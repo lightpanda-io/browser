@@ -315,9 +315,9 @@ fn addEnvVarCompletions(
         if (!std.ascii.isAlphanumeric(ch) and ch != '_') return;
     }
 
-    // `lpEnvNames` caches the result process-wide, so calling per keystroke
-    // costs one mutex acquire + pointer read after the first hit.
-    const names = browser_tools.lpEnvNames() catch return;
+    var name_buf: [2048]u8 = undefined;
+    var fba: std.heap.FixedBufferAllocator = .init(&name_buf);
+    const names = browser_tools.lpEnvNames(fba.allocator()) catch return;
     if (names.len == 0) return;
 
     const head = input[0 .. dollar + 1];

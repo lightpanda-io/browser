@@ -1005,7 +1005,7 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
     }
 
-    const env_names = lpEnvNames() catch return ToolError.InternalError;
+    const env_names = lpEnvNames(arena) catch return ToolError.InternalError;
     return formatLpEnvNames(arena, env_names);
 }
 
@@ -1019,40 +1019,26 @@ fn formatLpEnvNames(arena: std.mem.Allocator, env_names: []const []const u8) Too
     return aw.written();
 }
 
-/// Sorted `LP_*`-prefixed environment-variable names from the current
-/// process. Returned slices point into `std.os.environ`, which is stable for
-/// the process lifetime; the outer slice is allocated once into a static
-/// cache (environ doesn't change at runtime) and shared across callers. Used
-/// by the agent REPL completer to offer `$LP_*` Tab completions and by
-/// `execGetEnv` for the no-name variant.
-pub fn lpEnvNames() error{OutOfMemory}![]const []const u8 {
-    lp_env_names_mu.lock();
-    defer lp_env_names_mu.unlock();
-    if (lp_env_names_cache) |cached| return cached;
-
-    const gpa = std.heap.page_allocator;
+/// Walks `std.c.environ` (live) and dupes names into `arena` — `setenv`
+/// can free both the environ array and its entry strings, so a captured
+/// `std.os.environ` slice or name pointers into entries would dangle.
+pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
     var env_names: std.ArrayList([]const u8) = .empty;
-    errdefer env_names.deinit(gpa);
-    try env_names.ensureTotalCapacity(gpa, std.os.environ.len);
-    for (std.os.environ) |entry| {
+    var ptr = std.c.environ;
+    while (ptr[0]) |entry| : (ptr += 1) {
         const line = std.mem.span(entry);
         const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const name = line[0..eq_idx];
         if (!std.mem.startsWith(u8, name, "LP_")) continue;
-        env_names.appendAssumeCapacity(name);
+        try env_names.append(arena, try arena.dupe(u8, name));
     }
     std.mem.sort([]const u8, env_names.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
             return std.mem.lessThan(u8, a, b);
         }
     }.lt);
-    const owned = try env_names.toOwnedSlice(gpa);
-    lp_env_names_cache = owned;
-    return owned;
+    return env_names.toOwnedSlice(arena);
 }
-
-var lp_env_names_mu: std.Thread.Mutex = .{};
-var lp_env_names_cache: ?[]const []const u8 = null;
 
 /// Resolve an LP_-prefixed environment variable, or `null` for any other name.
 /// Only the LP_ namespace is readable from the model; everything else
@@ -1217,7 +1203,7 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
 /// agent retyped as a literal doesn't leak into the recording. Values < 4
 /// chars are skipped to avoid false-positive substring matches.
 pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
-    const env_names = lpEnvNames() catch return input;
+    const env_names = lpEnvNames(arena) catch return input;
 
     // Iterate by value length descending. With two LP_* values where one is a
     // substring of the other (both ≥4 chars so neither is filtered), name-order
