@@ -317,6 +317,9 @@ fn tokenize(arena: std.mem.Allocator, input: []const u8) ParseError![][]const u8
 }
 
 fn stripQuotes(arena: std.mem.Allocator, raw: []const u8) ParseError![]const u8 {
+    const has_quote = std.mem.indexOfAny(u8, raw, "\"'") != null;
+    if (!has_quote) return raw;
+
     var buf: std.ArrayList(u8) = .empty;
     try buf.ensureTotalCapacity(arena, raw.len);
     var i: usize = 0;
@@ -371,22 +374,21 @@ fn coerce(arena: std.mem.Allocator, schema: *const SchemaInfo, key: []const u8, 
 // here so those paths don't have to. Single-threaded REPL only — if
 // multi-threaded usage emerges, swap the guard for `std.Once` semantics.
 
-var global_initialized: bool = false;
 var global_failed: bool = false;
 var global_schemas_storage: [browser_tools.tool_defs.len]SchemaInfo = undefined;
 var global_arena: std.heap.ArenaAllocator = undefined;
+var global_once = std.once(initGlobal);
 
 /// Process-lifetime schema cache. Returns an empty slice if init fails (OOM
 /// or malformed input_schema), in which case parse/format fall back to a
 /// best-effort form rather than crashing.
 pub fn globalSchemas() []const SchemaInfo {
-    if (!global_initialized) initGlobal();
+    global_once.call();
     if (global_failed) return &.{};
     return global_schemas_storage[0..browser_tools.tool_defs.len];
 }
 
 fn initGlobal() void {
-    global_initialized = true;
     global_arena = .init(std.heap.page_allocator);
     const a = global_arena.allocator();
     for (browser_tools.tool_defs, 0..) |td, i| {

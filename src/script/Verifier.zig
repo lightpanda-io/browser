@@ -59,24 +59,32 @@ pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyRes
         .tool_call => |t| t,
         else => return .inconclusive,
     };
-    const args = (tc.args orelse return .inconclusive).object;
+    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse return .inconclusive;
+    const args_val = tc.args orelse return .inconclusive;
+    if (args_val != .object) return .inconclusive;
+    const args = args_val.object;
 
-    if (std.mem.eql(u8, tc.name, "fill")) {
-        const selector = (args.get("selector") orelse return .inconclusive).string;
-        const value = (args.get("value") orelse return .inconclusive).string;
-        return self.verifyFill(arena, selector, value);
+    switch (action) {
+        .fill => {
+            const selector_val = args.get("selector") orelse return .inconclusive;
+            const value_val = args.get("value") orelse return .inconclusive;
+            if (selector_val != .string or value_val != .string) return .inconclusive;
+            return self.verifyFill(arena, selector_val.string, value_val.string);
+        },
+        .setChecked => {
+            const selector_val = args.get("selector") orelse return .inconclusive;
+            const checked_val = args.get("checked") orelse return .inconclusive;
+            if (selector_val != .string or checked_val != .bool) return .inconclusive;
+            return self.verifyCheck(arena, selector_val.string, checked_val.bool);
+        },
+        .selectOption => {
+            const selector_val = args.get("selector") orelse return .inconclusive;
+            const value_val = args.get("value") orelse return .inconclusive;
+            if (selector_val != .string or value_val != .string) return .inconclusive;
+            return self.verifySelect(arena, selector_val.string, value_val.string);
+        },
+        else => return .inconclusive,
     }
-    if (std.mem.eql(u8, tc.name, "setChecked")) {
-        const selector = (args.get("selector") orelse return .inconclusive).string;
-        const checked = (args.get("checked") orelse return .inconclusive).bool;
-        return self.verifyCheck(arena, selector, checked);
-    }
-    if (std.mem.eql(u8, tc.name, "selectOption")) {
-        const selector = (args.get("selector") orelse return .inconclusive).string;
-        const value = (args.get("value") orelse return .inconclusive).string;
-        return self.verifySelect(arena, selector, value);
-    }
-    return .inconclusive;
 }
 
 fn verifyFill(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {

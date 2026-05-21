@@ -37,6 +37,7 @@ pub const Split = schema.Split;
 pub const max_hint_slots = schema.max_hint_slots;
 
 pub const buildSchemas = schema.buildSchemas;
+pub const globalSchemas = schema.globalSchemas;
 pub const findSchema = schema.findSchema;
 pub const splitNameRest = schema.splitNameRest;
 

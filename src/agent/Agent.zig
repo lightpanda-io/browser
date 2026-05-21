@@ -19,6 +19,7 @@
 const std = @import("std");
 const zenai = @import("zenai");
 const lp = @import("lightpanda");
+const browser_tools = lp.tools;
 
 const log = lp.log;
 const Config = lp.Config;
@@ -152,7 +153,6 @@ self_heal: bool,
 interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
-slash_schemas: []const SlashCommand.SchemaInfo,
 cancel_requested: std.atomic.Value(bool) = .init(false),
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
@@ -247,16 +247,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // pure replay and must not be mutated.
     const recorder_path: ?[]const u8 = if (opts.interactive) opts.script_file else null;
 
-    // Reuse the executor's schema arena: the parsed schemas in `tools` already
-    // live there, and the cache must outlive only as long as those do.
-    const slash_schemas: []const SlashCommand.SchemaInfo = if (will_repl)
-        SlashCommand.buildSchemas(tool_executor.schemaAllocator(), tool_executor.tools) catch {
-            log.fatal(.app, "failed to build slash schemas", .{});
-            return error.SlashSchemaInitFailed;
-        }
-    else
-        &.{};
-
     self.* = .{
         .allocator = allocator,
         .ai_client = ai_client,
@@ -274,12 +264,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
-        .slash_schemas = slash_schemas,
     };
 
     self.cmd_runner = .init(tool_executor, &self.terminal);
 
-    if (will_repl) self.terminal.attachCompleter(slash_schemas);
+    if (will_repl) self.terminal.attachCompleter();
 
     if (recorder_path) |p| {
         if (Recorder.init(allocator, std.fs.cwd(), p)) |r| {
@@ -426,11 +415,10 @@ fn runRepl(self: *Agent) void {
         // PandaScript — they're REPL-only and never recorded. Intercept
         // before Command.parse so they don't surface as UnknownTool.
         if (line.len > 0 and line[0] == '/') {
-            if (SlashCommand.splitNameRest(line[1..])) |split| {
-                if (SlashCommand.findMeta(split.name)) |_| {
-                    if (self.handleMeta(split.name, split.rest)) break :repl;
-                    continue :repl;
-                }
+            const split = SlashCommand.splitNameRest(line[1..]) orelse continue :repl;
+            if (SlashCommand.findMeta(split.name) != null) {
+                if (self.handleMeta(split.name, split.rest)) break :repl;
+                continue :repl;
             }
         }
 
@@ -438,7 +426,7 @@ fn runRepl(self: *Agent) void {
         defer arena.deinit();
         const aa = arena.allocator();
 
-        const cmd = Command.parseWithSchemas(aa, line, self.slash_schemas) catch |err| switch (err) {
+        const cmd = Command.parseWithSchemas(aa, line, SlashCommand.globalSchemas()) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
                     self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.");
@@ -513,7 +501,7 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
 fn printSlashHelp(self: *Agent, target: []const u8) void {
     if (target.len == 0) {
         self.terminal.printInfo("Slash commands (no LLM, REPL only):");
-        for (self.slash_schemas) |s| {
+        for (SlashCommand.globalSchemas()) |s| {
             const summary = firstSentence(s.description);
             self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, summary });
         }
@@ -536,7 +524,7 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
         );
         return;
     }
-    const schema = SlashCommand.findSchema(self.slash_schemas, lookup) orelse {
+    const schema = SlashCommand.findSchema(SlashCommand.globalSchemas(), lookup) orelse {
         self.terminal.printErrorFmt("unknown tool: {s}", .{lookup});
         return;
     };
@@ -752,12 +740,11 @@ fn isRetryable(cmd: Command) bool {
         .tool_call => |t| t,
         else => return false,
     };
-    // Same set as today: tools whose post-action state can lag (form updates,
-    // controlled inputs, select dropdowns) and benefit from a brief retry
-    // before going to the LLM for heal.
-    return std.mem.eql(u8, tc.name, "fill") or
-        std.mem.eql(u8, tc.name, "setChecked") or
-        std.mem.eql(u8, tc.name, "selectOption");
+    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse return false;
+    return switch (action) {
+        .fill, .setChecked, .selectOption => true,
+        else => false,
+    };
 }
 
 const self_heal_max_attempts = 3;

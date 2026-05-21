@@ -57,25 +57,35 @@ pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Co
 fn substituteStringArgs(arena: std.mem.Allocator, tool_name: []const u8, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;
-    var changed = false;
+
+    var needs_sub = false;
+    var it = v.object.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.*;
+        const exclude = std.mem.eql(u8, tool_name, "fill") and std.mem.eql(u8, key, "value");
+        if (!exclude and val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null) {
+            needs_sub = true;
+            break;
+        }
+    }
+    if (!needs_sub) return v;
+
     var new_obj: std.json.ObjectMap = .init(arena);
     try new_obj.ensureTotalCapacity(v.object.count());
-    var it = v.object.iterator();
+    it = v.object.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         const val = entry.value_ptr.*;
         const exclude = std.mem.eql(u8, tool_name, "fill") and std.mem.eql(u8, key, "value");
         if (!exclude and val == .string) {
             const resolved = try browser_tools.substituteEnvVars(arena, val.string);
-            if (resolved.ptr != val.string.ptr) changed = true;
             try new_obj.put(key, .{ .string = resolved });
             continue;
         }
         try new_obj.put(key, val);
     }
-    // Only allocate a new value if substitution actually changed something —
-    // the original args object can stay aliased into the caller's arena.
-    return if (changed) .{ .object = new_obj } else v;
+    return .{ .object = new_obj };
 }
 
 /// Data output (extract/eval/markdown/tree/…) → stdout on success; everything

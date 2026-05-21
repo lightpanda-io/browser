@@ -64,7 +64,6 @@ verbosity: Verbosity,
 repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 spinner: Spinner,
-slash_schemas: []const SlashCommand.SchemaInfo = &.{},
 
 // Flat name list for the "match any slash command" search/completion paths.
 const all_slash_names: [browser_tools.names.len + SlashCommand.meta_names.len][]const u8 = blk: {
@@ -75,10 +74,9 @@ const all_slash_names: [browser_tools.names.len + SlashCommand.meta_names.len][]
 };
 
 /// Wires the isocline completer and hinter to `self` so the C callbacks can
-/// reach `slash_schemas`. Must run after the Terminal is in its final memory
+/// reach the global schemas. Must run after the Terminal is in its final memory
 /// location.
-pub fn attachCompleter(self: *Terminal, schemas: []const SlashCommand.SchemaInfo) void {
-    self.slash_schemas = schemas;
+pub fn attachCompleter(self: *Terminal) void {
     c.ic_set_default_completer(&completionCallback, self);
     c.ic_set_default_hinter(&hintsCallback, self);
 }
@@ -326,8 +324,6 @@ fn addEnvVarCompletions(
 
 fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callconv(.c) void {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(prefix)), 0);
-    const self_ptr = c.ic_completion_arg(cenv) orelse return;
-    const self: *Terminal = @ptrCast(@alignCast(self_ptr));
 
     var buf: [completion_buf_len:0]u8 = undefined;
 
@@ -343,7 +339,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     if (input[0] == '/') {
         if (has_space) {
             if (parseSlashCommand(input)) |parts| {
-                if (SlashCommand.findSchema(self.slash_schemas, parts.name)) |schema| {
+                if (SlashCommand.findSchema(SlashCommand.globalSchemas(), parts.name)) |schema| {
                     addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
                 } else if (SlashCommand.findMeta(parts.name)) |meta| {
                     addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
@@ -356,7 +352,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
             // which renders the full ` <url> [timeout=…]` template uniformly
             // whether the user typed the name or Tab-completed it.
             for (all_slash_names) |name| {
-                const suffix: []const u8 = if (slashHasParams(self.slash_schemas, name)) " " else "";
+                const suffix: []const u8 = if (slashHasParams(name)) " " else "";
                 addPrefixedCompletion(cenv, &buf, input, "/", name, suffix, partial);
             }
             return;
@@ -373,8 +369,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
 var hint_buf: [completion_buf_len:0]u8 = undefined;
 
 fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const u8 {
-    const self_ptr = arg orelse return null;
-    const self: *Terminal = @ptrCast(@alignCast(self_ptr));
+    _ = arg;
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input_c)), 0);
     if (input.len == 0) return null;
 
@@ -383,7 +378,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
 
     if (parseSlashCommand(input)) |parts| {
         const ends_ws = input[input.len - 1] == ' ';
-        if (SlashCommand.findSchema(self.slash_schemas, parts.name)) |schema| {
+        if (SlashCommand.findSchema(SlashCommand.globalSchemas(), parts.name)) |schema| {
             return renderSchemaHint(schema, parts.rest, ends_ws);
         }
         if (SlashCommand.findMeta(parts.name)) |meta| {
@@ -523,8 +518,8 @@ fn slashHasPrefix(name: []const u8) bool {
     return false;
 }
 
-fn slashHasParams(schemas: []const SlashCommand.SchemaInfo, name: []const u8) bool {
-    if (SlashCommand.findSchema(schemas, name)) |s| return s.hints.len > 0;
+fn slashHasParams(name: []const u8) bool {
+    if (SlashCommand.findSchema(SlashCommand.globalSchemas(), name)) |s| return s.hints.len > 0;
     if (SlashCommand.findMeta(name)) |m| return m.hint.len > 0;
     return false;
 }
