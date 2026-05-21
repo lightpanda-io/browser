@@ -442,9 +442,10 @@ fn runRepl(self: *Agent) void {
             self.browser.env.cancelTerminate();
         }
 
-        if (line.len == 0) continue;
+        const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+        if (trimmed.len == 0) continue;
 
-        const slash_split: ?SlashCommand.Split = if (line[0] == '/') SlashCommand.splitNameRest(line[1..]) else null;
+        const slash_split: ?SlashCommand.Split = if (trimmed[0] == '/') SlashCommand.splitNameRest(trimmed[1..]) else null;
         if (slash_split) |split| {
             if (SlashCommand.findMeta(split.name) != null) {
                 if (self.handleMeta(split.name, split.rest)) break :repl;

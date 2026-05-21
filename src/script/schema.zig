@@ -407,7 +407,7 @@ test "parseValue: single-required positional binds" {
     const schemas = globalSchemas();
     const goto = findSchema(schemas, "goto").?;
     const v = (try parseValue(arena.allocator(), goto, "https://example.com")).?;
-    try testing.expectEqualStrings("https://example.com", v.object.get("url").?.string);
+    try testing.expectString("https://example.com", v.object.get("url").?.string);
 }
 
 test "parseValue: positional then kv tail" {
@@ -416,7 +416,7 @@ test "parseValue: positional then kv tail" {
     const schemas = globalSchemas();
     const goto = findSchema(schemas, "goto").?;
     const v = (try parseValue(arena.allocator(), goto, "https://example.com timeout=5000")).?;
-    try testing.expectEqualStrings("https://example.com", v.object.get("url").?.string);
+    try testing.expectString("https://example.com", v.object.get("url").?.string);
     try testing.expectEqual(@as(i64, 5000), v.object.get("timeout").?.integer);
 }
 
@@ -426,8 +426,8 @@ test "parseValue: kv-only multi-required" {
     const schemas = globalSchemas();
     const fill = findSchema(schemas, "fill").?;
     const v = (try parseValue(arena.allocator(), fill, "selector='#email' value='foo@x.com'")).?;
-    try testing.expectEqualStrings("#email", v.object.get("selector").?.string);
-    try testing.expectEqualStrings("foo@x.com", v.object.get("value").?.string);
+    try testing.expectString("#email", v.object.get("selector").?.string);
+    try testing.expectString("foo@x.com", v.object.get("value").?.string);
 }
 
 test "parseValue: kv-only zero-required" {
@@ -461,7 +461,7 @@ test "parseValue: setChecked defaults checked=true when omitted" {
     const schemas = globalSchemas();
     const set_checked = findSchema(schemas, "setChecked").?;
     const v = (try parseValue(arena.allocator(), set_checked, "selector='#agree'")).?;
-    try testing.expectEqualStrings("#agree", v.object.get("selector").?.string);
+    try testing.expectString("#agree", v.object.get("selector").?.string);
     try testing.expect(v.object.get("checked").?.bool);
 }
 
@@ -479,15 +479,15 @@ test "parseValue: bare JSON passthrough" {
     const schemas = globalSchemas();
     const find = findSchema(schemas, "findElement").?;
     const v = (try parseValue(arena.allocator(), find, "{\"role\":\"button\"}")).?;
-    try testing.expectEqualStrings("button", v.object.get("role").?.string);
+    try testing.expectString("button", v.object.get("role").?.string);
 }
 
 test "splitNameRest: trims and handles empty" {
     try testing.expect(splitNameRest("") == null);
     try testing.expect(splitNameRest("   ") == null);
     const r = splitNameRest("  goto  https://x ").?;
-    try testing.expectEqualStrings("goto", r.name);
-    try testing.expectEqualStrings("https://x", r.rest);
+    try testing.expectString("goto", r.name);
+    try testing.expectString("https://x", r.rest);
 }
 
 test "tokenize: inline triple quotes with spaces" {
@@ -495,6 +495,6 @@ test "tokenize: inline triple quotes with spaces" {
     defer arena.deinit();
     const tokens = try tokenize(arena.allocator(), "selector='''hello world''' value=\"\"\"foo bar\"\"\"");
     try testing.expectEqual(@as(usize, 2), tokens.len);
-    try testing.expectEqualStrings("selector='''hello world'''", tokens[0]);
-    try testing.expectEqualStrings("value=\"\"\"foo bar\"\"\"", tokens[1]);
+    try testing.expectString("selector='''hello world'''", tokens[0]);
+    try testing.expectString("value=\"\"\"foo bar\"\"\"", tokens[1]);
 }

@@ -30,6 +30,7 @@
 //! heal roundtrip themselves.
 
 const std = @import("std");
+const browser_tools = @import("browser/tools.zig");
 
 pub const Command = @import("script/command.zig").Command;
 pub const Recorder = @import("script/Recorder.zig");
@@ -369,7 +370,8 @@ test "applyReplacements: heals a multi-line /eval block using iterator span" {
 fn buildToolCall(arena: std.mem.Allocator, name: []const u8, kvs: []const struct { []const u8, []const u8 }) Command {
     var obj: std.json.ObjectMap = .init(arena);
     for (kvs) |kv| obj.put(kv[0], .{ .string = kv[1] }) catch unreachable;
-    return .{ .tool_call = .{ .name = name, .args = .{ .object = obj } } };
+    const action = std.meta.stringToEnum(browser_tools.Action, name).?;
+    return .{ .tool_call = .{ .action = action, .args = .{ .object = obj } } };
 }
 
 test "formatHealReplacement: single command produces one-line replacement" {
