@@ -36,23 +36,28 @@ path: []const u8,
 lines: u32,
 /// Reused between writes so each line doesn't alloc/free.
 buf: std.Io.Writer.Allocating,
+/// Reset per write — backs short-lived scrub allocations so the first
+/// recorded command pays the page setup and the rest reuse the bump.
+arena: std.heap.ArenaAllocator,
 
-/// Append-open `path`, inserting a leading newline if the file is non-empty.
-pub fn init(allocator: std.mem.Allocator, path: []const u8) !Recorder {
-    const owned_path = try allocator.dupe(u8, path);
+/// Append-open `sub_path` under `dir`, inserting a leading newline if the
+/// file is non-empty.
+pub fn init(allocator: std.mem.Allocator, dir: std.fs.Dir, sub_path: []const u8) !Recorder {
+    const owned_path = try allocator.dupe(u8, sub_path);
     errdefer allocator.free(owned_path);
-    const file = try openForAppend(path);
+    const file = try openForAppend(dir, sub_path);
     return .{
         .allocator = allocator,
         .file = file,
         .path = owned_path,
         .lines = 0,
         .buf = .init(allocator),
+        .arena = .init(allocator),
     };
 }
 
-fn openForAppend(path: []const u8) !std.fs.File {
-    const f = try std.fs.cwd().createFile(path, .{ .truncate = false });
+fn openForAppend(dir: std.fs.Dir, sub_path: []const u8) !std.fs.File {
+    const f = try dir.createFile(sub_path, .{ .truncate = false });
     errdefer f.close();
     try f.seekFromEnd(0);
     const pos = try f.getPos();
@@ -62,6 +67,7 @@ fn openForAppend(path: []const u8) !std.fs.File {
 
 pub fn deinit(self: *Recorder) void {
     self.buf.deinit();
+    self.arena.deinit();
     if (self.file) |f| f.close();
     self.allocator.free(self.path);
 }
@@ -84,9 +90,8 @@ fn tryRecord(self: *Recorder, cmd: Command) !void {
     // Reverse-substitute any LP_* env-var values that snuck in as literals
     // (e.g. an agent that retyped a username it saw via getUrl) so the
     // recording stays portable instead of leaking the resolved secret.
-    var scrub_arena: std.heap.ArenaAllocator = .init(self.allocator);
-    defer scrub_arena.deinit();
-    const scrubbed = lp.tools.reverseSubstituteEnvVars(scrub_arena.allocator(), self.buf.written()) catch self.buf.written();
+    _ = self.arena.reset(.retain_capacity);
+    const scrubbed = lp.tools.reverseSubstituteEnvVars(self.arena.allocator(), self.buf.written()) catch self.buf.written();
 
     try self.file.?.writeAll(scrubbed);
     self.lines += 1;
@@ -128,15 +133,7 @@ test "record writes state-mutating commands" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = tmp.dir.createFile("test.lp", .{ .read = true }) catch unreachable;
-
-    var recorder: Recorder = .{
-        .allocator = std.testing.allocator,
-        .file = file,
-        .path = try std.testing.allocator.dupe(u8, "test.lp"),
-        .lines = 0,
-        .buf = .init(std.testing.allocator),
-    };
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "test.lp");
     defer recorder.deinit();
 
     recorder.record(Command.parse("GOTO https://example.com"));
@@ -152,8 +149,8 @@ test "record writes state-mutating commands" {
     recorder.record(Command.parse("EXTRACT '{\"title\":\".title\"}'"));
     recorder.recordComment("LOGIN");
 
-    // Read back and verify
-    file.seekTo(0) catch unreachable;
+    const file = tmp.dir.openFile("test.lp", .{}) catch unreachable;
+    defer file.close();
     var buf: [512]u8 = undefined;
     const n = file.readAll(&buf) catch unreachable;
     const content = buf[0..n];
@@ -176,15 +173,7 @@ test "record skips empty and comment lines" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = tmp.dir.createFile("test2.lp", .{ .read = true }) catch unreachable;
-
-    var recorder: Recorder = .{
-        .allocator = std.testing.allocator,
-        .file = file,
-        .path = try std.testing.allocator.dupe(u8, "test.lp"),
-        .lines = 0,
-        .buf = .init(std.testing.allocator),
-    };
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "test2.lp");
     defer recorder.deinit();
 
     recorder.record(Command.parse(""));
@@ -192,7 +181,8 @@ test "record skips empty and comment lines" {
     recorder.record(Command.parse("# this is a comment"));
     recorder.record(Command.parse("GOTO https://example.com"));
 
-    file.seekTo(0) catch unreachable;
+    const file = tmp.dir.openFile("test2.lp", .{}) catch unreachable;
+    defer file.close();
     var buf: [256]u8 = undefined;
     const n = file.readAll(&buf) catch unreachable;
     const content = buf[0..n];
@@ -204,15 +194,7 @@ test "lines counter tracks successful appends" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = tmp.dir.createFile("count.lp", .{ .read = true }) catch unreachable;
-
-    var recorder: Recorder = .{
-        .allocator = std.testing.allocator,
-        .file = file,
-        .path = try std.testing.allocator.dupe(u8, "test.lp"),
-        .lines = 0,
-        .buf = .init(std.testing.allocator),
-    };
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "count.lp");
     defer recorder.deinit();
 
     recorder.record(Command.parse("GOTO https://example.com")); // +1
@@ -234,18 +216,13 @@ test "init appends to an existing file without truncating" {
         _ = seed.writeAll("GOTO https://example.com\n") catch unreachable;
     }
 
-    // Resolve absolute path for Recorder.init (which uses std.fs.cwd()).
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const abs_path = tmp.dir.realpath("script.lp", &path_buf) catch unreachable;
-
-    var recorder: Recorder = try .init(std.testing.allocator, abs_path);
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "script.lp");
     defer recorder.deinit();
     recorder.record(Command.parse("CLICK 'Login'"));
 
     try std.testing.expect(recorder.isActive());
-    try std.testing.expectEqualStrings(abs_path, recorder.path);
+    try std.testing.expectEqualStrings("script.lp", recorder.path);
 
-    // Read back.
     const file = tmp.dir.openFile("script.lp", .{}) catch unreachable;
     defer file.close();
     var buf: [256]u8 = undefined;
@@ -264,21 +241,15 @@ test "recordComment splits embedded newlines into separate comment lines" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = tmp.dir.createFile("multi.lp", .{ .read = true }) catch unreachable;
-    var recorder: Recorder = .{
-        .allocator = std.testing.allocator,
-        .file = file,
-        .path = try std.testing.allocator.dupe(u8, "test.lp"),
-        .lines = 0,
-        .buf = .init(std.testing.allocator),
-    };
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "multi.lp");
     defer recorder.deinit();
 
     // An attacker-controlled comment trying to smuggle a command must not
     // produce an executable line on replay.
     recorder.recordComment("note\nGOTO https://attacker\r\nmore");
 
-    file.seekTo(0) catch unreachable;
+    const file = tmp.dir.openFile("multi.lp", .{}) catch unreachable;
+    defer file.close();
     var buf: [256]u8 = undefined;
     const n = file.readAll(&buf) catch unreachable;
     try std.testing.expectEqualStrings(
@@ -295,6 +266,8 @@ test "record disables recorder on write failure" {
     defer tmp.cleanup();
 
     // Open the file read-only so writeAll fails with `error.NotOpenForWriting`.
+    // Struct literal (not `init`) because only this test needs to inject a
+    // read-only handle to exercise the failure path.
     const file = blk: {
         _ = tmp.dir.createFile("ro.lp", .{}) catch unreachable;
         break :blk tmp.dir.openFile("ro.lp", .{ .mode = .read_only }) catch unreachable;
@@ -306,6 +279,7 @@ test "record disables recorder on write failure" {
         .path = try std.testing.allocator.dupe(u8, "test.lp"),
         .lines = 0,
         .buf = .init(std.testing.allocator),
+        .arena = .init(std.testing.allocator),
     };
     defer recorder.deinit();
 
@@ -324,12 +298,7 @@ test "init creates the file if missing" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = tmp.dir.realpath(".", &path_buf) catch unreachable;
-    var full_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const abs_path = std.fmt.bufPrint(&full_buf, "{s}/fresh.lp", .{dir_path}) catch unreachable;
-
-    var recorder: Recorder = try .init(std.testing.allocator, abs_path);
+    var recorder: Recorder = try .init(std.testing.allocator, tmp.dir, "fresh.lp");
     defer recorder.deinit();
     recorder.record(Command.parse("GOTO https://example.com"));
 

@@ -275,7 +275,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (will_repl) self.terminal.attachCompleter(slash_schemas);
 
     if (recorder_path) |p| {
-        if (Recorder.init(allocator, p)) |r| {
+        if (Recorder.init(allocator, std.fs.cwd(), p)) |r| {
             self.recorder = r;
             self.terminal.printInfoFmt("recording to {s}", .{r.path});
         } else |err| {

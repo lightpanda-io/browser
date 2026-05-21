@@ -202,7 +202,7 @@ fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
     }
 
-    var recorder = Recorder.init(server.allocator, args.path) catch |err| {
+    var recorder = Recorder.init(server.allocator, std.fs.cwd(), args.path) catch |err| {
         const msg = std.fmt.allocPrint(arena, "could not open recording file: {s}", .{@errorName(err)}) catch
             return sendErrorContent(server, id, "could not open recording file");
         return sendErrorContent(server, id, msg);
