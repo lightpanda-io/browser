@@ -16,14 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! PandaScript Command — one line of a `.lp` script: a slash command, a
-//! `#`-comment, or one of two LLM triggers (`/login`, `/acceptCookies`).
-//! Anything else is a parse error; bare prose → LLM only happens in the
-//! live REPL and is dispatched there, not here.
-//!
-//! Multi-line `/eval '''…'''` / `/extract '''…'''` blocks live in
-//! `ScriptIterator`, which assembles the body before calling `parse` on the
-//! synthesized line.
+//! PandaScript Command: a slash command, `#`-comment, or `/login` /
+//! `/acceptCookies` LLM trigger. Bare prose is the REPL's job, not the parser's.
+//! Multi-line `'''…'''` blocks are assembled by `ScriptIterator` before parse.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -40,9 +35,7 @@ pub const Command = union(enum) {
     comment: void,
 
     pub const ToolCall = struct {
-        /// Slice into the schema table — lives forever, no dupe required.
         name: []const u8,
-        /// Arena-owned. `null` for tools with no args (e.g. `/getCookies`).
         args: ?std.json.Value,
     };
 
@@ -53,9 +46,8 @@ pub const Command = union(enum) {
             .tool_call => |tc| blk: {
                 const s = schema.findSchemaCanonical(schema.globalSchemas(), tc.name) orelse break :blk false;
                 if (!s.recorded) break :blk false;
-                // backendNodeId-based calls aren't replayable (the id is
-                // invalidated by any DOM mutation), so keep them out of the
-                // recording even when the tool itself is recordable.
+                // backendNodeId is invalidated by any DOM mutation, so calls
+                // using it aren't replayable.
                 const args = tc.args orelse break :blk true;
                 if (args == .object and args.object.contains("backendNodeId")) break :blk false;
                 break :blk true;
@@ -77,9 +69,6 @@ pub const Command = union(enum) {
         };
     }
 
-    /// Self-heal must only patch the current page; navigation is excluded
-    /// even though `/goto` is recorded. The decision lives on the per-tool
-    /// `can_heal` flag in `tool_defs`; here it's just a lookup.
     pub fn canHeal(self: Command) bool {
         return switch (self) {
             .tool_call => |tc| if (schema.findSchemaCanonical(schema.globalSchemas(), tc.name)) |s| s.can_heal else false,
@@ -87,17 +76,10 @@ pub const Command = union(enum) {
         };
     }
 
-    /// Parse one trimmed line. Branch order: blank/`#` → `.comment`;
-    /// `/login` and `/acceptCookies` short-circuit to their meta variants;
-    /// any other `/<name>` resolves the schema and parses args; anything
-    /// else returns `error.NotASlashCommand`. Bare-prose-to-LLM is the REPL's
-    /// job, not the parser's.
     pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!Command {
         return parseWithSchemas(arena, line, schema.globalSchemas());
     }
 
-    /// Same as `parse` but lets callers inject a different schema set —
-    /// the agent uses its own arena-backed cache to avoid double-parsing.
     pub fn parseWithSchemas(arena: std.mem.Allocator, line: []const u8, schemas: []const schema.SchemaInfo) ParseError!Command {
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) return .{ .comment = {} };
@@ -120,10 +102,7 @@ pub const Command = union(enum) {
         return .{ .tool_call = .{ .name = s.tool_name, .args = args } };
     }
 
-    /// Round-trips with `parse` for the canonical recorder output. Single-
-    /// required-field tools emit positional + quoted (`/click '#login'`);
-    /// everything else emits `/name key=value ...`. Multi-line string values
-    /// use `'''…'''` blocks. Default-true booleans are omitted when matching.
+    /// Canonical recorder format. Round-trips with `parse`.
     pub fn format(self: Command, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .login => try writer.writeAll("/login"),
@@ -133,26 +112,21 @@ pub const Command = union(enum) {
         }
     }
 
-    /// `name` and `arguments` must outlive the returned Command. Use
-    /// `fromToolCallOwned` when that guarantee doesn't hold.
+    /// `name` and `arguments` must outlive the returned Command — use
+    /// `fromToolCallOwned` to deep-copy when they don't.
     pub fn fromToolCall(tool_name: []const u8, arguments: ?std.json.Value) Command {
         return .{ .tool_call = .{ .name = tool_name, .args = arguments } };
     }
 
-    /// Deep-copies `arguments` into `arena` so the Command can outlive the
-    /// caller's args buffer (e.g. the self-heal path returns Commands across
-    /// an arena deinit).
     pub fn fromToolCallOwned(arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) std.mem.Allocator.Error!Command {
         const owned_name = if (schema.findSchemaCanonical(schema.globalSchemas(), tool_name)) |s| s.tool_name else try arena.dupe(u8, tool_name);
         const owned_args = if (arguments) |v| try dupeJsonValue(arena, v) else null;
         return .{ .tool_call = .{ .name = owned_name, .args = owned_args } };
     }
 
-    /// Walks `.lp` content line-by-line, gluing multi-line `'''…'''` blocks
-    /// (today: `/eval`, `/extract`; any single-required-string-field tool
-    /// qualifies) into a single entry. Comments and blank lines surface as
-    /// `.comment` entries so the script replay can attach prefacing comments
-    /// to the next executable line.
+    /// Iterates `.lp` content, gluing multi-line `'''…'''` blocks into a
+    /// single entry. Comments surface as `.comment` so the replay can attach
+    /// the preceding comment to the next executable line.
     pub const ScriptIterator = struct {
         allocator: std.mem.Allocator,
         lines: std.mem.SplitIterator(u8, .scalar),
@@ -168,14 +142,12 @@ pub const Command = union(enum) {
 
         pub const Entry = struct {
             line_num: u32,
-            /// Trimmed opener line — the only line for single-line entries,
-            /// the `/eval '''` / `/extract '''` opener for blocks. Display-only
-            /// (errors, REPL echo, heal-comment headers); use `raw_span` for
-            /// splices that need the full block body.
+            /// Trimmed opener line; use `raw_span` for splices that need the
+            /// full block body.
             opener_line: []const u8,
-            /// The full slice of the original content buffer covering this entry,
-            /// including trailing newline(s). For multi-line blocks this spans
-            /// from the opener through the closing triple-quote line.
+            /// Slice of the original content buffer covering this entry,
+            /// trailing newline included. Multi-line blocks span opener
+            /// through closing triple-quote.
             raw_span: []const u8,
             command: Command,
         };
@@ -225,8 +197,6 @@ pub const Command = union(enum) {
             quote_type: QuoteType,
         };
 
-        /// `/eval '''` or `/extract '''` (and any other single-required-string-field
-        /// tool followed by a bare triple-quote token).
         fn tryBlockOpener(_: *ScriptIterator, line: []const u8, schemas: []const schema.SchemaInfo) ParseError!?BlockOpener {
             if (line.len < 2 or line[0] != '/') return null;
             const split = schema.splitNameRest(line[1..]) orelse return null;
@@ -239,7 +209,6 @@ pub const Command = union(enum) {
         fn collectMultiLineBlock(self: *ScriptIterator, quote_type: QuoteType) std.mem.Allocator.Error!?[]const u8 {
             const closer = quote_type.toLiteral();
             var parts: std.ArrayList(u8) = .empty;
-            // toOwnedSlice empties `parts`, so this defer is a no-op on success.
             defer parts.deinit(self.allocator);
             while (self.lines.next()) |line| {
                 self.line_num += 1;
@@ -250,7 +219,7 @@ pub const Command = union(enum) {
                 if (parts.items.len > 0) {
                     try parts.append(self.allocator, '\n');
                 }
-                // Strip trailing CR only — full trim would clobber indentation.
+                // Trim CR only; full trim would clobber indentation.
                 try parts.appendSlice(self.allocator, std.mem.trimRight(u8, line, "\r"));
             }
             return null;
@@ -258,8 +227,6 @@ pub const Command = union(enum) {
     };
 };
 
-/// Deep-copy a `std.json.Value`, duplicating all owned strings and containers
-/// into `a`. Used by `fromToolCallOwned` for the heal path.
 fn dupeJsonValue(a: std.mem.Allocator, value: std.json.Value) std.mem.Allocator.Error!std.json.Value {
     return switch (value) {
         .null, .bool, .integer, .float => value,
@@ -296,16 +263,11 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
     const args = args_val.object;
     if (args.count() == 0) return;
 
-    // Emit positional form only when the args reduce to the single required
-    // field: `/goto '<url>'`, `/click '<sel>'`, `/extract '<schema>'`. As soon
-    // as there are extra fields (`/selectOption selector=... value=...`,
-    // `/setChecked selector=... checked=false`), fall back to kv so the
-    // recording stays unambiguous.
+    // Positional form `/goto '<url>'` only when args reduce to the single
+    // required field; extra fields force kv so recordings stay unambiguous.
     var positional_emitted: ?[]const u8 = null;
     if (s_opt) |s| {
         const has_one_required = s.required.len == 1;
-        // Count visible fields, ignoring default-true booleans that we'd skip
-        // in the kv pass below — they don't make the args "non-trivial".
         var visible: usize = 0;
         var it_v = args.iterator();
         while (it_v.next()) |entry| {
@@ -322,8 +284,6 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
         }
     }
 
-    // Emit kv for every key not already used as the positional, *and* skip
-    // default-true booleans so `/setChecked selector='#a'` round-trips.
     var it = args.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
@@ -340,8 +300,6 @@ fn isDefaultTrueBool(s: *const schema.SchemaInfo, key: []const u8, v: std.json.V
     return v == .bool and v.bool and s.isFieldDefaultTrue(key);
 }
 
-/// Strings are always quoted (or triple-quoted when they contain newlines)
-/// so a recorded line is unambiguous regardless of the value's content.
 fn formatString(writer: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {
     if (std.mem.indexOfScalar(u8, s, '\n') != null) {
         const q = QuoteType.pickFor(s).toLiteral();
@@ -355,7 +313,6 @@ fn formatString(writer: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void 
     try writeQuoted(writer, s);
 }
 
-/// Kv-value emission: strings via `formatString`; numbers/bools bare.
 fn formatKvValue(writer: *std.Io.Writer, v: std.json.Value) std.Io.Writer.Error!void {
     switch (v) {
         .string => |s| try formatString(writer, s),
@@ -363,10 +320,7 @@ fn formatKvValue(writer: *std.Io.Writer, v: std.json.Value) std.Io.Writer.Error!
         .float => |n| try writer.print("{d}", .{n}),
         .bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .null => try writer.writeAll("null"),
-        else => {
-            // Arrays/objects emit as compact JSON.
-            std.json.Stringify.value(v, .{}, writer) catch return error.WriteFailed;
-        },
+        else => std.json.Stringify.value(v, .{}, writer) catch return error.WriteFailed,
     }
 }
 
@@ -410,9 +364,7 @@ pub const QuoteType = enum {
         };
     }
 
-    /// Pick the triple-quote delimiter that does not collide with `body`.
-    /// Defaults to `triple_single`; swaps to `triple_double` only when the
-    /// body already contains `'''`.
+    /// Default `'''`; swaps to `"""` only when the body already contains `'''`.
     pub fn pickFor(body: []const u8) QuoteType {
         if (std.mem.indexOf(u8, body, "'''") != null) return .triple_double;
         return .triple_single;
@@ -454,12 +406,10 @@ test "parse: /goto positional" {
     try testing.expectEqualStrings("https://example.com", cmd.tool_call.args.?.object.get("url").?.string);
 }
 
-test "parse: /click positional" {
+test "parse: /click rejects positional (zero required fields)" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    // click has zero required fields — `/click 'Login'` would be PositionalNotAllowed.
     try testing.expectError(error.PositionalNotAllowed, Command.parse(arena.allocator(), "/click 'Login'"));
-    // The valid form is kv.
     const cmd = try Command.parse(arena.allocator(), "/click selector='Login'");
     try testing.expectEqualStrings("Login", cmd.tool_call.args.?.object.get("selector").?.string);
 }
@@ -492,18 +442,16 @@ test "format: /goto round-trip" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try cmd.format(&aw.writer);
-    // Recorder always quotes string values for unambiguous round-trips.
     try testing.expectEqualStrings("/goto 'https://example.com'", aw.written());
 }
 
-test "format: /click emits positional for single-required tools? no — click has zero required" {
+test "format: /click stays kv (zero required fields)" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const cmd = try Command.parse(arena.allocator(), "/click selector='Login'");
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try cmd.format(&aw.writer);
-    // Click has zero required fields, so kv form is canonical.
     try testing.expectEqualStrings("/click selector='Login'", aw.written());
 }
 

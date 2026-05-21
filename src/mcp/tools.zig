@@ -182,6 +182,11 @@ fn surfacesErrorInBand(action: browser_tools.Action) bool {
     return action == .eval or action == .extract;
 }
 
+fn surfacesErrorInBandByName(name: []const u8) bool {
+    const action = std.meta.stringToEnum(browser_tools.Action, name) orelse return false;
+    return surfacesErrorInBand(action);
+}
+
 fn recordIfActive(server: *Server, name: []const u8, arguments: ?std.json.Value) void {
     if (server.recorder == null) return;
     const cmd = Command.fromToolCall(name, arguments);
@@ -266,13 +271,8 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     }
 
     const tc = cmd.tool_call;
-    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse {
-        return sendErrorContent(server, id, "internal: unknown action");
-    };
-
     const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc.args) catch |err| {
-        // eval/extract get a terse error — they're line-scoped already.
-        if (surfacesErrorInBand(action)) {
+        if (surfacesErrorInBandByName(tc.name)) {
             return sendErrorContent(server, id, @errorName(err));
         }
         const url = browser_tools.currentUrlOrPlaceholder(server.session);

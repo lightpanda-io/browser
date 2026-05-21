@@ -143,9 +143,8 @@ notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
-/// Provider-facing tool list, built from `SlashCommand.globalSchemas()`. Slice
-/// is owned by `allocator`; the `parameters` JSON `Value` each entry points at
-/// lives in the schema module's process-lifetime arena.
+/// Slice is owned by `allocator`; each entry's `parameters` JSON value points
+/// into the schema module's process-lifetime arena, so no per-entry free.
 tools: []const zenai.provider.Tool,
 terminal: Terminal,
 cmd_runner: CommandRunner,
@@ -445,8 +444,8 @@ fn runRepl(self: *Agent) void {
 
         if (line.len == 0) continue;
 
-        if (line[0] == '/') {
-            const split = SlashCommand.splitNameRest(line[1..]) orelse continue :repl;
+        const slash_split: ?SlashCommand.Split = if (line[0] == '/') SlashCommand.splitNameRest(line[1..]) else null;
+        if (slash_split) |split| {
             if (SlashCommand.findMeta(split.name) != null) {
                 if (self.handleMeta(split.name, split.rest)) break :repl;
                 continue :repl;
@@ -480,12 +479,11 @@ fn runRepl(self: *Agent) void {
                     continue :repl;
                 }
                 const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
-                const label: []const u8 = if (cmd == .login) "LOGIN" else "ACCEPT_COOKIES";
+                const label: []const u8 = if (cmd == .login) "/login" else "/acceptCookies";
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
             },
             .tool_call => |tc| {
-                const split = SlashCommand.splitNameRest(line[1..]) orelse unreachable;
-                self.terminal.beginTool(tc.name, split.rest);
+                self.terminal.beginTool(tc.name, slash_split.?.rest);
                 const result = self.cmd_runner.executeWithResult(aa, cmd);
                 self.terminal.endTool();
                 self.cmd_runner.printResult(cmd, result);
@@ -561,14 +559,9 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
 
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
-    const aa = arena.allocator();
-    const pretty: []const u8 = blk: {
-        const v = std.json.parseFromSliceLeaky(std.json.Value, aa, schema.input_schema_raw, .{}) catch break :blk schema.input_schema_raw;
-        var aw: std.Io.Writer.Allocating = .init(aa);
-        std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, &aw.writer) catch break :blk schema.input_schema_raw;
-        break :blk aw.written();
-    };
-    self.terminal.printInfoFmt("schema:\n{s}", .{pretty});
+    var aw: std.Io.Writer.Allocating = .init(arena.allocator());
+    std.json.Stringify.value(schema.parameters, .{ .whitespace = .indent_2 }, &aw.writer) catch return;
+    self.terminal.printInfoFmt("schema:\n{s}", .{aw.written()});
 }
 
 fn printSlashParseError(self: *Agent, err: SlashCommand.ParseError, name: []const u8) void {
@@ -620,9 +613,9 @@ fn runScript(self: *Agent, path: []const u8) bool {
         }) orelse break;
         switch (entry.command) {
             .comment => {
-                // Recorded scripts prefix LLM-generated commands with the
-                // natural-language prompt that produced them; keep the
-                // last one around so self-heal can use it as context.
+                // `#` prefix lines preceding a recorded action are the
+                // natural-language prompt that produced it — kept for
+                // self-heal context.
                 if (entry.opener_line.len > 2 and entry.opener_line[0] == '#') {
                     last_comment = std.mem.trim(u8, entry.opener_line[1..], &std.ascii.whitespace);
                 }
@@ -787,8 +780,6 @@ fn ensureSystemPrompt(self: *Agent) !void {
     }
 }
 
-// Drop older turns once `prune_high` is hit; survivors are deep-copied so
-// the old arena (which still pins dropped strings) can be released.
 const prune_high = 30;
 const prune_keep = 20;
 
@@ -798,10 +789,8 @@ fn pruneMessages(self: *Agent) void {
 
     const tail_start = zenai.provider.safeTruncationStart(msgs, msgs.len - prune_keep) orelse return;
 
-    // Dupe the kept tail into a scratch slice in the new arena first. Only
-    // mutate self.messages once every dupe has succeeded — otherwise a
-    // partial failure would leave self.messages.items[1..] pointing into
-    // the freed `new_arena`.
+    // Dupe into the new arena before mutating self.messages — a partial
+    // failure would otherwise leave items pointing into a freed arena.
     var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
     const duped = zenai.provider.dupeMessages(new_arena.allocator(), msgs[tail_start..]) catch {
         new_arena.deinit();
@@ -852,9 +841,8 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     var cmds: std.ArrayList(Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
-        // Deep-copy into the caller's arena: `result.deinit()` (deferred above)
-        // frees `tc.arguments`'s backing arena before the returned cmds are
-        // formatted by `attemptSelfHeal`.
+        // `result.deinit()` (deferred above) frees the args arena before the
+        // caller formats `cmds`; deep-copy into `arena` to outlive it.
         const cmd = try Command.fromToolCallOwned(arena, tc.name, tc.arguments);
         if (!cmd.canHeal()) {
             self.terminal.printInfoFmt(
@@ -1036,21 +1024,17 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             }
             r.record(cmd);
         }
-        // Recorder self-disables on write failure (disk full, fd closed). Tell
-        // the user the recording stopped instead of silently dropping appends.
         if (!r.isActive()) {
             self.terminal.printError("recording disabled (write failed); see logs");
         }
     };
 
-    // RunToolsResult arenas are deinited at the end of this function —
-    // dupe into `message_arena` so the returned slice outlives them.
+    // Dupe into `message_arena` — RunToolsResult arenas are deinited below.
     const final_text: ?[]const u8 = blk: {
         if (result.text) |text| break :blk try ma.dupe(u8, text);
 
-        // Tool loop ended without a final text — force one more turn that
-        // forbids tools and pretraining fallback. Without this, models
-        // confabulate answers when the page was blocked or empty.
+        // Without a synthesis turn forbidding tools+pretraining, models
+        // confabulate when the page was blocked or empty.
         log.info(.app, "synthesizing final answer", .{});
         const synth_baseline = self.messages.items.len;
         try self.messages.append(self.allocator, .{
@@ -1065,17 +1049,12 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             ma,
             .{ .context = @ptrCast(self), .callFn = handleToolCall },
             .{
-                // tool_choice = .none forbids tools; serializing the full
-                // catalog anyway just pads the request body.
                 .tools = &.{},
                 .max_turns = 1,
                 .max_tokens = 4096,
                 .tool_choice = .none,
-                // Cap thinking on the finalize turn. Fully disabling it (0)
-                // leaves reasoning-heavy tasks with no answer at all; letting
-                // it run unbounded lets models fill the turn with thoughts
-                // and emit nothing as the final text. 512 tokens is enough
-                // for the model to pick its answer but not to freewheel.
+                // .low (≈512 tokens) so reasoning models still pick an answer
+                // but can't burn the whole turn on thinking and emit nothing.
                 .thinking_level = .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             },

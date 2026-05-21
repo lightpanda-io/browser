@@ -60,19 +60,26 @@ pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyRes
         else => return .inconclusive,
     };
     const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse return .inconclusive;
+    const args = tc.args orelse return .inconclusive;
+    if (args != .object) return .inconclusive;
+    const selector = (args.object.get("selector") orelse return .inconclusive);
+    if (selector != .string) return .inconclusive;
 
     switch (action) {
         .fill => {
-            const a = browser_tools.parseArgs(struct { selector: []const u8, value: []const u8 }, arena, tc.args) catch return .inconclusive;
-            return self.verifyFill(arena, a.selector, a.value);
+            const value = args.object.get("value") orelse return .inconclusive;
+            if (value != .string) return .inconclusive;
+            return self.verifyFill(arena, selector.string, value.string);
         },
         .setChecked => {
-            const a = browser_tools.parseArgs(struct { selector: []const u8, checked: bool }, arena, tc.args) catch return .inconclusive;
-            return self.verifyCheck(arena, a.selector, a.checked);
+            const checked = args.object.get("checked") orelse return .inconclusive;
+            if (checked != .bool) return .inconclusive;
+            return self.verifyCheck(arena, selector.string, checked.bool);
         },
         .selectOption => {
-            const a = browser_tools.parseArgs(struct { selector: []const u8, value: []const u8 }, arena, tc.args) catch return .inconclusive;
-            return self.verifySelect(arena, a.selector, a.value);
+            const value = args.object.get("value") orelse return .inconclusive;
+            if (value != .string) return .inconclusive;
+            return self.verifySelect(arena, selector.string, value.string);
         },
         else => return .inconclusive,
     }

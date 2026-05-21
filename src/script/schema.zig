@@ -16,14 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Slash-command schema: the parsed view of `browser_tools.tool_defs` that
-//! both PandaScript (`Command.parse`/`format`) and the REPL Terminal consume.
-//!
-//! Each tool's JSON schema is reduced to a flat `SchemaInfo` (required names,
-//! field types, hint slots, recording flags) so callers don't re-parse the
-//! input_schema string. `globalSchemas()` is the lazy process-wide cache used
-//! by `Command.parse`/`format` when no agent-scoped cache is plumbed (script
-//! replay, recorder format, tests).
+//! Flat view of `browser_tools.tool_defs` shared by PandaScript and the REPL.
+//! `globalSchemas()` is the lazy process-wide cache.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -34,22 +28,18 @@ pub const FieldType = enum { string, integer, number, boolean, other };
 pub const FieldEntry = struct {
     name: []const u8,
     field_type: FieldType,
-    /// Default for booleans declared with `"default": true` in the JSON schema.
     /// Used by `Command.format` to omit `checked=true` when emitting `/setChecked`.
     default_true: bool = false,
 };
 
-/// One slot of the REPL's argument-syntax hint, in display order: required
-/// fields first, then optionals. `fragment` is pre-rendered as `<name>` for
-/// required and `[name=…]` for optional so the renderer can hand it directly
-/// to the shared writer.
+/// REPL argument-syntax hint slot. `fragment` is pre-rendered as `<name>` for
+/// required and `[name=…]` for optional.
 pub const HintSlot = struct {
     name: []const u8,
     required: bool,
     fragment: []const u8,
 };
 
-/// Upper bound on per-schema hint slots; lets the renderer use a stack array.
 /// Asserted at schema build time so adding a tool with more fields fails loud.
 pub const max_hint_slots: usize = 16;
 
@@ -57,20 +47,14 @@ pub const max_hint_slots: usize = 16;
 pub const SchemaInfo = struct {
     tool_name: []const u8,
     description: []const u8,
-    input_schema_raw: []const u8,
     required: []const []const u8,
     fields: []const FieldEntry,
     hints: []const HintSlot,
-    /// Mirrors `ToolDef.recorded` — kept on SchemaInfo so the script layer
-    /// doesn't have to re-resolve via `tool_defs` for every command.
     recorded: bool,
     can_heal: bool,
     produces_data: bool,
     parameters: std.json.Value,
 
-    /// True when this tool's args fit a multi-line `/<name> '''…'''` opener:
-    /// exactly one required field, and that field is a string. Used by
-    /// `Command.ScriptIterator` to detect block openers.
     pub fn isMultiLineCapable(self: *const SchemaInfo) bool {
         return self.required.len == 1 and self.fieldType(self.required[0]) == .string;
     }
@@ -107,7 +91,6 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
     var info: SchemaInfo = .{
         .tool_name = td.name,
         .description = td.description,
-        .input_schema_raw = td.input_schema,
         .required = &.{},
         .fields = &.{},
         .hints = &.{},
@@ -225,19 +208,14 @@ pub fn splitNameRest(input: []const u8) ?Split {
     };
 }
 
-/// Parse `rest` (the args portion of a slash command) into a `std.json.Value`
-/// shaped for the tool. Returns null when the schema takes no args and `rest`
-/// is empty; that lets the caller pass `null` straight to `tool_executor.call`
-/// without allocating an empty object.
+/// Parse `rest` (args portion of a slash command) into a `std.json.Value`.
+/// Returns null when the schema takes no args and `rest` is empty.
 ///
 /// Argument-binding rules:
-///   - Bare `{json}` payload — returned as-is after JSON parse. Pass-through
-///     avoids re-stringifying the blob the LLM emitted.
-///   - A single leading positional token binds to the schema's sole required
-///     field when `schema.required.len == 1`. Multiple positionals (or one
-///     positional with `required.len != 1`) error.
-///   - Everything else is `key=value`. Coercion: integer/number/boolean
-///     fields parse their respective types; anything else stays a string.
+///   - Bare `{json}` payload returned as-is.
+///   - Single leading positional binds to `schema.required[0]` when
+///     `schema.required.len == 1`. Otherwise positionals error.
+///   - Everything else is `key=value` with type coercion via `coerce`.
 pub fn parseValue(arena: std.mem.Allocator, schema: *const SchemaInfo, rest: []const u8) ParseError!?std.json.Value {
     if (rest.len == 0) {
         if (schema.required.len > 0) return error.MissingRequired;
@@ -264,8 +242,8 @@ pub fn parseValue(arena: std.mem.Allocator, schema: *const SchemaInfo, rest: []c
         list.appendAssumeCapacity(.{ .key = tok[0..eq], .value = stripQuotes(tok[eq + 1 ..]) });
     }
 
-    // Default-true required booleans (e.g. setChecked.checked) are filled in
-    // when omitted, so `/setChecked selector='#a'` works without `checked=true`.
+    // Default-true booleans (e.g. setChecked.checked) so `/setChecked
+    // selector='#a'` works without `checked=true`.
     for (schema.required) |req| {
         var found = false;
         for (list.items) |p| {
@@ -291,9 +269,8 @@ const KvPair = struct {
     value: []const u8,
 };
 
-/// Split `input` into tokens, treating `"…"` and `'…'` as a single token (the
-/// surrounding quotes are stripped at value-extraction time, not here).
-/// Tokens may contain `=`.
+/// Tokenize on whitespace. `"…"` and `'…'` (single or triple) are kept whole;
+/// quote stripping happens later. Tokens may contain `=`.
 fn tokenize(arena: std.mem.Allocator, input: []const u8) ParseError![][]const u8 {
     var out: std.ArrayList([]const u8) = .empty;
 
@@ -369,17 +346,14 @@ fn coerce(arena: std.mem.Allocator, schema: *const SchemaInfo, key: []const u8, 
     return .{ .string = try arena.dupe(u8, value) };
 }
 
-// --- Global lazy schema cache ---
-//
-// Single-threaded REPL only — if multi-threaded usage emerges, swap the guard
-// for `std.Once` semantics.
+// --- Global lazy schema cache (process-lifetime) ---
 
 var global_schemas_storage: [browser_tools.tool_defs.len]SchemaInfo = undefined;
 var global_arena: std.heap.ArenaAllocator = undefined;
 var global_once = std.once(initGlobal);
 
-/// Process-lifetime schema cache. Panics on init failure — `tool_defs` is
-/// compile-time constant, so a parse/build error is a build-time bug.
+/// Panics on init failure — `tool_defs` is compile-time constant, so any
+/// parse/build error is a build-time bug.
 pub fn globalSchemas() []const SchemaInfo {
     global_once.call();
     return global_schemas_storage[0..browser_tools.tool_defs.len];
@@ -405,19 +379,15 @@ const testing = std.testing;
 test "globalSchemas: comptime tool defs reduce cleanly" {
     const schemas = globalSchemas();
     try testing.expect(schemas.len == browser_tools.tool_defs.len);
-    // /goto has one required string field — multi-line capable.
     const goto = findSchema(schemas, "goto").?;
     try testing.expect(goto.isMultiLineCapable());
     try testing.expect(goto.recorded);
-    // /scroll has zero required fields — not multi-line capable.
     const scroll = findSchema(schemas, "scroll").?;
     try testing.expect(!scroll.isMultiLineCapable());
     try testing.expect(scroll.recorded);
-    // /tree is read-only; should not be recorded.
     const tree = findSchema(schemas, "tree").?;
     try testing.expect(!tree.recorded);
     try testing.expect(tree.produces_data);
-    // /setChecked's `checked` field carries default=true.
     const set_checked = findSchema(schemas, "setChecked").?;
     var checked_default_true = false;
     for (set_checked.fields) |f| {
@@ -425,7 +395,6 @@ test "globalSchemas: comptime tool defs reduce cleanly" {
     }
     try testing.expect(checked_default_true);
 
-    // canonical lookup matches search lookup
     try testing.expect(findSchemaCanonical(schemas, "goto") == goto);
     try testing.expect(findSchemaCanonical(schemas, "unknown_tool") == null);
 }

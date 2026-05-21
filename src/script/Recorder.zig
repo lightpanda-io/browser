@@ -129,6 +129,8 @@ fn disable(self: *Recorder, err: anyerror) void {
     }
 }
 
+// --- Tests ---
+
 fn parseLine(arena: std.mem.Allocator, line: []const u8) Command {
     return Command.parse(arena, line) catch unreachable;
 }

@@ -62,18 +62,22 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool_name: []const u8, args: ?
 
     const is_fill = std.mem.eql(u8, tool_name, @tagName(browser_tools.Action.fill));
 
-    var needs_sub = false;
+    const needsSub = struct {
+        fn f(is_fill_: bool, key: []const u8, val: std.json.Value) bool {
+            if (is_fill_ and std.mem.eql(u8, key, "value")) return false;
+            return val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null;
+        }
+    }.f;
+
+    var needs_any = false;
     var it = v.object.iterator();
     while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        const val = entry.value_ptr.*;
-        const exclude = is_fill and std.mem.eql(u8, key, "value");
-        if (!exclude and val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null) {
-            needs_sub = true;
+        if (needsSub(is_fill, entry.key_ptr.*, entry.value_ptr.*)) {
+            needs_any = true;
             break;
         }
     }
-    if (!needs_sub) return v;
+    if (!needs_any) return v;
 
     var new_obj: std.json.ObjectMap = .init(arena);
     try new_obj.ensureTotalCapacity(v.object.count());
@@ -81,13 +85,11 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool_name: []const u8, args: ?
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         const val = entry.value_ptr.*;
-        const exclude = is_fill and std.mem.eql(u8, key, "value");
-        if (!exclude and val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null) {
-            const resolved = try browser_tools.substituteEnvVars(arena, val.string);
-            try new_obj.put(key, .{ .string = resolved });
-            continue;
-        }
-        try new_obj.put(key, val);
+        const new_val: std.json.Value = if (needsSub(is_fill, key, val))
+            .{ .string = try browser_tools.substituteEnvVars(arena, val.string) }
+        else
+            val;
+        try new_obj.put(key, new_val);
     }
     return .{ .object = new_obj };
 }

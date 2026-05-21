@@ -17,15 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! REPL-only meta slash commands and re-exports of the PandaScript schema
-//! primitives. The actual slash-command grammar lives in `script/schema.zig`;
-//! this module keeps the agent-only meta commands (`/help`, `/quit`,
-//! `/verbosity`) that aren't part of the script.
+//! primitives. The actual slash-command grammar lives in `script/schema.zig`.
 
 const std = @import("std");
 const lp = @import("lightpanda");
 const schema = lp.script.schema;
 
-// Re-export so existing call sites (Agent, Terminal) keep their import path.
 pub const SchemaInfo = schema.SchemaInfo;
 pub const ParseError = schema.ParseError;
 pub const Split = schema.Split;
@@ -37,8 +34,7 @@ pub const findSchema = schema.findSchema;
 pub const findSchemaCanonical = schema.findSchemaCanonical;
 pub const splitNameRest = schema.splitNameRest;
 
-/// Meta slash commands handled directly by the agent (not by ToolExecutor).
-/// Kept in sync with `handleMeta` in Agent.zig.
+/// Meta slash commands handled directly by Agent.handleMeta.
 pub const MetaCommand = struct {
     name: [:0]const u8,
     /// Ghost-text fragment shown after the name + space. Empty when the
