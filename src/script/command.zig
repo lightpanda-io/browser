@@ -106,8 +106,6 @@ pub const Command = union(enum) {
 
         const split = schema.splitNameRest(trimmed[1..]) orelse return error.MissingName;
 
-        // LLM-trigger meta commands. They live in the language (recordable)
-        // but execution happens in the REPL/runScript layer.
         if (std.ascii.eqlIgnoreCase(split.name, "login")) {
             if (split.rest.len > 0) return error.MalformedKv;
             return .{ .login = {} };
@@ -135,19 +133,15 @@ pub const Command = union(enum) {
         }
     }
 
-    /// Construct a Command for a tool call. Used by recording paths that
-    /// already have the `(name, args)` shape (MCP dispatch, LLM tool calls).
-    /// The `name` slice must live as long as the Command (typically a
-    /// `tool_defs`-owned slice, which is process-lifetime). Args borrow
-    /// from the caller — use `fromToolCallOwned` when the Command outlives
-    /// the args' arena.
+    /// `name` and `arguments` must outlive the returned Command. Use
+    /// `fromToolCallOwned` when that guarantee doesn't hold.
     pub fn fromToolCall(tool_name: []const u8, arguments: ?std.json.Value) Command {
         return .{ .tool_call = .{ .name = tool_name, .args = arguments } };
     }
 
-    /// Same as `fromToolCall` but deep-copies `arguments` into `arena`.
-    /// Use when the Command must outlive the original args buffer (e.g. the
-    /// self-heal path returns Commands across an arena deinit).
+    /// Deep-copies `arguments` into `arena` so the Command can outlive the
+    /// caller's args buffer (e.g. the self-heal path returns Commands across
+    /// an arena deinit).
     pub fn fromToolCallOwned(arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) std.mem.Allocator.Error!Command {
         const owned_name = if (schema.findSchemaCanonical(schema.globalSchemas(), tool_name)) |s| s.tool_name else try arena.dupe(u8, tool_name);
         const owned_args = if (arguments) |v| try dupeJsonValue(arena, v) else null;
@@ -293,8 +287,7 @@ fn dupeJsonValue(a: std.mem.Allocator, value: std.json.Value) std.mem.Allocator.
 // --- Formatting ---
 
 fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-    const schemas = schema.globalSchemas();
-    const s_opt = schema.findSchema(schemas, tc.name);
+    const s_opt = schema.findSchemaCanonical(schema.globalSchemas(), tc.name);
     try writer.writeByte('/');
     try writer.writeAll(tc.name);
 

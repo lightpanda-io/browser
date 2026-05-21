@@ -526,9 +526,8 @@ pub fn call(
     };
 }
 
-/// Run JavaScript against the current page, skipping the JSON parameter
-/// round-trip that `callEval` requires. The script need not be 0-terminated;
-/// a copy is made internally.
+/// Run JavaScript against the current page. The script need not be
+/// 0-terminated; a copy is made internally.
 pub fn evalScript(
     arena: std.mem.Allocator,
     session: *lp.Session,

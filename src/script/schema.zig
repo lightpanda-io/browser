@@ -275,28 +275,38 @@ pub fn parseValue(arena: std.mem.Allocator, schema: *const SchemaInfo, rest: []c
 
     // Default-true required booleans (e.g. setChecked.checked) are filled in
     // when omitted, so `/setChecked selector='#a'` works without `checked=true`.
-    var with_defaults: std.ArrayList(KvPair) = .empty;
-    try with_defaults.ensureTotalCapacity(arena, pairs.len + schema.required.len);
-    with_defaults.appendSliceAssumeCapacity(pairs);
-
+    var missing_defaults: usize = 0;
     for (schema.required) |req| {
         var found = false;
-        for (with_defaults.items) |p| if (std.mem.eql(u8, p.key, req)) {
+        for (pairs) |p| if (std.mem.eql(u8, p.key, req)) {
             found = true;
             break;
         };
         if (found) continue;
-        for (schema.fields) |f| {
-            if (std.mem.eql(u8, f.name, req) and f.default_true) {
-                with_defaults.appendAssumeCapacity(.{ .key = req, .value = "true" });
-                found = true;
-                break;
-            }
-        }
-        if (!found) return error.MissingRequired;
+        const has_default = blk: for (schema.fields) |f| {
+            if (std.mem.eql(u8, f.name, req) and f.default_true) break :blk true;
+        } else false;
+        if (!has_default) return error.MissingRequired;
+        missing_defaults += 1;
     }
 
-    return try buildValue(arena, schema, with_defaults.items);
+    if (missing_defaults == 0) return try buildValue(arena, schema, pairs);
+
+    const with_defaults = try arena.alloc(KvPair, pairs.len + missing_defaults);
+    @memcpy(with_defaults[0..pairs.len], pairs);
+    var next = pairs.len;
+    for (schema.required) |req| {
+        var found = false;
+        for (pairs) |p| if (std.mem.eql(u8, p.key, req)) {
+            found = true;
+            break;
+        };
+        if (found) continue;
+        with_defaults[next] = .{ .key = req, .value = "true" };
+        next += 1;
+    }
+
+    return try buildValue(arena, schema, with_defaults);
 }
 
 const KvPair = struct {
@@ -384,11 +394,8 @@ fn coerce(arena: std.mem.Allocator, schema: *const SchemaInfo, key: []const u8, 
 
 // --- Global lazy schema cache ---
 //
-// `Command.parse` and `Command.format` need schemas to decide between
-// positional and kv form, but most callers (recorder, MCP, tests) don't have
-// an agent-scoped cache to thread through. Lazily build a process-wide cache
-// here so those paths don't have to. Single-threaded REPL only — if
-// multi-threaded usage emerges, swap the guard for `std.Once` semantics.
+// Single-threaded REPL only — if multi-threaded usage emerges, swap the guard
+// for `std.Once` semantics.
 
 var global_failed: bool = false;
 var global_schemas_storage: [browser_tools.tool_defs.len]SchemaInfo = undefined;

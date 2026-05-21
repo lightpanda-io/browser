@@ -411,10 +411,7 @@ fn runRepl(self: *Agent) void {
 
         if (line.len == 0) continue;
 
-        // Meta slash commands (/help, /quit, /verbosity) aren't part of
-        // PandaScript — they're REPL-only and never recorded. Intercept
-        // before Command.parse so they don't surface as UnknownTool.
-        if (line.len > 0 and line[0] == '/') {
+        if (line[0] == '/') {
             const split = SlashCommand.splitNameRest(line[1..]) orelse continue :repl;
             if (SlashCommand.findMeta(split.name) != null) {
                 if (self.handleMeta(split.name, split.rest)) break :repl;
@@ -453,8 +450,6 @@ fn runRepl(self: *Agent) void {
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
             },
             .tool_call => |tc| {
-                // We just parsed `line` as `.tool_call` — it started with `/`,
-                // so the name+rest split is guaranteed to succeed.
                 const split = SlashCommand.splitNameRest(line[1..]) orelse unreachable;
                 self.terminal.beginTool(tc.name, split.rest);
                 const result = self.cmd_runner.executeWithResult(aa, cmd);

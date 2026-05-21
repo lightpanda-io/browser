@@ -96,13 +96,6 @@ pub fn getCurrentUrl(self: *ToolExecutor) []const u8 {
     return browser_tools.currentUrlOrPlaceholder(self.session);
 }
 
-/// Run a JavaScript expression. Operational failures (OOM, missing page)
-/// come back as `ToolError`; JS errors are returned in-band as
-/// `ToolResult.is_error = true`.
-pub fn callEval(self: *ToolExecutor, arena: std.mem.Allocator, script: []const u8) browser_tools.ToolError!browser_tools.ToolResult {
-    return browser_tools.evalScript(arena, self.session, &self.node_registry, script);
-}
-
 pub fn call(self: *ToolExecutor, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError!browser_tools.ToolResult {
     const arguments: ?std.json.Value = if (arguments_json.len > 0)
         std.json.parseFromSliceLeaky(std.json.Value, arena, arguments_json, .{}) catch
@@ -118,8 +111,4 @@ pub fn call(self: *ToolExecutor, arena: std.mem.Allocator, tool_name: []const u8
 /// have a `std.json.Value`.
 pub fn callValue(self: *ToolExecutor, arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) browser_tools.ToolError!browser_tools.ToolResult {
     return browser_tools.call(arena, self.session, &self.node_registry, tool_name, arguments);
-}
-
-pub fn extract(self: *ToolExecutor, arena: std.mem.Allocator, schema_json: []const u8) browser_tools.ToolError!browser_tools.ToolResult {
-    return browser_tools.extract(arena, self.session, &self.node_registry, schema_json);
 }
