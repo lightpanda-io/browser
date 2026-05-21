@@ -431,13 +431,16 @@ pub fn _request(_: *anyopaque, transfer: *Transfer) !void {
     return transfer.client.process(transfer);
 }
 
-// Ownership contract: from the moment this function is entered, the
-// HttpClient owns `req` — specifically `req.headers` (a curl_slist).
-// On success, transfer.deinit eventually frees it. On any failure path
-// inside this function, we free it before returning the error. Callers
-// must NOT pair `request()` with their own `errdefer headers.deinit()`
-// — that's a double-free.
 pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
+    _ = try self.requestT(req, owner);
+}
+
+// Like `request`, but returns the created `*Transfer`. The caller does not own
+// the returned `*Transfer` and must thus use it with care. From the moment this
+// function is entered, the HttpClient owns `req` — specifically `req.headers`
+// On success, transfer.deinit eventually frees it. On any failure path inside
+// this function, we free it before returning the error.
+fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
     const arena = self.arena_pool.acquire(.small, "Request.arena") catch |err| {
         req.headers.deinit();
         return err;
@@ -490,6 +493,8 @@ pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
         }
         return err;
     };
+
+    return transfer;
 }
 
 const SyncContext = struct {
@@ -546,10 +551,21 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     r.done_callback = SyncContext.doneCallback;
     r.error_callback = SyncContext.errorCallback;
     r.shutdown_callback = SyncContext.shutdownCallback;
-    try self.request(r, null);
+    const transfer = try self.requestT(r, null);
 
     while (sync_ctx.completion == .in_progress) {
-        try self.tick(200, .sync_wait);
+        self.tick(200, .sync_wait) catch |err| {
+            if (sync_ctx.completion == .in_progress) {
+                // tick appears to have failed for a reason not related to our
+                // transfer. This is a lose-lose situation, we need to surface
+                // this error; we need to return. This breaks the "sync" nature
+                // and, more dangerously, transfer.req.ctx references a stack
+                // value (&sync_ctx). We must abort the transfer to prevent a
+                // dangling pointer.
+                transfer.abort(err);
+            }
+            return err;
+        };
     }
 
     switch (sync_ctx.completion) {
