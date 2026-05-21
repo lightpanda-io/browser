@@ -149,7 +149,7 @@ pub const tool_defs = [_]ToolDef{
     .{
         .name = "extract",
         .description =
-        \\Extract structured data from the current page using a small JSON schema. Prefer this over `markdown` or `eval` whenever the user asked for a specific value or list (a score, price, count, profile field, headlines, …) — the result is returned as JSON AND the call is recorded as an `EXTRACT` PandaScript line, so a later replay (no LLM) prints the answer to stdout. Use `markdown` / `tree` / `interactiveElements` only to discover the right selector, then commit to one `extract` call.
+        \\Extract structured data from the current page using a small JSON schema. Prefer this over `markdown` or `eval` whenever the user asked for a specific value or list (a score, price, count, profile field, headlines, …) — the result is returned as JSON AND the call is recorded as an `/extract` PandaScript line, so a later replay (no LLM) prints the answer to stdout. Use `markdown` / `tree` / `interactiveElements` only to discover the right selector, then commit to one `extract` call.
         \\
         \\Schema is a JSON object literal (pass it as a string in `schema`). Each value picks what to lift out:
         \\  "<sel>"                                → first match's textContent.trim() (string|null)

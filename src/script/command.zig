@@ -87,10 +87,6 @@ pub const Command = union(enum) {
     }
 
     pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!Command {
-        return parseWithSchemas(arena, line, schema.globalSchemas());
-    }
-
-    pub fn parseWithSchemas(arena: std.mem.Allocator, line: []const u8, schemas: []const schema.SchemaInfo) ParseError!Command {
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) return .{ .comment = {} };
         if (trimmed[0] == '#') return .{ .comment = {} };
@@ -107,7 +103,7 @@ pub const Command = union(enum) {
             return .{ .accept_cookies = {} };
         }
 
-        const s = schema.findSchema(schemas, split.name) orelse return error.UnknownTool;
+        const s = schema.findSchema(schema.globalSchemas(), split.name) orelse return error.UnknownTool;
         const args = try schema.parseValue(arena, s, split.rest);
         return .{ .tool_call = .{ .action = s.action, .args = args } };
     }
@@ -162,8 +158,6 @@ pub const Command = union(enum) {
         };
 
         pub fn next(self: *ScriptIterator) ParseError!?Entry {
-            const schemas = schema.globalSchemas();
-
             while (self.lines.next()) |line| {
                 self.line_num += 1;
                 const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
@@ -171,7 +165,7 @@ pub const Command = union(enum) {
 
                 const line_start = @intFromPtr(line.ptr) - @intFromPtr(self.lines.buffer.ptr);
 
-                if (try self.tryBlockOpener(trimmed, schemas)) |opener| {
+                if (tryBlockOpener(trimmed)) |opener| {
                     const start_line = self.line_num;
                     const body = try self.collectMultiLineBlock(opener.quote_type);
                     const span_end = self.lines.index orelse self.lines.buffer.len;
@@ -194,7 +188,7 @@ pub const Command = union(enum) {
                     .line_num = self.line_num,
                     .opener_line = trimmed,
                     .raw_span = self.lines.buffer[line_start..span_end],
-                    .command = try Command.parseWithSchemas(self.allocator, trimmed, schemas),
+                    .command = try Command.parse(self.allocator, trimmed),
                 };
             }
             return null;
@@ -206,10 +200,10 @@ pub const Command = union(enum) {
             quote_type: QuoteType,
         };
 
-        fn tryBlockOpener(_: *ScriptIterator, line: []const u8, schemas: []const schema.SchemaInfo) ParseError!?BlockOpener {
+        fn tryBlockOpener(line: []const u8) ?BlockOpener {
             if (line.len < 2 or line[0] != '/') return null;
             const split = schema.splitNameRest(line[1..]) orelse return null;
-            const s = schema.findSchema(schemas, split.name) orelse return null;
+            const s = schema.findSchema(schema.globalSchemas(), split.name) orelse return null;
             if (!s.isMultiLineCapable()) return null;
             const qt = QuoteType.fromLiteral(split.rest) orelse return null;
             return .{ .action = s.action, .field = s.required[0], .quote_type = qt };

@@ -31,29 +31,25 @@ pub const max_hint_slots = schema.max_hint_slots;
 
 pub const globalSchemas = schema.globalSchemas;
 pub const findSchema = schema.findSchema;
-pub const findSchemaCanonical = schema.findSchemaCanonical;
 pub const splitNameRest = schema.splitNameRest;
 
 /// Meta slash commands handled directly by Agent.handleMeta.
 pub const MetaCommand = struct {
+    kind: Kind,
     name: [:0]const u8,
     /// Ghost-text fragment shown after the name + space. Empty when the
     /// command takes no args (`/help`, `/quit`).
     hint: []const u8,
     /// Tab-completion candidates for the first positional arg.
     values: []const [:0]const u8,
+
+    pub const Kind = enum { help, quit, verbosity };
 };
 
 pub const meta_commands = [_]MetaCommand{
-    .{ .name = "help", .hint = "", .values = &.{} },
-    .{ .name = "quit", .hint = "", .values = &.{} },
-    .{ .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" } },
-};
-
-pub const meta_names: [meta_commands.len][:0]const u8 = blk: {
-    var arr: [meta_commands.len][:0]const u8 = undefined;
-    for (meta_commands, 0..) |m, i| arr[i] = m.name;
-    break :blk arr;
+    .{ .kind = .help, .name = "help", .hint = "", .values = &.{} },
+    .{ .kind = .quit, .name = "quit", .hint = "", .values = &.{} },
+    .{ .kind = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" } },
 };
 
 pub fn findMeta(name: []const u8) ?*const MetaCommand {

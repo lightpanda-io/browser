@@ -143,9 +143,6 @@ notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
-/// Slice is owned by `allocator`; each entry's `parameters` JSON value points
-/// into the schema module's process-lifetime arena, so no per-entry free.
-tools: []const zenai.provider.Tool,
 terminal: Terminal,
 cmd_runner: CommandRunner,
 verifier: Verifier,
@@ -242,7 +239,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .browser = undefined,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
-        .tools = &.{},
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
         .cmd_runner = undefined,
         .verifier = undefined,
@@ -260,9 +256,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer self.node_registry.deinit();
     errdefer self.terminal.deinit();
     errdefer self.message_arena.deinit();
-
-    self.tools = try buildTools(allocator);
-    errdefer allocator.free(self.tools);
 
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
@@ -308,7 +301,6 @@ pub fn deinit(self: *Agent) void {
     self.terminal.deinit();
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
-    self.allocator.free(self.tools);
     self.node_registry.deinit();
     self.browser.deinit();
     self.notification.deinit();
@@ -324,13 +316,19 @@ pub fn deinit(self: *Agent) void {
     self.allocator.destroy(self);
 }
 
-fn buildTools(allocator: std.mem.Allocator) ![]const zenai.provider.Tool {
-    const schemas = SlashCommand.globalSchemas();
-    const tools = try allocator.alloc(zenai.provider.Tool, schemas.len);
-    for (schemas, 0..) |s, i| {
-        tools[i] = .{ .name = s.tool_name, .description = s.description, .parameters = s.parameters };
+// Tool definitions are compile-time constant; project them once per process.
+var global_tools_storage: [browser_tools.tool_defs.len]zenai.provider.Tool = undefined;
+var global_tools_once = std.once(initGlobalTools);
+
+fn initGlobalTools() void {
+    for (SlashCommand.globalSchemas(), 0..) |s, i| {
+        global_tools_storage[i] = .{ .name = s.tool_name, .description = s.description, .parameters = s.parameters };
     }
-    return tools;
+}
+
+fn globalTools() []const zenai.provider.Tool {
+    global_tools_once.call();
+    return global_tools_storage[0..browser_tools.tool_defs.len];
 }
 
 /// Called from the sighandler thread — sets the flag only, no terminal
@@ -423,7 +421,7 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
 fn runRepl(self: *Agent) void {
     self.terminal.printInfo("Lightpanda Agent (type '/quit' to exit)");
     self.terminal.printInfo("Tab completes/cycles through commands; the dim grey ghost shows the first match.");
-    log.debug(.app, "tools loaded", .{ .count = self.tools.len });
+    log.debug(.app, "tools loaded", .{ .count = globalTools().len });
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
@@ -447,8 +445,8 @@ fn runRepl(self: *Agent) void {
 
         const slash_split: ?SlashCommand.Split = if (trimmed[0] == '/') SlashCommand.splitNameRest(trimmed[1..]) else null;
         if (slash_split) |split| {
-            if (SlashCommand.findMeta(split.name) != null) {
-                if (self.handleMeta(split.name, split.rest)) break :repl;
+            if (SlashCommand.findMeta(split.name)) |meta| {
+                if (self.handleMeta(meta, split.rest)) break :repl;
                 continue :repl;
             }
         }
@@ -457,7 +455,7 @@ fn runRepl(self: *Agent) void {
         defer arena.deinit();
         const aa = arena.allocator();
 
-        const cmd = Command.parseWithSchemas(aa, line, SlashCommand.globalSchemas()) catch |err| switch (err) {
+        const cmd = Command.parse(aa, line) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
                     self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.");
@@ -498,17 +496,12 @@ fn runRepl(self: *Agent) void {
 
 /// Handle a meta slash command (/quit, /help, /verbosity). These aren't part
 /// of PandaScript — they're REPL-only and never recorded. Returns `true` if
-/// the user asked to quit. Caller has already verified `name` is in
-/// `SlashCommand.meta_commands`.
-fn handleMeta(self: *Agent, name: []const u8, rest: []const u8) bool {
-    if (std.mem.eql(u8, name, "quit")) return true;
-    if (std.mem.eql(u8, name, "help")) {
-        self.printSlashHelp(rest);
-        return false;
-    }
-    if (std.mem.eql(u8, name, "verbosity")) {
-        self.handleVerbosity(rest);
-        return false;
+/// the user asked to quit.
+fn handleMeta(self: *Agent, meta: *const SlashCommand.MetaCommand, rest: []const u8) bool {
+    switch (meta.kind) {
+        .quit => return true,
+        .help => self.printSlashHelp(rest),
+        .verbosity => self.handleVerbosity(rest),
     }
     return false;
 }
@@ -537,19 +530,15 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
         return;
     }
     const lookup = if (target[0] == '/') target[1..] else target;
-    if (std.ascii.eqlIgnoreCase(lookup, "help")) {
-        self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted");
-        return;
-    }
-    if (std.ascii.eqlIgnoreCase(lookup, "quit")) {
-        self.terminal.printInfo("/quit — exit the REPL");
-        return;
-    }
-    if (std.ascii.eqlIgnoreCase(lookup, "verbosity")) {
-        self.terminal.printInfoFmt(
-            "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
-            .{@tagName(self.terminal.verbosity)},
-        );
+    if (SlashCommand.findMeta(lookup)) |meta| {
+        switch (meta.kind) {
+            .help => self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted"),
+            .quit => self.terminal.printInfo("/quit — exit the REPL"),
+            .verbosity => self.terminal.printInfoFmt(
+                "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
+                .{@tagName(self.terminal.verbosity)},
+            ),
+        }
         return;
     }
     const schema = SlashCommand.findSchema(SlashCommand.globalSchemas(), lookup) orelse {
@@ -825,7 +814,7 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = self.tools,
+            .tools = globalTools(),
             .max_tool_calls = 4,
             .max_tokens = 4096,
             .tool_choice = .auto,
@@ -979,7 +968,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = self.tools,
+            .tools = globalTools(),
             .max_turns = 30,
             // Safety net; max_turns is the primary terminal.
             .max_tool_calls = 200,

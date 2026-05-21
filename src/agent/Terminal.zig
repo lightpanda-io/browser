@@ -64,10 +64,10 @@ stderr_is_tty: bool,
 spinner: Spinner,
 
 // Flat name list for the "match any slash command" search/completion paths.
-const all_slash_names: [browser_tools.names.len + SlashCommand.meta_names.len][]const u8 = blk: {
-    var arr: [browser_tools.names.len + SlashCommand.meta_names.len][]const u8 = undefined;
+const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len][]const u8 = blk: {
+    var arr: [browser_tools.names.len + SlashCommand.meta_commands.len][]const u8 = undefined;
     for (browser_tools.names, 0..) |n, i| arr[i] = n;
-    for (SlashCommand.meta_names, 0..) |m, i| arr[browser_tools.names.len + i] = m;
+    for (SlashCommand.meta_commands, 0..) |m, i| arr[browser_tools.names.len + i] = m.name;
     break :blk arr;
 };
 
@@ -392,7 +392,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
 /// Join `fragments` into `hint_buf` with single-space separators, prefixed by
 /// `lead` (typically `""` or `" "`). Null-terminates and returns the isocline
 /// C pointer, or null when there's nothing to render or the buffer would
-/// overflow. Shared by the slash and PandaScript hint renderers.
+/// overflow.
 fn writeHints(lead: []const u8, fragments: []const []const u8) [*c]const u8 {
     if (fragments.len == 0) return null;
     const cap = hint_buf.len - 1;
@@ -516,7 +516,7 @@ fn slashHasPrefix(name: []const u8) bool {
 }
 
 fn slashHasParams(name: []const u8) bool {
-    if (SlashCommand.findSchemaCanonical(SlashCommand.globalSchemas(), name)) |s| return s.hints.len > 0;
+    if (SlashCommand.findSchema(SlashCommand.globalSchemas(), name)) |s| return s.hints.len > 0;
     if (SlashCommand.findMeta(name)) |m| return m.hint.len > 0;
     return false;
 }

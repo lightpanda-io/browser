@@ -53,9 +53,11 @@ pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Co
     };
 }
 
-/// Resolve `$LP_*` placeholders in string args before the tool runs. `fill`'s
-/// `value` is excluded — the tool resolves it internally and rewrites the
-/// result text so the credential never appears in the echoed confirmation.
+/// Resolve `$LP_*` placeholders in every string arg before the tool runs.
+/// `fill.value` is the one exception: the tool resolves it internally and
+/// rewrites the result text so the credential never appears in the echoed
+/// confirmation. Every other string field (selectors, urls, scripts, schemas)
+/// is substituted here.
 fn substituteStringArgs(arena: std.mem.Allocator, action: browser_tools.Action, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;

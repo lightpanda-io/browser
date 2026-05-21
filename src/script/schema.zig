@@ -188,12 +188,6 @@ pub fn findSchema(schemas: []const SchemaInfo, name: []const u8) ?*const SchemaI
     return null;
 }
 
-pub fn findSchemaCanonical(schemas: []const SchemaInfo, name: []const u8) ?*const SchemaInfo {
-    std.debug.assert(schemas.len == browser_tools.tool_defs.len);
-    const action = std.meta.stringToEnum(browser_tools.Action, name) orelse return null;
-    return &schemas[@intFromEnum(action)];
-}
-
 pub const Split = struct {
     name: []const u8,
     rest: []const u8,
@@ -246,21 +240,10 @@ pub fn parseValue(arena: std.mem.Allocator, schema: *const SchemaInfo, rest: []c
 
     // Default-true booleans (e.g. setChecked.checked) so `/setChecked
     // selector='#a'` works without `checked=true`.
-    for (schema.required) |req| {
-        var found = false;
-        for (list.items) |p| {
-            if (std.mem.eql(u8, p.key, req)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            if (schema.isFieldDefaultTrue(req)) {
-                list.appendAssumeCapacity(.{ .key = req, .value = "true" });
-            } else {
-                return error.MissingRequired;
-            }
-        }
+    required: for (schema.required) |req| {
+        for (list.items) |p| if (std.mem.eql(u8, p.key, req)) continue :required;
+        if (!schema.isFieldDefaultTrue(req)) return error.MissingRequired;
+        list.appendAssumeCapacity(.{ .key = req, .value = "true" });
     }
 
     return try buildValue(arena, schema, list.items);
@@ -348,7 +331,9 @@ fn coerce(arena: std.mem.Allocator, schema: *const SchemaInfo, key: []const u8, 
     return .{ .string = try arena.dupe(u8, value) };
 }
 
-// --- Global lazy schema cache (process-lifetime) ---
+// --- Global lazy schema cache ---
+//
+// `global_arena` is never deinit'd: it's process-lifetime, freed at exit.
 
 var global_schemas_storage: [browser_tools.tool_defs.len]SchemaInfo = undefined;
 var global_arena: std.heap.ArenaAllocator = undefined;
@@ -396,9 +381,6 @@ test "globalSchemas: comptime tool defs reduce cleanly" {
         if (std.mem.eql(u8, f.name, "checked")) checked_default_true = f.default_true;
     }
     try testing.expect(checked_default_true);
-
-    try testing.expect(findSchemaCanonical(schemas, "goto") == goto);
-    try testing.expect(findSchemaCanonical(schemas, "unknown_tool") == null);
 }
 
 test "parseValue: single-required positional binds" {
