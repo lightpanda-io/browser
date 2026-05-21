@@ -30,7 +30,7 @@ const Verifier = lp.script.Verifier;
 const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
-const ToolExecutor = @import("ToolExecutor.zig");
+const CDPNode = @import("../cdp/Node.zig");
 const Terminal = @import("Terminal.zig");
 const CommandRunner = @import("CommandRunner.zig");
 const SlashCommand = @import("SlashCommand.zig");
@@ -139,7 +139,14 @@ const synthesis_prompt =
 
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
-tool_executor: *ToolExecutor,
+notification: *lp.Notification,
+browser: lp.Browser,
+session: *lp.Session,
+node_registry: CDPNode.Registry,
+tool_schema_arena: std.heap.ArenaAllocator,
+/// Schemas parsed once at init from `browser_tools.tool_defs`. The slice and
+/// every JSON `Value` inside live in `tool_schema_arena`.
+tools: []const zenai.provider.Tool,
 terminal: Terminal,
 cmd_runner: CommandRunner,
 verifier: Verifier,
@@ -207,7 +214,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     }
 
     // Resolve model BEFORE the heavy init so --pick-model's prompt fires
-    // before tool_executor / ai_client setup.
+    // before browser / ai_client setup.
     // Precedence: --model > --pick-model > defaultModel.
     const model: []u8 = if (opts.model) |m|
         try allocator.dupe(u8, m)
@@ -217,29 +224,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         try allocator.dupe(u8, "");
     errdefer allocator.free(model);
 
-    const tool_executor: *ToolExecutor = try .init(allocator, app);
-    errdefer tool_executor.deinit();
+    const notification: *lp.Notification = try .init(allocator);
+    errdefer notification.deinit();
 
     const self = try allocator.create(Agent);
     errdefer allocator.destroy(self);
-
-    const ai_client: ?zenai.provider.Client = if (llm) |l| switch (l.provider) {
-        inline else => |tag| blk: {
-            const ProviderClient = zenai.provider.Client;
-            const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
-            const Client = @typeInfo(ClientPtr).pointer.child;
-            const client = try allocator.create(Client);
-            const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
-            client.* = Client.init(allocator, l.key, if (url) |u| .{ .base_url = u } else .{});
-            break :blk @unionInit(ProviderClient, @tagName(tag), client);
-        },
-    } else null;
-    errdefer if (ai_client) |c| switch (c) {
-        inline else => |client| {
-            client.deinit();
-            allocator.destroy(client);
-        },
-    };
 
     const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
 
@@ -249,11 +238,16 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     self.* = .{
         .allocator = allocator,
-        .ai_client = ai_client,
-        .tool_executor = tool_executor,
+        .ai_client = null,
+        .notification = notification,
+        .browser = undefined,
+        .session = undefined,
+        .node_registry = CDPNode.Registry.init(allocator),
+        .tool_schema_arena = .init(allocator),
+        .tools = &.{},
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
         .cmd_runner = undefined,
-        .verifier = .{ .session = tool_executor.session, .node_registry = &tool_executor.node_registry },
+        .verifier = undefined,
         .recorder = null,
         .messages = .empty,
         .message_arena = .init(allocator),
@@ -265,8 +259,35 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
     };
+    errdefer self.tool_schema_arena.deinit();
+    errdefer self.node_registry.deinit();
 
-    self.cmd_runner = .init(tool_executor, &self.terminal);
+    self.tools = try buildTools(self.tool_schema_arena.allocator());
+
+    try self.browser.init(app, .{}, null);
+    errdefer self.browser.deinit();
+
+    self.session = try self.browser.newSession(notification);
+    self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
+    self.cmd_runner = .init(self.session, &self.node_registry, &self.terminal);
+
+    self.ai_client = if (llm) |l| switch (l.provider) {
+        inline else => |tag| blk: {
+            const ProviderClient = zenai.provider.Client;
+            const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
+            const Client = @typeInfo(ClientPtr).pointer.child;
+            const client = try allocator.create(Client);
+            const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
+            client.* = Client.init(allocator, l.key, if (url) |u| .{ .base_url = u } else .{});
+            break :blk @unionInit(ProviderClient, @tagName(tag), client);
+        },
+    } else null;
+    errdefer if (self.ai_client) |c| switch (c) {
+        inline else => |client| {
+            client.deinit();
+            allocator.destroy(client);
+        },
+    };
 
     if (will_repl) self.terminal.attachCompleter();
 
@@ -287,7 +308,10 @@ pub fn deinit(self: *Agent) void {
     self.terminal.deinit();
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
-    self.tool_executor.deinit();
+    self.tool_schema_arena.deinit();
+    self.node_registry.deinit();
+    self.browser.deinit();
+    self.notification.deinit();
     if (self.ai_client) |ai_client| {
         switch (ai_client) {
             inline else => |c| {
@@ -298,6 +322,15 @@ pub fn deinit(self: *Agent) void {
     }
     self.allocator.free(self.model);
     self.allocator.destroy(self);
+}
+
+fn buildTools(arena: std.mem.Allocator) ![]const zenai.provider.Tool {
+    const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
+    for (browser_tools.tool_defs, 0..) |t, i| {
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, t.input_schema, .{});
+        tools[i] = .{ .name = t.name, .description = t.description, .parameters = parsed };
+    }
+    return tools;
 }
 
 /// Called from the sighandler thread — sets the flag only, no terminal
@@ -338,7 +371,7 @@ fn checkCancel(ctx: *anyopaque) bool {
 /// already happened on its path.
 fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
     self.rollbackMessages(baseline);
-    self.tool_executor.browser.env.cancelTerminate();
+    self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
     return error.UserCancelled;
 }
@@ -390,7 +423,7 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
 fn runRepl(self: *Agent) void {
     self.terminal.printInfo("Lightpanda Agent (type '/quit' to exit)");
     self.terminal.printInfo("Tab completes/cycles through commands; the dim grey ghost shows the first match.");
-    log.debug(.app, "tools loaded", .{ .count = self.tool_executor.tools.len });
+    log.debug(.app, "tools loaded", .{ .count = self.tools.len });
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
@@ -406,7 +439,7 @@ fn runRepl(self: *Agent) void {
         // Slash commands and idle Ctrl-C set the cancel flag without
         // clearing V8's terminate state; drain both before the next turn.
         if (self.cancel_requested.swap(false, .acq_rel)) {
-            self.tool_executor.browser.env.cancelTerminate();
+            self.browser.env.cancelTerminate();
         }
 
         if (line.len == 0) continue;
@@ -800,7 +833,7 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = self.tool_executor.tools,
+            .tools = self.tools,
             .max_tool_calls = 4,
             .max_tokens = 4096,
             .tool_choice = .auto,
@@ -846,7 +879,7 @@ fn attemptSelfHeal(self: *Agent, arena: std.mem.Allocator, failed_command: []con
         self_heal_prompt_prefix,
         failed_command,
         self_heal_prompt_page_state,
-        self.tool_executor.getCurrentUrl(),
+        browser_tools.currentUrlOrPlaceholder(self.session),
     }) catch return null;
     if (context_comment) |c|
         aw.writer.print("\n\nThe original user request that generated this command was:\n{s}", .{c}) catch return null;
@@ -954,7 +987,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = self.tool_executor.tools,
+            .tools = self.tools,
             .max_turns = 30,
             // Safety net; max_turns is the primary terminal.
             .max_tool_calls = 200,
@@ -1142,7 +1175,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    if (self.tool_executor.callValue(allocator, tool_name, arguments)) |result| {
+    if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result| {
         const capped = capToolOutput(allocator, result.text);
         self.terminal.agentToolDone(tool_name, args_str, !result.is_error);
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);

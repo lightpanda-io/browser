@@ -20,17 +20,19 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const Command = lp.script.Command;
-const ToolExecutor = @import("ToolExecutor.zig");
+const CDPNode = @import("../cdp/Node.zig");
 const Terminal = @import("Terminal.zig");
 
 const CommandRunner = @This();
 
-tool_executor: *ToolExecutor,
+session: *lp.Session,
+node_registry: *CDPNode.Registry,
 terminal: *Terminal,
 
-pub fn init(tool_executor: *ToolExecutor, terminal: *Terminal) CommandRunner {
+pub fn init(session: *lp.Session, node_registry: *CDPNode.Registry, terminal: *Terminal) CommandRunner {
     return .{
-        .tool_executor = tool_executor,
+        .session = session,
+        .node_registry = node_registry,
         .terminal = terminal,
     };
 }
@@ -45,7 +47,7 @@ pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Co
     };
     const substituted = substituteStringArgs(arena, tc.name, tc.args) catch
         return .{ .text = "out of memory", .is_error = true };
-    return self.tool_executor.callValue(arena, tc.name, substituted) catch |err| .{
+    return browser_tools.call(arena, self.session, self.node_registry, tc.name, substituted) catch |err| .{
         .text = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name, @errorName(err) }) catch "tool failed",
         .is_error = true,
     };

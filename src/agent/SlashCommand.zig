@@ -23,20 +23,15 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const browser_tools = lp.tools;
 const schema = lp.script.schema;
 
 // Re-export so existing call sites (Agent, Terminal) keep their import path.
-pub const FieldType = schema.FieldType;
-pub const FieldEntry = schema.FieldEntry;
-pub const HintSlot = schema.HintSlot;
 pub const SchemaInfo = schema.SchemaInfo;
 pub const ParseError = schema.ParseError;
 pub const Split = schema.Split;
 
 pub const max_hint_slots = schema.max_hint_slots;
 
-pub const buildSchemas = schema.buildSchemas;
 pub const globalSchemas = schema.globalSchemas;
 pub const findSchema = schema.findSchema;
 pub const findSchemaCanonical = schema.findSchemaCanonical;

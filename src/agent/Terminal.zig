@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const Config = lp.Config;
-const Command = lp.script.Command;
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
 const c = @cImport({
@@ -29,7 +28,6 @@ const c = @cImport({
 
 const Terminal = @This();
 
-const style_cmd = "ps-cmd";
 const style_slash = "ps-slash";
 const style_string = "ps-string";
 const style_var = "ps-var";
@@ -93,7 +91,6 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         _ = c.ic_set_hint_delay(0);
         _ = c.ic_enable_brace_insertion(true);
         // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
-        c.ic_style_def(style_cmd, "ansi-cyan bold");
         c.ic_style_def(style_slash, "ansi-magenta bold");
         c.ic_style_def(style_string, "ansi-green");
         c.ic_style_def(style_var, "ansi-yellow bold");

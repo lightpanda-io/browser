@@ -237,7 +237,8 @@ pub fn splitNameRest(input: []const u8) ?Split {
 
 /// Parse `rest` (the args portion of a slash command) into a `std.json.Value`
 /// shaped for the tool. Returns null when the schema takes no args and `rest`
-/// is empty; that lets the caller pass `null` straight to `tool_executor.call`.
+/// is empty; that lets the caller pass `null` straight to `tool_executor.call`
+/// without allocating an empty object.
 ///
 /// Argument-binding rules:
 ///   - Bare `{json}` payload — returned as-is after JSON parse. Pass-through
