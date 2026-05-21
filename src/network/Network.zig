@@ -787,7 +787,7 @@ pub fn run(self: *Network) void {
 
         if (self.shutdown.load(.acquire)) {
             // Drain any live CDP links so their workers can exit (issue #2510).
-            // Idempo tent — no-op once drained, safe to call every iteration
+            // Idempotent — no-op once drained, safe to call every iteration
             self.shutdownCdpLinks();
 
             if (running_handles == 0) {
