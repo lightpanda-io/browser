@@ -16,17 +16,14 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! PandaScript Command — one line of a `.lp` script.
+//! PandaScript Command — one line of a `.lp` script: a slash command, a
+//! `#`-comment, or one of two LLM triggers (`/login`, `/acceptCookies`).
+//! Anything else is a parse error; bare prose → LLM only happens in the
+//! live REPL and is dispatched there, not here.
 //!
-//! Post-unification PandaScript is just slash commands plus two LLM triggers
-//! and comments. Natural language is NOT part of the language: a line that
-//! is neither a slash command, a `#`-comment, nor blank is a parse error.
-//! Bare prose → LLM happens only in the live REPL when an LLM is configured,
-//! and is handled there, not here.
-//!
-//! `Command.parse` consumes a single line and returns a `Command`. Multi-line
-//! `/eval '''…'''` / `/extract '''…'''` blocks live in `ScriptIterator`,
-//! which assembles the body before calling `parse` on the synthesized line.
+//! Multi-line `/eval '''…'''` / `/extract '''…'''` blocks live in
+//! `ScriptIterator`, which assembles the body before calling `parse` on the
+//! synthesized line.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -54,7 +51,8 @@ pub const Command = union(enum) {
             .comment => false,
             .login, .accept_cookies => true,
             .tool_call => |tc| blk: {
-                if (!recordedByName(tc.name)) break :blk false;
+                const td = toolDef(tc.name) orelse break :blk false;
+                if (!td.recorded) break :blk false;
                 // backendNodeId-based calls aren't replayable (the id is
                 // invalidated by any DOM mutation), so keep them out of the
                 // recording even when the tool itself is recordable.
@@ -67,7 +65,7 @@ pub const Command = union(enum) {
 
     pub fn producesData(self: Command) bool {
         return switch (self) {
-            .tool_call => |tc| producesDataByName(tc.name),
+            .tool_call => |tc| if (toolDef(tc.name)) |td| td.produces_data else false,
             else => false,
         };
     }
@@ -84,7 +82,7 @@ pub const Command = union(enum) {
     /// `can_heal` flag in `tool_defs`; here it's just a lookup.
     pub fn canHeal(self: Command) bool {
         return switch (self) {
-            .tool_call => |tc| canHealByName(tc.name),
+            .tool_call => |tc| if (toolDef(tc.name)) |td| td.can_heal else false,
             else => false,
         };
     }
@@ -140,9 +138,20 @@ pub const Command = union(enum) {
     /// Construct a Command for a tool call. Used by recording paths that
     /// already have the `(name, args)` shape (MCP dispatch, LLM tool calls).
     /// The `name` slice must live as long as the Command (typically a
-    /// `tool_defs`-owned slice, which is process-lifetime).
+    /// `tool_defs`-owned slice, which is process-lifetime). Args borrow
+    /// from the caller — use `fromToolCallOwned` when the Command outlives
+    /// the args' arena.
     pub fn fromToolCall(tool_name: []const u8, arguments: ?std.json.Value) Command {
         return .{ .tool_call = .{ .name = tool_name, .args = arguments } };
+    }
+
+    /// Same as `fromToolCall` but deep-copies `arguments` into `arena`.
+    /// Use when the Command must outlive the original args buffer (e.g. the
+    /// self-heal path returns Commands across an arena deinit).
+    pub fn fromToolCallOwned(arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) std.mem.Allocator.Error!Command {
+        const owned_name = if (toolDef(tool_name)) |td| td.name else try arena.dupe(u8, tool_name);
+        const owned_args = if (arguments) |v| try dupeJsonValue(arena, v) else null;
+        return .{ .tool_call = .{ .name = owned_name, .args = owned_args } };
     }
 
     /// Walks `.lp` content line-by-line, gluing multi-line `'''…'''` blocks
@@ -255,27 +264,37 @@ pub const Command = union(enum) {
     };
 };
 
-// --- Recording-policy lookups (delegate to schema flags) ---
-
-fn recordedByName(name: []const u8) bool {
-    for (lp.tools.tool_defs) |td| {
-        if (std.mem.eql(u8, td.name, name)) return td.recorded;
+fn toolDef(name: []const u8) ?*const lp.tools.ToolDef {
+    for (&lp.tools.tool_defs) |*td| {
+        if (std.mem.eql(u8, td.name, name)) return td;
     }
-    return false;
+    return null;
 }
 
-fn canHealByName(name: []const u8) bool {
-    for (lp.tools.tool_defs) |td| {
-        if (std.mem.eql(u8, td.name, name)) return td.can_heal;
-    }
-    return false;
-}
-
-fn producesDataByName(name: []const u8) bool {
-    for (lp.tools.tool_defs) |td| {
-        if (std.mem.eql(u8, td.name, name)) return td.produces_data;
-    }
-    return false;
+/// Deep-copy a `std.json.Value`, duplicating all owned strings and containers
+/// into `a`. Used by `fromToolCallOwned` for the heal path.
+fn dupeJsonValue(a: std.mem.Allocator, value: std.json.Value) std.mem.Allocator.Error!std.json.Value {
+    return switch (value) {
+        .null, .bool, .integer, .float => value,
+        .number_string => |s| .{ .number_string = try a.dupe(u8, s) },
+        .string => |s| .{ .string = try a.dupe(u8, s) },
+        .array => |arr| blk: {
+            var new_arr = try std.json.Array.initCapacity(a, arr.items.len);
+            for (arr.items) |item| {
+                new_arr.appendAssumeCapacity(try dupeJsonValue(a, item));
+            }
+            break :blk .{ .array = new_arr };
+        },
+        .object => |obj| blk: {
+            var new_obj: std.json.ObjectMap = .init(a);
+            try new_obj.ensureTotalCapacity(@intCast(obj.count()));
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                new_obj.putAssumeCapacity(try a.dupe(u8, entry.key_ptr.*), try dupeJsonValue(a, entry.value_ptr.*));
+            }
+            break :blk .{ .object = new_obj };
+        },
+    };
 }
 
 // --- Formatting ---
@@ -312,7 +331,7 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
             if (args.get(req_name)) |v| {
                 if (v == .string) {
                     try writer.writeByte(' ');
-                    try formatPositional(writer, v.string);
+                    try formatString(writer, v.string);
                     positional_emitted = req_name;
                 }
             }
@@ -341,13 +360,8 @@ fn isDefaultTrueBool(s: *const schema.SchemaInfo, key: []const u8, v: std.json.V
     return false;
 }
 
-/// Positional and kv string emission share the same quoting rules — strings
-/// always quoted (or triple-quoted when they contain newlines) so a recorded
-/// line is unambiguous regardless of the value's content.
-fn formatPositional(writer: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {
-    return formatString(writer, s);
-}
-
+/// Strings are always quoted (or triple-quoted when they contain newlines)
+/// so a recorded line is unambiguous regardless of the value's content.
 fn formatString(writer: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {
     if (std.mem.indexOfScalar(u8, s, '\n') != null) {
         const q = QuoteType.pickFor(s).toLiteral();

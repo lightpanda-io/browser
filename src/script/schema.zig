@@ -226,7 +226,7 @@ pub fn splitNameRest(input: []const u8) ?Split {
 /// shaped for the tool. Returns null when the schema takes no args and `rest`
 /// is empty; that lets the caller pass `null` straight to `tool_executor.call`.
 ///
-/// Argument-binding rules (mirrors today's `/<name>` REPL parser):
+/// Argument-binding rules:
 ///   - Bare `{json}` payload — returned as-is after JSON parse. Pass-through
 ///     avoids re-stringifying the blob the LLM emitted.
 ///   - A single leading positional token binds to the schema's sole required

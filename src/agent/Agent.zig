@@ -836,7 +836,10 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     var cmds: std.ArrayList(Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
-        const cmd = Command.fromToolCall(tc.name, tc.arguments);
+        // Deep-copy into the caller's arena: `result.deinit()` (deferred above)
+        // frees `tc.arguments`'s backing arena before the returned cmds are
+        // formatted by `attemptSelfHeal`.
+        const cmd = try Command.fromToolCallOwned(arena, tc.name, tc.arguments);
         if (!cmd.canHeal()) {
             self.terminal.printInfoFmt(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
