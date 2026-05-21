@@ -683,6 +683,30 @@ fn processCdpEvents(self: *Network) void {
     }
 }
 
+// On shutdown, force-disconnect every still-live CDP link. Each link's
+// worker thread blocks in curl_multi_poll and is woken ONLY by this
+// (Network) thread via dropCdp -> handles.wakeup(). If the run loop
+// exits with links still live, those workers never wake and
+// Server.deinit() spins on active_threads forever (issue #2510).
+// Mirrors the peer-EOF path in processCdpEvents: dropCdp(notify=true)
+// pushes a .disconnect into the worker's inbox and wakes it, so
+// cdp.tick() returns false and the worker exits.
+fn shutdownCdpLinks(self: *Network) void {
+    self.cdp_mutex.lock();
+    defer self.cdp_mutex.unlock();
+
+    var it = self.cdp_links.first;
+    while (it) |node| {
+        it = node.next;
+        const link: *CdpLink = @fieldParentPtr("node", node);
+        if (link.state == .live) {
+            self.dropCdp(link, null, true);
+        }
+    }
+
+    self.cdp_unregister.broadcast();
+}
+
 pub fn run(self: *Network) void {
     var drain_buf: [64]u8 = undefined;
     var running_handles: c_int = 0;
@@ -767,13 +791,23 @@ pub fn run(self: *Network) void {
 
         self.fireTicks();
 
-        if (self.shutdown.load(.acquire) and running_handles == 0) {
-            // Check if fireTicks submitted new requests (e.g. telemetry flush).
-            // If so, continue the loop to drain and send them before exiting.
-            self.submission_mutex.lock();
-            const has_pending = self.submission_queue.first != null;
-            self.submission_mutex.unlock();
-            if (!has_pending) break;
+        if (self.shutdown.load(.acquire)) {
+            // Drain any live CDP links so their workers can exit (issue #2510).
+            // Idempotent — no-op once drained, safe to call every iteration
+            self.shutdownCdpLinks();
+
+            if (running_handles == 0) {
+                // Check if fireTicks submitted new requests (e.g. telemetry
+                // flush). If so, continue the loop to drain and send them
+                // before exiting.
+                self.submission_mutex.lock();
+                const has_pending = self.submission_queue.first != null;
+                self.submission_mutex.unlock();
+
+                if (!has_pending) {
+                    break;
+                }
+            }
         }
     }
 

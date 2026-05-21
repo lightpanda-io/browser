@@ -39,6 +39,13 @@ const Inbox = @This();
 mutex: std.Thread.Mutex = .{},
 queue: DoublyLinkedList = .{},
 
+// One-way latch, set by the worker's drainInbox the first time it
+// observes a .disconnect (or .close) and never cleared. Ensures that, on
+// multiple drains, the terminated state is preserved / communicated. This is
+// specifically meant to handle the case where a disconnect is captured during
+// a syncRequest and we want the following non-nested tick to pick it up again.
+terminated: bool = false,
+
 pub fn deinit(self: *Inbox, arena_pool: *ArenaPool) void {
     self.mutex.lock();
     defer self.mutex.unlock();
