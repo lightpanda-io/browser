@@ -148,6 +148,7 @@ model: []u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
 self_heal: bool,
+no_llm: bool,
 interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
@@ -183,11 +184,17 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const is_one_shot = opts.task != null;
     const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
 
-    const llm: ?Llm = if (opts.no_llm) null else try Llm.resolve(opts);
+    // Basic-mode REPL (no LLM) must be opted into via --no-llm. Without it,
+    // the REPL accepts natural language and an absent API key would only
+    // surface at the first non-PandaScript line — too late to be useful.
+    // Pure replay (`agent <script>.lp`) stays allowed: no REPL, no LLM needed.
+    const requires_llm = is_one_shot or opts.self_heal or opts.pick_model or (will_repl and !opts.no_llm);
 
-    // The REPL itself can run without an LLM (basic mode), but --task,
-    // --self-heal, and --pick-model genuinely need one.
-    const requires_llm = is_one_shot or opts.self_heal or opts.pick_model;
+    // Skip resolve when --no-llm forces no client, or no mode could use one
+    // (pure replay) — otherwise resolve prints "No API key detected" for a
+    // run that does not need one.
+    const llm: ?Llm = if (opts.no_llm or !requires_llm) null else try Llm.resolve(opts);
+
     if (llm == null and requires_llm) {
         if (opts.no_llm) {
             std.debug.print("--no-llm forbids LLM use; drop it to run this mode.\n", .{});
@@ -264,6 +271,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .self_heal = opts.self_heal,
+        .no_llm = opts.no_llm,
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
@@ -398,7 +406,7 @@ fn runRepl(self: *Agent) void {
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printInfo("Basic REPL — PandaScript only. Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) for natural-language, LOGIN, and ACCEPT_COOKIES (and drop --no-llm if you set it).");
+        self.terminal.printInfo("Basic REPL (--no-llm) — PandaScript only. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language, LOGIN, and ACCEPT_COOKIES.");
     }
 
     repl: while (true) {
@@ -438,7 +446,11 @@ fn runRepl(self: *Agent) void {
         }
 
         if (cmd.needsLlm() and self.ai_client == null) {
-            self.terminal.printError("This command needs an LLM. Set an API key (and drop --no-llm if you set it). PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
+            if (self.no_llm) {
+                self.terminal.printError("To use Lightpanda agent in natural language mode, you need to connect an LLM. Set an API key with export or type /help for available commands in no-llm mode.");
+            } else {
+                self.terminal.printError("This command needs an LLM. Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY). PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
+            }
             continue;
         }
 
@@ -1221,9 +1233,10 @@ const Llm = struct {
         return switch (n) {
             0 => blk: {
                 std.debug.print(
-                    "No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY — or pass --no-llm for the basic REPL.\n",
-                    .{},
-                );
+                    \\No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
+                    \\If you want to use the REPL in basic mode (without LLM integration) you can pass the --no-llm option.
+                    \\
+                , .{});
                 break :blk null;
             },
             1 => blk: {
