@@ -1241,10 +1241,6 @@ pub const Transfer = struct {
         // CDP Fetch interception, request phase.
         intercept_request,
 
-        // CDP Fetch interception, response phase. Reserved for when
-        // response interception lands; not currently emitted.
-        intercept_response,
-
         // CDP auth challenge — processOneMessage stashed the transfer
         // waiting for continueWithAuth.
         intercept_auth,
@@ -1261,9 +1257,11 @@ pub const Transfer = struct {
     }
 
     // Layer-facing: take the transfer out of .parked and return it to
-    // the request flow (.created). Caller is expected to re-enter the
-    // layer chain or call abort(); if neither happens the transfer is
-    // stranded.
+    // the request flow (.created). This assumes pre-inflight handling (i.e. the
+    // transfer was in .created before being parked). This is true today, but
+    // could become false if Request Interception ever supports the "response"
+    // requestStage (although, to support this, I think the safety of transfers
+    // post-perform would need to be improved),
     pub fn unpark(self: *Transfer) void {
         lp.assert(self.state == .parked, "Transfer.unpark", .{ .state = self.state });
         self.state = .created;
