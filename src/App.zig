@@ -22,7 +22,8 @@ const lp = @import("lightpanda");
 const Config = @import("Config.zig");
 const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
-const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
+const telemetry_mod = @import("telemetry/telemetry.zig");
+const Telemetry = telemetry_mod.Telemetry;
 
 const Storage = @import("storage/Storage.zig");
 const Network = @import("network/Network.zig");
@@ -71,6 +72,10 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     errdefer app.network.deinit();
 
     app.app_dir_path = getAndMakeAppDir(allocator);
+
+    // Propagate `--no-telemetry` so it also suppresses crash reports,
+    // which call telemetry.isDisabled() outside the App lifecycle.
+    telemetry_mod.setDisabledByCli(config.noTelemetry());
 
     app.telemetry = try Telemetry.init(app, config.mode);
     errdefer app.telemetry.deinit(allocator);

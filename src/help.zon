@@ -227,5 +227,11 @@
     \\  --storage-sqlite-path <PATH>
     \\          Path to the SQLite database file for persistent storage.
     \\          Use ":memory:" for in-memory storage.
+    \\  --no-telemetry
+    \\          Disable anonymous usage telemetry and crash reporting.
+    \\          Equivalent to setting the LIGHTPANDA_DISABLE_TELEMETRY
+    \\          environment variable (any value, including empty).
+    \\          See https://lightpanda.io/privacy-policy for details.
+    \\          Defaults to false.
     ,
 }

@@ -170,7 +170,12 @@ Add to your MCP configuration:
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
 
 ### Telemetry
-By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
+By default, Lightpanda collects and sends anonymous usage telemetry and crash reports. You can opt out in either of two equivalent ways:
+
+- Pass `--no-telemetry` to any command (`serve`, `fetch`, `mcp`).
+- Set the environment variable `LIGHTPANDA_DISABLE_TELEMETRY` to any value (e.g. `LIGHTPANDA_DISABLE_TELEMETRY=1`). The variable only needs to be present; its value is not inspected.
+
+Telemetry is also always disabled in debug builds. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
 
 ## Status
 

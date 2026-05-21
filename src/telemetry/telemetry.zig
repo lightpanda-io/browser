@@ -10,8 +10,22 @@ const log = lp.log;
 const IID_FILE = "iid";
 const Allocator = std.mem.Allocator;
 
+// Set from main() once CLI args are parsed. The crash handler and
+// `Telemetry.init` both consult this in addition to the environment
+// variable, so `--no-telemetry` opts out everywhere telemetry would
+// otherwise fire (including crash reporting).
+var cli_disabled: bool = false;
+
+pub fn setDisabledByCli(value: bool) void {
+    cli_disabled = value;
+}
+
 pub fn isDisabled() bool {
     if (builtin.mode == .Debug or builtin.is_test) {
+        return true;
+    }
+
+    if (cli_disabled) {
         return true;
     }
 
@@ -120,12 +134,16 @@ extern fn unsetenv(name: [*:0]u8) c_int;
 
 const testing = @import("../testing.zig");
 test "telemetry: always disabled in debug builds" {
-    // Must be disabled regardless of environment variable.
+    // Must be disabled regardless of environment variable or CLI flag.
     _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
     try testing.expectEqual(true, isDisabled());
 
     _ = setenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"), @constCast(""), 0);
     defer _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
+    try testing.expectEqual(true, isDisabled());
+
+    setDisabledByCli(true);
+    defer setDisabledByCli(false);
     try testing.expectEqual(true, isDisabled());
 
     const FailingProvider = struct {

@@ -101,6 +101,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
+    .{ .name = "no_telemetry", .type = bool },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -260,6 +261,16 @@ pub fn enableExternalStylesheets(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.enable_external_stylesheets,
         else => unreachable,
+    };
+}
+
+/// True when telemetry has been disabled via `--no-telemetry`.
+/// The `LIGHTPANDA_DISABLE_TELEMETRY` environment variable is handled
+/// separately inside `telemetry.isDisabled()`.
+pub fn noTelemetry(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.no_telemetry,
+        .help, .version => false,
     };
 }
 
