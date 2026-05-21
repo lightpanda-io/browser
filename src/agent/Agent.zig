@@ -143,9 +143,8 @@ notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
-tool_schema_arena: std.heap.ArenaAllocator,
-/// Provider-facing tool list, built from `SlashCommand.globalSchemas()`. The
-/// slice lives in `tool_schema_arena`; the JSON `Value` each entry points at
+/// Provider-facing tool list, built from `SlashCommand.globalSchemas()`. Slice
+/// is owned by `allocator`; the `parameters` JSON `Value` each entry points at
 /// lives in the schema module's process-lifetime arena.
 tools: []const zenai.provider.Tool,
 terminal: Terminal,
@@ -244,7 +243,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .browser = undefined,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
-        .tool_schema_arena = .init(allocator),
         .tools = &.{},
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
         .cmd_runner = undefined,
@@ -260,12 +258,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
     };
-    errdefer self.tool_schema_arena.deinit();
     errdefer self.node_registry.deinit();
     errdefer self.terminal.deinit();
     errdefer self.message_arena.deinit();
 
-    self.tools = try buildTools(self.tool_schema_arena.allocator());
+    self.tools = try buildTools(allocator);
+    errdefer allocator.free(self.tools);
 
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
@@ -311,7 +309,7 @@ pub fn deinit(self: *Agent) void {
     self.terminal.deinit();
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
-    self.tool_schema_arena.deinit();
+    self.allocator.free(self.tools);
     self.node_registry.deinit();
     self.browser.deinit();
     self.notification.deinit();
@@ -327,9 +325,9 @@ pub fn deinit(self: *Agent) void {
     self.allocator.destroy(self);
 }
 
-fn buildTools(arena: std.mem.Allocator) ![]const zenai.provider.Tool {
+fn buildTools(allocator: std.mem.Allocator) ![]const zenai.provider.Tool {
     const schemas = SlashCommand.globalSchemas();
-    const tools = try arena.alloc(zenai.provider.Tool, schemas.len);
+    const tools = try allocator.alloc(zenai.provider.Tool, schemas.len);
     for (schemas, 0..) |s, i| {
         tools[i] = .{ .name = s.tool_name, .description = s.description, .parameters = s.parameters };
     }

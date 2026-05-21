@@ -66,14 +66,13 @@ pub const SchemaInfo = struct {
     recorded: bool,
     can_heal: bool,
     produces_data: bool,
-    is_multiline_capable: bool,
     parameters: std.json.Value,
 
     /// True when this tool's args fit a multi-line `/<name> '''…'''` opener:
     /// exactly one required field, and that field is a string. Used by
     /// `Command.ScriptIterator` to detect block openers.
     pub fn isMultiLineCapable(self: *const SchemaInfo) bool {
-        return self.is_multiline_capable;
+        return self.required.len == 1 and self.fieldType(self.required[0]) == .string;
     }
 
     pub fn findField(self: *const SchemaInfo, key: []const u8) ?FieldEntry {
@@ -115,7 +114,6 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
         .recorded = td.recorded,
         .can_heal = td.can_heal,
         .produces_data = td.produces_data,
-        .is_multiline_capable = false,
         .parameters = parsed,
     };
 
@@ -152,8 +150,6 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
 
     info.hints = try buildHints(arena, info.required, info.fields);
     std.debug.assert(info.hints.len <= max_hint_slots);
-
-    info.is_multiline_capable = (info.required.len == 1 and info.fieldType(info.required[0]) == .string);
 
     return info;
 }
