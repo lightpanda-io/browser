@@ -398,6 +398,10 @@ pub fn abortRequests(_: *Client, owner: *Owner) void {
 const DrainMode = enum { all, sync_wait };
 
 pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
+    if (self.inbox.terminated) {
+        return error.ClientDisconnected;
+    }
+
     try self.drainQueue();
     try self.perform(@intCast(timeout_ms));
     // perform/processMessages just released a batch of connections back to
@@ -536,6 +540,10 @@ const SyncContext = struct {
 };
 
 pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncResponse {
+    if (self.inbox.terminated) {
+        return error.ClientDisconnected;
+    }
+
     var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
     errdefer sync_ctx.body.deinit(allocator);
 
@@ -719,10 +727,12 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
             .close => {
                 cdp.onClose();
                 cdp.onDisconnect(null);
+                self.inbox.terminated = true;
                 return error.ClientDisconnected;
             },
             .disconnect => |err| {
                 cdp.onDisconnect(err);
+                self.inbox.terminated = true;
                 return error.ClientDisconnected;
             },
         }

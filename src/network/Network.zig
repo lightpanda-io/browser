@@ -695,21 +695,17 @@ fn shutdownCdpLinks(self: *Network) void {
     self.cdp_mutex.lock();
     defer self.cdp_mutex.unlock();
 
-    var any_removed = false;
     var it = self.cdp_links.first;
     while (it) |node| {
         const next = node.next;
         const link: *CdpLink = @fieldParentPtr("node", node);
         if (link.state == .live) {
             self.dropCdp(link, null, true);
-            any_removed = true;
         }
         it = next;
     }
 
-    if (any_removed) {
-        self.cdp_unregister.broadcast();
-    }
+    self.cdp_unregister.broadcast();
 }
 
 pub fn run(self: *Network) void {
@@ -790,12 +786,8 @@ pub fn run(self: *Network) void {
         self.fireTicks();
 
         if (self.shutdown.load(.acquire)) {
-            // Force-disconnect any still-live CDP clients so their worker
-            // threads wake from curl_multi_poll and exit. A worker is woken
-            // only by this (Network) thread; if the loop exits with links
-            // still live, those workers block forever and Server.deinit()
-            // spins on active_threads (issue #2510). Idempotent — a no-op
-            // once the links are drained.
+            // Drain any live CDP links so their workers can exit (issue #2510).
+            // Idempo tent — no-op once drained, safe to call every iteration
             self.shutdownCdpLinks();
 
             if (running_handles == 0) {
@@ -805,7 +797,10 @@ pub fn run(self: *Network) void {
                 self.submission_mutex.lock();
                 const has_pending = self.submission_queue.first != null;
                 self.submission_mutex.unlock();
-                if (!has_pending) break;
+
+                if (!has_pending) {
+                    break;
+                }
             }
         }
     }
