@@ -22,6 +22,8 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const zenai = @import("zenai");
+const browser_tools = lp.tools;
 const schema = @import("schema.zig");
 
 pub const ParseError = schema.ParseError || error{
@@ -35,16 +37,24 @@ pub const Command = union(enum) {
     comment: void,
 
     pub const ToolCall = struct {
-        name: []const u8,
+        action: browser_tools.Action,
         args: ?std.json.Value,
+
+        pub fn name(self: ToolCall) [:0]const u8 {
+            return @tagName(self.action);
+        }
     };
+
+    fn schemaOf(tc: ToolCall) *const schema.SchemaInfo {
+        return &schema.globalSchemas()[@intFromEnum(tc.action)];
+    }
 
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
             .comment => false,
             .login, .accept_cookies => true,
             .tool_call => |tc| blk: {
-                const s = schema.findSchemaCanonical(schema.globalSchemas(), tc.name) orelse break :blk false;
+                const s = schemaOf(tc);
                 if (!s.recorded) break :blk false;
                 // backendNodeId is invalidated by any DOM mutation, so calls
                 // using it aren't replayable.
@@ -57,7 +67,7 @@ pub const Command = union(enum) {
 
     pub fn producesData(self: Command) bool {
         return switch (self) {
-            .tool_call => |tc| if (schema.findSchemaCanonical(schema.globalSchemas(), tc.name)) |s| s.produces_data else false,
+            .tool_call => |tc| schemaOf(tc).produces_data,
             else => false,
         };
     }
@@ -71,7 +81,7 @@ pub const Command = union(enum) {
 
     pub fn canHeal(self: Command) bool {
         return switch (self) {
-            .tool_call => |tc| if (schema.findSchemaCanonical(schema.globalSchemas(), tc.name)) |s| s.can_heal else false,
+            .tool_call => |tc| schemaOf(tc).can_heal,
             else => false,
         };
     }
@@ -99,7 +109,7 @@ pub const Command = union(enum) {
 
         const s = schema.findSchema(schemas, split.name) orelse return error.UnknownTool;
         const args = try schema.parseValue(arena, s, split.rest);
-        return .{ .tool_call = .{ .name = s.tool_name, .args = args } };
+        return .{ .tool_call = .{ .action = s.action, .args = args } };
     }
 
     /// Canonical recorder format. Round-trips with `parse`.
@@ -112,16 +122,15 @@ pub const Command = union(enum) {
         }
     }
 
-    /// `name` and `arguments` must outlive the returned Command — use
-    /// `fromToolCallOwned` to deep-copy when they don't.
-    pub fn fromToolCall(tool_name: []const u8, arguments: ?std.json.Value) Command {
-        return .{ .tool_call = .{ .name = tool_name, .args = arguments } };
+    /// `arguments` must outlive the returned Command — use `fromToolCallOwned`
+    /// to deep-copy when it doesn't.
+    pub fn fromToolCall(action: browser_tools.Action, arguments: ?std.json.Value) Command {
+        return .{ .tool_call = .{ .action = action, .args = arguments } };
     }
 
-    pub fn fromToolCallOwned(arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) std.mem.Allocator.Error!Command {
-        const owned_name = if (schema.findSchemaCanonical(schema.globalSchemas(), tool_name)) |s| s.tool_name else try arena.dupe(u8, tool_name);
-        const owned_args = if (arguments) |v| try dupeJsonValue(arena, v) else null;
-        return .{ .tool_call = .{ .name = owned_name, .args = owned_args } };
+    pub fn fromToolCallOwned(arena: std.mem.Allocator, action: browser_tools.Action, arguments: ?std.json.Value) std.mem.Allocator.Error!Command {
+        const owned_args = if (arguments) |v| try zenai.json.dupeValue(arena, v) else null;
+        return .{ .tool_call = .{ .action = action, .args = owned_args } };
     }
 
     /// Iterates `.lp` content, gluing multi-line `'''…'''` blocks into a
@@ -174,7 +183,7 @@ pub const Command = union(enum) {
                         .opener_line = trimmed,
                         .raw_span = self.lines.buffer[line_start..span_end],
                         .command = .{ .tool_call = .{
-                            .name = opener.tool_name,
+                            .action = opener.action,
                             .args = .{ .object = obj },
                         } },
                     };
@@ -192,7 +201,7 @@ pub const Command = union(enum) {
         }
 
         const BlockOpener = struct {
-            tool_name: []const u8,
+            action: browser_tools.Action,
             field: []const u8,
             quote_type: QuoteType,
         };
@@ -203,7 +212,7 @@ pub const Command = union(enum) {
             const s = schema.findSchema(schemas, split.name) orelse return null;
             if (!s.isMultiLineCapable()) return null;
             const qt = QuoteType.fromLiteral(split.rest) orelse return null;
-            return .{ .tool_name = s.tool_name, .field = s.required[0], .quote_type = qt };
+            return .{ .action = s.action, .field = s.required[0], .quote_type = qt };
         }
 
         fn collectMultiLineBlock(self: *ScriptIterator, quote_type: QuoteType) std.mem.Allocator.Error!?[]const u8 {
@@ -227,36 +236,12 @@ pub const Command = union(enum) {
     };
 };
 
-fn dupeJsonValue(a: std.mem.Allocator, value: std.json.Value) std.mem.Allocator.Error!std.json.Value {
-    return switch (value) {
-        .null, .bool, .integer, .float => value,
-        .number_string => |s| .{ .number_string = try a.dupe(u8, s) },
-        .string => |s| .{ .string = try a.dupe(u8, s) },
-        .array => |arr| blk: {
-            var new_arr = try std.json.Array.initCapacity(a, arr.items.len);
-            for (arr.items) |item| {
-                new_arr.appendAssumeCapacity(try dupeJsonValue(a, item));
-            }
-            break :blk .{ .array = new_arr };
-        },
-        .object => |obj| blk: {
-            var new_obj: std.json.ObjectMap = .init(a);
-            try new_obj.ensureTotalCapacity(@intCast(obj.count()));
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                new_obj.putAssumeCapacity(try a.dupe(u8, entry.key_ptr.*), try dupeJsonValue(a, entry.value_ptr.*));
-            }
-            break :blk .{ .object = new_obj };
-        },
-    };
-}
-
 // --- Formatting ---
 
 fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-    const s_opt = schema.findSchemaCanonical(schema.globalSchemas(), tc.name);
+    const s = &schema.globalSchemas()[@intFromEnum(tc.action)];
     try writer.writeByte('/');
-    try writer.writeAll(tc.name);
+    try writer.writeAll(s.tool_name);
 
     const args_val = tc.args orelse return;
     if (args_val != .object) return;
@@ -266,7 +251,7 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
     // Positional form `/goto '<url>'` only when args reduce to the single
     // required field; extra fields force kv so recordings stay unambiguous.
     var positional_emitted: ?[]const u8 = null;
-    if (s_opt) |s| {
+    {
         const has_one_required = s.required.len == 1;
         var visible: usize = 0;
         var it_v = args.iterator();
@@ -288,7 +273,7 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         if (positional_emitted) |p| if (std.mem.eql(u8, key, p)) continue;
-        if (s_opt) |s| if (isDefaultTrueBool(s, key, entry.value_ptr.*)) continue;
+        if (isDefaultTrueBool(s, key, entry.value_ptr.*)) continue;
         try writer.writeByte(' ');
         try writer.writeAll(key);
         try writer.writeByte('=');
@@ -402,7 +387,7 @@ test "parse: /goto positional" {
     defer arena.deinit();
     const cmd = try Command.parse(arena.allocator(), "/goto https://example.com");
     try testing.expect(cmd == .tool_call);
-    try testing.expectEqualStrings("goto", cmd.tool_call.name);
+    try testing.expectEqualStrings("goto", cmd.tool_call.name());
     try testing.expectEqualStrings("https://example.com", cmd.tool_call.args.?.object.get("url").?.string);
 }
 
@@ -463,7 +448,7 @@ test "format: /eval emits triple-quote block for multi-line script" {
         try obj.put("script", .{ .string = "const x = 1;\nreturn x;" });
         break :blk std.json.Value{ .object = obj };
     };
-    const cmd: Command = .{ .tool_call = .{ .name = "eval", .args = args } };
+    const cmd: Command = .{ .tool_call = .{ .action = .eval, .args = args } };
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -534,13 +519,13 @@ test "ScriptIterator: basic slash commands" {
 
     const e1 = (try iter.next()).?;
     try testing.expect(e1.command == .tool_call);
-    try testing.expectEqualStrings("goto", e1.command.tool_call.name);
+    try testing.expectEqualStrings("goto", e1.command.tool_call.name());
 
     const e2 = (try iter.next()).?;
-    try testing.expectEqualStrings("tree", e2.command.tool_call.name);
+    try testing.expectEqualStrings("tree", e2.command.tool_call.name());
 
     const e3 = (try iter.next()).?;
-    try testing.expectEqualStrings("click", e3.command.tool_call.name);
+    try testing.expectEqualStrings("click", e3.command.tool_call.name());
 
     try testing.expect((try iter.next()) == null);
 }
@@ -560,16 +545,16 @@ test "ScriptIterator: multi-line /eval block" {
     var iter: Command.ScriptIterator = .init(arena.allocator(), content);
 
     const e1 = (try iter.next()).?;
-    try testing.expectEqualStrings("goto", e1.command.tool_call.name);
+    try testing.expectEqualStrings("goto", e1.command.tool_call.name());
 
     const e2 = (try iter.next()).?;
-    try testing.expectEqualStrings("eval", e2.command.tool_call.name);
+    try testing.expectEqualStrings("eval", e2.command.tool_call.name());
     const script_value = e2.command.tool_call.args.?.object.get("script").?.string;
     try testing.expect(std.mem.indexOf(u8, script_value, "const x = 1;") != null);
     try testing.expect(std.mem.indexOf(u8, script_value, "return x;") != null);
 
     const e3 = (try iter.next()).?;
-    try testing.expectEqualStrings("tree", e3.command.tool_call.name);
+    try testing.expectEqualStrings("tree", e3.command.tool_call.name());
 
     try testing.expect((try iter.next()) == null);
 }
@@ -611,14 +596,14 @@ test "ScriptIterator: strips trailing CR from CRLF-authored bodies" {
     var iter: Command.ScriptIterator = .init(arena.allocator(), content);
 
     const e1 = (try iter.next()).?;
-    try testing.expectEqualStrings("goto", e1.command.tool_call.name);
+    try testing.expectEqualStrings("goto", e1.command.tool_call.name());
 
     const e2 = (try iter.next()).?;
-    try testing.expectEqualStrings("extract", e2.command.tool_call.name);
+    try testing.expectEqualStrings("extract", e2.command.tool_call.name());
     try testing.expectEqualStrings("{\"t\":\"h1\"}", e2.command.tool_call.args.?.object.get("schema").?.string);
 
     const e3 = (try iter.next()).?;
-    try testing.expectEqualStrings("click", e3.command.tool_call.name);
+    try testing.expectEqualStrings("click", e3.command.tool_call.name());
 
     try testing.expect((try iter.next()) == null);
 }
@@ -629,7 +614,7 @@ test "fromToolCall: builds a tool_call Command" {
 
     var obj: std.json.ObjectMap = .init(arena.allocator());
     try obj.put("url", .{ .string = "https://x" });
-    const cmd = Command.fromToolCall("goto", .{ .object = obj });
+    const cmd = Command.fromToolCall(.goto, .{ .object = obj });
     try testing.expect(cmd == .tool_call);
-    try testing.expectEqualStrings("goto", cmd.tool_call.name);
+    try testing.expectEqualStrings("goto", cmd.tool_call.name());
 }

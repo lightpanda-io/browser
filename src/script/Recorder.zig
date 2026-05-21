@@ -365,7 +365,7 @@ test "record and parse: triple-quote round-trip" {
     const entry = (try iter.next()).?;
     const parsed_cmd = entry.command;
 
-    try std.testing.expectEqualStrings("extract", parsed_cmd.tool_call.name);
+    try std.testing.expectEqualStrings("extract", parsed_cmd.tool_call.name());
 
     const original_val = original_cmd.tool_call.args.?.object.get("schema").?.string;
     const parsed_val = parsed_cmd.tool_call.args.?.object.get("schema").?.string;

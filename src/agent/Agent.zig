@@ -483,7 +483,7 @@ fn runRepl(self: *Agent) void {
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
             },
             .tool_call => |tc| {
-                self.terminal.beginTool(tc.name, slash_split.?.rest);
+                self.terminal.beginTool(tc.name(), slash_split.?.rest);
                 const result = self.cmd_runner.executeWithResult(aa, cmd);
                 self.terminal.endTool();
                 self.cmd_runner.printResult(cmd, result);
@@ -747,8 +747,7 @@ fn isRetryable(cmd: Command) bool {
         .tool_call => |t| t,
         else => return false,
     };
-    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse return false;
-    return switch (action) {
+    return switch (tc.action) {
         .fill, .setChecked, .selectOption => true,
         else => false,
     };
@@ -841,9 +840,10 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     var cmds: std.ArrayList(Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
+        const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse continue;
         // `result.deinit()` (deferred above) frees the args arena before the
         // caller formats `cmds`; deep-copy into `arena` to outlive it.
-        const cmd = try Command.fromToolCallOwned(arena, tc.name, tc.arguments);
+        const cmd = try Command.fromToolCallOwned(arena, action, tc.arguments);
         if (!cmd.canHeal()) {
             self.terminal.printInfoFmt(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
@@ -1016,7 +1016,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         for (result.tool_calls_made, 0..) |tc, i| {
             if (tc.is_error) continue;
             if (last_extract_idx) |idx| if (std.mem.eql(u8, tc.name, "extract") and idx != i) continue;
-            const cmd = Command.fromToolCall(tc.name, tc.arguments);
+            const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse continue;
+            const cmd = Command.fromToolCall(action, tc.arguments);
             if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| r.recordComment(c);
@@ -1350,18 +1351,18 @@ fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: 
 // --- Tests ---
 
 test "canHeal: only page-local DOM commands are allowed" {
-    // Table driven over the actual tool flags so adding a new tool can't
-    // silently drift from the heal allow-list. The heal LLM is restricted to
-    // these tools by Command.canHeal(); navigation and eval are excluded.
-    const tc_allow = [_][]const u8{ "click", "hover", "waitForSelector", "fill", "selectOption", "setChecked", "scroll", "extract", "press" };
-    const tc_deny = [_][]const u8{ "goto", "eval", "tree", "markdown", "search", "links" };
+    // Table-driven over the live tool flags so adding a new tool can't
+    // silently drift from the heal allow-list.
+    const Action = browser_tools.Action;
+    const allow = [_]Action{ .click, .hover, .waitForSelector, .fill, .selectOption, .setChecked, .scroll, .extract, .press };
+    const deny = [_]Action{ .goto, .eval, .tree, .markdown, .search, .links };
 
-    for (tc_allow) |name| {
-        const cmd = Command.fromToolCall(name, null);
+    for (allow) |action| {
+        const cmd = Command.fromToolCall(action, null);
         try std.testing.expect(cmd.canHeal());
     }
-    for (tc_deny) |name| {
-        const cmd = Command.fromToolCall(name, null);
+    for (deny) |action| {
+        const cmd = Command.fromToolCall(action, null);
         try std.testing.expect(!cmd.canHeal());
     }
 

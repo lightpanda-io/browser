@@ -173,7 +173,7 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, @errorName(err));
     };
 
-    if (!result.is_error) recordIfActive(server, name, arguments);
+    if (!result.is_error) recordIfActive(server, action, arguments);
 
     try sendToolResultText(server, id, result.text, result.is_error);
 }
@@ -182,16 +182,10 @@ fn surfacesErrorInBand(action: browser_tools.Action) bool {
     return action == .eval or action == .extract;
 }
 
-fn surfacesErrorInBandByName(name: []const u8) bool {
-    const action = std.meta.stringToEnum(browser_tools.Action, name) orelse return false;
-    return surfacesErrorInBand(action);
-}
-
-fn recordIfActive(server: *Server, name: []const u8, arguments: ?std.json.Value) void {
+fn recordIfActive(server: *Server, action: browser_tools.Action, arguments: ?std.json.Value) void {
     if (server.recorder == null) return;
-    const cmd = Command.fromToolCall(name, arguments);
-    // `record` no-ops on non-recorded tools (read-only queries, env probes),
-    // so the gate lives there — see `Command.isRecorded`.
+    const cmd = Command.fromToolCall(action, arguments);
+    // `record` no-ops on non-recorded tools — see `Command.isRecorded`.
     server.recorder.?.record(cmd);
 }
 
@@ -271,12 +265,12 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     }
 
     const tc = cmd.tool_call;
-    const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc.args) catch |err| {
-        if (surfacesErrorInBandByName(tc.name)) {
+    const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name(), tc.args) catch |err| {
+        if (surfacesErrorInBand(tc.action)) {
             return sendErrorContent(server, id, @errorName(err));
         }
         const url = browser_tools.currentUrlOrPlaceholder(server.session);
-        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name, args.line, url, @errorName(err) }) catch @errorName(err);
+        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name(), args.line, url, @errorName(err) }) catch @errorName(err);
         return sendErrorContent(server, id, msg);
     };
 
@@ -285,7 +279,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     switch (server.verifier.verify(arena, cmd)) {
         .failed => |reason| {
             const url = browser_tools.currentUrlOrPlaceholder(server.session);
-            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, reason }) catch reason;
+            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name(), args.line, url, reason }) catch reason;
             return sendErrorContent(server, id, msg);
         },
         .passed, .inconclusive => {},

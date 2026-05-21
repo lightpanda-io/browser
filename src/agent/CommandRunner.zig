@@ -45,10 +45,10 @@ pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Co
         .tool_call => |t| t,
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
-    const substituted = substituteStringArgs(arena, tc.name, tc.args) catch
+    const substituted = substituteStringArgs(arena, tc.action, tc.args) catch
         return .{ .text = "out of memory", .is_error = true };
-    return browser_tools.call(arena, self.session, self.node_registry, tc.name, substituted) catch |err| .{
-        .text = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name, @errorName(err) }) catch "tool failed",
+    return browser_tools.call(arena, self.session, self.node_registry, tc.name(), substituted) catch |err| .{
+        .text = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), @errorName(err) }) catch "tool failed",
         .is_error = true,
     };
 }
@@ -56,11 +56,11 @@ pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Co
 /// Resolve `$LP_*` placeholders in string args before the tool runs. `fill`'s
 /// `value` is excluded — the tool resolves it internally and rewrites the
 /// result text so the credential never appears in the echoed confirmation.
-fn substituteStringArgs(arena: std.mem.Allocator, tool_name: []const u8, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
+fn substituteStringArgs(arena: std.mem.Allocator, action: browser_tools.Action, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;
 
-    const is_fill = std.mem.eql(u8, tool_name, @tagName(browser_tools.Action.fill));
+    const is_fill = action == .fill;
 
     const needsSub = struct {
         fn f(is_fill_: bool, key: []const u8, val: std.json.Value) bool {

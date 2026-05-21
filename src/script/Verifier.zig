@@ -59,13 +59,12 @@ pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyRes
         .tool_call => |t| t,
         else => return .inconclusive,
     };
-    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse return .inconclusive;
     const args = tc.args orelse return .inconclusive;
     if (args != .object) return .inconclusive;
     const selector = (args.object.get("selector") orelse return .inconclusive);
     if (selector != .string) return .inconclusive;
 
-    switch (action) {
+    switch (tc.action) {
         .fill => {
             const value = args.object.get("value") orelse return .inconclusive;
             if (value != .string) return .inconclusive;

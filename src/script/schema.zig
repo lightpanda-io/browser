@@ -45,6 +45,7 @@ pub const max_hint_slots: usize = 16;
 
 /// Cached, schema-extracted view of a single browser tool.
 pub const SchemaInfo = struct {
+    action: browser_tools.Action,
     tool_name: []const u8,
     description: []const u8,
     required: []const []const u8,
@@ -87,8 +88,9 @@ pub const ParseError = error{
     OutOfMemory,
 };
 
-fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.json.Value) !SchemaInfo {
+fn buildOne(arena: std.mem.Allocator, action: browser_tools.Action, td: browser_tools.ToolDef, parsed: std.json.Value) !SchemaInfo {
     var info: SchemaInfo = .{
+        .action = action,
         .tool_name = td.name,
         .description = td.description,
         .required = &.{},
@@ -366,7 +368,7 @@ fn initGlobal() void {
         const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, td.input_schema, .{}) catch |err| {
             std.debug.panic("failed to parse schema for tool '{s}': {s}", .{ td.name, @errorName(err) });
         };
-        global_schemas_storage[i] = buildOne(a, td, parsed) catch |err| {
+        global_schemas_storage[i] = buildOne(a, @enumFromInt(i), td, parsed) catch |err| {
             std.debug.panic("failed to build schema for tool '{s}': {s}", .{ td.name, @errorName(err) });
         };
     }
@@ -374,7 +376,7 @@ fn initGlobal() void {
 
 // --- Tests ---
 
-const testing = std.testing;
+const testing = @import("../testing.zig");
 
 test "globalSchemas: comptime tool defs reduce cleanly" {
     const schemas = globalSchemas();

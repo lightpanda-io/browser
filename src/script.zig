@@ -343,12 +343,12 @@ test "applyReplacements: heals a multi-line /eval block using iterator span" {
     var iter: Command.ScriptIterator = .init(arena.allocator(), content);
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .tool_call);
-    try std.testing.expectEqualStrings("goto", e1.command.tool_call.name);
+    try std.testing.expectEqualStrings("goto", e1.command.tool_call.name());
     const e2 = (try iter.next()).?;
     try std.testing.expect(e2.command == .tool_call);
-    try std.testing.expectEqualStrings("eval", e2.command.tool_call.name);
+    try std.testing.expectEqualStrings("eval", e2.command.tool_call.name());
     const e3 = (try iter.next()).?;
-    try std.testing.expectEqualStrings("click", e3.command.tool_call.name);
+    try std.testing.expectEqualStrings("click", e3.command.tool_call.name());
     try std.testing.expect((try iter.next()) == null);
 
     const replacements = [_]Replacement{.{
