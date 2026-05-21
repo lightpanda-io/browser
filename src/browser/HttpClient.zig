@@ -541,6 +541,9 @@ const SyncContext = struct {
 
 pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncResponse {
     if (self.inbox.terminated) {
+        // request() takes ownership of req.headers on every path; we return
+        // before calling it, so free the curl_slist here to avoid leaking it.
+        req.headers.deinit();
         return error.ClientDisconnected;
     }
 

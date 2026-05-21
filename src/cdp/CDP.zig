@@ -1355,3 +1355,36 @@ test "cdp: disconnect latches so the worker keeps exiting" {
     // (#2510). The latch keeps the terminal state sticky so the worker exits.
     try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
 }
+
+test "cdp: syncRequest short-circuits after disconnect" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const client = &ctx.cdp().browser.http_client;
+
+    // Latch terminated via a drained disconnect (as above).
+    {
+        const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
+        client.inbox.push(arena, .{ .disconnect = null });
+    }
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+
+    // A synchronous fetch attempted after the latch returns ClientDisconnected
+    // without starting the request. syncRequest also frees req.headers on this
+    // early-return path (it returns before request() takes ownership); that
+    // free isn't asserted here because curl_slist is C-allocated and escapes the
+    // per-test leak check, so it's verified by review. The latch check returns
+    // before any other req field is read, so the rest are placeholders.
+    const headers = try client.newHeaders();
+    try testing.expectError(error.ClientDisconnected, client.syncRequest(testing.allocator, .{
+        .frame_id = 0,
+        .loader_id = 0,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/",
+        .headers = headers,
+        .cookie_jar = null,
+        .cookie_origin = "",
+        .resource_type = .fetch,
+        .notification = undefined,
+    }));
+}
