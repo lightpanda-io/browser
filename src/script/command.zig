@@ -19,22 +19,22 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-pub const TypeArgs = struct {
+const TypeArgs = struct {
     selector: []const u8,
     value: []const u8,
 };
 
-pub const ScrollArgs = struct {
+const ScrollArgs = struct {
     x: i32 = 0,
     y: i32 = 0,
 };
 
-pub const SelectArgs = struct {
+const SelectArgs = struct {
     selector: []const u8,
     value: []const u8,
 };
 
-pub const CheckArgs = struct {
+const CheckArgs = struct {
     selector: []const u8,
     checked: bool,
 };
@@ -85,6 +85,79 @@ pub const Command = union(enum) {
         };
     }
 
+    /// Self-heal must only patch the current page; navigation and arbitrary
+    /// scripting are blocked even if the model emits them via `goto` / `eval`.
+    /// docs/agent.md guarantees "no navigation away from the current page".
+    /// Exhaustive on purpose: adding a `Command` variant must force a decision here.
+    pub fn canHeal(self: Command) bool {
+        return switch (self) {
+            .click, .hover, .wait, .type_cmd, .select, .check, .scroll, .extract => true,
+            .goto, .eval_js, .tree, .markdown, .login, .accept_cookies, .comment, .natural_language => false,
+        };
+    }
+
+    /// Map a Command to its (tool_name, JSON args) representation. Returns
+    /// null for variants without a 1:1 tool mapping (login, accept_cookies,
+    /// natural_language, comment).
+    ///
+    /// `substitute` is applied to selector-like fields. The `value` field of
+    /// `type_cmd` is intentionally NOT substituted: `execFill` in
+    /// `browser/tools.zig` substitutes it itself so the secret never appears
+    /// in the result text echoed back to the LLM/terminal.
+    pub fn toToolCall(self: Command, arena: std.mem.Allocator, substitute: SubstituteFn) std.mem.Allocator.Error!?ToolCall {
+        const Action = lp.tools.Action;
+        var obj: std.json.ObjectMap = .init(arena);
+        switch (self) {
+            .goto => |url| {
+                try obj.put("url", .{ .string = try substitute(arena, url) });
+                return .{ .name = @tagName(Action.goto), .args = .{ .object = obj } };
+            },
+            .click => |sel| {
+                try obj.put("selector", .{ .string = try substitute(arena, sel) });
+                return .{ .name = @tagName(Action.click), .args = .{ .object = obj } };
+            },
+            .type_cmd => |args| {
+                try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
+                try obj.put("value", .{ .string = args.value });
+                return .{ .name = @tagName(Action.fill), .args = .{ .object = obj } };
+            },
+            .wait => |sel| {
+                try obj.put("selector", .{ .string = sel });
+                return .{ .name = @tagName(Action.waitForSelector), .args = .{ .object = obj } };
+            },
+            .scroll => |args| {
+                try obj.put("x", .{ .integer = args.x });
+                try obj.put("y", .{ .integer = args.y });
+                return .{ .name = @tagName(Action.scroll), .args = .{ .object = obj } };
+            },
+            .hover => |sel| {
+                try obj.put("selector", .{ .string = try substitute(arena, sel) });
+                return .{ .name = @tagName(Action.hover), .args = .{ .object = obj } };
+            },
+            .select => |args| {
+                try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
+                try obj.put("value", .{ .string = try substitute(arena, args.value) });
+                return .{ .name = @tagName(Action.selectOption), .args = .{ .object = obj } };
+            },
+            .check => |args| {
+                try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
+                try obj.put("checked", .{ .bool = args.checked });
+                return .{ .name = @tagName(Action.setChecked), .args = .{ .object = obj } };
+            },
+            .tree => return .{ .name = @tagName(Action.tree), .args = null },
+            .markdown => return .{ .name = @tagName(Action.markdown), .args = null },
+            .eval_js => |script| {
+                try obj.put("script", .{ .string = script });
+                return .{ .name = @tagName(Action.eval), .args = .{ .object = obj } };
+            },
+            .extract => |schema| {
+                try obj.put("schema", .{ .string = try substitute(arena, schema) });
+                return .{ .name = @tagName(Action.extract), .args = .{ .object = obj } };
+            },
+            .natural_language, .comment, .login, .accept_cookies => return null,
+        }
+    }
+
     /// Serializes back to PandaScript. Every string argument is wrapped in
     /// content-aware quotes so the output round-trips through `parse()`:
     ///   - single quotes by default,
@@ -123,6 +196,338 @@ pub const Command = union(enum) {
             .natural_language => |text| try writer.writeAll(text),
         }
     }
+
+    /// Parse a line of REPL input into a PandaScript command.
+    /// Unrecognized input is returned as `.natural_language`.
+    /// For multi-line EVAL blocks in scripts, use `ScriptParser`.
+    pub fn parse(line: []const u8) Command {
+        const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+        if (trimmed.len == 0) return .{ .natural_language = trimmed };
+
+        if (trimmed[0] == '#') return .{ .comment = {} };
+
+        const split = splitHead(trimmed);
+        const cmd_word = split.head;
+        const rest = split.rest;
+
+        if (std.mem.eql(u8, cmd_word, "GOTO")) {
+            if (rest.len == 0) return .{ .natural_language = trimmed };
+            return .{ .goto = rest };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "CLICK")) {
+            const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
+            return .{ .click = arg };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "TYPE")) {
+            const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
+            const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
+            const second = trimMatchingQuotes(second_arg) orelse return .{ .natural_language = trimmed };
+            return .{ .type_cmd = .{ .selector = first.value, .value = second } };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "WAIT")) {
+            const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
+            return .{ .wait = arg };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "SCROLL")) {
+            // SCROLL          → scroll to (0, 0)
+            // SCROLL 100      → scroll y=100
+            // SCROLL 50 200   → scroll x=50, y=200
+            if (rest.len == 0) return .{ .scroll = .{} };
+            var it = std.mem.tokenizeAny(u8, rest, &std.ascii.whitespace);
+            const first = it.next() orelse return .{ .scroll = .{} };
+            const second = it.next();
+            if (second) |s| {
+                const x = std.fmt.parseInt(i32, first, 10) catch return .{ .natural_language = trimmed };
+                const y = std.fmt.parseInt(i32, s, 10) catch return .{ .natural_language = trimmed };
+                return .{ .scroll = .{ .x = x, .y = y } };
+            }
+            const y = std.fmt.parseInt(i32, first, 10) catch return .{ .natural_language = trimmed };
+            return .{ .scroll = .{ .x = 0, .y = y } };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "HOVER")) {
+            const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
+            return .{ .hover = arg };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "SELECT")) {
+            const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
+            const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
+            const second = trimMatchingQuotes(second_arg) orelse return .{ .natural_language = trimmed };
+            return .{ .select = .{ .selector = first.value, .value = second } };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "CHECK")) {
+            // CHECK '<sel>'         → checked = true
+            // CHECK '<sel>' true    → checked = true
+            // CHECK '<sel>' false   → checked = false
+            const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
+            const after = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
+            if (after.len == 0) {
+                return .{ .check = .{ .selector = first.value, .checked = true } };
+            }
+            if (std.ascii.eqlIgnoreCase(after, "true")) {
+                return .{ .check = .{ .selector = first.value, .checked = true } };
+            }
+            if (std.ascii.eqlIgnoreCase(after, "false")) {
+                return .{ .check = .{ .selector = first.value, .checked = false } };
+            }
+            return .{ .natural_language = trimmed };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "TREE")) {
+            if (rest.len > 0) return .{ .natural_language = trimmed };
+            return .{ .tree = {} };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "MARKDOWN")) {
+            if (rest.len > 0) return .{ .natural_language = trimmed };
+            return .{ .markdown = {} };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "EXTRACT")) {
+            const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
+            return .{ .extract = arg };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "EVAL")) {
+            const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
+            return .{ .eval_js = arg };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "LOGIN")) {
+            if (rest.len > 0) return .{ .natural_language = trimmed };
+            return .{ .login = {} };
+        }
+
+        if (std.mem.eql(u8, cmd_word, "ACCEPT_COOKIES")) {
+            if (rest.len > 0) return .{ .natural_language = trimmed };
+            return .{ .accept_cookies = {} };
+        }
+
+        return .{ .natural_language = trimmed };
+    }
+
+    /// Inverse of `toToolCall`: map an LLM tool call into a Command, or return
+    /// null if the tool name doesn't correspond to a PandaScript command.
+    /// Variants emitted by `toToolCall` round-trip through this.
+    pub fn fromToolCall(tool_name: []const u8, arguments: std.json.Value) ?Command {
+        const Action = lp.tools.Action;
+        const action = std.meta.stringToEnum(Action, tool_name) orelse return null;
+        const obj = switch (arguments) {
+            .object => |o| o,
+            else => return null,
+        };
+
+        return switch (action) {
+            .goto => .{ .goto = getJsonString(obj, "url") orelse return null },
+            .click => .{ .click = getJsonString(obj, "selector") orelse return null },
+            .hover => .{ .hover = getJsonString(obj, "selector") orelse return null },
+            .eval => .{ .eval_js = getJsonString(obj, "script") orelse return null },
+            .extract => .{ .extract = getJsonString(obj, "schema") orelse return null },
+            .waitForSelector => .{ .wait = getJsonString(obj, "selector") orelse return null },
+            .fill => .{ .type_cmd = .{
+                .selector = getJsonString(obj, "selector") orelse return null,
+                .value = getJsonString(obj, "value") orelse return null,
+            } },
+            .selectOption => .{ .select = .{
+                .selector = getJsonString(obj, "selector") orelse return null,
+                .value = getJsonString(obj, "value") orelse return null,
+            } },
+            .setChecked => .{ .check = .{
+                .selector = getJsonString(obj, "selector") orelse return null,
+                .checked = switch (obj.get("checked") orelse return null) {
+                    .bool => |b| b,
+                    else => return null,
+                },
+            } },
+            .scroll => blk: {
+                if (obj.get("backendNodeId") != null) break :blk null;
+                break :blk .{ .scroll = .{ .x = getJsonI32(obj, "x", 0), .y = getJsonI32(obj, "y", 0) } };
+            },
+            else => null,
+        };
+    }
+
+    pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8 {
+        return input;
+    }
+
+    /// If the first word of `line` is a recognized PandaScript keyword, returns
+    /// its entry. Used by the REPL to surface a syntax error when `Command.parse`
+    /// rejects a line whose first word *looked* like a command — either an argful
+    /// keyword missing its args, or an argless keyword followed by junk.
+    pub fn keywordSyntax(line: []const u8) ?KeywordSyntax {
+        const word = splitHead(std.mem.trim(u8, line, &std.ascii.whitespace)).head;
+        for (keywords) |kc| {
+            if (std.mem.eql(u8, word, kc.name)) return kc;
+        }
+        return null;
+    }
+
+    /// Walks a PandaScript command body (the text after the keyword and its
+    /// separating space) and reports how many positional args have been
+    /// completed. Quote-aware: handles single, double, and triple-quoted strings.
+    /// An unterminated quote sets `at_boundary = false` so the hint suppresses
+    /// while the user is still inside the string. A bare token without trailing
+    /// whitespace likewise suppresses (cursor is mid-token).
+    pub fn analyzePandaBody(body: []const u8) BodyCursor {
+        var i: usize = 0;
+        var complete: usize = 0;
+        while (i < body.len) {
+            while (i < body.len and std.ascii.isWhitespace(body[i])) : (i += 1) {}
+            if (i >= body.len) break;
+            const ch = body[i];
+            if (ch == '\'' or ch == '"') {
+                if (QuoteType.fromPrefix(body[i..])) |tq| {
+                    const lit = tq.toLiteral();
+                    const end_idx = std.mem.indexOfPos(u8, body, i + lit.len, lit) orelse
+                        return .{ .complete_args = complete, .at_boundary = false };
+                    i = end_idx + lit.len;
+                } else {
+                    const end_idx = std.mem.indexOfScalarPos(u8, body, i + 1, ch) orelse
+                        return .{ .complete_args = complete, .at_boundary = false };
+                    i = end_idx + 1;
+                }
+                complete += 1;
+            } else {
+                while (i < body.len and !std.ascii.isWhitespace(body[i])) : (i += 1) {}
+                complete += 1;
+            }
+        }
+        const boundary = body.len == 0 or std.ascii.isWhitespace(body[body.len - 1]);
+        return .{ .complete_args = complete, .at_boundary = boundary };
+    }
+
+    pub const KeywordSyntax = struct {
+        name: []const u8,
+        /// Null for argless commands; the agent renders a different error.
+        args: ?[]const u8,
+        /// Pre-rendered positional-arg fragments shown progressively in the inline
+        /// hint as the user fills them in. Empty for argless commands. The visual
+        /// notation matches `args` (e.g. `'<selector>'` for quoted, `[x]` for
+        /// optional bare). Drives `analyzePandaBody`-based hint narrowing.
+        params: []const []const u8 = &.{},
+    };
+
+    /// Single source of truth for PandaScript keyword names — consumed by the
+    /// parser, the REPL highlighter, and Tab completion.
+    pub const keywords = [_]KeywordSyntax{
+        .{ .name = "GOTO", .args = "<url>", .params = &.{"<url>"} },
+        .{ .name = "CLICK", .args = selector_arg, .params = &.{selector_arg} },
+        .{ .name = "TYPE", .args = selector_arg ++ " " ++ value_arg, .params = &.{ selector_arg, value_arg } },
+        .{ .name = "WAIT", .args = selector_arg, .params = &.{selector_arg} },
+        .{ .name = "SCROLL", .args = "[x] [y]", .params = &.{ "[x]", "[y]" } },
+        .{ .name = "HOVER", .args = selector_arg, .params = &.{selector_arg} },
+        .{ .name = "SELECT", .args = selector_arg ++ " " ++ value_arg, .params = &.{ selector_arg, value_arg } },
+        .{ .name = "CHECK", .args = selector_arg ++ " [true|false]", .params = &.{ selector_arg, "[true|false]" } },
+        .{ .name = "TREE", .args = null },
+        .{ .name = "MARKDOWN", .args = null },
+        .{ .name = "EXTRACT", .args = schema_arg, .params = &.{schema_arg} },
+        .{ .name = "EVAL", .args = "'<script>'", .params = &.{"'<script>'"} },
+        .{ .name = "LOGIN", .args = null },
+        .{ .name = "ACCEPT_COOKIES", .args = null },
+    };
+
+    /// Iterator for parsing a script file, handling multi-line EVAL """ ... """ blocks.
+    pub const ScriptIterator = struct {
+        allocator: std.mem.Allocator,
+        lines: std.mem.SplitIterator(u8, .scalar),
+        line_num: u32,
+
+        pub fn init(allocator: std.mem.Allocator, content: []const u8) ScriptIterator {
+            return .{
+                .allocator = allocator,
+                .lines = std.mem.splitScalar(u8, content, '\n'),
+                .line_num = 0,
+            };
+        }
+
+        pub const Entry = struct {
+            line_num: u32,
+            raw_line: []const u8,
+            /// The full slice of the original content buffer covering this entry,
+            /// including trailing newline(s). For multi-line EVAL blocks this spans
+            /// from the EVAL keyword through the closing triple-quote line.
+            raw_span: []const u8,
+            command: Command,
+        };
+
+        /// Multi-line EVAL / EXTRACT blocks are assembled into a single command.
+        pub fn next(self: *ScriptIterator) std.mem.Allocator.Error!?Entry {
+            while (self.lines.next()) |line| {
+                self.line_num += 1;
+                const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+                if (trimmed.len == 0) continue;
+
+                const line_start = @intFromPtr(line.ptr) - @intFromPtr(self.lines.buffer.ptr);
+
+                if (BlockKeyword.fromOpener(trimmed)) |opener| {
+                    const start_line = self.line_num;
+                    const body_or_null = try self.collectMultiLineBlock(opener.quote_type);
+                    const span_end = self.lines.index orelse self.lines.buffer.len;
+                    const cmd: Command = switch (opener.kind) {
+                        .eval => if (body_or_null) |body| .{ .eval_js = body } else .{ .natural_language = "unterminated EVAL block" },
+                        .extract => if (body_or_null) |body| .{ .extract = body } else .{ .natural_language = "unterminated EXTRACT block" },
+                    };
+                    return .{
+                        .line_num = start_line,
+                        .raw_line = trimmed,
+                        .raw_span = self.lines.buffer[line_start..span_end],
+                        .command = cmd,
+                    };
+                }
+
+                const span_end = self.lines.index orelse self.lines.buffer.len;
+                return .{
+                    .line_num = self.line_num,
+                    .raw_line = trimmed,
+                    .raw_span = self.lines.buffer[line_start..span_end],
+                    .command = Command.parse(trimmed),
+                };
+            }
+            return null;
+        }
+
+        /// The triple-quote must stand alone on the line — inline forms like
+        /// `EVAL '''a'''` fall through to single-line `parse()`.
+        const BlockKeyword = struct {
+            kind: enum { eval, extract },
+            quote_type: QuoteType,
+
+            fn fromOpener(line: []const u8) ?BlockKeyword {
+                const split = splitHead(line);
+                const quote_type = QuoteType.fromLiteral(split.rest) orelse return null;
+                if (std.mem.eql(u8, split.head, "EVAL")) return .{ .kind = .eval, .quote_type = quote_type };
+                if (std.mem.eql(u8, split.head, "EXTRACT")) return .{ .kind = .extract, .quote_type = quote_type };
+                return null;
+            }
+        };
+
+        fn collectMultiLineBlock(self: *ScriptIterator, quote_type: QuoteType) std.mem.Allocator.Error!?[]const u8 {
+            const closer = quote_type.toLiteral();
+            var parts: std.ArrayList(u8) = .empty;
+            // toOwnedSlice empties `parts`, so this defer is a no-op on success.
+            defer parts.deinit(self.allocator);
+            while (self.lines.next()) |line| {
+                self.line_num += 1;
+                const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+                if (std.mem.eql(u8, trimmed, closer)) {
+                    return try parts.toOwnedSlice(self.allocator);
+                }
+                if (parts.items.len > 0) {
+                    try parts.append(self.allocator, '\n');
+                }
+                // Strip trailing CR only — full trim would clobber EXTRACT/EVAL indentation.
+                try parts.appendSlice(self.allocator, std.mem.trimRight(u8, line, "\r"));
+            }
+            return null;
+        }
+    };
 };
 
 fn writeBlockOrInline(writer: *std.Io.Writer, keyword: []const u8, body: []const u8) std.Io.Writer.Error!void {
@@ -142,305 +547,18 @@ fn splitHead(line: []const u8) struct { head: []const u8, rest: []const u8 } {
     };
 }
 
-/// Parse a line of REPL input into a PandaScript command.
-/// Unrecognized input is returned as `.natural_language`.
-/// For multi-line EVAL blocks in scripts, use `ScriptParser`.
-pub fn parse(line: []const u8) Command {
-    const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-    if (trimmed.len == 0) return .{ .natural_language = trimmed };
-
-    if (trimmed[0] == '#') return .{ .comment = {} };
-
-    const split = splitHead(trimmed);
-    const cmd_word = split.head;
-    const rest = split.rest;
-
-    if (std.mem.eql(u8, cmd_word, "GOTO")) {
-        if (rest.len == 0) return .{ .natural_language = trimmed };
-        return .{ .goto = rest };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "CLICK")) {
-        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
-        return .{ .click = arg };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "TYPE")) {
-        const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
-        const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
-        const second = trimMatchingQuotes(second_arg) orelse return .{ .natural_language = trimmed };
-        return .{ .type_cmd = .{ .selector = first.value, .value = second } };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "WAIT")) {
-        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
-        return .{ .wait = arg };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "SCROLL")) {
-        // SCROLL          → scroll to (0, 0)
-        // SCROLL 100      → scroll y=100
-        // SCROLL 50 200   → scroll x=50, y=200
-        if (rest.len == 0) return .{ .scroll = .{} };
-        var it = std.mem.tokenizeAny(u8, rest, &std.ascii.whitespace);
-        const first = it.next() orelse return .{ .scroll = .{} };
-        const second = it.next();
-        if (second) |s| {
-            const x = std.fmt.parseInt(i32, first, 10) catch return .{ .natural_language = trimmed };
-            const y = std.fmt.parseInt(i32, s, 10) catch return .{ .natural_language = trimmed };
-            return .{ .scroll = .{ .x = x, .y = y } };
-        }
-        const y = std.fmt.parseInt(i32, first, 10) catch return .{ .natural_language = trimmed };
-        return .{ .scroll = .{ .x = 0, .y = y } };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "HOVER")) {
-        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
-        return .{ .hover = arg };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "SELECT")) {
-        const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
-        const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
-        const second = trimMatchingQuotes(second_arg) orelse return .{ .natural_language = trimmed };
-        return .{ .select = .{ .selector = first.value, .value = second } };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "CHECK")) {
-        // CHECK '<sel>'         → checked = true
-        // CHECK '<sel>' true    → checked = true
-        // CHECK '<sel>' false   → checked = false
-        const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
-        const after = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
-        if (after.len == 0) {
-            return .{ .check = .{ .selector = first.value, .checked = true } };
-        }
-        if (std.ascii.eqlIgnoreCase(after, "true")) {
-            return .{ .check = .{ .selector = first.value, .checked = true } };
-        }
-        if (std.ascii.eqlIgnoreCase(after, "false")) {
-            return .{ .check = .{ .selector = first.value, .checked = false } };
-        }
-        return .{ .natural_language = trimmed };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "TREE")) {
-        if (rest.len > 0) return .{ .natural_language = trimmed };
-        return .{ .tree = {} };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "MARKDOWN")) {
-        if (rest.len > 0) return .{ .natural_language = trimmed };
-        return .{ .markdown = {} };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "EXTRACT")) {
-        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
-        return .{ .extract = arg };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "EVAL")) {
-        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
-        return .{ .eval_js = arg };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "LOGIN")) {
-        if (rest.len > 0) return .{ .natural_language = trimmed };
-        return .{ .login = {} };
-    }
-
-    if (std.mem.eql(u8, cmd_word, "ACCEPT_COOKIES")) {
-        if (rest.len > 0) return .{ .natural_language = trimmed };
-        return .{ .accept_cookies = {} };
-    }
-
-    return .{ .natural_language = trimmed };
-}
-
-pub const KeywordSyntax = struct {
-    name: []const u8,
-    /// Null for argless commands; the agent renders a different error.
-    args: ?[]const u8,
-    /// Pre-rendered positional-arg fragments shown progressively in the inline
-    /// hint as the user fills them in. Empty for argless commands. The visual
-    /// notation matches `args` (e.g. `'<selector>'` for quoted, `[x]` for
-    /// optional bare). Drives `analyzePandaBody`-based hint narrowing.
-    params: []const []const u8 = &.{},
-};
-
 // Shared positional-arg fragments used in the keyword table below.
 const selector_arg = "'<selector>'";
 const value_arg = "'<value>'";
 const schema_arg = "'<schema-json>'";
 
-/// Single source of truth for PandaScript keyword names — consumed by the
-/// parser, the REPL highlighter, and Tab completion.
-pub const keywords = [_]KeywordSyntax{
-    .{ .name = "GOTO", .args = "<url>", .params = &.{"<url>"} },
-    .{ .name = "CLICK", .args = selector_arg, .params = &.{selector_arg} },
-    .{ .name = "TYPE", .args = selector_arg ++ " " ++ value_arg, .params = &.{ selector_arg, value_arg } },
-    .{ .name = "WAIT", .args = selector_arg, .params = &.{selector_arg} },
-    .{ .name = "SCROLL", .args = "[x] [y]", .params = &.{ "[x]", "[y]" } },
-    .{ .name = "HOVER", .args = selector_arg, .params = &.{selector_arg} },
-    .{ .name = "SELECT", .args = selector_arg ++ " " ++ value_arg, .params = &.{ selector_arg, value_arg } },
-    .{ .name = "CHECK", .args = selector_arg ++ " [true|false]", .params = &.{ selector_arg, "[true|false]" } },
-    .{ .name = "TREE", .args = null },
-    .{ .name = "MARKDOWN", .args = null },
-    .{ .name = "EXTRACT", .args = schema_arg, .params = &.{schema_arg} },
-    .{ .name = "EVAL", .args = "'<script>'", .params = &.{"'<script>'"} },
-    .{ .name = "LOGIN", .args = null },
-    .{ .name = "ACCEPT_COOKIES", .args = null },
-};
-
 /// Result of `analyzePandaBody`: how many positional args the user has already
 /// fully entered, and whether the cursor is at a token boundary (ready to
 /// accept the next arg). Used by the REPL inline-hint renderer to narrow the
 /// shown params as the user types.
-pub const BodyCursor = struct {
+const BodyCursor = struct {
     complete_args: usize,
     at_boundary: bool,
-};
-
-/// Walks a PandaScript command body (the text after the keyword and its
-/// separating space) and reports how many positional args have been
-/// completed. Quote-aware: handles single, double, and triple-quoted strings.
-/// An unterminated quote sets `at_boundary = false` so the hint suppresses
-/// while the user is still inside the string. A bare token without trailing
-/// whitespace likewise suppresses (cursor is mid-token).
-pub fn analyzePandaBody(body: []const u8) BodyCursor {
-    var i: usize = 0;
-    var complete: usize = 0;
-    while (i < body.len) {
-        while (i < body.len and std.ascii.isWhitespace(body[i])) : (i += 1) {}
-        if (i >= body.len) break;
-        const ch = body[i];
-        if (ch == '\'' or ch == '"') {
-            if (QuoteType.fromPrefix(body[i..])) |tq| {
-                const lit = tq.toLiteral();
-                const end_idx = std.mem.indexOfPos(u8, body, i + lit.len, lit) orelse
-                    return .{ .complete_args = complete, .at_boundary = false };
-                i = end_idx + lit.len;
-            } else {
-                const end_idx = std.mem.indexOfScalarPos(u8, body, i + 1, ch) orelse
-                    return .{ .complete_args = complete, .at_boundary = false };
-                i = end_idx + 1;
-            }
-            complete += 1;
-        } else {
-            while (i < body.len and !std.ascii.isWhitespace(body[i])) : (i += 1) {}
-            complete += 1;
-        }
-    }
-    const boundary = body.len == 0 or std.ascii.isWhitespace(body[body.len - 1]);
-    return .{ .complete_args = complete, .at_boundary = boundary };
-}
-
-/// If the first word of `line` is a recognized PandaScript keyword, returns
-/// its entry. Used by the REPL to surface a syntax error when `Command.parse`
-/// rejects a line whose first word *looked* like a command — either an argful
-/// keyword missing its args, or an argless keyword followed by junk.
-pub fn keywordSyntax(line: []const u8) ?KeywordSyntax {
-    const word = splitHead(std.mem.trim(u8, line, &std.ascii.whitespace)).head;
-    for (keywords) |kc| {
-        if (std.mem.eql(u8, word, kc.name)) return kc;
-    }
-    return null;
-}
-
-/// Iterator for parsing a script file, handling multi-line EVAL """ ... """ blocks.
-pub const ScriptIterator = struct {
-    allocator: std.mem.Allocator,
-    lines: std.mem.SplitIterator(u8, .scalar),
-    line_num: u32,
-
-    pub fn init(allocator: std.mem.Allocator, content: []const u8) ScriptIterator {
-        return .{
-            .allocator = allocator,
-            .lines = std.mem.splitScalar(u8, content, '\n'),
-            .line_num = 0,
-        };
-    }
-
-    pub const Entry = struct {
-        line_num: u32,
-        raw_line: []const u8,
-        /// The full slice of the original content buffer covering this entry,
-        /// including trailing newline(s). For multi-line EVAL blocks this spans
-        /// from the EVAL keyword through the closing triple-quote line.
-        raw_span: []const u8,
-        command: Command,
-    };
-
-    /// Multi-line EVAL / EXTRACT blocks are assembled into a single command.
-    pub fn next(self: *ScriptIterator) std.mem.Allocator.Error!?Entry {
-        while (self.lines.next()) |line| {
-            self.line_num += 1;
-            const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-            if (trimmed.len == 0) continue;
-
-            const line_start = @intFromPtr(line.ptr) - @intFromPtr(self.lines.buffer.ptr);
-
-            if (BlockKeyword.fromOpener(trimmed)) |opener| {
-                const start_line = self.line_num;
-                const body_or_null = try self.collectMultiLineBlock(opener.quote_type);
-                const span_end = self.lines.index orelse self.lines.buffer.len;
-                const cmd: Command = switch (opener.kind) {
-                    .eval => if (body_or_null) |body| .{ .eval_js = body } else .{ .natural_language = "unterminated EVAL block" },
-                    .extract => if (body_or_null) |body| .{ .extract = body } else .{ .natural_language = "unterminated EXTRACT block" },
-                };
-                return .{
-                    .line_num = start_line,
-                    .raw_line = trimmed,
-                    .raw_span = self.lines.buffer[line_start..span_end],
-                    .command = cmd,
-                };
-            }
-
-            const span_end = self.lines.index orelse self.lines.buffer.len;
-            return .{
-                .line_num = self.line_num,
-                .raw_line = trimmed,
-                .raw_span = self.lines.buffer[line_start..span_end],
-                .command = parse(trimmed),
-            };
-        }
-        return null;
-    }
-
-    /// The triple-quote must stand alone on the line — inline forms like
-    /// `EVAL '''a'''` fall through to single-line `parse()`.
-    const BlockKeyword = struct {
-        kind: enum { eval, extract },
-        quote_type: QuoteType,
-
-        fn fromOpener(line: []const u8) ?BlockKeyword {
-            const split = splitHead(line);
-            const quote_type = QuoteType.fromLiteral(split.rest) orelse return null;
-            if (std.mem.eql(u8, split.head, "EVAL")) return .{ .kind = .eval, .quote_type = quote_type };
-            if (std.mem.eql(u8, split.head, "EXTRACT")) return .{ .kind = .extract, .quote_type = quote_type };
-            return null;
-        }
-    };
-
-    fn collectMultiLineBlock(self: *ScriptIterator, quote_type: QuoteType) std.mem.Allocator.Error!?[]const u8 {
-        const closer = quote_type.toLiteral();
-        var parts: std.ArrayList(u8) = .empty;
-        // toOwnedSlice empties `parts`, so this defer is a no-op on success.
-        defer parts.deinit(self.allocator);
-        while (self.lines.next()) |line| {
-            self.line_num += 1;
-            const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-            if (std.mem.eql(u8, trimmed, closer)) {
-                return try parts.toOwnedSlice(self.allocator);
-            }
-            if (parts.items.len > 0) {
-                try parts.append(self.allocator, '\n');
-            }
-            // Strip trailing CR only — full trim would clobber EXTRACT/EVAL indentation.
-            try parts.appendSlice(self.allocator, std.mem.trimRight(u8, line, "\r"));
-        }
-        return null;
-    }
 };
 
 const QuotedResult = struct {
@@ -522,7 +640,7 @@ fn trimMatchingQuotes(s: []const u8) ?[]const u8 {
 }
 
 /// Wraps a string in outer quotes when formatted via `{f}`, choosing the
-/// quote character so the output round-trips through `parse()`:
+/// quote character so the output round-trips through `Command.parse()`:
 ///   - prefer `'…'`
 ///   - use `"…"` if the content contains `'` but not `"`
 ///   - use `'''…'''` if it contains both
@@ -552,123 +670,16 @@ fn quote(s: []const u8) Quoted {
 }
 
 /// Callback for resolving placeholder strings (typically `$LP_*` env vars)
-/// inside selector-like fields before serialization. Pass `noSubstitute`
+/// inside selector-like fields before serialization. Pass `Command.noSubstitute`
 /// when raw output is desired (e.g. in tests).
-pub const SubstituteFn = *const fn (arena: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8;
-
-pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8 {
-    return input;
-}
+const SubstituteFn = *const fn (arena: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8;
 
 /// A tool call: the action name plus its already-built JSON arguments,
 /// ready to hand to `lp.tools.call` without a stringify/reparse round-trip.
-pub const ToolCall = struct {
+const ToolCall = struct {
     name: []const u8,
     args: ?std.json.Value,
 };
-
-/// Map a Command to its (tool_name, JSON args) representation. Returns
-/// null for variants without a 1:1 tool mapping (login, accept_cookies,
-/// natural_language, comment).
-///
-/// `substitute` is applied to selector-like fields. The `value` field of
-/// `type_cmd` is intentionally NOT substituted: `execFill` in
-/// `browser/tools.zig` substitutes it itself so the secret never appears
-/// in the result text echoed back to the LLM/terminal.
-pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) std.mem.Allocator.Error!?ToolCall {
-    const Action = lp.tools.Action;
-    var obj: std.json.ObjectMap = .init(arena);
-    switch (cmd) {
-        .goto => |url| {
-            try obj.put("url", .{ .string = try substitute(arena, url) });
-            return .{ .name = @tagName(Action.goto), .args = .{ .object = obj } };
-        },
-        .click => |sel| {
-            try obj.put("selector", .{ .string = try substitute(arena, sel) });
-            return .{ .name = @tagName(Action.click), .args = .{ .object = obj } };
-        },
-        .type_cmd => |args| {
-            try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
-            try obj.put("value", .{ .string = args.value });
-            return .{ .name = @tagName(Action.fill), .args = .{ .object = obj } };
-        },
-        .wait => |sel| {
-            try obj.put("selector", .{ .string = sel });
-            return .{ .name = @tagName(Action.waitForSelector), .args = .{ .object = obj } };
-        },
-        .scroll => |args| {
-            try obj.put("x", .{ .integer = args.x });
-            try obj.put("y", .{ .integer = args.y });
-            return .{ .name = @tagName(Action.scroll), .args = .{ .object = obj } };
-        },
-        .hover => |sel| {
-            try obj.put("selector", .{ .string = try substitute(arena, sel) });
-            return .{ .name = @tagName(Action.hover), .args = .{ .object = obj } };
-        },
-        .select => |args| {
-            try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
-            try obj.put("value", .{ .string = try substitute(arena, args.value) });
-            return .{ .name = @tagName(Action.selectOption), .args = .{ .object = obj } };
-        },
-        .check => |args| {
-            try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
-            try obj.put("checked", .{ .bool = args.checked });
-            return .{ .name = @tagName(Action.setChecked), .args = .{ .object = obj } };
-        },
-        .tree => return .{ .name = @tagName(Action.tree), .args = null },
-        .markdown => return .{ .name = @tagName(Action.markdown), .args = null },
-        .eval_js => |script| {
-            try obj.put("script", .{ .string = script });
-            return .{ .name = @tagName(Action.eval), .args = .{ .object = obj } };
-        },
-        .extract => |schema| {
-            try obj.put("schema", .{ .string = try substitute(arena, schema) });
-            return .{ .name = @tagName(Action.extract), .args = .{ .object = obj } };
-        },
-        .natural_language, .comment, .login, .accept_cookies => return null,
-    }
-}
-
-/// Inverse of `toToolCall`: map an LLM tool call into a Command, or return
-/// null if the tool name doesn't correspond to a PandaScript command.
-/// Variants emitted by `toToolCall` round-trip through this.
-pub fn fromToolCall(tool_name: []const u8, arguments: std.json.Value) ?Command {
-    const Action = lp.tools.Action;
-    const action = std.meta.stringToEnum(Action, tool_name) orelse return null;
-    const obj = switch (arguments) {
-        .object => |o| o,
-        else => return null,
-    };
-
-    return switch (action) {
-        .goto => .{ .goto = getJsonString(obj, "url") orelse return null },
-        .click => .{ .click = getJsonString(obj, "selector") orelse return null },
-        .hover => .{ .hover = getJsonString(obj, "selector") orelse return null },
-        .eval => .{ .eval_js = getJsonString(obj, "script") orelse return null },
-        .extract => .{ .extract = getJsonString(obj, "schema") orelse return null },
-        .waitForSelector => .{ .wait = getJsonString(obj, "selector") orelse return null },
-        .fill => .{ .type_cmd = .{
-            .selector = getJsonString(obj, "selector") orelse return null,
-            .value = getJsonString(obj, "value") orelse return null,
-        } },
-        .selectOption => .{ .select = .{
-            .selector = getJsonString(obj, "selector") orelse return null,
-            .value = getJsonString(obj, "value") orelse return null,
-        } },
-        .setChecked => .{ .check = .{
-            .selector = getJsonString(obj, "selector") orelse return null,
-            .checked = switch (obj.get("checked") orelse return null) {
-                .bool => |b| b,
-                else => return null,
-            },
-        } },
-        .scroll => blk: {
-            if (obj.get("backendNodeId") != null) break :blk null;
-            break :blk .{ .scroll = .{ .x = getJsonI32(obj, "x", 0), .y = getJsonI32(obj, "y", 0) } };
-        },
-        else => null,
-    };
-}
 
 fn getJsonString(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     return switch (o.get(key) orelse return null) {
@@ -692,144 +703,144 @@ fn testUpcase(ar: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error!
 }
 
 test "parse GOTO" {
-    const cmd = parse("GOTO https://example.com");
+    const cmd = Command.parse("GOTO https://example.com");
     try std.testing.expectEqualStrings("https://example.com", cmd.goto);
 }
 
 test "parse lowercase keyword falls through to natural_language" {
     // Commands must be ALL CAPS so that prose like "click the login button"
     // can flow through to the LLM without being misread as a CLICK command.
-    try std.testing.expect(parse("goto https://example.com") == .natural_language);
-    try std.testing.expect(parse("click '#submit'") == .natural_language);
-    try std.testing.expect(parse("type '#email' 'a@b.c'") == .natural_language);
+    try std.testing.expect(Command.parse("goto https://example.com") == .natural_language);
+    try std.testing.expect(Command.parse("click '#submit'") == .natural_language);
+    try std.testing.expect(Command.parse("type '#email' 'a@b.c'") == .natural_language);
 }
 
 test "parse mixed-case keyword falls through to natural_language" {
-    try std.testing.expect(parse("Click '#foo'") == .natural_language);
-    try std.testing.expect(parse("Goto https://x") == .natural_language);
-    try std.testing.expect(parse("Markdown") == .natural_language);
+    try std.testing.expect(Command.parse("Click '#foo'") == .natural_language);
+    try std.testing.expect(Command.parse("Goto https://x") == .natural_language);
+    try std.testing.expect(Command.parse("Markdown") == .natural_language);
 }
 
 test "parse natural language starting with command verb" {
-    try std.testing.expect(parse("click on the login button") == .natural_language);
-    try std.testing.expect(parse("type the username into the form") == .natural_language);
-    try std.testing.expect(parse("wait for the page to load") == .natural_language);
+    try std.testing.expect(Command.parse("click on the login button") == .natural_language);
+    try std.testing.expect(Command.parse("type the username into the form") == .natural_language);
+    try std.testing.expect(Command.parse("wait for the page to load") == .natural_language);
 }
 
 test "parse GOTO missing url" {
-    const cmd = parse("GOTO");
+    const cmd = Command.parse("GOTO");
     try std.testing.expect(cmd == .natural_language);
 }
 
 test "keywordSyntax: argful keyword without args returns its shape" {
-    const k = keywordSyntax("CLICK").?;
+    const k = Command.keywordSyntax("CLICK").?;
     try std.testing.expectEqualStrings("CLICK", k.name);
     try std.testing.expectEqualStrings("'<selector>'", k.args.?);
 }
 
 test "keywordSyntax: trailing whitespace tolerated" {
-    try std.testing.expect(keywordSyntax("  GOTO   ") != null);
+    try std.testing.expect(Command.keywordSyntax("  GOTO   ") != null);
 }
 
 test "keywordSyntax: argless keyword returns entry with null args" {
-    const k = keywordSyntax("LOGIN").?;
+    const k = Command.keywordSyntax("LOGIN").?;
     try std.testing.expectEqualStrings("LOGIN", k.name);
     try std.testing.expect(k.args == null);
 }
 
 test "keywordSyntax: unknown word returns null" {
-    try std.testing.expect(keywordSyntax("FOOBAR") == null);
-    try std.testing.expect(keywordSyntax("click the button") == null);
+    try std.testing.expect(Command.keywordSyntax("FOOBAR") == null);
+    try std.testing.expect(Command.keywordSyntax("click the button") == null);
 }
 
 test "parse argless keyword with trailing junk falls through to natural_language" {
-    try std.testing.expect(parse("LOGIN abc") == .natural_language);
-    try std.testing.expect(parse("TREE foo") == .natural_language);
-    try std.testing.expect(parse("MARKDOWN x") == .natural_language);
-    try std.testing.expect(parse("ACCEPT_COOKIES y") == .natural_language);
+    try std.testing.expect(Command.parse("LOGIN abc") == .natural_language);
+    try std.testing.expect(Command.parse("TREE foo") == .natural_language);
+    try std.testing.expect(Command.parse("MARKDOWN x") == .natural_language);
+    try std.testing.expect(Command.parse("ACCEPT_COOKIES y") == .natural_language);
 }
 
 test "parse CLICK quoted" {
-    const cmd = parse("CLICK \"Login\"");
+    const cmd = Command.parse("CLICK \"Login\"");
     try std.testing.expectEqualStrings("Login", cmd.click);
 }
 
 test "parse CLICK unquoted" {
-    const cmd = parse("CLICK .submit-btn");
+    const cmd = Command.parse("CLICK .submit-btn");
     try std.testing.expectEqualStrings(".submit-btn", cmd.click);
 }
 
 test "parse TYPE two quoted args" {
-    const cmd = parse("TYPE \"#email\" \"user@test.com\"");
+    const cmd = Command.parse("TYPE \"#email\" \"user@test.com\"");
     try std.testing.expectEqualStrings("#email", cmd.type_cmd.selector);
     try std.testing.expectEqualStrings("user@test.com", cmd.type_cmd.value);
 }
 
 test "parse TYPE with triple-quoted selector" {
-    const cmd = parse("TYPE '''a[x='y'][z=\"w\"]''' 'value'");
+    const cmd = Command.parse("TYPE '''a[x='y'][z=\"w\"]''' 'value'");
     try std.testing.expectEqualStrings("a[x='y'][z=\"w\"]", cmd.type_cmd.selector);
     try std.testing.expectEqualStrings("value", cmd.type_cmd.value);
 }
 
 test "parse TYPE single-quoted with inner double quotes" {
-    const cmd = parse("TYPE 'input[name=\"acct\"]' '$LP_USERNAME'");
+    const cmd = Command.parse("TYPE 'input[name=\"acct\"]' '$LP_USERNAME'");
     try std.testing.expectEqualStrings("input[name=\"acct\"]", cmd.type_cmd.selector);
     try std.testing.expectEqualStrings("$LP_USERNAME", cmd.type_cmd.value);
 }
 
 test "parse CLICK single-quoted" {
-    const cmd = parse("CLICK 'a[href*=\"login\"]'");
+    const cmd = Command.parse("CLICK 'a[href*=\"login\"]'");
     try std.testing.expectEqualStrings("a[href*=\"login\"]", cmd.click);
 }
 
 test "parse CLICK with nested single quotes" {
     // Input: CLICK 'a[href='login?goto=news']'
-    const cmd = parse("CLICK 'a[href='login?goto=news']'");
+    const cmd = Command.parse("CLICK 'a[href='login?goto=news']'");
     try std.testing.expectEqualStrings("a[href='login?goto=news']", cmd.click);
 }
 
 test "parse CLICK malformed quotes falls through to natural_language" {
-    try std.testing.expect(parse("CLICK '#foo") == .natural_language);
-    try std.testing.expect(parse("WAIT \".foo") == .natural_language);
-    try std.testing.expect(parse("HOVER '#x\"") == .natural_language);
+    try std.testing.expect(Command.parse("CLICK '#foo") == .natural_language);
+    try std.testing.expect(Command.parse("WAIT \".foo") == .natural_language);
+    try std.testing.expect(Command.parse("HOVER '#x\"") == .natural_language);
 }
 
 test "parse EXTRACT with nested quotes in schema" {
-    const cmd = parse("EXTRACT '{\"link\": \"a[href*='news']\"}'");
+    const cmd = Command.parse("EXTRACT '{\"link\": \"a[href*='news']\"}'");
     try std.testing.expectEqualStrings("{\"link\": \"a[href*='news']\"}", cmd.extract);
 }
 
 test "parse EVAL with single-quoted inner string" {
-    const cmd = parse("EVAL 'document.querySelector('h1').innerText'");
+    const cmd = Command.parse("EVAL 'document.querySelector('h1').innerText'");
     try std.testing.expectEqualStrings("document.querySelector('h1').innerText", cmd.eval_js);
 }
 
 test "parse TYPE nested inner quote in value" {
-    const cmd = parse("TYPE '#comment' 'she said 'hi''");
+    const cmd = Command.parse("TYPE '#comment' 'she said 'hi''");
     try std.testing.expectEqualStrings("#comment", cmd.type_cmd.selector);
     try std.testing.expectEqualStrings("she said 'hi'", cmd.type_cmd.value);
 }
 
 test "parse TYPE unquoted value" {
-    const cmd = parse("TYPE '#email' user@example.com");
+    const cmd = Command.parse("TYPE '#email' user@example.com");
     try std.testing.expectEqualStrings("#email", cmd.type_cmd.selector);
     try std.testing.expectEqualStrings("user@example.com", cmd.type_cmd.value);
 }
 
 test "parse TYPE multi-word unquoted value" {
     // The whole remainder after the first arg becomes the value — spaces included.
-    const cmd = parse("TYPE '#comment' hello world");
+    const cmd = Command.parse("TYPE '#comment' hello world");
     try std.testing.expectEqualStrings("#comment", cmd.type_cmd.selector);
     try std.testing.expectEqualStrings("hello world", cmd.type_cmd.value);
 }
 
 test "parse TYPE missing second arg" {
-    const cmd = parse("TYPE \"#email\"");
+    const cmd = Command.parse("TYPE \"#email\"");
     try std.testing.expect(cmd == .natural_language);
 }
 
 test "parse WAIT" {
-    const cmd = parse("WAIT \".dashboard\"");
+    const cmd = Command.parse("WAIT \".dashboard\"");
     try std.testing.expectEqualStrings(".dashboard", cmd.wait);
 }
 
@@ -845,7 +856,7 @@ test "parse SCROLL" {
     };
     for (cases, 0..) |c, i| {
         errdefer std.debug.print("failing case {d}: {s}\n", .{ i, c.in });
-        const cmd = parse(c.in);
+        const cmd = Command.parse(c.in);
         if (c.expected) |e| {
             try std.testing.expectEqual(e.x, cmd.scroll.x);
             try std.testing.expectEqual(e.y, cmd.scroll.y);
@@ -869,7 +880,7 @@ test "format CHECK round-trips both checked states" {
         try cmd.format(&aw.writer);
         try std.testing.expectEqualStrings(c.expected, aw.written());
 
-        const round = parse(aw.written());
+        const round = Command.parse(aw.written());
         try std.testing.expectEqualStrings("#agree", round.check.selector);
         try std.testing.expectEqual(c.checked, round.check.checked);
     }
@@ -893,15 +904,15 @@ test "format SCROLL emits shortest round-tripping form" {
         try cmd.format(&aw.writer);
         try std.testing.expectEqualStrings(c.expected, aw.written());
 
-        const round = parse(aw.written());
+        const round = Command.parse(aw.written());
         try std.testing.expectEqual(c.x, round.scroll.x);
         try std.testing.expectEqual(c.y, round.scroll.y);
     }
 }
 
-test "ScriptIterator strips trailing CR from CRLF-authored block bodies" {
+test "Command.ScriptIterator strips trailing CR from CRLF-authored block bodies" {
     const script = "GOTO https://x\r\nEXTRACT '''\r\n{\"t\":\"h1\"}\r\n'''\r\nCLICK '#x'\r\n";
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .goto);
@@ -921,23 +932,23 @@ test "ScriptIterator strips trailing CR from CRLF-authored block bodies" {
 }
 
 test "parse HOVER" {
-    const cmd = parse("HOVER '#menu'");
+    const cmd = Command.parse("HOVER '#menu'");
     try std.testing.expectEqualStrings("#menu", cmd.hover);
 }
 
 test "parse HOVER missing selector" {
-    const cmd = parse("HOVER");
+    const cmd = Command.parse("HOVER");
     try std.testing.expect(cmd == .natural_language);
 }
 
 test "parse SELECT two args" {
-    const cmd = parse("SELECT '#country' 'France'");
+    const cmd = Command.parse("SELECT '#country' 'France'");
     try std.testing.expectEqualStrings("#country", cmd.select.selector);
     try std.testing.expectEqualStrings("France", cmd.select.value);
 }
 
 test "parse SELECT missing value" {
-    const cmd = parse("SELECT '#country'");
+    const cmd = Command.parse("SELECT '#country'");
     try std.testing.expect(cmd == .natural_language);
 }
 
@@ -953,7 +964,7 @@ test "parse CHECK" {
     };
     for (cases, 0..) |c, i| {
         errdefer std.debug.print("failing case {d}: {s}\n", .{ i, c.in });
-        const cmd = parse(c.in);
+        const cmd = Command.parse(c.in);
         if (c.expected) |e| {
             try std.testing.expectEqualStrings(e.selector, cmd.check.selector);
             try std.testing.expectEqual(e.checked, cmd.check.checked);
@@ -981,12 +992,12 @@ test "parse argless and tag-only inputs" {
     };
     for (cases, 0..) |c, i| {
         errdefer std.debug.print("failing case {d}: \"{s}\"\n", .{ i, c.in });
-        try std.testing.expectEqual(c.expected, std.meta.activeTag(parse(c.in)));
+        try std.testing.expectEqual(c.expected, std.meta.activeTag(Command.parse(c.in)));
     }
 }
 
 test "parse EXTRACT" {
-    const cmd = parse("EXTRACT '{\"titles\": [\".title\"]}'");
+    const cmd = Command.parse("EXTRACT '{\"titles\": [\".title\"]}'");
     try std.testing.expectEqualStrings("{\"titles\": [\".title\"]}", cmd.extract);
 }
 
@@ -999,7 +1010,7 @@ test "format EXTRACT single-line schema round-trip" {
     try cmd.format(&aw.writer);
     try std.testing.expectEqualStrings("EXTRACT '{\"title\":\"h1\",\"items\":[\".item\"]}'", aw.written());
 
-    const round = parse(aw.written());
+    const round = Command.parse(aw.written());
     try std.testing.expectEqualStrings(schema, round.extract);
 }
 
@@ -1014,48 +1025,48 @@ test "format EXTRACT multi-line schema uses triple quotes" {
 }
 
 test "parse EVAL single line" {
-    const cmd = parse("EVAL \"document.title\"");
+    const cmd = Command.parse("EVAL \"document.title\"");
     try std.testing.expectEqualStrings("document.title", cmd.eval_js);
 }
 
 test "parse EVAL triple-quote opener requires uppercase" {
-    try std.testing.expect(parse("eval '''") == .natural_language);
-    try std.testing.expect(parse("eval \"\"\"") == .natural_language);
+    try std.testing.expect(Command.parse("eval '''") == .natural_language);
+    try std.testing.expect(Command.parse("eval \"\"\"") == .natural_language);
 }
 
 test "parse natural language fallback" {
-    const cmd = parse("what is on this page?");
+    const cmd = Command.parse("what is on this page?");
     try std.testing.expectEqualStrings("what is on this page?", cmd.natural_language);
 }
 
 test "parse whitespace trimming" {
-    const cmd = parse("  GOTO  https://example.com  ");
+    const cmd = Command.parse("  GOTO  https://example.com  ");
     try std.testing.expectEqualStrings("https://example.com", cmd.goto);
 }
 
 test "isRecorded" {
-    try std.testing.expect(parse("GOTO https://example.com").isRecorded());
-    try std.testing.expect(parse("CLICK \"btn\"").isRecorded());
-    try std.testing.expect(parse("TYPE \"sel\" \"val\"").isRecorded());
-    try std.testing.expect(parse("WAIT \".x\"").isRecorded());
-    try std.testing.expect(parse("SCROLL 0 200").isRecorded());
-    try std.testing.expect(parse("HOVER '#menu'").isRecorded());
-    try std.testing.expect(parse("SELECT '#sel' 'a'").isRecorded());
-    try std.testing.expect(parse("CHECK '#chk'").isRecorded());
-    try std.testing.expect(parse("CHECK '#chk' false").isRecorded());
-    try std.testing.expect(parse("EXTRACT '{\"t\":\".title\"}'").isRecorded());
-    try std.testing.expect(parse("EVAL \"1+1\"").isRecorded());
-    try std.testing.expect(!parse("TREE").isRecorded());
-    try std.testing.expect(!parse("MARKDOWN").isRecorded());
+    try std.testing.expect(Command.parse("GOTO https://example.com").isRecorded());
+    try std.testing.expect(Command.parse("CLICK \"btn\"").isRecorded());
+    try std.testing.expect(Command.parse("TYPE \"sel\" \"val\"").isRecorded());
+    try std.testing.expect(Command.parse("WAIT \".x\"").isRecorded());
+    try std.testing.expect(Command.parse("SCROLL 0 200").isRecorded());
+    try std.testing.expect(Command.parse("HOVER '#menu'").isRecorded());
+    try std.testing.expect(Command.parse("SELECT '#sel' 'a'").isRecorded());
+    try std.testing.expect(Command.parse("CHECK '#chk'").isRecorded());
+    try std.testing.expect(Command.parse("CHECK '#chk' false").isRecorded());
+    try std.testing.expect(Command.parse("EXTRACT '{\"t\":\".title\"}'").isRecorded());
+    try std.testing.expect(Command.parse("EVAL \"1+1\"").isRecorded());
+    try std.testing.expect(!Command.parse("TREE").isRecorded());
+    try std.testing.expect(!Command.parse("MARKDOWN").isRecorded());
 }
 
-test "ScriptIterator basic commands" {
+test "Command.ScriptIterator basic commands" {
     const script =
         \\GOTO https://example.com
         \\TREE
         \\CLICK "Login"
     ;
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expectEqualStrings("https://example.com", e1.command.goto);
@@ -1070,7 +1081,7 @@ test "ScriptIterator basic commands" {
     try std.testing.expect((try iter.next()) == null);
 }
 
-test "ScriptIterator skips blank lines and comments" {
+test "Command.ScriptIterator skips blank lines and comments" {
     const script =
         \\# Navigate
         \\GOTO https://example.com
@@ -1078,7 +1089,7 @@ test "ScriptIterator skips blank lines and comments" {
         \\# Extract
         \\TREE
     ;
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .comment);
@@ -1095,7 +1106,7 @@ test "ScriptIterator skips blank lines and comments" {
     try std.testing.expect((try iter.next()) == null);
 }
 
-test "ScriptIterator multi-line EVAL" {
+test "Command.ScriptIterator multi-line EVAL" {
     const script =
         \\GOTO https://example.com
         \\EVAL """
@@ -1105,7 +1116,7 @@ test "ScriptIterator multi-line EVAL" {
         \\"""
         \\TREE
     ;
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .goto);
@@ -1122,26 +1133,26 @@ test "ScriptIterator multi-line EVAL" {
     try std.testing.expect((try iter.next()) == null);
 }
 
-test "ScriptIterator unterminated EVAL" {
+test "Command.ScriptIterator unterminated EVAL" {
     const script =
         \\EVAL """
         \\  const x = 1;
     ;
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .natural_language);
     try std.testing.expectEqualStrings("unterminated EVAL block", e1.command.natural_language);
 }
 
-test "ScriptIterator inline triple-quoted EVAL stays single-line" {
+test "Command.ScriptIterator inline triple-quoted EVAL stays single-line" {
     // The opening ''' has content on the same line, so this is NOT a
-    // multi-line block — trimMatchingQuotes handles it via parse().
+    // multi-line block — trimMatchingQuotes handles it via Command.parse().
     const script =
         \\EVAL '''console.log("x")'''
         \\CLICK '.btn'
     ;
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .eval_js);
@@ -1154,7 +1165,7 @@ test "ScriptIterator inline triple-quoted EVAL stays single-line" {
     try std.testing.expect((try iter.next()) == null);
 }
 
-test "ScriptIterator multi-line EXTRACT" {
+test "Command.ScriptIterator multi-line EXTRACT" {
     const script =
         \\GOTO https://example.com
         \\EXTRACT '''
@@ -1165,7 +1176,7 @@ test "ScriptIterator multi-line EXTRACT" {
         \\'''
         \\TREE
     ;
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .goto);
@@ -1182,26 +1193,26 @@ test "ScriptIterator multi-line EXTRACT" {
     try std.testing.expect((try iter.next()) == null);
 }
 
-test "ScriptIterator unterminated EXTRACT" {
+test "Command.ScriptIterator unterminated EXTRACT" {
     const script =
         \\EXTRACT """
         \\{"t":"h1"
     ;
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .natural_language);
     try std.testing.expectEqualStrings("unterminated EXTRACT block", e1.command.natural_language);
 }
 
-test "ScriptIterator multi-line EVAL mismatched triple quote" {
+test "Command.ScriptIterator multi-line EVAL mismatched triple quote" {
     const script =
         \\EVAL """
         \\  const s = " ''' ";
         \\  console.log(s);
         \\"""
     ;
-    var iter: ScriptIterator = .init(std.testing.allocator, script);
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .eval_js);
@@ -1271,7 +1282,7 @@ test "format round-trip for quoted selectors" {
         try cmd.format(&aw.writer);
         try std.testing.expectEqualStrings(c.expected_line, aw.written());
 
-        const round = parse(aw.written());
+        const round = Command.parse(aw.written());
         try std.testing.expectEqualStrings(c.input, round.click);
     }
 }
@@ -1287,7 +1298,7 @@ test "format TYPE with nested single quotes round-trip" {
     try cmd.format(&aw.writer);
     try std.testing.expectEqualStrings("TYPE \"input[name='acct']\" '$LP_USERNAME'", aw.written());
 
-    const round = parse(aw.written());
+    const round = Command.parse(aw.written());
     try std.testing.expectEqualStrings("input[name='acct']", round.type_cmd.selector);
     try std.testing.expectEqualStrings("$LP_USERNAME", round.type_cmd.value);
 }
@@ -1300,7 +1311,7 @@ test "format with both quote types uses triple quotes" {
     try cmd.format(&aw.writer);
     try std.testing.expectEqualStrings("CLICK '''a[x='y'][z=\"w\"]'''", aw.written());
 
-    const round = parse(aw.written());
+    const round = Command.parse(aw.written());
     try std.testing.expectEqualStrings("a[x='y'][z=\"w\"]", round.click);
 }
 
@@ -1315,7 +1326,7 @@ test "format TYPE with both quote types round-trip" {
     try cmd.format(&aw.writer);
     try std.testing.expectEqualStrings("TYPE '''a[x='y'][z=\"w\"]''' '''some 'value' with \"quotes\"'''", aw.written());
 
-    const round = parse(aw.written());
+    const round = Command.parse(aw.written());
     try std.testing.expectEqualStrings("a[x='y'][z=\"w\"]", round.type_cmd.selector);
     try std.testing.expectEqualStrings("some 'value' with \"quotes\"", round.type_cmd.value);
 }
@@ -1330,7 +1341,7 @@ test "format swaps to triple-double when body contains '''" {
     try cmd.format(&aw.writer);
     try std.testing.expectEqualStrings("CLICK \"\"\"weird '''selector\"\"\"\"", aw.written());
 
-    const round = parse(aw.written());
+    const round = Command.parse(aw.written());
     try std.testing.expectEqualStrings("weird '''selector\"", round.click);
 }
 
@@ -1343,9 +1354,9 @@ fn expectRoundTrip(cmd: Command) !void {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const tc = (try toToolCall(a, cmd, noSubstitute)) orelse return error.NoToolMapping;
+    const tc = (try cmd.toToolCall(a, Command.noSubstitute)) orelse return error.NoToolMapping;
     const args = tc.args orelse return error.RoundTripFailed;
-    const back = fromToolCall(tc.name, args) orelse return error.RoundTripFailed;
+    const back = Command.fromToolCall(tc.name, args) orelse return error.RoundTripFailed;
     try std.testing.expectEqualDeep(cmd, back);
 }
 
@@ -1373,24 +1384,22 @@ test "toToolCall: variants without tool mapping return null" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try std.testing.expect((try toToolCall(a, .login, noSubstitute)) == null);
-    try std.testing.expect((try toToolCall(a, .accept_cookies, noSubstitute)) == null);
-    try std.testing.expect((try toToolCall(a, .comment, noSubstitute)) == null);
-    try std.testing.expect((try toToolCall(a, .{ .natural_language = "hi" }, noSubstitute)) == null);
+    const cases = [_]Command{ .login, .accept_cookies, .comment, .{ .natural_language = "hi" } };
+    for (cases) |c| try std.testing.expect((try c.toToolCall(a, Command.noSubstitute)) == null);
 }
 
 test "fromToolCall: unknown tool returns null" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const empty = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "{}", .{});
-    try std.testing.expect(fromToolCall("no_such_tool", empty) == null);
+    try std.testing.expect(Command.fromToolCall("no_such_tool", empty) == null);
 }
 
 test "fromToolCall: missing required field returns null" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const empty = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "{}", .{});
-    try std.testing.expect(fromToolCall("click", empty) == null);
+    try std.testing.expect(Command.fromToolCall("click", empty) == null);
 }
 
 test "toToolCall: substitute callback applied to selector fields" {
@@ -1398,7 +1407,7 @@ test "toToolCall: substitute callback applied to selector fields" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const tc = (try toToolCall(a, .{ .click = "abc" }, testUpcase)).?;
+    const tc = (try (Command{ .click = "abc" }).toToolCall(a, testUpcase)).?;
     try std.testing.expectEqualStrings("click", tc.name);
     const args_json = try std.json.Stringify.valueAlloc(a, tc.args.?, .{});
     try std.testing.expectEqualStrings("{\"selector\":\"ABC\"}", args_json);
@@ -1409,7 +1418,7 @@ test "toToolCall: substitute callback applied to extract schema" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const tc = (try toToolCall(a, .{ .extract = "abc" }, testUpcase)).?;
+    const tc = (try (Command{ .extract = "abc" }).toToolCall(a, testUpcase)).?;
     try std.testing.expectEqualStrings("extract", tc.name);
     const args_json = try std.json.Stringify.valueAlloc(a, tc.args.?, .{});
     try std.testing.expectEqualStrings("{\"schema\":\"ABC\"}", args_json);
@@ -1420,7 +1429,7 @@ test "toToolCall: type_cmd value is NOT substituted" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const tc = (try toToolCall(a, .{ .type_cmd = .{ .selector = "abc", .value = "$LP_PASSWORD" } }, testUpcase)).?;
+    const tc = (try (Command{ .type_cmd = .{ .selector = "abc", .value = "$LP_PASSWORD" } }).toToolCall(a, testUpcase)).?;
     try std.testing.expectEqualStrings("fill", tc.name);
     // selector substituted, value preserved as $LP_* reference
     const args_json = try std.json.Stringify.valueAlloc(a, tc.args.?, .{});
@@ -1428,7 +1437,7 @@ test "toToolCall: type_cmd value is NOT substituted" {
 }
 
 fn expectBody(body: []const u8, complete_args: usize, at_boundary: bool) !void {
-    const cur = analyzePandaBody(body);
+    const cur = Command.analyzePandaBody(body);
     try std.testing.expectEqual(complete_args, cur.complete_args);
     try std.testing.expectEqual(at_boundary, cur.at_boundary);
 }

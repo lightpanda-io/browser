@@ -262,7 +262,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     }
 
     // No recording on script_step: replay must not double-record.
-    const tc = (try Command.toToolCall(arena, cmd, Command.noSubstitute)) orelse {
+    const tc = (try cmd.toToolCall(arena, Command.noSubstitute)) orelse {
         return sendErrorContent(server, id, "command has no browser-tool mapping");
     };
 

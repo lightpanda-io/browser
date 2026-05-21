@@ -38,14 +38,14 @@ pub fn init(tool_executor: *ToolExecutor, terminal: *Terminal) CommandRunner {
 /// Caller contract: `cmd` must not be `.natural_language`, `.comment`,
 /// `.login`, or `.accept_cookies` — those are filtered upstream (see
 /// `Agent.runRepl`) because they have no tool mapping.
-pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Command.Command) browser_tools.ToolResult {
+pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Command) browser_tools.ToolResult {
     switch (cmd) {
         .extract => |schema| return self.execExtract(arena, schema),
         .eval_js => |script| return browser_tools.ToolResult.unwrap(self.tool_executor.callEval(arena, script)),
         else => {},
     }
 
-    const tc = (Command.toToolCall(arena, cmd, browser_tools.substituteEnvVars) catch
+    const tc = (cmd.toToolCall(arena, browser_tools.substituteEnvVars) catch
         return .{ .text = "out of memory", .is_error = true }) orelse
         return .{ .text = "internal: command has no tool mapping", .is_error = true };
     return self.tool_executor.callValue(arena, tc.name, tc.args) catch |err| .{
@@ -56,7 +56,7 @@ pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Co
 
 /// Data output (EXTRACT/EVAL/MARKDOWN/TREE) → stdout on success; everything
 /// else, including failures from those same commands, → stderr.
-pub fn printResult(self: *CommandRunner, cmd: Command.Command, result: browser_tools.ToolResult) void {
+pub fn printResult(self: *CommandRunner, cmd: Command, result: browser_tools.ToolResult) void {
     if (cmd.producesData() and !result.is_error) {
         self.terminal.printAssistant(result.text);
     } else {

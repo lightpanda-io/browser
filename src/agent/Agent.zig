@@ -740,7 +740,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
 
 /// Re-run a verification-failed command with bounded backoff. Returns true
 /// once both execution and verification pass, false after 3 attempts.
-fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command.Command) bool {
+fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command) bool {
     for (0..3) |i| {
         std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
         self.terminal.printInfo("Retrying command...");
@@ -768,7 +768,7 @@ fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replac
     );
 }
 
-fn isRetryable(cmd: Command.Command) bool {
+fn isRetryable(cmd: Command) bool {
     return switch (cmd) {
         .type_cmd, .check, .select => true,
         else => false,
@@ -814,20 +814,9 @@ fn pruneMessages(self: *Agent) void {
     self.message_arena = new_arena;
 }
 
-/// Self-heal must only patch the current page; navigation and arbitrary
-/// scripting are blocked even if the model emits them via `goto` / `eval`.
-/// docs/agent.md guarantees "no navigation away from the current page".
-/// Exhaustive on purpose: adding a `Command` variant must force a decision here.
-fn isHealAllowed(cmd: Command.Command) bool {
-    return switch (cmd) {
-        .click, .hover, .wait, .type_cmd, .select, .check, .scroll, .extract => true,
-        .goto, .eval_js, .tree, .markdown, .login, .accept_cookies, .comment, .natural_language => false,
-    };
-}
-
 /// Runs a single LLM turn, captures the commands it called without recording
 /// them — so the caller can splice healed commands into the script directly.
-fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Command.Command {
+fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Command {
     const provider_client = self.ai_client orelse return error.NoAiClient;
     const ma = self.message_arena.allocator();
 
@@ -859,12 +848,12 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     self.terminal.spinner.stop();
     defer result.deinit();
 
-    var cmds: std.ArrayList(Command.Command) = .empty;
+    var cmds: std.ArrayList(Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
         const args = tc.arguments orelse continue;
         const cmd = Command.fromToolCall(tc.name, args) orelse continue;
-        if (!isHealAllowed(cmd)) {
+        if (!cmd.canHeal()) {
             self.terminal.printInfoFmt(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
                 .{tc.name},
@@ -881,7 +870,7 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     return cmds.toOwnedSlice(arena);
 }
 
-fn attemptSelfHeal(self: *Agent, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command.Command {
+fn attemptSelfHeal(self: *Agent, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command {
     // Build the prompt in `arena` (the caller's per-replay arena), not in
     // `message_arena`. The prompt is re-used across attempts, so it must
     // survive arena rebuilds done between failed attempts.
@@ -1399,24 +1388,25 @@ fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: 
 
 // --- Tests ---
 
-test "isHealAllowed: only page-local DOM commands are allowed" {
-    try std.testing.expect(isHealAllowed(.{ .click = ".btn" }));
-    try std.testing.expect(isHealAllowed(.{ .hover = ".menu" }));
-    try std.testing.expect(isHealAllowed(.{ .wait = ".loaded" }));
-    try std.testing.expect(isHealAllowed(.{ .type_cmd = .{ .selector = "#u", .value = "x" } }));
-    try std.testing.expect(isHealAllowed(.{ .select = .{ .selector = "#s", .value = "x" } }));
-    try std.testing.expect(isHealAllowed(.{ .check = .{ .selector = "#c", .checked = true } }));
-    try std.testing.expect(isHealAllowed(.{ .scroll = .{ .x = 0, .y = 100 } }));
-    try std.testing.expect(isHealAllowed(.{ .extract = "schema" }));
+test "canHeal: only page-local DOM commands are allowed" {
+    const C = Command;
+    try std.testing.expect((C{ .click = ".btn" }).canHeal());
+    try std.testing.expect((C{ .hover = ".menu" }).canHeal());
+    try std.testing.expect((C{ .wait = ".loaded" }).canHeal());
+    try std.testing.expect((C{ .type_cmd = .{ .selector = "#u", .value = "x" } }).canHeal());
+    try std.testing.expect((C{ .select = .{ .selector = "#s", .value = "x" } }).canHeal());
+    try std.testing.expect((C{ .check = .{ .selector = "#c", .checked = true } }).canHeal());
+    try std.testing.expect((C{ .scroll = .{ .x = 0, .y = 100 } }).canHeal());
+    try std.testing.expect((C{ .extract = "schema" }).canHeal());
 
-    try std.testing.expect(!isHealAllowed(.{ .goto = "https://x" }));
-    try std.testing.expect(!isHealAllowed(.{ .eval_js = "alert(1)" }));
-    try std.testing.expect(!isHealAllowed(.{ .natural_language = "do x" }));
-    try std.testing.expect(!isHealAllowed(.login));
-    try std.testing.expect(!isHealAllowed(.accept_cookies));
-    try std.testing.expect(!isHealAllowed(.comment));
-    try std.testing.expect(!isHealAllowed(.tree));
-    try std.testing.expect(!isHealAllowed(.markdown));
+    try std.testing.expect(!(C{ .goto = "https://x" }).canHeal());
+    try std.testing.expect(!(C{ .eval_js = "alert(1)" }).canHeal());
+    try std.testing.expect(!(C{ .natural_language = "do x" }).canHeal());
+    try std.testing.expect(!(C{ .login = {} }).canHeal());
+    try std.testing.expect(!(C{ .accept_cookies = {} }).canHeal());
+    try std.testing.expect(!(C{ .comment = {} }).canHeal());
+    try std.testing.expect(!(C{ .tree = {} }).canHeal());
+    try std.testing.expect(!(C{ .markdown = {} }).canHeal());
 }
 
 test {

@@ -31,7 +31,7 @@
 
 const std = @import("std");
 
-pub const Command = @import("script/Command.zig");
+pub const Command = @import("script/command.zig").Command;
 pub const Recorder = @import("script/Recorder.zig");
 pub const Verifier = @import("script/Verifier.zig");
 
@@ -188,7 +188,7 @@ pub fn formatHealReplacement(
     arena: std.mem.Allocator,
     original_span: []const u8,
     raw_line: []const u8,
-    cmds: []const Command.Command,
+    cmds: []const Command,
 ) !Replacement {
     std.debug.assert(cmds.len > 0);
     const lines = try arena.alloc([]const u8, cmds.len);
@@ -360,7 +360,7 @@ test "formatHealReplacement: single command produces one-line replacement" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
-    const cmds = [_]Command.Command{.{ .click = "#submit-v2" }};
+    const cmds = [_]Command{.{ .click = "#submit-v2" }};
     const replacement = try formatHealReplacement(
         arena.allocator(),
         "CLICK '#submit'\n",
@@ -379,7 +379,7 @@ test "formatHealReplacement: multiple commands produce multi-line replacement" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
-    const cmds = [_]Command.Command{
+    const cmds = [_]Command{
         .{ .click = ".cookie-accept" },
         .{ .click = "#submit-v2" },
     };

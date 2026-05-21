@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
-const Command = @import("Command.zig");
+const Command = @import("command.zig").Command;
 const CDPNode = @import("../cdp/Node.zig");
 
 const Verifier = @This();
@@ -54,7 +54,7 @@ const failed_reason_oom = "verification failed (out of memory while formatting r
 /// when the command did not hard-fail (ToolResult.is_error == false).
 /// Commands without a dedicated verifier return `.inconclusive` so callers
 /// can distinguish "no verification available" from "explicitly verified".
-pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command.Command) VerifyResult {
+pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyResult {
     return switch (cmd) {
         .type_cmd => |args| self.verifyFill(arena, args.selector, args.value),
         .check => |args| self.verifyCheck(arena, args.selector, args.checked),

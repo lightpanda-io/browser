@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 const testing = @import("../testing.zig");
-const Command = @import("Command.zig");
+const Command = @import("command.zig").Command;
 
 const Recorder = @This();
 
@@ -70,13 +70,13 @@ pub fn isActive(self: *const Recorder) bool {
     return self.file != null;
 }
 
-pub fn record(self: *Recorder, cmd: Command.Command) void {
+pub fn record(self: *Recorder, cmd: Command) void {
     if (self.file == null) return;
     if (!cmd.isRecorded()) return;
     self.tryRecord(cmd) catch |err| self.disable(err);
 }
 
-fn tryRecord(self: *Recorder, cmd: Command.Command) !void {
+fn tryRecord(self: *Recorder, cmd: Command) !void {
     self.buf.clearRetainingCapacity();
     try cmd.format(&self.buf.writer);
     try self.buf.writer.writeByte('\n');
