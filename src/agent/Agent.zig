@@ -622,13 +622,13 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 // Recorded scripts prefix LLM-generated commands with the
                 // natural-language prompt that produced them; keep the
                 // last one around so self-heal can use it as context.
-                if (entry.raw_line.len > 2 and entry.raw_line[0] == '#') {
-                    last_comment = std.mem.trim(u8, entry.raw_line[1..], &std.ascii.whitespace);
+                if (entry.opener_line.len > 2 and entry.opener_line[0] == '#') {
+                    last_comment = std.mem.trim(u8, entry.opener_line[1..], &std.ascii.whitespace);
                 }
                 continue;
             },
             .natural_language => {
-                self.terminal.printErrorFmt("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.raw_line });
+                self.terminal.printErrorFmt("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.opener_line });
                 self.flushReplacements(path, content, replacements.items);
                 return false;
             },
@@ -636,7 +636,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 if (self.ai_client == null) {
                     self.terminal.printErrorFmt("line {d}: {s} requires --provider", .{
                         entry.line_num,
-                        entry.raw_line,
+                        entry.opener_line,
                     });
                     self.flushReplacements(path, content, replacements.items);
                     return false;
@@ -645,7 +645,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 const text = self.processUserMessage(.{ .prompt = prompt }) catch |err| {
                     self.terminal.printErrorFmt("line {d}: {s} failed: {s}", .{
                         entry.line_num,
-                        entry.raw_line,
+                        entry.opener_line,
                         @errorName(err),
                     });
                     self.flushReplacements(path, content, replacements.items);
@@ -655,7 +655,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 self.pruneMessages();
             },
             else => {
-                self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.raw_line });
+                self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.opener_line });
                 switch (self.runActionEntry(sa, entry, last_comment)) {
                     .ok => {},
                     .healed => |r| replacements.append(sa, r) catch |err| {
@@ -720,8 +720,8 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
             .failed => |r| r,
             .passed, .inconclusive => null,
         };
-        if (self.attemptSelfHeal(sa, entry.raw_line, reason, last_comment)) |healed_cmds| {
-            const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds) catch |err| {
+        if (self.attemptSelfHeal(sa, entry.opener_line, reason, last_comment)) |healed_cmds| {
+            const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.opener_line, healed_cmds) catch |err| {
                 self.terminal.printErrorFmt(
                     "line {d}: failed to record heal: {s} (script left unchanged)",
                     .{ entry.line_num, @errorName(err) },
@@ -733,7 +733,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
     }
     self.terminal.printErrorFmt("line {d}: command failed: {s}", .{
         entry.line_num,
-        entry.raw_line,
+        entry.opener_line,
     });
     return .fail;
 }

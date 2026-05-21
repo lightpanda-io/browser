@@ -188,12 +188,12 @@ pub fn writeAtomic(
 pub fn formatHealReplacement(
     arena: std.mem.Allocator,
     original_span: []const u8,
-    raw_line: []const u8,
+    opener_line: []const u8,
     cmds: []const Command,
 ) !Replacement {
     std.debug.assert(cmds.len > 0);
     var aw: std.Io.Writer.Allocating = .init(arena);
-    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
+    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{opener_line});
     for (cmds) |cmd| {
         try cmd.format(&aw.writer);
         try aw.writer.writeByte('\n');
@@ -207,12 +207,12 @@ pub fn formatHealReplacement(
 pub fn formatHealReplacementLines(
     arena: std.mem.Allocator,
     original_span: []const u8,
-    raw_line: []const u8,
+    opener_line: []const u8,
     replacement_lines: []const []const u8,
 ) !Replacement {
     var aw: std.Io.Writer.Allocating = .init(arena);
 
-    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
+    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{opener_line});
     for (replacement_lines) |line| {
         try aw.writer.writeAll(line);
         try aw.writer.writeByte('\n');

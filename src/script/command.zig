@@ -449,7 +449,11 @@ pub const Command = union(enum) {
 
         pub const Entry = struct {
             line_num: u32,
-            raw_line: []const u8,
+            /// Trimmed opener line — the only line for single-line entries,
+            /// the `EVAL '''` / `EXTRACT '''` opener for blocks. Display-only
+            /// (errors, REPL echo, heal-comment headers); use `raw_span` for
+            /// splices that need the full block body.
+            opener_line: []const u8,
             /// The full slice of the original content buffer covering this entry,
             /// including trailing newline(s). For multi-line EVAL blocks this spans
             /// from the EVAL keyword through the closing triple-quote line.
@@ -475,7 +479,7 @@ pub const Command = union(enum) {
                     };
                     return .{
                         .line_num = start_line,
-                        .raw_line = trimmed,
+                        .opener_line = trimmed,
                         .raw_span = self.lines.buffer[line_start..span_end],
                         .command = cmd,
                     };
@@ -484,7 +488,7 @@ pub const Command = union(enum) {
                 const span_end = self.lines.index orelse self.lines.buffer.len;
                 return .{
                     .line_num = self.line_num,
-                    .raw_line = trimmed,
+                    .opener_line = trimmed,
                     .raw_span = self.lines.buffer[line_start..span_end],
                     .command = Command.parse(trimmed),
                 };
