@@ -1331,3 +1331,27 @@ test "cdp: STARTUP sessionId" {
         try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
     }
 }
+
+test "cdp: disconnect latches so the worker keeps exiting" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const client = &ctx.cdp().browser.http_client;
+
+    // Simulate the Network thread delivering a peer disconnect into the
+    // worker's inbox — the dropCdp(notify=true) path used on peer EOF and,
+    // since #2510, on shutdown via shutdownCdpLinks.
+    {
+        const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
+        client.inbox.push(arena, .{ .disconnect = null });
+    }
+
+    // First tick drains the .disconnect and tears the link down.
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+
+    // The inbox is now empty. Without the latch this second tick would fall
+    // through to perform/poll with no producer left to wake it, so the worker
+    // would never exit and Server.deinit() would spin on active_threads
+    // (#2510). The latch keeps the terminal state sticky so the worker exits.
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+}
