@@ -197,9 +197,9 @@ pub const Command = union(enum) {
         }
     }
 
-    /// Parse a line of REPL input into a PandaScript command.
-    /// Unrecognized input is returned as `.natural_language`.
-    /// For multi-line EVAL blocks in scripts, use `ScriptParser`.
+    /// Unrecognized input falls through to `.natural_language`; multi-line
+    /// `EVAL '''…'''` / `EXTRACT '''…'''` blocks need `ScriptIterator`,
+    /// which `parse` (line-only) can't assemble.
     pub fn parse(line: []const u8) Command {
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) return .{ .natural_language = trimmed };
@@ -312,9 +312,8 @@ pub const Command = union(enum) {
         return .{ .natural_language = trimmed };
     }
 
-    /// Inverse of `toToolCall`: map an LLM tool call into a Command, or return
-    /// null if the tool name doesn't correspond to a PandaScript command.
-    /// Variants emitted by `toToolCall` round-trip through this.
+    /// Round-trips with `toToolCall`. Returns null for tool names outside
+    /// the PandaScript-emittable set.
     pub fn fromToolCall(tool_name: []const u8, arguments: std.json.Value) ?Command {
         const Action = lp.tools.Action;
         const action = std.meta.stringToEnum(Action, tool_name) orelse return null;
@@ -433,7 +432,8 @@ pub const Command = union(enum) {
         .{ .name = "ACCEPT_COOKIES", .args = null },
     };
 
-    /// Iterator for parsing a script file, handling multi-line EVAL """ ... """ blocks.
+    /// Unlike `Command.parse`, assembles multi-line `EVAL '''…'''` and
+    /// `EXTRACT '''…'''` blocks into a single Command.
     pub const ScriptIterator = struct {
         allocator: std.mem.Allocator,
         lines: std.mem.SplitIterator(u8, .scalar),
@@ -457,7 +457,6 @@ pub const Command = union(enum) {
             command: Command,
         };
 
-        /// Multi-line EVAL / EXTRACT blocks are assembled into a single command.
         pub fn next(self: *ScriptIterator) std.mem.Allocator.Error!?Entry {
             while (self.lines.next()) |line| {
                 self.line_num += 1;

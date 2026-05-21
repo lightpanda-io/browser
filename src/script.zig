@@ -107,10 +107,9 @@ pub const mcp_driver_guidance =
 ;
 
 pub const Replacement = struct {
-    /// Slice into the original content buffer that should be replaced.
     /// Must alias into the `content` passed to `applyReplacements`.
     original_span: []const u8,
-    /// New text to substitute (caller is responsible for trailing newlines).
+    /// Caller is responsible for trailing newlines.
     new_text: []const u8,
 };
 
@@ -171,6 +170,8 @@ pub fn writeAtomic(
     const new_content = try applyReplacements(allocator, content, replacements);
     defer allocator.free(new_content);
 
+    if (std.mem.eql(u8, new_content, content)) return;
+
     var bak_buf: [std.fs.max_path_bytes]u8 = undefined;
     const bak_path = try std.fmt.bufPrint(&bak_buf, "{s}.bak", .{path});
     try dir.writeFile(.{ .sub_path = bak_path, .data = content });
@@ -191,9 +192,13 @@ pub fn formatHealReplacement(
     cmds: []const Command,
 ) !Replacement {
     std.debug.assert(cmds.len > 0);
-    const lines = try arena.alloc([]const u8, cmds.len);
-    for (cmds, 0..) |cmd, i| lines[i] = try std.fmt.allocPrint(arena, "{f}", .{cmd});
-    return formatHealReplacementLines(arena, original_span, raw_line, lines);
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
+    for (cmds) |cmd| {
+        try cmd.format(&aw.writer);
+        try aw.writer.writeByte('\n');
+    }
+    return .{ .original_span = original_span, .new_text = aw.written() };
 }
 
 /// Same shape as `formatHealReplacement` but for callers that already have

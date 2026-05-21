@@ -100,12 +100,12 @@ fn verifyElementValue(self: *Verifier, arena: std.mem.Allocator, selector: []con
 }
 
 fn queryElementProperty(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, property: ElementProperty) ?[]const u8 {
-    const selector_json = std.json.Stringify.valueAlloc(arena, selector, .{}) catch return null;
-    const script = std.fmt.allocPrint(
-        arena,
-        "(function(){{ var el = document.querySelector({s}); return el ? {s} : null; }})()",
-        .{ selector_json, property.jsExpr() },
-    ) catch return null;
-    const result = browser_tools.evalScript(arena, self.session, self.node_registry, script) catch return null;
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    aw.writer.writeAll("(function(){ var el = document.querySelector(") catch return null;
+    std.json.Stringify.value(selector, .{}, &aw.writer) catch return null;
+    aw.writer.writeAll("); return el ? ") catch return null;
+    aw.writer.writeAll(property.jsExpr()) catch return null;
+    aw.writer.writeAll(" : null; })()") catch return null;
+    const result = browser_tools.evalScript(arena, self.session, self.node_registry, aw.written()) catch return null;
     return result.okText();
 }
