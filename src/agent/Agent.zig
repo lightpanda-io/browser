@@ -144,8 +144,9 @@ browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
 tool_schema_arena: std.heap.ArenaAllocator,
-/// Schemas parsed once at init from `browser_tools.tool_defs`. The slice and
-/// every JSON `Value` inside live in `tool_schema_arena`.
+/// Provider-facing tool list, built from `SlashCommand.globalSchemas()`. The
+/// slice lives in `tool_schema_arena`; the JSON `Value` each entry points at
+/// lives in the schema module's process-lifetime arena.
 tools: []const zenai.provider.Tool,
 terminal: Terminal,
 cmd_runner: CommandRunner,
@@ -261,6 +262,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     };
     errdefer self.tool_schema_arena.deinit();
     errdefer self.node_registry.deinit();
+    errdefer self.terminal.deinit();
+    errdefer self.message_arena.deinit();
 
     self.tools = try buildTools(self.tool_schema_arena.allocator());
 
@@ -325,10 +328,10 @@ pub fn deinit(self: *Agent) void {
 }
 
 fn buildTools(arena: std.mem.Allocator) ![]const zenai.provider.Tool {
-    const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
-    for (browser_tools.tool_defs, 0..) |t, i| {
-        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, t.input_schema, .{});
-        tools[i] = .{ .name = t.name, .description = t.description, .parameters = parsed };
+    const schemas = SlashCommand.globalSchemas();
+    const tools = try arena.alloc(zenai.provider.Tool, schemas.len);
+    for (schemas, 0..) |s, i| {
+        tools[i] = .{ .name = s.tool_name, .description = s.description, .parameters = s.parameters };
     }
     return tools;
 }
@@ -699,6 +702,8 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
     if (!result.is_error and verification != .failed) return .ok;
 
     if (self.self_heal and self.ai_client != null) {
+        // Verification-only failures often resolve with a brief wait
+        // (animations, lazy-load); skip the LLM round-trip when they do.
         if (!result.is_error and isRetryable(entry.command) and self.retryCommand(ca, entry.command)) {
             return .ok;
         }

@@ -27,7 +27,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const zenai = @import("zenai");
 const browser_tools = lp.tools;
 
 pub const FieldType = enum { string, integer, number, boolean, other };
@@ -67,26 +66,30 @@ pub const SchemaInfo = struct {
     recorded: bool,
     can_heal: bool,
     produces_data: bool,
+    is_multiline_capable: bool,
+    parameters: std.json.Value,
 
     /// True when this tool's args fit a multi-line `/<name> '''…'''` opener:
     /// exactly one required field, and that field is a string. Used by
     /// `Command.ScriptIterator` to detect block openers.
     pub fn isMultiLineCapable(self: *const SchemaInfo) bool {
-        if (self.required.len != 1) return false;
-        return self.fieldType(self.required[0]) == .string;
+        return self.is_multiline_capable;
+    }
+
+    pub fn findField(self: *const SchemaInfo, key: []const u8) ?FieldEntry {
+        for (self.fields) |f| {
+            if (std.mem.eql(u8, f.name, key)) return f;
+        }
+        return null;
     }
 
     pub fn fieldType(self: *const SchemaInfo, key: []const u8) FieldType {
-        for (self.fields) |f| {
-            if (std.mem.eql(u8, f.name, key)) return f.field_type;
-        }
+        if (self.findField(key)) |f| return f.field_type;
         return .other;
     }
 
     pub fn isFieldDefaultTrue(self: *const SchemaInfo, key: []const u8) bool {
-        for (self.fields) |f| {
-            if (std.mem.eql(u8, f.name, key)) return f.default_true;
-        }
+        if (self.findField(key)) |f| return f.default_true;
         return false;
     }
 };
@@ -101,19 +104,6 @@ pub const ParseError = error{
     OutOfMemory,
 };
 
-/// Build schema cache from already-parsed tools (typically from
-/// `ToolExecutor.getTools`) so the JSON isn't parsed twice. `tools` must be
-/// parallel to `browser_tools.tool_defs`. Allocates into `arena`, which must
-/// outlive the returned slice.
-pub fn buildSchemas(arena: std.mem.Allocator, tools: []const zenai.provider.Tool) ![]const SchemaInfo {
-    std.debug.assert(tools.len == browser_tools.tool_defs.len);
-    const out = try arena.alloc(SchemaInfo, tools.len);
-    for (browser_tools.tool_defs, tools, 0..) |td, t, i| {
-        out[i] = try buildOne(arena, td, t.parameters);
-    }
-    return out;
-}
-
 fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.json.Value) !SchemaInfo {
     var info: SchemaInfo = .{
         .tool_name = td.name,
@@ -125,6 +115,8 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
         .recorded = td.recorded,
         .can_heal = td.can_heal,
         .produces_data = td.produces_data,
+        .is_multiline_capable = false,
+        .parameters = parsed,
     };
 
     if (parsed != .object) return info;
@@ -160,6 +152,8 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
 
     info.hints = try buildHints(arena, info.required, info.fields);
     std.debug.assert(info.hints.len <= max_hint_slots);
+
+    info.is_multiline_capable = (info.required.len == 1 and info.fieldType(info.required[0]) == .string);
 
     return info;
 }
@@ -263,51 +257,37 @@ pub fn parseValue(arena: std.mem.Allocator, schema: *const SchemaInfo, rest: []c
     const leading_positional = tokens.len >= 1 and std.mem.indexOfScalar(u8, tokens[0], '=') == null;
     if (leading_positional and schema.required.len != 1) return error.PositionalNotAllowed;
 
-    var pairs = try arena.alloc(KvPair, tokens.len);
+    var list = try std.ArrayList(KvPair).initCapacity(arena, tokens.len + schema.required.len);
     const kv_start: usize = if (leading_positional) 1 else 0;
     if (leading_positional) {
-        pairs[0] = .{ .key = schema.required[0], .value = stripQuotes(tokens[0]) };
+        list.appendAssumeCapacity(.{ .key = schema.required[0], .value = stripQuotes(tokens[0]) });
     }
-    for (tokens[kv_start..], kv_start..) |tok, i| {
+    for (tokens[kv_start..]) |tok| {
         const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return error.MalformedKv;
         if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
-        pairs[i] = .{ .key = tok[0..eq], .value = stripQuotes(tok[eq + 1 ..]) };
+        list.appendAssumeCapacity(.{ .key = tok[0..eq], .value = stripQuotes(tok[eq + 1 ..]) });
     }
 
     // Default-true required booleans (e.g. setChecked.checked) are filled in
     // when omitted, so `/setChecked selector='#a'` works without `checked=true`.
-    var missing_defaults: usize = 0;
     for (schema.required) |req| {
         var found = false;
-        for (pairs) |p| if (std.mem.eql(u8, p.key, req)) {
-            found = true;
-            break;
-        };
-        if (found) continue;
-        const has_default = blk: for (schema.fields) |f| {
-            if (std.mem.eql(u8, f.name, req) and f.default_true) break :blk true;
-        } else false;
-        if (!has_default) return error.MissingRequired;
-        missing_defaults += 1;
+        for (list.items) |p| {
+            if (std.mem.eql(u8, p.key, req)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            if (schema.isFieldDefaultTrue(req)) {
+                list.appendAssumeCapacity(.{ .key = req, .value = "true" });
+            } else {
+                return error.MissingRequired;
+            }
+        }
     }
 
-    if (missing_defaults == 0) return try buildValue(arena, schema, pairs);
-
-    const with_defaults = try arena.alloc(KvPair, pairs.len + missing_defaults);
-    @memcpy(with_defaults[0..pairs.len], pairs);
-    var next = pairs.len;
-    for (schema.required) |req| {
-        var found = false;
-        for (pairs) |p| if (std.mem.eql(u8, p.key, req)) {
-            found = true;
-            break;
-        };
-        if (found) continue;
-        with_defaults[next] = .{ .key = req, .value = "true" };
-        next += 1;
-    }
-
-    return try buildValue(arena, schema, with_defaults);
+    return try buildValue(arena, schema, list.items);
 }
 
 const KvPair = struct {
@@ -398,17 +378,14 @@ fn coerce(arena: std.mem.Allocator, schema: *const SchemaInfo, key: []const u8, 
 // Single-threaded REPL only — if multi-threaded usage emerges, swap the guard
 // for `std.Once` semantics.
 
-var global_failed: bool = false;
 var global_schemas_storage: [browser_tools.tool_defs.len]SchemaInfo = undefined;
 var global_arena: std.heap.ArenaAllocator = undefined;
 var global_once = std.once(initGlobal);
 
-/// Process-lifetime schema cache. Returns an empty slice if init fails (OOM
-/// or malformed input_schema), in which case parse/format fall back to a
-/// best-effort form rather than crashing.
+/// Process-lifetime schema cache. Panics on init failure — `tool_defs` is
+/// compile-time constant, so a parse/build error is a build-time bug.
 pub fn globalSchemas() []const SchemaInfo {
     global_once.call();
-    if (global_failed) return &.{};
     return global_schemas_storage[0..browser_tools.tool_defs.len];
 }
 
@@ -416,13 +393,11 @@ fn initGlobal() void {
     global_arena = .init(std.heap.page_allocator);
     const a = global_arena.allocator();
     for (browser_tools.tool_defs, 0..) |td, i| {
-        const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, td.input_schema, .{}) catch {
-            global_failed = true;
-            return;
+        const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, td.input_schema, .{}) catch |err| {
+            std.debug.panic("failed to parse schema for tool '{s}': {s}", .{ td.name, @errorName(err) });
         };
-        global_schemas_storage[i] = buildOne(a, td, parsed) catch {
-            global_failed = true;
-            return;
+        global_schemas_storage[i] = buildOne(a, td, parsed) catch |err| {
+            std.debug.panic("failed to build schema for tool '{s}': {s}", .{ td.name, @errorName(err) });
         };
     }
 }

@@ -60,28 +60,19 @@ pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyRes
         else => return .inconclusive,
     };
     const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse return .inconclusive;
-    const args_val = tc.args orelse return .inconclusive;
-    if (args_val != .object) return .inconclusive;
-    const args = args_val.object;
 
     switch (action) {
         .fill => {
-            const selector_val = args.get("selector") orelse return .inconclusive;
-            const value_val = args.get("value") orelse return .inconclusive;
-            if (selector_val != .string or value_val != .string) return .inconclusive;
-            return self.verifyFill(arena, selector_val.string, value_val.string);
+            const a = browser_tools.parseArgs(struct { selector: []const u8, value: []const u8 }, arena, tc.args) catch return .inconclusive;
+            return self.verifyFill(arena, a.selector, a.value);
         },
         .setChecked => {
-            const selector_val = args.get("selector") orelse return .inconclusive;
-            const checked_val = args.get("checked") orelse return .inconclusive;
-            if (selector_val != .string or checked_val != .bool) return .inconclusive;
-            return self.verifyCheck(arena, selector_val.string, checked_val.bool);
+            const a = browser_tools.parseArgs(struct { selector: []const u8, checked: bool }, arena, tc.args) catch return .inconclusive;
+            return self.verifyCheck(arena, a.selector, a.checked);
         },
         .selectOption => {
-            const selector_val = args.get("selector") orelse return .inconclusive;
-            const value_val = args.get("value") orelse return .inconclusive;
-            if (selector_val != .string or value_val != .string) return .inconclusive;
-            return self.verifySelect(arena, selector_val.string, value_val.string);
+            const a = browser_tools.parseArgs(struct { selector: []const u8, value: []const u8 }, arena, tc.args) catch return .inconclusive;
+            return self.verifySelect(arena, a.selector, a.value);
         },
         else => return .inconclusive,
     }

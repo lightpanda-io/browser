@@ -60,7 +60,7 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool_name: []const u8, args: ?
     const v = args orelse return null;
     if (v != .object) return v;
 
-    const is_fill = if (std.meta.stringToEnum(browser_tools.Action, tool_name)) |a| a == .fill else false;
+    const is_fill = std.mem.eql(u8, tool_name, @tagName(browser_tools.Action.fill));
 
     var needs_sub = false;
     var it = v.object.iterator();
