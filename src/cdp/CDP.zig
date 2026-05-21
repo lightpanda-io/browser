@@ -168,13 +168,6 @@ pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
     self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
 }
 
-// Called by Network to try to force the Worker to shutdown. This is only called
-// after a close/disconnect message was sent and the worker lingered. Presumably
-// it's stuck in JS code.
-pub fn terminateFromNetwork(self: *CDP) void {
-    self.browser.env.terminate();
-}
-
 // Called in the Worker to dispatch a single CDP message bubbled up by
 // HttpClient.drainInbox. The Network thread already parsed the JSON
 // when it pushed the message to the inbox, so we skip straight to
