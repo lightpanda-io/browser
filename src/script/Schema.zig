@@ -740,6 +740,14 @@ test "parseSlashCommand: validates command and rejects whitespace after slash" {
     try testing.expectString("", r2.rest);
 }
 
+test "parseValue: double-quoted script with embedded single-quoted argument" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const eval = Schema.find(Schema.all(), "eval").?;
+    const v = (try eval.parseValue(arena.allocator(), "\"setTimeout(() => document.querySelector('a'), 1000)\"")).?;
+    try testing.expectString("setTimeout(() => document.querySelector('a'), 1000)", v.object.get("script").?.string);
+}
+
 test "tokenize: inline triple quotes with spaces" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
