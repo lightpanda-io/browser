@@ -140,8 +140,11 @@ fn buildOne(arena: std.mem.Allocator, action: browser_tools.Action, td: browser_
 }
 
 fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry) ![]const HintSlot {
-    if (fields.len == 0) return &.{};
-    const out = try arena.alloc(HintSlot, fields.len);
+    if (fields.len == 0 and required.len == 0) return &.{};
+    // Worst case: every required name is absent from `properties`, so we emit
+    // one slot per required entry plus one per field. The returned slice is
+    // truncated to the actual count.
+    const out = try arena.alloc(HintSlot, required.len + fields.len);
     var idx: usize = 0;
     for (required) |name| {
         out[idx] = .{

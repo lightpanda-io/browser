@@ -57,9 +57,12 @@ pub const Command = union(enum) {
                 const s = schemaOf(tc);
                 if (!s.recorded) break :blk false;
                 const args = tc.args orelse break :blk s.required.len == 0;
-                // backendNodeId is invalidated by any DOM mutation, so calls
-                // using it aren't replayable.
-                if (args == .object and args.object.contains("backendNodeId")) break :blk false;
+                if (args != .object) break :blk true;
+                // backendNodeId is invalidated by any DOM mutation, so it's
+                // never replayable. Drop the line only when it's the sole
+                // identifier; selector-bearing calls are still recordable
+                // (formatToolCall strips backendNodeId from the output).
+                if (args.object.contains("backendNodeId") and !args.object.contains("selector")) break :blk false;
                 break :blk true;
             },
         };
@@ -169,7 +172,13 @@ pub const Command = union(enum) {
                     const start_line = self.line_num;
                     const body = try self.collectMultiLineBlock(opener.quote_type);
                     const span_end = self.lines.index orelse self.lines.buffer.len;
-                    if (body == null) return error.UnterminatedQuote;
+                    if (body == null) {
+                        // Point the error at the opener line, not at EOF
+                        // (where collectMultiLineBlock left line_num after
+                        // scanning the rest of the file for the closer).
+                        self.line_num = start_line;
+                        return error.UnterminatedQuote;
+                    }
                     var obj: std.json.ObjectMap = .init(self.allocator);
                     try obj.put(opener.field, .{ .string = body.? });
                     return .{
@@ -250,7 +259,7 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
         var visible: usize = 0;
         var it_v = args.iterator();
         while (it_v.next()) |entry| {
-            if (isDefaultTrueBool(s, entry.key_ptr.*, entry.value_ptr.*)) continue;
+            if (skipForFormat(s, entry.key_ptr.*, entry.value_ptr.*)) continue;
             visible += 1;
         }
         if (has_one_required and visible == 1) blk: {
@@ -267,7 +276,7 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         if (positional_emitted) |p| if (std.mem.eql(u8, key, p)) continue;
-        if (isDefaultTrueBool(s, key, entry.value_ptr.*)) continue;
+        if (skipForFormat(s, key, entry.value_ptr.*)) continue;
         try writer.writeByte(' ');
         try writer.writeAll(key);
         try writer.writeByte('=');
@@ -277,6 +286,14 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
 
 fn isDefaultTrueBool(s: *const schema.SchemaInfo, key: []const u8, v: std.json.Value) bool {
     return v == .bool and v.bool and s.isFieldDefaultTrue(key);
+}
+
+/// Args that the recorder must NOT emit:
+///   - `backendNodeId`: ephemeral identifier, never replayable.
+///   - boolean fields whose value equals the schema default (cosmetic).
+fn skipForFormat(s: *const schema.SchemaInfo, key: []const u8, v: std.json.Value) bool {
+    if (std.mem.eql(u8, key, "backendNodeId")) return true;
+    return isDefaultTrueBool(s, key, v);
 }
 
 fn formatString(writer: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {
@@ -511,6 +528,34 @@ test "isRecorded: null args on a required-fields tool are not recorded" {
     try testing.expect(!fill_null.isRecorded()); // fill requires value
 }
 
+test "isRecorded and format: backendNodeId stripped, selector preserved" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // selector + backendNodeId: keep the call, drop the backendNodeId.
+    {
+        var obj: std.json.ObjectMap = .init(aa);
+        try obj.put("selector", .{ .string = "#submit" });
+        try obj.put("backendNodeId", .{ .integer = 42 });
+        const cmd = Command.fromToolCall(.click, .{ .object = obj });
+        try testing.expect(cmd.isRecorded());
+
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.format(&aw.writer);
+        try testing.expectEqualStrings("/click selector='#submit'", aw.written());
+    }
+
+    // backendNodeId only: still skipped — no replayable identifier.
+    {
+        var obj: std.json.ObjectMap = .init(aa);
+        try obj.put("backendNodeId", .{ .integer = 42 });
+        const cmd = Command.fromToolCall(.click, .{ .object = obj });
+        try testing.expect(!cmd.isRecorded());
+    }
+}
+
 test "ScriptIterator: basic slash commands" {
     const content =
         "/goto https://example.com\n" ++
@@ -590,6 +635,24 @@ test "ScriptIterator: bare prose in script errors" {
     defer arena.deinit();
     var iter: Command.ScriptIterator = .init(arena.allocator(), content);
     try testing.expectError(error.NotASlashCommand, iter.next());
+}
+
+test "ScriptIterator: UnterminatedQuote reports the opener line" {
+    // Opener is on line 2; the closer is missing. line_num should point at
+    // line 2 (the opener), not at EOF where the scan stopped.
+    const content =
+        "/goto https://x\n" ++
+        "/eval '''\n" ++
+        "  const x = 1;\n" ++
+        "  return x;\n";
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    var iter: Command.ScriptIterator = .init(arena.allocator(), content);
+    _ = (try iter.next()).?; // /goto
+    try testing.expectError(error.UnterminatedQuote, iter.next());
+    try testing.expectEqual(@as(u32, 2), iter.line_num);
 }
 
 test "ScriptIterator: strips trailing CR from CRLF-authored bodies" {

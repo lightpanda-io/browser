@@ -81,12 +81,15 @@ syntax: anything that doesn't match those three forms is a parse error.
 Slash commands accept any of:
 
 - a single positional value, when the tool has exactly one required field —
-  `/goto 'https://example.com'`, `/click selector='Login'`,
-  `/extract '{"karma":"#karma"}'`;
+  `/goto 'https://example.com'`, `/extract '{"karma":"#karma"}'`;
 - `key=value` pairs — values may be bare or quoted; strings with whitespace
   must be quoted (`/fill selector='#email' value='user@x.com'`);
 - a raw `{json}` blob — handed straight to the tool (`/findElement
   {"role":"button"}`).
+
+Tools whose selector is optional (e.g. `/click`, `/hover`, `/findElement`)
+have zero required fields, so they don't take a positional and must be
+written as `key=value`: `/click selector='Login'`, not `/click 'Login'`.
 
 Quoting is content-aware: `'…'`, `"…"`, and triple-quoted `'''…'''` /
 `"""…"""` for values that mix both quote styles or span multiple lines.
