@@ -511,6 +511,22 @@ pub fn call(
         return .{ .text = msg, .is_error = true };
     const substituted = try substituteStringArgs(arena, tool, arguments);
 
+    return dispatch(arena, session, registry, tool, substituted) catch |err| {
+        if (err == error.NavigationFailed) {
+            if (formatNavigationError(arena, session)) |text|
+                return .{ .text = text, .is_error = true };
+        }
+        return err;
+    };
+}
+
+fn dispatch(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    tool: Tool,
+    substituted: ?std.json.Value,
+) ToolError!ToolResult {
     return switch (tool) {
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
         .search => .{ .text = try execSearch(arena, session, registry, substituted) },
@@ -537,6 +553,12 @@ pub fn call(
         .getUrl => .{ .text = try execGetUrl(session) },
         .getCookies => .{ .text = try execGetCookies(arena, session) },
     };
+}
+
+fn formatNavigationError(arena: std.mem.Allocator, session: *lp.Session) ?[]const u8 {
+    const frame = session.currentFrame() orelse return null;
+    const err = frame._last_navigate_error orelse return null;
+    return std.fmt.allocPrint(arena, "navigation failed: {s}", .{@errorName(err)}) catch null;
 }
 
 /// Run JavaScript against the current page. The script need not be
@@ -1198,6 +1220,9 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
         .ms = timeout orelse 10000,
         .until = waitUntil orelse .done,
     }) catch |err| return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+
+    const frame = session.currentFrame() orelse return ToolError.NavigationFailed;
+    if (frame._last_navigate_error != null) return ToolError.NavigationFailed;
 }
 
 fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {

@@ -610,6 +610,32 @@ pub fn freeLine(line: []const u8) void {
     c.ic_free(@ptrCast(@constCast(line.ptr)));
 }
 
+// Free-function `lp.log.sink` can't capture self; the agent sets this
+// before installing the sink and clears it on teardown.
+var active_for_log: ?*Terminal = null;
+
+pub fn installLogSink(self: *Terminal) void {
+    active_for_log = self;
+    lp.log.sink = logSink;
+}
+
+pub fn uninstallLogSink(self: *Terminal) void {
+    _ = self;
+    lp.log.sink = null;
+    active_for_log = null;
+}
+
+fn logSink(bytes: []const u8) void {
+    if (active_for_log) |t| {
+        // REPL already surfaces the clean `● ...` outcome line
+        if (t.isRepl()) return;
+        if (t.spinner.emitAbove(bytes)) return;
+    }
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
+}
+
 pub fn interactiveTty() bool {
     return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
 }
