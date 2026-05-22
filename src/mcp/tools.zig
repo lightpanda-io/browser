@@ -689,6 +689,36 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     try testing.expect(result.isTrue());
 }
 
+// Regression for the segfault Karl hit on PR #2520: clicking a link via
+// `backendNodeId` queued a navigation, `finalizeAction` swapped pages but
+// left the registry intact, and a second click on the same id dereferenced
+// a freed DOMNode.
+test "MCP - click that navigates clears node registry" {
+    defer testing.reset();
+    const aa = testing.arena_allocator;
+
+    var out: std.io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_nav.html", &out.writer);
+    defer server.deinit();
+
+    const before_frame = server.session.currentFrame().?;
+    const link = before_frame.document.getElementById("navlink", before_frame).?.asNode();
+    const link_id = (try server.node_registry.register(link)).id;
+    try testing.expect(server.node_registry.lookup_by_id.contains(link_id));
+
+    var id_buf: [12]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{link_id}) catch unreachable;
+    const click_msg = try std.mem.concat(aa, u8, &.{
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":",
+        id_str,
+        "}}}",
+    });
+    try router.handleMessage(server, aa, click_msg);
+
+    try testing.expect(server.session.currentFrame().? != before_frame);
+    try testing.expect(!server.node_registry.lookup_by_id.contains(link_id));
+}
+
 test "MCP - Actions by selector: hover, selectOption, setChecked" {
     defer testing.reset();
     const aa = testing.arena_allocator;
