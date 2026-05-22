@@ -48,6 +48,7 @@ pub const Tool = enum {
     fill,
     scroll,
     waitForSelector,
+    waitForScript,
     hover,
     press,
     selectOption,
@@ -63,7 +64,7 @@ pub const Tool = enum {
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .eval, .extract, .click, .fill, .scroll, .waitForSelector, .hover, .press, .selectOption, .setChecked => true,
+            .goto, .eval, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => true,
             .search, .markdown, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -73,7 +74,7 @@ pub const Tool = enum {
     /// on prior page state or LLM judgment is excluded.
     pub fn canHeal(self: Tool) bool {
         return switch (self) {
-            .click, .fill, .scroll, .waitForSelector, .hover, .press, .selectOption, .setChecked, .extract => true,
+            .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked, .extract => true,
             .goto, .search, .markdown, .links, .eval, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -84,7 +85,7 @@ pub const Tool = enum {
     pub fn needsLocator(self: Tool) bool {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => true,
-            .goto, .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -93,7 +94,7 @@ pub const Tool = enum {
     pub fn producesData(self: Tool) bool {
         return switch (self) {
             .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
-            .goto, .click, .fill, .scroll, .waitForSelector, .hover, .press, .selectOption, .setChecked => false,
+            .goto, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => false,
         };
     }
 
@@ -102,7 +103,7 @@ pub const Tool = enum {
     pub fn isRetryable(self: Tool) bool {
         return switch (self) {
             .fill, .setChecked, .selectOption => true,
-            .goto, .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .click, .scroll, .waitForSelector, .hover, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .click, .scroll, .waitForSelector, .waitForScript, .hover, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -214,7 +215,7 @@ pub const Tool = enum {
                 ),
             },
             .nodeDetails => .{
-                .description = "Details for a node by backendNodeId: tag, role, name, interactivity, disabled, value, input type, placeholder, href, **id**, **class**, checked, select options. Canonical way to turn a tree backendNodeId into a CSS selector.",
+                .description = "Details for a node by backendNodeId: tag, role, name, interactivity, disabled, value, input type, placeholder, href, id, class, checked, select options. Canonical way to turn a tree backendNodeId into a CSS selector.",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -286,6 +287,19 @@ pub const Tool = enum {
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
                     \\  },
                     \\  "required": ["selector"]
+                    \\}
+                ),
+            },
+            .waitForScript => .{
+                .description = "Wait until a JS expression returns truthy. Re-evaluates on each tick of the event loop. Use for synchronization beyond what CSS selectors can express — e.g. `window.dataLoaded === true`, `document.readyState === 'complete'`, `document.querySelectorAll('.row').length >= 5`.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "script": { "type": "string", "description": "JS expression evaluated each tick until truthy. Must be an expression (not a statement)." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+                    \\  },
+                    \\  "required": ["script"]
                     \\}
                 ),
             },
@@ -459,6 +473,7 @@ pub const ToolError = error{
     NodeNotFound,
     NavigationFailed,
     Cancelled,
+    Timeout,
     InternalError,
     OutOfMemory,
 };
@@ -548,6 +563,7 @@ fn dispatch(
         .fill => .{ .text = try execFill(arena, session, registry, substituted) },
         .scroll => .{ .text = try execScroll(arena, session, registry, substituted) },
         .waitForSelector => .{ .text = try execWaitForSelector(arena, session, registry, substituted) },
+        .waitForScript => .{ .text = try execWaitForScript(arena, session, substituted) },
         .hover => .{ .text = try execHover(arena, session, registry, substituted) },
         .press => .{ .text = try execPress(arena, session, registry, substituted) },
         .selectOption => .{ .text = try execSelectOption(arena, session, registry, substituted) },
@@ -1008,6 +1024,30 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
 
     const registered = registry.register(node) catch return ToolError.InternalError;
     return std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch return ToolError.InternalError;
+}
+
+fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {
+    const Params = struct {
+        script: [:0]const u8,
+        timeout: ?u32 = null,
+    };
+    const args = try parseArgs(Params, arena, arguments);
+
+    _ = try requireFrame(session);
+
+    const timeout_ms = args.timeout orelse 5000;
+
+    lp.actions.waitForScript(args.script, timeout_ms, session) catch |err| switch (err) {
+        error.Cancelled => return ToolError.Cancelled,
+        error.Timeout => return ToolError.Timeout,
+        error.ScriptError => return ToolError.InvalidParams,
+        else => {
+            log.debug(.browser, "waitForScript error", .{ .err = @errorName(err) });
+            return ToolError.InternalError;
+        },
+    };
+
+    return "Script returned truthy.";
 }
 
 fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {

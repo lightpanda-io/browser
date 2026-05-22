@@ -173,7 +173,7 @@ fn dispatchBrowserTool(
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
-            error.NavigationFailed, error.Cancelled, error.InternalError, error.OutOfMemory => .InternalError,
+            error.NavigationFailed, error.Cancelled, error.Timeout, error.InternalError, error.OutOfMemory => .InternalError,
         };
         return server.sendError(id, code, @errorName(err));
     };
@@ -896,6 +896,26 @@ test "MCP - waitForSelector: timeout" {
         .id = 1,
         .@"error" = .{ .message = "NodeNotFound" },
     }, out.written());
+}
+
+test "MCP - waitForScript: truthy returns, falsy times out" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const ok =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"document.readyState === 'complete'","timeout":2000}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, ok);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Script returned truthy") != null);
+
+    out.clearRetainingCapacity();
+    const timeout =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"false","timeout":50}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, timeout);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Timeout") != null);
 }
 
 test "MCP - press Enter on form input triggers submit (lowercase alias)" {

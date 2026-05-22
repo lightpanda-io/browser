@@ -274,3 +274,15 @@ pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Sessio
     const el = try runner.waitForSelector(selector, remaining);
     return el.asNode();
 }
+
+pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, session: *Session) !void {
+    var timer = try std.time.Timer.start();
+    var runner = try session.runner(.{});
+    try runner.wait(.{ .ms = timeout_ms, .until = .load });
+
+    const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+    const remaining = timeout_ms -| elapsed;
+    if (remaining == 0) return error.Timeout;
+
+    return runner.waitForScript(script, remaining);
+}
