@@ -289,9 +289,9 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (recorder_path) |p| {
         if (Recorder.init(allocator, std.fs.cwd(), p)) |r| {
             self.recorder = r;
-            self.terminal.printInfoFmt("recording to {s}", .{r.path});
+            self.terminal.printInfo("recording to {s}", .{r.path});
         } else |err| {
-            self.terminal.printErrorFmt("recording disabled: {s}", .{@errorName(err)});
+            self.terminal.printError("recording disabled: {s}", .{@errorName(err)});
         }
     }
 
@@ -411,28 +411,30 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
     const text = self.processUserMessage(input) catch |err| switch (err) {
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
         error.UserCancelled => {
-            self.terminal.printInfo("Interrupted.");
+            self.terminal.printInfo("Interrupted.", .{});
             self.pruneMessages();
             return false;
         },
         else => {
-            self.terminal.printErrorFmt("{s} failed: {s}", .{ input.label, @errorName(err) });
+            self.terminal.printError("{s} failed: {s}", .{ input.label, @errorName(err) });
             return false;
         },
     };
-    if (text) |t| self.terminal.printAssistant(t) else self.terminal.printInfo("(no response from model)");
+    if (text) |t| self.terminal.printAssistant(t) else self.terminal.printInfo("(no response from model)", .{});
     self.pruneMessages();
     return true;
 }
 
 fn runRepl(self: *Agent) void {
-    self.terminal.printInfo("Lightpanda Agent (type '/quit' to exit)");
-    self.terminal.printInfo("Tab completes/cycles through commands; the dim grey ghost shows the first match.");
+    self.terminal.printDimmed("Lightpanda Agent (type '/quit' to exit)", .{});
+    self.terminal.printDimmed("Tab completes/cycles through commands; the dim grey ghost shows the first match.", .{});
+    self.terminal.printDimmed("Shift-Tab (or Ctrl-J) inserts a newline — use it inside '''…''' or \"\"\"…\"\"\" blocks.", .{});
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
     if (self.ai_client) |ai_client| {
-        self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
+        self.terminal.printDimmed("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printInfo("Basic REPL (--no-llm) — PandaScript only. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language, /login, and /acceptCookies.");
+        self.terminal.printDimmed("Basic REPL (--no-llm) — PandaScript only.", .{});
+        self.terminal.printDimmed("Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language, /login, and /acceptCookies.", .{});
     }
 
     repl: while (true) {
@@ -465,7 +467,7 @@ fn runRepl(self: *Agent) void {
         const cmd = Command.parse(aa, line) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
-                    self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.");
+                    self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.", .{});
                     continue :repl;
                 }
                 _ = self.runTurn(.{ .prompt = line, .record_comment = line });
@@ -479,7 +481,7 @@ fn runRepl(self: *Agent) void {
         };
 
         if (cmd.needsLlm() and self.ai_client == null) {
-            self.terminal.printErrorFmt("/{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{@tagName(std.meta.activeTag(cmd))});
+            self.terminal.printError("/{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{@tagName(std.meta.activeTag(cmd))});
             continue :repl;
         }
 
@@ -500,7 +502,7 @@ fn runRepl(self: *Agent) void {
         }
     }
 
-    self.terminal.printInfo("Goodbye!");
+    self.terminal.printInfo("Goodbye!", .{});
 }
 
 /// Handle a meta slash command (/quit, /help, /verbosity). These aren't part
@@ -517,15 +519,15 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
 
 fn handleVerbosity(self: *Agent, rest: []const u8) void {
     if (rest.len == 0) {
-        self.terminal.printInfoFmt("verbosity: {s}", .{@tagName(self.terminal.verbosity)});
+        self.terminal.printInfo("verbosity: {s}", .{@tagName(self.terminal.verbosity)});
         return;
     }
     const level = std.meta.stringToEnum(Config.AgentVerbosity, rest) orelse {
-        self.terminal.printErrorFmt("usage: /verbosity <low|medium|high> (got {s})", .{rest});
+        self.terminal.printError("usage: /verbosity <low|medium|high> (got {s})", .{rest});
         return;
     };
     self.terminal.verbosity = level;
-    self.terminal.printInfoFmt("verbosity: {s}", .{@tagName(level)});
+    self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
 }
 
 fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {
@@ -535,8 +537,8 @@ fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {
 fn printHelpSection(term: *Terminal, header: []const u8, rows: []SlashCommand.Help) void {
     if (rows.len == 0) return;
     std.sort.pdq(SlashCommand.Help, rows, {}, helpLessThan);
-    term.printInfoFmt("{s}{s}{s}", .{ Terminal.ansi.bold, header, Terminal.ansi.reset });
-    for (rows) |r| term.printInfoFmt("  {s}{s}/{s}{s} — {s}", .{
+    term.printInfo("{s}{s}{s}", .{ Terminal.ansi.bold, header, Terminal.ansi.reset });
+    for (rows) |r| term.printInfo("  {s}{s}/{s}{s} — {s}", .{
         Terminal.ansi.bold, Terminal.ansi.cyan, r.name, Terminal.ansi.reset, r.description,
     });
 }
@@ -562,9 +564,9 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
     const lookup = if (target[0] == '/') target[1..] else target;
     if (SlashCommand.findMeta(lookup)) |meta| {
         switch (meta.tag) {
-            .help => self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted"),
-            .quit => self.terminal.printInfo("/quit — exit the REPL"),
-            .verbosity => self.terminal.printInfoFmt(
+            .help => self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted", .{}),
+            .quit => self.terminal.printInfo("/quit — exit the REPL", .{}),
+            .verbosity => self.terminal.printInfo(
                 "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
                 .{@tagName(self.terminal.verbosity)},
             ),
@@ -572,28 +574,28 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         return;
     }
     const tool_schema = Schema.findByName(lookup) orelse {
-        self.terminal.printErrorFmt("unknown tool: {s}", .{lookup});
+        self.terminal.printError("unknown tool: {s}", .{lookup});
         return;
     };
-    self.terminal.printInfoFmt("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
+    self.terminal.printInfo("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(tool_schema.parameters, .{ .whitespace = .indent_2 }, &aw.writer) catch return;
-    self.terminal.printInfoFmt("schema:\n{s}", .{aw.written()});
+    self.terminal.printInfo("schema:\n{s}", .{aw.written()});
 }
 
 fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8) void {
     const reason: []const u8 = switch (err) {
         error.UnknownTool => "unknown tool",
-        error.MissingName => return self.terminal.printError("missing tool name. Try /help."),
+        error.MissingName => return self.terminal.printError("missing tool name. Try /help.", .{}),
         error.MissingRequired => "missing required argument",
         error.MalformedKv => "malformed key=value. Use key=value or {json}",
         error.UnknownField => "unknown field (typo?)",
         error.PositionalNotAllowed => "positional only works for tools with one required field. Use key=value",
         error.UnterminatedQuote => "unterminated quote",
-        error.OutOfMemory => return self.terminal.printError("out of memory"),
+        error.OutOfMemory => return self.terminal.printError("out of memory", .{}),
     };
-    self.terminal.printErrorFmt("{s}: {s}. Try /help {s}.", .{ name, reason, name });
+    self.terminal.printError("{s}: {s}. Try /help {s}.", .{ name, reason, name });
 }
 
 fn firstSentence(text: []const u8) []const u8 {
@@ -642,14 +644,14 @@ fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResu
 }
 
 fn runScript(self: *Agent, path: []const u8) bool {
-    self.terminal.printInfoFmt("Running script: {s}", .{path});
+    self.terminal.printInfo("Running script: {s}", .{path});
 
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
     const sa = script_arena.allocator();
 
     const content = std.fs.cwd().readFileAlloc(sa, path, 10 * 1024 * 1024) catch |err| {
-        self.terminal.printErrorFmt("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
+        self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
         return false;
     };
 
@@ -659,7 +661,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
 
     while (true) {
         const entry = (iter.next() catch |err| {
-            self.terminal.printErrorFmt("line {d}: {s} parsing script", .{ iter.line_num, @errorName(err) });
+            self.terminal.printError("line {d}: {s} parsing script", .{ iter.line_num, @errorName(err) });
             self.flushReplacements(path, content, replacements.items);
             return false;
         }) orelse break;
@@ -675,7 +677,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
             },
             .login, .acceptCookies => {
                 if (self.ai_client == null) {
-                    self.terminal.printErrorFmt("line {d}: {s} requires --provider", .{
+                    self.terminal.printError("line {d}: {s} requires --provider", .{
                         entry.line_num,
                         entry.opener_line,
                     });
@@ -684,7 +686,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
                 const text = self.processUserMessage(.{ .prompt = prompt }) catch |err| {
-                    self.terminal.printErrorFmt("line {d}: {s} failed: {s}", .{
+                    self.terminal.printError("line {d}: {s} failed: {s}", .{
                         entry.line_num,
                         entry.opener_line,
                         @errorName(err),
@@ -696,11 +698,11 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 self.pruneMessages();
             },
             .tool_call => {
-                self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.opener_line });
+                self.terminal.printInfo("[{d}] {s}", .{ entry.line_num, entry.opener_line });
                 switch (self.runActionEntry(sa, entry, last_comment)) {
                     .ok => {},
                     .healed => |r| replacements.append(sa, r) catch |err| {
-                        self.terminal.printErrorFmt(
+                        self.terminal.printError(
                             "line {d}: out of memory recording heal: {s} (script left unchanged)",
                             .{ entry.line_num, @errorName(err) },
                         );
@@ -716,7 +718,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
     }
 
     self.flushReplacements(path, content, replacements.items);
-    self.terminal.printInfo("Script completed.");
+    self.terminal.printInfo("Script completed.", .{});
     return true;
 }
 
@@ -755,7 +757,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.En
             "Command failed, attempting self-healing..."
         else
             "Command succeeded but verification failed, attempting self-healing...";
-        self.terminal.printInfo(msg);
+        self.terminal.printInfo("{s}", .{msg});
 
         const reason: ?[]const u8 = switch (verification) {
             .failed => |r| r,
@@ -766,7 +768,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.En
         const failed_text = std.mem.trimRight(u8, entry.raw_span, &std.ascii.whitespace);
         if (self.attemptSelfHeal(sa, failed_text, reason, last_comment)) |healed_cmds| {
             const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.opener_line, .{ .cmds = healed_cmds }) catch |err| {
-                self.terminal.printErrorFmt(
+                self.terminal.printError(
                     "line {d}: failed to record heal: {s} (script left unchanged)",
                     .{ entry.line_num, @errorName(err) },
                 );
@@ -775,7 +777,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.En
             return .{ .healed = replacement };
         }
     }
-    self.terminal.printErrorFmt("line {d}: command failed: {s}", .{
+    self.terminal.printError("line {d}: command failed: {s}", .{
         entry.line_num,
         entry.opener_line,
     });
@@ -787,7 +789,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.En
 fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command) bool {
     for (0..3) |i| {
         std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
-        self.terminal.printInfo("Retrying command...");
+        self.terminal.printInfo("Retrying command...", .{});
         const retry_result = self.runCommand(ca, cmd);
         if (retry_result.is_error) continue;
         if (self.verifier.verify(ca, cmd) == .failed) continue;
@@ -800,13 +802,13 @@ fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command) bool {
 fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replacements: []const Replacement) void {
     if (replacements.len == 0) return;
     script.writeAtomic(self.allocator, std.fs.cwd(), path, content, replacements) catch |err| {
-        self.terminal.printErrorFmt(
+        self.terminal.printError(
             "Failed to update script {s}: {s} (script left unchanged)",
             .{ path, @errorName(err) },
         );
         return;
     };
-    self.terminal.printInfoFmt(
+    self.terminal.printInfo(
         "Script updated with {d} healed command(s); backup at {s}.bak",
         .{ replacements.len, path },
     );
@@ -890,7 +892,7 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
         const owned_args = if (tc.arguments) |v| try zenai.json.dupeValue(arena, v) else null;
         const cmd = Command.fromToolCall(tool, owned_args);
         if (!cmd.canHeal()) {
-            self.terminal.printInfoFmt(
+            self.terminal.printInfo(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
                 .{tc.name},
             );
@@ -931,7 +933,7 @@ fn attemptSelfHeal(self: *Agent, arena: std.mem.Allocator, failed_command: []con
     var attempt: u8 = 0;
     while (attempt < self_heal_max_attempts) : (attempt += 1) {
         const cmds = self.runHealTurn(arena, prompt) catch |err| {
-            self.terminal.printErrorFmt("self-heal attempt {d}/{d} failed: {s}", .{
+            self.terminal.printError("self-heal attempt {d}/{d} failed: {s}", .{
                 attempt + 1,
                 self_heal_max_attempts,
                 @errorName(err),
@@ -1072,7 +1074,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             r.record(cmd);
         }
         if (!r.isActive()) {
-            self.terminal.printError("recording disabled (write failed); see logs");
+            self.terminal.printError("recording disabled (write failed); see logs", .{});
         }
     };
 
@@ -1141,14 +1143,14 @@ fn buildUserMessageParts(
     for (paths) |path| {
         const mime = zenai.provider.inferInlineMimeType(path) orelse {
             log.err(.app, "unsupported attachment", .{ .path = path });
-            self.terminal.printErrorFmt("unsupported attachment type: {s}", .{path});
+            self.terminal.printError("unsupported attachment type: {s}", .{path});
             return error.UnsupportedAttachment;
         };
 
         if (std.mem.startsWith(u8, mime, "text/")) {
             const bytes = std.fs.cwd().readFileAlloc(ma, path, 512 * 1024) catch |err| {
                 log.err(.app, "read attachment failed", .{ .path = path, .err = err });
-                self.terminal.printErrorFmt("could not read attachment: {s}", .{path});
+                self.terminal.printError("could not read attachment: {s}", .{path});
                 return error.AttachmentReadFailed;
             };
             try text_prefix.writer(ma).print(
@@ -1158,7 +1160,7 @@ fn buildUserMessageParts(
         } else {
             const raw = std.fs.cwd().readFileAlloc(ma, path, 20 * 1024 * 1024) catch |err| {
                 log.err(.app, "read attachment failed", .{ .path = path, .err = err });
-                self.terminal.printErrorFmt("could not read attachment: {s}", .{path});
+                self.terminal.printError("could not read attachment: {s}", .{path});
                 return error.AttachmentReadFailed;
             };
             const b64_len = std.base64.standard.Encoder.calcSize(raw.len);

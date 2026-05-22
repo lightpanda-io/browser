@@ -587,6 +587,11 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     var i = start;
     while (skipWs(text, &i)) {
         const tok_start = i;
+        if (text[i] == '\'' or text[i] == '"') {
+            i = scanQuoted(text, i);
+            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_string.ptr);
+            continue;
+        }
         while (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '=') i += 1;
         const key_end = i;
         if (i < text.len and text[i] == '=') {
@@ -741,11 +746,7 @@ fn formatReplOutcome(arena: std.mem.Allocator, text: []const u8, is_error: bool)
     return aw.written();
 }
 
-pub fn printError(self: *Terminal, msg: []const u8) void {
-    self.printErrorFmt("{s}", .{msg});
-}
-
-pub fn printErrorFmt(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
+pub fn printError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
         var aw: std.Io.Writer.Allocating = .init(a.allocator());
@@ -758,11 +759,12 @@ pub fn printErrorFmt(self: *Terminal, comptime fmt: []const u8, args: anytype) v
     std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi.bold, ansi.red } ++ args ++ .{ansi.reset});
 }
 
-pub fn printInfo(self: *Terminal, msg: []const u8) void {
-    self.printInfoFmt("{s}", .{msg});
-}
-
-pub fn printInfoFmt(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
+pub fn printInfo(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
     std.debug.print(fmt ++ "\n", args);
+}
+
+pub fn printDimmed(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
+    if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
+    std.debug.print(ansi.dim ++ fmt ++ ansi.reset ++ "\n", args);
 }
