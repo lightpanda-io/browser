@@ -447,17 +447,17 @@ fn runRepl(self: *Agent) void {
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) continue;
 
-        const slash_split: ?Schema.Split = Schema.parseSlashCommand(trimmed);
-        if (slash_split) |split| {
-            if (SlashCommand.findMeta(split.name)) |meta| {
-                if (self.handleMeta(meta, split.rest)) break :repl;
-                continue :repl;
-            }
-        }
-
         var arena: std.heap.ArenaAllocator = .init(self.allocator);
         defer arena.deinit();
         const aa = arena.allocator();
+
+        const slash_split: ?Schema.Split = Schema.parseSlashCommand(trimmed);
+        if (slash_split) |split| {
+            if (SlashCommand.findMeta(split.name)) |meta| {
+                if (self.handleMeta(aa, meta, split.rest)) break :repl;
+                continue :repl;
+            }
+        }
 
         const cmd = Command.parse(aa, line) catch |err| switch (err) {
             error.NotASlashCommand => {
@@ -502,10 +502,10 @@ fn runRepl(self: *Agent) void {
 /// Handle a meta slash command (/quit, /help, /verbosity). These aren't part
 /// of PandaScript — they're REPL-only and never recorded. Returns `true` if
 /// the user asked to quit.
-fn handleMeta(self: *Agent, meta: *const SlashCommand.MetaCommand, rest: []const u8) bool {
+fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.MetaCommand, rest: []const u8) bool {
     switch (meta.tag) {
         .quit => return true,
-        .help => self.printSlashHelp(rest),
+        .help => self.printSlashHelp(arena, rest),
         .verbosity => self.handleVerbosity(rest),
     }
     return false;
@@ -524,12 +524,19 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     self.terminal.printInfoFmt("verbosity: {s}", .{@tagName(level)});
 }
 
-fn printSlashHelp(self: *Agent, target: []const u8) void {
+fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) void {
     if (target.len == 0) {
         self.terminal.printInfo("Slash commands (no LLM, REPL only):");
-        for (Schema.all()) |s| {
-            const summary = firstSentence(s.description);
-            self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, summary });
+        const all = Schema.all();
+        const sorted = arena.alloc(*const Schema, all.len) catch {
+            for (all) |s| self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, firstSentence(s.description) });
+            self.terminal.printInfo("Meta: /help [name], /quit, /verbosity <low|medium|high>");
+            return;
+        };
+        for (sorted, all) |*p, *s| p.* = s;
+        std.sort.pdq(*const Schema, sorted, {}, Schema.lessByName);
+        for (sorted) |s| {
+            self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, firstSentence(s.description) });
         }
         self.terminal.printInfo("Meta: /help [name], /quit, /verbosity <low|medium|high>");
         return;
@@ -552,9 +559,7 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
     };
     self.terminal.printInfoFmt("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
 
-    var arena: std.heap.ArenaAllocator = .init(self.allocator);
-    defer arena.deinit();
-    var aw: std.Io.Writer.Allocating = .init(arena.allocator());
+    var aw: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(tool_schema.parameters, .{ .whitespace = .indent_2 }, &aw.writer) catch return;
     self.terminal.printInfoFmt("schema:\n{s}", .{aw.written()});
 }
