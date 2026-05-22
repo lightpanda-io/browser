@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const Config = lp.Config;
+const Command = lp.script.Command;
 const Schema = lp.script.Schema;
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
@@ -65,12 +66,21 @@ stderr_is_tty: bool,
 spinner: Spinner,
 
 // Flat name list for the "match any slash command" search/completion paths.
-const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + 2][]const u8 = blk: {
-    var arr: [browser_tools.names.len + SlashCommand.meta_commands.len + 2][]const u8 = undefined;
-    for (browser_tools.names, 0..) |n, i| arr[i] = n;
-    for (SlashCommand.meta_commands, 0..) |m, i| arr[browser_tools.names.len + i] = m.name;
-    arr[browser_tools.names.len + SlashCommand.meta_commands.len] = "login";
-    arr[browser_tools.names.len + SlashCommand.meta_commands.len + 1] = "acceptCookies";
+const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_commands.len][]const u8 = blk: {
+    var arr: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_commands.len][]const u8 = undefined;
+    var idx: usize = 0;
+    for (browser_tools.names) |n| {
+        arr[idx] = n;
+        idx += 1;
+    }
+    for (Command.llm_commands) |l| {
+        arr[idx] = @tagName(l);
+        idx += 1;
+    }
+    for (SlashCommand.meta_commands) |m| {
+        arr[idx] = m.name;
+        idx += 1;
+    }
     break :blk arr;
 };
 
@@ -187,13 +197,6 @@ fn addPrefixedCompletion(
     if (!std.ascii.startsWithIgnoreCase(name, partial)) return;
     const text = std.fmt.bufPrintZ(buf, "{s}{s}{s}", .{ prefix, name, suffix }) catch return;
     _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
-}
-
-fn parseSlashCommand(input: []const u8) ?Schema.Split {
-    // Reject `/ foo` (bare slash with arg) — `splitNameRest` would otherwise
-    // accept "foo" as the name after trimming.
-    if (input.len < 2 or input[0] != '/' or std.ascii.isWhitespace(input[1])) return null;
-    return Schema.splitNameRest(input[1..]);
 }
 
 // Cap on tokens we read out of the body. Real schemas and CLI inputs have far
@@ -338,7 +341,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
 
     if (input[0] == '/') {
         if (has_space) {
-            if (parseSlashCommand(input)) |parts| {
+            if (Schema.parseSlashCommand(input)) |parts| {
                 if (Schema.find(Schema.all(), parts.name)) |schema| {
                     addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
                 } else if (SlashCommand.findMeta(parts.name)) |meta| {
@@ -376,7 +379,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
     // `/help <partial>`: leave the inline hint to the completion-derived path.
     if (parseHelpArgPrefix(input)) |_| return null;
 
-    if (parseSlashCommand(input)) |parts| {
+    if (Schema.parseSlashCommand(input)) |parts| {
         const ends_ws = input[input.len - 1] == ' ';
         if (Schema.find(Schema.all(), parts.name)) |schema| {
             return renderSchemaHint(schema, parts.rest, ends_ws);

@@ -97,6 +97,15 @@ pub const Tool = enum {
         };
     }
 
+    /// Tool execution is retryable on element interaction failure (e.g. if
+    /// the element is detached, not visible yet, or covered).
+    pub fn isRetryable(self: Tool) bool {
+        return switch (self) {
+            .fill, .setChecked, .selectOption => true,
+            .goto, .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .click, .scroll, .waitForSelector, .hover, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
+    }
+
     /// Per-tool LLM-facing metadata. Tool identity (name + predicates) lives
     /// on the enclosing `Tool` enum; this struct just carries the strings.
     pub const Definition = struct {

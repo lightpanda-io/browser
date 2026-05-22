@@ -238,6 +238,12 @@ pub fn splitNameRest(input: []const u8) ?Split {
     };
 }
 
+/// Parse input as a slash command, rejecting leading whitespace or spaces after '/'.
+pub fn parseSlashCommand(input: []const u8) ?Split {
+    if (input.len < 2 or input[0] != '/' or std.ascii.isWhitespace(input[1])) return null;
+    return splitNameRest(input[1..]);
+}
+
 pub fn find(schemas: []const Schema, name: []const u8) ?*const Schema {
     if (std.meta.stringToEnum(BrowserTool, name)) |tool| {
         const idx = @intFromEnum(tool);
@@ -659,6 +665,22 @@ test "splitNameRest: trims and handles empty" {
     const r = Schema.splitNameRest("  goto  https://x ").?;
     try testing.expectString("goto", r.name);
     try testing.expectString("https://x", r.rest);
+}
+
+test "parseSlashCommand: validates command and rejects whitespace after slash" {
+    try testing.expect(Schema.parseSlashCommand("") == null);
+    try testing.expect(Schema.parseSlashCommand("/") == null);
+    try testing.expect(Schema.parseSlashCommand("/   ") == null);
+    try testing.expect(Schema.parseSlashCommand("/ foo") == null);
+    try testing.expect(Schema.parseSlashCommand("  /foo") == null);
+
+    const r1 = Schema.parseSlashCommand("/goto https://x").?;
+    try testing.expectString("goto", r1.name);
+    try testing.expectString("https://x", r1.rest);
+
+    const r2 = Schema.parseSlashCommand("/help").?;
+    try testing.expectString("help", r2.name);
+    try testing.expectString("", r2.rest);
 }
 
 test "tokenize: inline triple quotes with spaces" {

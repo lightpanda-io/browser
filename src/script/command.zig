@@ -35,6 +35,22 @@ pub const Command = union(enum) {
     accept_cookies: void,
     comment: void,
 
+    /// Variant names are the wire-format slash names — `@tagName` is the
+    /// single source of truth for parse, format, and autocomplete.
+    pub const LlmCommand = enum {
+        login,
+        acceptCookies,
+
+        pub fn toCommand(self: LlmCommand) Command {
+            return switch (self) {
+                .login => .{ .login = {} },
+                .acceptCookies => .{ .accept_cookies = {} },
+            };
+        }
+    };
+
+    pub const llm_commands = std.enums.values(LlmCommand);
+
     pub const ToolCall = struct {
         tool: BrowserTool,
         args: ?std.json.Value,
@@ -137,6 +153,13 @@ pub const Command = union(enum) {
         };
     }
 
+    pub fn isRetryable(self: Command) bool {
+        return switch (self) {
+            .tool_call => |tc| tc.tool.isRetryable(),
+            else => false,
+        };
+    }
+
     pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!Command {
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) return .{ .comment = {} };
@@ -145,13 +168,10 @@ pub const Command = union(enum) {
 
         const split = Schema.splitNameRest(trimmed[1..]) orelse return error.MissingName;
 
-        if (std.ascii.eqlIgnoreCase(split.name, "login")) {
+        for (llm_commands) |lc| {
+            if (!std.ascii.eqlIgnoreCase(split.name, @tagName(lc))) continue;
             if (split.rest.len > 0) return error.MalformedKv;
-            return .{ .login = {} };
-        }
-        if (std.ascii.eqlIgnoreCase(split.name, "acceptCookies")) {
-            if (split.rest.len > 0) return error.MalformedKv;
-            return .{ .accept_cookies = {} };
+            return lc.toCommand();
         }
 
         const s = Schema.find(Schema.all(), split.name) orelse return error.UnknownTool;
@@ -162,8 +182,8 @@ pub const Command = union(enum) {
     /// Canonical recorder format. Round-trips with `parse`.
     pub fn format(self: Command, writer: *std.Io.Writer) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
         switch (self) {
-            .login => try writer.writeAll("/login"),
-            .accept_cookies => try writer.writeAll("/acceptCookies"),
+            .login => try writer.writeAll("/" ++ @tagName(LlmCommand.login)),
+            .accept_cookies => try writer.writeAll("/" ++ @tagName(LlmCommand.acceptCookies)),
             .comment => try writer.writeAll("#"),
             .tool_call => |tc| try tc.format(writer),
         }

@@ -446,7 +446,7 @@ fn runRepl(self: *Agent) void {
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) continue;
 
-        const slash_split: ?Schema.Split = if (trimmed[0] == '/') Schema.splitNameRest(trimmed[1..]) else null;
+        const slash_split: ?Schema.Split = Schema.parseSlashCommand(trimmed);
         if (slash_split) |split| {
             if (SlashCommand.findMeta(split.name)) |meta| {
                 if (self.handleMeta(meta, split.rest)) break :repl;
@@ -482,7 +482,7 @@ fn runRepl(self: *Agent) void {
                     continue :repl;
                 }
                 const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
-                const label: []const u8 = if (cmd == .login) "/login" else "/acceptCookies";
+                const label: []const u8 = if (cmd == .login) "/" ++ @tagName(Command.LlmCommand.login) else "/" ++ @tagName(Command.LlmCommand.acceptCookies);
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
             },
             .tool_call => |tc| {
@@ -690,7 +690,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.En
     if (self.self_heal and self.ai_client != null) {
         // Verification-only failures often resolve with a brief wait
         // (animations, lazy-load); skip the LLM round-trip when they do.
-        if (!result.is_error and isRetryable(entry.command) and self.retryCommand(ca, entry.command)) {
+        if (!result.is_error and entry.command.isRetryable() and self.retryCommand(ca, entry.command)) {
             return .ok;
         }
 
@@ -738,17 +738,6 @@ fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command) bool {
         return true;
     }
     return false;
-}
-
-fn isRetryable(cmd: Command) bool {
-    const tc = switch (cmd) {
-        .tool_call => |t| t,
-        else => return false,
-    };
-    return switch (tc.tool) {
-        .fill, .setChecked, .selectOption => true,
-        else => false,
-    };
 }
 
 fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replacements: []const Replacement) void {

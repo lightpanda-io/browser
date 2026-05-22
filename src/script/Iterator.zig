@@ -105,8 +105,7 @@ const BlockOpener = struct {
 };
 
 fn tryBlockOpener(line: []const u8) ?BlockOpener {
-    if (line.len < 2 or line[0] != '/') return null;
-    const split = Schema.splitNameRest(line[1..]) orelse return null;
+    const split = Schema.parseSlashCommand(line) orelse return null;
     const s = Schema.find(Schema.all(), split.name) orelse return null;
     if (!s.isMultiLineCapable()) return null;
     const qt = Schema.QuoteType.fromLiteral(split.rest) orelse return null;
