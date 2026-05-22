@@ -36,6 +36,7 @@ pub const Tool = enum {
     goto,
     search,
     markdown,
+    html,
     links,
     eval,
     extract,
@@ -65,7 +66,7 @@ pub const Tool = enum {
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
             .goto, .eval, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => true,
-            .search, .markdown, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -75,7 +76,7 @@ pub const Tool = enum {
     pub fn canHeal(self: Tool) bool {
         return switch (self) {
             .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked, .extract => true,
-            .goto, .search, .markdown, .links, .eval, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .markdown, .html, .links, .eval, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -85,7 +86,7 @@ pub const Tool = enum {
     pub fn needsLocator(self: Tool) bool {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => true,
-            .goto, .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .markdown, .html, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -93,7 +94,7 @@ pub const Tool = enum {
     /// markdown, eval return value) rather than a status line on stderr.
     pub fn producesData(self: Tool) bool {
         return switch (self) {
-            .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
+            .search, .markdown, .html, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
             .goto, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => false,
         };
     }
@@ -103,7 +104,7 @@ pub const Tool = enum {
     pub fn isRetryable(self: Tool) bool {
         return switch (self) {
             .fill, .setChecked, .selectOption => true,
-            .goto, .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .click, .scroll, .waitForSelector, .waitForScript, .hover, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .markdown, .html, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .click, .scroll, .waitForSelector, .waitForScript, .hover, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -150,6 +151,10 @@ pub const Tool = enum {
             },
             .markdown => .{
                 .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
+                .input_schema = url_params_schema,
+            },
+            .html => .{
+                .description = "Dump the full raw HTML of the current page (doctype + document element). If a url is provided, it navigates to that url first. Prefer `markdown` or `tree` for LLM consumption — `html` is verbose and noisy. Use it for debugging or capturing fixtures.",
                 .input_schema = url_params_schema,
             },
             .links => .{
@@ -553,6 +558,7 @@ fn dispatch(
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
         .search => .{ .text = try execSearch(arena, session, registry, substituted) },
         .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
+        .html => .{ .text = try execHtml(arena, session, registry, substituted) },
         .links => .{ .text = try execLinks(arena, session, registry, substituted) },
         .tree => .{ .text = try execTree(arena, session, registry, substituted) },
         .nodeDetails => .{ .text = try execNodeDetails(arena, session, registry, substituted) },
@@ -751,6 +757,14 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
     return renderFrameMarkdown(arena, page);
+}
+
+fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
+    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    lp.dump.root(page.document, .{}, &aw.writer, page) catch return ToolError.InternalError;
+    return aw.written();
 }
 
 fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {

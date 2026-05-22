@@ -898,6 +898,21 @@ test "MCP - waitForSelector: timeout" {
     }, out.written());
 }
 
+test "MCP - html dumps doctype + document element" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.html", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"html"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<form id=\\\"f\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<input id=\\\"q\\\"") != null);
+}
+
 test "MCP - waitForScript: truthy returns, falsy times out" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
