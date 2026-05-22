@@ -305,18 +305,8 @@ pub fn createPage(self: *Session) !*Frame {
 }
 
 pub fn removePage(self: *Session) void {
-    const page = self._active orelse {
+    if (self._active == null) {
         lp.assert(false, "Session.removePage - page is null", .{});
-    };
-
-    if (page.frame.anyScriptEvaluating()) {
-        // Reentrant teardown from a CDP message drained inside syncRequest;
-        // either the page's own script (frame ScriptManager.is_evaluating)
-        // or a Worker eval (Worker.loadInitialScript marks its
-        // _worker_scope._script_manager.is_evaluating). Tearing down here
-        // would free the arena/identity_map underneath the active eval.
-        // Session.deinit reclaims the page when the connection closes.
-        return;
     }
 
     // If a navigation is in flight, drop the pending Page first. Its

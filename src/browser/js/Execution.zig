@@ -37,6 +37,7 @@ const EventManagerBase = @import("../EventManagerBase.zig");
 const Blob = @import("../webapi/Blob.zig");
 const Event = @import("../webapi/Event.zig");
 const EventTarget = @import("../webapi/EventTarget.zig");
+const Performance = @import("../webapi/Performance.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
@@ -127,6 +128,12 @@ pub fn dispatch(
 pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []const u8, handler: anytype) bool {
     return switch (self.context.global) {
         inline else => |g| g.hasDirectListeners(target, typ, handler),
+    };
+}
+
+pub fn performance(self: *const Execution) *Performance {
+    return switch (self.context.global) {
+        inline else => |g| g.performance(),
     };
 }
 

@@ -168,6 +168,12 @@ pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
     self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
 }
 
+// Called by Network to try to force the Worker to shutdown. Protects against a
+// stuck worker.
+pub fn terminateFromNetwork(self: *CDP) void {
+    self.browser.env.terminate();
+}
+
 // Called in the Worker to dispatch a single CDP message bubbled up by
 // HttpClient.drainInbox. The Network thread already parsed the JSON
 // when it pushed the message to the inbox, so we skip straight to
@@ -422,16 +428,6 @@ pub fn disposeBrowserContext(self: *CDP, browser_context_id: []const u8) bool {
     const bc = &(self.browser_context orelse return false);
     if (std.mem.eql(u8, bc.id, browser_context_id) == false) {
         return false;
-    }
-    // Reentrant teardown from a CDP message drained inside HttpClient.syncRequest.
-    // Tearing down the browser context here would free Session/Page state
-    // that the unwinding script-eval frame above us is about to dereference
-    // (see Session.removePage's matching guard). Defer cleanup to
-    // CDP.deinit at connection close, by which time eval has unwound.
-    if (bc.session.currentPage()) |page| {
-        if (page.frame.anyScriptEvaluating()) {
-            return true;
-        }
     }
     bc.deinit();
     self.browser.closeSession();
@@ -1330,4 +1326,61 @@ test "cdp: STARTUP sessionId" {
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
     }
+}
+
+test "cdp: disconnect latches so the worker keeps exiting" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const client = &ctx.cdp().browser.http_client;
+
+    // Simulate the Network thread delivering a peer disconnect into the
+    // worker's inbox — the dropCdp(notify=true) path used on peer EOF and,
+    // since #2510, on shutdown via shutdownCdpLinks.
+    {
+        const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
+        client.inbox.push(arena, .{ .disconnect = null });
+    }
+
+    // First tick drains the .disconnect and tears the link down.
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+
+    // The inbox is now empty. Without the latch this second tick would fall
+    // through to perform/poll with no producer left to wake it, so the worker
+    // would never exit and Server.deinit() would spin on active_threads
+    // (#2510). The latch keeps the terminal state sticky so the worker exits.
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+}
+
+test "cdp: syncRequest short-circuits after disconnect" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const client = &ctx.cdp().browser.http_client;
+
+    // Latch terminated via a drained disconnect (as above).
+    {
+        const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
+        client.inbox.push(arena, .{ .disconnect = null });
+    }
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+
+    // A synchronous fetch attempted after the latch returns ClientDisconnected
+    // without starting the request. syncRequest also frees req.headers on this
+    // early-return path (it returns before request() takes ownership); that
+    // free isn't asserted here because curl_slist is C-allocated and escapes the
+    // per-test leak check, so it's verified by review. The latch check returns
+    // before any other req field is read, so the rest are placeholders.
+    const headers = try client.newHeaders();
+    try testing.expectError(error.ClientDisconnected, client.syncRequest(testing.allocator, .{
+        .frame_id = 0,
+        .loader_id = 0,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/",
+        .headers = headers,
+        .cookie_jar = null,
+        .cookie_origin = "",
+        .resource_type = .fetch,
+        .notification = undefined,
+    }));
 }

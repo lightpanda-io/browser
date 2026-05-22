@@ -47,7 +47,6 @@ const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const VisualViewport = @import("webapi/VisualViewport.zig");
-const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
@@ -173,11 +172,6 @@ _intersection_delivery_scheduled: bool = false,
 // Slots that need slotchange events to be fired
 _slots_pending_slotchange: std.AutoHashMapUnmanaged(*Element.Html.Slot, void) = .{},
 _slotchange_delivery_scheduled: bool = false,
-
-/// List of active PerformanceObservers.
-/// Contrary to MutationObserver and IntersectionObserver, these are regular tasks.
-_performance_observers: std.ArrayList(*PerformanceObserver) = .{},
-_performance_delivery_scheduled: bool = false,
 
 // Lookup for customized built-in elements. Maps element pointer to definition.
 _customized_builtin_definitions: std.AutoHashMapUnmanaged(*Element, *CustomElementDefinition) = .{},
@@ -325,7 +319,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._proto = undefined,
         ._document = self.document,
         ._location = &default_location,
-        ._performance = Performance.init(),
+        ._performance = .init(),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
         ._cross_origin_wrapper = undefined,
@@ -1296,24 +1290,6 @@ pub fn isGoingAway(self: *const Frame) bool {
     return parent.isGoingAway();
 }
 
-// True if this frame, any descendant frame, or any worker owned by any
-// of those frames is currently inside script evaluation. Used as a
-// reentrancy guard before tearing down a page from a CDP message that
-// may have been drained while a Zig->JS->Zig stack (e.g. Worker
-// importScripts -> syncRequest -> blocking_read) is mid-flight.
-// Recursive over child frames so an evaluating subframe also defers
-// parent teardown.
-pub fn anyScriptEvaluating(self: *const Frame) bool {
-    if (self._script_manager.base.is_evaluating) return true;
-    for (self.workers.items) |worker| {
-        if (worker._worker_scope._script_manager.is_evaluating) return true;
-    }
-    for (self.child_frames.items) |child| {
-        if (child.anyScriptEvaluating()) return true;
-    }
-    return false;
-}
-
 pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *Element.Html.Script) !void {
     if (self.isGoingAway()) {
         // if we're planning on navigating to another frame, don't run this script
@@ -1403,6 +1379,16 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         );
     };
 
+    // Append the new frame before navigate() so synchronous navigation paths
+    // (about:blank, blob:) and the notifications they dispatch can see this
+    // frame in self.child_frames.
+    try self.child_frames.append(self.arena, new_frame);
+
+    // navigate() may run JS that reads window[N]; flag the list unsorted until
+    // we've verified ordering post-navigate.
+    const was_sorted = self.child_frames_sorted;
+    self.child_frames_sorted = false;
+
     // Iframe's initial src request carries the parent's URL as Referer and
     // as the SameSite initiator. Parent frame outlives this navigate()
     // call, so the slice is safe.
@@ -1412,28 +1398,31 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .referer = parent_url,
         .initiator_url = parent_url,
     }) catch |err| {
+        // extra defensive..maybe navigate added a new frame, and the index it
+        // was added at was removed. Or maybe this frame was removed somehow
+        // (which I don't think is possible)
+        if (std.mem.indexOfScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
+            _ = self.child_frames.swapRemove(idx);
+        }
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
         return error.IFrameLoadError;
     };
 
-    // window[N] is based on document order. For now we'll just append the frame
-    // at the end of our list and set child_frames_sorted == false. window.getFrame
-    // will check this flag to decide if it needs to sort the frames or not.
-    // But, we can optimize this a bit. Since we expect frames to often be
-    // added in document order, we can do a quick check to see whether the list
-    // is sorted or not.
-    try self.child_frames.append(self.arena, new_frame);
-
+    // window[N] is based on document order. We appended above and rely on
+    // child_frames_sorted to tell window.getFrame whether it has to sort.
+    // Since we expect frames to often be added in document order, do a quick
+    // check to keep the list flagged as sorted when possible.
     const frames_len = self.child_frames.items.len;
     if (frames_len == 1) {
         // this is the only frame, it must be sorted.
+        self.child_frames_sorted = true;
         return;
     }
 
-    if (self.child_frames_sorted == false) {
-        // the list already wasn't sorted, it still isn't
+    if (!was_sorted) {
+        // it was already unsorted; leave flag false
         return;
     }
 
@@ -1442,11 +1431,10 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const iframe_a = self.child_frames.items[frames_len - 2].iframe.?;
     const iframe_b = self.child_frames.items[frames_len - 1].iframe.?;
 
-    if (iframe_a.asNode().compareDocumentPosition(iframe_b.asNode()) & 0x04 == 0) {
-        // if b followed a, then & 0x04 = 0x04
-        // but since we got 0, it means b does not follow a, and thus our list
-        // is no longer sorted.
-        self.child_frames_sorted = false;
+    if (iframe_a.asNode().compareDocumentPosition(iframe_b.asNode()) & 0x04 != 0) {
+        // b follows a (& 0x04 == 0x04), so the appended frame is in document
+        // order relative to the previous tail — the list is still sorted.
+        self.child_frames_sorted = true;
     }
 }
 
@@ -1618,61 +1606,8 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
     return null;
 }
 
-pub fn registerPerformanceObserver(self: *Frame, observer: *PerformanceObserver) !void {
-    return self._performance_observers.append(self.arena, observer);
-}
-
-pub fn unregisterPerformanceObserver(self: *Frame, observer: *PerformanceObserver) void {
-    for (self._performance_observers.items, 0..) |perf_observer, i| {
-        if (perf_observer == observer) {
-            _ = self._performance_observers.swapRemove(i);
-            return;
-        }
-    }
-}
-
-/// Updates performance observers with the new entry.
-/// This doesn't emit callbacks but rather fills the queues of observers.
-pub fn notifyPerformanceObservers(self: *Frame, entry: *Performance.Entry) !void {
-    for (self._performance_observers.items) |observer| {
-        if (observer.interested(entry)) {
-            observer._entries.append(self.arena, entry) catch |err| {
-                log.err(.frame, "notifyPerformanceObservers", .{ .err = err, .type = self._type, .url = self.url });
-            };
-        }
-    }
-
-    try self.schedulePerformanceObserverDelivery();
-}
-
-/// Schedules async delivery of performance observer records.
-pub fn schedulePerformanceObserverDelivery(self: *Frame) !void {
-    // Already scheduled.
-    if (self._performance_delivery_scheduled) {
-        return;
-    }
-    self._performance_delivery_scheduled = true;
-
-    return self.js.scheduler.add(
-        self,
-        struct {
-            fn run(_frame: *anyopaque) anyerror!?u32 {
-                const frame: *Frame = @ptrCast(@alignCast(_frame));
-                frame._performance_delivery_scheduled = false;
-
-                // Dispatch performance observer events.
-                for (frame._performance_observers.items) |observer| {
-                    if (observer.hasRecords()) {
-                        try observer.dispatch(frame);
-                    }
-                }
-
-                return null;
-            }
-        }.run,
-        0,
-        .{ .low_priority = true },
-    );
+pub fn performance(self: *Frame) *Performance {
+    return &self.window._performance;
 }
 
 pub fn registerMutationObserver(self: *Frame, observer: *MutationObserver) !void {

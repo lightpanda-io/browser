@@ -97,10 +97,10 @@ fn fetchRobotsThenRequest(
         entry.value_ptr.* = .empty;
 
         try entry.value_ptr.append(self.allocator, transfer);
-        transfer.loop_owned = true;
+        transfer.park(.robots);
         errdefer {
             entry.value_ptr.deinit(self.allocator);
-            transfer.loop_owned = false;
+            transfer.unpark();
         }
 
         const robots_ctx = try transfer.arena.create(RobotsContext);
@@ -143,7 +143,7 @@ fn fetchRobotsThenRequest(
         // until robots.txt resolves. Without this, Client.request's errdefer (or
         // any caller's cleanup) would deinit a transfer that's still on the
         // pending list, leaving flushPending with a dangling pointer.
-        transfer.loop_owned = true;
+        transfer.park(.robots);
     }
 }
 
@@ -156,12 +156,12 @@ fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) voi
             log.warn(.http, "blocked by robots", .{ .url = transfer.req.url });
             transfer.abort(error.RobotsBlocked);
         } else {
-            // Reset ownership: handing back to the layer chain. If a downstream
-            // layer commits (multi / queue / pause), it'll flip loop_owned back
-            // to true. If it fails before committing, we clean up here.
-            transfer.loop_owned = false;
+            // Hand back to the layer chain. If a downstream layer commits
+            // (multi / queue / park), state advances past .created. If it
+            // fails before committing, we clean up here.
+            transfer.unpark();
             self.next.request(transfer) catch |e| {
-                if (!transfer.loop_owned) {
+                if (transfer.state == .created) {
                     transfer.abort(e);
                 }
             };

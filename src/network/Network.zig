@@ -536,6 +536,8 @@ fn dropCdp(self: *Network, link: *CdpLink, err: ?anyerror, notify: bool) void {
     link.state = .removed;
     self.cdp_dirty = true;
     if (notify) {
+        link.cdp.terminateFromNetwork();
+
         // notify=true means the worker hasn't been told yet — push the
         // disconnect into the inbox and break it out of curl_multi_poll.
         // notify=false paths have already woken the worker (close frame
@@ -683,6 +685,30 @@ fn processCdpEvents(self: *Network) void {
     }
 }
 
+// On shutdown, force-disconnect every still-live CDP link. Each link's
+// worker thread blocks in curl_multi_poll and is woken ONLY by this
+// (Network) thread via dropCdp -> handles.wakeup(). If the run loop
+// exits with links still live, those workers never wake and
+// Server.deinit() spins on active_threads forever (issue #2510).
+// Mirrors the peer-EOF path in processCdpEvents: dropCdp(notify=true)
+// pushes a .disconnect into the worker's inbox and wakes it, so
+// cdp.tick() returns false and the worker exits.
+fn shutdownCdpLinks(self: *Network) void {
+    self.cdp_mutex.lock();
+    defer self.cdp_mutex.unlock();
+
+    var it = self.cdp_links.first;
+    while (it) |node| {
+        it = node.next;
+        const link: *CdpLink = @fieldParentPtr("node", node);
+        if (link.state == .live) {
+            self.dropCdp(link, null, true);
+        }
+    }
+
+    self.cdp_unregister.broadcast();
+}
+
 pub fn run(self: *Network) void {
     var drain_buf: [64]u8 = undefined;
     var running_handles: c_int = 0;
@@ -722,8 +748,15 @@ pub fn run(self: *Network) void {
                 break :blk min_timeout;
             }
 
+            // curl_multi_timeout reports -1 when curl has no timeout
+            // preference (idle) and 0 when it wants to be serviced
+            // immediately. Treat both as "no curl-imposed deadline" and
+            // fall back to min_timeout — otherwise @min(min_timeout, -1)
+            // would be -1, i.e. poll() blocks forever, starving onTick
+            // (telemetry's periodic flush) and removing the safety net
+            // that bounds any missed wakeup to min_timeout.
             const curl_timeout = self.getCurlTimeout();
-            if (curl_timeout == 0) {
+            if (curl_timeout <= 0) {
                 break :blk min_timeout;
             }
 
@@ -760,13 +793,23 @@ pub fn run(self: *Network) void {
 
         self.fireTicks();
 
-        if (self.shutdown.load(.acquire) and running_handles == 0) {
-            // Check if fireTicks submitted new requests (e.g. telemetry flush).
-            // If so, continue the loop to drain and send them before exiting.
-            self.submission_mutex.lock();
-            const has_pending = self.submission_queue.first != null;
-            self.submission_mutex.unlock();
-            if (!has_pending) break;
+        if (self.shutdown.load(.acquire)) {
+            // Drain any live CDP links so their workers can exit (issue #2510).
+            // Idempotent — no-op once drained, safe to call every iteration
+            self.shutdownCdpLinks();
+
+            if (running_handles == 0) {
+                // Check if fireTicks submitted new requests (e.g. telemetry
+                // flush). If so, continue the loop to drain and send them
+                // before exiting.
+                self.submission_mutex.lock();
+                const has_pending = self.submission_queue.first != null;
+                self.submission_mutex.unlock();
+
+                if (!has_pending) {
+                    break;
+                }
+            }
         }
     }
 
@@ -860,7 +903,16 @@ fn acceptConnections(self: *Network) void {
 }
 
 fn preparePollFds(self: *Network, multi: *libcurl.CurlM) void {
-    const curl_fds = self.pollfds[PSEUDO_POLLFDS..];
+    // Only the curl slice — NOT through to the end of pollfds. The CDP
+    // socket fds live in [cdp_start..] and are owned by
+    // prepareCdpPollFds, which only rebuilds them when cdp_dirty is set
+    // (a steady-state optimization). Slicing to the end here would
+    // @memset those fds to -1 every iteration once a multi exists (which
+    // happens as soon as telemetry sends its first request), silently
+    // dropping every live CDP socket from the poll set — Network then
+    // never reads another CDP message (#2508) nor observes peer
+    // EOF/shutdown (#2507).
+    const curl_fds = self.pollfds[PSEUDO_POLLFDS..self.cdp_start];
     @memset(curl_fds, .{ .fd = -1, .events = 0, .revents = 0 });
 
     var fd_count: c_uint = 0;
@@ -1052,4 +1104,41 @@ fn loadCerts(allocator: Allocator) !libcurl.CurlBlob {
         .data = result.ptr,
         .flags = 0,
     };
+}
+
+const testing = @import("../testing.zig");
+
+test "Network: preparePollFds leaves the CDP fd region untouched" {
+    // Regression for #2507 / #2508. Once a multi exists (telemetry creates
+    // one in optimized builds), preparePollFds runs every loop iteration.
+    // It rebuilds only the curl slice [PSEUDO_POLLFDS..cdp_start]; the CDP
+    // region [cdp_start..] is owned by prepareCdpPollFds, which keeps its
+    // entries across iterations and only rebuilds when cdp_dirty is set.
+    // A slice that ran to the end of pollfds @memset those CDP sockets to
+    // -1, silently dropping every live CDP connection from the poll set —
+    // so Network stopped reading CDP messages (#2508) and never observed
+    // peer EOF/shutdown (#2507). curl global is initialized by the test
+    // harness (App.init -> Network.init).
+    const multi = libcurl.curl_multi_init() orelse return error.FailedToInitMulti;
+    defer libcurl.curl_multi_cleanup(multi) catch {};
+
+    const curl_slots = 4;
+    const cdp_slots = 3;
+    var pollfds: [PSEUDO_POLLFDS + curl_slots + cdp_slots]posix.pollfd = undefined;
+    @memset(&pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
+
+    // preparePollFds only reads self.pollfds and self.cdp_start.
+    var nw: Network = undefined;
+    nw.pollfds = &pollfds;
+    nw.cdp_start = PSEUDO_POLLFDS + curl_slots;
+
+    // Two live CDP sockets parked in the CDP region, mimicking the steady
+    // state between cdp_dirty rebuilds.
+    pollfds[nw.cdp_start] = .{ .fd = 4242, .events = posix.POLL.IN, .revents = 0 };
+    pollfds[nw.cdp_start + 1] = .{ .fd = 4243, .events = posix.POLL.IN, .revents = 0 };
+
+    nw.preparePollFds(multi);
+
+    try testing.expectEqual(@as(posix.fd_t, 4242), pollfds[nw.cdp_start].fd);
+    try testing.expectEqual(@as(posix.fd_t, 4243), pollfds[nw.cdp_start + 1].fd);
 }

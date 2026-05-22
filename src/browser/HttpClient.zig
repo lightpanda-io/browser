@@ -398,6 +398,10 @@ pub fn abortRequests(_: *Client, owner: *Owner) void {
 const DrainMode = enum { all, sync_wait };
 
 pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
+    if (self.inbox.terminated) {
+        return error.ClientDisconnected;
+    }
+
     try self.drainQueue();
     try self.perform(@intCast(timeout_ms));
     // perform/processMessages just released a batch of connections back to
@@ -419,10 +423,16 @@ fn drainQueue(self: *Client) !void {
             self.queue.prepend(queue_node);
             return;
         };
-        // Cleared only after we've successfully obtained a connection;
-        // if we put the node back, _queued stays true.
-        transfer._queued = false;
-        try self.makeRequest(conn, transfer);
+        // Bridge state to .created so a failure inside makeRequest before
+        // any commit cleans up via the abort below. makeRequest flips to
+        // .inflight on a successful trackConn.
+        transfer.state = .created;
+        self.makeRequest(conn, transfer) catch |err| {
+            if (transfer.state == .created) {
+                transfer.abort(err);
+            }
+            return err;
+        };
     }
 }
 
@@ -431,13 +441,18 @@ pub fn _request(_: *anyopaque, transfer: *Transfer) !void {
     return transfer.client.process(transfer);
 }
 
-// Ownership contract: from the moment this function is entered, the
-// HttpClient owns `req` — specifically `req.headers` (a curl_slist).
-// On success, transfer.deinit eventually frees it. On any failure path
-// inside this function, we free it before returning the error. Callers
-// must NOT pair `request()` with their own `errdefer headers.deinit()`
-// — that's a double-free.
+// HttpClient takes ownership of req.headers; do not pair with
+// `errdefer headers.deinit()`
 pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
+    _ = try self.requestT(req, owner);
+}
+
+// Like `request`, but returns the created `*Transfer`. The caller does not own
+// the returned `*Transfer` and must thus use it with care. From the moment this
+// function is entered, the HttpClient owns `req` — specifically `req.headers`
+// On success, transfer.deinit eventually frees it. On any failure path inside
+// this function, we free it before returning the error.
+fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
     const arena = self.arena_pool.acquire(.small, "Request.arena") catch |err| {
         req.headers.deinit();
         return err;
@@ -483,13 +498,17 @@ pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
     // From this point forward, the transfer owns `req` and `arena`. If the
     // layer chain fails before any layer commits the transfer to an external
     // owner (queue / multi handle / pending interception), we clean up here
-    // via transfer.abort which fires error_callback and deinits.
+    // via transfer.abort which fires error_callback and deinits. `.created`
+    // means no commit happened — anything else is held by an owner that
+    // will clean up.
     self.entry_layer.request(transfer) catch |err| {
-        if (!transfer.loop_owned) {
+        if (transfer.state == .created) {
             transfer.abort(err);
         }
         return err;
     };
+
+    return transfer;
 }
 
 const SyncContext = struct {
@@ -536,6 +555,13 @@ const SyncContext = struct {
 };
 
 pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncResponse {
+    if (self.inbox.terminated) {
+        // request() takes ownership of req.headers on every path; we return
+        // before calling it, so free the curl_slist here to avoid leaking it.
+        req.headers.deinit();
+        return error.ClientDisconnected;
+    }
+
     var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
     errdefer sync_ctx.body.deinit(allocator);
 
@@ -546,10 +572,18 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     r.done_callback = SyncContext.doneCallback;
     r.error_callback = SyncContext.errorCallback;
     r.shutdown_callback = SyncContext.shutdownCallback;
-    try self.request(r, null);
+    const transfer = try self.requestT(r, null);
 
     while (sync_ctx.completion == .in_progress) {
-        try self.tick(200, .sync_wait);
+        self.tick(200, .sync_wait) catch |err| {
+            if (sync_ctx.completion == .in_progress) {
+                // tick failed for a reason unrelated to our transfer (likely OOM or
+                // client disconnect). transfer.req.ctx points at &sync_ctx on this
+                // stack — abort to sever that reference before we return
+                transfer.abort(err);
+            }
+            return err;
+        };
     }
 
     switch (sync_ctx.completion) {
@@ -575,8 +609,7 @@ fn process(self: *Client, transfer: *Transfer) !void {
     }
 
     self.queue.append(&transfer._node);
-    transfer._queued = true;
-    transfer.loop_owned = true;
+    transfer.state = .queued;
 }
 
 pub fn nextReqId(self: *Client) u32 {
@@ -599,30 +632,35 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 }
 
 fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyerror!void {
+    conn.debug_added = 0;
+    conn.debug_removed = 0;
+    conn.debug_remove_err = null;
     {
         // Reset per-response state for retries (auth challenge, queue).
         const auth = transfer._auth_challenge;
         transfer.reset();
         transfer._auth_challenge = auth;
 
-        transfer._conn = conn;
-        errdefer {
-            transfer._conn = null;
-            self.releaseConn(conn);
-        }
+        // conn is locally held during configure; we don't write it to
+        // `transfer._conn` until trackConn commits it to the multi
+        // handle. If configureConn fails, release the conn back to the
+        // pool — `transfer.state` stays `.created`, and the caller
+        // (Client.request's errdefer or drainQueue's catch) aborts
+        // the transfer.
+        errdefer self.releaseConn(conn);
 
         try transfer.configureConn(conn);
     }
 
     // As soon as trackConn succeeds, the multi handle owns the transfer's
     // lifecycle. perform/processMessages will eventually invoke completion
-    // callbacks and call transfer.deinit. We flag loop_owned so Client.request
-    // (or anyone else holding the transfer pointer) knows not to deinit it.
+    // callbacks and call transfer.deinit.
     self.trackConn(conn) catch |err| {
-        transfer._conn = null;
+        self.releaseConn(conn);
         return err;
     };
-    transfer.loop_owned = true;
+    transfer._conn = conn;
+    transfer.state = .inflight;
 
     if (transfer.req.start_callback) |cb| {
         cb(Response.fromTransfer(transfer)) catch |err| {
@@ -656,9 +694,15 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     while (self.dirty.popFirst()) |node| {
         const conn: *http.Connection = @fieldParentPtr("node", node);
         self.handles.remove(conn) catch |err| {
-            log.fatal(.http, "multi remove handle", .{ .err = err, .src = "perform" });
-            @panic("multi_remove_handle");
+            lp.assert(false, "multi_remove_handle", .{
+                .err = err,
+                .in_use = conn.in_use,
+                .added = conn.debug_added,
+                .removed = conn.debug_removed,
+                .remove_err = conn.debug_remove_err,
+            });
         };
+        conn.debug_removed = 2;
         self.releaseConn(conn);
     }
 
@@ -719,10 +763,12 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
             .close => {
                 cdp.onClose();
                 cdp.onDisconnect(null);
+                self.inbox.terminated = true;
                 return error.ClientDisconnected;
             },
             .disconnect => |err| {
                 cdp.onDisconnect(err);
+                self.inbox.terminated = true;
                 return error.ClientDisconnected;
             },
         }
@@ -736,6 +782,11 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
 // transfer state via InterceptionLayer; they don't touch page /
 // session / V8 state). The check is exact on the parsed `method`
 // field — no substring matching against raw JSON.
+//
+// Every method listed here must be safe to dispatch with
+// JS on the stack — meaning it must NO reach any other code
+// path that frees Page/Session/Frame/Worker state the unwinding
+// eval frame above us will dereference.
 fn allowDuringSyncWait(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .ping, .close, .disconnect => true,
@@ -751,6 +802,7 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
 }
 
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
+    // State at entry: .inflight = conn (multi just delivered a completion).
     if (msg.err == null or msg.err.? == error.RecvError) {
         transfer.detectAuthChallenge(msg.conn);
     }
@@ -772,8 +824,11 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             // Whether or not this is a blocking request, we're not going
             // to process it now. We can end the transfer, which will
             // release the easy handle back into the pool. The transfer
-            // is still valid/alive (just has no handle).
-            transfer.releaseConn();
+            // is still valid/alive (just has no handle); park it for
+            // continueWithAuth.
+            self.removeConn(transfer._conn.?);
+            transfer._conn = null;
+            transfer.state = .{ .parked = .intercept_auth };
             return false;
         }
     }
@@ -787,14 +842,17 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             const conn = transfer._conn.?;
 
             try self.handles.remove(conn);
-            transfer._conn = null;
-            transfer._detached_conn = conn; // signal orphan for processMessages cleanup
+            conn.debug_removed = 3;
+            // Conn temporarily out of multi during reconfigure.
+            // _detached_conn lets processMessages release it if any of
+            // the steps below throw. State stays .inflight; _conn stays set
+            transfer._detached_conn = conn;
 
             transfer.reset();
             try transfer.configureConn(conn);
             try self.handles.add(conn);
+            conn.debug_added = 2;
             transfer._detached_conn = null;
-            transfer._conn = conn; // reattach after successful re-add
 
             _ = try self.perform(0);
 
@@ -817,10 +875,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
     };
 
-    // make sure the transfer can't be immediately aborted from a callback
-    // since we still need it here.
-    transfer._performing = true;
-    defer transfer._performing = false;
+    // Transition to .completing so re-entrant aborts from user callbacks
+    // defer their teardown to processMessages. (_conn carries through
+    // from .inflight; nothing to set here.)
+    transfer.state = .completing;
 
     if (msg.err != null and !is_conn_close_recv) {
         transfer.requestFailed(transfer.res.callback_error orelse msg.err.?, true);
@@ -843,15 +901,17 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     if (body.len > 0) {
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
-        if (transfer.aborted) {
+        if (transfer.state == .aborted) {
             transfer.requestFailed(error.Abort, true);
             return true;
         }
     }
 
     // release conn ASAP so that it's available; some done_callbacks
-    // will load more resources.
-    transfer.releaseConn();
+    // will load more resources. State stays .completing — the
+    // processMessages caller still owns deinit.
+    self.removeConn(msg.conn);
+    transfer._conn = null;
 
     try transfer.req.done_callback(transfer.req.ctx);
 
@@ -923,6 +983,7 @@ pub fn trackConn(self: *Client, conn: *http.Connection) !void {
         self.releaseConn(conn);
         return err;
     };
+    conn.debug_added = 1;
 
     switch (conn.transport) {
         .http => self.http_active += 1,
@@ -946,10 +1007,12 @@ pub fn removeConn(self: *Client, conn: *http.Connection) void {
         else => unreachable,
     }
     if (self.handles.remove(conn)) {
+        conn.debug_removed = 1;
         self.releaseConn(conn);
-    } else |_| {
+    } else |err| {
         // Can happen if we're in a perform() call, so we'll queue this
         // for cleanup later.
+        conn.debug_remove_err = err;
         self.dirty.append(&conn.node);
     }
 }
@@ -1153,34 +1216,32 @@ pub const Transfer = struct {
     owner: ?*Owner,
     owner_node: std.DoublyLinkedList.Node = .{},
 
-    // Latched true by the first commit point that hands the transfer off to
-    // an external owner: client.queue.append, successful trackConn, or
-    // InterceptionLayer pausing for a CDP response. Once set, Client.request's
-    // errdefer skips cleanup — whoever now owns the transfer will deinit it.
-    loop_owned: bool = false,
+    // The transfer's lifecycle position. Source of truth for
+    // "is this committed?" and "can we deinit synchronously?".
+    // The conn the transfer holds (if any) is tracked separately
+    // in `_conn` — orthogonal to state. See `State` below.
+    state: State = .created,
 
-    // True iff `_node` is currently linked in `client.queue` (waiting for a
-    // libcurl handle). Set in `Client.process` on enqueue, cleared in
-    // `Client.tick` on popFirst, and used by `Transfer.deinit` to safely
-    // unlink — `deinit` has no other way to detect queue membership, and
-    // a transfer aborted while queued (e.g. via owner-list abort) would
-    // otherwise leave a dangling `_node` in `client.queue` that the next
-    // `tick` would dereference and hand to libcurl.
-    _queued: bool = false,
+    // Conn the transfer currently holds. Set when makeRequest commits
+    // the conn to the multi handle; cleared by the "release ASAP" step
+    // inside processOneMessage, by the auth-parking path, and by deinit.
+    // Lifetime is decoupled from `state` on purpose: a single transition
+    // shouldn't have to thread the conn pointer, and aborts in mid-flight
+    // can let `deinit` find the conn via this field instead of carrying
+    // it on every state variant.
+    _conn: ?*http.Connection = null,
 
     req: Request,
     res: Transfer.Response = .{},
     client: *Client,
 
     start_time: u64,
-    aborted: bool = false,
 
     _notified_fail: bool = false,
 
-    _conn: ?*http.Connection = null,
     // Set when conn is temporarily detached from transfer during redirect
     // reconfiguration. Used by processMessages to release the orphaned conn
-    // if reconfiguration fails.
+    // if reconfiguration fails. Transient inside the redirect path only.
     _detached_conn: ?*http.Connection = null,
 
     _auth_challenge: ?http.AuthChallenge = null,
@@ -1188,22 +1249,76 @@ pub const Transfer = struct {
     // number of times the transfer has been tried.
     // incremented by reset func.
     _tries: u8 = 0,
-    _performing: bool = false,
     _redirect_count: u8 = 0,
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
 
-    fn releaseConn(self: *Transfer) void {
-        if (self._conn) |conn| {
-            self.client.removeConn(conn);
-            self._conn = null;
-        }
+    pub const State = union(enum) {
+        // Pre-commit. Only valid inside the request flow (Client.request
+        // or a re-entry like continueTransfer / unpark) before any commit
+        // point hands the transfer to an external owner. Client.request's
+        // errdefer uses `.created` to decide whether to abort.
+        created,
+
+        // On client.queue, waiting for a libcurl handle. `_node` is
+        // linked into client.queue.
+        queued,
+
+        // Conn (in `_conn`) is in the multi handle; libcurl owns the
+        // lifecycle. processOneMessage will eventually fire callbacks
+        // for us.
+        inflight,
+
+        // processOneMessage is running user callbacks. The conn may
+        // still be in `_conn` (header/data phase) or have been cleared
+        // by the "release ASAP" step before done_callback fires.
+        completing,
+
+        // External owner is holding the transfer paused. The owner is
+        // responsible for resuming or terminating it.
+        parked: ParkedBy,
+
+        // detachInPerform ran; user callbacks are noop'd, owner link is
+        // cleared, processOneMessage / processMessages will deinit on
+        // exit. `_conn` (if any) is what `deinit` will release once
+        // libcurl is done with it.
+        aborted,
+    };
+
+    pub const ParkedBy = enum {
+        // CDP Fetch interception, request phase.
+        intercept_request,
+
+        // CDP auth challenge — processOneMessage stashed the transfer
+        // waiting for continueWithAuth.
+        intercept_auth,
+
+        // RobotsLayer holds the transfer pending a robots.txt fetch.
+        robots,
+    };
+
+    // Layer-facing: park the transfer for an external owner. The caller
+    // must be holding the transfer in the request flow (state == .created).
+    pub fn park(self: *Transfer, by: ParkedBy) void {
+        lp.assert(self.state == .created, "Transfer.park", .{ .state = self.state });
+        self.state = .{ .parked = by };
+    }
+
+    // Layer-facing: take the transfer out of .parked and return it to
+    // the request flow (.created). This assumes pre-inflight handling (i.e. the
+    // transfer was in .created before being parked). This is true today, but
+    // could become false if Request Interception ever supports the "response"
+    // requestStage (although, to support this, I think the safety of transfers
+    // post-perform would need to be improved),
+    pub fn unpark(self: *Transfer) void {
+        lp.assert(self.state == .parked, "Transfer.unpark", .{ .state = self.state });
+        self.state = .created;
     }
 
     pub fn deinit(self: *Transfer) void {
-        if (self._conn) |conn| {
-            self.client.removeConn(conn);
+        if (self._conn) |c| {
+            self.client.removeConn(c);
             self._conn = null;
         }
 
@@ -1211,9 +1326,8 @@ pub const Transfer = struct {
         // Without this, deinit'ing a queued transfer (e.g. via owner-list
         // abort during navigation) leaves a dangling _node in the queue
         // that the next tick would pop and hand to libcurl → UAF.
-        if (self._queued) {
+        if (self.state == .queued) {
             self.client.queue.remove(&self._node);
-            self._queued = false;
         }
 
         // Drop the id→*Transfer index entry before freeing the memory.
@@ -1257,23 +1371,24 @@ pub const Transfer = struct {
     // Decide whether to tear down now or defer until processOneMessage
     // eventually drains the in-flight curl handle.
     //
-    // Two cases force deferral:
-    //   * `_performing` — processOneMessage is currently processing THIS
-    //     transfer (set/cleared around the callback chain). It will call
-    //     `transfer.deinit` itself after the chain returns; deiniting
-    //     here would double-free. Note that `_conn` is cleared partway
-    //     through this window (the "release conn ASAP" step before
-    //     done_callback fires), so we cannot rely on `_conn != null`.
-    //   * `client.performing` + we have a libcurl handle — libcurl could
-    //     still fire callbacks for us. Releasing the arena now would UAF
+    // Two states force deferral:
+    //   * `.completing` — processOneMessage is currently processing
+    //     this transfer. It will call `transfer.deinit` itself after the
+    //     chain returns; deiniting here would double-free. This covers
+    //     both the with-conn and post-release-ASAP windows.
+    //   * `.inflight` while `client.performing` — libcurl could still
+    //     fire callbacks for us. Releasing the arena now would UAF
     //     from inside curl.
     //
-    // Otherwise (parked / queued / never-trackConn'd / fully drained),
-    // there is nothing left referencing this transfer and we can safely
-    // deinit inline even from inside a perform callback.
+    // Otherwise (created / queued / parked / fully drained), there is
+    // nothing left referencing this transfer and we can safely deinit
+    // inline.
     fn detachOrDeinit(self: *Transfer) void {
-        const must_defer = self._performing or
-            (self.client.performing and self._conn != null);
+        const must_defer = switch (self.state) {
+            .completing => true,
+            .inflight => self.client.performing,
+            else => false,
+        };
         if (must_defer) {
             self.detachInPerform();
         } else {
@@ -1284,8 +1399,9 @@ pub const Transfer = struct {
     // Deferred-cleanup path when we can't synchronously deinit.
     //
     // We:
-    //   - flag `aborted` so processOneMessage's normal-completion paths
-    //     short-circuit when they next see this transfer,
+    //   - transition state to `.aborted` so processOneMessage's
+    //     normal-completion paths short-circuit when they next see
+    //     this transfer,
     //   - noop every user callback so libcurl naturally draining the
     //     in-flight response can't re-enter user code,
     //   - unlink from owner.transfers and clear `owner` so the owning
@@ -1294,7 +1410,9 @@ pub const Transfer = struct {
     //     `owner == null` and skips the list-remove that would otherwise
     //     UAF against a freed list.
     fn detachInPerform(self: *Transfer) void {
-        self.aborted = true;
+        // `_conn` (if any) rides through .aborted untouched; deinit
+        // releases it once libcurl is done.
+        self.state = .aborted;
         self.req.start_callback = null;
         self.req.shutdown_callback = null;
         self.req.header_callback = Noop.headerCallback;
@@ -1572,7 +1690,7 @@ pub const Transfer = struct {
             return err;
         };
 
-        return proceed and transfer.aborted == false;
+        return proceed and transfer.state != .aborted;
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
@@ -1622,7 +1740,7 @@ pub const Transfer = struct {
             return http.writefunc_error;
         };
 
-        if (transfer.aborted) {
+        if (transfer.state == .aborted) {
             return http.writefunc_error;
         }
 
@@ -1631,12 +1749,11 @@ pub const Transfer = struct {
 
     pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
         // We always have a real curl request here. We handle injection up in InterceptionLayer.
-        lp.assert(self._conn != null, "Transfer.responseHeaderIterator", .{ .value = self._conn != null });
-        const conn = self._conn.?;
-
+        const c = self._conn;
+        lp.assert(c != null, "Transfer.responseHeaderIterator", .{ .value = c != null });
         // If we have a connection, than this is a real curl request and we
         // iterate through the header that curl maintains.
-        return .{ .curl = .{ .conn = conn } };
+        return .{ .curl = .{ .conn = c.? } };
     }
 
     // This function should be called during the dataCallback. Calling it after
@@ -1647,10 +1764,10 @@ pub const Transfer = struct {
     }
 
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
-        if (self._conn) |conn| {
+        if (self._conn) |c| {
             // If we have a connection, than this is a normal request. We can get the
             // header value from the connection.
-            const cl = conn.getResponseHeader("content-length", 0) orelse return null;
+            const cl = c.getResponseHeader("content-length", 0) orelse return null;
             return cl.value;
         }
 
@@ -1702,6 +1819,7 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     }
 
     self.interception_layer.intercepted -= 1;
+    transfer.unpark();
     return self.process(transfer);
 }
 
