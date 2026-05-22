@@ -87,19 +87,19 @@ pub fn isMultiLineCapable(self: Schema) bool {
     return self.required.len == 1 and self.fieldType(self.required[0]) == .string;
 }
 
-pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
+fn findField(self: Schema, key: []const u8) ?FieldEntry {
     for (self.fields) |f| {
         if (std.mem.eql(u8, f.name, key)) return f;
     }
     return null;
 }
 
-pub fn fieldType(self: Schema, key: []const u8) FieldType {
+fn fieldType(self: Schema, key: []const u8) FieldType {
     if (self.findField(key)) |f| return f.field_type;
     return .other;
 }
 
-pub fn isFieldDefaultTrue(self: Schema, key: []const u8) bool {
+fn isFieldDefaultTrue(self: Schema, key: []const u8) bool {
     if (self.findField(key)) |f| return f.default_true;
     return false;
 }
@@ -181,7 +181,7 @@ pub fn parseValue(self: Schema, arena: std.mem.Allocator, rest: []const u8) Pars
     return try self.buildValue(arena, list.items);
 }
 
-pub fn validateAndFillObject(self: Schema, obj: *std.json.ObjectMap) ParseError!void {
+fn validateAndFillObject(self: Schema, obj: *std.json.ObjectMap) ParseError!void {
     var it = obj.iterator();
     while (it.next()) |entry| {
         if (self.findField(entry.key_ptr.*) == null) return error.UnknownField;
@@ -253,6 +253,10 @@ pub fn find(schemas: []const Schema, name: []const u8) ?*const Schema {
         if (std.ascii.eqlIgnoreCase(s.tool_name, name)) return s;
     }
     return null;
+}
+
+pub fn findByName(name: []const u8) ?*const Schema {
+    return find(all(), name);
 }
 
 /// Lazy process-wide cache, keyed by `@intFromEnum(BrowserTool)`.

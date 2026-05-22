@@ -35,7 +35,6 @@ const Credentials = zenai.provider.Credentials;
 const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Terminal = @import("Terminal.zig");
-const CommandRunner = @import("CommandRunner.zig");
 const SlashCommand = @import("SlashCommand.zig");
 
 const Agent = @This();
@@ -147,7 +146,6 @@ browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
 terminal: Terminal,
-cmd_runner: CommandRunner,
 verifier: Verifier,
 recorder: ?Recorder,
 messages: std.ArrayList(zenai.provider.Message),
@@ -243,7 +241,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
-        .cmd_runner = undefined,
         .verifier = undefined,
         .recorder = null,
         .messages = .empty,
@@ -265,7 +262,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     self.session = try self.browser.newSession(notification);
     self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
-    self.cmd_runner = .init(self.session, &self.node_registry, &self.terminal);
 
     self.ai_client = if (llm) |l| switch (l.provider) {
         inline else => |tag| blk: {
@@ -476,20 +472,20 @@ fn runRepl(self: *Agent) void {
 
         switch (cmd) {
             .comment => continue :repl,
-            .login, .accept_cookies => {
+            .login, .acceptCookies => {
                 if (self.ai_client == null) {
                     self.terminal.printError("/login and /acceptCookies require an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).");
                     continue :repl;
                 }
                 const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
-                const label: []const u8 = if (cmd == .login) "/" ++ @tagName(Command.LlmCommand.login) else "/" ++ @tagName(Command.LlmCommand.acceptCookies);
+                const label: []const u8 = if (cmd == .login) "/login" else "/acceptCookies";
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
             },
             .tool_call => |tc| {
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
-                const result = self.cmd_runner.executeWithResult(aa, cmd);
+                const result = self.runCommand(aa, cmd);
                 self.terminal.endTool();
-                self.cmd_runner.printResult(cmd, result);
+                self.printCommandResult(cmd, result);
                 if (self.recorder) |*r| r.record(cmd);
             },
         }
@@ -545,7 +541,7 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
         }
         return;
     }
-    const tool_schema = Schema.find(Schema.all(), lookup) orelse {
+    const tool_schema = Schema.findByName(lookup) orelse {
         self.terminal.printErrorFmt("unknown tool: {s}", .{lookup});
         return;
     };
@@ -584,6 +580,32 @@ fn firstSentence(text: []const u8) []const u8 {
 
 const Replacement = script.Replacement;
 
+/// Caller contract: `cmd` must be `.tool_call` — `.comment`, `.login`, and
+/// `.acceptCookies` are filtered upstream because they have no tool mapping.
+fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tools.ToolResult {
+    const tc = switch (cmd) {
+        .tool_call => |t| t,
+        else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
+    };
+    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| .{
+        .text = if (err == error.OutOfMemory)
+            "out of memory"
+        else
+            std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), @errorName(err) }) catch "tool failed",
+        .is_error = true,
+    };
+}
+
+/// Data output (extract/eval/markdown/tree/…) → stdout on success; everything
+/// else, including failures from those same commands, → stderr.
+fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResult) void {
+    if (cmd.producesData() and !result.is_error) {
+        self.terminal.printAssistant(result.text);
+    } else {
+        self.terminal.printActionResult(result.text);
+    }
+}
+
 fn runScript(self: *Agent, path: []const u8) bool {
     self.terminal.printInfoFmt("Running script: {s}", .{path});
 
@@ -616,7 +638,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 }
                 continue;
             },
-            .login, .accept_cookies => {
+            .login, .acceptCookies => {
                 if (self.ai_client == null) {
                     self.terminal.printErrorFmt("line {d}: {s} requires --provider", .{
                         entry.line_num,
@@ -677,8 +699,8 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.En
     defer cmd_arena.deinit();
     const ca = cmd_arena.allocator();
 
-    const result = self.cmd_runner.executeWithResult(ca, entry.command);
-    self.cmd_runner.printResult(entry.command, result);
+    const result = self.runCommand(ca, entry.command);
+    self.printCommandResult(entry.command, result);
 
     const verification: Verifier.VerifyResult = if (!result.is_error and self.self_heal)
         self.verifier.verify(ca, entry.command)
@@ -731,10 +753,10 @@ fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command) bool {
     for (0..3) |i| {
         std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
         self.terminal.printInfo("Retrying command...");
-        const retry_result = self.cmd_runner.executeWithResult(ca, cmd);
+        const retry_result = self.runCommand(ca, cmd);
         if (retry_result.is_error) continue;
         if (self.verifier.verify(ca, cmd) == .failed) continue;
-        self.cmd_runner.printResult(cmd, retry_result);
+        self.printCommandResult(cmd, retry_result);
         return true;
     }
     return false;
@@ -1357,7 +1379,7 @@ test "canHeal: only page-local DOM commands are allowed" {
     }
 
     try std.testing.expect(!(Command{ .login = {} }).canHeal());
-    try std.testing.expect(!(Command{ .accept_cookies = {} }).canHeal());
+    try std.testing.expect(!(Command{ .acceptCookies = {} }).canHeal());
     try std.testing.expect(!(Command{ .comment = {} }).canHeal());
 }
 

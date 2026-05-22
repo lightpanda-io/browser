@@ -32,24 +32,12 @@ pub const ParseError = Schema.ParseError || error{
 pub const Command = union(enum) {
     tool_call: ToolCall,
     login: void,
-    accept_cookies: void,
+    acceptCookies: void,
     comment: void,
 
-    /// Variant names are the wire-format slash names — `@tagName` is the
-    /// single source of truth for parse, format, and autocomplete.
-    pub const LlmCommand = enum {
-        login,
-        acceptCookies,
-
-        pub fn toCommand(self: LlmCommand) Command {
-            return switch (self) {
-                .login => .{ .login = {} },
-                .acceptCookies => .{ .accept_cookies = {} },
-            };
-        }
-    };
-
-    pub const llm_commands = std.enums.values(LlmCommand);
+    /// Union tags that fire an LLM trigger. Tag names match the wire-format
+    /// slash command, so `@tagName` is the single source of truth.
+    pub const llm_tags: []const std.meta.Tag(Command) = &.{ .login, .acceptCookies };
 
     pub const ToolCall = struct {
         tool: BrowserTool,
@@ -59,7 +47,7 @@ pub const Command = union(enum) {
             return @tagName(self.tool);
         }
 
-        pub fn schema(self: ToolCall) *const Schema {
+        fn schema(self: ToolCall) *const Schema {
             return &Schema.all()[@intFromEnum(self.tool)];
         }
 
@@ -67,7 +55,7 @@ pub const Command = union(enum) {
         /// - no `selector` AND (tool needs one OR only locator is the
         ///   ephemeral `backendNodeId`);
         /// - a string field can't be quoted unambiguously.
-        pub fn isRecorded(self: ToolCall) bool {
+        fn isRecorded(self: ToolCall) bool {
             if (!self.tool.isRecorded()) return false;
             const s = self.schema();
             const args = self.args orelse return s.required.len == 0;
@@ -90,7 +78,7 @@ pub const Command = union(enum) {
         }
 
         /// Canonical recorder format. Round-trips with `Command.parse`.
-        pub fn format(self: ToolCall, writer: *std.Io.Writer) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
+        fn format(self: ToolCall, writer: *std.Io.Writer) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
             const s = self.schema();
             try writer.writeByte('/');
             try writer.writeAll(s.tool_name);
@@ -127,7 +115,7 @@ pub const Command = union(enum) {
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
             .comment => false,
-            .login, .accept_cookies => true,
+            .login, .acceptCookies => true,
             .tool_call => |tc| tc.isRecorded(),
         };
     }
@@ -139,18 +127,17 @@ pub const Command = union(enum) {
         };
     }
 
-    pub fn needsLlm(self: Command) bool {
-        return switch (self) {
-            .login, .accept_cookies => true,
-            else => false,
-        };
-    }
-
     pub fn canHeal(self: Command) bool {
         return switch (self) {
             .tool_call => |tc| tc.tool.canHeal(),
             else => false,
         };
+    }
+
+    pub fn needsLlm(self: Command) bool {
+        return inline for (llm_tags) |tag| {
+            if (self == tag) break true;
+        } else false;
     }
 
     pub fn isRetryable(self: Command) bool {
@@ -168,13 +155,14 @@ pub const Command = union(enum) {
 
         const split = Schema.splitNameRest(trimmed[1..]) orelse return error.MissingName;
 
-        for (llm_commands) |lc| {
-            if (!std.ascii.eqlIgnoreCase(split.name, @tagName(lc))) continue;
-            if (split.rest.len > 0) return error.MalformedKv;
-            return lc.toCommand();
+        inline for (llm_tags) |tag| {
+            if (std.ascii.eqlIgnoreCase(split.name, @tagName(tag))) {
+                if (split.rest.len > 0) return error.MalformedKv;
+                return @unionInit(Command, @tagName(tag), {});
+            }
         }
 
-        const s = Schema.find(Schema.all(), split.name) orelse return error.UnknownTool;
+        const s = Schema.findByName(split.name) orelse return error.UnknownTool;
         const args = try s.parseValue(arena, split.rest);
         return .{ .tool_call = .{ .tool = s.tool, .args = args } };
     }
@@ -182,8 +170,7 @@ pub const Command = union(enum) {
     /// Canonical recorder format. Round-trips with `parse`.
     pub fn format(self: Command, writer: *std.Io.Writer) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
         switch (self) {
-            .login => try writer.writeAll("/" ++ @tagName(LlmCommand.login)),
-            .accept_cookies => try writer.writeAll("/" ++ @tagName(LlmCommand.acceptCookies)),
+            inline .login, .acceptCookies => |_, tag| try writer.writeAll("/" ++ @tagName(tag)),
             .comment => try writer.writeAll("#"),
             .tool_call => |tc| try tc.format(writer),
         }
@@ -221,7 +208,7 @@ test "parse: /login and /acceptCookies" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     try testing.expect((try Command.parse(arena.allocator(), "/login")) == .login);
-    try testing.expect((try Command.parse(arena.allocator(), "/acceptCookies")) == .accept_cookies);
+    try testing.expect((try Command.parse(arena.allocator(), "/acceptCookies")) == .acceptCookies);
 }
 
 test "parse: /goto positional" {
@@ -326,7 +313,7 @@ test "format: /login and /acceptCookies" {
 
     var aw2: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw2.deinit();
-    try (Command{ .accept_cookies = {} }).format(&aw2.writer);
+    try (Command{ .acceptCookies = {} }).format(&aw2.writer);
     try testing.expectString("/acceptCookies", aw2.written());
 }
 

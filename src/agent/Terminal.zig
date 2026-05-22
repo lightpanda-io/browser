@@ -66,15 +66,15 @@ stderr_is_tty: bool,
 spinner: Spinner,
 
 // Flat name list for the "match any slash command" search/completion paths.
-const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_commands.len][]const u8 = blk: {
-    var arr: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_commands.len][]const u8 = undefined;
+const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_tags.len][]const u8 = blk: {
+    var arr: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_tags.len][]const u8 = undefined;
     var idx: usize = 0;
     for (browser_tools.names) |n| {
         arr[idx] = n;
         idx += 1;
     }
-    for (Command.llm_commands) |l| {
-        arr[idx] = @tagName(l);
+    for (Command.llm_tags) |tag| {
+        arr[idx] = @tagName(tag);
         idx += 1;
     }
     for (SlashCommand.meta_commands) |m| {
@@ -342,7 +342,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     if (input[0] == '/') {
         if (has_space) {
             if (Schema.parseSlashCommand(input)) |parts| {
-                if (Schema.find(Schema.all(), parts.name)) |schema| {
+                if (Schema.findByName(parts.name)) |schema| {
                     addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
                 } else if (SlashCommand.findMeta(parts.name)) |meta| {
                     addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
@@ -381,7 +381,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
 
     if (Schema.parseSlashCommand(input)) |parts| {
         const ends_ws = input[input.len - 1] == ' ';
-        if (Schema.find(Schema.all(), parts.name)) |schema| {
+        if (Schema.findByName(parts.name)) |schema| {
             return renderSchemaHint(schema, parts.rest, ends_ws);
         }
         if (SlashCommand.findMeta(parts.name)) |meta| {
@@ -522,7 +522,7 @@ fn slashHasPrefix(name: []const u8) bool {
 }
 
 fn slashHasParams(name: []const u8) bool {
-    if (Schema.find(Schema.all(), name)) |s| return s.hints.len > 0;
+    if (Schema.findByName(name)) |s| return s.hints.len > 0;
     if (SlashCommand.findMeta(name)) |m| return m.hint.len > 0;
     return false;
 }
