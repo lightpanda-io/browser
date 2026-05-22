@@ -632,6 +632,9 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 }
 
 fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyerror!void {
+    conn.debug_added = 0;
+    conn.debug_removed = 0;
+    conn.debug_remove_err = null;
     {
         // Reset per-response state for retries (auth challenge, queue).
         const auth = transfer._auth_challenge;
@@ -691,9 +694,15 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     while (self.dirty.popFirst()) |node| {
         const conn: *http.Connection = @fieldParentPtr("node", node);
         self.handles.remove(conn) catch |err| {
-            log.fatal(.http, "multi remove handle", .{ .err = err, .src = "perform" });
-            @panic("multi_remove_handle");
+            lp.assert(false, "multi_remove_handle", .{
+                .err = err,
+                .in_use = conn.in_use,
+                .added = conn.debug_added,
+                .removed = conn.debug_removed,
+                .remove_err = conn.debug_remove_err,
+            });
         };
+        conn.debug_removed = 2;
         self.releaseConn(conn);
     }
 
@@ -833,6 +842,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             const conn = transfer._conn.?;
 
             try self.handles.remove(conn);
+            conn.debug_removed = 3;
             // Conn temporarily out of multi during reconfigure.
             // _detached_conn lets processMessages release it if any of
             // the steps below throw. State stays .inflight; _conn stays set
@@ -841,6 +851,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             transfer.reset();
             try transfer.configureConn(conn);
             try self.handles.add(conn);
+            conn.debug_added = 2;
             transfer._detached_conn = null;
 
             _ = try self.perform(0);
@@ -972,6 +983,7 @@ pub fn trackConn(self: *Client, conn: *http.Connection) !void {
         self.releaseConn(conn);
         return err;
     };
+    conn.debug_added = 1;
 
     switch (conn.transport) {
         .http => self.http_active += 1,
@@ -995,10 +1007,12 @@ pub fn removeConn(self: *Client, conn: *http.Connection) void {
         else => unreachable,
     }
     if (self.handles.remove(conn)) {
+        conn.debug_removed = 1;
         self.releaseConn(conn);
-    } else |_| {
+    } else |err| {
         // Can happen if we're in a perform() call, so we'll queue this
         // for cleanup later.
+        conn.debug_remove_err = err;
         self.dirty.append(&conn.node);
     }
 }
