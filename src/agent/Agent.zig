@@ -19,19 +19,22 @@
 const std = @import("std");
 const zenai = @import("zenai");
 const lp = @import("lightpanda");
+const browser_tools = lp.tools;
+const BrowserTool = browser_tools.Tool;
+const ProviderTool = zenai.provider.Tool;
 
 const log = lp.log;
 const Config = lp.Config;
 const script = lp.script;
 const Command = lp.script.Command;
+const Schema = lp.script.Schema;
 const Recorder = lp.script.Recorder;
 const Verifier = lp.script.Verifier;
 const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
-const ToolExecutor = @import("ToolExecutor.zig");
+const CDPNode = @import("../cdp/Node.zig");
 const Terminal = @import("Terminal.zig");
-const CommandRunner = @import("CommandRunner.zig");
 const SlashCommand = @import("SlashCommand.zig");
 
 const Agent = @This();
@@ -138,9 +141,11 @@ const synthesis_prompt =
 
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
-tool_executor: *ToolExecutor,
+notification: *lp.Notification,
+browser: lp.Browser,
+session: *lp.Session,
+node_registry: CDPNode.Registry,
 terminal: Terminal,
-cmd_runner: CommandRunner,
 verifier: Verifier,
 recorder: ?Recorder,
 messages: std.ArrayList(zenai.provider.Message),
@@ -152,7 +157,6 @@ self_heal: bool,
 interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
-slash_schemas: []const SlashCommand.SchemaInfo,
 cancel_requested: std.atomic.Value(bool) = .init(false),
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
@@ -207,7 +211,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     }
 
     // Resolve model BEFORE the heavy init so --pick-model's prompt fires
-    // before tool_executor / ai_client setup.
+    // before browser / ai_client setup.
     // Precedence: --model > --pick-model > defaultModel.
     const model: []u8 = if (opts.model) |m|
         try allocator.dupe(u8, m)
@@ -217,29 +221,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         try allocator.dupe(u8, "");
     errdefer allocator.free(model);
 
-    const tool_executor: *ToolExecutor = try .init(allocator, app);
-    errdefer tool_executor.deinit();
+    const notification: *lp.Notification = try .init(allocator);
+    errdefer notification.deinit();
 
     const self = try allocator.create(Agent);
     errdefer allocator.destroy(self);
-
-    const ai_client: ?zenai.provider.Client = if (llm) |l| switch (l.provider) {
-        inline else => |tag| blk: {
-            const ProviderClient = zenai.provider.Client;
-            const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
-            const Client = @typeInfo(ClientPtr).pointer.child;
-            const client = try allocator.create(Client);
-            const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
-            client.* = Client.init(allocator, l.key, if (url) |u| .{ .base_url = u } else .{});
-            break :blk @unionInit(ProviderClient, @tagName(tag), client);
-        },
-    } else null;
-    errdefer if (ai_client) |c| switch (c) {
-        inline else => |client| {
-            client.deinit();
-            allocator.destroy(client);
-        },
-    };
 
     const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
 
@@ -247,23 +233,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // pure replay and must not be mutated.
     const recorder_path: ?[]const u8 = if (opts.interactive) opts.script_file else null;
 
-    // Reuse the executor's schema arena: the parsed schemas in `tools` already
-    // live there, and the cache must outlive only as long as those do.
-    const slash_schemas: []const SlashCommand.SchemaInfo = if (will_repl)
-        SlashCommand.buildSchemas(tool_executor.schemaAllocator(), tool_executor.tools) catch {
-            log.fatal(.app, "failed to build slash schemas", .{});
-            return error.SlashSchemaInitFailed;
-        }
-    else
-        &.{};
-
     self.* = .{
         .allocator = allocator,
-        .ai_client = ai_client,
-        .tool_executor = tool_executor,
+        .ai_client = null,
+        .notification = notification,
+        .browser = undefined,
+        .session = undefined,
+        .node_registry = CDPNode.Registry.init(allocator),
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
-        .cmd_runner = undefined,
-        .verifier = .{ .session = tool_executor.session, .node_registry = &tool_executor.node_registry },
+        .verifier = undefined,
         .recorder = null,
         .messages = .empty,
         .message_arena = .init(allocator),
@@ -274,12 +252,36 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
-        .slash_schemas = slash_schemas,
+    };
+    errdefer self.node_registry.deinit();
+    errdefer self.terminal.deinit();
+    errdefer self.message_arena.deinit();
+
+    try self.browser.init(app, .{}, null);
+    errdefer self.browser.deinit();
+
+    self.session = try self.browser.newSession(notification);
+    self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
+
+    self.ai_client = if (llm) |l| switch (l.provider) {
+        inline else => |tag| blk: {
+            const ProviderClient = zenai.provider.Client;
+            const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
+            const Client = @typeInfo(ClientPtr).pointer.child;
+            const client = try allocator.create(Client);
+            const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
+            client.* = Client.init(allocator, l.key, if (url) |u| .{ .base_url = u } else .{});
+            break :blk @unionInit(ProviderClient, @tagName(tag), client);
+        },
+    } else null;
+    errdefer if (self.ai_client) |c| switch (c) {
+        inline else => |client| {
+            client.deinit();
+            allocator.destroy(client);
+        },
     };
 
-    self.cmd_runner = .init(tool_executor, &self.terminal);
-
-    if (will_repl) self.terminal.attachCompleter(slash_schemas);
+    if (will_repl) self.terminal.attachCompleter();
 
     if (recorder_path) |p| {
         if (Recorder.init(allocator, std.fs.cwd(), p)) |r| {
@@ -298,7 +300,9 @@ pub fn deinit(self: *Agent) void {
     self.terminal.deinit();
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
-    self.tool_executor.deinit();
+    self.node_registry.deinit();
+    self.browser.deinit();
+    self.notification.deinit();
     if (self.ai_client) |ai_client| {
         switch (ai_client) {
             inline else => |c| {
@@ -309,6 +313,21 @@ pub fn deinit(self: *Agent) void {
     }
     self.allocator.free(self.model);
     self.allocator.destroy(self);
+}
+
+// Tool definitions are compile-time constant; project them once per process.
+var global_tools_storage: [browser_tools.tool_defs.len]ProviderTool = undefined;
+var global_tools_once = std.once(initGlobalTools);
+
+fn initGlobalTools() void {
+    for (Schema.all(), 0..) |s, i| {
+        global_tools_storage[i] = .{ .name = s.tool_name, .description = s.description, .parameters = s.parameters };
+    }
+}
+
+fn globalTools() []const ProviderTool {
+    global_tools_once.call();
+    return global_tools_storage[0..browser_tools.tool_defs.len];
 }
 
 /// Called from the sighandler thread — sets the flag only, no terminal
@@ -349,7 +368,7 @@ fn checkCancel(ctx: *anyopaque) bool {
 /// already happened on its path.
 fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
     self.rollbackMessages(baseline);
-    self.tool_executor.browser.env.cancelTerminate();
+    self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
     return error.UserCancelled;
 }
@@ -401,11 +420,11 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
 fn runRepl(self: *Agent) void {
     self.terminal.printInfo("Lightpanda Agent (type '/quit' to exit)");
     self.terminal.printInfo("Tab completes/cycles through commands; the dim grey ghost shows the first match.");
-    log.debug(.app, "tools loaded", .{ .count = self.tool_executor.tools.len });
+    log.debug(.app, "tools loaded", .{ .count = globalTools().len });
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printInfo("Basic REPL (--no-llm) — PandaScript only. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language, LOGIN, and ACCEPT_COOKIES.");
+        self.terminal.printInfo("Basic REPL (--no-llm) — PandaScript only. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language, /login, and /acceptCookies.");
     }
 
     repl: while (true) {
@@ -417,51 +436,56 @@ fn runRepl(self: *Agent) void {
         // Slash commands and idle Ctrl-C set the cancel flag without
         // clearing V8's terminate state; drain both before the next turn.
         if (self.cancel_requested.swap(false, .acq_rel)) {
-            self.tool_executor.browser.env.cancelTerminate();
+            self.browser.env.cancelTerminate();
         }
 
-        if (line.len == 0) continue;
+        const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+        if (trimmed.len == 0) continue;
 
-        if (line[0] == '/') {
-            if (self.handleSlash(line[1..])) break :repl;
-            continue :repl;
-        }
-
-        const cmd = Command.parse(line);
-
-        // Distinguish "you mistyped a PandaScript command" from "this is
-        // natural language for the LLM". Both fall through to
-        // `.natural_language` in Command.parse, but the first should never
-        // hit the LLM-needed error path.
-        if (std.meta.activeTag(cmd) == .natural_language) {
-            if (Command.keywordSyntax(line)) |kc| {
-                if (kc.args) |args| {
-                    self.terminal.printErrorFmt("Usage: {s} {s}", .{ kc.name, args });
-                } else {
-                    self.terminal.printErrorFmt("{s} takes no arguments", .{kc.name});
-                }
-                continue;
+        const slash_split: ?Schema.Split = Schema.parseSlashCommand(trimmed);
+        if (slash_split) |split| {
+            if (SlashCommand.findMeta(split.name)) |meta| {
+                if (self.handleMeta(meta, split.rest)) break :repl;
+                continue :repl;
             }
         }
 
-        if (cmd.needsLlm() and self.ai_client == null) {
-            self.terminal.printError("To use Lightpanda agent in natural language mode, you need to connect an LLM. Set an API key with export or type /help for available commands in no-llm mode.");
-            continue;
-        }
+        var arena: std.heap.ArenaAllocator = .init(self.allocator);
+        defer arena.deinit();
+        const aa = arena.allocator();
+
+        const cmd = Command.parse(aa, line) catch |err| switch (err) {
+            error.NotASlashCommand => {
+                if (self.ai_client == null) {
+                    self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.");
+                    continue :repl;
+                }
+                _ = self.runTurn(.{ .prompt = line, .record_comment = line });
+                continue :repl;
+            },
+            else => |e| {
+                const name = if (slash_split) |sp| sp.name else line;
+                self.printSlashParseError(e, name);
+                continue :repl;
+            },
+        };
 
         switch (cmd) {
             .comment => continue :repl,
-            .login => _ = self.runTurn(.{ .prompt = login_prompt, .record_comment = line, .label = "LOGIN" }),
-            .accept_cookies => _ = self.runTurn(.{ .prompt = accept_cookies_prompt, .record_comment = line, .label = "ACCEPT_COOKIES" }),
-            .natural_language => _ = self.runTurn(.{ .prompt = line, .record_comment = line }),
-            else => {
-                const split = SlashCommand.splitNameRest(line) orelse continue :repl;
-                self.terminal.beginTool(split.name, split.rest);
-                var arena: std.heap.ArenaAllocator = .init(self.allocator);
-                defer arena.deinit();
-                const result = self.cmd_runner.executeWithResult(arena.allocator(), cmd);
+            .login, .acceptCookies => {
+                if (self.ai_client == null) {
+                    self.terminal.printError("/login and /acceptCookies require an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).");
+                    continue :repl;
+                }
+                const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
+                const label: []const u8 = if (cmd == .login) "/login" else "/acceptCookies";
+                _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
+            },
+            .tool_call => |tc| {
+                self.terminal.beginTool(tc.name(), slash_split.?.rest);
+                const result = self.runCommand(aa, cmd);
                 self.terminal.endTool();
-                self.cmd_runner.printResult(cmd, result);
+                self.printCommandResult(cmd, result);
                 if (self.recorder) |*r| r.record(cmd);
             },
         }
@@ -470,52 +494,14 @@ fn runRepl(self: *Agent) void {
     self.terminal.printInfo("Goodbye!");
 }
 
-/// Handle a REPL line that started with `/`. Returns `true` if the user asked
-/// to quit (`/quit`), `false` otherwise. All errors are printed and
-/// swallowed — the REPL must not die from a malformed slash command.
-fn handleSlash(self: *Agent, body: []const u8) bool {
-    const split = SlashCommand.splitNameRest(body) orelse {
-        self.terminal.printError("Empty slash command. Try /help.");
-        return false;
-    };
-    const name = split.name;
-    const rest = split.rest;
-
-    if (std.mem.eql(u8, name, "quit")) return true;
-    if (std.mem.eql(u8, name, "help")) {
-        self.printSlashHelp(rest);
-        return false;
-    }
-    if (std.mem.eql(u8, name, "verbosity")) {
-        self.handleVerbosity(rest);
-        return false;
-    }
-
-    const schema = SlashCommand.findSchema(self.slash_schemas, name) orelse {
-        self.printSlashParseError(error.UnknownTool, name);
-        return false;
-    };
-
-    var arena: std.heap.ArenaAllocator = .init(self.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const args_json = SlashCommand.parseArgs(aa, schema, rest) catch |err| {
-        self.printSlashParseError(err, name);
-        return false;
-    };
-
-    self.terminal.beginTool(schema.tool_name, rest);
-    if (self.tool_executor.call(aa, schema.tool_name, args_json)) |result| {
-        self.terminal.endTool();
-        if (result.is_error) {
-            self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, result.text });
-        } else {
-            self.terminal.printToolResult(schema.tool_name, result.text);
-        }
-    } else |err| {
-        self.terminal.endTool();
-        self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
+/// Handle a meta slash command (/quit, /help, /verbosity). These aren't part
+/// of PandaScript — they're REPL-only and never recorded. Returns `true` if
+/// the user asked to quit.
+fn handleMeta(self: *Agent, meta: *const SlashCommand.MetaCommand, rest: []const u8) bool {
+    switch (meta.tag) {
+        .quit => return true,
+        .help => self.printSlashHelp(rest),
+        .verbosity => self.handleVerbosity(rest),
     }
     return false;
 }
@@ -536,7 +522,7 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
 fn printSlashHelp(self: *Agent, target: []const u8) void {
     if (target.len == 0) {
         self.terminal.printInfo("Slash commands (no LLM, REPL only):");
-        for (self.slash_schemas) |s| {
+        for (Schema.all()) |s| {
             const summary = firstSentence(s.description);
             self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, summary });
         }
@@ -544,45 +530,37 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
         return;
     }
     const lookup = if (target[0] == '/') target[1..] else target;
-    if (std.ascii.eqlIgnoreCase(lookup, "help")) {
-        self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted");
+    if (SlashCommand.findMeta(lookup)) |meta| {
+        switch (meta.tag) {
+            .help => self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted"),
+            .quit => self.terminal.printInfo("/quit — exit the REPL"),
+            .verbosity => self.terminal.printInfoFmt(
+                "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
+                .{@tagName(self.terminal.verbosity)},
+            ),
+        }
         return;
     }
-    if (std.ascii.eqlIgnoreCase(lookup, "quit")) {
-        self.terminal.printInfo("/quit — exit the REPL");
-        return;
-    }
-    if (std.ascii.eqlIgnoreCase(lookup, "verbosity")) {
-        self.terminal.printInfoFmt(
-            "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
-            .{@tagName(self.terminal.verbosity)},
-        );
-        return;
-    }
-    const schema = SlashCommand.findSchema(self.slash_schemas, lookup) orelse {
+    const tool_schema = Schema.findByName(lookup) orelse {
         self.terminal.printErrorFmt("unknown tool: {s}", .{lookup});
         return;
     };
-    self.terminal.printInfoFmt("/{s} — {s}", .{ schema.tool_name, schema.description });
+    self.terminal.printInfoFmt("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
 
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
-    const aa = arena.allocator();
-    const pretty: []const u8 = blk: {
-        const v = std.json.parseFromSliceLeaky(std.json.Value, aa, schema.input_schema_raw, .{}) catch break :blk schema.input_schema_raw;
-        var aw: std.Io.Writer.Allocating = .init(aa);
-        std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, &aw.writer) catch break :blk schema.input_schema_raw;
-        break :blk aw.written();
-    };
-    self.terminal.printInfoFmt("schema:\n{s}", .{pretty});
+    var aw: std.Io.Writer.Allocating = .init(arena.allocator());
+    std.json.Stringify.value(tool_schema.parameters, .{ .whitespace = .indent_2 }, &aw.writer) catch return;
+    self.terminal.printInfoFmt("schema:\n{s}", .{aw.written()});
 }
 
-fn printSlashParseError(self: *Agent, err: SlashCommand.ParseError, name: []const u8) void {
+fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8) void {
     const reason: []const u8 = switch (err) {
         error.UnknownTool => "unknown tool",
         error.MissingName => return self.terminal.printError("missing tool name. Try /help."),
         error.MissingRequired => "missing required argument",
         error.MalformedKv => "malformed key=value. Use key=value or {json}",
+        error.UnknownField => "unknown field (typo?)",
         error.PositionalNotAllowed => "positional only works for tools with one required field. Use key=value",
         error.UnterminatedQuote => "unterminated quote",
         error.OutOfMemory => return self.terminal.printError("out of memory"),
@@ -602,6 +580,32 @@ fn firstSentence(text: []const u8) []const u8 {
 
 const Replacement = script.Replacement;
 
+/// Caller contract: `cmd` must be `.tool_call` — `.comment`, `.login`, and
+/// `.acceptCookies` are filtered upstream because they have no tool mapping.
+fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tools.ToolResult {
+    const tc = switch (cmd) {
+        .tool_call => |t| t,
+        else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
+    };
+    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| .{
+        .text = if (err == error.OutOfMemory)
+            "out of memory"
+        else
+            std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), @errorName(err) }) catch "tool failed",
+        .is_error = true,
+    };
+}
+
+/// Data output (extract/eval/markdown/tree/…) → stdout on success; everything
+/// else, including failures from those same commands, → stderr.
+fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResult) void {
+    if (cmd.producesData() and !result.is_error) {
+        self.terminal.printAssistant(result.text);
+    } else {
+        self.terminal.printActionResult(result.text);
+    }
+}
+
 fn runScript(self: *Agent, path: []const u8) bool {
     self.terminal.printInfoFmt("Running script: {s}", .{path});
 
@@ -614,7 +618,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
         return false;
     };
 
-    var iter: Command.ScriptIterator = .init(sa, content);
+    var iter: script.Iterator = .init(sa, content);
     var last_comment: ?[]const u8 = null;
     var replacements: std.ArrayList(Replacement) = .empty;
 
@@ -626,20 +630,15 @@ fn runScript(self: *Agent, path: []const u8) bool {
         }) orelse break;
         switch (entry.command) {
             .comment => {
-                // Recorded scripts prefix LLM-generated commands with the
-                // natural-language prompt that produced them; keep the
-                // last one around so self-heal can use it as context.
+                // `#` prefix lines preceding a recorded action are the
+                // natural-language prompt that produced it — kept for
+                // self-heal context.
                 if (entry.opener_line.len > 2 and entry.opener_line[0] == '#') {
                     last_comment = std.mem.trim(u8, entry.opener_line[1..], &std.ascii.whitespace);
                 }
                 continue;
             },
-            .natural_language => {
-                self.terminal.printErrorFmt("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.opener_line });
-                self.flushReplacements(path, content, replacements.items);
-                return false;
-            },
-            .login, .accept_cookies => {
+            .login, .acceptCookies => {
                 if (self.ai_client == null) {
                     self.terminal.printErrorFmt("line {d}: {s} requires --provider", .{
                         entry.line_num,
@@ -661,7 +660,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 if (text) |t| self.terminal.printAssistant(t);
                 self.pruneMessages();
             },
-            else => {
+            .tool_call => {
                 self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.opener_line });
                 switch (self.runActionEntry(sa, entry, last_comment)) {
                     .ok => {},
@@ -695,13 +694,13 @@ const ActionOutcome = union(enum) {
 
 /// Execute one action-style script entry, including post-execution
 /// verification, transient-failure retry, and LLM self-heal escalation.
-fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIterator.Entry, last_comment: ?[]const u8) ActionOutcome {
+fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.Entry, last_comment: ?[]const u8) ActionOutcome {
     var cmd_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer cmd_arena.deinit();
     const ca = cmd_arena.allocator();
 
-    const result = self.cmd_runner.executeWithResult(ca, entry.command);
-    self.cmd_runner.printResult(entry.command, result);
+    const result = self.runCommand(ca, entry.command);
+    self.printCommandResult(entry.command, result);
 
     const verification: Verifier.VerifyResult = if (!result.is_error and self.self_heal)
         self.verifier.verify(ca, entry.command)
@@ -713,7 +712,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
     if (self.self_heal and self.ai_client != null) {
         // Verification-only failures often resolve with a brief wait
         // (animations, lazy-load); skip the LLM round-trip when they do.
-        if (!result.is_error and isRetryable(entry.command) and self.retryCommand(ca, entry.command)) {
+        if (!result.is_error and entry.command.isRetryable() and self.retryCommand(ca, entry.command)) {
             return .ok;
         }
 
@@ -727,8 +726,11 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
             .failed => |r| r,
             .passed, .inconclusive => null,
         };
-        if (self.attemptSelfHeal(sa, entry.opener_line, reason, last_comment)) |healed_cmds| {
-            const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.opener_line, healed_cmds) catch |err| {
+        // For multi-line blocks (`/eval '''…'''`, `/extract '''…'''`) the
+        // opener alone is useless to the LLM — feed it the full block body.
+        const failed_text = std.mem.trimRight(u8, entry.raw_span, &std.ascii.whitespace);
+        if (self.attemptSelfHeal(sa, failed_text, reason, last_comment)) |healed_cmds| {
+            const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.opener_line, .{ .cmds = healed_cmds }) catch |err| {
                 self.terminal.printErrorFmt(
                     "line {d}: failed to record heal: {s} (script left unchanged)",
                     .{ entry.line_num, @errorName(err) },
@@ -751,10 +753,10 @@ fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command) bool {
     for (0..3) |i| {
         std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
         self.terminal.printInfo("Retrying command...");
-        const retry_result = self.cmd_runner.executeWithResult(ca, cmd);
+        const retry_result = self.runCommand(ca, cmd);
         if (retry_result.is_error) continue;
         if (self.verifier.verify(ca, cmd) == .failed) continue;
-        self.cmd_runner.printResult(cmd, retry_result);
+        self.printCommandResult(cmd, retry_result);
         return true;
     }
     return false;
@@ -775,13 +777,6 @@ fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replac
     );
 }
 
-fn isRetryable(cmd: Command) bool {
-    return switch (cmd) {
-        .type_cmd, .check, .select => true,
-        else => false,
-    };
-}
-
 const self_heal_max_attempts = 3;
 
 fn ensureSystemPrompt(self: *Agent) !void {
@@ -793,8 +788,6 @@ fn ensureSystemPrompt(self: *Agent) !void {
     }
 }
 
-// Drop older turns once `prune_high` is hit; survivors are deep-copied so
-// the old arena (which still pins dropped strings) can be released.
 const prune_high = 30;
 const prune_keep = 20;
 
@@ -804,10 +797,8 @@ fn pruneMessages(self: *Agent) void {
 
     const tail_start = zenai.provider.safeTruncationStart(msgs, msgs.len - prune_keep) orelse return;
 
-    // Dupe the kept tail into a scratch slice in the new arena first. Only
-    // mutate self.messages once every dupe has succeeded — otherwise a
-    // partial failure would leave self.messages.items[1..] pointing into
-    // the freed `new_arena`.
+    // Dupe into the new arena before mutating self.messages — a partial
+    // failure would otherwise leave items pointing into a freed arena.
     var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
     const duped = zenai.provider.dupeMessages(new_arena.allocator(), msgs[tail_start..]) catch {
         new_arena.deinit();
@@ -842,7 +833,7 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = self.tool_executor.tools,
+            .tools = globalTools(),
             .max_tool_calls = 4,
             .max_tokens = 4096,
             .tool_choice = .auto,
@@ -858,8 +849,11 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     var cmds: std.ArrayList(Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
-        const args = tc.arguments orelse continue;
-        const cmd = Command.fromToolCall(tc.name, args) orelse continue;
+        const tool = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
+        // `result.deinit()` (deferred above) frees the args arena before the
+        // caller formats `cmds`; deep-copy into `arena` to outlive it.
+        const owned_args = if (tc.arguments) |v| try zenai.json.dupeValue(arena, v) else null;
+        const cmd = Command.fromToolCall(tool, owned_args);
         if (!cmd.canHeal()) {
             self.terminal.printInfoFmt(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
@@ -886,7 +880,7 @@ fn attemptSelfHeal(self: *Agent, arena: std.mem.Allocator, failed_command: []con
         self_heal_prompt_prefix,
         failed_command,
         self_heal_prompt_page_state,
-        self.tool_executor.getCurrentUrl(),
+        browser_tools.currentUrlOrPlaceholder(self.session),
     }) catch return null;
     if (context_comment) |c|
         aw.writer.print("\n\nThe original user request that generated this command was:\n{s}", .{c}) catch return null;
@@ -994,7 +988,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = self.tool_executor.tools,
+            .tools = globalTools(),
             .max_turns = 30,
             // Safety net; max_turns is the primary terminal.
             .max_tool_calls = 200,
@@ -1025,36 +1019,34 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         // last successful one is the answer — earlier probes are noise.
         var last_extract_idx: ?usize = null;
         for (result.tool_calls_made, 0..) |tc, i| {
-            if (!tc.is_error and std.mem.eql(u8, tc.name, "extract")) last_extract_idx = i;
+            const t = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
+            if (!tc.is_error and t == .extract) last_extract_idx = i;
         }
 
         var recorded_any = false;
         for (result.tool_calls_made, 0..) |tc, i| {
             if (tc.is_error) continue;
-            if (last_extract_idx) |idx| if (std.mem.eql(u8, tc.name, "extract") and idx != i) continue;
-            const args = tc.arguments orelse continue;
-            const cmd = Command.fromToolCall(tc.name, args) orelse continue;
+            const tool = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
+            if (last_extract_idx) |idx| if (tool == .extract and idx != i) continue;
+            const cmd = Command.fromToolCall(tool, tc.arguments);
+            if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| r.recordComment(c);
                 recorded_any = true;
             }
             r.record(cmd);
         }
-        // Recorder self-disables on write failure (disk full, fd closed). Tell
-        // the user the recording stopped instead of silently dropping appends.
         if (!r.isActive()) {
             self.terminal.printError("recording disabled (write failed); see logs");
         }
     };
 
-    // RunToolsResult arenas are deinited at the end of this function —
-    // dupe into `message_arena` so the returned slice outlives them.
+    // Dupe into `message_arena` — RunToolsResult arenas are deinited below.
     const final_text: ?[]const u8 = blk: {
         if (result.text) |text| break :blk try ma.dupe(u8, text);
 
-        // Tool loop ended without a final text — force one more turn that
-        // forbids tools and pretraining fallback. Without this, models
-        // confabulate answers when the page was blocked or empty.
+        // Without a synthesis turn forbidding tools+pretraining, models
+        // confabulate when the page was blocked or empty.
         log.info(.app, "synthesizing final answer", .{});
         const synth_baseline = self.messages.items.len;
         try self.messages.append(self.allocator, .{
@@ -1069,17 +1061,12 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             ma,
             .{ .context = @ptrCast(self), .callFn = handleToolCall },
             .{
-                // tool_choice = .none forbids tools; serializing the full
-                // catalog anyway just pads the request body.
                 .tools = &.{},
                 .max_turns = 1,
                 .max_tokens = 4096,
                 .tool_choice = .none,
-                // Cap thinking on the finalize turn. Fully disabling it (0)
-                // leaves reasoning-heavy tasks with no answer at all; letting
-                // it run unbounded lets models fill the turn with thoughts
-                // and emit nothing as the final text. 512 tokens is enough
-                // for the model to pick its answer but not to freewheel.
+                // .low (≈512 tokens) so reasoning models still pick an answer
+                // but can't burn the whole turn on thinking and emit nothing.
                 .thinking_level = .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             },
@@ -1175,6 +1162,8 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     // The spinner doesn't render args, and `agentToolDone` skips the body
     // line at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
+    // Stringify the pre-substitution args so $LP_* placeholders the model
+    // emitted stay redacted in the UI.
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
     else
@@ -1182,7 +1171,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    if (self.tool_executor.callValue(allocator, tool_name, arguments)) |result| {
+    if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result| {
         const capped = capToolOutput(allocator, result.text);
         self.terminal.agentToolDone(tool_name, args_str, !result.is_error);
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
@@ -1269,7 +1258,7 @@ fn defaultModel(p: Config.AiProvider) []const u8 {
 }
 
 fn pickProvider(found: []const Credentials) !Credentials {
-    if (!interactiveTty()) {
+    if (!Terminal.interactiveTty()) {
         log.fatal(.app, "multiple API keys detected", .{
             .hint = "Pass --provider explicitly when running non-interactively",
         });
@@ -1279,7 +1268,7 @@ fn pickProvider(found: []const Credentials) !Credentials {
     var labels: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
     for (found, 0..) |f, i| labels[i] = @tagName(f.provider);
 
-    const idx = promptNumberedChoice("Multiple API keys detected. Pick provider:", labels[0..found.len], null) catch {
+    const idx = Terminal.promptNumberedChoice("Multiple API keys detected. Pick provider:", labels[0..found.len], null) catch {
         std.debug.print("Cancelled — pass --provider to skip the picker.\n", .{});
         return error.UserCancelled;
     };
@@ -1291,7 +1280,7 @@ fn pickProvider(found: []const Credentials) !Credentials {
 /// heap buffer (including for the default case) so the caller has one
 /// uniform free path.
 fn pickModel(allocator: std.mem.Allocator, llm: Credentials, base_url: ?[:0]const u8) ![]u8 {
-    if (!interactiveTty()) {
+    if (!Terminal.interactiveTty()) {
         log.fatal(.app, "pick-model needs a TTY", .{
             .hint = "rerun in a terminal or pass --model explicitly",
         });
@@ -1325,76 +1314,9 @@ fn pickModel(allocator: std.mem.Allocator, llm: Credentials, base_url: ?[:0]cons
     const header = std.fmt.bufPrint(&header_buf, "Pick model for {s}{s}:", .{ @tagName(llm.provider), enter_hint }) catch
         "Pick model:";
 
-    const idx = promptNumberedChoice(header, ids, default_idx) catch {
+    const idx = Terminal.promptNumberedChoice(header, ids, default_idx) catch {
         std.debug.print("Cancelled — pass --model to skip the picker.\n", .{});
         return error.UserCancelled;
     };
     return try allocator.dupe(u8, ids[idx]);
-}
-
-fn interactiveTty() bool {
-    return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
-}
-
-/// Numbered TTY picker. `default` (if set) marks that row "(default)" and
-/// makes Enter return that index. Errors with NoChoice after 3 invalid
-/// attempts.
-fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
-    var stdin_buf: [128]u8 = undefined;
-    var stdin = std.fs.File.stdin().reader(&stdin_buf);
-
-    var attempt: u8 = 0;
-    while (attempt < 3) : (attempt += 1) {
-        std.debug.print("{s}\n", .{header});
-        for (items, 0..) |item, idx| {
-            const marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
-            std.debug.print("  {d:>3}) {s}{s}\n", .{ idx + 1, item, marker });
-        }
-        std.debug.print("> ", .{});
-
-        const line = stdin.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
-            error.EndOfStream, error.StreamTooLong, error.ReadFailed => return error.UserCancelled,
-        };
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-        if (trimmed.len == 0) {
-            if (default) |d| return d;
-            std.debug.print("Invalid input — type a number.\n", .{});
-            continue;
-        }
-        const choice = std.fmt.parseInt(usize, trimmed, 10) catch {
-            const hint: []const u8 = if (default != null) " (or press Enter for default)" else "";
-            std.debug.print("Invalid input — type a number{s}.\n", .{hint});
-            continue;
-        };
-        if (choice >= 1 and choice <= items.len) return choice - 1;
-        std.debug.print("Out of range.\n", .{});
-    }
-    return error.NoChoice;
-}
-
-// --- Tests ---
-
-test "canHeal: only page-local DOM commands are allowed" {
-    const C = Command;
-    try std.testing.expect((C{ .click = ".btn" }).canHeal());
-    try std.testing.expect((C{ .hover = ".menu" }).canHeal());
-    try std.testing.expect((C{ .wait = ".loaded" }).canHeal());
-    try std.testing.expect((C{ .type_cmd = .{ .selector = "#u", .value = "x" } }).canHeal());
-    try std.testing.expect((C{ .select = .{ .selector = "#s", .value = "x" } }).canHeal());
-    try std.testing.expect((C{ .check = .{ .selector = "#c", .checked = true } }).canHeal());
-    try std.testing.expect((C{ .scroll = .{ .x = 0, .y = 100 } }).canHeal());
-    try std.testing.expect((C{ .extract = "schema" }).canHeal());
-
-    try std.testing.expect(!(C{ .goto = "https://x" }).canHeal());
-    try std.testing.expect(!(C{ .eval_js = "alert(1)" }).canHeal());
-    try std.testing.expect(!(C{ .natural_language = "do x" }).canHeal());
-    try std.testing.expect(!(C{ .login = {} }).canHeal());
-    try std.testing.expect(!(C{ .accept_cookies = {} }).canHeal());
-    try std.testing.expect(!(C{ .comment = {} }).canHeal());
-    try std.testing.expect(!(C{ .tree = {} }).canHeal());
-    try std.testing.expect(!(C{ .markdown = {} }).canHeal());
-}
-
-test {
-    _ = @import("SlashCommand.zig");
 }

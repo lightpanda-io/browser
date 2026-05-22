@@ -3,19 +3,24 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = lp.js;
 const browser_tools = lp.tools;
+const BrowserTool = browser_tools.Tool;
 const script = lp.script;
 const Command = lp.script.Command;
 const Recorder = lp.script.Recorder;
 
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
+const McpTool = protocol.Tool;
 
-/// Convert browser tool_defs to MCP protocol.Tool format (comptime).
+/// Convert browser tool_defs to MCP wire-protocol tools (comptime).
+/// Tool identity comes from the `BrowserTool` tag — `tool_defs` only
+/// carries the LLM-facing description and JSON schema.
 const browser_tool_list = blk: {
-    var tools: [browser_tools.tool_defs.len]protocol.Tool = undefined;
-    for (browser_tools.tool_defs, 0..) |td, i| {
+    const fields = @typeInfo(BrowserTool).@"enum".fields;
+    var tools: [fields.len]McpTool = undefined;
+    for (browser_tools.tool_defs, fields, 0..) |td, f, i| {
         tools[i] = .{
-            .name = td.name,
+            .name = f.name,
             .description = td.description,
             .inputSchema = td.input_schema,
         };
@@ -54,7 +59,7 @@ const script_step_schema = browser_tools.minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "line": { "type": "string", "description": "A single PandaScript command (e.g. `GOTO https://x`, `CLICK '#btn'`, `TYPE '#email' 'a@b.c'`). Comments (`# …`) and blank lines are accepted as no-ops. LLM-driven keywords (LOGIN, ACCEPT_COOKIES, natural language) are rejected — the calling agent owns those." }
+    \\    "line": { "type": "string", "description": "A single PandaScript slash command (e.g. `/goto 'https://x'`, `/click selector='#btn'`, `/fill selector='#email' value='a@b.c'`). Comments (`# …`) and blank lines are accepted as no-ops. LLM-driven slash commands (`/login`, `/acceptCookies`) and anything that isn't a slash command are rejected — the calling agent owns those." }
     \\  },
     \\  "required": ["line"]
     \\}
@@ -82,7 +87,7 @@ const script_heal_schema = browser_tools.minify(
     \\}
 );
 
-const extra_tools = [_]protocol.Tool{
+const extra_tools = [_]McpTool{
     .{
         .name = "record_start",
         .description = "Start recording state-mutating browser tool calls into a PandaScript file. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, `eval`, and `extract` get appended as PandaScript lines. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
@@ -155,14 +160,14 @@ fn dispatchBrowserTool(
     name: []const u8,
     arguments: ?std.json.Value,
 ) !void {
-    const action = std.meta.stringToEnum(browser_tools.Action, name) orelse {
+    const tool = std.meta.stringToEnum(BrowserTool, name) orelse {
         return server.sendError(id, .MethodNotFound, "Tool not found");
     };
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
         // eval/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
-        if (surfacesErrorInBand(action)) {
+        if (surfacesErrorInBand(tool)) {
             return sendToolResultText(server, id, @errorName(err), true);
         }
         const code: protocol.ErrorCode = switch (err) {
@@ -173,19 +178,19 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, @errorName(err));
     };
 
-    if (!result.is_error) recordIfActive(server, name, arguments);
+    if (!result.is_error) recordIfActive(server, tool, arguments);
 
     try sendToolResultText(server, id, result.text, result.is_error);
 }
 
-fn surfacesErrorInBand(action: browser_tools.Action) bool {
-    return action == .eval or action == .extract;
+fn surfacesErrorInBand(tool: BrowserTool) bool {
+    return tool == .eval or tool == .extract;
 }
 
-fn recordIfActive(server: *Server, name: []const u8, arguments: ?std.json.Value) void {
+fn recordIfActive(server: *Server, tool: BrowserTool, arguments: ?std.json.Value) void {
     if (server.recorder == null) return;
-    const args_value = arguments orelse return;
-    const cmd = Command.fromToolCall(name, args_value) orelse return;
+    const cmd = Command.fromToolCall(tool, arguments);
+    // `record` no-ops on non-recorded tools — see `Command.isRecorded`.
     server.recorder.?.record(cmd);
 }
 
@@ -251,41 +256,35 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return server.sendError(id, .InvalidParams, "expected { line: string }");
     };
 
-    const cmd = Command.parse(args.line);
+    const cmd = Command.parse(arena, args.line) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "could not parse step `{s}`: {s}", .{ args.line, @errorName(err) }) catch @errorName(err);
+        return sendErrorContent(server, id, msg);
+    };
 
     if (cmd.needsLlm()) {
-        return sendErrorContent(server, id, "LOGIN / ACCEPT_COOKIES / natural-language steps require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
+        return sendErrorContent(server, id, "/login and /acceptCookies require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
     }
 
     if (cmd == .comment) {
         return sendToolResultText(server, id, "comment", false);
     }
 
-    // No recording on script_step: replay must not double-record.
-    const tc = (try cmd.toToolCall(arena, Command.noSubstitute)) orelse {
-        return sendErrorContent(server, id, "command has no browser-tool mapping");
-    };
-
-    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse {
-        return sendErrorContent(server, id, "internal: unknown action from Command.toToolCall");
-    };
-
-    const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc.args) catch |err| {
-        // eval/extract get a terse error — they're line-scoped already.
-        if (surfacesErrorInBand(action)) {
+    const tc = cmd.tool_call;
+    const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name(), tc.args) catch |err| {
+        if (surfacesErrorInBand(tc.tool)) {
             return sendErrorContent(server, id, @errorName(err));
         }
         const url = browser_tools.currentUrlOrPlaceholder(server.session);
-        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name, args.line, url, @errorName(err) }) catch @errorName(err);
+        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name(), args.line, url, @errorName(err) }) catch @errorName(err);
         return sendErrorContent(server, id, msg);
     };
 
-    // Post-exec verification drives the heal roundtrip on TYPE/CHECK/SELECT;
+    // Post-exec verification drives the heal roundtrip on fill/setChecked/selectOption;
     // for eval/extract `verify` is a no-op (.inconclusive).
     switch (server.verifier.verify(arena, cmd)) {
         .failed => |reason| {
             const url = browser_tools.currentUrlOrPlaceholder(server.session);
-            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, reason }) catch reason;
+            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name(), args.line, url, reason }) catch reason;
             return sendErrorContent(server, id, msg);
         },
         .passed, .inconclusive => {},
@@ -316,6 +315,12 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, msg);
     };
 
+    if (args.replacements.len == 0) {
+        const msg = std.fmt.allocPrint(arena, "healed 0 line(s) in {s}", .{args.path}) catch "ok";
+        try sendToolResultText(server, id, msg, false);
+        return;
+    }
+
     var splices = arena.alloc(script.Replacement, args.replacements.len) catch return sendErrorContent(server, id, "out of memory");
 
     const index = indexLines(arena, content) catch return sendErrorContent(server, id, "out of memory");
@@ -330,8 +335,23 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
             return sendErrorContent(server, id, msg);
         }
 
-        splices[i] = script.formatHealReplacementLines(arena, entry.span, spec.original_line, spec.replacement_lines) catch |err|
+        splices[i] = script.formatHealReplacement(arena, entry.span, spec.original_line, .{ .lines = spec.replacement_lines }) catch |err|
             return sendErrorContent(server, id, @errorName(err));
+    }
+
+    // applyReplacements requires spans in file order and non-overlapping.
+    // The LLM may emit replacements unordered, and two specs can resolve to
+    // the same line. Sort by span offset, then reject duplicates so a single
+    // line can't be healed twice.
+    std.mem.sort(script.Replacement, splices, {}, struct {
+        fn lt(_: void, a: script.Replacement, b: script.Replacement) bool {
+            return @intFromPtr(a.original_span.ptr) < @intFromPtr(b.original_span.ptr);
+        }
+    }.lt);
+    for (splices[1..], splices[0 .. splices.len - 1]) |cur, prev| {
+        if (@intFromPtr(cur.original_span.ptr) == @intFromPtr(prev.original_span.ptr)) {
+            return sendErrorContent(server, id, "two replacements target the same original_line; merge them into one entry");
+        }
     }
 
     script.writeAtomic(arena, std.fs.cwd(), args.path, content, splices) catch |err| {
@@ -413,35 +433,35 @@ test "MCP - eval error reporting" {
 test "MCP - indexLines: exact match returns line + trailing newline" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const content = "GOTO https://x\nCLICK 'old'\nWAIT '.thanks'\n";
+    const content = "/goto 'https://x'\n/click selector='old'\n/waitForSelector '.thanks'\n";
     const index = try indexLines(arena.allocator(), content);
-    const entry = index.get("CLICK 'old'").?;
+    const entry = index.get("/click selector='old'").?;
     try std.testing.expect(!entry.dup);
-    try std.testing.expectEqualStrings("CLICK 'old'\n", entry.span);
+    try std.testing.expectEqualStrings("/click selector='old'\n", entry.span);
 }
 
 test "MCP - indexLines: missing line absent from index" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const content = "GOTO https://x\nCLICK 'a'\n";
+    const content = "/goto 'https://x'\n/click selector='a'\n";
     const index = try indexLines(arena.allocator(), content);
-    try std.testing.expect(index.get("CLICK 'b'") == null);
+    try std.testing.expect(index.get("/click selector='b'") == null);
 }
 
 test "MCP - indexLines: last line without trailing newline" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const content = "GOTO https://x\nCLICK 'last'";
+    const content = "/goto 'https://x'\n/click selector='last'";
     const index = try indexLines(arena.allocator(), content);
-    try std.testing.expectEqualStrings("CLICK 'last'", index.get("CLICK 'last'").?.span);
+    try std.testing.expectEqualStrings("/click selector='last'", index.get("/click selector='last'").?.span);
 }
 
 test "MCP - indexLines: duplicate line flagged dup" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const content = "CLICK 'go'\nWAIT '.x'\nCLICK 'go'\n";
+    const content = "/click selector='go'\n/waitForSelector '.x'\n/click selector='go'\n";
     const index = try indexLines(arena.allocator(), content);
-    try std.testing.expect(index.get("CLICK 'go'").?.dup);
+    try std.testing.expect(index.get("/click selector='go'").?.dup);
 }
 
 test "MCP - record_start rejects unsafe path" {
@@ -470,7 +490,20 @@ test "MCP - record_stop without active recording errors" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "no recording is active") != null);
 }
 
-test "MCP - script_step rejects natural-language input" {
+test "MCP - script_step rejects /login (LLM-required)" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"/login"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "require an LLM") != null);
+}
+
+test "MCP - script_step rejects bare prose" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -480,19 +513,19 @@ test "MCP - script_step rejects natural-language input" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"please summarize this page"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "require an LLM") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "could not parse step") != null);
 }
 
-test "MCP - script_step runs TYPE and verifier passes" {
+test "MCP - script_step runs /fill and verifier passes" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    // TYPE on the input that exists on the test page; verifier checks
+    // /fill on the input that exists on the test page; verifier checks
     // the field's `value` property after execution.
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"TYPE '#inp' 'hello world'"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"/fill selector='#inp' value='hello world'"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);

@@ -86,15 +86,7 @@ fn tryRecord(self: *Recorder, cmd: Command) !void {
     self.buf.clearRetainingCapacity();
     try cmd.format(&self.buf.writer);
     try self.buf.writer.writeByte('\n');
-
-    // Reverse-substitute any LP_* env-var values that snuck in as literals
-    // (e.g. an agent that retyped a username it saw via getUrl) so the
-    // recording stays portable instead of leaking the resolved secret.
-    _ = self.arena.reset(.retain_capacity);
-    const scrubbed = lp.tools.reverseSubstituteEnvVars(self.arena.allocator(), self.buf.written()) catch self.buf.written();
-
-    try self.file.?.writeAll(scrubbed);
-    self.lines += 1;
+    try self.writeScrubbed();
 }
 
 pub fn recordComment(self: *Recorder, comment: []const u8) void {
@@ -114,8 +106,20 @@ fn tryRecordComment(self: *Recorder, comment: []const u8) !void {
         try self.buf.writer.writeAll(trimmed);
         try self.buf.writer.writeByte('\n');
     }
-    try self.file.?.writeAll(self.buf.written());
-    self.lines += 1;
+    try self.writeScrubbed();
+}
+
+fn writeScrubbed(self: *Recorder) !void {
+    // Reverse-substitute any LP_* env-var values that snuck in as literals
+    // (e.g. an agent that retyped a username it saw via getUrl) so the
+    // recording stays portable instead of leaking the resolved secret.
+    // Propagate scrub OOM so the recorder disables itself rather than
+    // silently writing the unscrubbed buffer.
+    _ = self.arena.reset(.retain_capacity);
+    const scrubbed = try lp.tools.reverseSubstituteEnvVars(self.arena.allocator(), self.buf.written());
+
+    try self.file.?.writeAll(scrubbed);
+    self.lines += @intCast(std.mem.count(u8, scrubbed, "\n"));
 }
 
 /// Any failure along the record path — buffer-write OOM, scrub OOM, or file
@@ -129,24 +133,34 @@ fn disable(self: *Recorder, err: anyerror) void {
     }
 }
 
+// --- Tests ---
+
+fn parseLine(arena: std.mem.Allocator, line: []const u8) Command {
+    return Command.parse(arena, line) catch unreachable;
+}
+
 test "record writes state-mutating commands" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "test.lp");
     defer recorder.deinit();
 
-    recorder.record(Command.parse("GOTO https://example.com"));
-    recorder.record(Command.parse("CLICK \"Login\""));
-    recorder.record(Command.parse("TREE"));
-    recorder.record(Command.parse("WAIT \".dashboard\""));
-    recorder.record(Command.parse("MARKDOWN"));
-    recorder.record(Command.parse("SCROLL 0 200"));
-    recorder.record(Command.parse("HOVER '#menu'"));
-    recorder.record(Command.parse("SELECT '#country' 'France'"));
-    recorder.record(Command.parse("CHECK '#agree'"));
-    recorder.record(Command.parse("CHECK '#newsletter' false"));
-    recorder.record(Command.parse("EXTRACT '{\"title\":\".title\"}'"));
+    recorder.record(parseLine(aa, "/goto https://example.com"));
+    recorder.record(parseLine(aa, "/click selector='Login'"));
+    recorder.record(parseLine(aa, "/tree"));
+    recorder.record(parseLine(aa, "/waitForSelector '.dashboard'"));
+    recorder.record(parseLine(aa, "/markdown"));
+    recorder.record(parseLine(aa, "/scroll y=200"));
+    recorder.record(parseLine(aa, "/hover selector='#menu'"));
+    recorder.record(parseLine(aa, "/selectOption selector='#country' value='France'"));
+    recorder.record(parseLine(aa, "/setChecked selector='#agree'"));
+    recorder.record(parseLine(aa, "/setChecked selector='#newsletter' checked=false"));
+    recorder.record(parseLine(aa, "/extract '{\"title\":\".title\"}'"));
     recorder.recordComment("LOGIN");
 
     const file = tmp.dir.openFile("test.lp", .{}) catch unreachable;
@@ -155,31 +169,36 @@ test "record writes state-mutating commands" {
     const n = file.readAll(&buf) catch unreachable;
     const content = buf[0..n];
 
-    try std.testing.expect(std.mem.indexOf(u8, content, "GOTO https://example.com\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "CLICK 'Login'\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "WAIT '.dashboard'\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "SCROLL 200\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "HOVER '#menu'\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "SELECT '#country' 'France'\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "CHECK '#agree'\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "CHECK '#newsletter' false\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "EXTRACT '{\"title\":\".title\"}'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/goto 'https://example.com'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/click selector='Login'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/waitForSelector '.dashboard'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/scroll y=200\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/hover selector='#menu'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/selectOption selector='#country' value='France'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/setChecked selector='#agree'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/setChecked selector='#newsletter' checked=false\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/extract '{\"title\":\".title\"}'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "\n# LOGIN\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "TREE") == null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "MARKDOWN") == null);
+    // Read-only tools (tree, markdown) are gated out by isRecorded().
+    try std.testing.expect(std.mem.indexOf(u8, content, "/tree") == null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/markdown") == null);
 }
 
 test "record skips empty and comment lines" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "test2.lp");
     defer recorder.deinit();
 
-    recorder.record(Command.parse(""));
-    recorder.record(Command.parse("   "));
-    recorder.record(Command.parse("# this is a comment"));
-    recorder.record(Command.parse("GOTO https://example.com"));
+    recorder.record(parseLine(aa, ""));
+    recorder.record(parseLine(aa, "   "));
+    recorder.record(parseLine(aa, "# this is a comment"));
+    recorder.record(parseLine(aa, "/goto https://example.com"));
 
     const file = tmp.dir.openFile("test2.lp", .{}) catch unreachable;
     defer file.close();
@@ -187,25 +206,33 @@ test "record skips empty and comment lines" {
     const n = file.readAll(&buf) catch unreachable;
     const content = buf[0..n];
 
-    try std.testing.expectEqualStrings("GOTO https://example.com\n", content);
+    try std.testing.expectEqualStrings("/goto 'https://example.com'\n", content);
 }
 
 test "lines counter tracks successful appends" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "count.lp");
     defer recorder.deinit();
 
-    recorder.record(Command.parse("GOTO https://example.com")); // +1
-    recorder.record(Command.parse("TREE")); // skipped — not isRecorded()
-    recorder.record(Command.parse("CLICK 'Login'")); // +1
+    recorder.record(parseLine(aa, "/goto https://example.com")); // +1
+    recorder.record(parseLine(aa, "/tree")); // skipped — not isRecorded()
+    recorder.record(parseLine(aa, "/click selector='Login'")); // +1
     recorder.recordComment("a note"); // +1
 
     try std.testing.expectEqual(@as(u32, 3), recorder.lines);
 }
 
 test "init appends to an existing file without truncating" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -213,12 +240,12 @@ test "init appends to an existing file without truncating" {
     {
         const seed = tmp.dir.createFile("script.lp", .{}) catch unreachable;
         defer seed.close();
-        _ = seed.writeAll("GOTO https://example.com\n") catch unreachable;
+        _ = seed.writeAll("/goto 'https://example.com'\n") catch unreachable;
     }
 
     var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "script.lp");
     defer recorder.deinit();
-    recorder.record(Command.parse("CLICK 'Login'"));
+    recorder.record(parseLine(aa, "/click selector='Login'"));
 
     try std.testing.expect(recorder.isActive());
     try std.testing.expectEqualStrings("script.lp", recorder.path);
@@ -229,12 +256,39 @@ test "init appends to an existing file without truncating" {
     const n = file.readAll(&buf) catch unreachable;
     const content = buf[0..n];
 
-    try std.testing.expect(std.mem.indexOf(u8, content, "GOTO https://example.com\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "CLICK 'Login'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/goto 'https://example.com'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "/click selector='Login'\n") != null);
     // The prior line must precede the appended line.
-    const prior = std.mem.indexOf(u8, content, "GOTO").?;
-    const appended = std.mem.indexOf(u8, content, "CLICK").?;
+    const prior = std.mem.indexOf(u8, content, "/goto").?;
+    const appended = std.mem.indexOf(u8, content, "/click").?;
     try std.testing.expect(prior < appended);
+}
+
+extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
+extern fn unsetenv(name: [*:0]u8) c_int;
+
+test "recordComment scrubs literal LP_* values back to placeholders" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const var_name = "LP_RECORDER_COMMENT_TEST";
+    const var_value = "topsecret";
+    _ = setenv(@constCast(var_name), @constCast(var_value), 1);
+    defer _ = unsetenv(@constCast(var_name));
+
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "scrub.lp");
+    defer recorder.deinit();
+
+    recorder.recordComment("a user noted that their password is topsecret");
+
+    const file = tmp.dir.openFile("scrub.lp", .{}) catch unreachable;
+    defer file.close();
+    var buf: [256]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    try std.testing.expectEqualStrings(
+        "# a user noted that their password is $LP_RECORDER_COMMENT_TEST\n",
+        buf[0..n],
+    );
 }
 
 test "recordComment splits embedded newlines into separate comment lines" {
@@ -246,14 +300,14 @@ test "recordComment splits embedded newlines into separate comment lines" {
 
     // An attacker-controlled comment trying to smuggle a command must not
     // produce an executable line on replay.
-    recorder.recordComment("note\nGOTO https://attacker\r\nmore");
+    recorder.recordComment("note\n/goto https://attacker\r\nmore");
 
     const file = tmp.dir.openFile("multi.lp", .{}) catch unreachable;
     defer file.close();
     var buf: [256]u8 = undefined;
     const n = file.readAll(&buf) catch unreachable;
     try std.testing.expectEqualStrings(
-        "# note\n# GOTO https://attacker\n# more\n",
+        "# note\n# /goto https://attacker\n# more\n",
         buf[0..n],
     );
 }
@@ -283,28 +337,68 @@ test "record disables recorder on write failure" {
     };
     defer recorder.deinit();
 
+    var test_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer test_arena.deinit();
+    const aa = test_arena.allocator();
+
     try std.testing.expect(recorder.isActive());
-    recorder.record(Command.parse("GOTO https://example.com"));
+    recorder.record(parseLine(aa, "/goto https://example.com"));
     try std.testing.expect(!recorder.isActive());
     try std.testing.expectEqual(@as(u32, 0), recorder.lines);
 
     // Subsequent calls are silent no-ops, not silent successes.
-    recorder.record(Command.parse("CLICK 'Login'"));
+    recorder.record(parseLine(aa, "/click selector='Login'"));
     recorder.recordComment("note");
     try std.testing.expectEqual(@as(u32, 0), recorder.lines);
 }
 
 test "init creates the file if missing" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     var recorder: Recorder = try .init(std.testing.allocator, tmp.dir, "fresh.lp");
     defer recorder.deinit();
-    recorder.record(Command.parse("GOTO https://example.com"));
+    recorder.record(parseLine(aa, "/goto https://example.com"));
 
     const file = tmp.dir.openFile("fresh.lp", .{}) catch unreachable;
     defer file.close();
     var buf: [128]u8 = undefined;
     const n = file.readAll(&buf) catch unreachable;
-    try std.testing.expectEqualStrings("GOTO https://example.com\n", buf[0..n]);
+    try std.testing.expectEqualStrings("/goto 'https://example.com'\n", buf[0..n]);
+}
+
+test "record and parse: triple-quote round-trip" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "triple.lp");
+    defer recorder.deinit();
+
+    const cmd_str = "/extract '{\n  \"title\": \"span.title\",\n  \"desc\": \"p.description\"\n}'";
+    const original_cmd = parseLine(aa, cmd_str);
+    recorder.record(original_cmd);
+
+    const file = tmp.dir.openFile("triple.lp", .{}) catch unreachable;
+    defer file.close();
+    var buf: [512]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    const content = buf[0..n];
+
+    var iter: lp.script.Iterator = .init(aa, content);
+    const entry = (try iter.next()).?;
+    const parsed_cmd = entry.command;
+
+    try std.testing.expectEqualStrings("extract", parsed_cmd.tool_call.name());
+
+    const original_val = original_cmd.tool_call.args.?.object.get("schema").?.string;
+    const parsed_val = parsed_cmd.tool_call.args.?.object.get("schema").?.string;
+    try std.testing.expectEqualStrings(original_val, parsed_val);
 }

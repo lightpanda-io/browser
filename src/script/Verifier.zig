@@ -54,13 +54,39 @@ const failed_reason_oom = "verification failed (out of memory while formatting r
 /// when the command did not hard-fail (ToolResult.is_error == false).
 /// Commands without a dedicated verifier return `.inconclusive` so callers
 /// can distinguish "no verification available" from "explicitly verified".
+///
+/// backendNodeId-addressed commands are intentionally `.inconclusive`: the
+/// id is a CDP-side handle with no in-page accessor, and recorded paths use
+/// CSS selectors per `mcp_driver_guidance` (backendNodeId calls can't be
+/// recorded as PandaScript anyway).
 pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyResult {
-    return switch (cmd) {
-        .type_cmd => |args| self.verifyFill(arena, args.selector, args.value),
-        .check => |args| self.verifyCheck(arena, args.selector, args.checked),
-        .select => |args| self.verifySelect(arena, args.selector, args.value),
-        else => .inconclusive,
+    const tc = switch (cmd) {
+        .tool_call => |t| t,
+        else => return .inconclusive,
     };
+    const args = tc.args orelse return .inconclusive;
+    if (args != .object) return .inconclusive;
+    const selector = (args.object.get("selector") orelse return .inconclusive);
+    if (selector != .string) return .inconclusive;
+
+    switch (tc.tool) {
+        .fill => {
+            const value = args.object.get("value") orelse return .inconclusive;
+            if (value != .string) return .inconclusive;
+            return self.verifyFill(arena, selector.string, value.string);
+        },
+        .setChecked => {
+            const checked = args.object.get("checked") orelse return .inconclusive;
+            if (checked != .bool) return .inconclusive;
+            return self.verifyCheck(arena, selector.string, checked.bool);
+        },
+        .selectOption => {
+            const value = args.object.get("value") orelse return .inconclusive;
+            if (value != .string) return .inconclusive;
+            return self.verifySelect(arena, selector.string, value.string);
+        },
+        else => return .inconclusive,
+    }
 }
 
 fn verifyFill(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {

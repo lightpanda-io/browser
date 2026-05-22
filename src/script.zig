@@ -30,9 +30,12 @@
 //! heal roundtrip themselves.
 
 const std = @import("std");
+const BrowserTool = @import("browser/tools.zig").Tool;
 
 pub const Command = @import("script/command.zig").Command;
+pub const Iterator = @import("script/Iterator.zig");
 pub const Recorder = @import("script/Recorder.zig");
+pub const Schema = @import("script/Schema.zig");
 pub const Verifier = @import("script/Verifier.zig");
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
@@ -96,7 +99,7 @@ pub const mcp_driver_guidance =
     \\Data extraction:
     \\- For any task that asks for a specific value or list, finish with
     \\  `extract` (JSON-schema-driven) — only `extract` calls survive replay
-    \\  as `EXTRACT` PandaScript lines. Reading the page via `markdown` and
+    \\  as `/extract` PandaScript lines. Reading the page via `markdown` and
     \\  answering in chat does NOT.
     \\- Workflow: `tree` → `nodeDetails(backendNodeId)` → `extract`. `tree`
     \\  hides raw HTML attributes; `nodeDetails` returns the id/class you
@@ -183,45 +186,34 @@ pub fn writeAtomic(
     try af.finish();
 }
 
+/// Replacement body: either parsed Commands (agent self-heal) or pre-rendered
+/// lines (MCP `script_heal`, where the LLM driver supplies raw PandaScript).
+pub const HealBody = union(enum) {
+    cmds: []const Command,
+    lines: []const []const u8,
+};
+
 /// Build the standard `# [Auto-healed] Original: <line>` header followed by
-/// the serialized replacement commands. Caller owns the returned slice.
+/// the body. Caller owns the returned slice.
 pub fn formatHealReplacement(
     arena: std.mem.Allocator,
     original_span: []const u8,
     opener_line: []const u8,
-    cmds: []const Command,
+    body: HealBody,
 ) !Replacement {
-    std.debug.assert(cmds.len > 0);
     var aw: std.Io.Writer.Allocating = .init(arena);
     try aw.writer.print("# [Auto-healed] Original: {s}\n", .{opener_line});
-    for (cmds) |cmd| {
-        try cmd.format(&aw.writer);
-        try aw.writer.writeByte('\n');
+    switch (body) {
+        .cmds => |cmds| for (cmds) |cmd| {
+            try cmd.format(&aw.writer);
+            try aw.writer.writeByte('\n');
+        },
+        .lines => |lines| for (lines) |line| {
+            try aw.writer.writeAll(line);
+            try aw.writer.writeByte('\n');
+        },
     }
     return .{ .original_span = original_span, .new_text = aw.written() };
-}
-
-/// Same shape as `formatHealReplacement` but for callers that already have
-/// rendered replacement lines (no Command round-trip). Used by the MCP
-/// `script_heal` tool where the LLM driver supplies raw PandaScript lines.
-pub fn formatHealReplacementLines(
-    arena: std.mem.Allocator,
-    original_span: []const u8,
-    opener_line: []const u8,
-    replacement_lines: []const []const u8,
-) !Replacement {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-
-    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{opener_line});
-    for (replacement_lines) |line| {
-        try aw.writer.writeAll(line);
-        try aw.writer.writeByte('\n');
-    }
-
-    return .{
-        .original_span = original_span,
-        .new_text = aw.written(),
-    };
 }
 
 /// Reject paths that an untrusted MCP client could use to escape the
@@ -248,23 +240,23 @@ test {
 // --- Tests ---
 
 test "applyReplacements: empty list returns copy" {
-    const content = "CLICK 'a'\nCLICK 'b'\n";
+    const content = "/click selector='a'\n/click selector='b'\n";
     const out = try applyReplacements(std.testing.allocator, content, &.{});
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings(content, out);
 }
 
 test "applyReplacements: single span in the middle" {
-    const content = "GOTO https://x\nCLICK 'old'\nCLICK 'tail'\n";
-    const span_start = std.mem.indexOf(u8, content, "CLICK 'old'\n").?;
-    const span = content[span_start .. span_start + "CLICK 'old'\n".len];
+    const content = "/goto 'https://x'\n/click selector='old'\n/click selector='tail'\n";
+    const span_start = std.mem.indexOf(u8, content, "/click selector='old'\n").?;
+    const span = content[span_start .. span_start + "/click selector='old'\n".len];
     const replacements = [_]Replacement{
-        .{ .original_span = span, .new_text = "CLICK 'new'\n" },
+        .{ .original_span = span, .new_text = "/click selector='new'\n" },
     };
     const out = try applyReplacements(std.testing.allocator, content, &replacements);
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings(
-        "GOTO https://x\nCLICK 'new'\nCLICK 'tail'\n",
+        "/goto 'https://x'\n/click selector='new'\n/click selector='tail'\n",
         out,
     );
 }
@@ -310,107 +302,105 @@ test "applyReplacements: new_text longer and shorter than span" {
 }
 
 test "applyReplacements: single-line span replaced with multi-line content" {
-    const content = "GOTO https://x\nCLICK '#submit'\nWAIT '.thanks'\n";
-    const span_start = std.mem.indexOf(u8, content, "CLICK '#submit'\n").?;
-    const span = content[span_start .. span_start + "CLICK '#submit'\n".len];
+    const content = "/goto 'https://x'\n/click selector='#submit'\n/waitForSelector '.thanks'\n";
+    const span_start = std.mem.indexOf(u8, content, "/click selector='#submit'\n").?;
+    const span = content[span_start .. span_start + "/click selector='#submit'\n".len];
     const replacements = [_]Replacement{
         .{
             .original_span = span,
-            .new_text = "# [Auto-healed] Original: CLICK '#submit'\nCLICK '.cookie-accept'\nCLICK '#submit-v2'\n",
+            .new_text = "# [Auto-healed] Original: /click selector='#submit'\n/click selector='.cookie-accept'\n/click selector='#submit-v2'\n",
         },
     };
     const out = try applyReplacements(std.testing.allocator, content, &replacements);
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings(
-        "GOTO https://x\n# [Auto-healed] Original: CLICK '#submit'\nCLICK '.cookie-accept'\nCLICK '#submit-v2'\nWAIT '.thanks'\n",
+        "/goto 'https://x'\n# [Auto-healed] Original: /click selector='#submit'\n/click selector='.cookie-accept'\n/click selector='#submit-v2'\n/waitForSelector '.thanks'\n",
         out,
     );
 }
 
-test "applyReplacements: heals a multi-line EVAL block using iterator span" {
+test "applyReplacements: heals a multi-line /eval block using iterator span" {
     const content =
-        "GOTO https://x\n" ++
-        "EVAL '''\n" ++
+        "/goto https://x\n" ++
+        "/eval '''\n" ++
         "  const x = 1;\n" ++
         "  return x;\n" ++
         "'''\n" ++
-        "CLICK '#after'\n";
+        "/click selector='#after'\n";
 
-    var iter: Command.ScriptIterator = .init(std.testing.allocator, content);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    var iter: Iterator = .init(arena.allocator(), content);
     const e1 = (try iter.next()).?;
-    try std.testing.expect(e1.command == .goto);
+    try std.testing.expect(e1.command == .tool_call);
+    try std.testing.expectEqualStrings("goto", e1.command.tool_call.name());
     const e2 = (try iter.next()).?;
-    try std.testing.expect(e2.command == .eval_js);
-    defer std.testing.allocator.free(e2.command.eval_js);
+    try std.testing.expect(e2.command == .tool_call);
+    try std.testing.expectEqualStrings("eval", e2.command.tool_call.name());
     const e3 = (try iter.next()).?;
-    try std.testing.expect(e3.command == .click);
+    try std.testing.expectEqualStrings("click", e3.command.tool_call.name());
     try std.testing.expect((try iter.next()) == null);
 
     const replacements = [_]Replacement{.{
         .original_span = e2.raw_span,
-        .new_text = "# [Auto-healed] Original: EVAL block\nCLICK '#healed'\n",
+        .new_text = "# [Auto-healed] Original: /eval block\n/click selector='#healed'\n",
     }};
     const out = try applyReplacements(std.testing.allocator, content, &replacements);
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings(
-        "GOTO https://x\n" ++
-            "# [Auto-healed] Original: EVAL block\n" ++
-            "CLICK '#healed'\n" ++
-            "CLICK '#after'\n",
+        "/goto https://x\n" ++
+            "# [Auto-healed] Original: /eval block\n" ++
+            "/click selector='#healed'\n" ++
+            "/click selector='#after'\n",
         out,
     );
 }
 
-test "formatHealReplacement: single command produces one-line replacement" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const cmds = [_]Command{.{ .click = "#submit-v2" }};
-    const replacement = try formatHealReplacement(
-        arena.allocator(),
-        "CLICK '#submit'\n",
-        "CLICK '#submit'",
-        &cmds,
-    );
-
-    try std.testing.expectEqualStrings("CLICK '#submit'\n", replacement.original_span);
-    try std.testing.expectEqualStrings(
-        "# [Auto-healed] Original: CLICK '#submit'\nCLICK '#submit-v2'\n",
-        replacement.new_text,
-    );
+fn buildToolCall(arena: std.mem.Allocator, name: []const u8, kvs: []const struct { []const u8, []const u8 }) Command {
+    var obj: std.json.ObjectMap = .init(arena);
+    for (kvs) |kv| obj.put(kv[0], .{ .string = kv[1] }) catch unreachable;
+    const tool = std.meta.stringToEnum(BrowserTool, name).?;
+    return .{ .tool_call = .{ .tool = tool, .args = .{ .object = obj } } };
 }
 
-test "formatHealReplacement: multiple commands produce multi-line replacement" {
+test "formatHealReplacement: single and multiple commands" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
+    const aa = arena.allocator();
 
-    const cmds = [_]Command{
-        .{ .click = ".cookie-accept" },
-        .{ .click = "#submit-v2" },
-    };
-    const replacement = try formatHealReplacement(
-        arena.allocator(),
-        "CLICK '#submit'\n",
-        "CLICK '#submit'",
-        &cmds,
-    );
-
-    try std.testing.expectEqualStrings(
-        "# [Auto-healed] Original: CLICK '#submit'\nCLICK '.cookie-accept'\nCLICK '#submit-v2'\n",
-        replacement.new_text,
-    );
+    {
+        const cmds = [_]Command{buildToolCall(aa, "click", &.{.{ "selector", "#submit-v2" }})};
+        const r = try formatHealReplacement(aa, "/click selector='#submit'\n", "/click selector='#submit'", .{ .cmds = &cmds });
+        try std.testing.expectEqualStrings("/click selector='#submit'\n", r.original_span);
+        try std.testing.expectEqualStrings(
+            "# [Auto-healed] Original: /click selector='#submit'\n/click selector='#submit-v2'\n",
+            r.new_text,
+        );
+    }
+    {
+        const cmds = [_]Command{
+            buildToolCall(aa, "click", &.{.{ "selector", ".cookie-accept" }}),
+            buildToolCall(aa, "click", &.{.{ "selector", "#submit-v2" }}),
+        };
+        const r = try formatHealReplacement(aa, "/click selector='#submit'\n", "/click selector='#submit'", .{ .cmds = &cmds });
+        try std.testing.expectEqualStrings(
+            "# [Auto-healed] Original: /click selector='#submit'\n/click selector='.cookie-accept'\n/click selector='#submit-v2'\n",
+            r.new_text,
+        );
+    }
 }
 
 test "writeAtomic: writes content and creates .bak" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{ .sub_path = "script.lp", .data = "GOTO https://x\nCLICK 'old'\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "script.lp", .data = "/goto 'https://x'\n/click selector='old'\n" });
 
-    const content = "GOTO https://x\nCLICK 'old'\n";
-    const span = content[std.mem.indexOf(u8, content, "CLICK 'old'\n").?..][0.."CLICK 'old'\n".len];
+    const content = "/goto 'https://x'\n/click selector='old'\n";
+    const span = content[std.mem.indexOf(u8, content, "/click selector='old'\n").?..][0.."/click selector='old'\n".len];
     const replacements = [_]Replacement{
-        .{ .original_span = span, .new_text = "CLICK 'new'\n" },
+        .{ .original_span = span, .new_text = "/click selector='new'\n" },
     };
 
     try writeAtomic(std.testing.allocator, tmp.dir, "script.lp", content, &replacements);
@@ -420,23 +410,23 @@ test "writeAtomic: writes content and creates .bak" {
     const live = tmp.dir.openFile("script.lp", .{}) catch unreachable;
     defer live.close();
     const n = live.readAll(&buf) catch unreachable;
-    try std.testing.expectEqualStrings("GOTO https://x\nCLICK 'new'\n", buf[0..n]);
+    try std.testing.expectEqualStrings("/goto 'https://x'\n/click selector='new'\n", buf[0..n]);
 
     const bak = tmp.dir.openFile("script.lp.bak", .{}) catch unreachable;
     defer bak.close();
     const m = bak.readAll(&buf) catch unreachable;
-    try std.testing.expectEqualStrings("GOTO https://x\nCLICK 'old'\n", buf[0..m]);
+    try std.testing.expectEqualStrings("/goto 'https://x'\n/click selector='old'\n", buf[0..m]);
 }
 
 test "writeAtomic: leaves original untouched when .bak write fails" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const original = "CLICK 'old'\n";
+    const original = "/click selector='old'\n";
     try tmp.dir.writeFile(.{ .sub_path = "script.lp", .data = original });
 
     const replacements = [_]Replacement{
-        .{ .original_span = original[0..], .new_text = "CLICK 'new'\n" },
+        .{ .original_span = original[0..], .new_text = "/click selector='new'\n" },
     };
 
     // Force the .bak write to fail by putting a directory at the .bak path.
