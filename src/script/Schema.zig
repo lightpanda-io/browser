@@ -89,7 +89,7 @@ pub fn isMultiLineCapable(self: Schema) bool {
 
 fn findField(self: Schema, key: []const u8) ?FieldEntry {
     for (self.fields) |f| {
-        if (std.mem.eql(u8, f.name, key)) return f;
+        if (std.ascii.eqlIgnoreCase(f.name, key)) return f;
     }
     return null;
 }
@@ -164,10 +164,10 @@ pub fn parseValue(self: Schema, arena: std.mem.Allocator, rest: []const u8) Pars
         const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return error.MalformedKv;
         if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
         const key = tok[0..eq];
-        // Reject unknown keys so a typo (`checke=false`) can't be silently
+        // Reject typos like `checke=false` that would otherwise be silently
         // absorbed while the actual required field gets default-filled.
-        if (self.findField(key) == null) return error.UnknownField;
-        list.appendAssumeCapacity(.{ .key = key, .value = stripQuotes(tok[eq + 1 ..]) });
+        const field = self.findField(key) orelse return error.UnknownField;
+        list.appendAssumeCapacity(.{ .key = field.name, .value = stripQuotes(tok[eq + 1 ..]) });
     }
 
     // Default-true booleans (e.g. setChecked.checked) so `/setChecked
@@ -182,9 +182,18 @@ pub fn parseValue(self: Schema, arena: std.mem.Allocator, rest: []const u8) Pars
 }
 
 fn validateAndFillObject(self: Schema, obj: *std.json.ObjectMap) ParseError!void {
+    const Rename = struct { from: []const u8, to: []const u8 };
+    var renames: std.ArrayList(Rename) = .empty;
     var it = obj.iterator();
     while (it.next()) |entry| {
-        if (self.findField(entry.key_ptr.*) == null) return error.UnknownField;
+        const field = self.findField(entry.key_ptr.*) orelse return error.UnknownField;
+        if (!std.mem.eql(u8, field.name, entry.key_ptr.*)) {
+            renames.append(obj.allocator, .{ .from = entry.key_ptr.*, .to = field.name }) catch return error.OutOfMemory;
+        }
+    }
+    for (renames.items) |r| {
+        const kv = obj.fetchSwapRemove(r.from) orelse continue;
+        try obj.put(r.to, kv.value);
     }
     for (self.required) |req| {
         if (obj.contains(req)) continue;
@@ -616,6 +625,24 @@ test "parseValue: unknown field is rejected, not absorbed into default-true fill
     const set_checked = Schema.find(Schema.all(), "setChecked").?;
     // Typo `checke=false`: must error, not silently default `checked=true`.
     try testing.expectError(error.UnknownField, set_checked.parseValue(arena.allocator(), "selector='#x' checke=false"));
+}
+
+test "parseValue: arg keys are case-insensitive (kv path)" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const click = Schema.find(Schema.all(), "click").?;
+    const v = (try click.parseValue(arena.allocator(), "Selector='#btn'")).?;
+    try testing.expectString("#btn", v.object.get("selector").?.string);
+    try testing.expect(v.object.get("Selector") == null);
+}
+
+test "parseValue: arg keys are case-insensitive (json path)" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const click = Schema.find(Schema.all(), "click").?;
+    const v = (try click.parseValue(arena.allocator(), "{\"Selector\":\"#btn\"}")).?;
+    try testing.expectString("#btn", v.object.get("selector").?.string);
+    try testing.expect(v.object.get("Selector") == null);
 }
 
 test "parseValue: setChecked defaults checked=true when omitted" {
