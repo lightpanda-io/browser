@@ -302,13 +302,14 @@ pub const Tool = enum {
                 ),
             },
             .press => .{
-                .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'.",
+                .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'. Common shorthand is normalized: 'enter'/'return' → 'Enter', 'esc' → 'Escape', 'up'/'down'/'left'/'right' → 'Arrow*', 'space' → ' '. Pressing 'Enter' on a form input or submit button triggers implicit form submission.",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document." }
+                    \\    "selector": { "type": "string", "description": "Optional CSS selector of the element to target. Preferred over backendNodeId." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document when neither selector nor backendNodeId is provided." }
                     \\  },
                     \\  "required": ["key"]
                     \\}
@@ -1026,12 +1027,21 @@ fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
 fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         key: []const u8,
+        selector: ?[]const u8 = null,
         backendNodeId: ?CDPNode.Id = null,
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    const page = try requireFrame(session);
-    const target_node = try resolveOptionalNode(registry, args.backendNodeId);
+    var page: *lp.Frame = undefined;
+    var target_node: ?*DOMNode = null;
+    if (args.selector) |sel| {
+        const resolved = try resolveBySelector(session, sel);
+        page = resolved.page;
+        target_node = resolved.node;
+    } else {
+        page = try requireFrame(session);
+        target_node = try resolveOptionalNode(registry, args.backendNodeId);
+    }
 
     lp.actions.press(target_node, args.key, page) catch |err| return mapActionError(err);
 

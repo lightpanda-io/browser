@@ -898,6 +898,28 @@ test "MCP - waitForSelector: timeout" {
     }, out.written());
 }
 
+test "MCP - press Enter on form input triggers submit (lowercase alias)" {
+    defer testing.reset();
+    const aa = testing.arena_allocator;
+    var out: std.io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.html", &out.writer);
+    defer server.deinit();
+
+    // Fill the input then press "enter" (lowercase alias) on it. The form's
+    // submit handler sets window.submitted and snapshots the input value.
+    const fill = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"selector\":\"#q\",\"value\":\"hello\"}}}");
+    try router.handleMessage(server, aa, fill);
+    out.clearRetainingCapacity();
+
+    const press_msg = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"selector\":\"#q\",\"key\":\"enter\"}}}");
+    try router.handleMessage(server, aa, press_msg);
+    out.clearRetainingCapacity();
+
+    const eval_msg = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"eval\",\"arguments\":{\"script\":\"window.submitted === true && window.submittedValue === 'hello'\"}}}");
+    try router.handleMessage(server, aa, eval_msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "true") != null);
+}
+
 test "MCP - getCookies: defaults to current page, url filter, all flag" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
