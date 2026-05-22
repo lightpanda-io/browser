@@ -961,9 +961,15 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
 
     const timeout_ms = args.timeout orelse 5000;
 
-    const node = lp.actions.waitForSelector(args.selector, timeout_ms, session) catch |err| {
-        if (err == error.InvalidSelector) return ToolError.InvalidParams;
-        return ToolError.InternalError;
+    const node = lp.actions.waitForSelector(args.selector, timeout_ms, session) catch |err| switch (err) {
+        error.InvalidSelector => return ToolError.InvalidParams,
+        // Timeout w/o a match: same outcome as `/hover selector=…` on a missing
+        // node — surface `NodeNotFound` so the LLM sees a consistent signal.
+        error.Timeout => return ToolError.NodeNotFound,
+        else => {
+            log.debug(.browser, "waitForSelector error", .{ .err = @errorName(err) });
+            return ToolError.InternalError;
+        },
     };
 
     const registered = registry.register(node) catch return ToolError.InternalError;
