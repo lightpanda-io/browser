@@ -1384,6 +1384,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     // frame in self.child_frames.
     try self.child_frames.append(self.arena, new_frame);
 
+    // navigate() may run JS that reads window[N]; flag the list unsorted until
+    // we've verified ordering post-navigate.
+    const was_sorted = self.child_frames_sorted;
+    self.child_frames_sorted = false;
+
     // Iframe's initial src request carries the parent's URL as Referer and
     // as the SameSite initiator. Parent frame outlives this navigate()
     // call, so the slice is safe.
@@ -1412,11 +1417,12 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const frames_len = self.child_frames.items.len;
     if (frames_len == 1) {
         // this is the only frame, it must be sorted.
+        self.child_frames_sorted = true;
         return;
     }
 
-    if (self.child_frames_sorted == false) {
-        // the list already wasn't sorted, it still isn't
+    if (!was_sorted) {
+        // it was already unsorted; leave flag false
         return;
     }
 
@@ -1425,11 +1431,10 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const iframe_a = self.child_frames.items[frames_len - 2].iframe.?;
     const iframe_b = self.child_frames.items[frames_len - 1].iframe.?;
 
-    if (iframe_a.asNode().compareDocumentPosition(iframe_b.asNode()) & 0x04 == 0) {
-        // if b followed a, then & 0x04 = 0x04
-        // but since we got 0, it means b does not follow a, and thus our list
-        // is no longer sorted.
-        self.child_frames_sorted = false;
+    if (iframe_a.asNode().compareDocumentPosition(iframe_b.asNode()) & 0x04 != 0) {
+        // b follows a (& 0x04 == 0x04), so the appended frame is in document
+        // order relative to the previous tail — the list is still sorted.
+        self.child_frames_sorted = true;
     }
 }
 
