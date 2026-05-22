@@ -54,6 +54,11 @@ const failed_reason_oom = "verification failed (out of memory while formatting r
 /// when the command did not hard-fail (ToolResult.is_error == false).
 /// Commands without a dedicated verifier return `.inconclusive` so callers
 /// can distinguish "no verification available" from "explicitly verified".
+///
+/// backendNodeId-addressed commands are intentionally `.inconclusive`: the
+/// id is a CDP-side handle with no in-page accessor, and recorded paths use
+/// CSS selectors per `mcp_driver_guidance` (backendNodeId calls can't be
+/// recorded as PandaScript anyway).
 pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyResult {
     const tc = switch (cmd) {
         .tool_call => |t| t,
@@ -64,7 +69,7 @@ pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyRes
     const selector = (args.object.get("selector") orelse return .inconclusive);
     if (selector != .string) return .inconclusive;
 
-    switch (tc.action) {
+    switch (tc.tool) {
         .fill => {
             const value = args.object.get("value") orelse return .inconclusive;
             if (value != .string) return .inconclusive;

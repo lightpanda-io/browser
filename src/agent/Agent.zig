@@ -20,11 +20,14 @@ const std = @import("std");
 const zenai = @import("zenai");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
+const BrowserTool = browser_tools.Tool;
+const ProviderTool = zenai.provider.Tool;
 
 const log = lp.log;
 const Config = lp.Config;
 const script = lp.script;
 const Command = lp.script.Command;
+const Schema = lp.script.Schema;
 const Recorder = lp.script.Recorder;
 const Verifier = lp.script.Verifier;
 const Credentials = zenai.provider.Credentials;
@@ -317,16 +320,16 @@ pub fn deinit(self: *Agent) void {
 }
 
 // Tool definitions are compile-time constant; project them once per process.
-var global_tools_storage: [browser_tools.tool_defs.len]zenai.provider.Tool = undefined;
+var global_tools_storage: [browser_tools.tool_defs.len]ProviderTool = undefined;
 var global_tools_once = std.once(initGlobalTools);
 
 fn initGlobalTools() void {
-    for (SlashCommand.globalSchemas(), 0..) |s, i| {
+    for (Schema.all(), 0..) |s, i| {
         global_tools_storage[i] = .{ .name = s.tool_name, .description = s.description, .parameters = s.parameters };
     }
 }
 
-fn globalTools() []const zenai.provider.Tool {
+fn globalTools() []const ProviderTool {
     global_tools_once.call();
     return global_tools_storage[0..browser_tools.tool_defs.len];
 }
@@ -443,7 +446,7 @@ fn runRepl(self: *Agent) void {
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) continue;
 
-        const slash_split: ?SlashCommand.Split = if (trimmed[0] == '/') SlashCommand.splitNameRest(trimmed[1..]) else null;
+        const slash_split: ?Schema.Split = if (trimmed[0] == '/') Schema.splitNameRest(trimmed[1..]) else null;
         if (slash_split) |split| {
             if (SlashCommand.findMeta(split.name)) |meta| {
                 if (self.handleMeta(meta, split.rest)) break :repl;
@@ -465,7 +468,8 @@ fn runRepl(self: *Agent) void {
                 continue :repl;
             },
             else => |e| {
-                self.printSlashParseError(e, line);
+                const name = if (slash_split) |sp| sp.name else line;
+                self.printSlashParseError(e, name);
                 continue :repl;
             },
         };
@@ -498,7 +502,7 @@ fn runRepl(self: *Agent) void {
 /// of PandaScript — they're REPL-only and never recorded. Returns `true` if
 /// the user asked to quit.
 fn handleMeta(self: *Agent, meta: *const SlashCommand.MetaCommand, rest: []const u8) bool {
-    switch (meta.kind) {
+    switch (meta.tag) {
         .quit => return true,
         .help => self.printSlashHelp(rest),
         .verbosity => self.handleVerbosity(rest),
@@ -522,7 +526,7 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
 fn printSlashHelp(self: *Agent, target: []const u8) void {
     if (target.len == 0) {
         self.terminal.printInfo("Slash commands (no LLM, REPL only):");
-        for (SlashCommand.globalSchemas()) |s| {
+        for (Schema.all()) |s| {
             const summary = firstSentence(s.description);
             self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, summary });
         }
@@ -531,7 +535,7 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
     }
     const lookup = if (target[0] == '/') target[1..] else target;
     if (SlashCommand.findMeta(lookup)) |meta| {
-        switch (meta.kind) {
+        switch (meta.tag) {
             .help => self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted"),
             .quit => self.terminal.printInfo("/quit — exit the REPL"),
             .verbosity => self.terminal.printInfoFmt(
@@ -541,25 +545,26 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
         }
         return;
     }
-    const schema = SlashCommand.findSchema(SlashCommand.globalSchemas(), lookup) orelse {
+    const tool_schema = Schema.find(Schema.all(), lookup) orelse {
         self.terminal.printErrorFmt("unknown tool: {s}", .{lookup});
         return;
     };
-    self.terminal.printInfoFmt("/{s} — {s}", .{ schema.tool_name, schema.description });
+    self.terminal.printInfoFmt("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
 
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
     var aw: std.Io.Writer.Allocating = .init(arena.allocator());
-    std.json.Stringify.value(schema.parameters, .{ .whitespace = .indent_2 }, &aw.writer) catch return;
+    std.json.Stringify.value(tool_schema.parameters, .{ .whitespace = .indent_2 }, &aw.writer) catch return;
     self.terminal.printInfoFmt("schema:\n{s}", .{aw.written()});
 }
 
-fn printSlashParseError(self: *Agent, err: SlashCommand.ParseError, name: []const u8) void {
+fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8) void {
     const reason: []const u8 = switch (err) {
         error.UnknownTool => "unknown tool",
         error.MissingName => return self.terminal.printError("missing tool name. Try /help."),
         error.MissingRequired => "missing required argument",
         error.MalformedKv => "malformed key=value. Use key=value or {json}",
+        error.UnknownField => "unknown field (typo?)",
         error.PositionalNotAllowed => "positional only works for tools with one required field. Use key=value",
         error.UnterminatedQuote => "unterminated quote",
         error.OutOfMemory => return self.terminal.printError("out of memory"),
@@ -591,7 +596,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
         return false;
     };
 
-    var iter: Command.ScriptIterator = .init(sa, content);
+    var iter: script.Iterator = .init(sa, content);
     var last_comment: ?[]const u8 = null;
     var replacements: std.ArrayList(Replacement) = .empty;
 
@@ -667,7 +672,7 @@ const ActionOutcome = union(enum) {
 
 /// Execute one action-style script entry, including post-execution
 /// verification, transient-failure retry, and LLM self-heal escalation.
-fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIterator.Entry, last_comment: ?[]const u8) ActionOutcome {
+fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.Entry, last_comment: ?[]const u8) ActionOutcome {
     var cmd_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer cmd_arena.deinit();
     const ca = cmd_arena.allocator();
@@ -699,7 +704,10 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
             .failed => |r| r,
             .passed, .inconclusive => null,
         };
-        if (self.attemptSelfHeal(sa, entry.opener_line, reason, last_comment)) |healed_cmds| {
+        // For multi-line blocks (`/eval '''…'''`, `/extract '''…'''`) the
+        // opener alone is useless to the LLM — feed it the full block body.
+        const failed_text = std.mem.trimRight(u8, entry.raw_span, &std.ascii.whitespace);
+        if (self.attemptSelfHeal(sa, failed_text, reason, last_comment)) |healed_cmds| {
             const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.opener_line, healed_cmds) catch |err| {
                 self.terminal.printErrorFmt(
                     "line {d}: failed to record heal: {s} (script left unchanged)",
@@ -737,7 +745,7 @@ fn isRetryable(cmd: Command) bool {
         .tool_call => |t| t,
         else => return false,
     };
-    return switch (tc.action) {
+    return switch (tc.tool) {
         .fill, .setChecked, .selectOption => true,
         else => false,
     };
@@ -830,10 +838,11 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     var cmds: std.ArrayList(Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
-        const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse continue;
+        const tool = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
         // `result.deinit()` (deferred above) frees the args arena before the
         // caller formats `cmds`; deep-copy into `arena` to outlive it.
-        const cmd = try Command.fromToolCallOwned(arena, action, tc.arguments);
+        const owned_args = if (tc.arguments) |v| try zenai.json.dupeValue(arena, v) else null;
+        const cmd = Command.fromToolCall(tool, owned_args);
         if (!cmd.canHeal()) {
             self.terminal.printInfoFmt(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
@@ -999,15 +1008,16 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         // last successful one is the answer — earlier probes are noise.
         var last_extract_idx: ?usize = null;
         for (result.tool_calls_made, 0..) |tc, i| {
-            if (!tc.is_error and std.mem.eql(u8, tc.name, "extract")) last_extract_idx = i;
+            const t = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
+            if (!tc.is_error and t == .extract) last_extract_idx = i;
         }
 
         var recorded_any = false;
         for (result.tool_calls_made, 0..) |tc, i| {
             if (tc.is_error) continue;
-            if (last_extract_idx) |idx| if (std.mem.eql(u8, tc.name, "extract") and idx != i) continue;
-            const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse continue;
-            const cmd = Command.fromToolCall(action, tc.arguments);
+            const tool = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
+            if (last_extract_idx) |idx| if (tool == .extract and idx != i) continue;
+            const cmd = Command.fromToolCall(tool, tc.arguments);
             if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| r.recordComment(c);
@@ -1141,6 +1151,8 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     // The spinner doesn't render args, and `agentToolDone` skips the body
     // line at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
+    // Stringify the pre-substitution args so $LP_* placeholders the model
+    // emitted stay redacted in the UI.
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
     else
@@ -1343,9 +1355,8 @@ fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: 
 test "canHeal: only page-local DOM commands are allowed" {
     // Table-driven over the live tool flags so adding a new tool can't
     // silently drift from the heal allow-list.
-    const Action = browser_tools.Action;
-    const allow = [_]Action{ .click, .hover, .waitForSelector, .fill, .selectOption, .setChecked, .scroll, .extract, .press };
-    const deny = [_]Action{ .goto, .eval, .tree, .markdown, .search, .links };
+    const allow = [_]BrowserTool{ .click, .hover, .waitForSelector, .fill, .selectOption, .setChecked, .scroll, .extract, .press };
+    const deny = [_]BrowserTool{ .goto, .eval, .tree, .markdown, .search, .links };
 
     for (allow) |action| {
         const cmd = Command.fromToolCall(action, null);

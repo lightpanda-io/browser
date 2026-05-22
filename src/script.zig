@@ -30,12 +30,13 @@
 //! heal roundtrip themselves.
 
 const std = @import("std");
-const browser_tools = @import("browser/tools.zig");
+const BrowserTool = @import("browser/tools.zig").Tool;
 
 pub const Command = @import("script/command.zig").Command;
+pub const Iterator = @import("script/Iterator.zig");
 pub const Recorder = @import("script/Recorder.zig");
+pub const Schema = @import("script/Schema.zig");
 pub const Verifier = @import("script/Verifier.zig");
-pub const schema = @import("script/schema.zig");
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
 /// agent prepends this to its own system prompt; the MCP server returns
@@ -341,7 +342,7 @@ test "applyReplacements: heals a multi-line /eval block using iterator span" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
-    var iter: Command.ScriptIterator = .init(arena.allocator(), content);
+    var iter: Iterator = .init(arena.allocator(), content);
     const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .tool_call);
     try std.testing.expectEqualStrings("goto", e1.command.tool_call.name());
@@ -370,8 +371,8 @@ test "applyReplacements: heals a multi-line /eval block using iterator span" {
 fn buildToolCall(arena: std.mem.Allocator, name: []const u8, kvs: []const struct { []const u8, []const u8 }) Command {
     var obj: std.json.ObjectMap = .init(arena);
     for (kvs) |kv| obj.put(kv[0], .{ .string = kv[1] }) catch unreachable;
-    const action = std.meta.stringToEnum(browser_tools.Action, name).?;
-    return .{ .tool_call = .{ .action = action, .args = .{ .object = obj } } };
+    const tool = std.meta.stringToEnum(BrowserTool, name).?;
+    return .{ .tool_call = .{ .tool = tool, .args = .{ .object = obj } } };
 }
 
 test "formatHealReplacement: single command produces one-line replacement" {

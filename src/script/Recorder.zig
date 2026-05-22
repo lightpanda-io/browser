@@ -86,15 +86,7 @@ fn tryRecord(self: *Recorder, cmd: Command) !void {
     self.buf.clearRetainingCapacity();
     try cmd.format(&self.buf.writer);
     try self.buf.writer.writeByte('\n');
-
-    // Reverse-substitute any LP_* env-var values that snuck in as literals
-    // (e.g. an agent that retyped a username it saw via getUrl) so the
-    // recording stays portable instead of leaking the resolved secret.
-    _ = self.arena.reset(.retain_capacity);
-    const scrubbed = lp.tools.reverseSubstituteEnvVars(self.arena.allocator(), self.buf.written()) catch self.buf.written();
-
-    try self.file.?.writeAll(scrubbed);
-    self.lines += 1;
+    try self.writeScrubbed();
 }
 
 pub fn recordComment(self: *Recorder, comment: []const u8) void {
@@ -114,8 +106,20 @@ fn tryRecordComment(self: *Recorder, comment: []const u8) !void {
         try self.buf.writer.writeAll(trimmed);
         try self.buf.writer.writeByte('\n');
     }
-    try self.file.?.writeAll(self.buf.written());
-    self.lines += 1;
+    try self.writeScrubbed();
+}
+
+fn writeScrubbed(self: *Recorder) !void {
+    // Reverse-substitute any LP_* env-var values that snuck in as literals
+    // (e.g. an agent that retyped a username it saw via getUrl) so the
+    // recording stays portable instead of leaking the resolved secret.
+    // Propagate scrub OOM so the recorder disables itself rather than
+    // silently writing the unscrubbed buffer.
+    _ = self.arena.reset(.retain_capacity);
+    const scrubbed = try lp.tools.reverseSubstituteEnvVars(self.arena.allocator(), self.buf.written());
+
+    try self.file.?.writeAll(scrubbed);
+    self.lines += @intCast(std.mem.count(u8, scrubbed, "\n"));
 }
 
 /// Any failure along the record path — buffer-write OOM, scrub OOM, or file
@@ -260,6 +264,33 @@ test "init appends to an existing file without truncating" {
     try std.testing.expect(prior < appended);
 }
 
+extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
+extern fn unsetenv(name: [*:0]u8) c_int;
+
+test "recordComment scrubs literal LP_* values back to placeholders" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const var_name = "LP_RECORDER_COMMENT_TEST";
+    const var_value = "topsecret";
+    _ = setenv(@constCast(var_name), @constCast(var_value), 1);
+    defer _ = unsetenv(@constCast(var_name));
+
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "scrub.lp");
+    defer recorder.deinit();
+
+    recorder.recordComment("a user noted that their password is topsecret");
+
+    const file = tmp.dir.openFile("scrub.lp", .{}) catch unreachable;
+    defer file.close();
+    var buf: [256]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    try std.testing.expectEqualStrings(
+        "# a user noted that their password is $LP_RECORDER_COMMENT_TEST\n",
+        buf[0..n],
+    );
+}
+
 test "recordComment splits embedded newlines into separate comment lines" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -361,7 +392,7 @@ test "record and parse: triple-quote round-trip" {
     const n = file.readAll(&buf) catch unreachable;
     const content = buf[0..n];
 
-    var iter: Command.ScriptIterator = .init(aa, content);
+    var iter: lp.script.Iterator = .init(aa, content);
     const entry = (try iter.next()).?;
     const parsed_cmd = entry.command;
 

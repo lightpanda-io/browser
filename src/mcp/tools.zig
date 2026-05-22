@@ -3,19 +3,24 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = lp.js;
 const browser_tools = lp.tools;
+const BrowserTool = browser_tools.Tool;
 const script = lp.script;
 const Command = lp.script.Command;
 const Recorder = lp.script.Recorder;
 
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
+const McpTool = protocol.Tool;
 
-/// Convert browser tool_defs to MCP protocol.Tool format (comptime).
+/// Convert browser tool_defs to MCP wire-protocol tools (comptime).
+/// Tool identity comes from the `BrowserTool` tag — `tool_defs` only
+/// carries the LLM-facing description and JSON schema.
 const browser_tool_list = blk: {
-    var tools: [browser_tools.tool_defs.len]protocol.Tool = undefined;
-    for (browser_tools.tool_defs, 0..) |td, i| {
+    const fields = @typeInfo(BrowserTool).@"enum".fields;
+    var tools: [fields.len]McpTool = undefined;
+    for (browser_tools.tool_defs, fields, 0..) |td, f, i| {
         tools[i] = .{
-            .name = td.name,
+            .name = f.name,
             .description = td.description,
             .inputSchema = td.input_schema,
         };
@@ -82,7 +87,7 @@ const script_heal_schema = browser_tools.minify(
     \\}
 );
 
-const extra_tools = [_]protocol.Tool{
+const extra_tools = [_]McpTool{
     .{
         .name = "record_start",
         .description = "Start recording state-mutating browser tool calls into a PandaScript file. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, `eval`, and `extract` get appended as PandaScript lines. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
@@ -155,14 +160,14 @@ fn dispatchBrowserTool(
     name: []const u8,
     arguments: ?std.json.Value,
 ) !void {
-    const action = std.meta.stringToEnum(browser_tools.Action, name) orelse {
+    const tool = std.meta.stringToEnum(BrowserTool, name) orelse {
         return server.sendError(id, .MethodNotFound, "Tool not found");
     };
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
         // eval/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
-        if (surfacesErrorInBand(action)) {
+        if (surfacesErrorInBand(tool)) {
             return sendToolResultText(server, id, @errorName(err), true);
         }
         const code: protocol.ErrorCode = switch (err) {
@@ -173,18 +178,18 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, @errorName(err));
     };
 
-    if (!result.is_error) recordIfActive(server, action, arguments);
+    if (!result.is_error) recordIfActive(server, tool, arguments);
 
     try sendToolResultText(server, id, result.text, result.is_error);
 }
 
-fn surfacesErrorInBand(action: browser_tools.Action) bool {
-    return action == .eval or action == .extract;
+fn surfacesErrorInBand(tool: BrowserTool) bool {
+    return tool == .eval or tool == .extract;
 }
 
-fn recordIfActive(server: *Server, action: browser_tools.Action, arguments: ?std.json.Value) void {
+fn recordIfActive(server: *Server, tool: BrowserTool, arguments: ?std.json.Value) void {
     if (server.recorder == null) return;
-    const cmd = Command.fromToolCall(action, arguments);
+    const cmd = Command.fromToolCall(tool, arguments);
     // `record` no-ops on non-recorded tools — see `Command.isRecorded`.
     server.recorder.?.record(cmd);
 }
@@ -266,7 +271,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
 
     const tc = cmd.tool_call;
     const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name(), tc.args) catch |err| {
-        if (surfacesErrorInBand(tc.action)) {
+        if (surfacesErrorInBand(tc.tool)) {
             return sendErrorContent(server, id, @errorName(err));
         }
         const url = browser_tools.currentUrlOrPlaceholder(server.session);
@@ -310,6 +315,12 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, msg);
     };
 
+    if (args.replacements.len == 0) {
+        const msg = std.fmt.allocPrint(arena, "healed 0 line(s) in {s}", .{args.path}) catch "ok";
+        try sendToolResultText(server, id, msg, false);
+        return;
+    }
+
     var splices = arena.alloc(script.Replacement, args.replacements.len) catch return sendErrorContent(server, id, "out of memory");
 
     const index = indexLines(arena, content) catch return sendErrorContent(server, id, "out of memory");
@@ -326,6 +337,21 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
 
         splices[i] = script.formatHealReplacementLines(arena, entry.span, spec.original_line, spec.replacement_lines) catch |err|
             return sendErrorContent(server, id, @errorName(err));
+    }
+
+    // applyReplacements requires spans in file order and non-overlapping.
+    // The LLM may emit replacements unordered, and two specs can resolve to
+    // the same line. Sort by span offset, then reject duplicates so a single
+    // line can't be healed twice.
+    std.mem.sort(script.Replacement, splices, {}, struct {
+        fn lt(_: void, a: script.Replacement, b: script.Replacement) bool {
+            return @intFromPtr(a.original_span.ptr) < @intFromPtr(b.original_span.ptr);
+        }
+    }.lt);
+    for (splices[1..], splices[0 .. splices.len - 1]) |cur, prev| {
+        if (@intFromPtr(cur.original_span.ptr) == @intFromPtr(prev.original_span.ptr)) {
+            return sendErrorContent(server, id, "two replacements target the same original_line; merge them into one entry");
+        }
     }
 
     script.writeAtomic(arena, std.fs.cwd(), args.path, content, splices) catch |err| {

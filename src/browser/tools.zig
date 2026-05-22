@@ -27,20 +27,355 @@ const DOMNode = @import("webapi/Node.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 
-pub const ToolDef = struct {
-    name: []const u8,
-    description: []const u8,
-    input_schema: []const u8,
-    /// State-mutating: surfaces in `.lp` recordings. Read-only tools (queries,
-    /// env probes) stay out so a replay doesn't bloat the script with noise.
-    recorded: bool = false,
-    /// Safe target for the self-heal LLM to emit when a recorded step fails.
-    /// Only deterministic per-element actions; anything that depends on prior
-    /// page state or LLM judgment is excluded.
-    can_heal: bool = false,
+/// Hand-written so per-tool semantics (record/heal/locator/data) and
+/// LLM-facing metadata (`definition`) live as exhaustive switches on the
+/// tag — adding a new tool is a compile error until each predicate AND
+/// `definition` make an explicit choice. `tool_defs` (below) materializes
+/// `definition` over every tag for callers that iterate.
+pub const Tool = enum {
+    goto,
+    search,
+    markdown,
+    links,
+    eval,
+    extract,
+    tree,
+    nodeDetails,
+    interactiveElements,
+    structuredData,
+    detectForms,
+    click,
+    fill,
+    scroll,
+    waitForSelector,
+    hover,
+    press,
+    selectOption,
+    setChecked,
+    findElement,
+    consoleLogs,
+    getUrl,
+    getCookies,
+    getEnv,
+
+    /// State-mutating: surfaces in `.lp` recordings. Read-only tools
+    /// (queries, env probes) stay out so a replay doesn't bloat the script
+    /// with noise.
+    pub fn isRecorded(self: Tool) bool {
+        return switch (self) {
+            .goto, .eval, .extract, .click, .fill, .scroll, .waitForSelector, .hover, .press, .selectOption, .setChecked => true,
+            .search, .markdown, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
+    }
+
+    /// Safe target for the self-heal LLM to emit when a recorded step
+    /// fails. Only deterministic per-element actions; anything that depends
+    /// on prior page state or LLM judgment is excluded.
+    pub fn canHeal(self: Tool) bool {
+        return switch (self) {
+            .click, .fill, .scroll, .waitForSelector, .hover, .press, .selectOption, .setChecked, .extract => true,
+            .goto, .search, .markdown, .links, .eval, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
+    }
+
+    /// Tool requires a target element (selector or backendNodeId) at
+    /// runtime even though the JSON schema marks both as optional. Used by
+    /// the recorder to skip lines that can't be replayed.
+    pub fn needsLocator(self: Tool) bool {
+        return switch (self) {
+            .click, .fill, .hover, .selectOption, .setChecked => true,
+            .goto, .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
+    }
+
     /// Result is data the caller probably wants on stdout (extracted JSON,
     /// markdown, eval return value) rather than a status line on stderr.
-    produces_data: bool = false,
+    pub fn producesData(self: Tool) bool {
+        return switch (self) {
+            .search, .markdown, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
+            .goto, .click, .fill, .scroll, .waitForSelector, .hover, .press, .selectOption, .setChecked => false,
+        };
+    }
+
+    /// Per-tool LLM-facing metadata. Tool identity (name + predicates) lives
+    /// on the enclosing `Tool` enum; this struct just carries the strings.
+    pub const Definition = struct {
+        description: []const u8,
+        input_schema: []const u8,
+    };
+
+    /// Source of truth for tool ↔ metadata. The exhaustive switch makes
+    /// adding a new `Tool` tag a compile error until its description and
+    /// JSON schema exist. `tool_defs` (below) materializes the array form
+    /// for callers that iterate (MCP `tools/list`, schema build).
+    pub fn definition(self: Tool) Definition {
+        return switch (self) {
+            .goto => .{
+                .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\  },
+                    \\  "required": ["url"]
+                    \\}
+                ),
+            },
+            .search => .{
+                .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "query": { "type": "string", "description": "The search query." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\  },
+                    \\  "required": ["query"]
+                    \\}
+                ),
+            },
+            .markdown => .{
+                .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
+                .input_schema = url_params_schema,
+            },
+            .links => .{
+                .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
+                .input_schema = url_params_schema,
+            },
+            .eval => .{
+                .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "script": { "type": "string" },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\  },
+                    \\  "required": ["script"]
+                    \\}
+                ),
+            },
+            .extract => .{
+                .description =
+                \\Extract structured data from the current page using a small JSON schema. Prefer this over `markdown` or `eval` whenever the user asked for a specific value or list (a score, price, count, profile field, headlines, …) — the result is returned as JSON AND the call is recorded as an `/extract` PandaScript line, so a later replay (no LLM) prints the answer to stdout. Use `markdown` / `tree` / `interactiveElements` only to discover the right selector, then commit to one `extract` call.
+                \\
+                \\Schema is a JSON object literal (pass it as a string in `schema`). Each value picks what to lift out:
+                \\  "<sel>"                                → first match's textContent.trim() (string|null)
+                \\  ""                                     → element's own textContent.trim() (only meaningful inside `fields`)
+                \\  ["<sel>"]                              → every match's text (string[])
+                \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute (string|null)
+                \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
+                \\  [{"selector":"<sel>","fields":{…}}]    → array of objects, fields resolved relative to each match
+                \\
+                \\Examples (schema → result):
+                \\  {"karma": "#karma"} → {"karma":"42"}
+                \\  {"items": [".story .title"]} → {"items":["Title 1","Title 2"]}
+                \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
+                \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
+                ,
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." }
+                    \\  },
+                    \\  "required": ["schema"]
+                    \\}
+                ),
+            },
+            .tree => .{
+                .description = "Simplified semantic DOM tree (role, name, value, backendNodeId per node). Output omits raw HTML attributes; call `nodeDetails` on a backendNodeId to read id/class for selector synthesis. Navigates first if `url` is provided.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
+                    \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
+                    \\  }
+                    \\}
+                ),
+            },
+            .nodeDetails => .{
+                .description = "Details for a node by backendNodeId: tag, role, name, interactivity, disabled, value, input type, placeholder, href, **id**, **class**, checked, select options. Canonical way to turn a tree backendNodeId into a CSS selector.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to inspect." }
+                    \\  },
+                    \\  "required": ["backendNodeId"]
+                    \\}
+                ),
+            },
+            .interactiveElements => .{
+                .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
+                .input_schema = url_params_schema,
+            },
+            .structuredData => .{
+                .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
+                .input_schema = url_params_schema,
+            },
+            .detectForms => .{
+                .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
+                .input_schema = url_params_schema,
+            },
+            .click => .{
+                .description = "Click on an interactive element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Returns the current page URL and title after the click.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "selector": { "type": "string", "description": "CSS selector of the element to click. Preferred over backendNodeId." },
+                    \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to click." }
+                    \\  }
+                    \\}
+                ),
+            },
+            .fill => .{
+                .description = "Fill text into an input element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "selector": { "type": "string", "description": "CSS selector of the input element to fill. Preferred over backendNodeId." },
+                    \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the input element to fill." },
+                    \\    "value": { "type": "string", "description": "The text to fill into the input element." }
+                    \\  },
+                    \\  "required": ["value"]
+                    \\}
+                ),
+            },
+            .scroll => .{
+                .description = "Scroll the page or a specific element. Returns the scroll position and current page URL and title.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted, scrolls the window." },
+                    \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
+                    \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
+                    \\  }
+                    \\}
+                ),
+            },
+            .waitForSelector => .{
+                .description = "Wait for an element matching a CSS selector to appear in the page. Returns the backend node ID of the matched element.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "selector": { "type": "string", "description": "The CSS selector to wait for." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+                    \\  },
+                    \\  "required": ["selector"]
+                    \\}
+                ),
+            },
+            .hover => .{
+                .description = "Hover over an element, triggering mouseover and mouseenter events. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Useful for menus, tooltips, and hover states.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "selector": { "type": "string", "description": "CSS selector of the element to hover over. Preferred over backendNodeId." },
+                    \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to hover over." }
+                    \\  }
+                    \\}
+                ),
+            },
+            .press => .{
+                .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document." }
+                    \\  },
+                    \\  "required": ["key"]
+                    \\}
+                ),
+            },
+            .selectOption => .{
+                .description = "Select an option in a <select> dropdown element by its value. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Dispatches input and change events.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "selector": { "type": "string", "description": "CSS selector of the <select> element. Preferred over backendNodeId." },
+                    \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the <select> element." },
+                    \\    "value": { "type": "string", "description": "The value of the option to select." }
+                    \\  },
+                    \\  "required": ["value"]
+                    \\}
+                ),
+            },
+            .setChecked => .{
+                .description = "Check or uncheck a checkbox or radio button. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Dispatches input, change, and click events.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "selector": { "type": "string", "description": "CSS selector of the checkbox or radio input element. Preferred over backendNodeId." },
+                    \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the checkbox or radio input element." },
+                    \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element.", "default": true }
+                    \\  },
+                    \\  "required": ["checked"]
+                    \\}
+                ),
+            },
+            .findElement => .{
+                .description = "Find interactive elements by role and/or accessible name. Returns matching elements with their backend node IDs. Useful for locating specific elements without parsing the full semantic tree.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
+                    \\    "name": { "type": "string", "description": "Optional accessible name substring to match (case-insensitive)." }
+                    \\  }
+                    \\}
+                ),
+            },
+            .consoleLogs => .{
+                .description = "Get buffered console.log/warn/error messages from the current page. Returns all messages since last call and clears the buffer.",
+                .input_schema = minify(
+                    \\{ "type": "object", "properties": {} }
+                ),
+            },
+            .getUrl => .{
+                .description = "Current page URL. The browser may already have a page loaded (slash command, replayed script) not visible in this conversation — call this before assuming nothing is loaded when the user references the current page/site. Also useful to verify a navigation or detect a redirect.",
+                .input_schema = minify(
+                    \\{ "type": "object", "properties": {} }
+                ),
+            },
+            .getCookies => .{
+                .description = "Get all cookies in the browser. Useful for debugging authentication and session state.",
+                .input_schema = minify(
+                    \\{ "type": "object", "properties": {} }
+                ),
+            },
+            .getEnv => .{
+                .description = "With `name`: read an LP_* env var (other namespaces report as not set) — for non-secret config only (base URLs, flags). Without `name`: list LP_* names that are set (no values) — safe credential discovery. For secrets, pass `$LP_*` placeholders in tool args; never request a credential by name (the value would land in your context).",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "name": { "type": "string", "description": "Optional. If provided, must start with LP_; returns the value. If omitted, returns the list of LP_* names that are set." }
+                    \\  }
+                    \\}
+                ),
+            },
+        };
+    }
 };
 
 pub fn minify(comptime json: []const u8) []const u8 {
@@ -83,337 +418,22 @@ const url_params_schema = minify(
     \\}
 );
 
-pub const tool_defs = [_]ToolDef{
-    .{
-        .name = "goto",
-        .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  },
-            \\  "required": ["url"]
-            \\}
-        ),
-        .recorded = true,
-    },
-    .{
-        .name = "search",
-        .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "query": { "type": "string", "description": "The search query." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  },
-            \\  "required": ["query"]
-            \\}
-        ),
-        .produces_data = true,
-    },
-    .{
-        .name = "markdown",
-        .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
-        .input_schema = url_params_schema,
-        .produces_data = true,
-    },
-    .{
-        .name = "links",
-        .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
-        .input_schema = url_params_schema,
-        .produces_data = true,
-    },
-    .{
-        .name = "eval",
-        .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "script": { "type": "string" },
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  },
-            \\  "required": ["script"]
-            \\}
-        ),
-        .recorded = true,
-        .produces_data = true,
-    },
-    .{
-        .name = "extract",
-        .description =
-        \\Extract structured data from the current page using a small JSON schema. Prefer this over `markdown` or `eval` whenever the user asked for a specific value or list (a score, price, count, profile field, headlines, …) — the result is returned as JSON AND the call is recorded as an `/extract` PandaScript line, so a later replay (no LLM) prints the answer to stdout. Use `markdown` / `tree` / `interactiveElements` only to discover the right selector, then commit to one `extract` call.
-        \\
-        \\Schema is a JSON object literal (pass it as a string in `schema`). Each value picks what to lift out:
-        \\  "<sel>"                                → first match's textContent.trim() (string|null)
-        \\  ""                                     → element's own textContent.trim() (only meaningful inside `fields`)
-        \\  ["<sel>"]                              → every match's text (string[])
-        \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute (string|null)
-        \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
-        \\  [{"selector":"<sel>","fields":{…}}]    → array of objects, fields resolved relative to each match
-        \\
-        \\Examples (schema → result):
-        \\  {"karma": "#karma"} → {"karma":"42"}
-        \\  {"items": [".story .title"]} → {"items":["Title 1","Title 2"]}
-        \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
-        \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
-        ,
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." }
-            \\  },
-            \\  "required": ["schema"]
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-        .produces_data = true,
-    },
-    .{
-        .name = "tree",
-        .description = "Simplified semantic DOM tree (role, name, value, backendNodeId per node). Output omits raw HTML attributes; call `nodeDetails` on a backendNodeId to read id/class for selector synthesis. Navigates first if `url` is provided.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
-            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
-            \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
-            \\  }
-            \\}
-        ),
-        .produces_data = true,
-    },
-    .{
-        .name = "nodeDetails",
-        .description = "Details for a node by backendNodeId: tag, role, name, interactivity, disabled, value, input type, placeholder, href, **id**, **class**, checked, select options. Canonical way to turn a tree backendNodeId into a CSS selector.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to inspect." }
-            \\  },
-            \\  "required": ["backendNodeId"]
-            \\}
-        ),
-        .produces_data = true,
-    },
-    .{
-        .name = "interactiveElements",
-        .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
-        .input_schema = url_params_schema,
-        .produces_data = true,
-    },
-    .{
-        .name = "structuredData",
-        .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
-        .input_schema = url_params_schema,
-        .produces_data = true,
-    },
-    .{
-        .name = "detectForms",
-        .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
-        .input_schema = url_params_schema,
-        .produces_data = true,
-    },
-    .{
-        .name = "click",
-        .description = "Click on an interactive element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Returns the current page URL and title after the click.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "selector": { "type": "string", "description": "CSS selector of the element to click. Preferred over backendNodeId." },
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to click." }
-            \\  }
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-    },
-    .{
-        .name = "fill",
-        .description = "Fill text into an input element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "selector": { "type": "string", "description": "CSS selector of the input element to fill. Preferred over backendNodeId." },
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the input element to fill." },
-            \\    "value": { "type": "string", "description": "The text to fill into the input element." }
-            \\  },
-            \\  "required": ["value"]
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-    },
-    .{
-        .name = "scroll",
-        .description = "Scroll the page or a specific element. Returns the scroll position and current page URL and title.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted, scrolls the window." },
-            \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
-            \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
-            \\  }
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-    },
-    .{
-        .name = "waitForSelector",
-        .description = "Wait for an element matching a CSS selector to appear in the page. Returns the backend node ID of the matched element.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "selector": { "type": "string", "description": "The CSS selector to wait for." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
-            \\  },
-            \\  "required": ["selector"]
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-    },
-    .{
-        .name = "hover",
-        .description = "Hover over an element, triggering mouseover and mouseenter events. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Useful for menus, tooltips, and hover states.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "selector": { "type": "string", "description": "CSS selector of the element to hover over. Preferred over backendNodeId." },
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to hover over." }
-            \\  }
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-    },
-    .{
-        .name = "press",
-        .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
-            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document." }
-            \\  },
-            \\  "required": ["key"]
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-    },
-    .{
-        .name = "selectOption",
-        .description = "Select an option in a <select> dropdown element by its value. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Dispatches input and change events.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "selector": { "type": "string", "description": "CSS selector of the <select> element. Preferred over backendNodeId." },
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the <select> element." },
-            \\    "value": { "type": "string", "description": "The value of the option to select." }
-            \\  },
-            \\  "required": ["value"]
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-    },
-    .{
-        .name = "setChecked",
-        .description = "Check or uncheck a checkbox or radio button. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Dispatches input, change, and click events.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "selector": { "type": "string", "description": "CSS selector of the checkbox or radio input element. Preferred over backendNodeId." },
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the checkbox or radio input element." },
-            \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element.", "default": true }
-            \\  },
-            \\  "required": ["checked"]
-            \\}
-        ),
-        .recorded = true,
-        .can_heal = true,
-    },
-    .{
-        .name = "findElement",
-        .description = "Find interactive elements by role and/or accessible name. Returns matching elements with their backend node IDs. Useful for locating specific elements without parsing the full semantic tree.",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
-            \\    "name": { "type": "string", "description": "Optional accessible name substring to match (case-insensitive)." }
-            \\  }
-            \\}
-        ),
-        .produces_data = true,
-    },
-    .{
-        .name = "consoleLogs",
-        .description = "Get buffered console.log/warn/error messages from the current page. Returns all messages since last call and clears the buffer.",
-        .input_schema = minify(
-            \\{ "type": "object", "properties": {} }
-        ),
-        .produces_data = true,
-    },
-    .{
-        .name = "getUrl",
-        .description = "Current page URL. The browser may already have a page loaded (slash command, replayed script) not visible in this conversation — call this before assuming nothing is loaded when the user references the current page/site. Also useful to verify a navigation or detect a redirect.",
-        .input_schema = minify(
-            \\{ "type": "object", "properties": {} }
-        ),
-        .produces_data = true,
-    },
-    .{
-        .name = "getCookies",
-        .description = "Get all cookies in the browser. Useful for debugging authentication and session state.",
-        .input_schema = minify(
-            \\{ "type": "object", "properties": {} }
-        ),
-        .produces_data = true,
-    },
-    .{
-        .name = "getEnv",
-        .description = "With `name`: read an LP_* env var (other namespaces report as not set) — for non-secret config only (base URLs, flags). Without `name`: list LP_* names that are set (no values) — safe credential discovery. For secrets, pass `$LP_*` placeholders in tool args; never request a credential by name (the value would land in your context).",
-        .input_schema = minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "name": { "type": "string", "description": "Optional. If provided, must start with LP_; returns the value. If omitted, returns the list of LP_* names that are set." }
-            \\  }
-            \\}
-        ),
-        .produces_data = true,
-    },
+/// Materialized form of `Tool.definition` keyed by `@intFromEnum(Tool)`.
+/// Built at comptime by iterating every `Tool` tag — order and count
+/// can't drift because both come from the enum itself.
+pub const tool_defs: [@typeInfo(Tool).@"enum".fields.len]Tool.Definition = blk: {
+    var arr: [@typeInfo(Tool).@"enum".fields.len]Tool.Definition = undefined;
+    for (std.enums.values(Tool), 0..) |t, i| arr[i] = t.definition();
+    break :blk arr;
 };
 
-/// Comptime-built flat array of tool names, in `tool_defs` order. Use this
-/// when callers only need the names (slash-command lookup, MCP `tools/list`).
-pub const names: [tool_defs.len][]const u8 = blk: {
-    var arr: [tool_defs.len][]const u8 = undefined;
-    for (tool_defs, 0..) |td, i| arr[i] = td.name;
+/// Comptime-built flat array of tool names, in `Tool` declaration order.
+/// Use this when callers only need the names (slash-command lookup, MCP
+/// `tools/list`).
+pub const names: [@typeInfo(Tool).@"enum".fields.len][]const u8 = blk: {
+    const fields = @typeInfo(Tool).@"enum".fields;
+    var arr: [fields.len][]const u8 = undefined;
+    for (fields, 0..) |f, i| arr[i] = f.name;
     break :blk arr;
 };
 
@@ -435,13 +455,6 @@ pub const ToolError = error{
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
-
-    /// Collapse a `ToolError!ToolResult` into a single value by surfacing
-    /// the Zig error name in-band (`is_error = true`). Use when the caller
-    /// treats operational and JS-level failures the same way.
-    pub fn unwrap(result: ToolError!ToolResult) ToolResult {
-        return result catch |err| .{ .text = @errorName(err), .is_error = true };
-    }
 
     /// The text payload only when the tool succeeded; `null` on failure.
     /// Convenient for callers (e.g. `Verifier`) that bail on any error.
@@ -476,19 +489,6 @@ const ActionTarget = union(enum) {
 
 const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarget };
 
-/// Derived from `tool_defs` so the enum and the tool table can't drift.
-/// Tag order follows declaration order in `tool_defs`.
-pub const Action = blk: {
-    var fields: [tool_defs.len]std.builtin.Type.EnumField = undefined;
-    for (tool_defs, 0..) |td, i| fields[i] = .{ .name = td.name[0..td.name.len :0], .value = i };
-    break :blk @Type(.{ .@"enum" = .{
-        .tag_type = u8,
-        .fields = &fields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
-};
-
 pub fn call(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -496,30 +496,31 @@ pub fn call(
     tool_name: []const u8,
     arguments: ?std.json.Value,
 ) ToolError!ToolResult {
-    const action = std.meta.stringToEnum(Action, tool_name) orelse return ToolError.InvalidParams;
+    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return ToolError.InvalidParams;
+    const substituted = try substituteStringArgs(arena, tool, arguments);
 
-    return switch (action) {
-        .goto => .{ .text = try execGoto(arena, session, registry, arguments) },
-        .search => .{ .text = try execSearch(arena, session, registry, arguments) },
-        .markdown => .{ .text = try execMarkdown(arena, session, registry, arguments) },
-        .links => .{ .text = try execLinks(arena, session, registry, arguments) },
-        .tree => .{ .text = try execTree(arena, session, registry, arguments) },
-        .nodeDetails => .{ .text = try execNodeDetails(arena, session, registry, arguments) },
-        .interactiveElements => .{ .text = try execInteractiveElements(arena, session, registry, arguments) },
-        .structuredData => .{ .text = try execStructuredData(arena, session, registry, arguments) },
-        .detectForms => .{ .text = try execDetectForms(arena, session, registry, arguments) },
-        .click => .{ .text = try execClick(arena, session, registry, arguments) },
-        .fill => .{ .text = try execFill(arena, session, registry, arguments) },
-        .scroll => .{ .text = try execScroll(arena, session, registry, arguments) },
-        .waitForSelector => .{ .text = try execWaitForSelector(arena, session, registry, arguments) },
-        .hover => .{ .text = try execHover(arena, session, registry, arguments) },
-        .press => .{ .text = try execPress(arena, session, registry, arguments) },
-        .selectOption => .{ .text = try execSelectOption(arena, session, registry, arguments) },
-        .setChecked => .{ .text = try execSetChecked(arena, session, registry, arguments) },
-        .findElement => .{ .text = try execFindElement(arena, session, registry, arguments) },
-        .eval => execEval(arena, session, registry, arguments),
-        .extract => execExtract(arena, session, registry, arguments),
-        .getEnv => .{ .text = try execGetEnv(arena, arguments) },
+    return switch (tool) {
+        .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
+        .search => .{ .text = try execSearch(arena, session, registry, substituted) },
+        .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
+        .links => .{ .text = try execLinks(arena, session, registry, substituted) },
+        .tree => .{ .text = try execTree(arena, session, registry, substituted) },
+        .nodeDetails => .{ .text = try execNodeDetails(arena, session, registry, substituted) },
+        .interactiveElements => .{ .text = try execInteractiveElements(arena, session, registry, substituted) },
+        .structuredData => .{ .text = try execStructuredData(arena, session, registry, substituted) },
+        .detectForms => .{ .text = try execDetectForms(arena, session, registry, substituted) },
+        .click => .{ .text = try execClick(arena, session, registry, substituted) },
+        .fill => .{ .text = try execFill(arena, session, registry, substituted) },
+        .scroll => .{ .text = try execScroll(arena, session, registry, substituted) },
+        .waitForSelector => .{ .text = try execWaitForSelector(arena, session, registry, substituted) },
+        .hover => .{ .text = try execHover(arena, session, registry, substituted) },
+        .press => .{ .text = try execPress(arena, session, registry, substituted) },
+        .selectOption => .{ .text = try execSelectOption(arena, session, registry, substituted) },
+        .setChecked => .{ .text = try execSetChecked(arena, session, registry, substituted) },
+        .findElement => .{ .text = try execFindElement(arena, session, registry, substituted) },
+        .eval => execEval(arena, session, registry, substituted),
+        .extract => execExtract(arena, session, registry, substituted),
+        .getEnv => .{ .text = try execGetEnv(arena, substituted) },
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
         .getUrl => .{ .text = try execGetUrl(session) },
         .getCookies => .{ .text = try execGetCookies(arena, session) },
@@ -1209,6 +1210,49 @@ pub fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.jso
     return parseValue(T, arena, arguments orelse return error.InvalidParams);
 }
 
+/// Resolve `$LP_*` placeholders in every string arg before the tool runs.
+/// `fill.value` is the one exception: `execFill` resolves it internally and
+/// echoes the original placeholder so the credential never surfaces in the
+/// result text. Co-located with `execFill` so both halves of the carve-out
+/// live in one file.
+fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
+    const v = args orelse return null;
+    if (v != .object) return v;
+
+    const is_fill = tool == .fill;
+
+    const needsSub = struct {
+        fn f(is_fill_: bool, key: []const u8, val: std.json.Value) bool {
+            if (is_fill_ and std.mem.eql(u8, key, "value")) return false;
+            return val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null;
+        }
+    }.f;
+
+    var needs_any = false;
+    var it = v.object.iterator();
+    while (it.next()) |entry| {
+        if (needsSub(is_fill, entry.key_ptr.*, entry.value_ptr.*)) {
+            needs_any = true;
+            break;
+        }
+    }
+    if (!needs_any) return v;
+
+    var new_obj: std.json.ObjectMap = .init(arena);
+    try new_obj.ensureTotalCapacity(v.object.count());
+    it = v.object.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.*;
+        const new_val: std.json.Value = if (needsSub(is_fill, key, val))
+            .{ .string = try substituteEnvVars(arena, val.string) }
+        else
+            val;
+        try new_obj.put(key, new_val);
+    }
+    return .{ .object = new_obj };
+}
+
 pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
     // No `$LP_` prefix → no substitution possible, skip the rebuild entirely.
     // Pages routinely contain `$5.99`-style content where `$` is incidental.
@@ -1247,7 +1291,8 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
 /// agent retyped as a literal doesn't leak into the recording. Values < 4
 /// chars are skipped to avoid false-positive substring matches.
 pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
-    const env_names = lpEnvNames(arena) catch return input;
+    if (input.len < 4) return input;
+    const env_names = try lpEnvNames(arena);
 
     // Iterate by value length descending. With two LP_* values where one is a
     // substring of the other (both ≥4 chars so neither is filtered), name-order
