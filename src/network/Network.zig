@@ -536,6 +536,8 @@ fn dropCdp(self: *Network, link: *CdpLink, err: ?anyerror, notify: bool) void {
     link.state = .removed;
     self.cdp_dirty = true;
     if (notify) {
+        link.cdp.terminateFromNetwork();
+
         // notify=true means the worker hasn't been told yet — push the
         // disconnect into the inbox and break it out of curl_multi_poll.
         // notify=false paths have already woken the worker (close frame
