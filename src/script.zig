@@ -186,45 +186,34 @@ pub fn writeAtomic(
     try af.finish();
 }
 
+/// Replacement body: either parsed Commands (agent self-heal) or pre-rendered
+/// lines (MCP `script_heal`, where the LLM driver supplies raw PandaScript).
+pub const HealBody = union(enum) {
+    cmds: []const Command,
+    lines: []const []const u8,
+};
+
 /// Build the standard `# [Auto-healed] Original: <line>` header followed by
-/// the serialized replacement commands. Caller owns the returned slice.
+/// the body. Caller owns the returned slice.
 pub fn formatHealReplacement(
     arena: std.mem.Allocator,
     original_span: []const u8,
     opener_line: []const u8,
-    cmds: []const Command,
+    body: HealBody,
 ) !Replacement {
-    std.debug.assert(cmds.len > 0);
     var aw: std.Io.Writer.Allocating = .init(arena);
     try aw.writer.print("# [Auto-healed] Original: {s}\n", .{opener_line});
-    for (cmds) |cmd| {
-        try cmd.format(&aw.writer);
-        try aw.writer.writeByte('\n');
+    switch (body) {
+        .cmds => |cmds| for (cmds) |cmd| {
+            try cmd.format(&aw.writer);
+            try aw.writer.writeByte('\n');
+        },
+        .lines => |lines| for (lines) |line| {
+            try aw.writer.writeAll(line);
+            try aw.writer.writeByte('\n');
+        },
     }
     return .{ .original_span = original_span, .new_text = aw.written() };
-}
-
-/// Same shape as `formatHealReplacement` but for callers that already have
-/// rendered replacement lines (no Command round-trip). Used by the MCP
-/// `script_heal` tool where the LLM driver supplies raw PandaScript lines.
-pub fn formatHealReplacementLines(
-    arena: std.mem.Allocator,
-    original_span: []const u8,
-    opener_line: []const u8,
-    replacement_lines: []const []const u8,
-) !Replacement {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-
-    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{opener_line});
-    for (replacement_lines) |line| {
-        try aw.writer.writeAll(line);
-        try aw.writer.writeByte('\n');
-    }
-
-    return .{
-        .original_span = original_span,
-        .new_text = aw.written(),
-    };
 }
 
 /// Reject paths that an untrusted MCP client could use to escape the
@@ -375,45 +364,31 @@ fn buildToolCall(arena: std.mem.Allocator, name: []const u8, kvs: []const struct
     return .{ .tool_call = .{ .tool = tool, .args = .{ .object = obj } } };
 }
 
-test "formatHealReplacement: single command produces one-line replacement" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const cmds = [_]Command{buildToolCall(arena.allocator(), "click", &.{.{ "selector", "#submit-v2" }})};
-    const replacement = try formatHealReplacement(
-        arena.allocator(),
-        "/click selector='#submit'\n",
-        "/click selector='#submit'",
-        &cmds,
-    );
-
-    try std.testing.expectEqualStrings("/click selector='#submit'\n", replacement.original_span);
-    try std.testing.expectEqualStrings(
-        "# [Auto-healed] Original: /click selector='#submit'\n/click selector='#submit-v2'\n",
-        replacement.new_text,
-    );
-}
-
-test "formatHealReplacement: multiple commands produce multi-line replacement" {
+test "formatHealReplacement: single and multiple commands" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const cmds = [_]Command{
-        buildToolCall(aa, "click", &.{.{ "selector", ".cookie-accept" }}),
-        buildToolCall(aa, "click", &.{.{ "selector", "#submit-v2" }}),
-    };
-    const replacement = try formatHealReplacement(
-        aa,
-        "/click selector='#submit'\n",
-        "/click selector='#submit'",
-        &cmds,
-    );
-
-    try std.testing.expectEqualStrings(
-        "# [Auto-healed] Original: /click selector='#submit'\n/click selector='.cookie-accept'\n/click selector='#submit-v2'\n",
-        replacement.new_text,
-    );
+    {
+        const cmds = [_]Command{buildToolCall(aa, "click", &.{.{ "selector", "#submit-v2" }})};
+        const r = try formatHealReplacement(aa, "/click selector='#submit'\n", "/click selector='#submit'", .{ .cmds = &cmds });
+        try std.testing.expectEqualStrings("/click selector='#submit'\n", r.original_span);
+        try std.testing.expectEqualStrings(
+            "# [Auto-healed] Original: /click selector='#submit'\n/click selector='#submit-v2'\n",
+            r.new_text,
+        );
+    }
+    {
+        const cmds = [_]Command{
+            buildToolCall(aa, "click", &.{.{ "selector", ".cookie-accept" }}),
+            buildToolCall(aa, "click", &.{.{ "selector", "#submit-v2" }}),
+        };
+        const r = try formatHealReplacement(aa, "/click selector='#submit'\n", "/click selector='#submit'", .{ .cmds = &cmds });
+        try std.testing.expectEqualStrings(
+            "# [Auto-healed] Original: /click selector='#submit'\n/click selector='.cookie-accept'\n/click selector='#submit-v2'\n",
+            r.new_text,
+        );
+    }
 }
 
 test "writeAtomic: writes content and creates .bak" {

@@ -610,6 +610,46 @@ pub fn freeLine(line: []const u8) void {
     c.ic_free(@ptrCast(@constCast(line.ptr)));
 }
 
+pub fn interactiveTty() bool {
+    return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
+}
+
+/// Numbered TTY picker. `default` (if set) marks that row "(default)" and
+/// makes Enter return that index. Errors with NoChoice after 3 invalid
+/// attempts.
+pub fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
+    var stdin_buf: [128]u8 = undefined;
+    var stdin = std.fs.File.stdin().reader(&stdin_buf);
+
+    var attempt: u8 = 0;
+    while (attempt < 3) : (attempt += 1) {
+        std.debug.print("{s}\n", .{header});
+        for (items, 0..) |item, idx| {
+            const marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
+            std.debug.print("  {d:>3}) {s}{s}\n", .{ idx + 1, item, marker });
+        }
+        std.debug.print("> ", .{});
+
+        const line = stdin.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+            error.EndOfStream, error.StreamTooLong, error.ReadFailed => return error.UserCancelled,
+        };
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (trimmed.len == 0) {
+            if (default) |d| return d;
+            std.debug.print("Invalid input — type a number.\n", .{});
+            continue;
+        }
+        const choice = std.fmt.parseInt(usize, trimmed, 10) catch {
+            const hint: []const u8 = if (default != null) " (or press Enter for default)" else "";
+            std.debug.print("Invalid input — type a number{s}.\n", .{hint});
+            continue;
+        };
+        if (choice >= 1 and choice <= items.len) return choice - 1;
+        std.debug.print("Out of range.\n", .{});
+    }
+    return error.NoChoice;
+}
+
 pub fn printAssistant(_: *Terminal, text: []const u8) void {
     const fd = std.posix.STDOUT_FILENO;
     _ = std.posix.write(fd, text) catch {};

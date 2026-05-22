@@ -335,7 +335,7 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
             return sendErrorContent(server, id, msg);
         }
 
-        splices[i] = script.formatHealReplacementLines(arena, entry.span, spec.original_line, spec.replacement_lines) catch |err|
+        splices[i] = script.formatHealReplacement(arena, entry.span, spec.original_line, .{ .lines = spec.replacement_lines }) catch |err|
             return sendErrorContent(server, id, @errorName(err));
     }
 

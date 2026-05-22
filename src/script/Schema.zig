@@ -244,7 +244,7 @@ pub fn parseSlashCommand(input: []const u8) ?Split {
     return splitNameRest(input[1..]);
 }
 
-pub fn find(schemas: []const Schema, name: []const u8) ?*const Schema {
+fn find(schemas: []const Schema, name: []const u8) ?*const Schema {
     if (std.meta.stringToEnum(BrowserTool, name)) |tool| {
         const idx = @intFromEnum(tool);
         if (idx < schemas.len) return &schemas[idx];
@@ -452,7 +452,7 @@ pub const QuoteType = enum {
         return if (s.len == 3) fromPrefix(s) else null;
     }
 
-    pub fn fromPrefix(s: []const u8) ?QuoteType {
+    fn fromPrefix(s: []const u8) ?QuoteType {
         if (std.mem.startsWith(u8, s, "\"\"\"")) return .triple_double;
         if (std.mem.startsWith(u8, s, "'''")) return .triple_single;
         return null;
@@ -467,7 +467,7 @@ pub const QuoteType = enum {
 
     /// Pick a triple-quote delimiter not appearing in `body`. Null when
     /// both appear and neither can wrap unambiguously.
-    pub fn pickFor(body: []const u8) ?QuoteType {
+    fn pickFor(body: []const u8) ?QuoteType {
         const has_single = std.mem.indexOf(u8, body, "'''") != null;
         const has_double = std.mem.indexOf(u8, body, "\"\"\"") != null;
         if (has_single and has_double) return null;
@@ -515,7 +515,7 @@ pub fn writeInlineValue(writer: *std.Io.Writer, v: std.json.Value) (std.Io.Write
 
 /// Caller must filter via `quotableInline` first; remaining ambiguous
 /// cases trap as `WriteFailed` so a stray path can't emit a broken line.
-pub fn writeQuoted(writer: *std.Io.Writer, s: []const u8) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
+fn writeQuoted(writer: *std.Io.Writer, s: []const u8) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
     if (std.mem.indexOfScalar(u8, s, '\n') != null) return error.WriteFailed;
 
     const has_single = std.mem.indexOfScalar(u8, s, '\'') != null;

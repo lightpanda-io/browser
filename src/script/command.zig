@@ -285,24 +285,22 @@ test "format: /eval emits triple-quote block for multi-line script" {
     try testing.expectString("/eval '''\nconst x = 1;\nreturn x;\n'''", aw.written());
 }
 
-test "format: /setChecked omits checked=true (matches default)" {
+test "format: /setChecked omits checked=true (default), keeps checked=false" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const cmd = try Command.parse(arena.allocator(), "/setChecked selector='#agree' checked=true");
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try cmd.format(&aw.writer);
-    try testing.expectString("/setChecked selector='#agree'", aw.written());
-}
+    const aa = arena.allocator();
 
-test "format: /setChecked keeps checked=false (non-default)" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const cmd = try Command.parse(arena.allocator(), "/setChecked selector='#x' checked=false");
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try cmd.format(&aw.writer);
-    try testing.expectString("/setChecked selector='#x' checked=false", aw.written());
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "/setChecked selector='#agree' checked=true", .expected = "/setChecked selector='#agree'" },
+        .{ .input = "/setChecked selector='#x' checked=false", .expected = "/setChecked selector='#x' checked=false" },
+    };
+    for (cases) |case| {
+        const cmd = try Command.parse(aa, case.input);
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.format(&aw.writer);
+        try testing.expectString(case.expected, aw.written());
+    }
 }
 
 test "format: /login and /acceptCookies" {
@@ -315,6 +313,26 @@ test "format: /login and /acceptCookies" {
     defer aw2.deinit();
     try (Command{ .acceptCookies = {} }).format(&aw2.writer);
     try testing.expectString("/acceptCookies", aw2.written());
+}
+
+test "canHeal: only page-local DOM commands are allowed" {
+    // Table-driven over the live tool flags so adding a new tool can't
+    // silently drift from the heal allow-list.
+    const allow = [_]BrowserTool{ .click, .hover, .waitForSelector, .fill, .selectOption, .setChecked, .scroll, .extract, .press };
+    const deny = [_]BrowserTool{ .goto, .eval, .tree, .markdown, .search, .links };
+
+    for (allow) |action| {
+        const cmd = Command.fromToolCall(action, null);
+        try testing.expect(cmd.canHeal());
+    }
+    for (deny) |action| {
+        const cmd = Command.fromToolCall(action, null);
+        try testing.expect(!cmd.canHeal());
+    }
+
+    try testing.expect(!(Command{ .login = {} }).canHeal());
+    try testing.expect(!(Command{ .acceptCookies = {} }).canHeal());
+    try testing.expect(!(Command{ .comment = {} }).canHeal());
 }
 
 test "isRecorded / canHeal / producesData via tool flags" {
@@ -335,21 +353,21 @@ test "isRecorded / canHeal / producesData via tool flags" {
     try testing.expect(!login.canHeal());
 }
 
-test "isRecorded: null args on a required-fields tool are not recorded" {
-    // A provider that hands back `arguments: null` for `/click` would
-    // otherwise produce a bare `/click` line that can't be replayed.
-    const click_null = Command.fromToolCall(.click, null);
-    try testing.expect(click_null.isRecorded()); // click has zero required fields
-    const goto_null = Command.fromToolCall(.goto, null);
-    try testing.expect(!goto_null.isRecorded()); // goto requires url
-    const fill_null = Command.fromToolCall(.fill, null);
-    try testing.expect(!fill_null.isRecorded()); // fill requires value
-}
-
-test "isRecorded and format: backendNodeId stripped, selector preserved" {
+test "isRecorded: args shape and locator semantics" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
+
+    // Null args: recorded iff the tool has zero required fields. A provider
+    // that hands back `arguments: null` for `/click` would otherwise produce
+    // a bare `/click` line that can't be replayed.
+    try testing.expect(Command.fromToolCall(.click, null).isRecorded());
+    try testing.expect(!Command.fromToolCall(.goto, null).isRecorded());
+    try testing.expect(!Command.fromToolCall(.fill, null).isRecorded());
+
+    // Non-object args: recorded iff the tool doesn't need a locator.
+    try testing.expect(Command.fromToolCall(.goto, .{ .string = "https://x" }).isRecorded());
+    try testing.expect(!Command.fromToolCall(.click, .{ .string = "#submit" }).isRecorded());
 
     // selector + backendNodeId: keep the call, drop the backendNodeId.
     {
@@ -365,32 +383,11 @@ test "isRecorded and format: backendNodeId stripped, selector preserved" {
         try testing.expectString("/click selector='#submit'", aw.written());
     }
 
-    // backendNodeId only: still skipped — no replayable identifier.
+    // backendNodeId only: skipped — no replayable identifier.
     {
         var obj: std.json.ObjectMap = .init(aa);
         try obj.put("backendNodeId", .{ .integer = 42 });
         const cmd = Command.fromToolCall(.click, .{ .object = obj });
         try testing.expect(!cmd.isRecorded());
     }
-}
-
-test "fromToolCall: builds a tool_call Command" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-
-    var obj: std.json.ObjectMap = .init(arena.allocator());
-    try obj.put("url", .{ .string = "https://x" });
-    const cmd = Command.fromToolCall(.goto, .{ .object = obj });
-    try testing.expect(cmd == .tool_call);
-    try testing.expectString("goto", cmd.tool_call.name());
-}
-
-test "isRecorded: non-object args check locator presence" {
-    // goto does not need a locator: isRecorded returns true even if args is not object
-    const goto_non_obj = Command.fromToolCall(.goto, .{ .string = "https://x" });
-    try testing.expect(goto_non_obj.isRecorded());
-
-    // click needs a locator: isRecorded returns false if args is not object
-    const click_non_obj = Command.fromToolCall(.click, .{ .string = "#submit" });
-    try testing.expect(!click_non_obj.isRecorded());
 }

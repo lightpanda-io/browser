@@ -730,7 +730,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.En
         // opener alone is useless to the LLM — feed it the full block body.
         const failed_text = std.mem.trimRight(u8, entry.raw_span, &std.ascii.whitespace);
         if (self.attemptSelfHeal(sa, failed_text, reason, last_comment)) |healed_cmds| {
-            const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.opener_line, healed_cmds) catch |err| {
+            const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.opener_line, .{ .cmds = healed_cmds }) catch |err| {
                 self.terminal.printErrorFmt(
                     "line {d}: failed to record heal: {s} (script left unchanged)",
                     .{ entry.line_num, @errorName(err) },
@@ -1258,7 +1258,7 @@ fn defaultModel(p: Config.AiProvider) []const u8 {
 }
 
 fn pickProvider(found: []const Credentials) !Credentials {
-    if (!interactiveTty()) {
+    if (!Terminal.interactiveTty()) {
         log.fatal(.app, "multiple API keys detected", .{
             .hint = "Pass --provider explicitly when running non-interactively",
         });
@@ -1268,7 +1268,7 @@ fn pickProvider(found: []const Credentials) !Credentials {
     var labels: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
     for (found, 0..) |f, i| labels[i] = @tagName(f.provider);
 
-    const idx = promptNumberedChoice("Multiple API keys detected. Pick provider:", labels[0..found.len], null) catch {
+    const idx = Terminal.promptNumberedChoice("Multiple API keys detected. Pick provider:", labels[0..found.len], null) catch {
         std.debug.print("Cancelled — pass --provider to skip the picker.\n", .{});
         return error.UserCancelled;
     };
@@ -1280,7 +1280,7 @@ fn pickProvider(found: []const Credentials) !Credentials {
 /// heap buffer (including for the default case) so the caller has one
 /// uniform free path.
 fn pickModel(allocator: std.mem.Allocator, llm: Credentials, base_url: ?[:0]const u8) ![]u8 {
-    if (!interactiveTty()) {
+    if (!Terminal.interactiveTty()) {
         log.fatal(.app, "pick-model needs a TTY", .{
             .hint = "rerun in a terminal or pass --model explicitly",
         });
@@ -1314,75 +1314,9 @@ fn pickModel(allocator: std.mem.Allocator, llm: Credentials, base_url: ?[:0]cons
     const header = std.fmt.bufPrint(&header_buf, "Pick model for {s}{s}:", .{ @tagName(llm.provider), enter_hint }) catch
         "Pick model:";
 
-    const idx = promptNumberedChoice(header, ids, default_idx) catch {
+    const idx = Terminal.promptNumberedChoice(header, ids, default_idx) catch {
         std.debug.print("Cancelled — pass --model to skip the picker.\n", .{});
         return error.UserCancelled;
     };
     return try allocator.dupe(u8, ids[idx]);
-}
-
-fn interactiveTty() bool {
-    return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
-}
-
-/// Numbered TTY picker. `default` (if set) marks that row "(default)" and
-/// makes Enter return that index. Errors with NoChoice after 3 invalid
-/// attempts.
-fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
-    var stdin_buf: [128]u8 = undefined;
-    var stdin = std.fs.File.stdin().reader(&stdin_buf);
-
-    var attempt: u8 = 0;
-    while (attempt < 3) : (attempt += 1) {
-        std.debug.print("{s}\n", .{header});
-        for (items, 0..) |item, idx| {
-            const marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
-            std.debug.print("  {d:>3}) {s}{s}\n", .{ idx + 1, item, marker });
-        }
-        std.debug.print("> ", .{});
-
-        const line = stdin.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
-            error.EndOfStream, error.StreamTooLong, error.ReadFailed => return error.UserCancelled,
-        };
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-        if (trimmed.len == 0) {
-            if (default) |d| return d;
-            std.debug.print("Invalid input — type a number.\n", .{});
-            continue;
-        }
-        const choice = std.fmt.parseInt(usize, trimmed, 10) catch {
-            const hint: []const u8 = if (default != null) " (or press Enter for default)" else "";
-            std.debug.print("Invalid input — type a number{s}.\n", .{hint});
-            continue;
-        };
-        if (choice >= 1 and choice <= items.len) return choice - 1;
-        std.debug.print("Out of range.\n", .{});
-    }
-    return error.NoChoice;
-}
-
-// --- Tests ---
-
-test "canHeal: only page-local DOM commands are allowed" {
-    // Table-driven over the live tool flags so adding a new tool can't
-    // silently drift from the heal allow-list.
-    const allow = [_]BrowserTool{ .click, .hover, .waitForSelector, .fill, .selectOption, .setChecked, .scroll, .extract, .press };
-    const deny = [_]BrowserTool{ .goto, .eval, .tree, .markdown, .search, .links };
-
-    for (allow) |action| {
-        const cmd = Command.fromToolCall(action, null);
-        try std.testing.expect(cmd.canHeal());
-    }
-    for (deny) |action| {
-        const cmd = Command.fromToolCall(action, null);
-        try std.testing.expect(!cmd.canHeal());
-    }
-
-    try std.testing.expect(!(Command{ .login = {} }).canHeal());
-    try std.testing.expect(!(Command{ .acceptCookies = {} }).canHeal());
-    try std.testing.expect(!(Command{ .comment = {} }).canHeal());
-}
-
-test {
-    _ = @import("SlashCommand.zig");
 }
