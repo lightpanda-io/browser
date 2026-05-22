@@ -20,9 +20,9 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Frame = @import("../Frame.zig");
 
 const log = lp.log;
-const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -100,16 +100,16 @@ pub fn getSize(_: *const EventCounts) u32 {
     return tracked_event_types.len;
 }
 
-pub fn keys(self: *EventCounts, exec: *const Execution) !*KeyIterator {
-    return .init(.{ .event_counts = self }, exec);
+pub fn keys(self: *EventCounts, frame: *Frame) !*KeyIterator {
+    return .init(.{ .event_counts = self }, frame);
 }
 
-pub fn values(self: *EventCounts, exec: *const Execution) !*ValueIterator {
-    return .init(.{ .event_counts = self }, exec);
+pub fn values(self: *EventCounts, frame: *Frame) !*ValueIterator {
+    return .init(.{ .event_counts = self }, frame);
 }
 
-pub fn entries(self: *EventCounts, exec: *const Execution) !*EntryIterator {
-    return .init(.{ .event_counts = self }, exec);
+pub fn entries(self: *EventCounts, frame: *Frame) !*EntryIterator {
+    return .init(.{ .event_counts = self }, frame);
 }
 
 pub fn forEach(self: *EventCounts, cb_: js.Function, js_this_: ?js.Object) !void {
@@ -158,7 +158,7 @@ pub const Iterator = struct {
 
     pub const Entry = struct { []const u8, u32 };
 
-    pub fn next(self: *Iterator, _: *const Execution) ?Iterator.Entry {
+    pub fn next(self: *Iterator, _: *const Frame) ?Iterator.Entry {
         const index = self.index;
         if (index >= tracked_event_types.len) {
             return null;

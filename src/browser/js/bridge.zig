@@ -145,6 +145,7 @@ pub const Function = struct {
     arity: usize,
     noop: bool = false,
     wpt_only: bool = false,
+    exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
@@ -153,6 +154,7 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .wpt_only = opts.wpt_only,
+            .exposed = opts.exposed,
             // Non-static methods receive `self` as their first param; static
             // methods don't, so don't skip the first param for them.
             .arity = getArity(@TypeOf(func), if (opts.static) 0 else 1),
@@ -205,6 +207,7 @@ pub const Accessor = struct {
     static: bool = false,
     deletable: bool = true,
     wpt_only: bool = false,
+    exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
     setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
@@ -215,6 +218,7 @@ pub const Accessor = struct {
             .static = opts.static,
             .wpt_only = opts.wpt_only,
             .deletable = opts.deletable,
+            .exposed = opts.exposed,
         };
 
         if (@typeInfo(@TypeOf(getter)) != .null) {
@@ -986,7 +990,9 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
-    @import("../webapi/EventCounts.zig"),
+    // EventCounts is reachable only via Performance.eventCounts, which is
+    // [Exposed=Window] (pruned from Worker by Snapshot.pruneExposed). The
+    // type itself is in PageJsApis via Performance.registerTypes().
 });
 
 // Master list of ALL JS APIs across all contexts.

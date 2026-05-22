@@ -571,21 +571,18 @@
   }
 </script>
 
-<script id=worker_event_counts type=module>
+<script id=worker_window_only_partials_hidden type=module>
   {
     const state = await testing.async();
     const worker = new Worker('./performance-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'event_counts' }), 100);
+    setTimeout(() => worker.postMessage({ kind: 'window_only_partials_hidden' }), 100);
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker error: ' + data.err);
-      testing.expectEqual(36, data.size);
-      testing.expectEqual(true, data.has_click);
-      testing.expectEqual(false, data.has_scroll);
-      testing.expectEqual(true, data.get_click_is_number);
-      testing.expectEqual(36, data.keys_length);
-      testing.expectEqual(36, data.iter_count);
+      testing.expectEqual(false, data.has_event_counts);
+      testing.expectEqual(false, data.has_timing);
+      testing.expectEqual(false, data.has_navigation);
     });
   }
 </script>

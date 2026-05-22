@@ -42,21 +42,14 @@ self.onmessage = async function(e) {
       return;
     }
 
-    if (cmd.kind === 'event_counts') {
-      const ec = performance.eventCounts;
-      const keys = Array.from(ec.keys());
-      let iter_count = 0;
-      for (const [k, v] of ec) {
-        if (typeof k === 'string' && typeof v === 'number') iter_count++;
-      }
+    if (cmd.kind === 'window_only_partials_hidden') {
+      // eventCounts, timing and navigation are [Exposed=Window] partials —
+      // they must not exist on a worker's performance object.
       postMessage({
         ok: true,
-        size: ec.size,
-        has_click: ec.has('click'),
-        has_scroll: ec.has('scroll'),
-        get_click_is_number: typeof ec.get('click') === 'number',
-        keys_length: keys.length,
-        iter_count,
+        has_event_counts: 'eventCounts' in performance,
+        has_timing: 'timing' in performance,
+        has_navigation: 'navigation' in performance,
       });
       return;
     }

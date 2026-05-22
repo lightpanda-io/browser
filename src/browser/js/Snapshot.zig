@@ -31,6 +31,20 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Snapshot = @This();
 
+const Caller = @import("Caller.zig");
+
+const Realm = enum {
+    window,
+    worker,
+
+    fn asExposed(comptime self: Realm) Caller.Function.Opts.Exposed {
+        return switch (self) {
+            .window => .window,
+            .worker => .worker,
+        };
+    }
+};
+
 const embedded_snapshot_blob = if (lp.build_config.snapshot_path) |path| @embedFile(path) else "";
 
 // When creating our Snapshot, we use local function templates for every Zig type.
@@ -184,13 +198,13 @@ pub fn create() !Snapshot {
 
         {
             const Window = @import("../webapi/Window.zig");
-            const index = try createSnapshotContext(&PageJsApis, Window.JsApi, isolate, snapshot_creator.?, &templates);
+            const index = try createSnapshotContext(.window, &PageJsApis, Window.JsApi, isolate, snapshot_creator.?, &templates);
             std.debug.assert(index == 0);
         }
 
         {
             const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
-            const index = try createSnapshotContext(&WorkerJsApis, WorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
+            const index = try createSnapshotContext(.worker, &WorkerJsApis, WorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
             std.debug.assert(index == 1);
         }
     }
@@ -206,6 +220,7 @@ pub fn create() !Snapshot {
 }
 
 fn createSnapshotContext(
+    comptime realm: Realm,
     comptime ContextApis: []const type,
     comptime GlobalScopeApi: type,
     isolate: *v8.Isolate,
@@ -257,8 +272,13 @@ fn createSnapshotContext(
 
     const global_obj = v8.v8__Context__Global(context);
 
-    // Attach constructors for this context's APIs to the global
+    // Attach constructors for this context's APIs to the global, and for any
+    // type with members tagged [Exposed=Window]/[Exposed=Worker], prune the
+    // ones that don't match this realm from the per-context Func.prototype.
+    const prototype_key = v8.v8__String__NewFromUtf8(isolate, "prototype", v8.kNormal, 9);
+
     inline for (ContextApis) |JsApi| {
+        @setEvalBranchQuota(10_000);
         const template_index = comptime bridge.JsApiLookup.getId(JsApi);
         const func = v8.v8__FunctionTemplate__GetFunction(templates[template_index], context);
         if (@hasDecl(JsApi.Meta, "name")) {
@@ -283,6 +303,25 @@ fn createSnapshotContext(
                     properties = v8.None;
                 }
                 v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, properties, &maybe_result);
+            }
+        }
+
+        // WebIDL [Exposed=...] gating. Members are installed on the shared
+        // FunctionTemplate by attachClass; here we delete the ones that don't
+        // match this realm from the per-context Func.prototype.
+        if (comptime hasGatedMember(JsApi)) {
+            const func_obj: *const v8.Object = @ptrCast(func);
+            if (v8.v8__Object__Get(func_obj, context, prototype_key)) |proto_handle| {
+                const proto_obj: *const v8.Object = @ptrCast(proto_handle);
+                inline for (@typeInfo(JsApi).@"struct".decls) |d| {
+                    const exposed = comptime memberExposed(@field(JsApi, d.name));
+                    if (comptime exposed != .both and exposed != realm.asExposed()) {
+                        const name: [:0]const u8 = d.name;
+                        const name_v8 = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+                        var maybe_deleted: v8.MaybeBool = undefined;
+                        v8.v8__Object__Delete(proto_obj, context, name_v8, &maybe_deleted);
+                    }
+                }
             }
         }
     }
@@ -321,6 +360,25 @@ fn createSnapshotContext(
     }
 
     return v8.v8__SnapshotCreator__AddContext(snapshot_creator, context);
+}
+
+fn hasGatedMember(comptime JsApi: type) bool {
+    comptime {
+        for (@typeInfo(JsApi).@"struct".decls) |d| {
+            if (memberExposed(@field(JsApi, d.name)) != .both) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+fn memberExposed(value: anytype) Caller.Function.Opts.Exposed {
+    const T = @TypeOf(value);
+    if (T == bridge.Accessor or T == bridge.Function) {
+        return value.exposed;
+    }
+    return .both;
 }
 
 fn countExternalReferences() comptime_int {

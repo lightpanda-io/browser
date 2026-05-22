@@ -365,9 +365,9 @@ pub const JsApi = struct {
     pub const getEntriesByType = bridge.function(Performance.getEntriesByType, .{});
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});
     pub const timeOrigin = bridge.accessor(Performance.getTimeOrigin, null, .{});
-    pub const timing = bridge.accessor(Performance.getTiming, null, .{});
-    pub const navigation = bridge.accessor(Performance.getNavigation, null, .{});
-    pub const eventCounts = bridge.accessor(Performance.getEventCounts, null, .{});
+    pub const timing = bridge.accessor(Performance.getTiming, null, .{ .exposed = .window });
+    pub const navigation = bridge.accessor(Performance.getNavigation, null, .{ .exposed = .window });
+    pub const eventCounts = bridge.accessor(Performance.getEventCounts, null, .{ .exposed = .window });
 };
 
 pub const Entry = struct {
