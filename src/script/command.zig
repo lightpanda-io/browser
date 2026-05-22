@@ -56,9 +56,9 @@ pub const Command = union(enum) {
             .tool_call => |tc| blk: {
                 const s = schemaOf(tc);
                 if (!s.recorded) break :blk false;
+                const args = tc.args orelse break :blk s.required.len == 0;
                 // backendNodeId is invalidated by any DOM mutation, so calls
                 // using it aren't replayable.
-                const args = tc.args orelse break :blk true;
                 if (args == .object and args.object.contains("backendNodeId")) break :blk false;
                 break :blk true;
             },
@@ -498,6 +498,17 @@ test "isRecorded / canHeal / producesData via tool flags" {
     const login: Command = .{ .login = {} };
     try testing.expect(login.isRecorded());
     try testing.expect(!login.canHeal());
+}
+
+test "isRecorded: null args on a required-fields tool are not recorded" {
+    // A provider that hands back `arguments: null` for `/click` would
+    // otherwise produce a bare `/click` line that can't be replayed.
+    const click_null = Command.fromToolCall(.click, null);
+    try testing.expect(click_null.isRecorded()); // click has zero required fields
+    const goto_null = Command.fromToolCall(.goto, null);
+    try testing.expect(!goto_null.isRecorded()); // goto requires url
+    const fill_null = Command.fromToolCall(.fill, null);
+    try testing.expect(!fill_null.isRecorded()); // fill requires value
 }
 
 test "ScriptIterator: basic slash commands" {
