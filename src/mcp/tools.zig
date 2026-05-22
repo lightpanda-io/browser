@@ -898,6 +898,46 @@ test "MCP - waitForSelector: timeout" {
     }, out.written());
 }
 
+test "MCP - getCookies: defaults to current page, url filter, all flag" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://example.com/", &out.writer);
+    defer server.deinit();
+
+    try server.session.cookie_jar.populateFromResponse("http://example.com/", "session=abc; Path=/");
+    try server.session.cookie_jar.populateFromResponse("http://other.test/", "tracking=xyz; Path=/");
+
+    const default_msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getCookies"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, default_msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") == null);
+
+    out.clearRetainingCapacity();
+    const url_msg =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getCookies","arguments":{"url":"http://other.test/"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, url_msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") == null);
+
+    out.clearRetainingCapacity();
+    const all_msg =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getCookies","arguments":{"all":true}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, all_msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") != null);
+
+    out.clearRetainingCapacity();
+    const empty_msg =
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"getCookies","arguments":{"url":"http://nope.test/"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, empty_msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "No cookies for http://nope.test/") != null);
+}
+
 test "MCP - goto with bad waitUntil surfaces rich error" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);

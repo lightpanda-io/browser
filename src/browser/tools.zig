@@ -367,9 +367,15 @@ pub const Tool = enum {
                 ),
             },
             .getCookies => .{
-                .description = "Get all cookies in the browser. Useful for debugging authentication and session state.",
+                .description = "Cookies stored in the browser. Defaults to cookies whose domain matches the current page's host. Pass `url=<URL>` to filter for another host, or `all=true` to dump every cookie regardless of host. Useful for debugging authentication and session state.",
                 .input_schema = minify(
-                    \\{ "type": "object", "properties": {} }
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "url": { "type": "string", "description": "Restrict output to cookies matching this URL's host. Defaults to the current page." },
+                    \\    "all": { "type": "boolean", "default": false, "description": "If true, dump every cookie regardless of host. Overrides `url`." }
+                    \\  }
+                    \\}
                 ),
             },
             .getEnv => .{
@@ -551,7 +557,7 @@ fn dispatch(
         .getEnv => .{ .text = try execGetEnv(arena, substituted) },
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
         .getUrl => .{ .text = try execGetUrl(session) },
-        .getCookies => .{ .text = try execGetCookies(arena, session) },
+        .getCookies => .{ .text = try execGetCookies(arena, session, substituted) },
     };
 }
 
@@ -1168,18 +1174,36 @@ pub fn currentUrlOrPlaceholder(session: *lp.Session) []const u8 {
     return frame.url;
 }
 
-fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
+fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {
+    const Params = struct { url: ?[]const u8 = null, all: bool = false };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
+
     const cookies = session.cookie_jar.cookies.items;
     if (cookies.len == 0) return "No cookies.";
 
+    const filter_url: ?[:0]const u8 = blk: {
+        if (args.all) break :blk null;
+        if (args.url) |u| break :blk arena.dupeZ(u8, u) catch return ToolError.InternalError;
+        if (session.currentFrame()) |f| break :blk f.url;
+        break :blk null;
+    };
+    const host: ?[]const u8 = if (filter_url) |u| lp.URL.getHostname(u) else null;
+
     var aw: std.Io.Writer.Allocating = .init(arena);
     const writer = &aw.writer;
+    var count: usize = 0;
     for (cookies) |*cookie| {
+        if (host) |h| if (!cookie.matchesHost(h)) continue;
         writer.print("{s}={s}", .{ cookie.name, cookie.value }) catch return ToolError.InternalError;
         writer.print("; domain={s}; path={s}", .{ cookie.domain, cookie.path }) catch return ToolError.InternalError;
         if (cookie.secure) writer.writeAll("; Secure") catch return ToolError.InternalError;
         if (cookie.http_only) writer.writeAll("; HttpOnly") catch return ToolError.InternalError;
         writer.writeAll("\n") catch return ToolError.InternalError;
+        count += 1;
+    }
+    if (count == 0) {
+        const label = filter_url orelse "(unfiltered)";
+        return std.fmt.allocPrint(arena, "No cookies for {s}.", .{label}) catch ToolError.InternalError;
     }
     return aw.written();
 }
