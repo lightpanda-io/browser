@@ -104,12 +104,12 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         _ = c.ic_set_hint_delay(0);
         _ = c.ic_enable_brace_insertion(true);
         // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
-        c.ic_style_def(style_slash, "ansi-magenta bold");
+        c.ic_style_def(style_slash, "ansi-teal bold");
         c.ic_style_def(style_string, "ansi-green");
         c.ic_style_def(style_var, "ansi-yellow bold");
         c.ic_style_def(style_url, "ansi-blue underline");
-        c.ic_style_def(style_key, "ansi-cyan");
-        c.ic_style_def(style_num, "ansi-yellow");
+        c.ic_style_def(style_key, "ansi-blue");
+        c.ic_style_def(style_num, "ansi-magenta");
         c.ic_style_def(style_err, "ansi-red");
         c.ic_set_default_highlighter(&highlighterCallback, null);
         _ = c.ic_enable_highlight(true);
@@ -760,5 +760,5 @@ pub fn printInfo(self: *Terminal, msg: []const u8) void {
 
 pub fn printInfoFmt(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
-    std.debug.print("{s}" ++ fmt ++ "{s}\n", .{ansi.dim} ++ args ++ .{ansi.reset});
+    std.debug.print(fmt ++ "\n", args);
 }

@@ -535,8 +535,10 @@ fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {
 fn printHelpSection(term: *Terminal, header: []const u8, rows: []SlashCommand.Help) void {
     if (rows.len == 0) return;
     std.sort.pdq(SlashCommand.Help, rows, {}, helpLessThan);
-    term.printInfo(header);
-    for (rows) |r| term.printInfoFmt("  /{s} — {s}", .{ r.name, r.description });
+    term.printInfoFmt("{s}{s}{s}", .{ Terminal.ansi.bold, header, Terminal.ansi.reset });
+    for (rows) |r| term.printInfoFmt("  {s}{s}/{s}{s} — {s}", .{
+        Terminal.ansi.bold, Terminal.ansi.cyan, r.name, Terminal.ansi.reset, r.description,
+    });
 }
 
 fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) void {
