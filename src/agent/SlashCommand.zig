@@ -34,7 +34,7 @@ pub const MetaCommand = struct {
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
     /// a new meta command is a compile error until it's wired up there too.
-    pub const Tag = enum { help, quit, verbosity };
+    const Tag = enum { help, quit, verbosity };
 };
 
 pub const meta_commands = [_]MetaCommand{

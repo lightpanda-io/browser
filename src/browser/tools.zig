@@ -1237,15 +1237,10 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
         }
     }.f;
 
-    var needs_any = false;
     var it = v.object.iterator();
     while (it.next()) |entry| {
-        if (needsSub(is_fill, entry.key_ptr.*, entry.value_ptr.*)) {
-            needs_any = true;
-            break;
-        }
-    }
-    if (!needs_any) return v;
+        if (needsSub(is_fill, entry.key_ptr.*, entry.value_ptr.*)) break;
+    } else return v;
 
     var new_obj: std.json.ObjectMap = .init(arena);
     try new_obj.ensureTotalCapacity(v.object.count());

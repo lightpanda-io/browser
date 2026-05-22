@@ -234,7 +234,7 @@ pub fn splitNameRest(input: []const u8) ?Split {
     const name_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
     return .{
         .name = trimmed[0..name_end],
-        .rest = std.mem.trim(u8, trimmed[name_end..], &std.ascii.whitespace),
+        .rest = std.mem.trimStart(u8, trimmed[name_end..], &std.ascii.whitespace),
     };
 }
 
