@@ -507,8 +507,26 @@ pub fn call(
     arguments: ?std.json.Value,
 ) ToolError!ToolResult {
     const tool = std.meta.stringToEnum(Tool, tool_name) orelse return ToolError.InvalidParams;
+    if (diagnoseArgs(arena, arguments)) |msg|
+        return .{ .text = msg, .is_error = true };
     const substituted = try substituteStringArgs(arena, tool, arguments);
 
+    return dispatch(arena, session, registry, tool, substituted) catch |err| {
+        if (err == error.NavigationFailed) {
+            if (formatNavigationError(arena, session)) |text|
+                return .{ .text = text, .is_error = true };
+        }
+        return err;
+    };
+}
+
+fn dispatch(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    tool: Tool,
+    substituted: ?std.json.Value,
+) ToolError!ToolResult {
     return switch (tool) {
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
         .search => .{ .text = try execSearch(arena, session, registry, substituted) },
@@ -535,6 +553,12 @@ pub fn call(
         .getUrl => .{ .text = try execGetUrl(session) },
         .getCookies => .{ .text = try execGetCookies(arena, session) },
     };
+}
+
+fn formatNavigationError(arena: std.mem.Allocator, session: *lp.Session) ?[]const u8 {
+    const frame = session.currentFrame() orelse return null;
+    const err = frame._last_navigate_error orelse return null;
+    return std.fmt.allocPrint(arena, "navigation failed: {s}", .{@errorName(err)}) catch null;
 }
 
 /// Run JavaScript against the current page. The script need not be
@@ -1196,6 +1220,9 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
         .ms = timeout orelse 10000,
         .until = waitUntil orelse .done,
     }) catch |err| return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+
+    const frame = session.currentFrame() orelse return ToolError.NavigationFailed;
+    if (frame._last_navigate_error != null) return ToolError.NavigationFailed;
 }
 
 fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {
@@ -1212,6 +1239,31 @@ fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeA
 }
 
 pub const ParseArgsError = error{ OutOfMemory, InvalidParams };
+
+/// Surface field/value context for known typed args — `std.json`'s parse
+/// errors only carry the tag (`InvalidEnumTag`, …), not which field failed.
+fn diagnoseArgs(arena: std.mem.Allocator, arguments: ?std.json.Value) ?[]const u8 {
+    const args = arguments orelse return null;
+    if (args != .object) return null;
+
+    if (args.object.get("waitUntil")) |v| switch (v) {
+        .string => |s| if (std.meta.stringToEnum(lp.Config.WaitUntil, s) == null)
+            return formatEnumError(arena, "waitUntil", s, lp.Config.WaitUntil),
+        else => return std.fmt.allocPrint(arena, "waitUntil must be a string", .{}) catch null,
+    };
+
+    return null;
+}
+
+fn formatEnumError(arena: std.mem.Allocator, field: []const u8, got: []const u8, comptime E: type) ?[]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    aw.writer.print("invalid {s} '{s}'. Expected one of: ", .{ field, got }) catch return null;
+    inline for (std.meta.fields(E), 0..) |f, i| {
+        if (i > 0) aw.writer.writeAll(", ") catch return null;
+        aw.writer.writeAll(f.name) catch return null;
+    }
+    return aw.written();
+}
 
 pub fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Value) ParseArgsError!T {
     return std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {

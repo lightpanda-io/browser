@@ -610,6 +610,32 @@ pub fn freeLine(line: []const u8) void {
     c.ic_free(@ptrCast(@constCast(line.ptr)));
 }
 
+// Free-function `lp.log.sink` can't capture self; the agent sets this
+// before installing the sink and clears it on teardown.
+var active_for_log: ?*Terminal = null;
+
+pub fn installLogSink(self: *Terminal) void {
+    active_for_log = self;
+    lp.log.sink = logSink;
+}
+
+pub fn uninstallLogSink(self: *Terminal) void {
+    _ = self;
+    lp.log.sink = null;
+    active_for_log = null;
+}
+
+fn logSink(bytes: []const u8) void {
+    if (active_for_log) |t| {
+        // REPL already surfaces the clean `● ...` outcome line
+        if (t.isRepl()) return;
+        if (t.spinner.emitAbove(bytes)) return;
+    }
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
+}
+
 pub fn interactiveTty() bool {
     return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
 }
@@ -663,9 +689,9 @@ pub fn printAssistant(_: *Terminal, text: []const u8) void {
 const max_result_display_len = 2000;
 
 /// Tool-outcome line shared by REPL slash commands and LLM tool calls.
-/// REPL: green ● on success, red ● on error (`name` is already on the
-/// preceding `[tool: …]` line). Non-REPL gates on `medium+` and prefixes
-/// `[result: name]`; same green/red coloring.
+/// REPL: green ● on success, red ● on error. Non-REPL prefixes `[result:
+/// name]`; success gates on `medium+`, errors bypass the gate so a
+/// failing script still surfaces *why* at the default verbosity.
 pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_error: bool) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
@@ -674,7 +700,7 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
         _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
         return;
     }
-    if (!atLeast(self.verbosity, .medium)) return;
+    if (!is_error and !atLeast(self.verbosity, .medium)) return;
     const truncated = text[0..@min(text.len, max_result_display_len)];
     const ellipsis: []const u8 = if (text.len > max_result_display_len) "..." else "";
     const color: []const u8 = if (is_error) ansi.red else ansi.green;

@@ -52,6 +52,11 @@ const Opts = struct {
 
 pub var opts = Opts{};
 
+/// Optional sink for formatted log lines. The agent's REPL terminal sets
+/// this so log output can be routed through `Spinner.emitAbove` instead
+/// of trampling the spinner line on stderr.
+pub var sink: ?*const fn (bytes: []const u8) void = null;
+
 // synchronizes access to last_log
 var last_log_lock: Thread.Mutex = .{};
 
@@ -113,6 +118,17 @@ pub fn fatal(comptime scope: Scope, comptime msg: []const u8, data: anytype) voi
 
 pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype) void {
     if (enabled(scope, level) == false) {
+        return;
+    }
+
+    if (sink) |s| {
+        var buf: [4096]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        logTo(scope, level, msg, data, &w) catch |log_err| {
+            std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
+            return;
+        };
+        s(w.buffered());
         return;
     }
 

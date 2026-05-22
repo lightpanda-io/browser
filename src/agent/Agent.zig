@@ -256,6 +256,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer self.node_registry.deinit();
     errdefer self.terminal.deinit();
     errdefer self.message_arena.deinit();
+    self.terminal.installLogSink();
+    errdefer self.terminal.uninstallLogSink();
 
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
@@ -297,6 +299,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 }
 
 pub fn deinit(self: *Agent) void {
+    self.terminal.uninstallLogSink();
     if (self.recorder) |*r| r.deinit();
     self.terminal.deinit();
     self.message_arena.deinit();

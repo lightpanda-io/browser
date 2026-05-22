@@ -198,6 +198,10 @@ _load_state: LoadState = .waiting,
 
 _parse_state: ParseState = .pre,
 
+/// `frameErrorCallback` swallows the failure into a placeholder page;
+/// callers that need to detect it read this.
+_last_navigate_error: ?anyerror = null,
+
 _notified_network_idle: IdleNotification = .init,
 _notified_network_almost_idle: IdleNotification = .init,
 
@@ -522,6 +526,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     lp.assert(self._load_state == .waiting, "frame.renavigate", .{});
     const session = self._session;
     self._load_state = .parsing;
+    self._last_navigate_error = null;
 
     const req_id = self._session.browser.http_client.nextReqId();
     log.info(.frame, "navigate", .{
@@ -1261,6 +1266,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
 fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
+    self._last_navigate_error = err;
     log.err(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
 
     // A pending root navigation that failed before commit: discard the

@@ -898,6 +898,22 @@ test "MCP - waitForSelector: timeout" {
     }, out.written());
 }
 
+test "MCP - goto with bad waitUntil surfaces rich error" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"about:blank","waitUntil":"x"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    const written = out.written();
+    try testing.expect(std.mem.indexOf(u8, written, "invalid waitUntil 'x'") != null);
+    try testing.expect(std.mem.indexOf(u8, written, "load") != null);
+    try testing.expect(std.mem.indexOf(u8, written, "isError\":true") != null);
+}
+
 fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     var server = try Server.init(testing.allocator, testing.test_app, writer);
     errdefer server.deinit();
