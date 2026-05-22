@@ -31,6 +31,15 @@ const http = @import("../network/http.zig");
 const Robots = @import("../network/Robots.zig");
 const Network = @import("../network/Network.zig");
 
+const CDP = @import("../cdp/CDP.zig");
+const Inbox = @import("../Inbox.zig");
+const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
+
+pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
+pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
+pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
+pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
+
 const log = lp.log;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
@@ -41,12 +50,6 @@ pub const Method = http.Method;
 pub const Headers = http.Headers;
 pub const ResponseHead = http.ResponseHead;
 pub const HeaderIterator = http.HeaderIterator;
-const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
-
-pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
-pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
-pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
-pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -126,7 +129,29 @@ obey_robots: bool,
 user_agent_override: ?[:0]const u8 = null,
 user_agent_header_override: ?[:0]const u8 = null,
 
-cdp_client: ?CDPClient = null,
+// The CDP layer we dispatch inbox messages to. Set in CDP.init for
+// `serve` mode; null in all other modes. Since this is set early, BEFORE the
+// CDP socket is registered with the network thread, we also have the
+// `cdp_link_active` boolean.
+cdp: ?*CDP = null,
+
+// True iff a producer (Server.handleConnection, after the worker
+// handshake completes) has registered the CDP socket with the Network
+// thread and Network will fire curl_multi_wakeup on our multi handle
+// when it pushes to the inbox. perform uses this — NOT `cdp != null`
+// — to decide whether to block in poll without any in-flight curl
+// work. cdp is set in CDP.init, well before the link is wired; tests
+// and the pre-handshake window have a cdp but no producer, so polling
+// there would just eat the timeout waiting for a wakeup that's never
+// coming.
+cdp_link_active: bool = false,
+
+// CDP messages parsed off the WS socket by the Network thread land
+// here. perform drains the inbox at each safe point and dispatches
+// via cdp.onMessage / onPing / onClose / onDisconnect. Always present
+// even in non-CDP mode — the empty-queue drain is one mutex lock plus
+// a linked-list head check, cheaper than nullability everywhere.
+inbox: Inbox,
 
 max_response_size: usize,
 
@@ -154,25 +179,7 @@ fn layerWith(self: anytype, next: Layer) Layer {
     return self.layer();
 }
 
-// libcurl can monitor arbitrary sockets, this lets us use libcurl to poll
-// both HTTP data as well as messages from an CDP connection.
-// Furthermore, we have some tension between blocking scripts and request
-// interception. For non-blocking scripts, because nothing blocks, we can
-// just queue the scripts until we receive a response to the interception
-// notification. But for blocking scripts (which block the parser), it's hard
-// to return control back to the CDP loop. So the `read` function pointer is
-// used by the Client to have the CDP client read more data from the socket,
-// specifically when we're waiting for a request interception response to
-// a blocking script.
-pub const CDPClient = struct {
-    socket: posix.socket_t,
-    ctx: *anyopaque,
-    blocking_read_start: *const fn (*anyopaque) bool,
-    blocking_read: *const fn (*anyopaque) bool,
-    blocking_read_end: *const fn (*anyopaque) bool,
-};
-
-pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: ?CDPClient) !void {
+pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
     errdefer handles.deinit();
 
@@ -182,7 +189,8 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: 
         .handles = handles,
         .network = network,
         .allocator = allocator,
-        .cdp_client = cdp_client,
+        .cdp = cdp,
+        .inbox = .{},
 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
@@ -227,6 +235,7 @@ pub fn deinit(self: *Client) void {
 
     self.robots_layer.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
+    self.inbox.deinit(self.arena_pool);
 }
 
 // Look up a live transfer by its id. Returns null if the transfer has been
@@ -378,14 +387,33 @@ pub fn abortRequests(_: *Client, owner: *Owner) void {
     // owner itself is freed, no orphan transfer points at it.
 }
 
-pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
+// What CDP messages drainInbox is allowed to dispatch this tick.
+//   .all       — outer event loop (Runner.tick). Safe to dispatch
+//                everything; the JS stack is empty.
+//   .sync_wait — reachable from inside a JS callback (syncRequest,
+//                waitForImport). The JS callstack above us holds
+//                refs to page / session / V8 state; dispatching a
+//                command that frees that state would UAF on unwind.
+//                Cherry-pick only Fetch interception responses
+const DrainMode = enum { all, sync_wait };
+
+pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
+    if (self.inbox.terminated) {
+        return error.ClientDisconnected;
+    }
+
     try self.drainQueue();
-    const status = try self.perform(@intCast(timeout_ms));
+    try self.perform(@intCast(timeout_ms));
     // perform/processMessages just released a batch of connections back to
     // the pool. Drain again so queued transfers can use them this tick
     // instead of waiting for the next runner iteration.
     try self.drainQueue();
-    return status;
+    // Dispatch CDP messages here, not inside perform: perform recurses
+    // via processOneMessage's redirect path (perform → processMessages
+    // → processOneMessage → perform), and dispatching CDP from that
+    // nested call would fire CDP handlers mid-redirect, defeating the
+    // "safe points only" guarantee.
+    try self.drainInbox(mode);
 }
 
 fn drainQueue(self: *Client) !void {
@@ -395,10 +423,16 @@ fn drainQueue(self: *Client) !void {
             self.queue.prepend(queue_node);
             return;
         };
-        // Cleared only after we've successfully obtained a connection;
-        // if we put the node back, _queued stays true.
-        transfer._queued = false;
-        try self.makeRequest(conn, transfer);
+        // Bridge state to .created so a failure inside makeRequest before
+        // any commit cleans up via the abort below. makeRequest flips to
+        // .inflight on a successful trackConn.
+        transfer.state = .created;
+        self.makeRequest(conn, transfer) catch |err| {
+            if (transfer.state == .created) {
+                transfer.abort(err);
+            }
+            return err;
+        };
     }
 }
 
@@ -407,13 +441,18 @@ pub fn _request(_: *anyopaque, transfer: *Transfer) !void {
     return transfer.client.process(transfer);
 }
 
-// Ownership contract: from the moment this function is entered, the
-// HttpClient owns `req` — specifically `req.headers` (a curl_slist).
-// On success, transfer.deinit eventually frees it. On any failure path
-// inside this function, we free it before returning the error. Callers
-// must NOT pair `request()` with their own `errdefer headers.deinit()`
-// — that's a double-free.
+// HttpClient takes ownership of req.headers; do not pair with
+// `errdefer headers.deinit()`
 pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
+    _ = try self.requestT(req, owner);
+}
+
+// Like `request`, but returns the created `*Transfer`. The caller does not own
+// the returned `*Transfer` and must thus use it with care. From the moment this
+// function is entered, the HttpClient owns `req` — specifically `req.headers`
+// On success, transfer.deinit eventually frees it. On any failure path inside
+// this function, we free it before returning the error.
+fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
     const arena = self.arena_pool.acquire(.small, "Request.arena") catch |err| {
         req.headers.deinit();
         return err;
@@ -459,13 +498,17 @@ pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
     // From this point forward, the transfer owns `req` and `arena`. If the
     // layer chain fails before any layer commits the transfer to an external
     // owner (queue / multi handle / pending interception), we clean up here
-    // via transfer.abort which fires error_callback and deinits.
+    // via transfer.abort which fires error_callback and deinits. `.created`
+    // means no commit happened — anything else is held by an owner that
+    // will clean up.
     self.entry_layer.request(transfer) catch |err| {
-        if (!transfer.loop_owned) {
+        if (transfer.state == .created) {
             transfer.abort(err);
         }
         return err;
     };
+
+    return transfer;
 }
 
 const SyncContext = struct {
@@ -512,6 +555,13 @@ const SyncContext = struct {
 };
 
 pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncResponse {
+    if (self.inbox.terminated) {
+        // request() takes ownership of req.headers on every path; we return
+        // before calling it, so free the curl_slist here to avoid leaking it.
+        req.headers.deinit();
+        return error.ClientDisconnected;
+    }
+
     var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
     errdefer sync_ctx.body.deinit(allocator);
 
@@ -522,20 +572,18 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     r.done_callback = SyncContext.doneCallback;
     r.error_callback = SyncContext.errorCallback;
     r.shutdown_callback = SyncContext.shutdownCallback;
-    try self.request(r, null);
+    const transfer = try self.requestT(r, null);
 
     while (sync_ctx.completion == .in_progress) {
-        const status = try self.tick(200);
-        log.debug(.http, "sync request tick", .{ .status = status });
-        switch (status) {
-            .cdp_socket => {
-                const cdp = self.cdp_client.?;
-                if (cdp.blocking_read(cdp.ctx) == false) {
-                    return error.ClientDisconnected;
-                }
-            },
-            .normal => continue,
-        }
+        self.tick(200, .sync_wait) catch |err| {
+            if (sync_ctx.completion == .in_progress) {
+                // tick failed for a reason unrelated to our transfer (likely OOM or
+                // client disconnect). transfer.req.ctx points at &sync_ctx on this
+                // stack — abort to sever that reference before we return
+                transfer.abort(err);
+            }
+            return err;
+        };
     }
 
     switch (sync_ctx.completion) {
@@ -561,8 +609,7 @@ fn process(self: *Client, transfer: *Transfer) !void {
     }
 
     self.queue.append(&transfer._node);
-    transfer._queued = true;
-    transfer.loop_owned = true;
+    transfer.state = .queued;
 }
 
 pub fn nextReqId(self: *Client) u32 {
@@ -585,30 +632,35 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 }
 
 fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyerror!void {
+    conn.debug_added = 0;
+    conn.debug_removed = 0;
+    conn.debug_remove_err = null;
     {
         // Reset per-response state for retries (auth challenge, queue).
         const auth = transfer._auth_challenge;
         transfer.reset();
         transfer._auth_challenge = auth;
 
-        transfer._conn = conn;
-        errdefer {
-            transfer._conn = null;
-            self.releaseConn(conn);
-        }
+        // conn is locally held during configure; we don't write it to
+        // `transfer._conn` until trackConn commits it to the multi
+        // handle. If configureConn fails, release the conn back to the
+        // pool — `transfer.state` stays `.created`, and the caller
+        // (Client.request's errdefer or drainQueue's catch) aborts
+        // the transfer.
+        errdefer self.releaseConn(conn);
 
         try transfer.configureConn(conn);
     }
 
     // As soon as trackConn succeeds, the multi handle owns the transfer's
     // lifecycle. perform/processMessages will eventually invoke completion
-    // callbacks and call transfer.deinit. We flag loop_owned so Client.request
-    // (or anyone else holding the transfer pointer) knows not to deinit it.
+    // callbacks and call transfer.deinit.
     self.trackConn(conn) catch |err| {
-        transfer._conn = null;
+        self.releaseConn(conn);
         return err;
     };
-    transfer.loop_owned = true;
+    transfer._conn = conn;
+    transfer.state = .inflight;
 
     if (transfer.req.start_callback) |cb| {
         cb(Response.fromTransfer(transfer)) catch |err| {
@@ -630,12 +682,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     _ = try self.handles.perform();
 }
 
-pub const PerformStatus = enum {
-    cdp_socket,
-    normal,
-};
-
-fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
+fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     const running = blk: {
         self.performing = true;
         defer self.performing = false;
@@ -647,9 +694,15 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
     while (self.dirty.popFirst()) |node| {
         const conn: *http.Connection = @fieldParentPtr("node", node);
         self.handles.remove(conn) catch |err| {
-            log.fatal(.http, "multi remove handle", .{ .err = err, .src = "perform" });
-            @panic("multi_remove_handle");
+            lp.assert(false, "multi_remove_handle", .{
+                .err = err,
+                .in_use = conn.in_use,
+                .added = conn.debug_added,
+                .removed = conn.debug_removed,
+                .remove_err = conn.debug_remove_err,
+            });
         };
+        conn.debug_removed = 2;
         self.releaseConn(conn);
     }
 
@@ -658,32 +711,98 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
         try self.trackConn(conn);
     }
 
-    // We're potentially going to block for a while until we get data. Process
-    // whatever messages we have waiting ahead of time.
+    // We just processed completions; their done_callbacks may have
+    // scheduled microtasks (JS continuations) or queued new transfers.
+    // Return without polling so the caller (_tick) can run macrotasks
+    // and re-evaluate. Otherwise we'd sleep on cdp_link_active for up
+    // to timeout_ms while pending JS work sits idle.
     if (try self.processMessages()) {
-        return .normal;
+        return;
     }
 
-    var status = PerformStatus.normal;
-    if (self.cdp_client) |cdp_client| {
-        var wait_fds = [_]http.WaitFd{.{
-            .fd = cdp_client.socket,
-            .events = .{ .pollin = true },
-            .revents = .{},
-        }};
-        try self.handles.poll(&wait_fds, timeout_ms);
-        if (wait_fds[0].revents.pollin or wait_fds[0].revents.pollpri or wait_fds[0].revents.pollout) {
-            status = .cdp_socket;
-        }
-    } else if (running > 0) {
+    // Poll for HTTP I/O. The Network thread will call curl_multi_wakeup
+    // on our multi handle whenever it pushes to our inbox, so we drop
+    // out of poll promptly even when we have no curl handles in flight
+    // — but ONLY if a producer is actually wired up. `cdp_link_active`
+    // is set by Server.handleConnection once network.registerCdp has
+    // returned; in tests (which never register) and during the
+    // pre-handshake window the flag stays false and we don't waste a
+    // poll timeout waiting for a wakeup that won't arrive.
+    if (running > 0 or self.cdp_link_active) {
+        // when cdp_link_active == true, the network thread will unblock this
+        // by calling wakup on our multi.
         try self.handles.poll(&.{}, timeout_ms);
     }
 
     _ = try self.processMessages();
-    return status;
+}
+
+// Drain any CDP messages the Network thread pushed into our inbox
+// and dispatch them via the cdp_client callbacks. Returns
+// error.ClientDisconnected if the inbox surfaced a disconnect message,
+// so the worker loop can tear down the connection. Called from tick
+// only — NOT from perform, because perform recurses through
+// processOneMessage's redirect path.
+fn drainInbox(self: *Client, mode: DrainMode) !void {
+    const cdp = self.cdp orelse return;
+    while (true) {
+        const msg = switch (mode) {
+            .all => self.inbox.pop(),
+            .sync_wait => self.inbox.popIf(allowDuringSyncWait),
+        } orelse return;
+
+        defer msg.deinit(self.arena_pool);
+
+        switch (msg.payload) {
+            .cdp => |*c| cdp.onMessage(c) catch |err| {
+                // A single malformed/failed dispatch shouldn't poison
+                // the rest of the batch — log and continue.
+                log.err(.cdp, "CDP dispatch", .{ .err = err });
+            },
+            .ping => |body| cdp.onPing(body),
+            .close => {
+                cdp.onClose();
+                cdp.onDisconnect(null);
+                self.inbox.terminated = true;
+                return error.ClientDisconnected;
+            },
+            .disconnect => |err| {
+                cdp.onDisconnect(err);
+                self.inbox.terminated = true;
+                return error.ClientDisconnected;
+            },
+        }
+    }
+}
+
+// Predicate for Inbox.popIf during sync_wait drains. Always allows
+// ping/close/disconnect (control frames must be observed). CDP data
+// messages are filtered: only the four Fetch interception methods
+// are safe to dispatch from inside a JS callback (they mutate
+// transfer state via InterceptionLayer; they don't touch page /
+// session / V8 state). The check is exact on the parsed `method`
+// field — no substring matching against raw JSON.
+//
+// Every method listed here must be safe to dispatch with
+// JS on the stack — meaning it must NO reach any other code
+// path that frees Page/Session/Frame/Worker state the unwinding
+// eval frame above us will dereference.
+fn allowDuringSyncWait(msg: *Inbox.Message) bool {
+    return switch (msg.payload) {
+        .ping, .close, .disconnect => true,
+        .cdp => |c| isFetchInterceptionMethod(c.input.method),
+    };
+}
+
+fn isFetchInterceptionMethod(method: []const u8) bool {
+    return std.mem.eql(u8, method, "Fetch.continueRequest") or
+        std.mem.eql(u8, method, "Fetch.failRequest") or
+        std.mem.eql(u8, method, "Fetch.fulfillRequest") or
+        std.mem.eql(u8, method, "Fetch.continueWithAuth");
 }
 
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
+    // State at entry: .inflight = conn (multi just delivered a completion).
     if (msg.err == null or msg.err.? == error.RecvError) {
         transfer.detectAuthChallenge(msg.conn);
     }
@@ -705,8 +824,11 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             // Whether or not this is a blocking request, we're not going
             // to process it now. We can end the transfer, which will
             // release the easy handle back into the pool. The transfer
-            // is still valid/alive (just has no handle).
-            transfer.releaseConn();
+            // is still valid/alive (just has no handle); park it for
+            // continueWithAuth.
+            self.removeConn(transfer._conn.?);
+            transfer._conn = null;
+            transfer.state = .{ .parked = .intercept_auth };
             return false;
         }
     }
@@ -720,14 +842,17 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             const conn = transfer._conn.?;
 
             try self.handles.remove(conn);
-            transfer._conn = null;
-            transfer._detached_conn = conn; // signal orphan for processMessages cleanup
+            conn.debug_removed = 3;
+            // Conn temporarily out of multi during reconfigure.
+            // _detached_conn lets processMessages release it if any of
+            // the steps below throw. State stays .inflight; _conn stays set
+            transfer._detached_conn = conn;
 
             transfer.reset();
             try transfer.configureConn(conn);
             try self.handles.add(conn);
+            conn.debug_added = 2;
             transfer._detached_conn = null;
-            transfer._conn = conn; // reattach after successful re-add
 
             _ = try self.perform(0);
 
@@ -750,10 +875,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
     };
 
-    // make sure the transfer can't be immediately aborted from a callback
-    // since we still need it here.
-    transfer._performing = true;
-    defer transfer._performing = false;
+    // Transition to .completing so re-entrant aborts from user callbacks
+    // defer their teardown to processMessages. (_conn carries through
+    // from .inflight; nothing to set here.)
+    transfer.state = .completing;
 
     if (msg.err != null and !is_conn_close_recv) {
         transfer.requestFailed(transfer.res.callback_error orelse msg.err.?, true);
@@ -776,15 +901,17 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     if (body.len > 0) {
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
-        if (transfer.aborted) {
+        if (transfer.state == .aborted) {
             transfer.requestFailed(error.Abort, true);
             return true;
         }
     }
 
     // release conn ASAP so that it's available; some done_callbacks
-    // will load more resources.
-    transfer.releaseConn();
+    // will load more resources. State stays .completing — the
+    // processMessages caller still owns deinit.
+    self.removeConn(msg.conn);
+    transfer._conn = null;
 
     try transfer.req.done_callback(transfer.req.ctx);
 
@@ -856,6 +983,7 @@ pub fn trackConn(self: *Client, conn: *http.Connection) !void {
         self.releaseConn(conn);
         return err;
     };
+    conn.debug_added = 1;
 
     switch (conn.transport) {
         .http => self.http_active += 1,
@@ -879,10 +1007,12 @@ pub fn removeConn(self: *Client, conn: *http.Connection) void {
         else => unreachable,
     }
     if (self.handles.remove(conn)) {
+        conn.debug_removed = 1;
         self.releaseConn(conn);
-    } else |_| {
+    } else |err| {
         // Can happen if we're in a perform() call, so we'll queue this
         // for cleanup later.
+        conn.debug_remove_err = err;
         self.dirty.append(&conn.node);
     }
 }
@@ -910,6 +1040,7 @@ pub const Request = struct {
         xhr,
         script,
         fetch,
+        stylesheet,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -921,6 +1052,7 @@ pub const Request = struct {
                 .xhr => "XHR",
                 .script => "Script",
                 .fetch => "Fetch",
+                .stylesheet => "Stylesheet",
             };
         }
     };
@@ -1084,34 +1216,32 @@ pub const Transfer = struct {
     owner: ?*Owner,
     owner_node: std.DoublyLinkedList.Node = .{},
 
-    // Latched true by the first commit point that hands the transfer off to
-    // an external owner: client.queue.append, successful trackConn, or
-    // InterceptionLayer pausing for a CDP response. Once set, Client.request's
-    // errdefer skips cleanup — whoever now owns the transfer will deinit it.
-    loop_owned: bool = false,
+    // The transfer's lifecycle position. Source of truth for
+    // "is this committed?" and "can we deinit synchronously?".
+    // The conn the transfer holds (if any) is tracked separately
+    // in `_conn` — orthogonal to state. See `State` below.
+    state: State = .created,
 
-    // True iff `_node` is currently linked in `client.queue` (waiting for a
-    // libcurl handle). Set in `Client.process` on enqueue, cleared in
-    // `Client.tick` on popFirst, and used by `Transfer.deinit` to safely
-    // unlink — `deinit` has no other way to detect queue membership, and
-    // a transfer aborted while queued (e.g. via owner-list abort) would
-    // otherwise leave a dangling `_node` in `client.queue` that the next
-    // `tick` would dereference and hand to libcurl.
-    _queued: bool = false,
+    // Conn the transfer currently holds. Set when makeRequest commits
+    // the conn to the multi handle; cleared by the "release ASAP" step
+    // inside processOneMessage, by the auth-parking path, and by deinit.
+    // Lifetime is decoupled from `state` on purpose: a single transition
+    // shouldn't have to thread the conn pointer, and aborts in mid-flight
+    // can let `deinit` find the conn via this field instead of carrying
+    // it on every state variant.
+    _conn: ?*http.Connection = null,
 
     req: Request,
     res: Transfer.Response = .{},
     client: *Client,
 
     start_time: u64,
-    aborted: bool = false,
 
     _notified_fail: bool = false,
 
-    _conn: ?*http.Connection = null,
     // Set when conn is temporarily detached from transfer during redirect
     // reconfiguration. Used by processMessages to release the orphaned conn
-    // if reconfiguration fails.
+    // if reconfiguration fails. Transient inside the redirect path only.
     _detached_conn: ?*http.Connection = null,
 
     _auth_challenge: ?http.AuthChallenge = null,
@@ -1119,22 +1249,76 @@ pub const Transfer = struct {
     // number of times the transfer has been tried.
     // incremented by reset func.
     _tries: u8 = 0,
-    _performing: bool = false,
     _redirect_count: u8 = 0,
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
 
-    fn releaseConn(self: *Transfer) void {
-        if (self._conn) |conn| {
-            self.client.removeConn(conn);
-            self._conn = null;
-        }
+    pub const State = union(enum) {
+        // Pre-commit. Only valid inside the request flow (Client.request
+        // or a re-entry like continueTransfer / unpark) before any commit
+        // point hands the transfer to an external owner. Client.request's
+        // errdefer uses `.created` to decide whether to abort.
+        created,
+
+        // On client.queue, waiting for a libcurl handle. `_node` is
+        // linked into client.queue.
+        queued,
+
+        // Conn (in `_conn`) is in the multi handle; libcurl owns the
+        // lifecycle. processOneMessage will eventually fire callbacks
+        // for us.
+        inflight,
+
+        // processOneMessage is running user callbacks. The conn may
+        // still be in `_conn` (header/data phase) or have been cleared
+        // by the "release ASAP" step before done_callback fires.
+        completing,
+
+        // External owner is holding the transfer paused. The owner is
+        // responsible for resuming or terminating it.
+        parked: ParkedBy,
+
+        // detachInPerform ran; user callbacks are noop'd, owner link is
+        // cleared, processOneMessage / processMessages will deinit on
+        // exit. `_conn` (if any) is what `deinit` will release once
+        // libcurl is done with it.
+        aborted,
+    };
+
+    pub const ParkedBy = enum {
+        // CDP Fetch interception, request phase.
+        intercept_request,
+
+        // CDP auth challenge — processOneMessage stashed the transfer
+        // waiting for continueWithAuth.
+        intercept_auth,
+
+        // RobotsLayer holds the transfer pending a robots.txt fetch.
+        robots,
+    };
+
+    // Layer-facing: park the transfer for an external owner. The caller
+    // must be holding the transfer in the request flow (state == .created).
+    pub fn park(self: *Transfer, by: ParkedBy) void {
+        lp.assert(self.state == .created, "Transfer.park", .{ .state = self.state });
+        self.state = .{ .parked = by };
+    }
+
+    // Layer-facing: take the transfer out of .parked and return it to
+    // the request flow (.created). This assumes pre-inflight handling (i.e. the
+    // transfer was in .created before being parked). This is true today, but
+    // could become false if Request Interception ever supports the "response"
+    // requestStage (although, to support this, I think the safety of transfers
+    // post-perform would need to be improved),
+    pub fn unpark(self: *Transfer) void {
+        lp.assert(self.state == .parked, "Transfer.unpark", .{ .state = self.state });
+        self.state = .created;
     }
 
     pub fn deinit(self: *Transfer) void {
-        if (self._conn) |conn| {
-            self.client.removeConn(conn);
+        if (self._conn) |c| {
+            self.client.removeConn(c);
             self._conn = null;
         }
 
@@ -1142,9 +1326,8 @@ pub const Transfer = struct {
         // Without this, deinit'ing a queued transfer (e.g. via owner-list
         // abort during navigation) leaves a dangling _node in the queue
         // that the next tick would pop and hand to libcurl → UAF.
-        if (self._queued) {
+        if (self.state == .queued) {
             self.client.queue.remove(&self._node);
-            self._queued = false;
         }
 
         // Drop the id→*Transfer index entry before freeing the memory.
@@ -1188,23 +1371,24 @@ pub const Transfer = struct {
     // Decide whether to tear down now or defer until processOneMessage
     // eventually drains the in-flight curl handle.
     //
-    // Two cases force deferral:
-    //   * `_performing` — processOneMessage is currently processing THIS
-    //     transfer (set/cleared around the callback chain). It will call
-    //     `transfer.deinit` itself after the chain returns; deiniting
-    //     here would double-free. Note that `_conn` is cleared partway
-    //     through this window (the "release conn ASAP" step before
-    //     done_callback fires), so we cannot rely on `_conn != null`.
-    //   * `client.performing` + we have a libcurl handle — libcurl could
-    //     still fire callbacks for us. Releasing the arena now would UAF
+    // Two states force deferral:
+    //   * `.completing` — processOneMessage is currently processing
+    //     this transfer. It will call `transfer.deinit` itself after the
+    //     chain returns; deiniting here would double-free. This covers
+    //     both the with-conn and post-release-ASAP windows.
+    //   * `.inflight` while `client.performing` — libcurl could still
+    //     fire callbacks for us. Releasing the arena now would UAF
     //     from inside curl.
     //
-    // Otherwise (parked / queued / never-trackConn'd / fully drained),
-    // there is nothing left referencing this transfer and we can safely
-    // deinit inline even from inside a perform callback.
+    // Otherwise (created / queued / parked / fully drained), there is
+    // nothing left referencing this transfer and we can safely deinit
+    // inline.
     fn detachOrDeinit(self: *Transfer) void {
-        const must_defer = self._performing or
-            (self.client.performing and self._conn != null);
+        const must_defer = switch (self.state) {
+            .completing => true,
+            .inflight => self.client.performing,
+            else => false,
+        };
         if (must_defer) {
             self.detachInPerform();
         } else {
@@ -1215,8 +1399,9 @@ pub const Transfer = struct {
     // Deferred-cleanup path when we can't synchronously deinit.
     //
     // We:
-    //   - flag `aborted` so processOneMessage's normal-completion paths
-    //     short-circuit when they next see this transfer,
+    //   - transition state to `.aborted` so processOneMessage's
+    //     normal-completion paths short-circuit when they next see
+    //     this transfer,
     //   - noop every user callback so libcurl naturally draining the
     //     in-flight response can't re-enter user code,
     //   - unlink from owner.transfers and clear `owner` so the owning
@@ -1225,7 +1410,9 @@ pub const Transfer = struct {
     //     `owner == null` and skips the list-remove that would otherwise
     //     UAF against a freed list.
     fn detachInPerform(self: *Transfer) void {
-        self.aborted = true;
+        // `_conn` (if any) rides through .aborted untouched; deinit
+        // releases it once libcurl is done.
+        self.state = .aborted;
         self.req.start_callback = null;
         self.req.shutdown_callback = null;
         self.req.header_callback = Noop.headerCallback;
@@ -1503,7 +1690,7 @@ pub const Transfer = struct {
             return err;
         };
 
-        return proceed and transfer.aborted == false;
+        return proceed and transfer.state != .aborted;
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
@@ -1553,7 +1740,7 @@ pub const Transfer = struct {
             return http.writefunc_error;
         };
 
-        if (transfer.aborted) {
+        if (transfer.state == .aborted) {
             return http.writefunc_error;
         }
 
@@ -1562,12 +1749,11 @@ pub const Transfer = struct {
 
     pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
         // We always have a real curl request here. We handle injection up in InterceptionLayer.
-        lp.assert(self._conn != null, "Transfer.responseHeaderIterator", .{ .value = self._conn != null });
-        const conn = self._conn.?;
-
+        const c = self._conn;
+        lp.assert(c != null, "Transfer.responseHeaderIterator", .{ .value = c != null });
         // If we have a connection, than this is a real curl request and we
         // iterate through the header that curl maintains.
-        return .{ .curl = .{ .conn = conn } };
+        return .{ .curl = .{ .conn = c.? } };
     }
 
     // This function should be called during the dataCallback. Calling it after
@@ -1578,10 +1764,10 @@ pub const Transfer = struct {
     }
 
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
-        if (self._conn) |conn| {
+        if (self._conn) |c| {
             // If we have a connection, than this is a normal request. We can get the
             // header value from the connection.
-            const cl = conn.getResponseHeader("content-length", 0) orelse return null;
+            const cl = c.getResponseHeader("content-length", 0) orelse return null;
             return cl.value;
         }
 
@@ -1633,6 +1819,7 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     }
 
     self.interception_layer.intercepted -= 1;
+    transfer.unpark();
     return self.process(transfer);
 }
 
@@ -1669,3 +1856,92 @@ pub const Owner = struct {
         self.websockets.remove(&ws._owner_node);
     }
 };
+
+const testing = @import("../testing.zig");
+
+test "HttpClient: isFetchInterceptionMethod matches the four Fetch methods" {
+    try testing.expect(isFetchInterceptionMethod("Fetch.continueRequest"));
+    try testing.expect(isFetchInterceptionMethod("Fetch.failRequest"));
+    try testing.expect(isFetchInterceptionMethod("Fetch.fulfillRequest"));
+    try testing.expect(isFetchInterceptionMethod("Fetch.continueWithAuth"));
+}
+
+test "HttpClient: isFetchInterceptionMethod rejects unrelated methods" {
+    try testing.expect(!isFetchInterceptionMethod(""));
+    try testing.expect(!isFetchInterceptionMethod("Fetch.enable"));
+    try testing.expect(!isFetchInterceptionMethod("Fetch.disable"));
+    try testing.expect(!isFetchInterceptionMethod("Page.navigate"));
+    try testing.expect(!isFetchInterceptionMethod("Runtime.evaluate"));
+    // strict-equality check: a prefix of a valid name must not match
+    try testing.expect(!isFetchInterceptionMethod("Fetch.continueReq"));
+    // trailing space, etc.
+    try testing.expect(!isFetchInterceptionMethod("Fetch.continueRequest "));
+}
+
+test "HttpClient: allowDuringSyncWait allows ping/close/disconnect" {
+    var ping_msg = Inbox.Message{
+        .arena = testing.allocator,
+        .payload = .{ .ping = "" },
+    };
+    try testing.expect(allowDuringSyncWait(&ping_msg));
+
+    var close_msg = Inbox.Message{
+        .arena = testing.allocator,
+        .payload = .close,
+    };
+    try testing.expect(allowDuringSyncWait(&close_msg));
+
+    var disconnect_msg = Inbox.Message{
+        .arena = testing.allocator,
+        .payload = .{ .disconnect = null },
+    };
+    try testing.expect(allowDuringSyncWait(&disconnect_msg));
+
+    var disconnect_err_msg = Inbox.Message{
+        .arena = testing.allocator,
+        .payload = .{ .disconnect = error.PeerClosed },
+    };
+    try testing.expect(allowDuringSyncWait(&disconnect_err_msg));
+}
+
+test "HttpClient: allowDuringSyncWait allows only Fetch interception CDP methods" {
+    var raw_buf: [16]u8 = undefined;
+
+    inline for ([_][]const u8{
+        "Fetch.continueRequest",
+        "Fetch.failRequest",
+        "Fetch.fulfillRequest",
+        "Fetch.continueWithAuth",
+    }) |method| {
+        var msg = Inbox.Message{
+            .arena = testing.allocator,
+            .payload = .{ .cdp = .{
+                .raw = &raw_buf,
+                .input = .{ .method = method },
+            } },
+        };
+        try testing.expect(allowDuringSyncWait(&msg));
+    }
+}
+
+test "HttpClient: allowDuringSyncWait denies non-Fetch CDP methods" {
+    var raw_buf: [16]u8 = undefined;
+
+    inline for ([_][]const u8{
+        "Page.navigate",
+        "Runtime.evaluate",
+        "Target.createTarget",
+        "Fetch.enable",
+        "Fetch.disable",
+        "",
+    }) |method| {
+        var msg = Inbox.Message{
+            .arena = testing.allocator,
+            .payload = .{ .cdp = .{
+                .raw = &raw_buf,
+                .input = .{ .method = method },
+            } },
+        };
+        try testing.expect(!allowDuringSyncWait(&msg));
+    }
+}

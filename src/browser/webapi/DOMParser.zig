@@ -53,6 +53,17 @@ pub fn parseFromString(
     const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
     defer frame.releaseArena(arena);
 
+    // DOMParser builds a detached Document. Borrow the same fragment
+    // parse-mode that `parseHtmlAsChildren` uses so frame-side hooks
+    // triggered from `Build.created` / `nodeIsReady` (external stylesheet
+    // fetches, script execution, mutation-observer fan-out, default-script
+    // injection) treat the parsed nodes as detached and skip
+    // side effects on the live document. The frame's `_parse_mode` is
+    // restored on exit.
+    const previous_parse_mode = frame._parse_mode;
+    frame._parse_mode = .fragment;
+    defer frame._parse_mode = previous_parse_mode;
+
     return switch (target_mime) {
         .@"text/html" => {
             // Create a new HTMLDocument

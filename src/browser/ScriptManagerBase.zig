@@ -300,7 +300,7 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
     while (true) {
         switch (entry.value_ptr.state) {
             .loading => {
-                _ = try client.tick(200);
+                _ = try client.tick(200, .sync_wait);
                 continue;
             },
             .done => |script| {
@@ -576,7 +576,7 @@ pub const Script = struct {
                     .a9 = self.debug_transfer_easy_id,
                     .b1 = transfer.id,
                     .b2 = transfer._tries,
-                    .b3 = transfer.aborted,
+                    .b3 = transfer.state == .aborted,
                     .b4 = transfer.res.bytes_received,
                     .b5 = transfer._notified_fail,
                     .b8 = transfer._auth_challenge != null,
@@ -585,7 +585,7 @@ pub const Script = struct {
                 self.header_callback_called = true;
                 self.debug_transfer_id = transfer.id;
                 self.debug_transfer_tries = transfer._tries;
-                self.debug_transfer_aborted = transfer.aborted;
+                self.debug_transfer_aborted = transfer.state == .aborted;
                 self.debug_transfer_bytes_received = transfer.res.bytes_received;
                 self.debug_transfer_notified_fail = transfer._notified_fail;
                 self.debug_transfer_auth_challenge = transfer._auth_challenge != null;

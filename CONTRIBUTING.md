@@ -71,6 +71,13 @@ export PATH="$PWD/.lp-cache/darwin-sdk-shim/bin:$PATH"
 zig build $V8 test
 ```
 
+### Skip the V8 source build
+
+By default the build compiles V8 from source, which takes several minutes. Run
+`make download-v8` once to fetch the matching prebuilt archive from the
+[`zig-v8-fork`](https://github.com/lightpanda-io/zig-v8-fork/releases) releases
+instead; later `make build` / `make test` pick it up automatically.
+
 ## Before opening a PR
 
 - [ ] Tests pass (`make test`).

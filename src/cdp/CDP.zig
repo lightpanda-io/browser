@@ -20,7 +20,10 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
+const Inbox = @import("../Inbox.zig");
+const Network = @import("../network/Network.zig");
 const Notification = @import("../Notification.zig");
+const WS = @import("../network/WS.zig");
 const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
@@ -29,9 +32,8 @@ const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
 const Transfer = @import("../browser/HttpClient.zig").Transfer;
-const CDPClient = @import("../browser/HttpClient.zig").CDPClient;
-const WsConnection = @import("../network/WsConnection.zig");
 
+const Connection = @import("Connection.zig");
 const Incrementing = @import("id.zig").Incrementing;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
@@ -52,13 +54,16 @@ pub const InvocationIdGen = Incrementing(u32, "INV");
 // Generic so that we can inject mocks into it.
 const CDP = @This();
 
-allocator: Allocator,
 app: *App,
-
-ws: WsConnection,
-
-// The active browser
+conn: Connection,
 browser: Browser,
+allocator: Allocator,
+
+// Network-thread read-side handle for the CDP socket. Populated in
+// init; Server.handleConnection calls network.registerCdp(&cdp.link)
+// after the worker-side handshake completes, and unregisterCdp before
+// teardown.
+link: Network.CdpLink,
 
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
@@ -92,7 +97,8 @@ pub fn init(
 
     self.* = .{
         .app = app,
-        .ws = undefined,
+        .link = undefined,
+        .conn = undefined,
         .browser = undefined,
         .allocator = allocator,
         .browser_context = null,
@@ -102,16 +108,18 @@ pub fn init(
         .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
     };
 
-    try self.ws.init(socket, self.app.allocator, json_version_response);
-    errdefer self.ws.deinit();
+    try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, self);
+    const http_client = &self.browser.http_client;
 
-    try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, .{
-        .ctx = self,
+    try self.conn.init(allocator, socket, json_version_response, &http_client.inbox, &app.arena_pool);
+    errdefer self.conn.deinit();
+
+    self.link = .{
+        .cdp = self,
+        .state = .live,
         .socket = socket,
-        .blocking_read_start = CDP.blockingReadStart,
-        .blocking_read = CDP.blockingRead,
-        .blocking_read_end = CDP.blockingReadStop,
-    });
+        .handles = http_client.handles,
+    };
 }
 
 pub fn deinit(self: *CDP) void {
@@ -123,103 +131,157 @@ pub fn deinit(self: *CDP) void {
     self.message_arena.deinit();
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
-    self.ws.deinit();
+    self.conn.deinit();
 }
-
-pub fn blockingReadStart(ctx: *anyopaque) bool {
-    const self: *CDP = @ptrCast(@alignCast(ctx));
-    self.ws.setBlocking(true) catch |err| {
-        log.warn(.app, "CDP blockingReadStart", .{ .err = err });
-        return false;
-    };
-    return true;
-}
-
-pub fn blockingRead(ctx: *anyopaque) bool {
-    const self: *CDP = @ptrCast(@alignCast(ctx));
-    return self.readSocket();
-}
-
-pub fn blockingReadStop(ctx: *anyopaque) bool {
-    const self: *CDP = @ptrCast(@alignCast(ctx));
-    self.ws.setBlocking(false) catch |err| {
-        log.warn(.app, "CDP blockingReadStop", .{ .err = err });
-        return false;
-    };
-    return true;
-}
-
-pub fn readSocket(self: *CDP) bool {
-    const n = self.ws.read() catch |err| {
-        log.warn(.app, "CDP read", .{ .err = err });
-        return false;
-    };
-
-    if (n == 0) {
-        log.info(.app, "CDP disconnect", .{});
-        return false;
+// Called by Network when readable bytes arrive on the CDP socket.
+// Feeds them through the WS framer and pushes each parsed frame into
+// the worker's inbox. Returns false if a close frame was seen (or a
+// fatal frame error) so Network drops the link from its poll set.
+//
+// One network read can carry more bytes than the reader's current
+// free space — large CDP messages (Page.addScriptToEvaluateOnNewDocument,
+// Runtime evaluation results, etc.) routinely exceed 16 KB, and a
+// single read can contain multiple messages, or part of messages. We loop: feed
+// what fits, run processMessages (which extracts complete frames, compacts the
+// reader, and grows the buffer if it sees a frame header larger than current
+// capacity), repeat until the chunk is drained.
+pub fn onData(self: *CDP, data: []const u8) anyerror!bool {
+    var remaining = data;
+    while (remaining.len > 0) {
+        const n = self.conn.feedBytes(remaining);
+        remaining = remaining[n..];
+        if ((try self.conn.processMessages()) == false) {
+            return false;
+        }
     }
-
-    return self.ws.processMessages(self) catch false;
-}
-
-pub fn sendJSON(self: *CDP, message: anytype) !void {
-    try self.ws.sendJSON(message, .{ .emit_null_optional_fields = false });
-}
-
-pub fn handleMessage(self: *CDP, msg: []const u8) bool {
-    // if there's an error, it's already been logged
-    self.processMessage(msg) catch return false;
     return true;
 }
 
+// Called by Network when it drops the link unsolicited (peer EOF, read
+// error, poll HUP/ERR). Push a disconnect into the inbox so the
+// worker's drainInbox surfaces error.ClientDisconnected.
+pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
+    const arena = self.browser.arena_pool.acquire(.tiny, "cdp disconnect") catch |e| switch (e) {
+        error.OutOfMemory => @panic("OOM"),
+    };
+
+    self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
+}
+
+// Called by Network to try to force the Worker to shutdown. Protects against a
+// stuck worker.
+pub fn terminateFromNetwork(self: *CDP) void {
+    self.browser.env.terminate();
+}
+
+// Called in the Worker to dispatch a single CDP message bubbled up by
+// HttpClient.drainInbox. The Network thread already parsed the JSON
+// when it pushed the message to the inbox, so we skip straight to
+// dispatchParsed without re-parsing. `c.raw` and `c.arena` outlive
+// this call (they're owned by the inbox Message which drainInbox
+// frees right after we return), so `c.input`'s string slices stay
+// valid for the duration of dispatch.
+pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
+    const arena = &self.message_arena;
+    defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
+    return self.dispatchParsed(arena.allocator(), .{ .cdp = self }, c.raw, c.input);
+}
+
+// Parse + dispatch a raw JSON CDP message. Used by tests (which
+// don't go through the Network thread / inbox pipeline) and by any
+// caller that has bytes rather than a pre-parsed InputMessage.
 pub fn processMessage(self: *CDP, msg: []const u8) !void {
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
     return self.dispatch(arena.allocator(), .{ .cdp = self }, msg);
 }
 
-// @newhttp
-// A bit hacky right now. The main server loop doesn't unblock for
-// scheduled task. So we run this directly in order to process any
-// timeouts (or http events) which are ready to be processed.
-pub fn pageWait(self: *CDP, ms: u32) !Session.Runner.CDPWaitResult {
+// Called in the worker when a PING message is received
+pub fn onPing(self: *CDP, body: []const u8) void {
+    self.conn.sendPong(body) catch |err| {
+        log.warn(.app, "CDP pong", .{ .err = err });
+    };
+}
+
+// Called in the Worker when a peer-initiated close with CLOSE_NORMAL. The worker
+// loop tears down immediately after; drainInbox returns
+// error.ClientDisconnected once we return.
+pub fn onClose(self: *CDP) void {
+    self.conn.send(&WS.CLOSE_NORMAL) catch |err| {
+        log.warn(.app, "CDP close reply", .{ .err = err });
+    };
+}
+
+// Called in the Worker when the peer disconnected (peer EOF, fatal frame error,
+// or right after a peer close was replied to). drainInbox returns
+// error.ClientDisconnected, which the worker loop catches to tear down.
+//
+// If `err` is a recognized WS framing error, send the matching close
+// frame back to the peer before tearing down — that's how clients
+// observe protocol violations (close code 1002 / 1009 / etc.).
+pub fn onDisconnect(self: *CDP, err: ?anyerror) void {
+    if (err) |e| {
+        if (WS.errorReply(e)) |close_frame| {
+            self.conn.send(close_frame) catch {};
+        }
+    }
+    log.info(.cdp, "CDP disconnect", .{ .err = err });
+}
+
+pub fn sendJSON(self: *CDP, message: anytype) !void {
+    try self.conn.sendJSON(message, .{ .emit_null_optional_fields = false });
+}
+
+pub fn tick(self: *CDP) !bool {
+    // Liveness is enforced by TCP keepalive configured in
+    // Server.configureSocket; the wakeup lets V8 run or terminate.
+    const wait_ms: u32 = 1000; // 1s
+
+    self.pageWait(wait_ms) catch |wait_err| switch (wait_err) {
+        error.NoPage => {
+            // No active page yet (or a teardown is in flight). Fall
+            // back to ticking the http client directly so CDP messages
+            // still get dispatched.
+            self.browser.http_client.tick(wait_ms, .all) catch |err| switch (err) {
+                error.ClientDisconnected => return false,
+                else => {
+                    log.err(.app, "http tick", .{ .err = err });
+                    return false;
+                },
+            };
+        },
+        error.ClientDisconnected => return false,
+        else => return wait_err,
+    };
+    return true;
+}
+
+fn pageWait(self: *CDP, ms: u32) !void {
     const session = &(self.browser.session orelse return error.NoPage);
     var runner = try session.runner(.{});
     return runner.waitCDP(.{ .ms = ms });
 }
 
-pub fn tick(self: *CDP) !bool {
-    // Liveness is enforced by TCP keepalive configured in
-    // Network.acceptConnections; the wakeup lets V8 run or terminate.
-    const wait_ms: u32 = 1000; // 1s
-
-    const result = self.pageWait(wait_ms) catch |wait_err| switch (wait_err) {
-        error.NoPage => {
-            const status = self.browser.http_client.tick(wait_ms) catch |err| {
-                log.err(.app, "http tick", .{ .err = err });
-                return false;
-            };
-            return status != .cdp_socket or self.readSocket();
-        },
-        else => return wait_err,
-    };
-
-    if (result == .cdp_socket) {
-        return self.readSocket();
-    }
-
-    return true;
-}
-
-// Called from above, in processMessage which handles client messages
-// but can also be called internally. For example, Target.sendMessageToTarget
-// calls back into dispatch to capture the response.
+// Parse-then-dispatch entry point. Used by:
+//   - CDP.processMessage (tests, and any other caller that hands us
+//     raw JSON bytes).
+//   - Target.sendMessageToTarget (a CDP command that wraps another
+//     CDP message as a string parameter and forwards it through the
+//     dispatch table).
+// The normal Network-thread path doesn't go through here — it parses
+// once on the Network thread and reaches dispatchParsed directly via
+// onMessage.
 pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8) !void {
     const input = json.parseFromSliceLeaky(InputMessage, arena, str, .{
         .ignore_unknown_fields = true,
     }) catch return error.InvalidJSON;
+    return self.dispatchParsed(arena, sender, str, input);
+}
 
+// Dispatch a pre-parsed CDP message. The caller is responsible for
+// keeping `str` and the backing storage for `input`'s string slices
+// alive for the duration of the call.
+fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, input: InputMessage) !void {
     var command = Command{
         .input = .{
             .json = str,
@@ -366,16 +428,6 @@ pub fn disposeBrowserContext(self: *CDP, browser_context_id: []const u8) bool {
     const bc = &(self.browser_context orelse return false);
     if (std.mem.eql(u8, bc.id, browser_context_id) == false) {
         return false;
-    }
-    // Reentrant teardown from a CDP message drained inside HttpClient.syncRequest.
-    // Tearing down the browser context here would free Session/Page state
-    // that the unwinding script-eval frame above us is about to dereference
-    // (see Session.removePage's matching guard). Defer cleanup to
-    // CDP.deinit at connection close, by which time eval has unwound.
-    if (bc.session.currentPage()) |page| {
-        if (page.frame.anyScriptEvaluating()) {
-            return true;
-        }
     }
     bc.deinit();
     self.browser.closeSession();
@@ -654,8 +706,13 @@ pub const BrowserContext = struct {
     }
 
     pub fn axnodeWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
-        const frame = self.session.currentFrame() orelse return error.FrameNotLoaded;
-        _ = opts;
+        // Bind the writer to the frame that owns the root node, not whatever
+        // happens to be `currentFrame`. Name resolution (`Label.findLabelByFor`
+        // against `ownerDocument`) and visibility checks (`frame._style_manager`)
+        // are per-frame; getting this wrong on cross-frame queries produces
+        // names/visibility from the wrong document.
+        const fallback = self.session.currentFrame() orelse return error.FrameNotLoaded;
+        const frame = root.dom.ownerFrame(fallback);
         const cache = try frame.call_arena.create(Element.VisibilityCache);
         cache.* = .empty;
         const label_index = try frame.call_arena.create(Label.LabelByForIndex);
@@ -667,6 +724,7 @@ pub const BrowserContext = struct {
             .visibility_cache = cache,
             .label_index = label_index,
             .temp_arena = temp_arena,
+            .filter = opts.filter,
         };
     }
 
@@ -951,7 +1009,7 @@ pub const BrowserContext = struct {
         };
 
         const cdp = self.cdp;
-        const allocator = cdp.ws.send_arena.allocator();
+        const allocator = cdp.conn.send_arena.allocator();
 
         const field = ",\"sessionId\":\"";
 
@@ -977,7 +1035,7 @@ pub const BrowserContext = struct {
             std.debug.assert(buf.items.len == message_len);
         }
 
-        try cdp.ws.sendJSONRaw(buf);
+        try cdp.conn.sendJSONRaw(buf);
     }
 };
 
@@ -1154,8 +1212,11 @@ pub const Command = struct {
 };
 
 // When we parse a JSON message from the client, this is the structure
-// we always expect
-const InputMessage = struct {
+// we always expect. Parsed on the Network thread inside
+// Connection.handleMessage; the slices reference the raw JSON bytes
+// (or arena allocations for fields that needed unescaping). Both
+// outlive the InputMessage for the inbox message's lifetime.
+pub const InputMessage = struct {
     id: ?i64 = null,
     method: []const u8,
     params: ?InputParams = null,
@@ -1166,7 +1227,7 @@ const InputMessage = struct {
 // capture the raw json object (including the opening and closing braces).
 // Then, when we're processing the message, and we know what type it is, we
 // can parse it (in Disaptch(T).params).
-const InputParams = struct {
+pub const InputParams = struct {
     raw: []const u8,
 
     pub fn jsonParse(
@@ -1265,4 +1326,61 @@ test "cdp: STARTUP sessionId" {
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
     }
+}
+
+test "cdp: disconnect latches so the worker keeps exiting" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const client = &ctx.cdp().browser.http_client;
+
+    // Simulate the Network thread delivering a peer disconnect into the
+    // worker's inbox — the dropCdp(notify=true) path used on peer EOF and,
+    // since #2510, on shutdown via shutdownCdpLinks.
+    {
+        const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
+        client.inbox.push(arena, .{ .disconnect = null });
+    }
+
+    // First tick drains the .disconnect and tears the link down.
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+
+    // The inbox is now empty. Without the latch this second tick would fall
+    // through to perform/poll with no producer left to wake it, so the worker
+    // would never exit and Server.deinit() would spin on active_threads
+    // (#2510). The latch keeps the terminal state sticky so the worker exits.
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+}
+
+test "cdp: syncRequest short-circuits after disconnect" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const client = &ctx.cdp().browser.http_client;
+
+    // Latch terminated via a drained disconnect (as above).
+    {
+        const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
+        client.inbox.push(arena, .{ .disconnect = null });
+    }
+    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+
+    // A synchronous fetch attempted after the latch returns ClientDisconnected
+    // without starting the request. syncRequest also frees req.headers on this
+    // early-return path (it returns before request() takes ownership); that
+    // free isn't asserted here because curl_slist is C-allocated and escapes the
+    // per-test leak check, so it's verified by review. The latch check returns
+    // before any other req field is read, so the rest are placeholders.
+    const headers = try client.newHeaders();
+    try testing.expectError(error.ClientDisconnected, client.syncRequest(testing.allocator, .{
+        .frame_id = 0,
+        .loader_id = 0,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/",
+        .headers = headers,
+        .cookie_jar = null,
+        .cookie_origin = "",
+        .resource_type = .fetch,
+        .notification = undefined,
+    }));
 }

@@ -47,11 +47,11 @@ const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const VisualViewport = @import("webapi/VisualViewport.zig");
-const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const Worker = @import("webapi/Worker.zig");
+const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
@@ -173,11 +173,6 @@ _intersection_delivery_scheduled: bool = false,
 _slots_pending_slotchange: std.AutoHashMapUnmanaged(*Element.Html.Slot, void) = .{},
 _slotchange_delivery_scheduled: bool = false,
 
-/// List of active PerformanceObservers.
-/// Contrary to MutationObserver and IntersectionObserver, these are regular tasks.
-_performance_observers: std.ArrayList(*PerformanceObserver) = .{},
-_performance_delivery_scheduled: bool = false,
-
 // Lookup for customized built-in elements. Maps element pointer to definition.
 _customized_builtin_definitions: std.AutoHashMapUnmanaged(*Element, *CustomElementDefinition) = .{},
 _customized_builtin_connected_callback_invoked: std.AutoHashMapUnmanaged(*Element, void) = .{},
@@ -256,6 +251,13 @@ _parent_notified: bool = false,
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
+_http_status: ?u16 = null,
+_http_headers: std.ArrayList(HttpHeader) = .empty,
+
+pub const HttpHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
 
 pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     if (comptime IS_DEBUG) {
@@ -313,7 +315,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._proto = undefined,
         ._document = self.document,
         ._location = &default_location,
-        ._performance = Performance.init(),
+        ._performance = .init(),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
         ._cross_origin_wrapper = undefined,
@@ -445,6 +447,20 @@ pub fn getTitle(self: *Frame) !?[]const u8 {
         return try html_doc.getTitle(self);
     }
     return null;
+}
+
+pub const HttpMetadata = struct {
+    url: [:0]const u8,
+    status: ?u16,
+    headers: []const HttpHeader,
+};
+
+pub fn httpMetadata(self: *const Frame) HttpMetadata {
+    return .{
+        .url = self.url,
+        .status = self._http_status,
+        .headers = self._http_headers.items,
+    };
 }
 
 // Add common headers for a request:
@@ -607,6 +623,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     }
 
     const http_client = &session.browser.http_client;
+
+    self._http_status = null;
+    self._http_headers = .empty;
 
     self.url = try self.arena.dupeZ(u8, request_url);
     self.origin = try URL.getOrigin(self.arena, self.url);
@@ -1031,6 +1050,15 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
         });
     }
 
+    self._http_status = response.status();
+    var it = response.headerIterator();
+    while (it.next()) |hdr| {
+        try self._http_headers.append(self.arena, .{
+            .name = try self.arena.dupe(u8, hdr.name),
+            .value = try self.arena.dupe(u8, hdr.value),
+        });
+    }
+
     if (self._navigated_options) |no| {
         // _navigated_options will be null in special short-circuit cases, like
         // "navigating" to about:blank, in which case this notification has
@@ -1256,24 +1284,6 @@ pub fn isGoingAway(self: *const Frame) bool {
     return parent.isGoingAway();
 }
 
-// True if this frame, any descendant frame, or any worker owned by any
-// of those frames is currently inside script evaluation. Used as a
-// reentrancy guard before tearing down a page from a CDP message that
-// may have been drained while a Zig->JS->Zig stack (e.g. Worker
-// importScripts -> syncRequest -> blocking_read) is mid-flight.
-// Recursive over child frames so an evaluating subframe also defers
-// parent teardown.
-pub fn anyScriptEvaluating(self: *const Frame) bool {
-    if (self._script_manager.base.is_evaluating) return true;
-    for (self.workers.items) |worker| {
-        if (worker._worker_scope._script_manager.is_evaluating) return true;
-    }
-    for (self.child_frames.items) |child| {
-        if (child.anyScriptEvaluating()) return true;
-    }
-    return false;
-}
-
 pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *Element.Html.Script) !void {
     if (self.isGoingAway()) {
         // if we're planning on navigating to another frame, don't run this script
@@ -1363,6 +1373,16 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         );
     };
 
+    // Append the new frame before navigate() so synchronous navigation paths
+    // (about:blank, blob:) and the notifications they dispatch can see this
+    // frame in self.child_frames.
+    try self.child_frames.append(self.arena, new_frame);
+
+    // navigate() may run JS that reads window[N]; flag the list unsorted until
+    // we've verified ordering post-navigate.
+    const was_sorted = self.child_frames_sorted;
+    self.child_frames_sorted = false;
+
     // Iframe's initial src request carries the parent's URL as Referer and
     // as the SameSite initiator. Parent frame outlives this navigate()
     // call, so the slice is safe.
@@ -1372,28 +1392,31 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .referer = parent_url,
         .initiator_url = parent_url,
     }) catch |err| {
+        // extra defensive..maybe navigate added a new frame, and the index it
+        // was added at was removed. Or maybe this frame was removed somehow
+        // (which I don't think is possible)
+        if (std.mem.indexOfScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
+            _ = self.child_frames.swapRemove(idx);
+        }
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
         return error.IFrameLoadError;
     };
 
-    // window[N] is based on document order. For now we'll just append the frame
-    // at the end of our list and set child_frames_sorted == false. window.getFrame
-    // will check this flag to decide if it needs to sort the frames or not.
-    // But, we can optimize this a bit. Since we expect frames to often be
-    // added in document order, we can do a quick check to see whether the list
-    // is sorted or not.
-    try self.child_frames.append(self.arena, new_frame);
-
+    // window[N] is based on document order. We appended above and rely on
+    // child_frames_sorted to tell window.getFrame whether it has to sort.
+    // Since we expect frames to often be added in document order, do a quick
+    // check to keep the list flagged as sorted when possible.
     const frames_len = self.child_frames.items.len;
     if (frames_len == 1) {
         // this is the only frame, it must be sorted.
+        self.child_frames_sorted = true;
         return;
     }
 
-    if (self.child_frames_sorted == false) {
-        // the list already wasn't sorted, it still isn't
+    if (!was_sorted) {
+        // it was already unsorted; leave flag false
         return;
     }
 
@@ -1402,11 +1425,10 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const iframe_a = self.child_frames.items[frames_len - 2].iframe.?;
     const iframe_b = self.child_frames.items[frames_len - 1].iframe.?;
 
-    if (iframe_a.asNode().compareDocumentPosition(iframe_b.asNode()) & 0x04 == 0) {
-        // if b followed a, then & 0x04 = 0x04
-        // but since we got 0, it means b does not follow a, and thus our list
-        // is no longer sorted.
-        self.child_frames_sorted = false;
+    if (iframe_a.asNode().compareDocumentPosition(iframe_b.asNode()) & 0x04 != 0) {
+        // b follows a (& 0x04 == 0x04), so the appended frame is in document
+        // order relative to the previous tail — the list is still sorted.
+        self.child_frames_sorted = true;
     }
 }
 
@@ -1578,61 +1600,8 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
     return null;
 }
 
-pub fn registerPerformanceObserver(self: *Frame, observer: *PerformanceObserver) !void {
-    return self._performance_observers.append(self.arena, observer);
-}
-
-pub fn unregisterPerformanceObserver(self: *Frame, observer: *PerformanceObserver) void {
-    for (self._performance_observers.items, 0..) |perf_observer, i| {
-        if (perf_observer == observer) {
-            _ = self._performance_observers.swapRemove(i);
-            return;
-        }
-    }
-}
-
-/// Updates performance observers with the new entry.
-/// This doesn't emit callbacks but rather fills the queues of observers.
-pub fn notifyPerformanceObservers(self: *Frame, entry: *Performance.Entry) !void {
-    for (self._performance_observers.items) |observer| {
-        if (observer.interested(entry)) {
-            observer._entries.append(self.arena, entry) catch |err| {
-                log.err(.frame, "notifyPerformanceObservers", .{ .err = err, .type = self._type, .url = self.url });
-            };
-        }
-    }
-
-    try self.schedulePerformanceObserverDelivery();
-}
-
-/// Schedules async delivery of performance observer records.
-pub fn schedulePerformanceObserverDelivery(self: *Frame) !void {
-    // Already scheduled.
-    if (self._performance_delivery_scheduled) {
-        return;
-    }
-    self._performance_delivery_scheduled = true;
-
-    return self.js.scheduler.add(
-        self,
-        struct {
-            fn run(_frame: *anyopaque) anyerror!?u32 {
-                const frame: *Frame = @ptrCast(@alignCast(_frame));
-                frame._performance_delivery_scheduled = false;
-
-                // Dispatch performance observer events.
-                for (frame._performance_observers.items) |observer| {
-                    if (observer.hasRecords()) {
-                        try observer.dispatch(frame);
-                    }
-                }
-
-                return null;
-            }
-        }.run,
-        0,
-        .{ .low_priority = true },
-    );
+pub fn performance(self: *Frame) *Performance {
+    return &self.window._performance;
 }
 
 pub fn registerMutationObserver(self: *Frame, observer: *MutationObserver) !void {
@@ -1679,6 +1648,131 @@ pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
     }
 }
 
+// Hard cap on a single external stylesheet body. CSS rule storage is per-
+// arena so a hostile sheet could otherwise inflate page memory; 2 MiB is
+// well above anything seen on real sites (Tailwind's `preflight + utilities`
+// build is ~400 KiB gzipped, ~3 MiB raw — at which point a site should be
+// splitting by route anyway).
+const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
+
+// Synchronously fetch and parse an external `<link rel=stylesheet>`.
+// href is passed in as an optimization since the [currently] only callsite has
+// it, so why look it up again?
+pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []const u8) !void {
+    if (self.isGoingAway() or href.len == 0) {
+        return;
+    }
+
+    const session = self._session;
+
+    // this feature is disabled by default, and can be turned on via a command
+    // line flag or via an CDP command
+    if (session.load_external_stylesheets == false) {
+        return self.queueLoad(link._proto);
+    }
+
+    // Fragment-parsed links (innerHTML, DOMParser, ...) may not be attached.
+    // TODO: this isn't correct in all cases. If the link is added into an
+    // attached node, I think we SHOULD load it.
+    if (self._parse_mode == .fragment) {
+        return;
+    }
+    const element = link.asElement();
+
+    const arena = try session.getArena(.medium, "Frame.loadExternalStylesheet");
+    defer session.releaseArena(arena);
+
+    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch |err| {
+        log.warn(.http, "external stylesheet resolve", .{ .err = err, .href = href });
+        try self.fireElementEvent(element, comptime .wrap("error"));
+        return;
+    };
+
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeaders();
+    try headers.add("Accept: text/css,*/*;q=0.1");
+    try self.headersForRequest(&headers);
+
+    // Set the script-manager `is_evaluating` flag for the same reason
+    // `ScriptManager.addFromElement` does: `syncRequest` pumps the CDP
+    // socket inline, so a `Target.closeTarget` / `Page.close` arriving
+    // mid-fetch would otherwise drive `Session.removePage` while this
+    // function still holds pointers to `self`. The check in
+    // `Session.removePage` (Session.zig:253) consults
+    // `frame.anyScriptEvaluating()`, which only sees this flag.
+    const sm = &self._script_manager.base;
+    const was_evaluating = sm.is_evaluating;
+    sm.is_evaluating = true;
+    defer sm.is_evaluating = was_evaluating;
+
+    var response = http_client.syncRequest(arena, .{
+        .url = resolved,
+        .method = .GET,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .headers = headers,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
+        .resource_type = .stylesheet,
+        .notification = session.notification,
+    }) catch |err| {
+        log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    };
+    defer response.deinit(arena);
+
+    if (response.status < 200 or response.status >= 300) {
+        log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    }
+
+    if (response.body.items.len > MAX_STYLESHEET_BYTES) {
+        log.warn(.http, "external stylesheet too large", .{
+            .bytes = response.body.items.len,
+            .max = MAX_STYLESHEET_BYTES,
+            .url = resolved,
+        });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    }
+
+    // Reuse the cached sheet on re-fetch (href mutation on a connected
+    // link) so `document.styleSheets` keeps a single entry per <link>
+    // instead of accumulating one per href change. On first load, create
+    // and register; on subsequent loads, replace content in place.
+    //
+    // First-load creation assigns `link._sheet` AFTER `sheets.add`
+    // succeeds so an OOM during registration doesn't cache an unregistered
+    // sheet (which would short-circuit every future re-fetch via the
+    // `orelse` branch, leaving the sheet permanently unreachable through
+    // `document.styleSheets`).
+    const sheet = link._sheet orelse blk: {
+        const new_sheet = try CSSStyleSheet.initWithOwner(element, self);
+        const sheets = try self.document.getStyleSheets(self);
+        try sheets.add(new_sheet, self);
+        link._sheet = new_sheet;
+        break :blk new_sheet;
+    };
+
+    // Parse first, only swap `_href` on success. `replaceSync` itself is
+    // not atomic (clears rules before the insert loop), so a mid-parse
+    // OOM still drops the old rules — full atomicity would require a
+    // scratch-list pattern in `CSSStyleSheet.replaceSync`. Keeping
+    // `_href` consistent with what the sheet actually contains is the
+    // minimum.
+    sheet.replaceSync(response.body.items, self) catch |err| {
+        log.warn(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    };
+    sheet._href = try self.arena.dupe(u8, resolved);
+
+    try self.fireElementEvent(element, comptime .wrap("load"));
+}
+
+fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
+    const event = try Event.initTrusted(name, .{}, self._page);
+    try self._event_manager.dispatch(el.asEventTarget(), event);
+}
+
 fn dispatchLoad(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
@@ -1691,8 +1785,7 @@ fn dispatchLoad(self: *Frame) !void {
 
     for (to_process.items) |html_element| {
         if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
-            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._page);
-            try self._event_manager.dispatch(html_element.asEventTarget(), event);
+            try self.fireElementEvent(html_element.asElement(), comptime .wrap("load"));
         }
     }
 
@@ -3012,6 +3105,20 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
                 style._sheet = null;
             }
             self._style_manager.sheetModified();
+        } else if (el.is(Element.Html.Link)) |link| {
+            // External stylesheet links registered via Frame.loadExternalStylesheet
+            // must be symmetrically deregistered on disconnect, or
+            // `document.styleSheets` accumulates phantom entries and the
+            // visibility cascade keeps honoring rules from removed links —
+            // exactly the SPA theme-switch pattern (append new sheet,
+            // remove old) the feature exists to serve.
+            if (link._sheet) |sheet| {
+                if (self.document._style_sheets) |sheets| {
+                    sheets.remove(sheet);
+                }
+                link._sheet = null;
+                self._style_manager.sheetModified();
+            }
         }
     }
 }
@@ -3472,10 +3579,16 @@ pub fn parseHtmlAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
     var parser = Parser.init(self.call_arena, node, self);
     parser.parseFragment(html);
 
-    // https://github.com/servo/html5ever/issues/583
+    // html5ever wraps fragment output in an <html> element; unwrap so its
+    // children land directly on `node`. See https://github.com/servo/html5ever/issues/583.
+    // Because of custom element callbacks, the structure might not be what
+    // we expect, and nodes might be altogether removed. We deal with this in a
+    // few different places, but always the same way: leave it as-is.
     const children = node._children orelse return;
-    const first = children.one;
-    lp.assert(first.is(Element.Html.Html) != null, "Frame.parseHtmlAsChildren root", .{ .type = first._type });
+    const first = children.first();
+    if (first.is(Element.Html.Html) == null) {
+        return;
+    }
     node._children = first._children;
 
     if (self.hasMutationObservers()) {
@@ -4166,4 +4279,22 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(false, frame.isSameOrigin(""));
     try testing.expectEqual(false, frame.isSameOrigin("not-a-url"));
     try testing.expectEqual(false, frame.isSameOrigin("//origin.com/foo"));
+}
+
+test "Frame: httpMetadata after navigation" {
+    const frame = try testing.pageTest("page/meta.html", .{});
+    defer testing.test_session.removePage();
+    const meta = frame.httpMetadata();
+    try testing.expect(meta.status != null);
+    try std.testing.expectEqual(@as(u16, 200), meta.status.?);
+    try testing.expect(meta.headers.len > 0);
+    try testing.expect(meta.url.len > 0);
+}
+
+test "Frame: httpMetadata 404" {
+    const frame = try testing.pageTest("nonexistent_page_xyz.html", .{});
+    defer testing.test_session.removePage();
+    const meta = frame.httpMetadata();
+    try testing.expect(meta.status != null);
+    try std.testing.expectEqual(@as(u16, 404), meta.status.?);
 }

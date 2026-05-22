@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+
+<!-- Frame.parseHtmlAsChildren extracts children from the temporary
+     <html> element the fragment parser leaves at the top of the parse
+     result. A custom element's connectedCallback fires synchronously
+     during that parse, so it can reach two levels up (this.parentNode is
+     the temporary <html>; this.parentNode.parentNode is the original
+     element receiving innerHTML) and replace the temporary wrapper with
+     a text node before the post-parse step inspects the result. -->
+<script id="connected_callback_replaces_wrapper">
+{
+    class WrapperReplacer extends HTMLElement {
+        connectedCallback() {
+            const wrapper = this.parentNode;
+            if (!wrapper) return;
+            const host = wrapper.parentNode;
+            if (!host) return;
+            host.removeChild(wrapper);
+            host.appendChild(document.createTextNode(''));
+        }
+    }
+    customElements.define('wrapper-replacer-1', WrapperReplacer);
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    host.innerHTML = '<wrapper-replacer-1></wrapper-replacer-1>';
+
+    // The point of this test is to reach this line without aborting.
+    testing.expectTrue(host.firstChild !== null);
+}
+</script>
+</body>
+</html>
+

@@ -18,12 +18,12 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 
 const App = @import("App.zig");
-const CDP = @import("cdp/CDP.zig");
 const Config = @import("Config.zig");
-const CDPClient = @import("./browser/HttpClient.zig").CDPClient;
-const WsConnection = @import("network/WsConnection.zig");
+
+const CDP = @import("cdp/CDP.zig");
 
 const log = lp.log;
 const net = std.net;
@@ -33,15 +33,14 @@ const Allocator = std.mem.Allocator;
 const Server = @This();
 
 app: *App,
+max_connections: usize,
 json_version_response: []const u8,
 
-// Thread management
 active_threads: std.atomic.Value(u32) = .init(0),
-pending: std.ArrayList(*CDP) = .{},
 
-conns: std.ArrayList(*CDP) = .{},
-conns_mutex: std.Thread.Mutex = .{},
-conns_pool: std.heap.MemoryPool(CDP),
+cdps: std.ArrayList(*CDP) = .{},
+cdp_mutex: std.Thread.Mutex = .{},
+cdp_pool: std.heap.MemoryPool(CDP),
 
 pub fn init(app: *App, address: net.Address) !*Server {
     const self = try app.allocator.create(Server);
@@ -49,14 +48,15 @@ pub fn init(app: *App, address: net.Address) !*Server {
 
     self.* = .{
         .app = app,
-        .conns_pool = .init(app.allocator),
         .json_version_response = "",
+        .cdp_pool = .init(app.allocator),
+        .max_connections = app.config.maxConnections(),
     };
-    errdefer self.conns_pool.deinit();
+    errdefer self.cdp_pool.deinit();
 
     // Bind first so /json/version can advertise the OS-assigned port (--port 0).
     var bound_address = address;
-    try self.app.network.bind(&bound_address, self, onAccept);
+    try app.network.bind(&bound_address, self, onAccept);
     log.info(.app, "server running", .{ .address = bound_address });
 
     self.json_version_response = try buildJSONVersionResponse(app, bound_address.getPort());
@@ -64,19 +64,19 @@ pub fn init(app: *App, address: net.Address) !*Server {
 }
 
 pub fn shutdown(self: *Server) void {
-    self.conns_mutex.lock();
-    defer self.conns_mutex.unlock();
+    self.cdp_mutex.lock();
+    defer self.cdp_mutex.unlock();
 
     self.app.network.unbind();
 
-    for (self.conns.items) |cdp| {
-        cdp.browser.env.terminate();
-        cdp.ws.sendClose();
-        cdp.ws.shutdown();
-    }
-
-    for (self.pending.items) |conn| {
-        conn.ws.shutdown();
+    for (self.cdps.items) |cdp| {
+        if (cdp.conn.state == .live) {
+            cdp.browser.env.terminate();
+            // We use to send a nice WS close frame here but (a) it isn't
+            // strictly required and (b) we'd have to protect against an interleaved
+            // write from the worker thread.
+        }
+        cdp.conn.shutdown();
     }
 }
 
@@ -87,18 +87,50 @@ pub fn deinit(self: *Server) void {
         std.Thread.sleep(10 * std.time.ns_per_ms);
     }
 
-    self.conns.deinit(self.app.allocator);
-    self.pending.deinit(self.app.allocator);
-    self.conns_pool.deinit();
+    self.cdps.deinit(self.app.allocator);
+    self.cdp_pool.deinit();
     self.app.allocator.free(self.json_version_response);
     self.app.allocator.destroy(self);
 }
 
 fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
     const self: *Server = @ptrCast(@alignCast(ctx));
+
+    configureSocket(socket) catch {
+        posix.close(socket);
+        return;
+    };
+
     self.spawnWorker(socket) catch |err| {
         log.err(.app, "CDP spawn", .{ .err = err });
         posix.close(socket);
+    };
+}
+
+// Liveness is enforced at the TCP layer via keepalive probes sent by the
+// kernel. This is transparent to CDP clients — unlike a WebSocket ping, which
+// go-rod panics on and chromedp logs as "malformed". Tunables in Config.zig.
+fn configureSocket(socket: posix.socket_t) !void {
+    posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, &std.mem.toBytes(@as(c_int, 1))) catch |err| {
+        log.warn(.app, "SO_KEEPALIVE", .{ .err = err });
+        return err;
+    };
+
+    const idle_opt = switch (builtin.os.tag) {
+        .macos, .ios => posix.TCP.KEEPALIVE,
+        else => posix.TCP.KEEPIDLE,
+    };
+    posix.setsockopt(socket, posix.IPPROTO.TCP, idle_opt, &std.mem.toBytes(Config.CDP_KEEPALIVE_IDLE_S)) catch |err| {
+        log.warn(.app, "TCP_KEEPIDLE", .{ .err = err });
+        return err;
+    };
+    posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, &std.mem.toBytes(Config.CDP_KEEPALIVE_INTVL_S)) catch |err| {
+        log.warn(.app, "TCP_KEEPINTVL", .{ .err = err });
+        return err;
+    };
+    posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, &std.mem.toBytes(Config.CDP_KEEPALIVE_CNT)) catch |err| {
+        log.warn(.app, "TCP_KEEPCNT", .{ .err = err });
+        return err;
     };
 }
 
@@ -120,9 +152,8 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
     //
     // On failure, cmpxchgWeak returns the actual value, which we reuse to avoid
     // an extra load on the next iteration.
-    const max_connections = self.app.config.maxConnections();
     var current = self.active_threads.load(.monotonic);
-    while (current < max_connections) {
+    while (current < self.max_connections) {
         current = self.active_threads.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
     } else {
         return error.MaxThreadsReached;
@@ -137,13 +168,16 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     defer _ = self.active_threads.fetchSub(1, .monotonic);
     defer posix.close(socket);
 
-    // CDP is HUGE (> 512KB) because WsConnection has a large read buffer.
-    // V8 crashes if this is on the stack (likely related to its size).
-    const cdp = self.allocConn() catch |err| {
-        log.err(.app, "CDP alloc", .{ .err = err });
-        return;
+    const cdp = blk: {
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        break :blk self.cdp_pool.create() catch @panic("OOM");
     };
-    defer self.releaseConn(cdp);
+    defer {
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        self.cdp_pool.destroy(cdp);
+    }
 
     cdp.init(self.app, socket, self.json_version_response) catch |err| {
         log.err(.app, "CDP init", .{ .err = err });
@@ -152,26 +186,71 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     defer cdp.deinit();
 
     if (log.enabled(.app, .info)) {
-        const client_address = cdp.ws.getAddress() catch null;
+        const client_address = cdp.conn.getAddress() catch null;
         log.info(.app, "client connected", .{ .ip = client_address });
     }
 
-    self.registerHandshake(cdp);
-    const handshake_result = cdp.ws.handshake();
-    self.unregisterHandshake(cdp);
+    {
+        // track the connection
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        self.cdps.append(self.app.allocator, cdp) catch {};
+    }
 
-    const upgraded = handshake_result catch |err| {
+    defer {
+        // untrack the connection
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        for (self.cdps.items, 0..) |c, i| {
+            if (c == cdp) {
+                _ = self.cdps.swapRemove(i);
+                break;
+            }
+        }
+    }
+
+    const upgraded = cdp.conn.handshake() catch |err| {
         log.err(.app, "CDP handshake", .{ .err = err });
         return;
     };
-    if (!upgraded) return;
 
-    self.registerConn(cdp);
-    defer self.unregisterConn(cdp);
+    if (!upgraded) {
+        return;
+    }
 
-    // Check shutdown after registering to avoid missing the stop signal.
-    // If shutdown() already iterated over conns, this conn won't be terminated
-    // and would block deinit() indefinitely.
+    {
+        // Transition from .handshake state to .live
+        // Lock needed even though the main thread hasn't seen this yet because
+        // shutdown could access this from the sighandler thread.
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        cdp.conn.state = .live;
+    }
+
+    // Hand the read side of the CDP socket over to the Network thread.
+    // From here until the matching unregisterCdp, the worker must NOT
+    // read from the socket directly — bytes arrive via the inbox.
+    // unregisterCdp is synchronous, so by the time it returns Network
+    // is guaranteed to be done with this link.
+    //
+    // cdp_link_active gates HttpClient.perform's block in
+    // curl_multi_poll: with it false (tests, pre-handshake), perform
+    // skips the poll when there's no in-flight curl work — sleeping
+    // would just eat the timeout waiting for a wakeup that won't
+    // come. We set it true *after* registerCdp so Network is already
+    // accepting wakeups by the time the worker might poll, and clear
+    // it *after* unregisterCdp returns (Network is guaranteed done
+    // with us by then).
+    self.app.network.registerCdp(&cdp.link);
+    cdp.browser.http_client.cdp_link_active = true;
+    defer {
+        self.app.network.unregisterCdp(&cdp.link);
+        cdp.browser.http_client.cdp_link_active = false;
+    }
+
+    // Check shutdown after markLive so that a concurrent shutdown either
+    // sees us as .live and terminates us, or we observe the stop signal
+    // here. Otherwise we could miss it and block deinit() indefinitely.
     if (self.app.shutdown()) {
         return;
     }
@@ -184,57 +263,6 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         if (!next) break;
     }
 }
-
-fn registerHandshake(self: *Server, conn: *CDP) void {
-    self.conns_mutex.lock();
-    defer self.conns_mutex.unlock();
-
-    self.pending.append(self.app.allocator, conn) catch {};
-}
-
-fn unregisterHandshake(self: *Server, conn: *CDP) void {
-    self.conns_mutex.lock();
-    defer self.conns_mutex.unlock();
-
-    for (self.pending.items, 0..) |w, i| {
-        if (w == conn) {
-            _ = self.pending.swapRemove(i);
-            break;
-        }
-    }
-}
-
-fn allocConn(self: *Server) !*CDP {
-    self.conns_mutex.lock();
-    defer self.conns_mutex.unlock();
-    return self.conns_pool.create();
-}
-
-fn releaseConn(self: *Server, conn: *CDP) void {
-    self.conns_mutex.lock();
-    defer self.conns_mutex.unlock();
-    self.conns_pool.destroy(conn);
-}
-
-fn registerConn(self: *Server, conn: *CDP) void {
-    self.conns_mutex.lock();
-    defer self.conns_mutex.unlock();
-    self.conns.append(self.app.allocator, conn) catch {};
-}
-
-fn unregisterConn(self: *Server, conn: *CDP) void {
-    self.conns_mutex.lock();
-    defer self.conns_mutex.unlock();
-    for (self.conns.items, 0..) |c, i| {
-        if (c == conn) {
-            _ = self.conns.swapRemove(i);
-            break;
-        }
-    }
-}
-
-// Utils
-// --------
 
 fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
     const host = app.config.advertiseHost();
@@ -266,9 +294,6 @@ fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         body_format;
     return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
 }
-
-pub const timestamp = @import("datetime.zig").timestamp;
-pub const milliTimestamp = @import("datetime.zig").milliTimestamp;
 
 const testing = @import("testing.zig");
 test "server: buildJSONVersionResponse" {
@@ -616,7 +641,9 @@ fn createTestClient() !TestClient {
 const TestClient = struct {
     stream: std.net.Stream,
     buf: [1024]u8 = undefined,
-    reader: WsConnection.Reader(false),
+    reader: WS.Reader(false, 1024),
+
+    const WS = @import("network/WS.zig");
 
     fn deinit(self: *TestClient) void {
         self.stream.close();
@@ -683,7 +710,7 @@ const TestClient = struct {
             "Sec-Websocket-Accept: flzHu2DevQ2dSCSVqKSii5e9C2o=\r\n\r\n", res);
     }
 
-    fn readWebsocketMessage(self: *TestClient) !?WsConnection.Message {
+    fn readWebsocketMessage(self: *TestClient) !?WS.Message {
         while (true) {
             const n = try self.stream.read(self.reader.readBuf());
             if (n == 0) {

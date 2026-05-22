@@ -19,18 +19,21 @@
 const std = @import("std");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+const dom = @import("dom.zig");
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         disable,
         getFullAXTree,
+        queryAXTree,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
         .getFullAXTree => return getFullAXTree(cmd),
+        .queryAXTree => return queryAXTree(cmd),
     }
 }
 fn enable(cmd: *CDP.Command) !void {
@@ -66,4 +69,60 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     defer frame.releaseArena(temp_arena);
 
     return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{}) }, .{});
+}
+
+fn queryAXTree(cmd: *CDP.Command) !void {
+    const Params = struct {
+        nodeId: ?u32 = null,
+        backendNodeId: ?u32 = null,
+        objectId: ?[]const u8 = null,
+        accessibleName: ?[]const u8 = null,
+        role: ?[]const u8 = null,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = try dom.getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
+
+    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{
+        .filter = .{
+            .accessible_name = params.accessibleName,
+            .role = params.role,
+        },
+    }) }, .{});
+}
+
+const testing = @import("../testing.zig");
+
+test "cdp.accessibility: queryAXTree requires nodeId, backendNodeId or objectId" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
+
+    // Pass filters but no node identifier — dom.getNode returns MissingParams.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Accessibility.queryAXTree",
+        .params = .{ .role = "button" },
+    });
+    try ctx.expectSentError(-31998, "MissingParams", .{ .id = 1 });
+}
+
+test "cdp.accessibility: queryAXTree with unknown nodeId returns error" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Accessibility.queryAXTree",
+        .params = .{ .nodeId = 99999 },
+    });
+    try ctx.expectSentError(-31998, "NodeNotFound", .{ .id = 1 });
 }

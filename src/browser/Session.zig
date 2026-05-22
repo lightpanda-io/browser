@@ -91,6 +91,15 @@ subframe_loading_enabled: bool = true,
 // session init; the LP.configureLoading CDP method can flip it per-session.
 worker_loading_enabled: bool = true,
 
+// Opt-in fetch of external <link rel=stylesheet> resources. Defaults to
+// false to preserve the current rendering-free fast path: drivers that
+// don't need accurate visibility checks pay nothing. Set from the
+// `--enable-external-stylesheets` CLI flag at session init; the
+// LP.configureLoading CDP method can flip it per-session. When true,
+// `Link.linkAddedCallback` routes to `Frame.loadExternalStylesheet`
+// (synchronous fetch + parse + register on `document.styleSheets`).
+load_external_stylesheets: bool = false,
+
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
@@ -112,6 +121,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         // CLI defaults; LP.configureLoading can flip these per-session.
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
         .worker_loading_enabled = !browser.app.config.disableWorkers(),
+        .load_external_stylesheets = browser.app.config.enableExternalStylesheets(),
     };
 }
 
@@ -236,18 +246,8 @@ pub fn createPage(self: *Session) !*Frame {
 }
 
 pub fn removePage(self: *Session) void {
-    const page = self._active orelse {
+    if (self._active == null) {
         lp.assert(false, "Session.removePage - page is null", .{});
-    };
-
-    if (page.frame.anyScriptEvaluating()) {
-        // Reentrant teardown from a CDP message drained inside syncRequest;
-        // either the page's own script (frame ScriptManager.is_evaluating)
-        // or a Worker eval (Worker.loadInitialScript marks its
-        // _worker_scope._script_manager.is_evaluating). Tearing down here
-        // would free the arena/identity_map underneath the active eval.
-        // Session.deinit reclaims the page when the connection closes.
-        return;
     }
 
     // If a navigation is in flight, drop the pending Page first. Its

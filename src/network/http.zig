@@ -274,6 +274,9 @@ pub const Connection = struct {
     in_use: bool,
     transport: Transport,
     node: std.DoublyLinkedList.Node = .{},
+    debug_remove_err: ?anyerror = null,
+    debug_added: u8 = 0,
+    debug_removed: u8 = 0,
 
     pub const Transport = union(enum) {
         none, // used for cases that manage their own connection, e.g. telemetry
@@ -623,6 +626,13 @@ pub const Handles = struct {
 
     pub fn poll(self: *Handles, extra_fds: []libcurl.CurlWaitFd, timeout_ms: c_int) !void {
         try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
+    }
+
+    // Thread-safe wake of a poll() in progress on this multi. Used by
+    // the Network thread to nudge the worker out of curl_multi_poll
+    // when it pushes work onto the worker's inbox.
+    pub fn wakeup(self: *Handles) !void {
+        try libcurl.curl_multi_wakeup(self.multi);
     }
 
     pub const MultiMessage = struct {

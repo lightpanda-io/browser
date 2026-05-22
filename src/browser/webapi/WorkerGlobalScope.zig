@@ -39,6 +39,7 @@ const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
 const Timers = @import("Timers.zig");
 const EventTarget = @import("EventTarget.zig");
+const Performance = @import("Performance.zig");
 const WorkerLocation = @import("WorkerLocation.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
@@ -95,6 +96,7 @@ _closed: bool = false,
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
+_performance: Performance,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
@@ -138,6 +140,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         ._event_manager = .init(arena),
         ._script_manager = undefined,
         ._location = .{ ._url = url },
+        ._performance = .init(),
     });
     errdefer factory.destroy(self);
 
@@ -246,6 +249,10 @@ pub fn getConsole(self: *WorkerGlobalScope) *Console {
 
 pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
+}
+
+pub fn performance(self: *WorkerGlobalScope) *Performance {
+    return &self._performance;
 }
 
 pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
@@ -427,26 +434,6 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 
     var headers = try http_client.newHeaders();
     try self.headersForRequest(&headers);
-
-    // Mark the worker's ScriptManager as evaluating for the duration of
-    // the synchronous fetch. syncRequest pumps the CDP socket while
-    // waiting (HttpClient.syncRequest -> cdp.blocking_read). A CDP
-    // message such as Target.closeTarget arriving on that socket would
-    // otherwise tear down the page (Session.removePage -> Page.deinit ->
-    // Frame.deinit -> Worker.deinit) while we're mid-fetch, freeing the
-    // worker's arena and identity_map underneath us. Frame.anyScriptEvaluating
-    // walks every frame's workers, so the teardown is deferred until the
-    // outer call unwinds.
-    //
-    // The typical caller (Worker.loadInitialScript) already sets this
-    // around its own eval, so this is a defense-in-depth nesting: a worker
-    // script that calls importScripts() from a setTimeout callback or a
-    // microtask wouldn't have the outer guard, but would still be safe
-    // because of this one.
-    const sm = &self._script_manager;
-    const was_evaluating = sm.is_evaluating;
-    sm.is_evaluating = true;
-    defer sm.is_evaluating = was_evaluating;
 
     const response = http_client.syncRequest(arena, .{
         .url = resolved_url,
@@ -648,6 +635,15 @@ pub const JsApi = struct {
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, null, .{});
     pub const console = bridge.accessor(WorkerGlobalScope.getConsole, null, .{});
     pub const crypto = bridge.accessor(WorkerGlobalScope.getCrypto, null, .{});
+    pub const performance = bridge.accessor(struct {
+        // Unnecessary, But, our WebAPI getters are ALWAYS `fn getPerformance()...`.
+        // But for performance, we _need_ to have fn performance() *Performance to
+        // have parity with frame. So rather than having method called `performance`
+        // and one called `getPerformance`, we create this wrapper here.
+        pub fn wrap(wgs: *WorkerGlobalScope) *Performance {
+            return wgs.performance();
+        }
+    }.wrap, null, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});

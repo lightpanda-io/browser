@@ -92,6 +92,26 @@ endif
 endif
 
 
+# Prebuilt V8
+# -----------
+# Building V8 from source takes 10+ minutes. `make download-v8` fetches the
+# matching prebuilt archive from the zig-v8-fork releases instead. The versions
+# are read from the install action so they can't drift from CI.
+V8_ACTION := .github/actions/install/action.yml
+V8_VERSION := $(shell awk -F\' '/^  v8:/{f=1} f&&/default:/{print $$2; exit}' $(V8_ACTION))
+ZIG_V8_TAG := $(shell awk -F\' '/^  zig-v8:/{f=1} f&&/default:/{print $$2; exit}' $(V8_ACTION))
+V8_ARCHIVE := libc_v8_$(V8_VERSION)_$(OS)_$(ARCH).a
+V8_CACHE   := .lp-cache/prebuilt-v8/$(V8_ARCHIVE)
+
+# If the prebuilt archive is in place and the caller hasn't set ZIGFLAGS, point
+# the build at it rather than building V8 from source.
+ifeq ($(strip $(ZIGFLAGS)),)
+  ifneq ($(wildcard $(V8_CACHE)),)
+    ZIGFLAGS := -Dprebuilt_v8_path=$(V8_CACHE)
+  endif
+endif
+
+
 # Infos
 # -----
 .PHONY: help
@@ -111,7 +131,17 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+
+## Download the prebuilt V8 archive (skips the 10+ min source build)
+download-v8:
+	@mkdir -p $(dir $(V8_CACHE))
+	@test -f $(V8_CACHE) || ( \
+		printf "\033[36mDownloading prebuilt V8 $(V8_VERSION) ($(ZIG_V8_TAG))...\033[0m\n"; \
+		curl -fL --progress-bar -o $(V8_CACHE) \
+			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_ARCHIVE) \
+		|| (rm -f $(V8_CACHE); printf "\033[33mDownload ERROR\033[0m\n"; exit 1) )
+	@printf "\033[33mV8 ready: %s\033[0m\n" "$(V8_CACHE)"
 
 ## Build v8 snapshot
 build-v8-snapshot: $(DARWIN_SDK_SHIM_MARK)
@@ -157,7 +187,7 @@ end2end:
 	@test -d ../demo
 	cd ../demo && go run runner/main.go
 
-## Remove build artifacts (keeps v8/ and zig-pkg/ — slow to re-fetch)
+## Remove build artifacts (keeps .lp-cache/ and zig-pkg/ — slow to re-fetch)
 clean:
 	rm -rf zig-out .zig-cache src/snapshot.bin
 	cd src/html5ever && cargo clean
