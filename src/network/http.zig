@@ -274,6 +274,9 @@ pub const Connection = struct {
     in_use: bool,
     transport: Transport,
     node: std.DoublyLinkedList.Node = .{},
+    debug_remove_err: ?anyerror = null,
+    debug_added: u8 = 0,
+    debug_removed: u8 = 0,
 
     pub const Transport = union(enum) {
         none, // used for cases that manage their own connection, e.g. telemetry
