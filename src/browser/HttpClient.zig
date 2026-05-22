@@ -431,6 +431,8 @@ pub fn _request(_: *anyopaque, transfer: *Transfer) !void {
     return transfer.client.process(transfer);
 }
 
+// HttpClient takes ownership of req.headers; do not pair with
+// `errdefer headers.deinit()`
 pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
     _ = try self.requestT(req, owner);
 }
@@ -556,12 +558,9 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     while (sync_ctx.completion == .in_progress) {
         self.tick(200, .sync_wait) catch |err| {
             if (sync_ctx.completion == .in_progress) {
-                // tick appears to have failed for a reason not related to our
-                // transfer. This is a lose-lose situation, we need to surface
-                // this error; we need to return. This breaks the "sync" nature
-                // and, more dangerously, transfer.req.ctx references a stack
-                // value (&sync_ctx). We must abort the transfer to prevent a
-                // dangling pointer.
+              // tick failed for a reason unrelated to our transfer (likely OOM or
+              // client disconnect). transfer.req.ctx points at &sync_ctx on this
+              // stack — abort to sever that reference before we return
                 transfer.abort(err);
             }
             return err;
