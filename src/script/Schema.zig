@@ -489,6 +489,28 @@ pub const QuoteType = enum {
     }
 };
 
+/// True when `input` opens a `'''` or `"""` block that hasn't been closed
+/// yet. The REPL hinter/completer call this to silence arg ghost-text once
+/// the user is typing inside a multi-line body.
+pub fn hasUnclosedTripleQuote(input: []const u8) bool {
+    var i: usize = 0;
+    var open: ?u8 = null;
+    while (i + 3 <= input.len) {
+        const c0 = input[i];
+        if ((c0 == '\'' or c0 == '"') and input[i + 1] == c0 and input[i + 2] == c0) {
+            if (open) |q| {
+                if (q == c0) open = null;
+            } else {
+                open = c0;
+            }
+            i += 3;
+            continue;
+        }
+        i += 1;
+    }
+    return open != null;
+}
+
 /// `body=true`: string is emitted as a `'''…'''` block (newlines OK).
 /// `body=false`: single-line kv quoting (no newlines representable).
 pub fn quotableInline(s: []const u8, body: bool) bool {
@@ -725,6 +747,17 @@ test "tokenize: inline triple quotes with spaces" {
     try testing.expectEqual(@as(usize, 2), tokens.len);
     try testing.expectString("selector='''hello world'''", tokens[0]);
     try testing.expectString("value=\"\"\"foo bar\"\"\"", tokens[1]);
+}
+
+test "hasUnclosedTripleQuote" {
+    try testing.expect(!hasUnclosedTripleQuote(""));
+    try testing.expect(!hasUnclosedTripleQuote("/goto https://x"));
+    try testing.expect(!hasUnclosedTripleQuote("/eval '''const x = 1;'''"));
+    try testing.expect(hasUnclosedTripleQuote("/eval '''\nconst x = 1;"));
+    try testing.expect(hasUnclosedTripleQuote("/eval \"\"\"\nconst x = 1;"));
+    try testing.expect(!hasUnclosedTripleQuote("/eval \"\"\"\nconst x = 1;\n\"\"\""));
+    // Mismatched closer — still open.
+    try testing.expect(hasUnclosedTripleQuote("/eval '''\nfoo\n\"\"\""));
 }
 
 test "parseValue: rejects non-object JSON payloads" {

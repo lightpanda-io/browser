@@ -338,16 +338,17 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
 
     if (input.len == 0) return;
     const has_space = std.mem.indexOfScalar(u8, input, ' ') != null;
+    const inside_block = Schema.hasUnclosedTripleQuote(input);
 
     if (input[0] == '/') {
         if (has_space) {
-            if (Schema.parseSlashCommand(input)) |parts| {
+            if (!inside_block) if (Schema.parseSlashCommand(input)) |parts| {
                 if (Schema.findByName(parts.name)) |schema| {
                     addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
                 } else if (SlashCommand.findMeta(parts.name)) |meta| {
                     addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
                 }
-            }
+            };
             // Fall through so `value=$LP_` picks up env completions.
         } else {
             const partial = input[1..];
@@ -378,6 +379,9 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
 
     // `/help <partial>`: leave the inline hint to the completion-derived path.
     if (parseHelpArgPrefix(input)) |_| return null;
+
+    // Inside an open `'''…'''` body the buffer is script text, not kv args.
+    if (Schema.hasUnclosedTripleQuote(input)) return null;
 
     if (Schema.parseSlashCommand(input)) |parts| {
         const ends_ws = input[input.len - 1] == ' ';
