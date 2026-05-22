@@ -1393,7 +1393,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .referer = parent_url,
         .initiator_url = parent_url,
     }) catch |err| {
-        // extra defensive..maybe navigate added a new fame, and the index it
+        // extra defensive..maybe navigate added a new frame, and the index it
         // was added at was removed. Or maybe this frame was removed somehow
         // (which I don't think is possible)
         if (std.mem.indexOfScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
