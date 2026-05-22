@@ -154,8 +154,19 @@ pub const Tool = enum {
                 .input_schema = url_params_schema,
             },
             .html => .{
-                .description = "Dump the full raw HTML of the current page (doctype + document element). If a url is provided, it navigates to that url first. Prefer `markdown` or `tree` for LLM consumption — `html` is verbose and noisy. Use it for debugging or capturing fixtures.",
-                .input_schema = url_params_schema,
+                .description = "Dump raw HTML. With no selector/backendNodeId, returns the full document (doctype + document element). With one, returns just that node's outerHTML — handy for capturing a fixture or zooming in on a component. Prefer `markdown` or `tree` for LLM consumption; `html` is verbose.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, dump only that element's outerHTML." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\  }
+                    \\}
+                ),
             },
             .links => .{
                 .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
@@ -760,10 +771,26 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
 }
 
 fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
+    const Params = struct {
+        selector: ?[]const u8 = null,
+        backendNodeId: ?CDPNode.Id = null,
+        url: ?[:0]const u8 = null,
+        timeout: ?u32 = null,
+        waitUntil: ?lp.Config.WaitUntil = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+
     var aw: std.Io.Writer.Allocating = .init(arena);
-    lp.dump.root(page.document, .{}, &aw.writer, page) catch return ToolError.InternalError;
+    if (args.selector) |sel| {
+        const resolved = try resolveBySelector(session, sel);
+        lp.dump.deep(resolved.node, .{}, &aw.writer, resolved.page) catch return ToolError.InternalError;
+    } else if (args.backendNodeId) |nid| {
+        const resolved = try resolveNodeAndPage(session, registry, nid);
+        lp.dump.deep(resolved.node, .{}, &aw.writer, resolved.page) catch return ToolError.InternalError;
+    } else {
+        lp.dump.root(page.document, .{}, &aw.writer, page) catch return ToolError.InternalError;
+    }
     return aw.written();
 }
 

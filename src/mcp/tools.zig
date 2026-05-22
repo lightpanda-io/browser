@@ -898,19 +898,30 @@ test "MCP - waitForSelector: timeout" {
     }, out.written());
 }
 
-test "MCP - html dumps doctype + document element" {
+test "MCP - html: full document, selector subtree, backendNodeId subtree" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.html", &out.writer);
     defer server.deinit();
 
-    const msg =
+    // No args → full document (doctype + form + input).
+    const full =
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"html"}}
     ;
-    try router.handleMessage(server, testing.arena_allocator, msg);
+    try router.handleMessage(server, testing.arena_allocator, full);
     try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "<form id=\\\"f\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "<input id=\\\"q\\\"") != null);
+
+    // selector → just that element's outerHTML, no doctype.
+    out.clearRetainingCapacity();
+    const sel =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"html","arguments":{"selector":"#q"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, sel);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<input id=\\\"q\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<form") == null);
 }
 
 test "MCP - waitForScript: truthy returns, falsy times out" {
