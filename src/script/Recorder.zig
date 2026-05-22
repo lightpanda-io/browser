@@ -97,7 +97,7 @@ pub fn recordComment(self: *Recorder, comment: []const u8) void {
 fn tryRecordComment(self: *Recorder, comment: []const u8) !void {
     self.buf.clearRetainingCapacity();
     // Embedded newlines would smuggle an executable line into the script on
-    // replay (e.g. `# foo\nGOTO https://attacker`). Emit each line of the
+    // replay (e.g. `# foo\n/goto https://attacker`). Emit each line of the
     // comment as its own `# ` line; strip lone CRs.
     var it = std.mem.splitScalar(u8, comment, '\n');
     while (it.next()) |line| {

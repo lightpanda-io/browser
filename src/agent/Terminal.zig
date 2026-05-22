@@ -58,9 +58,9 @@ fn atLeast(level: Verbosity, min: Verbosity) bool {
 allocator: std.mem.Allocator,
 verbosity: Verbosity,
 /// Non-null in REPL mode. Doubles as scratch arena for the pretty-printer
-/// (reset per `printToolResult`, so memory is bounded by the largest single
-/// tool output). REPL forces tool calls/results visible regardless of
-/// verbosity — the dial only gates non-interactive runs.
+/// (reset per `printToolOutcome`, so memory is bounded by the largest
+/// single tool output). REPL forces tool calls/results visible regardless
+/// of verbosity — the dial only gates non-interactive runs.
 repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 spinner: Spinner,
@@ -144,7 +144,7 @@ pub fn beginTool(self: *Terminal, name: []const u8, args: []const u8) void {
 }
 
 /// Mark the end of a manual REPL tool call. Clears the running spinner; the
-/// caller's `printToolResult` / `printError` lays down the colored status dot.
+/// caller's `printToolOutcome` lays down the colored status dot.
 pub fn endTool(self: *Terminal) void {
     self.spinner.cancel();
 }
@@ -656,58 +656,56 @@ pub fn printAssistant(_: *Terminal, text: []const u8) void {
     _ = std.posix.write(fd, "\n") catch {};
 }
 
-/// Print the result of an action command (GOTO, CLICK, ...) to stderr so
-/// stdout stays reserved for data-producing commands. User-driven, so
-/// shown unconditionally in REPL; outside REPL gated on `medium+`.
-pub fn printActionResult(self: *Terminal, text: []const u8) void {
-    if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
-    std.debug.print("{s}\n", .{text});
-}
-
 // Must exceed the downstream LLM-judge's snapshot window so it has full
 // grounding evidence. Does not cap the agent's own LLM, which gets up to
 // tool_output_max_bytes (1 MiB) via Agent.zig:capToolOutput. Bypassed in
 // REPL where the human can scroll.
 const max_result_display_len = 2000;
 
-pub fn printToolResult(self: *Terminal, name: []const u8, result: []const u8) void {
-    if (!self.isRepl() and !atLeast(self.verbosity, .high)) return;
+/// Tool-outcome line shared by REPL slash commands and LLM tool calls.
+/// REPL: green ● on success, red ● on error (`name` is already on the
+/// preceding `[tool: …]` line). Non-REPL gates on `medium+` and prefixes
+/// `[result: name]`; same green/red coloring.
+pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_error: bool) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
-        const bytes = formatReplResult(a.allocator(), result) catch return;
+        const bytes = formatReplOutcome(a.allocator(), text, is_error) catch return;
         if (self.spinner.emitAbove(bytes)) return;
         _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
         return;
     }
-    const truncated = result[0..@min(result.len, max_result_display_len)];
-    const ellipsis: []const u8 = if (result.len > max_result_display_len) "..." else "";
-    std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi.dim, ansi.green, name, ansi.reset, truncated, ellipsis });
+    if (!atLeast(self.verbosity, .medium)) return;
+    const truncated = text[0..@min(text.len, max_result_display_len)];
+    const ellipsis: []const u8 = if (text.len > max_result_display_len) "..." else "";
+    const color: []const u8 = if (is_error) ansi.red else ansi.green;
+    std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi.dim, color, name, ansi.reset, truncated, ellipsis });
 }
 
-/// REPL output: green-dot marker followed by the body, pretty-printed if JSON.
-/// Builds the entire payload in the arena so callers can route it past the
-/// spinner (`emitAbove`) without interleaving with frame writes.
-fn formatReplResult(arena: std.mem.Allocator, result: []const u8) ![]const u8 {
+/// REPL outcome line: colored ● marker followed by the body, pretty-printed
+/// if JSON. Builds the entire payload in the arena so callers can route it
+/// past the spinner (`emitAbove`) without interleaving with frame writes.
+fn formatReplOutcome(arena: std.mem.Allocator, text: []const u8, is_error: bool) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
 
     // Most tool results are plain text (markdown, URLs, action confirmations).
     // Skip the JSON parse + Value tree allocation unless the payload could
-    // plausibly be JSON — `result` may be up to 1 MiB.
-    const trimmed = std.mem.trimLeft(u8, result, " \t\r\n");
+    // plausibly be JSON — `text` may be up to 1 MiB.
+    const trimmed = std.mem.trimLeft(u8, text, " \t\r\n");
     const looks_json = trimmed.len > 0 and (trimmed[0] == '{' or trimmed[0] == '[');
     const parsed: ?std.json.Value = if (looks_json)
-        std.json.parseFromSliceLeaky(std.json.Value, arena, result, .{}) catch null
+        std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch null
     else
         null;
     const sep: []const u8 = if (parsed != null) "\n" else " ";
-    try w.print("{s}●{s}{s}", .{ ansi.green, ansi.reset, sep });
+    const color: []const u8 = if (is_error) ansi.red else ansi.green;
+    try w.print("{s}●{s}{s}", .{ color, ansi.reset, sep });
     if (parsed) |v| {
         std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, w) catch {
-            try w.writeAll(result);
+            try w.writeAll(text);
         };
     } else {
-        try w.writeAll(result);
+        try w.writeAll(text);
     }
     try w.writeByte('\n');
     return aw.written();

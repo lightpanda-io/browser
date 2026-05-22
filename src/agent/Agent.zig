@@ -596,14 +596,21 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
     };
 }
 
-/// Data output (extract/eval/markdown/tree/…) → stdout on success; everything
-/// else, including failures from those same commands, → stderr.
+/// Data output (/extract, /eval, /markdown, /tree, …) → plain stdout on
+/// success so a caller can pipe it. Everything else routes through
+/// `printToolOutcome`, which lays down the green ● / red ● dot shared
+/// with the LLM tool-call path. Callers only invoke this for `.tool_call`
+/// commands (the comment/login/acceptCookies branches take other paths).
 fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResult) void {
+    const tc = switch (cmd) {
+        .tool_call => |t| t,
+        else => return,
+    };
     if (cmd.producesData() and !result.is_error) {
         self.terminal.printAssistant(result.text);
-    } else {
-        self.terminal.printActionResult(result.text);
+        return;
     }
+    self.terminal.printToolOutcome(tc.name(), result.text, result.is_error);
 }
 
 fn runScript(self: *Agent, path: []const u8) bool {
@@ -1174,12 +1181,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result| {
         const capped = capToolOutput(allocator, result.text);
         self.terminal.agentToolDone(tool_name, args_str, !result.is_error);
-        if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
+        if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, capped, result.is_error);
         return .{ .content = capped, .is_error = result.is_error };
     } else |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
         self.terminal.agentToolDone(tool_name, args_str, false);
-        if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, msg);
+        if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, msg, true);
         return .{ .content = msg, .is_error = true };
     }
 }
