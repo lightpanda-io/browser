@@ -1,6 +1,5 @@
 /.zig-cache/
 /.lp-cache/
-/v8/
 /zig-pkg/
 zig-out
 lightpanda.id
