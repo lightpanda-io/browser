@@ -663,9 +663,9 @@ pub fn printAssistant(_: *Terminal, text: []const u8) void {
 const max_result_display_len = 2000;
 
 /// Tool-outcome line shared by REPL slash commands and LLM tool calls.
-/// REPL: green ● on success, red ● on error (`name` is already on the
-/// preceding `[tool: …]` line). Non-REPL gates on `medium+` and prefixes
-/// `[result: name]`; same green/red coloring.
+/// REPL: green ● on success, red ● on error. Non-REPL prefixes `[result:
+/// name]`; success gates on `medium+`, errors bypass the gate so a
+/// failing script still surfaces *why* at the default verbosity.
 pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_error: bool) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
@@ -674,7 +674,7 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
         _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
         return;
     }
-    if (!atLeast(self.verbosity, .medium)) return;
+    if (!is_error and !atLeast(self.verbosity, .medium)) return;
     const truncated = text[0..@min(text.len, max_result_display_len)];
     const ellipsis: []const u8 = if (text.len > max_result_display_len) "..." else "";
     const color: []const u8 = if (is_error) ansi.red else ansi.green;
