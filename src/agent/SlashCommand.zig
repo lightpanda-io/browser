@@ -23,6 +23,13 @@
 
 const std = @import("std");
 
+/// Shared row format for the `/help` listing — `name` is the slash name
+/// (no `/`), `description` is a single-sentence summary.
+pub const Help = struct {
+    name: []const u8,
+    description: []const u8,
+};
+
 pub const MetaCommand = struct {
     tag: Tag,
     name: [:0]const u8,
@@ -31,6 +38,9 @@ pub const MetaCommand = struct {
     hint: []const u8,
     /// Tab-completion candidates for the first positional arg.
     values: []const [:0]const u8,
+    /// First-sentence summary for `/help`; longer detail is rendered by
+    /// `Agent.printSlashHelp` for the per-command lookup.
+    description: []const u8,
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
     /// a new meta command is a compile error until it's wired up there too.
@@ -38,9 +48,17 @@ pub const MetaCommand = struct {
 };
 
 pub const meta_commands = [_]MetaCommand{
-    .{ .tag = .help, .name = "help", .hint = "", .values = &.{} },
-    .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{} },
-    .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" } },
+    .{ .tag = .help, .name = "help", .hint = "", .values = &.{}, .description = "Show help for a slash command, or list all when no name is given" },
+    .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
+    .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set REPL agent verbosity; bare /verbosity prints the current level" },
+};
+
+/// LLM-driven slash commands. Parsed via `script.Command.parse` (they're
+/// variants of the `Command` union) — listed here only so the help
+/// renderer and completer have a single source of names + descriptions.
+pub const llm_commands = [_]Help{
+    .{ .name = "login", .description = "Log in to the current site using $LP_* env-var credentials" },
+    .{ .name = "acceptCookies", .description = "Find and dismiss the cookie consent banner" },
 };
 
 pub fn findMeta(name: []const u8) ?*const MetaCommand {

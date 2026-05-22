@@ -478,15 +478,16 @@ fn runRepl(self: *Agent) void {
             },
         };
 
+        if (cmd.needsLlm() and self.ai_client == null) {
+            self.terminal.printErrorFmt("/{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{@tagName(std.meta.activeTag(cmd))});
+            continue :repl;
+        }
+
         switch (cmd) {
             .comment => continue :repl,
             .login, .acceptCookies => {
-                if (self.ai_client == null) {
-                    self.terminal.printError("/login and /acceptCookies require an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).");
-                    continue :repl;
-                }
-                const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
                 const label: []const u8 = if (cmd == .login) "/login" else "/acceptCookies";
+                const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
             },
             .tool_call => |tc| {
@@ -527,21 +528,33 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     self.terminal.printInfoFmt("verbosity: {s}", .{@tagName(level)});
 }
 
+fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {
+    return std.mem.lessThan(u8, a.name, b.name);
+}
+
+fn printHelpSection(term: *Terminal, header: []const u8, rows: []SlashCommand.Help) void {
+    if (rows.len == 0) return;
+    std.sort.pdq(SlashCommand.Help, rows, {}, helpLessThan);
+    term.printInfo(header);
+    for (rows) |r| term.printInfoFmt("  /{s} — {s}", .{ r.name, r.description });
+}
+
 fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) void {
     if (target.len == 0) {
-        self.terminal.printInfo("Slash commands (no LLM, REPL only):");
         const all = Schema.all();
-        const sorted = arena.alloc(*const Schema, all.len) catch {
-            for (all) |s| self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, firstSentence(s.description) });
-            self.terminal.printInfo("Meta: /help [name], /quit, /verbosity <low|medium|high>");
-            return;
-        };
-        for (sorted, all) |*p, *s| p.* = s;
-        std.sort.pdq(*const Schema, sorted, {}, Schema.lessByName);
-        for (sorted) |s| {
-            self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, firstSentence(s.description) });
+        const browser = arena.alloc(SlashCommand.Help, all.len) catch return;
+        for (all, browser) |*s, *e| e.* = .{ .name = s.tool_name, .description = firstSentence(s.description) };
+        printHelpSection(&self.terminal, "Browser commands:", browser);
+
+        if (self.ai_client != null) {
+            const llm = arena.alloc(SlashCommand.Help, SlashCommand.llm_commands.len) catch return;
+            @memcpy(llm, &SlashCommand.llm_commands);
+            printHelpSection(&self.terminal, "\nLLM commands:", llm);
         }
-        self.terminal.printInfo("Meta: /help [name], /quit, /verbosity <low|medium|high>");
+
+        const meta = arena.alloc(SlashCommand.Help, SlashCommand.meta_commands.len) catch return;
+        for (SlashCommand.meta_commands, meta) |m, *e| e.* = .{ .name = m.name, .description = m.description };
+        printHelpSection(&self.terminal, "\nMeta commands:", meta);
         return;
     }
     const lookup = if (target[0] == '/') target[1..] else target;
