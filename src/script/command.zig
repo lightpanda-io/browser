@@ -284,16 +284,12 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
     }
 }
 
-fn isDefaultTrueBool(s: *const schema.SchemaInfo, key: []const u8, v: std.json.Value) bool {
-    return v == .bool and v.bool and s.isFieldDefaultTrue(key);
-}
-
 /// Args that the recorder must NOT emit:
 ///   - `backendNodeId`: ephemeral identifier, never replayable.
 ///   - boolean fields whose value equals the schema default (cosmetic).
 fn skipForFormat(s: *const schema.SchemaInfo, key: []const u8, v: std.json.Value) bool {
     if (std.mem.eql(u8, key, "backendNodeId")) return true;
-    return isDefaultTrueBool(s, key, v);
+    return v == .bool and v.bool and s.isFieldDefaultTrue(key);
 }
 
 fn formatString(writer: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {

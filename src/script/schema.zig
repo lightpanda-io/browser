@@ -141,11 +141,15 @@ fn buildOne(arena: std.mem.Allocator, action: browser_tools.Action, td: browser_
 
 fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry) ![]const HintSlot {
     if (fields.len == 0 and required.len == 0) return &.{};
-    // Worst case: every required name is absent from `properties`, so we emit
-    // one slot per required entry plus one per field. The returned slice is
-    // truncated to the actual count.
-    const out = try arena.alloc(HintSlot, required.len + fields.len);
+    var optional_count: usize = 0;
+    for (fields) |f| {
+        if (!containsName(required, f.name)) {
+            optional_count += 1;
+        }
+    }
+    const out = try arena.alloc(HintSlot, required.len + optional_count);
     var idx: usize = 0;
+    defer std.debug.assert(idx == out.len);
     for (required) |name| {
         out[idx] = .{
             .name = name,
@@ -163,7 +167,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         };
         idx += 1;
     }
-    return out[0..idx];
+    return out;
 }
 
 fn containsName(names: []const []const u8, target: []const u8) bool {
