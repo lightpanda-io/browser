@@ -569,6 +569,9 @@ pub const Function = struct {
         null_as_undefined: bool = false,
         cache: ?Caching = null,
         embedded_receiver: bool = false,
+        exposed: Exposed = .both,
+
+        pub const Exposed = enum { both, window, worker };
 
         // We support two ways to cache a value directly into a v8::Object. The
         // difference between the two is like the difference between a Map

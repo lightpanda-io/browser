@@ -20,10 +20,10 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 const Performance = @import("Performance.zig");
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
@@ -42,16 +42,27 @@ _interests: u16,
 /// Entries this observer hold.
 /// Don't mutate these; other observers may hold pointers to them.
 _entries: std.ArrayList(*Performance.Entry),
+/// The Performance that owns this observer (Window's or Worker's).
+_performance: *Performance,
+/// JS context the observer's callback was created in. Captured at init so
+/// dispatch() can enter the right scope without needing an Execution.
+_js: *js.Context,
+/// Long-lived arena (Frame's or WorkerGlobalScope's) for entry list growth
+/// and takeRecords' returned slice.
+_arena: Allocator,
 
 const DefaultDurationThreshold: f64 = 104;
 
 /// Creates a new PerformanceObserver object with the given observer callback.
-pub fn init(callback: js.Function.Global, frame: *Frame) !*PerformanceObserver {
-    return frame._factory.create(PerformanceObserver{
+pub fn init(callback: js.Function.Global, exec: *const Execution) !*PerformanceObserver {
+    return exec._factory.create(PerformanceObserver{
         ._callback = callback,
         ._duration_threshold = DefaultDurationThreshold,
         ._interests = 0,
         ._entries = .{},
+        ._performance = exec.performance(),
+        ._js = exec.context,
+        ._arena = exec.arena,
     });
 }
 
@@ -63,11 +74,7 @@ const ObserveOptions = struct {
 };
 
 /// TODO: Support `buffered` option.
-pub fn observe(
-    self: *PerformanceObserver,
-    maybe_options: ?ObserveOptions,
-    frame: *Frame,
-) !void {
+pub fn observe(self: *PerformanceObserver, maybe_options: ?ObserveOptions, exec: *const Execution) !void {
     const options: ObserveOptions = maybe_options orelse .{};
     // Update threshold.
     self._duration_threshold = @max(@floor(options.durationThreshold / 8) * 8, 16);
@@ -107,10 +114,10 @@ pub fn observe(
         return;
     }
 
-    // If we had no interests before, it means Page is not aware of
-    // this observer.
+    // If we had no interests before, it means the Performance is not aware
+    // of this observer.
     if (self._interests == 0) {
-        try frame.registerPerformanceObserver(self);
+        try self._performance.registerObserver(self, exec);
     }
 
     // Update interests.
@@ -120,19 +127,19 @@ pub fn observe(
     // Per spec, buffered is only valid with the type option, not entryTypes.
     // Delivery is async via a queued task, not synchronous.
     if (options.buffered and options.type != null and !self.hasRecords()) {
-        for (frame.window._performance._entries.items) |entry| {
+        for (self._performance._entries.items) |entry| {
             if (self.interested(entry)) {
-                try self._entries.append(frame.arena, entry);
+                try self._entries.append(self._arena, entry);
             }
         }
         if (self.hasRecords()) {
-            try frame.schedulePerformanceObserverDelivery();
+            try self._performance.scheduleDelivery(exec);
         }
     }
 }
 
-pub fn disconnect(self: *PerformanceObserver, frame: *Frame) void {
-    frame.unregisterPerformanceObserver(self);
+pub fn disconnect(self: *PerformanceObserver) void {
+    self._performance.unregisterObserver(self);
     // Reset observer.
     self._duration_threshold = DefaultDurationThreshold;
     self._interests = 0;
@@ -141,10 +148,10 @@ pub fn disconnect(self: *PerformanceObserver, frame: *Frame) void {
 
 /// Returns the current list of PerformanceEntry objects
 /// stored in the performance observer, emptying it out.
-pub fn takeRecords(self: *PerformanceObserver, frame: *Frame) ![]*Performance.Entry {
-    // Use frame.arena instead of call_arena because this slice is wrapped in EntryList
-    // and may be accessed later.
-    const records = try frame.arena.dupe(*Performance.Entry, self._entries.items);
+pub fn takeRecords(self: *PerformanceObserver) ![]*Performance.Entry {
+    // Use the long-lived arena instead of call_arena because this slice is
+    // wrapped in EntryList and may be accessed later.
+    const records = try self._arena.dupe(*Performance.Entry, self._entries.items);
     self._entries.clearRetainingCapacity();
     return records;
 }
@@ -167,11 +174,11 @@ pub inline fn hasRecords(self: *const PerformanceObserver) bool {
 }
 
 /// Runs the PerformanceObserver's callback with records; emptying it out.
-pub fn dispatch(self: *PerformanceObserver, frame: *Frame) !void {
-    const records = try self.takeRecords(frame);
+pub fn dispatch(self: *PerformanceObserver) !void {
+    const records = try self.takeRecords();
 
     var ls: js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
+    self._js.localScope(&ls);
     defer ls.deinit();
 
     var caught: js.TryCatch.Caught = undefined;

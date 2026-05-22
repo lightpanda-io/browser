@@ -47,7 +47,6 @@ const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const VisualViewport = @import("webapi/VisualViewport.zig");
-const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
@@ -173,11 +172,6 @@ _intersection_delivery_scheduled: bool = false,
 // Slots that need slotchange events to be fired
 _slots_pending_slotchange: std.AutoHashMapUnmanaged(*Element.Html.Slot, void) = .{},
 _slotchange_delivery_scheduled: bool = false,
-
-/// List of active PerformanceObservers.
-/// Contrary to MutationObserver and IntersectionObserver, these are regular tasks.
-_performance_observers: std.ArrayList(*PerformanceObserver) = .{},
-_performance_delivery_scheduled: bool = false,
 
 // Lookup for customized built-in elements. Maps element pointer to definition.
 _customized_builtin_definitions: std.AutoHashMapUnmanaged(*Element, *CustomElementDefinition) = .{},
@@ -321,7 +315,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._proto = undefined,
         ._document = self.document,
         ._location = &default_location,
-        ._performance = Performance.init(),
+        ._performance = .init(),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
         ._cross_origin_wrapper = undefined,
@@ -1606,61 +1600,8 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
     return null;
 }
 
-pub fn registerPerformanceObserver(self: *Frame, observer: *PerformanceObserver) !void {
-    return self._performance_observers.append(self.arena, observer);
-}
-
-pub fn unregisterPerformanceObserver(self: *Frame, observer: *PerformanceObserver) void {
-    for (self._performance_observers.items, 0..) |perf_observer, i| {
-        if (perf_observer == observer) {
-            _ = self._performance_observers.swapRemove(i);
-            return;
-        }
-    }
-}
-
-/// Updates performance observers with the new entry.
-/// This doesn't emit callbacks but rather fills the queues of observers.
-pub fn notifyPerformanceObservers(self: *Frame, entry: *Performance.Entry) !void {
-    for (self._performance_observers.items) |observer| {
-        if (observer.interested(entry)) {
-            observer._entries.append(self.arena, entry) catch |err| {
-                log.err(.frame, "notifyPerformanceObservers", .{ .err = err, .type = self._type, .url = self.url });
-            };
-        }
-    }
-
-    try self.schedulePerformanceObserverDelivery();
-}
-
-/// Schedules async delivery of performance observer records.
-pub fn schedulePerformanceObserverDelivery(self: *Frame) !void {
-    // Already scheduled.
-    if (self._performance_delivery_scheduled) {
-        return;
-    }
-    self._performance_delivery_scheduled = true;
-
-    return self.js.scheduler.add(
-        self,
-        struct {
-            fn run(_frame: *anyopaque) anyerror!?u32 {
-                const frame: *Frame = @ptrCast(@alignCast(_frame));
-                frame._performance_delivery_scheduled = false;
-
-                // Dispatch performance observer events.
-                for (frame._performance_observers.items) |observer| {
-                    if (observer.hasRecords()) {
-                        try observer.dispatch(frame);
-                    }
-                }
-
-                return null;
-            }
-        }.run,
-        0,
-        .{ .low_priority = true },
-    );
+pub fn performance(self: *Frame) *Performance {
+    return &self.window._performance;
 }
 
 pub fn registerMutationObserver(self: *Frame, observer: *MutationObserver) !void {
