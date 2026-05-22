@@ -451,6 +451,7 @@ pub const ToolError = error{
     InvalidParams,
     NodeNotFound,
     NavigationFailed,
+    Cancelled,
     InternalError,
     OutOfMemory,
 };
@@ -869,7 +870,8 @@ fn awaitQueuedNavigation(session: *lp.Session) ToolError!void {
     const page = session.currentPage() orelse return;
     if (page.queued_navigation.items.len == 0) return;
     var runner = session.runner(.{}) catch return ToolError.InternalError;
-    runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
+    runner.wait(.{ .ms = 10000, .until = .done }) catch |err|
+        return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 }
 
 fn formatActionResult(
@@ -963,6 +965,7 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
 
     const node = lp.actions.waitForSelector(args.selector, timeout_ms, session) catch |err| switch (err) {
         error.InvalidSelector => return ToolError.InvalidParams,
+        error.Cancelled => return ToolError.Cancelled,
         // Timeout w/o a match: same outcome as `/hover selector=…` on a missing
         // node — surface `NodeNotFound` so the LLM sees a consistent signal.
         error.Timeout => return ToolError.NodeNotFound,
@@ -1192,7 +1195,7 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
     runner.wait(.{
         .ms = timeout orelse 10000,
         .until = waitUntil orelse .done,
-    }) catch return ToolError.NavigationFailed;
+    }) catch |err| return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 }
 
 fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {

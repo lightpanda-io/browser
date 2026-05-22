@@ -105,6 +105,23 @@ _console_messages: std.Io.Writer.Allocating,
 // (synchronous fetch + parse + register on `document.styleSheets`).
 load_external_stylesheets: bool = false,
 
+/// Caller-supplied cancellation probe. `Runner._wait` polls it between
+/// ticks; once `check` returns true the wait returns `error.Cancelled`.
+/// The agent installs this so SIGINT can abort an in-flight tool call
+/// (goto, search, waitForSelector, …) without sitting through the full
+/// timeout.
+cancel_hook: ?CancelHook = null,
+
+pub const CancelHook = struct {
+    context: *anyopaque,
+    check: *const fn (*anyopaque) bool,
+};
+
+pub fn isCancelled(self: *const Session) bool {
+    const hook = self.cancel_hook orelse return false;
+    return hook.check(hook.context);
+}
+
 const max_console_bytes = 64 * 1024;
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {

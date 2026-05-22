@@ -173,7 +173,7 @@ fn dispatchBrowserTool(
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
-            error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
+            error.NavigationFailed, error.Cancelled, error.InternalError, error.OutOfMemory => .InternalError,
         };
         return server.sendError(id, code, @errorName(err));
     };

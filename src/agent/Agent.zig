@@ -261,6 +261,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(notification);
+    self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
     self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
 
     self.ai_client = if (llm) |l| switch (l.provider) {
@@ -330,10 +331,14 @@ fn globalTools() []const ProviderTool {
     return global_tools_storage[0..browser_tools.tool_defs.len];
 }
 
-/// Called from the sighandler thread — sets the flag only, no terminal
-/// or V8 touches from this context.
+/// Called from the sighandler thread. Flips `cancel_requested` for the
+/// LLM streaming/HTTP probe and any code polling `Session.isCancelled`,
+/// then asks V8 to bail out of whatever JS is currently running. Both
+/// hooks are thread-safe (`Env.terminate` takes a mutex); no terminal
+/// touches from this context.
 pub fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
+    self.browser.env.terminate();
 }
 
 /// Lives in main's stack so it can be registered with the sighandler

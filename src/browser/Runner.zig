@@ -84,6 +84,10 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
     var gc_hint_timer = std.time.Timer.start() catch unreachable;
 
     while (true) {
+        // Cooperative cancellation. Set by the agent so SIGINT can break
+        // out of a long wait without the user sitting through the timeout.
+        if (session.isCancelled()) return error.Cancelled;
+
         if (gc_hint_timer.read() >= gc_hint_period_ns) {
             gc_hint_timer.reset();
             self.frame._page.cleanupClosedPopups();
@@ -272,6 +276,7 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
     const parsed_selector = try Selector.parseLeaky(arena, selector);
 
     while (true) {
+        if (self.session.isCancelled()) return error.Cancelled;
         // self.frame can change between ticks
         const frame = self.frame;
         if (try parsed_selector.query(frame.document.asNode(), frame)) |el| {
@@ -297,6 +302,7 @@ pub fn waitForScript(runner: *Runner, script: [:0]const u8, timeout_ms: u32) !vo
     var timer = try std.time.Timer.start();
 
     while (true) {
+        if (runner.session.isCancelled()) return error.Cancelled;
         const frame = runner.frame;
 
         // Execute the script and check if it returns truthy
