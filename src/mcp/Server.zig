@@ -94,7 +94,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
             .tools = .{},
         },
         .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
-        .instructions = lp.script.mcp_driver_guidance,
+        .instructions = lp.script.driver_guidance,
     });
 }
 

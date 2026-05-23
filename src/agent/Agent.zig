@@ -57,7 +57,7 @@ pub fn isUserError(err: anyerror) bool {
     return false;
 }
 
-const default_system_prompt = script.mcp_driver_guidance ++
+const default_system_prompt = script.driver_guidance ++
     \\
     \\Agent-specific behavior:
     \\- Call a tool for every browser action. NEVER claim you performed an

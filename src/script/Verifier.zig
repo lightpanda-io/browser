@@ -57,7 +57,7 @@ const failed_reason_oom = "verification failed (out of memory while formatting r
 ///
 /// backendNodeId-addressed commands are intentionally `.inconclusive`: the
 /// id is a CDP-side handle with no in-page accessor, and recorded paths use
-/// CSS selectors per `mcp_driver_guidance` (backendNodeId calls can't be
+/// CSS selectors per `driver_guidance` (backendNodeId calls can't be
 /// recorded as PandaScript anyway).
 pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyResult {
     const tc = switch (cmd) {
