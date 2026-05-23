@@ -30,3 +30,20 @@ otherwise we're not able to accept your contributions.
 The process signature uses the [CLA assistant
 lite](https://github.com/marketplace/actions/cla-assistant-lite). You can see
 an example of the process in [#303](https://github.com/lightpanda-io/browser/pull/303).
+
+## Troubleshooting
+
+**Build fails with "unknown target" error?**
+- Check `zig version` matches the project's expected version
+- Run `zig env` to see the current target triple
+- On macOS Apple Silicon, ensure Rosetta 2 is installed if building x86 binaries
+
+**V8 download fails or times out?**
+- Check your internet connection and proxy settings
+- Try manually downloading from https://github.com/lightpanda-io/zig-v8-fork/releases
+- Place the archive in the expected download directory
+
+**Tests fail with "memory leak" error?**
+- The test runner in debug builds detects any unfreed allocations
+- Run `make test` with `TEST_VERBOSE=true` to see which test leaks
+- Check that all allocated resources are properly freed
