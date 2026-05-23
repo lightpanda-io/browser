@@ -256,6 +256,17 @@ zig build -Dsnapshot_path=../../snapshot.bin
 
 See [#1279](https://github.com/lightpanda-io/browser/pull/1279) for more details.
 
+## Build Commands Quick Reference
+
+| Command | Description |
+|---------|-------------|
+| `make build` | Build release binary |
+| `make build-dev` | Build debug binary |
+| `make test` | Run all tests |
+| `make download-v8` | Download prebuilt V8 |
+| `zig build run` | Build and run |
+| `zig fmt --check .` | Check formatting |
+
 ## Test
 
 ### Unit Tests
