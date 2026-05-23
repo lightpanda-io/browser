@@ -227,9 +227,26 @@ For systems with [**Nix**](https://nixos.org/download/), you can use the devShel
 nix develop
 ```
 
-For **MacOS**, you need cmake and [Rust](https://rust-lang.org/tools/install/).
-```
+For **MacOS**, you need cmake, clang, and [Rust](https://rust-lang.org/tools/install/).
+
+```bash
 brew install cmake
+# clang is usually included with Xcode command line tools
+xcode-select --install
+```
+
+For **Fedora/RHEL-based Linux**:
+
+```bash
+sudo dnf install clang cmake curl git pkg-config \
+    libglib2.0-devel keyutils-libs-devel libidn2-devel
+```
+
+For **Arch Linux**:
+
+```bash
+sudo pacman -S base-devel cmake clang curl git \
+    pkg-config glib2 keyutils libidn2
 ```
 
 ### Build and run
