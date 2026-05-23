@@ -274,7 +274,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             const Client = @typeInfo(ClientPtr).pointer.child;
             const client = try allocator.create(Client);
             const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
-            client.* = Client.init(allocator, l.key, if (url) |u| .{ .base_url = u } else .{});
+            client.* = .init(allocator, l.key, if (url) |u|
+                .{ .base_url = u, .retry_policy = .long_running }
+            else
+                .{ .retry_policy = .long_running });
             break :blk @unionInit(ProviderClient, @tagName(tag), client);
         },
     } else null;
@@ -1086,7 +1089,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
             .tools = globalTools(),
-            .max_turns = 30,
+            .max_turns = 100,
             // Safety net; max_turns is the primary terminal.
             .max_tool_calls = 200,
             .max_tokens = 4096,
