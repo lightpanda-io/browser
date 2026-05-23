@@ -889,7 +889,21 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     };
     const args = try parseArgs(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
-    return runEval(arena, page, args.script);
+    const before = session.currentFrame();
+    const result = try runEval(arena, page, args.script);
+    if (result.is_error == true) return result;
+
+    // Script may have queued a navigation (e.g. `top.location = …`).
+    try awaitQueuedNavigation(session);
+    const after = session.currentFrame() orelse return result;
+    if (before == null or before.? == after) return result;
+
+    registry.reset();
+    const page_title = after.getTitle() catch null;
+    const text = std.fmt.allocPrint(arena, "{s}\n(Navigated to {s}, title: {s})", .{
+        result.text, after.url, page_title orelse "(none)",
+    }) catch return ToolError.InternalError;
+    return .{ .text = text };
 }
 
 fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {

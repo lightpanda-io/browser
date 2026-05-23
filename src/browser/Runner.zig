@@ -288,7 +288,8 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
             return error.Timeout;
         }
         switch (try self.tick(.{ .ms = timeout_ms - elapsed })) {
-            .done => return error.Timeout,
+            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
+            .done => std.Thread.sleep(std.time.ns_per_ms * @as(u64, @min(timeout_ms - elapsed, 50))),
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
                     std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
@@ -329,7 +330,8 @@ pub fn waitForScript(runner: *Runner, script: [:0]const u8, timeout_ms: u32) !vo
             return error.Timeout;
         }
         switch (try runner.tick(.{ .ms = timeout_ms - elapsed })) {
-            .done => return error.Timeout,
+            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
+            .done => std.Thread.sleep(std.time.ns_per_ms * @as(u64, @min(timeout_ms - elapsed, 50))),
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
                     std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
