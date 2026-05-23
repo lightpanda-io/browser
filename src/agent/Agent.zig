@@ -499,7 +499,7 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(cmd, result);
                 if (self.recorder) |*r| r.record(cmd);
-                self.recordSlashToolCall(tc.name(), tc.args, result) catch |err| {
+                self.recordSlashToolCall(trimmed, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
                 };
             },
@@ -834,6 +834,7 @@ fn ensureSystemPrompt(self: *Agent) !void {
 /// the same conversation shape either way.
 fn recordSlashToolCall(
     self: *Agent,
+    user_input: []const u8,
     tool_name: []const u8,
     args: ?std.json.Value,
     result: browser_tools.ToolResult,
@@ -843,6 +844,8 @@ fn recordSlashToolCall(
 
     const ma = self.message_arena.allocator();
     self.synthetic_tool_call_id += 1;
+
+    const user_content = try ma.dupe(u8, user_input);
 
     const tool_calls = try ma.alloc(zenai.provider.ToolCall, 1);
     tool_calls[0] = .{
@@ -866,6 +869,12 @@ fn recordSlashToolCall(
 
     const baseline = self.messages.items.len;
     errdefer self.messages.shrinkRetainingCapacity(baseline);
+    // User turn before the assistant tool_call satisfies Gemini's rule
+    // that a function call must follow a user or function-response turn.
+    try self.messages.append(self.allocator, .{
+        .role = .user,
+        .content = user_content,
+    });
     try self.messages.append(self.allocator, .{
         .role = .assistant,
         .tool_calls = tool_calls,
