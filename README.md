@@ -239,6 +239,26 @@ env.
 
 But you can directly use the zig command: `zig build run`.
 
+#### Common Zig build issues
+
+**Zig version mismatch:**
+If you see errors about missing or incompatible Zig features, ensure you have exactly `0.15.2`. Use `zig version` to check. If you need to switch versions, use [zvm](https://github.com/triste/zvm) or [zigup](https://github.com/marler8997/zigup):
+
+```bash
+# With zvm
+zvm install 0.15.2
+zvm use 0.15.2
+
+# With zigup
+zigup 0.15.2
+```
+
+**V8 download failures:**
+If `make download-v8` fails due to network issues, you can manually download the V8 prebuilt from the [zig-v8-fork releases](https://github.com/lightpanda-io/zig-v8-fork/releases) and place it in the `vendor/v8` directory.
+
+**Build time too long:**
+By default the build compiles V8 from source, which takes several minutes. Run `make download-v8` once to fetch the matching prebuilt archive; subsequent builds will use it automatically.
+
 #### Embed v8 snapshot
 
 Lighpanda uses v8 snapshot. By default, it is created on startup but you can
