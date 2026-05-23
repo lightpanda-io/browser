@@ -19,7 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
-const ansi = @import("Terminal.zig").ansi;
+const Terminal = @import("Terminal.zig");
+const ansi = Terminal.ansi;
 
 const Spinner = @This();
 
@@ -30,8 +31,14 @@ const interval_ns: u64 = 100 * std.time.ns_per_ms;
 const min_tool_display_ns: u64 = 1500 * std.time.ns_per_ms;
 const clear_eol = ansi.clear_eol;
 
-const max_args_bytes: usize = 100;
-const frame_buf_bytes: usize = 256;
+const max_args_bytes: usize = 256;
+const frame_buf_bytes: usize = 512;
+/// Visual ceiling on the args slice. Combined with the terminal-width cap so
+/// the spinner line stays single-row even when the script body is huge.
+const max_args_cells: usize = 70;
+/// UTF-8 horizontal ellipsis ("…") — 3 bytes, 1 visual cell.
+const ellipsis = "\xe2\x80\xa6";
+const ellipsis_cells: usize = 1;
 
 const ToolState = struct {
     name_buf: [64]u8 = undefined,
@@ -163,8 +170,13 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     var tool: ToolState = .{ .set_ns = std.time.nanoTimestamp(), .manual = manual };
     tool.name_len = @min(name.len, tool.name_buf.len);
     @memcpy(tool.name_buf[0..tool.name_len], name[0..tool.name_len]);
+    // Strip control chars: a literal `\n` in args (e.g. /eval """…""" bodies)
+    // breaks the spinner's `\r`-based redraw — the cursor only rewinds to the
+    // start of the last line, leaving prior frames stuck on screen.
     tool.args_len = @min(args.len, tool.args_buf.len);
-    @memcpy(tool.args_buf[0..tool.args_len], args[0..tool.args_len]);
+    for (args[0..tool.args_len], 0..) |ch, i| {
+        tool.args_buf[i] = if (ch < 0x20 or ch == 0x7f) ' ' else ch;
+    }
     self.state = .{ .tool = tool };
     // Manual paths skip `start()`, so spawn the worker on demand to drive
     // the braille animation.
@@ -246,10 +258,26 @@ fn renderLocked(self: *Spinner) void {
         ) catch return,
         .tool => |tool| blk: {
             const prefix: []const u8 = if (tool.manual) "" else "agent: ";
+            const name = tool.name_buf[0..tool.name_len];
+            const all_args = tool.args_buf[0..tool.args_len];
+            // "<glyph> [<prefix><name> <args>]" — 5 visible cells of fixed
+            // decoration (glyph, two spaces, `[`, `]`) around prefix+name+args.
+            // `\r` and ANSI escapes are zero-width, so they don't count toward
+            // terminal wrap.
+            const decoration_cells: usize = 5 + prefix.len + name.len;
+            const cols: usize = Terminal.columns() orelse 80;
+            // Reserve one extra cell so the line is strictly less than `cols` —
+            // terminals with auto-wrap (DECAWM) advance past a row that exactly
+            // fills the width.
+            const reserved = decoration_cells + ellipsis_cells + 1;
+            const room: usize = if (cols > reserved) cols - reserved else 0;
+            const cap = @min(max_args_cells, room);
+            const cut = truncToCells(all_args, cap);
+            const suffix: []const u8 = if (cut < all_args.len) ellipsis else "";
             break :blk std.fmt.bufPrint(
                 &buf,
-                "\r" ++ ansi.yellow ++ "{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s} {s}]" ++ ansi.reset ++ clear_eol,
-                .{ glyph, prefix, tool.name_buf[0..tool.name_len], tool.args_buf[0..tool.args_len] },
+                "\r" ++ ansi.yellow ++ "{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s} {s}{s}]" ++ ansi.reset ++ clear_eol,
+                .{ glyph, prefix, name, all_args[0..cut], suffix },
             ) catch return;
         },
     };
@@ -257,4 +285,20 @@ fn renderLocked(self: *Spinner) void {
     @memcpy(self.last_render_buf[0..written.len], written);
     self.last_render_len = written.len;
     _ = std.posix.write(std.posix.STDERR_FILENO, written) catch {};
+}
+
+/// Returns the byte length of `bytes` that fits in `max_cells` cells,
+/// rounded down to a whole UTF-8 codepoint. Multi-cell glyphs (CJK,
+/// wide emoji) are counted as 1 — args are typically ASCII so the
+/// approximation is good enough.
+fn truncToCells(bytes: []const u8, max_cells: usize) usize {
+    var cells: usize = 0;
+    var i: usize = 0;
+    while (i < bytes.len and cells < max_cells) {
+        const seq_len = std.unicode.utf8ByteSequenceLength(bytes[i]) catch 1;
+        if (i + seq_len > bytes.len) break;
+        i += seq_len;
+        cells += 1;
+    }
+    return i;
 }
