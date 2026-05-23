@@ -94,10 +94,24 @@ Your automation client (Puppeteer, Playwright, etc.) can run either inside WSL o
 Lightpanda provides [official Docker
 images](https://hub.docker.com/r/lightpanda/browser) for both Linux amd64 and
 arm64 architectures.
+
 The following command fetches the Docker image and starts a new container exposing Lightpanda's CDP server on port `9222`.
+
 ```console
 docker run -d --name lightpanda -p 127.0.0.1:9222:9222 lightpanda/browser:nightly
 ```
+
+**Docker verification:** After starting the container, verify it's running:
+
+```console
+docker ps | grep lightpanda
+docker logs lightpanda  # Check for startup errors
+```
+
+**Common Docker issues:**
+- Port already in use: Choose a different port with `-p 127.0.0.1:9223:9222`
+- Permission denied on Linux: Ensure Docker daemon is running and you have permission to bind to the port
+- Container exits immediately: Check logs with `docker logs lightpanda` for error details
 
 ### Dump a URL
 
