@@ -158,6 +158,7 @@ interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
 cancel_requested: std.atomic.Value(bool) = .init(false),
+synthetic_tool_call_id: u32 = 0,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     if (opts.task != null and opts.script_file != null) {
@@ -498,6 +499,9 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(cmd, result);
                 if (self.recorder) |*r| r.record(cmd);
+                self.recordSlashToolCall(tc.name(), tc.args, result) catch |err| {
+                    self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
+                };
             },
         }
     }
@@ -823,6 +827,53 @@ fn ensureSystemPrompt(self: *Agent) !void {
             .content = self.system_prompt,
         });
     }
+}
+
+/// Mirror a user-typed slash command into `self.messages` as if the LLM
+/// had called the tool itself, so the next natural-language turn sees
+/// the same conversation shape either way.
+fn recordSlashToolCall(
+    self: *Agent,
+    tool_name: []const u8,
+    args: ?std.json.Value,
+    result: browser_tools.ToolResult,
+) !void {
+    if (self.ai_client == null) return;
+    try self.ensureSystemPrompt();
+
+    const ma = self.message_arena.allocator();
+    self.synthetic_tool_call_id += 1;
+
+    const tool_calls = try ma.alloc(zenai.provider.ToolCall, 1);
+    tool_calls[0] = .{
+        .id = try std.fmt.allocPrint(ma, "lp-slash-{d}", .{self.synthetic_tool_call_id}),
+        .name = try ma.dupe(u8, tool_name),
+        .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
+    };
+
+    // capToolOutput returns its input unchanged under the cap; dupe so
+    // content doesn't alias the caller's per-iteration arena.
+    const capped = capToolOutput(ma, result.text);
+    const content = if (capped.ptr == result.text.ptr) try ma.dupe(u8, capped) else capped;
+
+    const tool_results = try ma.alloc(zenai.provider.ToolResult, 1);
+    tool_results[0] = .{
+        .id = try ma.dupe(u8, tool_calls[0].id),
+        .name = try ma.dupe(u8, tool_calls[0].name),
+        .content = content,
+        .is_error = result.is_error,
+    };
+
+    const baseline = self.messages.items.len;
+    errdefer self.messages.shrinkRetainingCapacity(baseline);
+    try self.messages.append(self.allocator, .{
+        .role = .assistant,
+        .tool_calls = tool_calls,
+    });
+    try self.messages.append(self.allocator, .{
+        .role = .tool,
+        .tool_results = tool_results,
+    });
 }
 
 const prune_high = 30;

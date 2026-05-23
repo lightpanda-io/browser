@@ -759,6 +759,19 @@ pub fn printError(self: *Terminal, comptime fmt: []const u8, args: anytype) void
     std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi.bold, ansi.red } ++ args ++ .{ansi.reset});
 }
 
+pub fn printWarning(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
+    if (self.repl_arena) |*a| {
+        defer _ = a.reset(.retain_capacity);
+        var aw: std.Io.Writer.Allocating = .init(a.allocator());
+        aw.writer.print("{s}●{s} " ++ fmt ++ "\n", .{ ansi.yellow, ansi.reset } ++ args) catch return;
+        const bytes = aw.written();
+        if (self.spinner.emitAbove(bytes)) return;
+        _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
+        return;
+    }
+    std.debug.print("{s}{s}Warning: " ++ fmt ++ "{s}\n", .{ ansi.bold, ansi.yellow } ++ args ++ .{ansi.reset});
+}
+
 pub fn printInfo(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
     std.debug.print(fmt ++ "\n", args);
