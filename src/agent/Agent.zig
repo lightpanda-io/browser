@@ -1250,9 +1250,11 @@ const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
     if (output.len <= tool_output_max_bytes) return output;
-    const prefix = output[0..tool_output_max_bytes];
-    // Format the suffix into a tiny scratch buffer then concat — avoids
-    // duplicating the 1 MiB prefix through `allocPrint`'s format machinery.
+    // Walk back to the start of the codepoint straddling the cap so
+    // providers don't see invalid UTF-8.
+    var end: usize = tool_output_max_bytes;
+    while (end > 0 and (output[end] & 0b1100_0000) == 0b1000_0000) : (end -= 1) {}
+    const prefix = output[0..end];
     var suffix_buf: [64]u8 = undefined;
     const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
@@ -1420,4 +1422,30 @@ fn pickModel(allocator: std.mem.Allocator, llm: Credentials, base_url: ?[:0]cons
         return error.UserCancelled;
     };
     return try allocator.dupe(u8, ids[idx]);
+}
+
+test "capToolOutput: truncates at UTF-8 codepoint boundary" {
+    const ta = std.testing.allocator;
+
+    // 3-byte Hangul codepoint (U+D55C '한' = 0xED 0x95 0x9C) straddling the cap.
+    // A naive byte-slice would leave the truncated body invalid UTF-8.
+    const cap = tool_output_max_bytes;
+    var buf = try ta.alloc(u8, cap + 8);
+    defer ta.free(buf);
+    @memset(buf[0 .. cap - 1], 'a');
+    buf[cap - 1] = 0xED;
+    buf[cap + 0] = 0x95;
+    buf[cap + 1] = 0x9C;
+    @memset(buf[cap + 2 ..], 'b');
+
+    const out = capToolOutput(ta, buf);
+    defer if (out.ptr != buf.ptr) ta.free(out);
+
+    try std.testing.expect(std.unicode.utf8ValidateSlice(out));
+}
+
+test "capToolOutput: passes through when under cap" {
+    const ta = std.testing.allocator;
+    const out = capToolOutput(ta, "short");
+    try std.testing.expectEqualStrings("short", out);
 }
