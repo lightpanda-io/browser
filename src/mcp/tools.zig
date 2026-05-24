@@ -375,9 +375,12 @@ fn indexLines(arena: std.mem.Allocator, content: []const u8) !std.StringHashMapU
     var pos: usize = 0;
     while (pos <= content.len) {
         const nl = std.mem.indexOfScalarPos(u8, content, pos, '\n') orelse content.len;
-        const this_line = content[pos..nl];
+        // Strip the CR from CRLF before keying so an LLM-supplied `original_line`
+        // (always plain `\n`) matches a file saved with Windows / autocrlf endings.
+        // The span still covers the full `\r\n` so the splice replaces both bytes.
+        const lookup_key = std.mem.trimRight(u8, content[pos..nl], "\r");
         const end = if (nl < content.len) nl + 1 else nl;
-        const gop = try index.getOrPut(arena, this_line);
+        const gop = try index.getOrPut(arena, lookup_key);
         if (gop.found_existing) {
             gop.value_ptr.dup = true;
         } else {
@@ -462,6 +465,16 @@ test "MCP - indexLines: duplicate line flagged dup" {
     const content = "/click selector='go'\n/waitForSelector '.x'\n/click selector='go'\n";
     const index = try indexLines(arena.allocator(), content);
     try std.testing.expect(index.get("/click selector='go'").?.dup);
+}
+
+test "MCP - indexLines: CRLF line endings still match plain LLM keys" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const content = "/goto 'https://x'\r\n/click selector='old'\r\n/waitForSelector '.thanks'\r\n";
+    const index = try indexLines(arena.allocator(), content);
+    const entry = index.get("/click selector='old'").?;
+    try std.testing.expect(!entry.dup);
+    try std.testing.expectEqualStrings("/click selector='old'\r\n", entry.span);
 }
 
 test "MCP - record_start rejects unsafe path" {
