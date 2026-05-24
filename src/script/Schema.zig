@@ -424,13 +424,19 @@ fn tokenize(arena: std.mem.Allocator, input: []const u8) ParseError![][]const u8
                     const close = std.mem.indexOfPos(u8, input, i + 3, triple_delim) orelse return error.UnterminatedQuote;
                     i = close + 2;
                 } else {
-                    // Scan for the closer. `\<quote>` is rejected rather
-                    // than decoded — choose the other quote style or a
-                    // triple-quoted block instead.
+                    // Odd run of `\` before the closer = escape attempt; even = literal.
                     var j = i + 1;
+                    var pending_bs: usize = 0;
                     while (j < input.len) : (j += 1) {
-                        if (input[j] == '\\' and j + 1 < input.len and input[j + 1] == ch) return error.UnsupportedEscape;
-                        if (input[j] == ch) break;
+                        if (input[j] == '\\') {
+                            pending_bs += 1;
+                            continue;
+                        }
+                        if (input[j] == ch) {
+                            if (pending_bs % 2 == 1) return error.UnsupportedEscape;
+                            break;
+                        }
+                        pending_bs = 0;
                     } else return error.UnterminatedQuote;
                     i = j;
                 }
@@ -788,6 +794,15 @@ test "tokenize: bare backslash inside quotes is allowed (e.g. Windows paths)" {
     const tokens = try tokenize(arena.allocator(), "value='C:\\Users\\bob'");
     try testing.expectEqual(@as(usize, 1), tokens.len);
     try testing.expectString("value='C:\\Users\\bob'", tokens[0]);
+}
+
+test "tokenize: even-count backslashes before close-quote are literal" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    // `"\\"` is two literal backslashes (even run before the closer), not an escape.
+    const tokens = try tokenize(arena.allocator(), "value=\"\\\\\"");
+    try testing.expectEqual(@as(usize, 1), tokens.len);
+    try testing.expectString("value=\"\\\\\"", tokens[0]);
 }
 
 test "hasUnclosedTripleQuote" {

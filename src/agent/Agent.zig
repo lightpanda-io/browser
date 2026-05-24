@@ -1250,10 +1250,12 @@ const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
     if (output.len <= tool_output_max_bytes) return output;
-    // Walk back to the start of the codepoint straddling the cap so
-    // providers don't see invalid UTF-8.
+    // Walk back at most 3 bytes (max UTF-8 sequence is 4); on malformed input
+    // fall back to the raw cap so we don't drop everything.
     var end: usize = tool_output_max_bytes;
-    while (end > 0 and (output[end] & 0b1100_0000) == 0b1000_0000) : (end -= 1) {}
+    const floor = end -| 3;
+    while (end > floor and (output[end] & 0b1100_0000) == 0b1000_0000) : (end -= 1) {}
+    if ((output[end] & 0b1100_0000) == 0b1000_0000) end = tool_output_max_bytes;
     const prefix = output[0..end];
     var suffix_buf: [64]u8 = undefined;
     const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
@@ -1448,4 +1450,17 @@ test "capToolOutput: passes through when under cap" {
     const ta = std.testing.allocator;
     const out = capToolOutput(ta, "short");
     try std.testing.expectEqualStrings("short", out);
+}
+
+test "capToolOutput: malformed UTF-8 around cap falls back to raw boundary" {
+    const ta = std.testing.allocator;
+    const cap = tool_output_max_bytes;
+    const buf = try ta.alloc(u8, cap + 8);
+    defer ta.free(buf);
+    @memset(buf, 0x80);
+
+    const out = capToolOutput(ta, buf);
+    defer if (out.ptr != buf.ptr) ta.free(out);
+
+    try std.testing.expect(out.len > cap);
 }
