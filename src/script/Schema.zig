@@ -70,6 +70,7 @@ pub const ParseError = error{
     MalformedKv,
     PositionalNotAllowed,
     UnterminatedQuote,
+    UnsupportedEscape,
     OutOfMemory,
 };
 
@@ -423,8 +424,15 @@ fn tokenize(arena: std.mem.Allocator, input: []const u8) ParseError![][]const u8
                     const close = std.mem.indexOfPos(u8, input, i + 3, triple_delim) orelse return error.UnterminatedQuote;
                     i = close + 2;
                 } else {
-                    const close = std.mem.indexOfScalarPos(u8, input, i + 1, ch) orelse return error.UnterminatedQuote;
-                    i = close;
+                    // Scan for the closer. `\<quote>` is rejected rather
+                    // than decoded — choose the other quote style or a
+                    // triple-quoted block instead.
+                    var j = i + 1;
+                    while (j < input.len) : (j += 1) {
+                        if (input[j] == '\\' and j + 1 < input.len and input[j + 1] == ch) return error.UnsupportedEscape;
+                        if (input[j] == ch) break;
+                    } else return error.UnterminatedQuote;
+                    i = j;
                 }
             }
         }
@@ -765,6 +773,21 @@ test "tokenize: inline triple quotes with spaces" {
     try testing.expectEqual(@as(usize, 2), tokens.len);
     try testing.expectString("selector='''hello world'''", tokens[0]);
     try testing.expectString("value=\"\"\"foo bar\"\"\"", tokens[1]);
+}
+
+test "tokenize: rejects backslash-escaped quote inside same-style quote" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectError(error.UnsupportedEscape, tokenize(arena.allocator(), "value=\"hello \\\"world\\\"\""));
+    try testing.expectError(error.UnsupportedEscape, tokenize(arena.allocator(), "value='it\\'s'"));
+}
+
+test "tokenize: bare backslash inside quotes is allowed (e.g. Windows paths)" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const tokens = try tokenize(arena.allocator(), "value='C:\\Users\\bob'");
+    try testing.expectEqual(@as(usize, 1), tokens.len);
+    try testing.expectString("value='C:\\Users\\bob'", tokens[0]);
 }
 
 test "hasUnclosedTripleQuote" {

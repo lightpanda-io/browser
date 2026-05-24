@@ -600,6 +600,7 @@ fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8) 
         error.UnknownField => "unknown field (typo?)",
         error.PositionalNotAllowed => "positional only works for tools with one required field. Use key=value",
         error.UnterminatedQuote => "unterminated quote",
+        error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
         error.OutOfMemory => return self.terminal.printError("out of memory", .{}),
     };
     self.terminal.printError("{s}: {s}. Try /help {s}.", .{ name, reason, name });
