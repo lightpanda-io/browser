@@ -387,9 +387,11 @@ pub fn matchesHost(self: *const Cookie, host: []const u8) bool {
     if (self.domain.len == 0) return false;
     if (self.domain[0] == '.') {
         const bare = self.domain[1..];
-        return std.mem.eql(u8, host, bare) or std.mem.endsWith(u8, host, self.domain);
+        if (std.ascii.eqlIgnoreCase(host, bare)) return true;
+        if (host.len < self.domain.len) return false;
+        return std.ascii.eqlIgnoreCase(host[host.len - self.domain.len ..], self.domain);
     }
-    return std.mem.eql(u8, host, self.domain);
+    return std.ascii.eqlIgnoreCase(host, self.domain);
 }
 
 pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, is_navigation: bool, is_http: bool) bool {
@@ -1272,6 +1274,34 @@ test "Cookie: appliesTo with empty domain" {
     };
 
     try testing.expectEqual(false, cookie.appliesTo(&target, true, true, true));
+}
+
+test "Cookie: matchesHost is case-insensitive" {
+    const exact = Cookie{
+        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .name = "n",
+        .value = "v",
+        .domain = "example.com",
+        .path = "/",
+        .expires = null,
+    };
+    defer exact.deinit();
+    try testing.expectEqual(true, exact.matchesHost("Example.com"));
+    try testing.expectEqual(true, exact.matchesHost("EXAMPLE.COM"));
+    try testing.expectEqual(false, exact.matchesHost("other.com"));
+
+    const subdomain = Cookie{
+        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .name = "n",
+        .value = "v",
+        .domain = ".example.com",
+        .path = "/",
+        .expires = null,
+    };
+    defer subdomain.deinit();
+    try testing.expectEqual(true, subdomain.matchesHost("Example.com"));
+    try testing.expectEqual(true, subdomain.matchesHost("API.Example.COM"));
+    try testing.expectEqual(false, subdomain.matchesHost("notexample.com"));
 }
 
 test "Cookie: parse rejects URL with empty host" {
