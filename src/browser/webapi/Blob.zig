@@ -113,7 +113,7 @@ pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: 
 }
 
 /// Validates and normalizes MIME type according to spec.
-fn validateMimeType(arena: Allocator, mime_type: []const u8, full_validation: bool) ![]const u8 {
+pub fn validateMimeType(arena: Allocator, mime_type: []const u8, full_validation: bool) ![]const u8 {
     if (mime_type.len == 0) {
         return "";
     }
@@ -171,7 +171,7 @@ const vector_sizes = blk: {
 };
 
 /// Writes a single part with optional line ending normalization.
-fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
+pub fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
     // Transparent - no conversion needed.
     if (!use_native_endings) {
         try writer.writeAll(part);

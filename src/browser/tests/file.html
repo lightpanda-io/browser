@@ -1,12 +1,52 @@
 <!DOCTYPE html>
 <head id="the_head">
-  <title>Test Document Title</title>
+  <title>Test File Web API</title>
   <script src="./testing.js"></script>
 </head>
 
-<script id=file>
-  const file = new File();
+<script id=file_basic>
+  // File requires parts and name.
+  // Verify basic construction.
+  const f = new File(["test data"], "test.txt");
 
-  testing.expectEqual(true, file instanceof File);
-  testing.expectEqual(true, file instanceof Blob);
+  testing.expectEqual(true, f instanceof File);
+  testing.expectEqual(true, f instanceof Blob);
+  testing.expectEqual("test.txt", f.name);
+  testing.expectEqual(9, f.size);
+  testing.expectEqual("", f.type);
+  testing.expectTrue(typeof f.lastModified === 'number');
+  // lastModified should be close to now (within 5 seconds)
+  const now = Date.now();
+  testing.expectTrue(Math.abs(now - f.lastModified) < 5000);
+</script>
+
+<script id=file_options type=module>
+  const state = await testing.async();
+
+  // Constructor with full option properties
+  const customTime = 1234567890;
+  const f2 = new File(["foo", "bar"], "data.csv", {
+    type: "text/csv",
+    lastModified: customTime
+  });
+
+  testing.expectEqual("data.csv", f2.name);
+  testing.expectEqual(6, f2.size);
+  testing.expectEqual("text/csv", f2.type);
+  testing.expectEqual(customTime, f2.lastModified);
+
+  // Verify async reader methods (inherited from Blob)
+  const text = await f2.text();
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual("foobar", text);
+  });
+</script>
+
+<script id=file_empty>
+  const fEmpty = new File([], "");
+  testing.expectEqual("", fEmpty.name);
+  testing.expectEqual(0, fEmpty.size);
+  testing.expectEqual("", fEmpty.type);
 </script>
