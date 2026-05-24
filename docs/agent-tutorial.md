@@ -406,16 +406,16 @@ Register the server with your MCP client:
 
 From the external agent, call:
 
-1. `record_start { "path": "hn.lp" }` — begins appending state-mutating
+1. `recordStart { "path": "hn.lp" }` — begins appending state-mutating
    tool calls to `hn.lp`. The path must be relative and free of `..`.
 2. The same browser tools you'd call anyway: `goto`, `fill`, `click`,
    `waitForSelector`. Each one that succeeds is appended verbatim;
    query-only tools (`tree`, `markdown`, `findElement`, `consoleLogs`)
    are never recorded.
-3. `record_comment { "text": "logged in" }` — drop a breadcrumb above
+3. `recordComment { "text": "logged in" }` — drop a breadcrumb above
    the next recorded line. Useful for marking the boundary between
    LLM-driven phases.
-4. `record_stop {}` — closes the recording and returns
+4. `recordStop {}` — closes the recording and returns
    `{path, line_count}`.
 
 The output file is byte-equivalent to what `-i hn.lp` produced in
@@ -431,13 +431,13 @@ MCP doesn't carry a `--self-heal` flag — self-heal is a two-tool
 roundtrip the calling agent orchestrates:
 
 1. Read the script. For each non-blank, non-comment line, call
-   `script_step { "line": "<line>" }`. Comments and blanks are no-ops
+   `scriptStep { "line": "<line>" }`. Comments and blanks are no-ops
    on the Lightpanda side.
 2. On `isError: true`, the structured error message tells you what
    failed. Hand the current page state and the failing line to your
    own LLM; have it return a replacement PandaScript line (or
    several).
-3. Call `script_heal { "path": "...", "replacements":
+3. Call `scriptHeal { "path": "...", "replacements":
    [{ "original_line": "...", "replacement_lines": ["..."] }] }`.
    Each `original_line` must match verbatim. Lightpanda writes
    `<path>.bak` first, then atomically rewrites the file with the
@@ -445,7 +445,7 @@ roundtrip the calling agent orchestrates:
    replacement — same format as section 6.
 4. Continue from the next line.
 
-`script_step` deliberately does *not* auto-record: the script is
+`scriptStep` deliberately does *not* auto-record: the script is
 already the source of truth during replay, so double-recording would
 diverge the file from itself. `/login`, `/acceptCookies`, and any line
 that isn't a slash command are rejected — those need an LLM, which is

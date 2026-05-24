@@ -26,8 +26,8 @@ verifier: Verifier,
 
 transport: Transport,
 
-/// Optional PandaScript recorder. Activated by the `record_start` tool;
-/// cleared by `record_stop`. State-mutating browser tool calls are
+/// Optional PandaScript recorder. Activated by the `recordStart` tool;
+/// cleared by `recordStop`. State-mutating browser tool calls are
 /// serialized into the active recorder via `Command.fromToolCall`.
 recorder: ?Recorder = null,
 

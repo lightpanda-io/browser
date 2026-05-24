@@ -89,28 +89,28 @@ const script_heal_schema = browser_tools.minify(
 
 const extra_tools = [_]McpTool{
     .{
-        .name = "record_start",
+        .name = "recordStart",
         .description = "Start recording state-mutating browser tool calls into a PandaScript file. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, `eval`, and `extract` get appended as PandaScript lines. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
         .inputSchema = record_start_schema,
     },
     .{
-        .name = "record_stop",
+        .name = "recordStop",
         .description = "Stop the active recording and return the path and number of lines written. Errors if no recording is active.",
         .inputSchema = record_stop_schema,
     },
     .{
-        .name = "record_comment",
+        .name = "recordComment",
         .description = "Append a `# <text>` comment line to the active recording. Useful as a breadcrumb above LLM-driven steps.",
         .inputSchema = record_comment_schema,
     },
     .{
-        .name = "script_step",
+        .name = "scriptStep",
         .description = "Parse and execute one PandaScript line on the current browser session. Returns success or a structured failure descriptor (failed line, page URL, error reason) so the calling agent can synthesize a heal step. Comments and blank lines are accepted as no-ops.",
         .inputSchema = script_step_schema,
     },
     .{
-        .name = "script_heal",
-        .description = "Atomically rewrite a .lp script with in-place line replacements. A `.bak` of the original is written first. Designed for the script_step → fail → script_heal roundtrip where the calling agent owns the LLM that synthesizes replacements.",
+        .name = "scriptHeal",
+        .description = "Atomically rewrite a .lp script with in-place line replacements. A `.bak` of the original is written first. Designed for the scriptStep → fail → scriptHeal roundtrip where the calling agent owns the LLM that synthesizes replacements.",
         .inputSchema = script_heal_schema,
     },
 };
@@ -119,11 +119,11 @@ const all_tools = browser_tool_list ++ extra_tools;
 
 /// Tools that bypass the browser-tool dispatch and have their own handlers.
 const ExtraTool = enum {
-    record_start,
-    record_stop,
-    record_comment,
-    script_step,
-    script_heal,
+    recordStart,
+    recordStop,
+    recordComment,
+    scriptStep,
+    scriptHeal,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -142,11 +142,11 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
     if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
         return switch (tool) {
-            .record_start => handleRecordStart(server, arena, id, call_params.arguments),
-            .record_stop => handleRecordStop(server, arena, id),
-            .record_comment => handleRecordComment(server, arena, id, call_params.arguments),
-            .script_step => handleScriptStep(server, arena, id, call_params.arguments),
-            .script_heal => handleScriptHeal(server, arena, id, call_params.arguments),
+            .recordStart => handleRecordStart(server, arena, id, call_params.arguments),
+            .recordStop => handleRecordStop(server, arena, id),
+            .recordComment => handleRecordComment(server, arena, id, call_params.arguments),
+            .scriptStep => handleScriptStep(server, arena, id, call_params.arguments),
+            .scriptHeal => handleScriptHeal(server, arena, id, call_params.arguments),
         };
     }
 
@@ -196,7 +196,7 @@ fn recordIfActive(server: *Server, tool: BrowserTool, arguments: ?std.json.Value
 
 fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     if (server.recorder != null) {
-        return sendErrorContent(server, id, "a recording is already active; call record_stop first");
+        return sendErrorContent(server, id, "a recording is already active; call recordStop first");
     }
     const Args = struct { path: []const u8 };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
@@ -546,59 +546,59 @@ test "MCP - indexLines: CRLF line endings still match plain LLM keys" {
     try std.testing.expectEqualStrings("/click selector='old'\r\n", entry.span);
 }
 
-test "MCP - record_start rejects unsafe path" {
+test "MCP - recordStart rejects unsafe path" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"record_start","arguments":{"path":"../escape.lp"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recordStart","arguments":{"path":"../escape.lp"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "must be relative") != null);
 }
 
-test "MCP - record_stop without active recording errors" {
+test "MCP - recordStop without active recording errors" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"record_stop","arguments":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recordStop","arguments":{}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "no recording is active") != null);
 }
 
-test "MCP - script_step rejects /login (LLM-required)" {
+test "MCP - scriptStep rejects /login (LLM-required)" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"/login"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"/login"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "require an LLM") != null);
 }
 
-test "MCP - script_step rejects bare prose" {
+test "MCP - scriptStep rejects bare prose" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"please summarize this page"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"please summarize this page"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "could not parse step") != null);
 }
 
-test "MCP - script_step runs /fill and verifier passes" {
+test "MCP - scriptStep runs /fill and verifier passes" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
@@ -607,21 +607,21 @@ test "MCP - script_step runs /fill and verifier passes" {
     // /fill on the input that exists on the test page; verifier checks
     // the field's `value` property after execution.
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"/fill selector='#inp' value='hello world'"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"/fill selector='#inp' value='hello world'"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "verification failed") == null);
 }
 
-test "MCP - script_step accepts comment line" {
+test "MCP - scriptStep accepts comment line" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"# fetch the homepage"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"# fetch the homepage"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);

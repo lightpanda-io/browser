@@ -99,7 +99,7 @@ pub const Command = union(enum) {
             }
 
             // Iterate the schema (not the ObjectMap) so the line order is
-            // stable across providers — MCP script_heal looks lines up
+            // stable across providers — MCP scriptHeal looks lines up
             // verbatim.
             for (s.fields) |f| {
                 const v = args.get(f.name) orelse continue;

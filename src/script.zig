@@ -192,7 +192,7 @@ pub fn writeAtomic(
 }
 
 /// Replacement body: either parsed Commands (agent self-heal) or pre-rendered
-/// lines (MCP `script_heal`, where the LLM driver supplies raw PandaScript).
+/// lines (MCP `scriptHeal`, where the LLM driver supplies raw PandaScript).
 pub const HealBody = union(enum) {
     cmds: []const Command,
     lines: []const []const u8,

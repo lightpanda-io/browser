@@ -107,7 +107,7 @@ Both require an LLM. `--no-llm` rejects them.
 
 In the REPL (and only the REPL), a line that isn't a slash command and
 doesn't start with `#` is sent to the LLM as a natural-language prompt. In
-`.lp` scripts and through MCP `script_step`, the same input is a parse
+`.lp` scripts and through MCP `scriptStep`, the same input is a parse
 error. To leave the REPL, use the `/quit` meta command.
 
 ### Example script
@@ -224,6 +224,14 @@ browser. No `--provider` or API key is required on the Lightpanda side.
 }
 ```
 
+Tool names are camelCase and case-sensitive — there are no aliases.
+Earlier names (`navigate`, `evaluate`, `semantic_tree`, `semanticTree`,
+`record_start`, `record_stop`, `record_comment`, `script_step`,
+`script_heal`) have been removed; existing MCP clients and saved
+prompts must call the canonical tags (`goto`, `eval`, `tree`,
+`recordStart`, `recordStop`, `recordComment`, `scriptStep`,
+`scriptHeal`).
+
 For sub-task delegation in the other direction — calling Lightpanda's
 own LLM-driven agent in a one-shot fashion — use `--task` on stdin
 instead.
@@ -233,11 +241,11 @@ instead.
 `lightpanda mcp` exposes three recording tools so an external agent can
 capture a session as a `.lp` script for later deterministic replay:
 
-| Tool             | Args                  | Effect                                                                                          |
-|------------------|-----------------------|-------------------------------------------------------------------------------------------------|
-| `record_start`   | `{ path: string }`    | Begin appending state-mutating tool calls to `path` (relative, no `..`). Errors if already on. |
-| `record_stop`    | `{}`                  | Close the recording and return `{path, line_count}`. Errors if no recording is active.          |
-| `record_comment` | `{ text: string }`    | Write `# <text>` to the active recording — useful as a breadcrumb above LLM-driven steps.       |
+| Tool            | Args                  | Effect                                                                                         |
+|-----------------|-----------------------|------------------------------------------------------------------------------------------------|
+| `recordStart`   | `{ path: string }`    | Begin appending state-mutating tool calls to `path` (relative, no `..`). Errors if already on. |
+| `recordStop`    | `{}`                  | Close the recording and return `{path, line_count}`. Errors if no recording is active.         |
+| `recordComment` | `{ text: string }`    | Write `# <text>` to the active recording — useful as a breadcrumb above LLM-driven steps.      |
 
 While recording is active, every `goto` / `click` / `fill` / `scroll` /
 `hover` / `selectOption` / `setChecked` / `waitForSelector` / `eval`
@@ -252,19 +260,19 @@ Self-heal is a two-tool roundtrip: lightpanda runs steps and reports
 structured failures, the calling agent synthesizes a replacement, and
 lightpanda atomically rewrites the script.
 
-| Tool          | Args                                                     | Effect                                                                                                                                              |
-|---------------|----------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `script_step` | `{ line: string }`                                       | Parse one PandaScript line and run it on the current session. Comments and blank lines are no-ops. Returns `isError: true` with a structured message on failure. |
-| `script_heal` | `{ path: string, replacements: [{original_line, replacement_lines}] }` | Atomically rewrite the script in place. A `<path>.bak` of the original is written first; each `original_line` must match verbatim. The first replacement gets a `# [Auto-healed] Original: …` header. |
+| Tool         | Args                                                     | Effect                                                                                                                                              |
+|--------------|----------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `scriptStep` | `{ line: string }`                                       | Parse one PandaScript line and run it on the current session. Comments and blank lines are no-ops. Returns `isError: true` with a structured message on failure. |
+| `scriptHeal` | `{ path: string, replacements: [{original_line, replacement_lines}] }` | Atomically rewrite the script in place. A `<path>.bak` of the original is written first; each `original_line` must match verbatim. The first replacement gets a `# [Auto-healed] Original: …` header. |
 
 Typical loop on the caller side: read the script, walk lines, call
-`script_step` per line, on failure ask the caller's LLM for a
-replacement, call `script_heal` with the patch, then continue. Lines
-executed via `script_step` are intentionally NOT auto-recorded — replay
+`scriptStep` per line, on failure ask the caller's LLM for a
+replacement, call `scriptHeal` with the patch, then continue. Lines
+executed via `scriptStep` are intentionally NOT auto-recorded — replay
 shouldn't double-record.
 
 `/login`, `/acceptCookies`, and anything that isn't a slash command are
-rejected by `script_step`: those require an LLM and belong to the calling
+rejected by `scriptStep`: those require an LLM and belong to the calling
 agent.
 
 ## Browser tools
@@ -306,7 +314,7 @@ for the LLM.
   — including natural-language context that accompanies a `/login` —
   lands in that file. Delete it or move out of sensitive directories if
   you don't want it retained.
-- `record_start` and `script_heal` reject empty, absolute, and `..`
+- `recordStart` and `scriptHeal` reject empty, absolute, and `..`
   paths, but do **not** follow-up on symlinks. On a shared filesystem,
   a pre-existing symlink at the recording target would be written
   through to whatever it points at. Prefer a fresh directory you own
