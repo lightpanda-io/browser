@@ -379,17 +379,54 @@ fn indexLines(arena: std.mem.Allocator, content: []const u8) !std.StringHashMapU
         // (always plain `\n`) matches a file saved with Windows / autocrlf endings.
         // The span still covers the full `\r\n` so the splice replaces both bytes.
         const lookup_key = std.mem.trimRight(u8, content[pos..nl], "\r");
-        const end = if (nl < content.len) nl + 1 else nl;
+        const line_end = if (nl < content.len) nl + 1 else nl;
+
+        // Multi-line block openers (`/eval '''`, `/extract """`, …) must
+        // index the whole block as one span — keyed by the opener line —
+        // so a splice doesn't orphan the body and closing fence.
+        const span_end = blk: {
+            const trimmed = std.mem.trim(u8, content[pos..nl], &std.ascii.whitespace);
+            const split = script.Schema.parseSlashCommand(trimmed) orelse break :blk line_end;
+            const s = script.Schema.findByName(split.name) orelse break :blk line_end;
+            if (!s.isMultiLineCapable()) break :blk line_end;
+            const qt = script.Schema.QuoteType.fromLiteral(split.rest) orelse break :blk line_end;
+            break :blk findBlockClose(content, line_end, qt.toLiteral()) orelse line_end;
+        };
+
         const gop = try index.getOrPut(arena, lookup_key);
         if (gop.found_existing) {
             gop.value_ptr.dup = true;
         } else {
-            gop.value_ptr.* = .{ .span = content[pos..end], .dup = false };
+            gop.value_ptr.* = .{ .span = content[pos..span_end], .dup = false };
         }
-        if (nl == content.len) break;
-        pos = nl + 1;
+
+        if (span_end > line_end) {
+            if (span_end >= content.len) break;
+            pos = span_end;
+        } else {
+            if (nl == content.len) break;
+            pos = nl + 1;
+        }
     }
     return index;
+}
+
+/// Scan from `start` for a line whose trimmed-right (CR-stripped) content
+/// equals `closer`. Returns the byte position immediately after that
+/// line's terminating `\n` (or `content.len` if the closer is the tail
+/// line with no trailing newline). Returns null if the closer is missing.
+fn findBlockClose(content: []const u8, start: usize, closer: []const u8) ?usize {
+    var pos = start;
+    while (pos <= content.len) {
+        const nl = std.mem.indexOfScalarPos(u8, content, pos, '\n') orelse content.len;
+        const scrubbed = std.mem.trimRight(u8, content[pos..nl], "\r");
+        if (std.mem.eql(u8, scrubbed, closer)) {
+            return if (nl < content.len) nl + 1 else nl;
+        }
+        if (nl == content.len) return null;
+        pos = nl + 1;
+    }
+    return null;
 }
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
@@ -465,6 +502,38 @@ test "MCP - indexLines: duplicate line flagged dup" {
     const content = "/click selector='go'\n/waitForSelector '.x'\n/click selector='go'\n";
     const index = try indexLines(arena.allocator(), content);
     try std.testing.expect(index.get("/click selector='go'").?.dup);
+}
+
+test "MCP - indexLines: multi-line block span covers opener through closer" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const content = "/goto 'https://x'\n/eval '''\nconst x = 1;\nreturn x;\n'''\n/tree\n";
+    const index = try indexLines(arena.allocator(), content);
+
+    const block = index.get("/eval '''").?;
+    try std.testing.expect(!block.dup);
+    try std.testing.expectEqualStrings("/eval '''\nconst x = 1;\nreturn x;\n'''\n", block.span);
+
+    // Body lines stay out of the index — splicing them individually would
+    // corrupt the block.
+    try std.testing.expect(index.get("const x = 1;") == null);
+    try std.testing.expect(index.get("return x;") == null);
+    try std.testing.expect(index.get("'''") == null);
+
+    // Siblings before/after the block remain individually addressable.
+    try std.testing.expectEqualStrings("/goto 'https://x'\n", index.get("/goto 'https://x'").?.span);
+    try std.testing.expectEqualStrings("/tree\n", index.get("/tree").?.span);
+}
+
+test "MCP - indexLines: unterminated block falls back to single-line indexing" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const content = "/eval '''\nconst x = 1;\n";
+    const index = try indexLines(arena.allocator(), content);
+    // No closer found → opener is indexed as a normal single line so the
+    // user can still heal it (e.g. to add the missing fence).
+    try std.testing.expectEqualStrings("/eval '''\n", index.get("/eval '''").?.span);
+    try std.testing.expectEqualStrings("const x = 1;\n", index.get("const x = 1;").?.span);
 }
 
 test "MCP - indexLines: CRLF line endings still match plain LLM keys" {
