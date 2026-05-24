@@ -161,7 +161,7 @@ fn walk(
         tag_name = el.getTagNameLower();
 
         if (el.is(Element.Html.Input)) |input| {
-            value = input.getValue();
+            value = input.getRedactedValue();
             if (input._input_type == .checkbox or input._input_type == .radio) {
                 checked = input.getChecked();
             }
@@ -676,7 +676,7 @@ pub fn getNodeDetails(
         }
 
         if (el.is(Element.Html.Input)) |input| {
-            value = input.getValue();
+            value = input.getRedactedValue();
             input_type = input._input_type.toString();
             if (input._input_type == .checkbox or input._input_type == .radio) {
                 checked = input.getChecked();

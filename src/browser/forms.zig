@@ -208,7 +208,7 @@ fn collectFormFields(
                 .input_type = input._input_type.toString(),
                 .required = el.getAttributeSafe(comptime .wrap("required")) != null,
                 .disabled = is_disabled,
-                .value = input.getValue(),
+                .value = input.getRedactedValue(),
                 .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
                 .options = &.{},
             });

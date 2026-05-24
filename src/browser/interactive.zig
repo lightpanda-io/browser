@@ -112,8 +112,7 @@ pub const InteractiveElement = struct {
 
         if (self.value) |v| {
             try jw.objectField("value");
-            const is_password = if (self.input_type) |t| std.mem.eql(u8, t, "password") else false;
-            try jw.write(if (is_password) "***" else v);
+            try jw.write(v);
         }
 
         if (self.element_name) |v| {
@@ -483,7 +482,7 @@ fn getInputType(el: *Element) ?[]const u8 {
 
 fn getInputValue(el: *Element) ?[]const u8 {
     if (el.is(Element.Html.Input)) |input| {
-        return input.getValue();
+        return input.getRedactedValue();
     }
     return null;
 }
