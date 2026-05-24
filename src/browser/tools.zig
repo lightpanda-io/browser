@@ -547,7 +547,10 @@ pub fn call(
     const tool = std.meta.stringToEnum(Tool, tool_name) orelse return ToolError.InvalidParams;
     if (diagnoseArgs(arena, arguments)) |msg|
         return .{ .text = msg, .is_error = true };
-    const substituted = try substituteStringArgs(arena, tool, arguments);
+    // Must run before substituteStringArgs so the `key=="value"` secret-
+    // redaction check there still triggers on PascalCase keys.
+    const normalized = try normalizeArgKeys(arena, tool, arguments);
+    const substituted = try substituteStringArgs(arena, tool, normalized);
 
     return dispatch(arena, session, registry, tool, substituted) catch |err| {
         if (err == error.NavigationFailed) {
@@ -1420,6 +1423,31 @@ pub fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.jso
 /// echoes the original placeholder so the credential never surfaces in the
 /// result text. Co-located with `execFill` so both halves of the carve-out
 /// live in one file.
+fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
+    const v = args orelse return null;
+    if (v != .object) return v;
+
+    const schemas = lp.script.Schema.all();
+    const tool_idx = @intFromEnum(tool);
+    if (tool_idx >= schemas.len) return v;
+    const schema = schemas[tool_idx];
+
+    var it = v.object.iterator();
+    while (it.next()) |entry| {
+        const field = schema.findField(entry.key_ptr.*) orelse continue;
+        if (!std.mem.eql(u8, field.name, entry.key_ptr.*)) break;
+    } else return v;
+
+    var new_obj: std.json.ObjectMap = .init(arena);
+    try new_obj.ensureTotalCapacity(v.object.count());
+    it = v.object.iterator();
+    while (it.next()) |entry| {
+        const canonical = if (schema.findField(entry.key_ptr.*)) |f| f.name else entry.key_ptr.*;
+        try new_obj.put(canonical, entry.value_ptr.*);
+    }
+    return .{ .object = new_obj };
+}
+
 fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;

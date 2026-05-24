@@ -627,6 +627,21 @@ test "MCP - scriptStep accepts comment line" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
 }
 
+test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fill","arguments":{"Selector":"#inp","Value":"hello"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    const written = out.written();
+    try testing.expect(std.mem.indexOf(u8, written, "\"isError\":true") == null);
+    try testing.expect(std.mem.indexOf(u8, written, "InvalidParams") == null);
+}
+
 test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked" {
     defer testing.reset();
     const aa = testing.arena_allocator;

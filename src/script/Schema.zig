@@ -87,11 +87,28 @@ pub fn isMultiLineCapable(self: Schema) bool {
     return self.required.len == 1 and self.fieldType(self.required[0]) == .string;
 }
 
-fn findField(self: Schema, key: []const u8) ?FieldEntry {
+pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
     for (self.fields) |f| {
         if (std.ascii.eqlIgnoreCase(f.name, key)) return f;
     }
     return null;
+}
+
+/// Rename keys in `obj` to canonical casing. Unknown keys pass through.
+pub fn normalizeKeys(self: Schema, obj: *std.json.ObjectMap) error{OutOfMemory}!void {
+    const Rename = struct { from: []const u8, to: []const u8 };
+    var renames: std.ArrayList(Rename) = .empty;
+    var it = obj.iterator();
+    while (it.next()) |entry| {
+        const field = self.findField(entry.key_ptr.*) orelse continue;
+        if (!std.mem.eql(u8, field.name, entry.key_ptr.*)) {
+            try renames.append(obj.allocator, .{ .from = entry.key_ptr.*, .to = field.name });
+        }
+    }
+    for (renames.items) |r| {
+        const kv = obj.fetchSwapRemove(r.from) orelse continue;
+        try obj.put(r.to, kv.value);
+    }
 }
 
 fn fieldType(self: Schema, key: []const u8) FieldType {
@@ -182,19 +199,12 @@ pub fn parseValue(self: Schema, arena: std.mem.Allocator, rest: []const u8) Pars
 }
 
 fn validateAndFillObject(self: Schema, obj: *std.json.ObjectMap) ParseError!void {
-    const Rename = struct { from: []const u8, to: []const u8 };
-    var renames: std.ArrayList(Rename) = .empty;
+    // Stricter than the LLM path: an unknown field is a user typo, not noise to drop.
     var it = obj.iterator();
     while (it.next()) |entry| {
-        const field = self.findField(entry.key_ptr.*) orelse return error.UnknownField;
-        if (!std.mem.eql(u8, field.name, entry.key_ptr.*)) {
-            renames.append(obj.allocator, .{ .from = entry.key_ptr.*, .to = field.name }) catch return error.OutOfMemory;
-        }
+        if (self.findField(entry.key_ptr.*) == null) return error.UnknownField;
     }
-    for (renames.items) |r| {
-        const kv = obj.fetchSwapRemove(r.from) orelse continue;
-        try obj.put(r.to, kv.value);
-    }
+    try self.normalizeKeys(obj);
     for (self.required) |req| {
         if (obj.contains(req)) continue;
         if (!self.isFieldDefaultTrue(req)) return error.MissingRequired;
