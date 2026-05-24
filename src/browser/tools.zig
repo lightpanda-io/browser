@@ -1290,7 +1290,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
         if (args.all) break :blk null;
         if (args.url) |u| break :blk arena.dupeZ(u8, u) catch return ToolError.InternalError;
         if (session.currentFrame()) |f| break :blk f.url;
-        break :blk null;
+        return "No current page. Pass `url` to filter by host or `all=true` to list every cookie.";
     };
     const host: ?[]const u8 = if (filter_url) |u| lp.URL.getHostname(u) else null;
 

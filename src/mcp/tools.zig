@@ -1006,6 +1006,23 @@ test "MCP - getCookies: defaults to current page, url filter, all flag" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "No cookies for http://nope.test/") != null);
 }
 
+test "MCP - getCookies without a loaded page refuses instead of dumping the jar" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try server.session.cookie_jar.populateFromResponse("http://example.com/", "session=abc; Path=/");
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getCookies"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    const written = out.written();
+    try testing.expect(std.mem.indexOf(u8, written, "session=abc") == null);
+    try testing.expect(std.mem.indexOf(u8, written, "No current page") != null);
+}
+
 test "MCP - goto with bad waitUntil surfaces rich error" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
