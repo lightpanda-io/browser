@@ -818,12 +818,7 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const args = try parseArgsOrDefault(TreeParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
-    var root_node = page.document.asNode();
-    if (args.backendNodeId) |node_id| {
-        if (registry.lookup_by_id.get(node_id)) |n| {
-            root_node = n.dom;
-        }
-    }
+    const root_node = (try resolveOptionalNode(registry, args.backendNodeId)) orelse page.document.asNode();
 
     const st = lp.SemanticTree{
         .dom_node = root_node,

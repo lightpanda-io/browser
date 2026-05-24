@@ -627,6 +627,20 @@ test "MCP - scriptStep accepts comment line" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
 }
 
+test "MCP - tree rejects stale backendNodeId instead of dumping whole document" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tree","arguments":{"backendNodeId":999999}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    const written = out.written();
+    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") != null);
+}
+
 test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
