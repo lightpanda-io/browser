@@ -390,17 +390,6 @@ pub fn staticScriptsDone(self: *ScriptManagerBase) void {
     lp.assert(self.static_scripts_done == false, "ScriptManagerBase.staticScriptsDone", .{});
     self.static_scripts_done = true;
 
-    const frame_id = self.owner.frameId();
-    if (comptime IS_DEBUG) {
-        const blocking_request_id = self.client.blocking_requests.get(frame_id);
-        lp.assert(
-            blocking_request_id == null,
-            "there should be no blocking request on this frame",
-            .{ .value = blocking_request_id },
-        );
-    }
-    self.client.deferring_layer.flushFrame(frame_id);
-
     self.evaluate();
 }
 

@@ -102,12 +102,17 @@ pub fn flushFrame(self: *DeferringLayer, frame_id: u32) void {
     while (node) |n| {
         node = n.next;
         const ctx: *DeferredContext = @fieldParentPtr("node", n);
-        if (!ctx.deferring or !ctx.terminal) continue;
+        if (!ctx.deferring) continue;
 
         const deferred_req = ctx.transfer.req;
-        if (deferred_req.frame_id == frame_id) {
+        if (deferred_req.frame_id != frame_id) continue;
+
+        if (ctx.terminal) {
             self.active.remove(n);
             ctx.fire();
+        } else {
+            ctx.firePartial();
+            ctx.deferring = false;
         }
     }
 }
@@ -295,5 +300,44 @@ const DeferredContext = struct {
                 },
             }
         }
+    }
+
+    fn firePartial(self: *DeferredContext) void {
+        const req = self.transfer.req;
+        const stable_response = self.stable_resp orelse return;
+        const response = Response.fromStable(&stable_response);
+
+        for (self.buffered.items) |event| {
+            switch (event) {
+                .start => {
+                    self.forward.forwardStart(response) catch |err| {
+                        log.err(.http, "defer part start callback", .{ .err = err, .url = req.url });
+                        self.forward.forwardErr(err);
+                        return;
+                    };
+                },
+                .header => {
+                    const proceed = self.forward.forwardHeader(response) catch |err| {
+                        log.err(.http, "defer part header callback", .{ .err = err, .url = req.url });
+                        self.forward.forwardErr(err);
+                        return;
+                    };
+                    if (!proceed) {
+                        self.forward.forwardErr(error.Abort);
+                        return;
+                    }
+                },
+                .data => |chunk| {
+                    self.forward.forwardData(response, chunk) catch |err| {
+                        log.err(.http, "defer part data callback", .{ .err = err, .url = req.url });
+                        self.forward.forwardErr(err);
+                        return;
+                    };
+                },
+                .done, .err, .shutdown => @panic("firePartial cant fire terminal events"),
+            }
+        }
+
+        self.buffered.clearRetainingCapacity();
     }
 };
