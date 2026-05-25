@@ -71,12 +71,21 @@ pub const ParseError = error{
     PositionalNotAllowed,
     UnterminatedQuote,
     UnsupportedEscape,
+    InvalidValue,
     OutOfMemory,
 };
 
 pub const Split = struct {
     name: []const u8,
     rest: []const u8,
+};
+
+/// Populated by `parseValueDiag` on `InvalidValue` so callers can surface
+/// the offending field/type/value to the user.
+pub const Diag = struct {
+    bad_field: []const u8 = "",
+    expected_type: FieldType = .other,
+    bad_value: []const u8 = "",
 };
 
 // --- Per-instance methods ---
@@ -154,6 +163,14 @@ pub fn isSinglePositional(self: Schema, args: std.json.ObjectMap) bool {
 ///     exactly one required. Otherwise positionals error.
 ///   - Everything else is `key=value` with type coercion.
 pub fn parseValue(self: Schema, arena: std.mem.Allocator, rest: []const u8) ParseError!?std.json.Value {
+    return self.parseValueDiag(arena, rest, null);
+}
+
+/// Same as `parseValue` but populates `diag` on `error.InvalidValue` so
+/// callers can render a user-facing message like
+/// "y: expected integer, got 'fast'".
+pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag: ?*Diag) ParseError!?std.json.Value {
+    const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
     if (rest.len == 0) {
         if (self.required.len > 0) return error.MissingRequired;
         return null;
@@ -196,7 +213,7 @@ pub fn parseValue(self: Schema, arena: std.mem.Allocator, rest: []const u8) Pars
         list.appendAssumeCapacity(.{ .key = req, .value = "true" });
     }
 
-    return try self.buildValue(arena, list.items);
+    return try self.buildValue(arena, list.items, diag);
 }
 
 fn validateAndFillObject(self: Schema, obj: *std.json.ObjectMap) ParseError!void {
@@ -218,27 +235,36 @@ const KvPair = struct {
     value: []const u8,
 };
 
-fn buildValue(self: Schema, arena: std.mem.Allocator, pairs: []const KvPair) error{OutOfMemory}!std.json.Value {
+fn buildValue(self: Schema, arena: std.mem.Allocator, pairs: []const KvPair, diag: ?*Diag) ParseError!std.json.Value {
     var obj: std.json.ObjectMap = .init(arena);
     try obj.ensureTotalCapacity(pairs.len);
     for (pairs) |p| {
-        const v = try self.coerce(arena, p.key, p.value);
+        const v = try self.coerce(arena, p.key, p.value, diag);
         try obj.put(p.key, v);
     }
     return .{ .object = obj };
 }
 
-fn coerce(self: Schema, arena: std.mem.Allocator, key: []const u8, value: []const u8) error{OutOfMemory}!std.json.Value {
-    switch (self.fieldType(key)) {
+fn coerce(self: Schema, arena: std.mem.Allocator, key: []const u8, value: []const u8, diag: ?*Diag) ParseError!std.json.Value {
+    const ft = self.fieldType(key);
+    switch (ft) {
         .integer => {
-            if (std.fmt.parseInt(i64, value, 10)) |n| return .{ .integer = n } else |_| {}
+            if (std.fmt.parseInt(i64, value, 10)) |n| return .{ .integer = n } else |_| {
+                if (diag) |d| d.* = .{ .bad_field = key, .expected_type = ft, .bad_value = value };
+                return error.InvalidValue;
+            }
         },
         .number => {
-            if (std.fmt.parseFloat(f64, value)) |n| return .{ .float = n } else |_| {}
+            if (std.fmt.parseFloat(f64, value)) |n| return .{ .float = n } else |_| {
+                if (diag) |d| d.* = .{ .bad_field = key, .expected_type = ft, .bad_value = value };
+                return error.InvalidValue;
+            }
         },
         .boolean => {
             if (std.mem.eql(u8, value, "true")) return .{ .bool = true };
             if (std.mem.eql(u8, value, "false")) return .{ .bool = false };
+            if (diag) |d| d.* = .{ .bad_field = key, .expected_type = ft, .bad_value = value };
+            return error.InvalidValue;
         },
         else => {},
     }

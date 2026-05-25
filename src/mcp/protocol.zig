@@ -37,6 +37,13 @@ pub const ErrorCode = enum(i64) {
     InternalError = -32603,
     FrameNotLoaded = -32604,
     NotFound = -32605,
+    /// Application-range code: tool call was aborted by the caller (SIGINT,
+    /// session shutdown). Distinct from InternalError so MCP clients don't
+    /// retry into a loop on intentional cancellation.
+    Cancelled = -32001,
+    /// Application-range code: tool call exceeded its deadline. Distinct
+    /// from Cancelled — Timeout is a tool-state outcome, not a caller signal.
+    Timeout = -32002,
 };
 
 pub const Notification = struct {

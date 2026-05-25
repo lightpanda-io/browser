@@ -163,7 +163,7 @@ fn implicitFormSubmit(el: *Element, frame: *Frame) !void {
         return form.requestSubmit(submitter, frame);
     }
     if (el.is(Button)) |button| {
-        if (!std.mem.eql(u8, button.getType(), "submit")) return;
+        if (!std.ascii.eqlIgnoreCase(button.getType(), "submit")) return;
         const form = button.getForm(frame) orelse return;
         return form.requestSubmit(el, frame);
     }

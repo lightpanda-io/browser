@@ -173,7 +173,9 @@ fn dispatchBrowserTool(
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
-            error.NavigationFailed, error.Cancelled, error.Timeout, error.InternalError, error.OutOfMemory => .InternalError,
+            error.Cancelled => .Cancelled,
+            error.Timeout => .Timeout,
+            error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
         };
         return server.sendError(id, code, @errorName(err));
     };
@@ -256,8 +258,12 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return server.sendError(id, .InvalidParams, "expected { line: string }");
     };
 
-    const cmd = Command.parse(arena, args.line) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "could not parse step `{s}`: {s}", .{ args.line, @errorName(err) }) catch @errorName(err);
+    var diag: lp.script.Schema.Diag = .{};
+    const cmd = Command.parseDiag(arena, args.line, &diag) catch |err| {
+        const msg = if (err == error.InvalidValue and diag.bad_field.len > 0)
+            std.fmt.allocPrint(arena, "could not parse step `{s}`: {s}: expected {s}, got '{s}'", .{ args.line, diag.bad_field, @tagName(diag.expected_type), diag.bad_value }) catch @errorName(err)
+        else
+            std.fmt.allocPrint(arena, "could not parse step `{s}`: {s}", .{ args.line, @errorName(err) }) catch @errorName(err);
         return sendErrorContent(server, id, msg);
     };
 

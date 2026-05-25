@@ -125,7 +125,7 @@ pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: 
         var buf: [4096]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
         logTo(scope, level, msg, data, &w) catch |log_err| {
-            std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
+            std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @tagName(scope), @errorName(log_err), msg });
             return;
         };
         s(w.buffered());

@@ -65,6 +65,15 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
+/// Loads `url` in a fresh session and waits per `opts`.
+///
+/// Errors:
+///   - `error.Timeout` if the wait deadline (`opts.wait_ms`) expires.
+///   - `error.Cancelled` if the embedder installed a `Session.cancel_hook`
+///     that returned true during the wait. The hook is opt-in via
+///     `session.cancel_hook = .{...}`; without it, this error never fires.
+///   - Other errors from navigation / parsing / I/O surface as their
+///     underlying tag.
 pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
     defer notification.deinit();

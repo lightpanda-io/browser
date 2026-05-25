@@ -468,7 +468,8 @@ fn runRepl(self: *Agent) void {
             }
         }
 
-        const cmd = Command.parse(aa, line) catch |err| switch (err) {
+        var diag: Schema.Diag = .{};
+        const cmd = Command.parseDiag(aa, line, &diag) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
                     self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.", .{});
@@ -479,7 +480,7 @@ fn runRepl(self: *Agent) void {
             },
             else => |e| {
                 const name = if (slash_split) |sp| sp.name else line;
-                self.printSlashParseError(e, name);
+                self.printSlashParseError(e, name, &diag);
                 continue :repl;
             },
         };
@@ -591,7 +592,13 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
     self.terminal.printInfo("schema:\n{s}", .{aw.written()});
 }
 
-fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8) void {
+fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8, diag: ?*const Schema.Diag) void {
+    if (err == error.InvalidValue) {
+        if (diag) |d| if (d.bad_field.len > 0) {
+            self.terminal.printError("{s}: {s}: expected {s}, got '{s}'. Try /help {s}.", .{ name, d.bad_field, @tagName(d.expected_type), d.bad_value, name });
+            return;
+        };
+    }
     const reason: []const u8 = switch (err) {
         error.UnknownTool => "unknown tool",
         error.MissingName => return self.terminal.printError("missing tool name. Try /help.", .{}),
@@ -601,6 +608,7 @@ fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8) 
         error.PositionalNotAllowed => "positional only works for tools with one required field. Use key=value",
         error.UnterminatedQuote => "unterminated quote",
         error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
+        error.InvalidValue => "invalid value (check argument type)",
         error.OutOfMemory => return self.terminal.printError("out of memory", .{}),
     };
     self.terminal.printError("{s}: {s}. Try /help {s}.", .{ name, reason, name });

@@ -419,13 +419,18 @@ pub fn processQueuedNavigation(self: *Session) !void {
     navigations.clearRetainingCapacity();
 
     // Second pass: process synchronous navigations (about:blank)
-    // These may trigger new navigations which go into queued_navigation
+    // These may trigger new navigations which go into queued_navigation.
+    // Mirror the first pass: a failure on one frame must not orphan the
+    // rest of the queue (the `defer clearRetainingCapacity` would wipe
+    // siblings whose _queued_navigation stays set).
     for (about_blank_queue.items) |frame| {
         const qn = frame._queued_navigation orelse {
             log.debug(.frame, "skipped null queued nav", .{});
             continue;
         };
-        try self.processFrameNavigation(frame, qn);
+        self.processFrameNavigation(frame, qn) catch |err| {
+            log.warn(.frame, "frame navigation", .{ .url = qn.url, .err = err });
+        };
     }
 
     // Safety: Remove any about:blank navigations that were queued during

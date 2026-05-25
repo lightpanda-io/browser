@@ -148,6 +148,11 @@ pub const Command = union(enum) {
     }
 
     pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!Command {
+        return parseDiag(arena, line, null);
+    }
+
+    /// Same as `parse` but populates `diag` on `error.InvalidValue`.
+    pub fn parseDiag(arena: std.mem.Allocator, line: []const u8, diag: ?*Schema.Diag) ParseError!Command {
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) return .{ .comment = {} };
         if (trimmed[0] == '#') return .{ .comment = {} };
@@ -163,7 +168,7 @@ pub const Command = union(enum) {
         }
 
         const s = Schema.findByName(split.name) orelse return error.UnknownTool;
-        const args = try s.parseValue(arena, split.rest);
+        const args = try s.parseValueDiag(arena, split.rest, diag);
         return .{ .tool_call = .{ .tool = s.tool, .args = args } };
     }
 

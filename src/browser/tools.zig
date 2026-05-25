@@ -1360,7 +1360,10 @@ fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id
 
 fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeAndPage {
     const page = try requireFrame(session);
-    const element = Selector.querySelector(page.document.asNode(), selector, page) catch return ToolError.InvalidParams;
+    const element = Selector.querySelector(page.document.asNode(), selector, page) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.InternalError,
+        else => return ToolError.InvalidParams,
+    };
     const node = (element orelse return ToolError.NodeNotFound).asNode();
     return .{ .node = node, .page = page, .target = .{ .selector = selector } };
 }

@@ -94,7 +94,7 @@ fn verifyFill(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, e
     // verify the field isn't empty after substitution.
     if (std.mem.indexOf(u8, expected_value, "$LP_") != null) {
         const actual = self.queryElementProperty(arena, selector, .value) orelse return .inconclusive;
-        if (actual.len == 0 or std.mem.eql(u8, actual, "null"))
+        if (actual.len == 0)
             return .{ .failed = "element value is empty after fill (expected non-empty for secret)" };
         return .passed;
     }
@@ -125,13 +125,19 @@ fn verifyElementValue(self: *Verifier, arena: std.mem.Allocator, selector: []con
     return .passed;
 }
 
+/// Returns the property value, or `null` when the element is missing or the
+/// eval failed. A single-byte tag (`v` = present, `m` = missing) disambiguates
+/// from values that happen to stringify to "null", so `value="null"` after
+/// `/fill ... value=null` doesn't look like a missing element.
 fn queryElementProperty(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, property: ElementProperty) ?[]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     aw.writer.writeAll("(function(){ var el = document.querySelector(") catch return null;
     std.json.Stringify.value(selector, .{}, &aw.writer) catch return null;
-    aw.writer.writeAll("); return el ? ") catch return null;
+    aw.writer.writeAll("); return el ? 'v' + (") catch return null;
     aw.writer.writeAll(property.jsExpr()) catch return null;
-    aw.writer.writeAll(" : null; })()") catch return null;
+    aw.writer.writeAll(") : 'm'; })()") catch return null;
     const result = browser_tools.evalScript(arena, self.session, self.node_registry, aw.written()) catch return null;
-    return result.okText();
+    const text = result.okText() orelse return null;
+    if (text.len == 0 or text[0] != 'v') return null;
+    return text[1..];
 }
