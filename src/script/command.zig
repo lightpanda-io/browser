@@ -58,7 +58,7 @@ pub const Command = union(enum) {
         fn isRecorded(self: ToolCall) bool {
             if (!self.tool.isRecorded()) return false;
             const s = self.schema();
-            const args = self.args orelse return s.required.len == 0;
+            const args = self.args orelse return s.required.len == 0 and !self.tool.needsLocator();
             if (args != .object) return !self.tool.needsLocator();
 
             const has_selector = args.object.contains("selector");
@@ -358,10 +358,11 @@ test "isRecorded: args shape and locator semantics" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    // Null args: recorded iff the tool has zero required fields. A provider
-    // that hands back `arguments: null` for `/click` would otherwise produce
-    // a bare `/click` line that can't be replayed.
-    try testing.expect(Command.fromToolCall(.click, null).isRecorded());
+    // Null args: recorded iff the tool has zero required fields AND doesn't
+    // need a locator. `/click` with null args is unreplayable — no selector,
+    // no backendNodeId — even though click's schema has zero required fields.
+    try testing.expect(!Command.fromToolCall(.click, null).isRecorded());
+    try testing.expect(!Command.fromToolCall(.hover, null).isRecorded());
     try testing.expect(!Command.fromToolCall(.goto, null).isRecorded());
     try testing.expect(!Command.fromToolCall(.fill, null).isRecorded());
 
