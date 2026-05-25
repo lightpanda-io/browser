@@ -76,16 +76,27 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         const ctx = try arena.create(CachedResponse);
         ctx.* = cached;
 
-        try transfer.client.runNextTick(transfer, ctx, struct {
-            fn run(t: *Transfer, ctx_ptr: *anyopaque) void {
-                defer t.deinit();
+        try transfer.client.runNextTick(transfer, ctx, .{
+            .run = struct {
+                fn run(t: *Transfer, ctx_ptr: *anyopaque) void {
+                    defer t.deinit();
 
-                const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr));
-                serveFromCache(&t.req, c) catch |err| {
-                    t.req.error_callback(t.req.ctx, err);
-                };
-            }
-        }.run);
+                    const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr));
+                    serveFromCache(&t.req, c) catch |err| {
+                        t.req.error_callback(t.req.ctx, err);
+                    };
+                }
+            }.run,
+            .abort = struct {
+                fn abort(ctx_ptr: *anyopaque) void {
+                    const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr));
+                    switch (c.data) {
+                        .buffer => |_| {},
+                        .file => |f| f.file.close(),
+                    }
+                }
+            }.abort,
+        });
         return;
     }
 
