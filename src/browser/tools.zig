@@ -891,7 +891,26 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const args = try parseArgs(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
     const before = session.currentFrame();
-    const result = try runEval(arena, page, args.script);
+
+    // Block-scope so top-level `let`/`const` don't leak across calls.
+    const block_script = std.fmt.allocPrintSentinel(
+        arena,
+        "{{\n{s}\n}}",
+        .{args.script},
+        0,
+    ) catch return ToolError.OutOfMemory;
+    var result = try runEval(arena, page, block_script);
+
+    // Recover from top-level `return` by retrying inside an IIFE.
+    if (result.is_error == true and std.mem.indexOf(u8, result.text, "Illegal return statement") != null) {
+        const iife_script = std.fmt.allocPrintSentinel(
+            arena,
+            "(function(){{ \"use strict\"; {s} }})()",
+            .{args.script},
+            0,
+        ) catch return ToolError.OutOfMemory;
+        result = try runEval(arena, page, iife_script);
+    }
     if (result.is_error == true) return result;
 
     // Script may have queued a navigation (e.g. `top.location = …`).

@@ -477,6 +477,92 @@ test "MCP - eval error reporting" {
     } }, out.written());
 }
 
+test "MCP - eval: top-level return retried inside IIFE" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "const x = 41; return x + 1;" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "42" }},
+    } }, out.written());
+}
+
+test "MCP - eval: let declaration does not leak across calls" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const first =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "let leaky = 1; leaky" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, first);
+
+    out.clearRetainingCapacity();
+    const second =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "let leaky = 2; leaky" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, second);
+
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "2" }},
+    } }, out.written());
+}
+
+test "MCP - eval: bare expression still returns its value" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "1 + 1" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "2" }},
+    } }, out.written());
+}
+
 test "MCP - indexLines: exact match returns line + trailing newline" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
