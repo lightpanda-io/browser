@@ -100,7 +100,11 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
     };
 
     if (std.mem.eql(u8, canonical, "Enter") and !keydown_event.asEvent().getDefaultPrevented()) {
-        if (target_el) |el| try implicitFormSubmit(el, frame);
+        if (target_el) |el| implicitFormSubmit(el, frame) catch |err| {
+            // Don't skip keyup on a submit-listener throw — UIs that gate
+            // state on keyup (e.g. clearing a "submitting" flag) would hang.
+            lp.log.warn(.app, "implicit form submit failed", .{ .err = err });
+        };
     }
 
     const keyup_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keyup"), .{
