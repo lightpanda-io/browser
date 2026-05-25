@@ -762,29 +762,24 @@ fn formatReplOutcome(arena: std.mem.Allocator, text: []const u8, is_error: bool)
 }
 
 pub fn printError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
-    if (self.repl_arena) |*a| {
-        defer _ = a.reset(.retain_capacity);
-        var aw: std.Io.Writer.Allocating = .init(a.allocator());
-        aw.writer.print("{s}●{s} " ++ fmt ++ "\n", .{ ansi.red, ansi.reset } ++ args) catch return;
-        const bytes = aw.written();
-        if (self.spinner.emitAbove(bytes)) return;
-        _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
-        return;
-    }
-    std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi.bold, ansi.red } ++ args ++ .{ansi.reset});
+    self.printSeverity(ansi.red, "Error", fmt, args);
 }
 
 pub fn printWarning(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
+    self.printSeverity(ansi.yellow, "Warning", fmt, args);
+}
+
+fn printSeverity(self: *Terminal, color: []const u8, label: []const u8, comptime fmt: []const u8, args: anytype) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
         var aw: std.Io.Writer.Allocating = .init(a.allocator());
-        aw.writer.print("{s}●{s} " ++ fmt ++ "\n", .{ ansi.yellow, ansi.reset } ++ args) catch return;
+        aw.writer.print("{s}●{s} " ++ fmt ++ "\n", .{ color, ansi.reset } ++ args) catch return;
         const bytes = aw.written();
         if (self.spinner.emitAbove(bytes)) return;
         _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
         return;
     }
-    std.debug.print("{s}{s}Warning: " ++ fmt ++ "{s}\n", .{ ansi.bold, ansi.yellow } ++ args ++ .{ansi.reset});
+    std.debug.print("{s}{s}{s}: " ++ fmt ++ "{s}\n", .{ ansi.bold, color, label } ++ args ++ .{ansi.reset});
 }
 
 pub fn printInfo(self: *Terminal, comptime fmt: []const u8, args: anytype) void {

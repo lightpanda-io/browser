@@ -442,8 +442,6 @@ fn runRepl(self: *Agent) void {
     }
 
     repl: while (true) {
-        // Ctrl-D returns null here. Ctrl-C is handled by the sighandler
-        // and never makes ic_readline return null.
         const line = Terminal.readLine("") orelse break;
         defer Terminal.freeLine(line);
 
@@ -1099,7 +1097,6 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         .{
             .tools = globalTools(),
             .max_turns = 100,
-            // Safety net; max_turns is the primary terminal.
             .max_tool_calls = 200,
             .max_tokens = 4096,
             .tool_choice = .auto,
