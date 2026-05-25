@@ -280,6 +280,20 @@ pub fn clear(self: *FsCache) !void {
     }
 }
 
+pub fn evict(self: *FsCache, url: []const u8) void {
+    const hashed_key = hashKey(url);
+    const cache_p = cachePath(&hashed_key);
+
+    const lock = self.getLockPtr(&hashed_key);
+    lock.lock();
+    defer lock.unlock();
+
+    self.dir.deleteFile(&cache_p) catch |e| switch (e) {
+        error.FileNotFound => {},
+        else => log.warn(.cache, "evict failed", .{ .url = url, .err = e }),
+    };
+}
+
 const testing = std.testing;
 
 fn setupCache() !struct { tmp: testing.TmpDir, cache: Cache } {
@@ -673,18 +687,46 @@ test "FsCache: clear removes all entries" {
     try cache.put(base_meta_b, "body b");
 
     // Sanity check: both are cached
-    const r1 = cache.get(arena.allocator(), .{ .url = "https://example.com/a", .timestamp = now, .request_headers = &.{} });
+    const r1 = cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com/a",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
+    );
     try testing.expect(r1 != null);
     r1.?.data.file.file.close();
 
-    const r2 = cache.get(arena.allocator(), .{ .url = "https://example.com/b", .timestamp = now, .request_headers = &.{} });
+    const r2 = cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com/b",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
+    );
     try testing.expect(r2 != null);
     r2.?.data.file.file.close();
 
     try cache.clear();
 
-    try testing.expectEqual(null, cache.get(arena.allocator(), .{ .url = "https://example.com/a", .timestamp = now, .request_headers = &.{} }));
-    try testing.expectEqual(null, cache.get(arena.allocator(), .{ .url = "https://example.com/b", .timestamp = now, .request_headers = &.{} }));
+    try testing.expectEqual(null, cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com/a",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
+    ));
+    try testing.expectEqual(null, cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com/b",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
+    ));
 }
 
 test "FsCache: put after clear works" {
@@ -715,11 +757,28 @@ test "FsCache: put after clear works" {
     try cache.clear();
 
     // Should be a miss after clear
-    try testing.expectEqual(null, cache.get(arena.allocator(), .{ .url = "https://example.com", .timestamp = now, .request_headers = &.{} }));
+    try testing.expectEqual(
+        null,
+        cache.get(
+            arena.allocator(),
+            .{
+                .url = "https://example.com",
+                .timestamp = now,
+                .request_headers = &.{},
+            },
+        ),
+    );
 
     // Put again after clear — should work normally
     try cache.put(meta, "after clear");
-    const result = cache.get(arena.allocator(), .{ .url = "https://example.com", .timestamp = now, .request_headers = &.{} }) orelse return error.CacheMiss;
+    const result = cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
+    ) orelse return error.CacheMiss;
     const f = result.data.file;
     defer f.file.close();
 
@@ -729,4 +788,52 @@ test "FsCache: put after clear works" {
     const read_buf = try file_reader.interface.readAlloc(testing.allocator, f.len);
     defer testing.allocator.free(read_buf);
     try testing.expectEqualStrings("after clear", read_buf);
+}
+
+test "FsCache: evict removes entry" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = std.time.timestamp();
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    try cache.put(meta, "hello world");
+
+    const result = cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
+    ) orelse return error.CacheMiss;
+    result.data.file.file.close();
+
+    cache.evict("https://example.com");
+
+    try testing.expectEqual(null, cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
+    ));
 }
