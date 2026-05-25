@@ -82,6 +82,8 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 
         try transfer.client.runNextTick(transfer.id, ctx, struct {
             fn run(t: *Transfer, ctx_ptr: *anyopaque) anyerror!void {
+                defer t.deinit();
+
                 const c: *CacheServeCtx = @ptrCast(@alignCast(ctx_ptr));
                 serveFromCache(&t.req, &c.cached) catch |err| {
                     t.req.error_callback(t.req.ctx, err);
