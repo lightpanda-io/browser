@@ -488,16 +488,14 @@ fn processRootQueuedNavigation(self: *Session) !void {
     // immediate-swap path for them.
     const is_synthetic = qn.is_about_blank or std.mem.startsWith(u8, qn.url, "blob:");
 
-    if (is_synthetic) {
-        defer self.arena_pool.release(qn.arena);
-        return self.replaceRootImmediate(current_frame._frame_id, qn.url, qn.opts);
-    }
-
     // The qn arena is consumed here regardless of success — frame.navigate
     // dupes the URL into the page's own arena, so we can release the qn
     // arena as soon as navigate returns.
     defer self.arena_pool.release(qn.arena);
 
+    if (is_synthetic) {
+        return self.replaceRootImmediate(current_frame._frame_id, qn.url, qn.opts);
+    }
     return self.initiateRootNavigation(current_frame._frame_id, qn.url, qn.opts);
 }
 
