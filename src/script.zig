@@ -180,15 +180,19 @@ pub fn writeAtomic(
 
     if (std.mem.eql(u8, new_content, content)) return;
 
-    var bak_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const bak_path = try std.fmt.bufPrint(&bak_buf, "{s}.bak", .{path});
-    try dir.writeFile(.{ .sub_path = bak_path, .data = content });
-
+    // Rewrite the live file first; only refresh `.bak` once the new content
+    // is committed. Reversed order left a stale `.bak == live` snapshot on
+    // any atomic-rewrite failure, which a later successful run would then
+    // overwrite — wiping the only record of the pre-heal state.
     var write_buf: [4096]u8 = undefined;
     var af = try dir.atomicFile(path, .{ .write_buffer = &write_buf });
     defer af.deinit();
     try af.file_writer.interface.writeAll(new_content);
     try af.finish();
+
+    var bak_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const bak_path = try std.fmt.bufPrint(&bak_buf, "{s}.bak", .{path});
+    try dir.writeFile(.{ .sub_path = bak_path, .data = content });
 }
 
 /// Replacement body: either parsed Commands (agent self-heal) or pre-rendered
@@ -423,15 +427,21 @@ test "writeAtomic: writes content and creates .bak" {
     try std.testing.expectEqualStrings("/goto 'https://x'\n/click selector='old'\n", buf[0..m]);
 }
 
-test "writeAtomic: leaves original untouched when .bak write fails" {
+test "writeAtomic: commits rewrite even when .bak write fails" {
+    // The live rewrite is committed before `.bak` is refreshed — a `.bak`
+    // failure surfaces as an error but the heal itself is already in place.
+    // The previous order (.bak first) left useless `.bak == live` snapshots
+    // on failure, which a later successful run could overwrite with stale
+    // pre-heal state.
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const original = "/click selector='old'\n";
+    const updated = "/click selector='new'\n";
     try tmp.dir.writeFile(.{ .sub_path = "script.lp", .data = original });
 
     const replacements = [_]Replacement{
-        .{ .original_span = original[0..], .new_text = "/click selector='new'\n" },
+        .{ .original_span = original[0..], .new_text = updated },
     };
 
     // Force the .bak write to fail by putting a directory at the .bak path.
@@ -445,7 +455,7 @@ test "writeAtomic: leaves original untouched when .bak write fails" {
     const live = tmp.dir.openFile("script.lp", .{}) catch unreachable;
     defer live.close();
     const n = live.readAll(&buf) catch unreachable;
-    try std.testing.expectEqualStrings(original, buf[0..n]);
+    try std.testing.expectEqualStrings(updated, buf[0..n]);
 }
 
 test "isPathSafe: relative paths without traversal are accepted" {

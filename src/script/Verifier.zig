@@ -93,7 +93,11 @@ fn verifyFill(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, e
     // Secret env-var references can't be compared literally — just
     // verify the field isn't empty after substitution.
     if (std.mem.indexOf(u8, expected_value, "$LP_") != null) {
-        const actual = self.queryElementProperty(arena, selector, .value) orelse return .inconclusive;
+        var actual = self.queryElementProperty(arena, selector, .value) orelse return .inconclusive;
+        if (actual.len == 0) {
+            self.settle();
+            actual = self.queryElementProperty(arena, selector, .value) orelse return .inconclusive;
+        }
         if (actual.len == 0)
             return .{ .failed = "element value is empty after fill (expected non-empty for secret)" };
         return .passed;
@@ -117,12 +121,26 @@ const Check = struct {
 };
 
 fn verifyElementValue(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, check: Check) VerifyResult {
-    const actual = self.queryElementProperty(arena, selector, check.property) orelse return .inconclusive;
-    if (!std.mem.eql(u8, actual, check.expected)) {
-        const msg = std.fmt.allocPrint(arena, "element {s} is \"{s}\" (expected \"{s}\")", .{ check.label, actual, check.expected }) catch failed_reason_oom;
-        return .{ .failed = msg };
-    }
-    return .passed;
+    var actual = self.queryElementProperty(arena, selector, check.property) orelse return .inconclusive;
+    if (std.mem.eql(u8, actual, check.expected)) return .passed;
+
+    // Frameworks (React, Vue) reflect state changes through a microtask /
+    // re-render. Reading inside the same tick can miss the update — drain
+    // one runner tick and try again before declaring failure.
+    self.settle();
+    actual = self.queryElementProperty(arena, selector, check.property) orelse return .inconclusive;
+    if (std.mem.eql(u8, actual, check.expected)) return .passed;
+
+    const msg = std.fmt.allocPrint(arena, "element {s} is \"{s}\" (expected \"{s}\")", .{ check.label, actual, check.expected }) catch failed_reason_oom;
+    return .{ .failed = msg };
+}
+
+/// Drain pending microtasks / macrotasks so a same-tick re-render
+/// reflects in DOM state before the next query. Best-effort; failures
+/// to acquire the runner fall through silently.
+fn settle(self: *Verifier) void {
+    var runner = self.session.runner(.{}) catch return;
+    runner.wait(.{ .ms = 50, .until = .done }) catch {};
 }
 
 /// Returns the property value, or `null` when the element is missing or the

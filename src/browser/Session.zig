@@ -401,7 +401,9 @@ pub fn processQueuedNavigation(self: *Session) !void {
     // First pass: process async navigations (non-about:blank)
     for (navigations.items) |frame| {
         const qn = frame._queued_navigation orelse {
-            log.debug(.frame, "skipped null queued nav", .{});
+            // Was previously an assert; downgraded so prod can recover, but
+            // kept at warn so the invariant violation isn't silently lost.
+            log.warn(.frame, "skipped null queued nav", .{});
             continue;
         };
 
@@ -425,7 +427,9 @@ pub fn processQueuedNavigation(self: *Session) !void {
     // siblings whose _queued_navigation stays set).
     for (about_blank_queue.items) |frame| {
         const qn = frame._queued_navigation orelse {
-            log.debug(.frame, "skipped null queued nav", .{});
+            // Was previously an assert; downgraded so prod can recover, but
+            // kept at warn so the invariant violation isn't silently lost.
+            log.warn(.frame, "skipped null queued nav", .{});
             continue;
         };
         self.processFrameNavigation(frame, qn) catch |err| {

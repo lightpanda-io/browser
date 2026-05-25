@@ -382,8 +382,21 @@ pub fn logLevel(self: *const Config) ?log.Level {
 /// --task on a TTY default to .low.
 pub fn agentVerbosity(opts: Agent) AgentVerbosity {
     if (opts.verbosity) |v| return v;
-    const piped_one_shot = opts.task != null and !std.posix.isatty(std.posix.STDERR_FILENO);
+    const piped_one_shot = opts.task != null and !stderrIsTty();
     return if (piped_one_shot) .high else .low;
+}
+
+/// `isatty(STDERR)` is a syscall and `agentVerbosity` is on the log hot
+/// path (every gate check resolves through it). Cache once — the fd
+/// doesn't change after process start.
+var stderr_tty_cached: bool = undefined;
+var stderr_tty_once = std.once(initStderrTty);
+fn initStderrTty() void {
+    stderr_tty_cached = std.posix.isatty(std.posix.STDERR_FILENO);
+}
+fn stderrIsTty() bool {
+    stderr_tty_once.call();
+    return stderr_tty_cached;
 }
 
 pub fn logFormat(self: *const Config) ?log.Format {

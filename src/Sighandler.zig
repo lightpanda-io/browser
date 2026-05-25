@@ -136,7 +136,10 @@ fn sighandle(self: *SigHandler) noreturn {
                     self.mutex.unlock();
                     std.process.exit(1);
                 }
-                self.attempt += 1;
+                // While `no_hard_exit` is set, cap the counter so a later
+                // flip back to false (e.g. agent-suspend/resume) doesn't
+                // immediately hard-exit on the next signal.
+                if (self.no_hard_exit) self.attempt = 1 else self.attempt += 1;
 
                 log.info(.app, "Received termination signal...", .{});
                 for (self.listeners.items) |*item| {

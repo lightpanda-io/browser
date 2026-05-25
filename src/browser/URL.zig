@@ -293,7 +293,9 @@ pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime 
         }
     }
     if (!needs_encoding) {
-        return segment;
+        // Always dupe — the signature returns owned bytes, so a caller doing
+        // `defer allocator.free(out)` mustn't crash on the no-op path.
+        return allocator.dupe(u8, segment);
     }
 
     var buf = try std.ArrayList(u8).initCapacity(allocator, segment.len + 10);
