@@ -1164,7 +1164,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
-        checked: bool,
+        checked: bool = true,
     };
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
