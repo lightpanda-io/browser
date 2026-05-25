@@ -511,6 +511,12 @@ fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
     return transfer;
 }
 
+pub fn waitFor(self: *Client, ctx: anytype, comptime isDone: fn (@TypeOf(ctx)) bool) !void {
+    while (!isDone(ctx)) {
+        try self.tick(200, .sync_wait);
+    }
+}
+
 const SyncContext = struct {
     allocator: Allocator,
     completion: union(enum) {
@@ -574,17 +580,22 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     r.shutdown_callback = SyncContext.shutdownCallback;
     const transfer = try self.requestT(r, null);
 
-    while (sync_ctx.completion == .in_progress) {
-        self.tick(200, .sync_wait) catch |err| {
-            if (sync_ctx.completion == .in_progress) {
-                // tick failed for a reason unrelated to our transfer (likely OOM or
-                // client disconnect). transfer.req.ctx points at &sync_ctx on this
-                // stack — abort to sever that reference before we return
-                transfer.abort(err);
+    self.waitFor(
+        &sync_ctx,
+        struct {
+            fn done(ctx: *SyncContext) bool {
+                return ctx.completion != .in_progress;
             }
-            return err;
-        };
-    }
+        }.done,
+    ) catch |err| {
+        if (sync_ctx.completion == .in_progress) {
+            // tick failed for a reason unrelated to our transfer (likely OOM or
+            // client disconnect). transfer.req.ctx points at &sync_ctx on this
+            // stack — abort to sever that reference before we return
+            transfer.abort(err);
+        }
+        return err;
+    };
 
     switch (sync_ctx.completion) {
         .in_progress => @panic("Impossible to be in progress here."),

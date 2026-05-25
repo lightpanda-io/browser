@@ -296,32 +296,32 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
     self.is_evaluating = true;
     defer self.is_evaluating = was_evaluating;
 
-    var client = self.client;
-    while (true) {
-        switch (entry.value_ptr.state) {
-            .loading => {
-                _ = try client.tick(200, .sync_wait);
-                continue;
-            },
-            .done => |script| {
-                var shared = false;
-                const buffer = entry.value_ptr.buffer;
-                const waiters = entry.value_ptr.waiters;
-
-                if (waiters == 1) {
-                    self.imported_modules.removeByPtr(entry.key_ptr);
-                } else {
-                    shared = true;
-                    entry.value_ptr.waiters = waiters - 1;
-                }
-                return .{
-                    .buffer = buffer,
-                    .shared = shared,
-                    .script = script,
-                };
-            },
-            .err => return error.Failed,
+    try self.client.waitFor(entry.value_ptr, struct {
+        fn done(m: *ImportedModule) bool {
+            return m.state != .loading;
         }
+    }.done);
+
+    switch (entry.value_ptr.state) {
+        .loading => @panic("Impossible to be loading here."),
+        .done => |script| {
+            var shared = false;
+            const buffer = entry.value_ptr.buffer;
+            const waiters = entry.value_ptr.waiters;
+
+            if (waiters == 1) {
+                self.imported_modules.removeByPtr(entry.key_ptr);
+            } else {
+                shared = true;
+                entry.value_ptr.waiters = waiters - 1;
+            }
+            return .{
+                .buffer = buffer,
+                .shared = shared,
+                .script = script,
+            };
+        },
+        .err => return error.Failed,
     }
 }
 
