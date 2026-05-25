@@ -183,7 +183,14 @@ fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !v
     const aw = &self._console_messages;
     const start = aw.written().len;
     if (start >= max_console_bytes) return;
-    appendConsoleMessageInner(&aw.writer, msg) catch {
+
+    // Format into a scratch buffer sized to the remaining budget so a single
+    // 10 MB `console.log` can't bust the cap before the post-hoc check fires.
+    const remaining = max_console_bytes - start;
+    var scratch_buf: [max_console_bytes]u8 = undefined;
+    var scratch: std.Io.Writer = .fixed(scratch_buf[0..remaining]);
+    appendConsoleMessageInner(&scratch, msg) catch {};
+    aw.writer.writeAll(scratch.buffered()) catch {
         aw.shrinkRetainingCapacity(start);
     };
 }
