@@ -610,7 +610,6 @@ pub fn dynamicModuleCallback(
 }
 
 pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta: ?*v8.Value) callconv(.c) void {
-    // @HandleScope  implement this without a fat context/local..
     const self = fromC(c_context.?).?;
     var local = js.Local{
         .ctx = self,
@@ -636,6 +635,66 @@ pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta
     if (!res) {
         log.err(.js, "import meta", .{ .err = error.FailedToSet });
     }
+
+    // import.meta.resolve(specifier) resolves against this module's URL,
+    // applying the document's importmap. The base is bound per-module so the
+    // function keeps working even when detached from import.meta.
+    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/import.meta/resolve
+    const resolve_data = self.arena.create(ImportMetaResolveData) catch {
+        log.err(.js, "import meta", .{ .err = error.OutOfMemory });
+        return;
+    };
+    resolve_data.* = .{ .context = self, .base = url };
+
+    const resolve_fn = newFunctionWithData(&local, importMetaResolveCallback, @ptrCast(resolve_data));
+    const resolve_value = js.Value{ .local = &local, .handle = @ptrCast(resolve_fn.handle) };
+    const resolve_res = meta.defineOwnProperty("resolve", resolve_value, 0) orelse false;
+    if (!resolve_res) {
+        log.err(.js, "import meta", .{ .err = error.FailedToSet });
+    }
+}
+
+const ImportMetaResolveData = struct {
+    context: *Context,
+    base: [:0]const u8,
+};
+
+// Implements import.meta.resolve(specifier): resolves the specifier against the
+// module's base URL (applying the document's importmap) and returns the
+// absolute URL.
+fn importMetaResolveCallback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+    var c: Caller = undefined;
+    if (!c.initFromHandle(callback_handle)) {
+        return;
+    }
+    defer c.deinit();
+
+    const l = &c.local;
+    const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
+    const data: *ImportMetaResolveData = @ptrCast(@alignCast(info.getData() orelse return));
+    const ctx = data.context;
+    const isolate = ctx.isolate;
+
+    if (info.length() == 0) {
+        _ = isolate.throwException(isolate.createTypeError("import.meta.resolve requires a specifier"));
+        return;
+    }
+
+    const specifier = info.getArg(0, l).toStringSliceZ() catch {
+        _ = isolate.throwException(isolate.createTypeError("invalid specifier"));
+        return;
+    };
+
+    const resolved = ctx.script_manager.resolveSpecifier(ctx.call_arena, data.base, specifier) catch {
+        _ = isolate.throwException(isolate.createTypeError("failed to resolve module specifier"));
+        return;
+    };
+
+    const result = l.zigValueToJs(resolved, .{}) catch {
+        _ = isolate.throwException(isolate.createTypeError("failed to resolve module specifier"));
+        return;
+    };
+    info.getReturnValue().set(result);
 }
 
 fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]const u8, local: *const js.Local) !?*const v8.Module {
