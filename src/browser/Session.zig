@@ -488,30 +488,29 @@ fn processRootQueuedNavigation(self: *Session) !void {
     // immediate-swap path for them.
     const is_synthetic = qn.is_about_blank or std.mem.startsWith(u8, qn.url, "blob:");
 
-    if (is_synthetic) {
-        return self.replaceRootImmediate(current_frame._frame_id, qn);
-    }
-
     // The qn arena is consumed here regardless of success — frame.navigate
     // dupes the URL into the page's own arena, so we can release the qn
     // arena as soon as navigate returns.
     defer self.arena_pool.release(qn.arena);
 
+    if (is_synthetic) {
+        return self.replaceRootImmediate(current_frame._frame_id, qn.url, qn.opts);
+    }
     return self.initiateRootNavigation(current_frame._frame_id, qn.url, qn.opts);
 }
 
-// Legacy immediate-swap path: tear down the active page and create a new one
-// in its place before issuing the navigation. Used for synthetic navigations
-// (about:blank, blob:) where there is no in-flight HTTP and therefore no
-// "pending" window to span.
-fn replaceRootImmediate(self: *Session, frame_id: u32, qn: *QueuedNavigation) !void {
-    defer self.arena_pool.release(qn.arena);
-
+// Immediate-swap path for synthetic navigations (about:blank, blob:): there is
+// no in-flight HTTP and therefore no "pending" window to span — and no
+// frameHeaderDoneCallback to commit a pending Page. Tear down the active page
+// and create a new one in its place, then navigate it. Reached from both the
+// queued-navigation path (processRootQueuedNavigation) and the CDP entry point
+// (initiateRootNavigation); each caller owns any arena tied to `url`/`opts`.
+fn replaceRootImmediate(self: *Session, frame_id: u32, url: [:0]const u8, opts: Frame.NavigateOpts) !void {
     self.tearDownActivePage();
     const new_frame = try self.installNewActivePage(frame_id);
 
-    new_frame.navigate(qn.url, qn.opts) catch |err| {
-        log.err(.browser, "queued navigation error", .{ .err = err });
+    new_frame.navigate(url, opts) catch |err| {
+        log.err(.browser, "synthetic navigation error", .{ .err = err, .url = url });
         return err;
     };
 }
@@ -523,6 +522,14 @@ fn replaceRootImmediate(self: *Session, frame_id: u32, qn: *QueuedNavigation) !v
 // until commitPendingPage swaps the pointer when response headers arrive.
 pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, opts: Frame.NavigateOpts) !void {
     self.discardPendingPage();
+
+    // Synthetic navigations (about:blank, blob:) have no HTTP round-trip and
+    // therefore no frameHeaderDoneCallback to commit a pending Page. Swap the
+    // active Page immediately instead of allocating a pending one that would
+    // never be promoted, leaving the previous document in place (issue #2363).
+    if (std.mem.eql(u8, "about:blank", url) or std.mem.startsWith(u8, url, "blob:")) {
+        return self.replaceRootImmediate(frame_id, url, opts);
+    }
 
     const page = try self.allocatePage(frame_id);
     errdefer self.destroyPage(page);

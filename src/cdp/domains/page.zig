@@ -1309,6 +1309,42 @@ test "cdp.frame: navigate inherits original fragment across redirect" {
     }
 }
 
+test "cdp.frame: navigate to about:blank replaces a non-blank document" {
+    // Regression test for #2363. Page.navigate("about:blank") issued against a
+    // tab that already holds a real document must replace the active document
+    // with a fresh about:blank page — not leave the previous page in place.
+    // A synthetic (no-HTTP) navigation has no response-headers callback to
+    // commit a pending Page, so it must swap the active Page immediately.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-AB", .url = "hi.html", .target_id = "TID-AB-0000000".* });
+
+    // Precondition: the tab is on a non-blank document.
+    {
+        const frame = bc.session.currentFrame() orelse unreachable;
+        try testing.expect(std.mem.endsWith(u8, frame.url, "/hi.html"));
+    }
+
+    try ctx.processMessage(.{ .id = 70, .method = "Page.navigate", .params = .{ .url = "about:blank" } });
+    {
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // The active frame must now point at the replaced about:blank document.
+    const frame = bc.session.currentFrame() orelse unreachable;
+    try testing.expectEqualSlices(u8, "about:blank", frame.url);
+
+    // ...and the active page's JS context must agree — the exact symptom in the
+    // bug report was window.location.href staying on the previous URL.
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("window.location.href === 'about:blank'", null);
+    try testing.expect(v.toBool());
+}
+
 test "cdp.frame: anchor click sends Referer matching the originating page" {
     // HTML Living Standard "navigate" algorithm + Fetch §4.5 "request's referrer":
     // when a navigation is initiated by a hyperlink click (or form submit, or
