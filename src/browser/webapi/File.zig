@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -27,13 +27,46 @@ const Blob = @import("Blob.zig");
 const File = @This();
 
 _proto: *Blob,
+_name: []const u8,
+_last_modified: i64,
 
-// TODO: Implement File API.
-pub fn init(page: *Page) !*File {
-    const session = page.session;
-    const arena = try session.getArena(.tiny, "File");
-    errdefer session.releaseArena(arena);
-    return page.factory.blob(arena, File{ ._proto = undefined });
+pub const InitOptions = struct {
+    type: []const u8 = "",
+    endings: []const u8 = "transparent",
+    lastModified: ?i64 = null,
+};
+
+pub fn init(
+    parts_: ?[]const js.Value,
+    name: []const u8,
+    opts_: ?InitOptions,
+    page: *Page,
+) !*File {
+    const opts = opts_ orelse InitOptions{};
+    const blob = try Blob.init(parts_, .{
+        .type = opts.type,
+        .endings = opts.endings,
+    }, page);
+
+    errdefer blob.deinit(page);
+
+    const file = try blob._arena.create(File);
+    file.* = .{
+        ._proto = blob,
+        ._name = try blob._arena.dupe(u8, name),
+        ._last_modified = opts.lastModified orelse std.time.milliTimestamp(),
+    };
+    blob._type = .{ .file = file };
+
+    return file;
+}
+
+pub fn getName(self: *const File) []const u8 {
+    return self._name;
+}
+
+pub fn getLastModified(self: *const File) f64 {
+    return @floatFromInt(self._last_modified);
 }
 
 pub const JsApi = struct {
@@ -46,6 +79,8 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(File.init, .{});
+    pub const name = bridge.accessor(File.getName, null, .{});
+    pub const lastModified = bridge.accessor(File.getLastModified, null, .{});
 };
 
 const testing = @import("../../testing.zig");
