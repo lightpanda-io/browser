@@ -20,6 +20,9 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
+
+const Element = @import("Element.zig");
 
 // This type is only included when the binary is built with the -Dwpt_extensions flag
 const WebDriver = @This();
@@ -28,6 +31,12 @@ _pad: bool = false,
 
 pub fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
     page.session.cookie_jar.clearRetainingCapacity();
+}
+
+pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
+    const AXNode = @import("../../cdp/AXNode.zig");
+    const axnode = AXNode.fromNode(element.asNode());
+    return (try axnode.getName(frame, frame.call_arena)) orelse "";
 }
 
 pub const JsApi = struct {
@@ -40,4 +49,5 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
     pub const deleteAllCookies = bridge.function(WebDriver.deleteAllCookies, .{});
+    pub const getComputedLabel = bridge.function(WebDriver.getComputedLabel, .{});
 };

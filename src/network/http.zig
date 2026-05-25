@@ -204,8 +204,9 @@ pub const AuthChallenge = struct {
             .scheme = null,
         };
 
-        const pos = std.mem.indexOfPos(u8, std.mem.trim(u8, value, std.ascii.whitespace[0..]), 0, " ") orelse value.len;
-        const _scheme = value[0..pos];
+        const challenge_value = std.mem.trim(u8, value, std.ascii.whitespace[0..]);
+        const pos = std.mem.indexOfPos(u8, challenge_value, 0, " ") orelse challenge_value.len;
+        const _scheme = challenge_value[0..pos];
         if (std.ascii.eqlIgnoreCase(_scheme, "basic")) {
             ac.scheme = .basic;
         } else if (std.ascii.eqlIgnoreCase(_scheme, "digest")) {

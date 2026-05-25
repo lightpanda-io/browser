@@ -171,7 +171,7 @@ const vector_sizes = blk: {
 };
 
 /// Writes a single part with optional line ending normalization.
-fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
+pub fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
     // Transparent - no conversion needed.
     if (!use_native_endings) {
         try writer.writeAll(part);
