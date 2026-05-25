@@ -77,7 +77,7 @@ pub fn log(_: *const Console, values: []js.Value, exec: *js.Execution) void {
 
 pub fn warn(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.warn(.js, "console.warn", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .info, exec);
+    dispatchConsoleMessage(values, .warn, exec);
 }
 
 pub fn clear(_: *const Console) void {}
