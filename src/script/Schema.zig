@@ -67,6 +67,7 @@ pub const ParseError = error{
     UnknownTool,
     UnknownField,
     MissingRequired,
+    DuplicateField,
     MalformedKv,
     PositionalNotAllowed,
     UnterminatedQuote,
@@ -104,14 +105,19 @@ pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
     return null;
 }
 
-/// Rename keys in `obj` to canonical casing. Unknown keys pass through.
-pub fn normalizeKeys(self: Schema, obj: *std.json.ObjectMap) error{OutOfMemory}!void {
+/// Rename keys in `obj` to canonical casing. Unknown keys pass through;
+/// keys that collide on the canonical form return `error.DuplicateField`.
+pub fn normalizeKeys(self: Schema, obj: *std.json.ObjectMap) !void {
     const Rename = struct { from: []const u8, to: []const u8 };
     var renames: std.ArrayList(Rename) = .empty;
     var it = obj.iterator();
     while (it.next()) |entry| {
         const field = self.findField(entry.key_ptr.*) orelse continue;
         if (!std.mem.eql(u8, field.name, entry.key_ptr.*)) {
+            if (obj.contains(field.name)) return error.DuplicateField;
+            for (renames.items) |r| {
+                if (std.mem.eql(u8, r.to, field.name)) return error.DuplicateField;
+            }
             try renames.append(obj.allocator, .{ .from = entry.key_ptr.*, .to = field.name });
         }
     }
@@ -493,13 +499,19 @@ fn stripQuotes(raw: []const u8) []const u8 {
     return raw;
 }
 
-/// Quoted positionals (`'https://x?id=42'`) must not be misread as kv —
-/// only look for `=` in the unquoted prefix.
+/// True for unquoted `<identifier>=<value>` tokens. Quoted positionals
+/// and URLs containing `=` fall through.
 fn looksLikeKv(tok: []const u8) bool {
     if (tok.len == 0) return false;
     if (tok[0] == '\'' or tok[0] == '"') return false;
     const end = std.mem.indexOfAny(u8, tok, "'\"") orelse tok.len;
-    return std.mem.indexOfScalar(u8, tok[0..end], '=') != null;
+    const eq = std.mem.indexOfScalar(u8, tok[0..end], '=') orelse return false;
+    if (eq == 0) return false;
+    if (!std.ascii.isAlphabetic(tok[0]) and tok[0] != '_') return false;
+    for (tok[1..eq]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_') return false;
+    }
+    return true;
 }
 
 // --- Recorder-side formatting primitives ---
@@ -660,6 +672,14 @@ test "parseValue: positional then kv tail" {
     try testing.expectEqual(@as(i64, 5000), v.object.get("timeout").?.integer);
 }
 
+test "parseValue: unquoted URL with `=` in query string binds positional" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const goto = Schema.find(Schema.all(), "goto").?;
+    const v = (try goto.parseValue(arena.allocator(), "https://example.com/?id=42")).?;
+    try testing.expectString("https://example.com/?id=42", v.object.get("url").?.string);
+}
+
 test "parseValue: kv-only multi-required" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
@@ -715,6 +735,16 @@ test "parseValue: arg keys are case-insensitive (json path)" {
     const v = (try click.parseValue(arena.allocator(), "{\"Selector\":\"#btn\"}")).?;
     try testing.expectString("#btn", v.object.get("selector").?.string);
     try testing.expect(v.object.get("Selector") == null);
+}
+
+test "parseValue: duplicate case-variants of the same field are rejected" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const click = Schema.find(Schema.all(), "click").?;
+    try testing.expectError(
+        error.DuplicateField,
+        click.parseValue(arena.allocator(), "{\"Selector\":\"#a\",\"selector\":\"#b\"}"),
+    );
 }
 
 test "parseValue: setChecked defaults checked=true when omitted" {

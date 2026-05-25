@@ -165,9 +165,9 @@ pub fn applyReplacements(
 
 /// Atomically rewrite `dir`/`path` with `content` after `replacements` are
 /// applied. Builds the new content first (so an OOM here doesn't clobber a
-/// prior `.bak`), then writes a fresh `.bak` of the original, then uses
-/// Zig's `atomicFile` (write-to-temp + rename) for the live file. On
-/// failure the original is left intact.
+/// prior `.bak`), commits the live file via `atomicFile`, then refreshes
+/// `.bak`. Pre-commit errors leave the original intact; a `.bak`-only
+/// failure surfaces as `error.BakUpdateFailed` (live has been rewritten).
 pub fn writeAtomic(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
@@ -191,8 +191,13 @@ pub fn writeAtomic(
     try af.finish();
 
     var bak_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const bak_path = try std.fmt.bufPrint(&bak_buf, "{s}.bak", .{path});
-    try dir.writeFile(.{ .sub_path = bak_path, .data = content });
+    const bak_path = std.fmt.bufPrint(&bak_buf, "{s}.bak", .{path}) catch return error.BakUpdateFailed;
+    dir.writeFile(.{ .sub_path = bak_path, .data = content }) catch return error.BakUpdateFailed;
+}
+
+/// Human-readable tail explaining file state after a `writeAtomic` error.
+pub fn writeAtomicErrorTail(err: anyerror) []const u8 {
+    return if (err == error.BakUpdateFailed) "(live file updated; .bak refresh failed)" else "(script left unchanged)";
 }
 
 /// Replacement body: either parsed Commands (agent self-heal) or pre-rendered
@@ -447,9 +452,10 @@ test "writeAtomic: commits rewrite even when .bak write fails" {
     // Force the .bak write to fail by putting a directory at the .bak path.
     try tmp.dir.makeDir("script.lp.bak");
 
-    try std.testing.expect(std.meta.isError(
+    try std.testing.expectError(
+        error.BakUpdateFailed,
         writeAtomic(std.testing.allocator, tmp.dir, "script.lp", original, &replacements),
-    ));
+    );
 
     var buf: [256]u8 = undefined;
     const live = tmp.dir.openFile("script.lp", .{}) catch unreachable;

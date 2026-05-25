@@ -180,7 +180,7 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, @errorName(err));
     };
 
-    if (!result.is_error) recordIfActive(server, tool, arguments);
+    if (!result.is_error) recordIfActive(arena, server, tool, arguments);
 
     try sendToolResultText(server, id, result.text, result.is_error);
 }
@@ -189,9 +189,10 @@ fn surfacesErrorInBand(tool: BrowserTool) bool {
     return tool == .eval or tool == .extract;
 }
 
-fn recordIfActive(server: *Server, tool: BrowserTool, arguments: ?std.json.Value) void {
+fn recordIfActive(arena: std.mem.Allocator, server: *Server, tool: BrowserTool, arguments: ?std.json.Value) void {
     if (server.recorder == null) return;
-    const cmd = Command.fromToolCall(tool, arguments);
+    const normalized = browser_tools.normalizeArgKeys(arena, tool, arguments) catch arguments;
+    const cmd = Command.fromToolCall(tool, normalized);
     // `record` no-ops on non-recorded tools — see `Command.isRecorded`.
     server.recorder.?.record(cmd);
 }
@@ -361,7 +362,7 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     }
 
     script.writeAtomic(arena, std.fs.cwd(), args.path, content, splices) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "failed to write {s}: {s} (script left unchanged)", .{ args.path, @errorName(err) }) catch @errorName(err);
+        const msg = std.fmt.allocPrint(arena, "failed to write {s}: {s} {s}", .{ args.path, @errorName(err), script.writeAtomicErrorTail(err) }) catch @errorName(err);
         return sendErrorContent(server, id, msg);
     };
 

@@ -549,7 +549,10 @@ pub fn call(
         return .{ .text = msg, .is_error = true };
     // Must run before substituteStringArgs so the `key=="value"` secret-
     // redaction check there still triggers on PascalCase keys.
-    const normalized = try normalizeArgKeys(arena, tool, arguments);
+    const normalized = normalizeArgKeys(arena, tool, arguments) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateField => return error.InvalidParams,
+    };
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
     return dispatch(arena, session, registry, tool, substituted) catch |err| {
@@ -1019,7 +1022,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
-        value: []const u8 = "",
+        value: []const u8,
     };
     const args = try parseArgs(Params, arena, arguments);
     const raw_text = args.value;
@@ -1421,7 +1424,7 @@ pub fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.jso
 /// echoes the original placeholder so the credential never surfaces in the
 /// result text. Co-located with `execFill` so both halves of the carve-out
 /// live in one file.
-fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
+pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) !?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;
 
@@ -1441,7 +1444,9 @@ fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value)
     it = v.object.iterator();
     while (it.next()) |entry| {
         const canonical = if (schema.findField(entry.key_ptr.*)) |f| f.name else entry.key_ptr.*;
-        try new_obj.put(canonical, entry.value_ptr.*);
+        const gop = try new_obj.getOrPut(canonical);
+        if (gop.found_existing) return error.DuplicateField;
+        gop.value_ptr.* = entry.value_ptr.*;
     }
     return .{ .object = new_obj };
 }

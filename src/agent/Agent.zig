@@ -603,6 +603,7 @@ fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8, 
         error.MissingRequired => "missing required argument",
         error.MalformedKv => "malformed key=value. Use key=value or {json}",
         error.UnknownField => "unknown field (typo?)",
+        error.DuplicateField => "the same field was supplied twice (check for case-variants like Selector vs selector)",
         error.PositionalNotAllowed => "positional only works for tools with one required field. Use key=value",
         error.UnterminatedQuote => "unterminated quote",
         error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
@@ -716,8 +717,9 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 switch (self.runActionEntry(sa, entry, last_comment)) {
                     .ok => {},
                     .healed => |r| replacements.append(sa, r) catch |err| {
+                        self.flushReplacements(path, content, replacements.items);
                         self.terminal.printError(
-                            "line {d}: out of memory recording heal: {s} (script left unchanged)",
+                            "line {d}: out of memory recording heal: {s}",
                             .{ entry.line_num, @errorName(err) },
                         );
                         return false;
@@ -817,8 +819,8 @@ fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replac
     if (replacements.len == 0) return;
     script.writeAtomic(self.allocator, std.fs.cwd(), path, content, replacements) catch |err| {
         self.terminal.printError(
-            "Failed to update script {s}: {s} (script left unchanged)",
-            .{ path, @errorName(err) },
+            "Failed to update script {s}: {s} {s}",
+            .{ path, @errorName(err), script.writeAtomicErrorTail(err) },
         );
         return;
     };
@@ -1134,7 +1136,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             if (tc.is_error) continue;
             const tool = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
             if (last_extract_idx) |idx| if (tool == .extract and idx != i) continue;
-            const cmd = Command.fromToolCall(tool, tc.arguments);
+            const args = browser_tools.normalizeArgKeys(self.message_arena.allocator(), tool, tc.arguments) catch tc.arguments;
+            const cmd = Command.fromToolCall(tool, args);
             if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| r.recordComment(c);
