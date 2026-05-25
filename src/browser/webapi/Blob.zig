@@ -113,7 +113,7 @@ pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: 
 }
 
 /// Validates and normalizes MIME type according to spec.
-pub fn validateMimeType(arena: Allocator, mime_type: []const u8, full_validation: bool) ![]const u8 {
+fn validateMimeType(arena: Allocator, mime_type: []const u8, full_validation: bool) ![]const u8 {
     if (mime_type.len == 0) {
         return "";
     }

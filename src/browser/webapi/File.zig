@@ -38,40 +38,25 @@ pub const InitOptions = struct {
 
 pub fn init(
     parts_: ?[]const js.Value,
-    name_: []const u8,
+    name: []const u8,
     opts_: ?InitOptions,
     page: *Page,
 ) !*File {
-    const session = page.session;
-    const arena = try session.getArena(.large, "File");
-    errdefer session.releaseArena(arena);
-
     const opts = opts_ orelse InitOptions{};
-    const mime = try Blob.validateMimeType(arena, opts.type, false);
+    const blob = try Blob.init(parts_, .{
+        .type = opts.type,
+        .endings = opts.endings,
+    }, page);
 
-    const data = blk: {
-        if (parts_) |blob_parts| {
-            const use_native_endings = std.mem.eql(u8, opts.endings, "native");
-            var w: std.Io.Writer.Allocating = .init(arena);
-            for (blob_parts) |js_val| {
-                const part = try js_val.toStringSmart();
-                try Blob.writePartWithEndings(part, use_native_endings, &w.writer);
-            }
-            break :blk w.written();
-        }
+    errdefer blob.deinit(page);
 
-        break :blk "";
+    const file = try blob._arena.create(File);
+    file.* = .{
+        ._proto = blob,
+        ._name = try blob._arena.dupe(u8, name),
+        ._last_modified = opts.lastModified orelse std.time.milliTimestamp(),
     };
-
-    const last_modified = opts.lastModified orelse std.time.milliTimestamp();
-
-    const file = try page.factory.blob(arena, File{
-        ._proto = undefined,
-        ._name = try arena.dupe(u8, name_),
-        ._last_modified = last_modified,
-    });
-    file._proto._slice = data;
-    file._proto._mime = mime;
+    blob._type = .{ .file = file };
 
     return file;
 }
