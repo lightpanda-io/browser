@@ -246,7 +246,9 @@ fn buildValue(self: Schema, arena: std.mem.Allocator, pairs: []const KvPair, dia
     try obj.ensureTotalCapacity(pairs.len);
     for (pairs) |p| {
         const v = try self.coerce(arena, p.key, p.value, diag);
-        try obj.put(p.key, v);
+        const gop = try obj.getOrPut(p.key);
+        if (gop.found_existing) return error.DuplicateField;
+        gop.value_ptr.* = v;
     }
     return .{ .object = obj };
 }
@@ -744,6 +746,10 @@ test "parseValue: duplicate case-variants of the same field are rejected" {
     try testing.expectError(
         error.DuplicateField,
         click.parseValue(arena.allocator(), "{\"Selector\":\"#a\",\"selector\":\"#b\"}"),
+    );
+    try testing.expectError(
+        error.DuplicateField,
+        click.parseValue(arena.allocator(), "Selector='#a' selector='#b'"),
     );
 }
 
