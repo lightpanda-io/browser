@@ -169,7 +169,7 @@ pub const JsApi = struct {
     // Read-only properties
     pub const userAgent = bridge.accessor(Navigator.getUserAgent, null, .{});
     pub const appName = bridge.property("Netscape", .{ .template = false });
-    pub const appCodeName = bridge.property("Netscape", .{ .template = false });
+    pub const appCodeName = bridge.property("Mozilla", .{ .template = false });
     pub const appVersion = bridge.property("1.0", .{ .template = false });
     pub const platform = bridge.accessor(Navigator.getPlatform, null, .{});
     pub const language = bridge.property("en-US", .{ .template = false });
