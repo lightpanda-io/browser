@@ -158,7 +158,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
             // There's no JS to run, and no reason to run the scheduler
             // — unless we're the CDP worker, in which case we want
             // http_client.tick to drain the inbox.
-            if (http_client.http_active == 0 and (comptime is_cdp) == false) {
+            if (http_client.http_active == 0 and http_client.next_tick_count == 0 and (comptime is_cdp) == false) {
                 // haven't started navigating, I guess.
                 return .done;
             }
@@ -185,7 +185,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
             try browser.runMacrotasks();
 
             const http_active = http_client.http_active;
-            const total_network_activity = http_active + http_client.interception_layer.intercepted;
+            const http_next_tick = http_client.next_tick_count;
+            const total_network_activity = http_active + http_next_tick + http_client.interception_layer.intercepted;
             if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
                 frame.notifyNetworkAlmostIdle();
             }
@@ -206,7 +207,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
                 },
             }
 
-            if (http_active == 0 and http_client.ws_active == 0 and http_client.queue.first == null and http_client.ready_queue.first == null and (comptime is_cdp) == false) {
+            if (http_active == 0 and http_next_tick == 0 and http_client.ws_active == 0 and http_client.queue.first == null and http_client.ready_queue.first == null and (comptime is_cdp) == false) {
                 // ready_queue is also part of the check: makeRequest now
                 // wraps its handles.perform() in a performing=true window,
                 // and any synchronous libcurl callback that ends up
