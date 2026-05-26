@@ -59,7 +59,6 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         .layer = self,
         .transfer = transfer,
         .forward = Forward.capture(&transfer.req),
-        .node = .{},
     };
 
     self.active.append(&ctx.node);
@@ -108,9 +107,9 @@ const DeferredContext = struct {
     layer: *DeferringLayer,
     transfer: *Transfer,
     forward: Forward,
-    node: std.DoublyLinkedList.Node,
+    node: std.DoublyLinkedList.Node = .{},
 
-    buffered: std.ArrayListUnmanaged(BufferedEvent) = .{},
+    buffered: std.ArrayList(BufferedEvent) = .{},
     done: bool = false,
     deferring: bool = false,
     terminal: bool = false,
