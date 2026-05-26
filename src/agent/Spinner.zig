@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const log = lp.log;
 const Terminal = @import("Terminal.zig");
 const ansi = Terminal.ansi;
+const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
 const Spinner = @This();
 
@@ -168,13 +169,15 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     const manual = self.state == .idle;
     self.tool_calls += 1;
     var tool: ToolState = .{ .set_ns = std.time.nanoTimestamp(), .manual = manual };
-    tool.name_len = utf8FloorTo(name, tool.name_buf.len);
-    @memcpy(tool.name_buf[0..tool.name_len], name[0..tool.name_len]);
+    const name_prefix = truncateUtf8(name, tool.name_buf.len);
+    tool.name_len = name_prefix.len;
+    @memcpy(tool.name_buf[0..name_prefix.len], name_prefix);
     // Strip control chars: a literal `\n` in args (e.g. /eval """…""" bodies)
     // breaks the spinner's `\r`-based redraw — the cursor only rewinds to the
     // start of the last line, leaving prior frames stuck on screen.
-    tool.args_len = utf8FloorTo(args, tool.args_buf.len);
-    for (args[0..tool.args_len], 0..) |ch, i| {
+    const args_prefix = truncateUtf8(args, tool.args_buf.len);
+    tool.args_len = args_prefix.len;
+    for (args_prefix, 0..) |ch, i| {
         tool.args_buf[i] = if (ch < 0x20 or ch == 0x7f) ' ' else ch;
     }
     self.state = .{ .tool = tool };
@@ -285,20 +288,6 @@ fn renderLocked(self: *Spinner) void {
     @memcpy(self.last_render_buf[0..written.len], written);
     self.last_render_len = written.len;
     _ = std.posix.write(std.posix.STDERR_FILENO, written) catch {};
-}
-
-/// Largest prefix length of `bytes` that fits in `max_bytes` and ends on
-/// a UTF-8 codepoint boundary. Invalid sequences are treated as one byte
-/// each so the function never loops.
-fn utf8FloorTo(bytes: []const u8, max_bytes: usize) usize {
-    if (bytes.len <= max_bytes) return bytes.len;
-    var i: usize = 0;
-    while (i < max_bytes) {
-        const seq_len = std.unicode.utf8ByteSequenceLength(bytes[i]) catch 1;
-        if (i + seq_len > max_bytes) break;
-        i += seq_len;
-    }
-    return i;
 }
 
 /// Returns the byte length of `bytes` that fits in `max_cells` cells,

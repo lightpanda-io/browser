@@ -150,11 +150,23 @@ pub const Tool = enum {
                 ),
             },
             .markdown => .{
-                .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
-                .input_schema = url_params_schema,
+                .description = "Render the page (or a subtree) as markdown. Scope with `selector` or `backendNodeId` to read just the relevant region — full-page markdown is the last resort. Use `maxBytes` to cap long pages.",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "selector": { "type": "string", "description": "Optional CSS selector. Render markdown for just that element's subtree." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree." },
+                    \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\  }
+                    \\}
+                ),
             },
             .html => .{
-                .description = "Dump raw HTML. With no selector/backendNodeId, returns the full document (doctype + document element). With one, returns just that node's outerHTML — handy for capturing a fixture or zooming in on a component. Prefer `markdown` or `tree` for LLM consumption; `html` is verbose.",
+                .description = "Raw HTML for the document or, with `selector`/`backendNodeId`, a single node's outerHTML. Verbose; use only when you need attributes that markdown discards.",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -189,9 +201,7 @@ pub const Tool = enum {
             },
             .extract => .{
                 .description =
-                \\Extract structured data from the current page using a small JSON schema. Prefer this over `markdown` or `eval` whenever the user asked for a specific value or list (a score, price, count, profile field, headlines, …) — the result is returned as JSON AND the call is recorded as an `/extract` PandaScript line, so a later replay (no LLM) prints the answer to stdout. Use `markdown` / `tree` / `interactiveElements` only to discover the right selector, then commit to one `extract` call.
-                \\
-                \\Schema is a JSON object literal (pass it as a string in `schema`). Each value picks what to lift out:
+                \\Extract structured data via a JSON schema. The only tool whose result is recorded as an `/extract` PandaScript line (replay-friendly); answering from `markdown` content in chat is not. Schema is a JSON object literal passed as a string in `schema`. Each value picks what to lift:
                 \\  "<sel>"                                → first match's textContent.trim() (string|null)
                 \\  ""                                     → element's own textContent.trim() (only meaningful inside `fields`)
                 \\  ["<sel>"]                              → every match's text (string[])
@@ -216,7 +226,7 @@ pub const Tool = enum {
                 ),
             },
             .tree => .{
-                .description = "Simplified semantic DOM tree (role, name, value, backendNodeId per node). Output omits raw HTML attributes; call `nodeDetails` on a backendNodeId to read id/class for selector synthesis. Navigates first if `url` is provided.",
+                .description = "Simplified semantic DOM tree (role, name, value, backendNodeId per node). Pass `backendNodeId` to scope, `maxDepth` to limit depth.",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -771,9 +781,30 @@ fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]c
 }
 
 fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
+    const Params = struct {
+        selector: ?[]const u8 = null,
+        backendNodeId: ?CDPNode.Id = null,
+        maxBytes: ?u32 = null,
+        url: ?[:0]const u8 = null,
+        timeout: ?u32 = null,
+        waitUntil: ?lp.Config.WaitUntil = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
-    return renderFrameMarkdown(arena, page);
+
+    const opts: lp.markdown.Opts = .{ .max_bytes = args.maxBytes };
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    if (args.selector) |sel| {
+        const resolved = try resolveBySelector(session, sel);
+        lp.markdown.dump(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
+    } else if (args.backendNodeId) |nid| {
+        const resolved = try resolveNodeAndPage(session, registry, nid);
+        lp.markdown.dump(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
+    } else {
+        lp.markdown.dump(page.document.asNode(), opts, &aw.writer, page) catch return ToolError.InternalError;
+    }
+    return aw.written();
 }
 
 fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
