@@ -50,9 +50,10 @@ pub const driver_guidance =
     \\over pages through tools; there is no rendering, no images, no PDFs.
     \\
     \\Reading pages (cheap → expensive — prefer cheaper):
-    \\- `tree` → semantic overview (role, name, backendNodeId per node).
-    \\  Default starting point for any unfamiliar page. Use `maxDepth` and
-    \\  pass a `backendNodeId` to scope.
+    \\- `tree` → semantic overview (role, name, value, backendNodeId per
+    \\  node). Default starting point for any unfamiliar page. Use
+    \\  `maxDepth` and pass a `backendNodeId` to scope. Input/select
+    \\  values are already in the tree — don't re-fetch via `nodeDetails`.
     \\- `nodeDetails(backendNodeId)` → id/class/attrs for one node. Use to
     \\  synthesize a CSS selector after `tree`.
     \\- `findElement(role, name)` → locate a candidate by role/name without
@@ -62,8 +63,10 @@ pub const driver_guidance =
     \\  region is.
     \\- `markdown` with no scope → full page. Last resort; full pages can
     \\  exceed 30KB. Pass `maxBytes` to cap.
-    \\- `html(selector | backendNodeId)` → raw HTML for a node. Verbose;
-    \\  use only when you need attributes markdown discards.
+    \\- `html(selector | backendNodeId)` → raw HTML for a node. Without a
+    \\  scope, returns the full document (doctype + document element) —
+    \\  the canonical way to capture a fixture. Verbose; use only when
+    \\  you need attributes markdown discards.
     \\
     \\Workflow:
     \\- Inspect before interacting (tree / interactiveElements /
