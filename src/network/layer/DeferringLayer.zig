@@ -111,6 +111,7 @@ const DeferredContext = struct {
     node: std.DoublyLinkedList.Node,
 
     buffered: std.ArrayListUnmanaged(BufferedEvent) = .{},
+    done: bool = false,
     deferring: bool = false,
     terminal: bool = false,
     stable_resp: ?StableResponse = null,
@@ -121,7 +122,6 @@ const DeferredContext = struct {
         data: []const u8,
         done,
         err: anyerror,
-        shutdown,
     };
 
     fn deinit(self: *DeferredContext) void {
@@ -189,6 +189,7 @@ const DeferredContext = struct {
 
         if (!self.deferring and !self.shouldDefer()) {
             defer self.deinit();
+            self.done = true;
             self.layer.active.remove(&self.node);
             return self.forward.forwardDone();
         }
@@ -205,6 +206,7 @@ const DeferredContext = struct {
 
         if (!self.deferring and !self.shouldDefer()) {
             defer self.deinit();
+            self.done = true;
             self.layer.active.remove(&self.node);
             self.forward.forwardErr(err);
             return;
@@ -218,19 +220,14 @@ const DeferredContext = struct {
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *DeferredContext = @ptrCast(@alignCast(ctx));
-        const req = self.transfer.req;
+        if (self.done) return;
 
-        if (!self.deferring and !self.shouldDefer()) {
-            defer self.deinit();
-            self.layer.active.remove(&self.node);
-            self.forward.forwardShutdown();
-            return;
-        }
+        defer self.deinit();
+        self.done = true;
+        self.layer.active.remove(&self.node);
 
-        log.debug(.http, "deferring shutdown callback", .{ .url = req.url });
-        self.deferring = true;
-        self.terminal = true;
-        self.buffered.append(self.arena, .shutdown) catch {};
+        log.debug(.http, "deferring shutdown callback", .{});
+        self.forward.forwardShutdown();
     }
 
     // Replay all buffered events in order, then clean up.
@@ -287,10 +284,6 @@ const DeferredContext = struct {
                     self.forward.forwardErr(err);
                     return;
                 },
-                .shutdown => {
-                    self.forward.forwardShutdown();
-                    return;
-                },
             }
         }
     }
@@ -327,7 +320,7 @@ const DeferredContext = struct {
                         return;
                     };
                 },
-                .done, .err, .shutdown => @panic("firePartial cant fire terminal events"),
+                .done, .err => @panic("firePartial cant fire terminal events"),
             }
         }
 
