@@ -63,10 +63,6 @@ inject_scripts: []const []const u8 = &.{},
 // Shared allocator. Used by Session itself and borrowed by Pages.
 arena_pool: *ArenaPool,
 
-// Pool for FinalizerCallback.Identity structs. These must survive Page
-// teardowns so V8 weak callbacks can validate the FC before dereferencing it.
-fc_identity_pool: std.heap.MemoryPool(FinalizerCallback.Identity),
-
 // The currently-active Page
 // flips this pointer.
 _active: ?*Page = null,
@@ -116,7 +112,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .storage_shed = .{},
         .browser = browser,
         .notification = notification,
-        .fc_identity_pool = .init(allocator),
         .cookie_jar = storage.Cookie.Jar.init(allocator),
         // CLI defaults; LP.configureLoading can flip these per-session.
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
@@ -135,13 +130,6 @@ pub fn deinit(self: *Session) void {
     self.processQueuedDestroyed();
 
     self.cookie_jar.deinit();
-
-    // Force V8 to flush any remaining weak callbacks while
-    // fc_identity_pool is still alive. Identity structs allocated from
-    // this pool back V8 weak-callback parameters; freeing the pool first
-    // would leave dangling pointers that segfault on the next GC.
-    self.browser.env.memoryPressureNotification(.critical);
-    self.fc_identity_pool.deinit();
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.arena_pool.release(self.arena);
@@ -647,49 +635,3 @@ pub fn nextLoaderId(self: *Session) u32 {
     self.loader_id_gen = id;
     return id;
 }
-
-// Every finalizable instance of Zig gets 1 FinalizerCallback registered in the
-// Page. This is to ensure that, if v8 doesn't finalize the value, we can
-// release on Page teardown.
-pub const FinalizerCallback = struct {
-    page: *Page,
-    arena: Allocator,
-    resolved_ptr_id: usize,
-    finalizer_ptr_id: usize,
-    release_ref: *const fn (ptr_id: usize, page: *Page) void,
-
-    // Linked list of Identities referencing this FC.
-    identities: ?*Identity = null,
-    // Count of active identities (for knowing when to clean up FC).
-    identity_count: u8 = 0,
-
-    // For every FinalizerCallback we'll have 1+ FinalizerCallback.Identity: one
-    // for every identity that gets the instance. In most cases, that'll be 1.
-    // Allocated from Session.fc_identity_pool so it survives Page teardowns and
-    // allows the weak callback to safely check the done flag.
-    pub const Identity = struct {
-        session: *Session,
-        // The Page that owns the FinalizerCallback this Identity references.
-        // Only safe to dereference when `done == false`. When done is true,
-        // the Page may have been torn down and this pointer is stale.
-        page: *Page,
-        identity: *js.Identity,
-        finalizer_ptr_id: usize,
-        resolved_ptr_id: usize,
-        next: ?*Identity = null,
-        done: bool = false,
-    };
-
-    // Called during Page teardown to force cleanup regardless of identities.
-    pub fn deinit(self: *FinalizerCallback, page: *Page) void {
-        // Mark all identities as done so stale V8 weak callbacks
-        // won't find the wrong FC if resolved_ptr_id is reused.
-        var id = self.identities;
-        while (id) |identity| {
-            identity.done = true;
-            id = identity.next;
-        }
-        self.release_ref(self.finalizer_ptr_id, page);
-        page.releaseArena(self.arena);
-    }
-};
