@@ -98,7 +98,7 @@ pub fn release(self: *Pool, conn: Sqlite.Conn) void {
 
 const testing = @import("../../testing.zig");
 test "Sqlite: Pool" {
-    // :memory: _has_ to run with a single connetion in the pool, which isn't
+    // :memory: _has_ to run with a single connection in the pool, which isn't
     // that useful for testing. So we create a temp file.
 
     std.fs.cwd().deleteFile("/tmp/lightpanda_test.sqlite") catch {};

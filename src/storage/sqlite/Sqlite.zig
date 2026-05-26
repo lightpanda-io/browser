@@ -198,7 +198,7 @@ const Statement = struct {
                 const data = c.sqlite3_column_text(stmt, @intCast(index));
                 return @as([*c]const u8, @ptrCast(data))[0..@intCast(len) :0];
             },
-            else => @compileError("unsupport column type: " ++ @typeName(T)),
+            else => @compileError("unsupported column type: " ++ @typeName(T)),
         };
     }
 
