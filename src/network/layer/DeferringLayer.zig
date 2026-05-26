@@ -76,25 +76,6 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     return self.next.request(transfer);
 }
 
-pub fn flushUnblocked(
-    self: *DeferringLayer,
-    blocking_requests: *const std.AutoHashMapUnmanaged(u32, u32),
-) void {
-    var node = self.active.first;
-    while (node) |n| {
-        node = n.next;
-        const ctx: *DeferredContext = @fieldParentPtr("node", n);
-        if (!ctx.deferring or !ctx.terminal) continue;
-
-        const deferred_req = ctx.transfer.req;
-        const frame_id = deferred_req.frame_id;
-        if (!blocking_requests.contains(frame_id)) {
-            self.active.remove(n);
-            ctx.fire();
-        }
-    }
-}
-
 pub fn flushFrame(self: *DeferringLayer, frame_id: u32) void {
     var node = self.active.first;
     while (node) |n| {

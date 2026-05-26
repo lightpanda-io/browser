@@ -436,7 +436,6 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     }
 
     try self.drainNextTickQueue();
-    self.deferring_layer.flushUnblocked(&self.blocking_requests);
     try self.drainQueue();
     try self.perform(@intCast(timeout_ms));
     // perform/processMessages just released a batch of connections back to
