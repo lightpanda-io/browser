@@ -214,20 +214,20 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const href = bridge.accessor(Anchor.getHref, Anchor.setHref, .{});
-    pub const target = bridge.accessor(Anchor.getTarget, Anchor.setTarget, .{});
-    pub const name = bridge.accessor(Anchor.getName, Anchor.setName, .{});
+    pub const href = bridge.accessor(Anchor.getHref, Anchor.setHref, .{ .ce_reactions = true });
+    pub const target = bridge.accessor(Anchor.getTarget, Anchor.setTarget, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(Anchor.getName, Anchor.setName, .{ .ce_reactions = true });
     pub const origin = bridge.accessor(Anchor.getOrigin, null, .{});
-    pub const protocol = bridge.accessor(Anchor.getProtocol, Anchor.setProtocol, .{});
-    pub const host = bridge.accessor(Anchor.getHost, Anchor.setHost, .{});
-    pub const hostname = bridge.accessor(Anchor.getHostname, Anchor.setHostname, .{});
-    pub const port = bridge.accessor(Anchor.getPort, Anchor.setPort, .{});
-    pub const pathname = bridge.accessor(Anchor.getPathname, Anchor.setPathname, .{});
-    pub const search = bridge.accessor(Anchor.getSearch, Anchor.setSearch, .{});
-    pub const hash = bridge.accessor(Anchor.getHash, Anchor.setHash, .{});
-    pub const rel = bridge.accessor(Anchor.getRel, Anchor.setRel, .{});
-    pub const @"type" = bridge.accessor(Anchor.getType, Anchor.setType, .{});
-    pub const text = bridge.accessor(Anchor.getText, Anchor.setText, .{});
+    pub const protocol = bridge.accessor(Anchor.getProtocol, Anchor.setProtocol, .{ .ce_reactions = true });
+    pub const host = bridge.accessor(Anchor.getHost, Anchor.setHost, .{ .ce_reactions = true });
+    pub const hostname = bridge.accessor(Anchor.getHostname, Anchor.setHostname, .{ .ce_reactions = true });
+    pub const port = bridge.accessor(Anchor.getPort, Anchor.setPort, .{ .ce_reactions = true });
+    pub const pathname = bridge.accessor(Anchor.getPathname, Anchor.setPathname, .{ .ce_reactions = true });
+    pub const search = bridge.accessor(Anchor.getSearch, Anchor.setSearch, .{ .ce_reactions = true });
+    pub const hash = bridge.accessor(Anchor.getHash, Anchor.setHash, .{ .ce_reactions = true });
+    pub const rel = bridge.accessor(Anchor.getRel, Anchor.setRel, .{ .ce_reactions = true });
+    pub const @"type" = bridge.accessor(Anchor.getType, Anchor.setType, .{ .ce_reactions = true });
+    pub const text = bridge.accessor(Anchor.getText, Anchor.setText, .{ .ce_reactions = true });
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
     pub const toString = bridge.function(Anchor.getHref, .{});
 

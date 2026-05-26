@@ -239,10 +239,10 @@ pub const JsApi = struct {
     pub const childElementCount = bridge.accessor(DocumentFragment.getChildElementCount, null, .{});
     pub const firstElementChild = bridge.accessor(DocumentFragment.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(DocumentFragment.lastElementChild, null, .{});
-    pub const append = bridge.function(DocumentFragment.append, .{ .dom_exception = true });
-    pub const prepend = bridge.function(DocumentFragment.prepend, .{ .dom_exception = true });
-    pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .dom_exception = true });
-    pub const innerHTML = bridge.accessor(_innerHTML, DocumentFragment.setInnerHTML, .{});
+    pub const append = bridge.function(DocumentFragment.append, .{ .dom_exception = true, .ce_reactions = true });
+    pub const prepend = bridge.function(DocumentFragment.prepend, .{ .dom_exception = true, .ce_reactions = true });
+    pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
+    pub const innerHTML = bridge.accessor(_innerHTML, DocumentFragment.setInnerHTML, .{ .ce_reactions = true });
 
     fn _innerHTML(self: *DocumentFragment, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);

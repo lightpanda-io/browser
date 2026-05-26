@@ -190,17 +190,20 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
         return error.CustomElementUpgradeFailed;
     };
 
-    // Invoke attributeChangedCallback for existing observed attributes
-    var attr_it = custom.asElement().attributeIterator();
+    // Enqueue attributeChangedCallback for existing observed attributes
+    const element = custom.asElement();
+    var attr_it = element.attributeIterator();
     while (attr_it.next()) |attr| {
         const name = attr._name;
         if (definition.isAttributeObserved(name)) {
-            custom.invokeAttributeChangedCallback(name, null, attr._value, null, frame);
+            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, attr._value, null, frame);
         }
     }
 
     if (node.isConnected()) {
-        custom.invokeConnectedCallback(frame);
+        Custom.enqueueConnectedCallbackOnElement(false, element, frame) catch |err| {
+            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+        };
     }
 }
 
@@ -257,9 +260,9 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
     };
 
-    pub const define = bridge.function(CustomElementRegistry.define, .{ .dom_exception = true });
+    pub const define = bridge.function(CustomElementRegistry.define, .{ .dom_exception = true, .ce_reactions = true });
     pub const get = bridge.function(CustomElementRegistry.get, .{ .null_as_undefined = true });
-    pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{});
+    pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{ .ce_reactions = true });
     pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{ .dom_exception = true });
 };
 

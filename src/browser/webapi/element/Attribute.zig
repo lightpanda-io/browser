@@ -104,7 +104,7 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(Attribute.getName, null, .{});
     pub const localName = bridge.accessor(Attribute.getName, null, .{});
-    pub const value = bridge.accessor(Attribute.getValue, Attribute.setValue, .{});
+    pub const value = bridge.accessor(Attribute.getValue, Attribute.setValue, .{ .ce_reactions = true });
     pub const namespaceURI = bridge.accessor(Attribute.getNamespaceURI, null, .{});
     pub const ownerElement = bridge.accessor(Attribute.getOwnerElement, null, .{});
 };
@@ -255,7 +255,11 @@ pub const List = struct {
 
         const existing_attribute = try self.getAttribute(attribute._name, element, frame);
         if (existing_attribute) |ea| {
-            try self.delete(ea._name, element, frame);
+            // Per DOM "replace an attribute": one handle-attribute-changes call
+            // with (old, new), not a remove-then-add that would fire two
+            // attributeChanged reactions. Detach the old wrapper; put() updates
+            // the entry in place and fires the single reaction.
+            ea._element = null;
         }
 
         const entry = try self.put(attribute._name, attribute._value, element, frame);
@@ -538,8 +542,8 @@ pub const NamedNodeMap = struct {
         pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, null, .{ .null_as_undefined = true });
         pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, .{ .null_as_undefined = true });
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
-        pub const setNamedItem = bridge.function(NamedNodeMap.set, .{});
-        pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{});
+        pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
+        pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });
         pub const item = bridge.function(_item, .{});
         fn _item(self: *const NamedNodeMap, index: i32, frame: *Frame) !?*Attribute {
             // the bridge.indexed handles this, so if we want

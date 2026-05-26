@@ -124,20 +124,20 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const src = bridge.accessor(Script.getSrc, Script.setSrc, .{});
-    pub const @"defer" = bridge.accessor(Script.getDefer, Script.setDefer, .{});
-    pub const async = bridge.accessor(Script.getAsync, Script.setAsync, .{});
-    pub const @"type" = bridge.accessor(Script.getType, Script.setType, .{});
-    pub const nonce = bridge.accessor(Script.getNonce, Script.setNonce, .{});
-    pub const charset = bridge.accessor(Script.getCharset, Script.setCharset, .{});
+    pub const src = bridge.accessor(Script.getSrc, Script.setSrc, .{ .ce_reactions = true });
+    pub const @"defer" = bridge.accessor(Script.getDefer, Script.setDefer, .{ .ce_reactions = true });
+    pub const async = bridge.accessor(Script.getAsync, Script.setAsync, .{ .ce_reactions = true });
+    pub const @"type" = bridge.accessor(Script.getType, Script.setType, .{ .ce_reactions = true });
+    pub const nonce = bridge.accessor(Script.getNonce, Script.setNonce, .{ .ce_reactions = true });
+    pub const charset = bridge.accessor(Script.getCharset, Script.setCharset, .{ .ce_reactions = true });
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
-    pub const innerText = bridge.accessor(_innerText, Script.setInnerText, .{});
+    pub const innerText = bridge.accessor(_innerText, Script.setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *Script, frame: *const Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.asNode().getTextContent(&buf.writer);
         return buf.written();
     }
-    pub const text = bridge.accessor(_text, Script.setInnerText, .{});
+    pub const text = bridge.accessor(_text, Script.setInnerText, .{ .ce_reactions = true });
     fn _text(self: *Script, frame: *const Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.asNode().getChildTextContent(&buf.writer);

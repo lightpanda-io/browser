@@ -319,14 +319,14 @@ pub const JsApi = struct {
 
     pub const value = bridge.accessor(Select.getValue, Select.setValue, .{});
     pub const selectedIndex = bridge.accessor(Select.getSelectedIndex, Select.setSelectedIndex, .{});
-    pub const multiple = bridge.accessor(Select.getMultiple, Select.setMultiple, .{});
-    pub const disabled = bridge.accessor(Select.getDisabled, Select.setDisabled, .{});
-    pub const name = bridge.accessor(Select.getName, Select.setName, .{});
-    pub const required = bridge.accessor(Select.getRequired, Select.setRequired, .{});
+    pub const multiple = bridge.accessor(Select.getMultiple, Select.setMultiple, .{ .ce_reactions = true });
+    pub const disabled = bridge.accessor(Select.getDisabled, Select.setDisabled, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(Select.getName, Select.setName, .{ .ce_reactions = true });
+    pub const required = bridge.accessor(Select.getRequired, Select.setRequired, .{ .ce_reactions = true });
     pub const options = bridge.accessor(Select.getOptions, null, .{});
     pub const selectedOptions = bridge.accessor(Select.getSelectedOptions, null, .{});
     pub const form = bridge.accessor(Select.getForm, null, .{});
-    pub const size = bridge.accessor(Select.getSize, Select.setSize, .{});
+    pub const size = bridge.accessor(Select.getSize, Select.setSize, .{ .ce_reactions = true });
     pub const length = bridge.accessor(Select.getLength, null, .{});
     pub const labels = bridge.accessor(Select.getLabels, null, .{});
     pub const willValidate = bridge.accessor(Select.getWillValidate, null, .{});

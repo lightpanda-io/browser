@@ -1048,6 +1048,17 @@ pub fn queueSlotchangeDelivery(self: *Context) !void {
     }.run);
 }
 
+pub fn queueCustomElementBackupDrain(self: *Context) !void {
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            switch (ctx.global) {
+                .frame => |frame| frame._ce_reactions.drainBackup(frame),
+                .worker => unreachable,
+            }
+        }
+    }.run);
+}
+
 // Helper for executing a Microtask on this Context. In V8, microtasks aren't
 // associated to a Context - they are just functions to execute in an Isolate.
 // But for these Context microtasks, we want to (a) make sure the context isn't

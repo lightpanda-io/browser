@@ -570,6 +570,7 @@ pub const Function = struct {
         cache: ?Caching = null,
         embedded_receiver: bool = false,
         exposed: Exposed = .both,
+        ce_reactions: bool = false,
 
         pub const Exposed = enum { both, window, worker };
 
@@ -623,6 +624,26 @@ pub const Function = struct {
         var caller: Caller = undefined;
         caller.initWithContext(ctx, v8_context);
         defer caller.deinit();
+
+        // [CEReactions] entry: open a reactions scope so any custom-element
+        // callbacks queued by DOM mutation inside `func` fire after it
+        // returns, never mid-algorithm.
+        var ce_checkpoint: usize = undefined;
+        const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (ctx.global) {
+            .frame => |frame| frame,
+            .worker => null,
+        } else null;
+
+        if (comptime opts.ce_reactions) {
+            if (ce_frame) |frame| {
+                ce_checkpoint = frame._ce_reactions.push();
+            }
+        }
+        defer if (comptime opts.ce_reactions) {
+            if (ce_frame) |frame| {
+                frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+            }
+        };
 
         const js_value = _call(T, &caller.local, info, func, opts) catch |err| {
             handleError(T, @TypeOf(func), &caller.local, err, info, .{
