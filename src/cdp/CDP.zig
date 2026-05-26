@@ -1026,7 +1026,7 @@ pub const BrowserContext = struct {
         // reserve 10 bytes for websocket header
         buf.appendSliceAssumeCapacity(&.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
 
-        // -1  because we dont' want the closing brace '}'
+        // -1  because we don't want the closing brace '}'
         buf.appendSliceAssumeCapacity(msg[0 .. msg.len - 1]);
         buf.appendSliceAssumeCapacity(field);
         buf.appendSliceAssumeCapacity(session_id);
