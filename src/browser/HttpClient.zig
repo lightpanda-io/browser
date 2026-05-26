@@ -457,6 +457,8 @@ pub fn runNextTick(
 fn cancelNextTick(self: *Client, transfer: *Transfer) void {
     if (transfer._next_tick_node) |*ntn| {
         self.next_tick_queue.remove(&ntn.node);
+        self.next_tick_count -= 1;
+
         if (ntn.abort) |abort_cb| {
             abort_cb(ntn.ctx);
         }
