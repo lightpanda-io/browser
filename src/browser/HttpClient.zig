@@ -245,14 +245,13 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 pub fn deinit(self: *Client) void {
     self.abort();
 
-    // Drain Next Tick Queue
-    while (self.next_tick_queue.popFirst()) |node| {
-        const n: *NextTickNode = @fieldParentPtr("node", node);
-        if (n.abort) |abort_cb| {
-            abort_cb(n.ctx);
-        }
+    if (comptime IS_DEBUG) {
+        lp.assert(
+            self.next_tick_count == 0,
+            "next_tick_count must be 0",
+            .{ .value = self.next_tick_count },
+        );
     }
-    self.next_tick_count = 0;
 
     self.handles.deinit();
 
