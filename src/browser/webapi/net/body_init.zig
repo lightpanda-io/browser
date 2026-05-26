@@ -30,10 +30,13 @@
 
 const std = @import("std");
 
+const js = @import("../../js/js.zig");
+
 const Blob = @import("../Blob.zig");
 
 const FormData = @import("FormData.zig");
 const URLSearchParams = @import("URLSearchParams.zig");
+const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -41,6 +44,8 @@ pub const BodyInit = union(enum) {
     blob: *Blob,
     form_data: *FormData,
     url_search_params: *URLSearchParams,
+    stream: *ReadableStream,
+    buffer: js.TypedArray(u8),
     bytes: []const u8, // must be last, js.Bridge will map anything to a string
 
     pub fn extract(self: BodyInit, arena: Allocator) !Extracted {
@@ -91,6 +96,22 @@ pub const BodyInit = union(enum) {
                     .content_type = if (blob._mime.len > 0) try arena.dupe(u8, blob._mime) else null,
                 };
             },
+            .buffer => |b| {
+                // Buffer sources carry no default Content-Type (Fetch §6.5).
+                return .{
+                    .bytes = try arena.dupe(u8, b.values),
+                    .content_type = null,
+                };
+            },
+            .stream => {
+                // A ReadableStream body cannot be serialized synchronously.
+                // Callers that support streaming bodies (Response) special-case
+                // the `.stream` arm before calling extract; the Request/XHR
+                // paths that reach here have no place to store a stream, so
+                // they send an empty body. Like other non-string sources, a
+                // stream carries no default Content-Type.
+                return .{ .bytes = "", .content_type = null };
+            },
         }
     }
 };
@@ -103,6 +124,15 @@ pub const Extracted = struct {
     bytes: []const u8,
     content_type: ?[]const u8,
 };
+
+// "UTF-8 decode" (Encoding §4.2) strips a leading BOM; consuming a body as
+// text/json must use it, while arrayBuffer/blob/bytes keep the raw bytes.
+pub fn stripUtf8Bom(bytes: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, bytes, "\xef\xbb\xbf")) {
+        return bytes[3..];
+    }
+    return bytes;
+}
 
 const testing = @import("../../../testing.zig");
 test "BodyInit: bytes pass through with text/plain" {
@@ -149,6 +179,20 @@ test "BodyInit: FormData emits multipart with random boundary" {
     try testing.expect(std.mem.indexOf(u8, r.bytes, "alice@example.com") != null);
     const closer = try std.fmt.allocPrint(arena, "--{s}--\r\n", .{boundary});
     try testing.expect(std.mem.endsWith(u8, r.bytes, closer));
+}
+
+test "BodyInit: buffer source has no default Content-Type" {
+    defer testing.reset();
+    const r = try (BodyInit{ .buffer = .{ .values = "hello" } }).extract(testing.arena_allocator);
+    try testing.expectString("hello", r.bytes);
+    try testing.expectEqual(true, r.content_type == null);
+}
+
+test "stripUtf8Bom" {
+    try testing.expectString("abc", stripUtf8Bom("\xef\xbb\xbfabc"));
+    try testing.expectString("abc", stripUtf8Bom("abc"));
+    try testing.expectString("", stripUtf8Bom("\xef\xbb\xbf"));
+    try testing.expectString("\xef\xbbno-bom", stripUtf8Bom("\xef\xbbno-bom"));
 }
 
 // Blob.extract is exercised end-to-end by the Request/XHR HTML fixture

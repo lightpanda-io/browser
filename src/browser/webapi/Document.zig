@@ -718,7 +718,13 @@ pub fn writeln(self: *Document, text: []const []const u8, frame: *Frame) !void {
     return self.writeInternal(text, true, frame);
 }
 
-fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool, frame: *Frame) !void {
+fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool, call_frame: *Frame) !void {
+    // document.write acts on this document's own frame, which isn't necessarily
+    // the calling frame — e.g. a parent frame writing into an iframe's document.
+    // The markup (and any scripts it contains) must be parsed and run in that
+    // document's context, not the caller's.
+    const frame = self._frame orelse call_frame;
+
     if (self._type == .xml) {
         return error.InvalidStateError;
     }
@@ -730,10 +736,13 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     const html = blk: {
         var joined: std.ArrayList(u8) = .empty;
         for (text) |str| {
-            try joined.appendSlice(frame.call_arena, str);
+            // Scratch buffer, consumed synchronously below. Keep it on the
+            // active (calling) frame's call_arena: a script run by the parse
+            // could reset the document frame's call_arena underfoot.
+            try joined.appendSlice(call_frame.call_arena, str);
         }
         if (append_newline) {
-            try joined.append(frame.call_arena, '\n');
+            try joined.append(call_frame.call_arena, '\n');
         }
         break :blk joined.items;
     };
@@ -827,7 +836,9 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     self._write_insertion_point = children_to_insert.getLast();
 }
 
-pub fn open(self: *Document, frame: *Frame) !*Document {
+pub fn open(self: *Document, call_frame: *Frame) !*Document {
+    const frame = self._frame orelse call_frame;
+
     if (self._type == .xml) {
         return error.InvalidStateError;
     }
@@ -869,7 +880,9 @@ pub fn open(self: *Document, frame: *Frame) !*Document {
     return self;
 }
 
-pub fn close(self: *Document, frame: *Frame) !void {
+pub fn close(self: *Document, call_frame: *Frame) !void {
+    const frame = self._frame orelse call_frame;
+
     if (self._type == .xml) {
         return error.InvalidStateError;
     }
@@ -888,6 +901,12 @@ pub fn close(self: *Document, frame: *Frame) !void {
     // (Streaming.done nulls its own handle, so dropping the struct is safe.)
     defer self._script_created_parser = null;
     try self._script_created_parser.?.done();
+
+    // The write'd markup is fully parsed; run any deferred scripts it produced
+    // (e.g. inline modules) before firing the load event. This frame's initial
+    // parse may never have set static_scripts_done (e.g. a freshly-loaded
+    // iframe written into via document.write), so we can't rely on it.
+    frame._script_manager.base.scriptCreatedParseDone();
 
     frame.documentIsComplete();
 }
@@ -1160,17 +1179,17 @@ pub const JsApi = struct {
     pub const getSelection = bridge.function(Document.getSelection, .{});
     pub const getElementsByClassName = bridge.function(Document.getElementsByClassName, .{});
     pub const getElementsByName = bridge.function(Document.getElementsByName, .{});
-    pub const adoptNode = bridge.function(Document.adoptNode, .{ .dom_exception = true });
-    pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true });
-    pub const append = bridge.function(Document.append, .{ .dom_exception = true });
-    pub const prepend = bridge.function(Document.prepend, .{ .dom_exception = true });
-    pub const replaceChildren = bridge.function(Document.replaceChildren, .{ .dom_exception = true });
+    pub const adoptNode = bridge.function(Document.adoptNode, .{ .dom_exception = true, .ce_reactions = true });
+    pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true, .ce_reactions = true });
+    pub const append = bridge.function(Document.append, .{ .dom_exception = true, .ce_reactions = true });
+    pub const prepend = bridge.function(Document.prepend, .{ .dom_exception = true, .ce_reactions = true });
+    pub const replaceChildren = bridge.function(Document.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
     pub const elementFromPoint = bridge.function(Document.elementFromPoint, .{});
     pub const elementsFromPoint = bridge.function(Document.elementsFromPoint, .{});
-    pub const write = bridge.function(Document.write, .{ .dom_exception = true });
-    pub const writeln = bridge.function(Document.writeln, .{ .dom_exception = true });
-    pub const open = bridge.function(Document.open, .{ .dom_exception = true });
-    pub const close = bridge.function(Document.close, .{ .dom_exception = true });
+    pub const write = bridge.function(Document.write, .{ .dom_exception = true, .ce_reactions = true });
+    pub const writeln = bridge.function(Document.writeln, .{ .dom_exception = true, .ce_reactions = true });
+    pub const open = bridge.function(Document.open, .{ .dom_exception = true, .ce_reactions = true });
+    pub const close = bridge.function(Document.close, .{ .dom_exception = true, .ce_reactions = true });
     pub const doctype = bridge.accessor(Document.getDocType, null, .{});
     pub const firstElementChild = bridge.accessor(Document.getFirstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});

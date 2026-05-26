@@ -33,6 +33,14 @@ pub const TextArea = @import("TextArea.zig");
 const Form = @This();
 _proto: *HtmlElement,
 
+// Prevents submission of the form while we're in the process of submitting
+// the form. You can imagine an onsubmit = () => form.submit() endless loop.
+_firing_submission_events: bool = false,
+
+// Prevents submission of the form while we're building the entry list for the
+// form. You can imagine an formdata = () => form.submit() endless loop.
+_constructing_entry_list: bool = false,
+
 pub fn asHtmlElement(self: *Form) *HtmlElement {
     return self._proto;
 }
@@ -227,12 +235,12 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(Form.getName, Form.setName, .{});
-    pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{});
-    pub const action = bridge.accessor(Form.getAction, Form.setAction, .{});
-    pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{});
-    pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{});
-    pub const enctype = bridge.accessor(Form.getEnctype, Form.setEnctype, .{});
+    pub const name = bridge.accessor(Form.getName, Form.setName, .{ .ce_reactions = true });
+    pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{ .ce_reactions = true });
+    pub const action = bridge.accessor(Form.getAction, Form.setAction, .{ .ce_reactions = true });
+    pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{ .ce_reactions = true });
+    pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{ .ce_reactions = true });
+    pub const enctype = bridge.accessor(Form.getEnctype, Form.setEnctype, .{ .ce_reactions = true });
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});

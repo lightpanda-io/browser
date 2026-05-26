@@ -216,3 +216,53 @@
     testing.expectEqual('value', req2.headers.get('X-Custom'));
   }
 </script>
+
+<script id=body_used>
+  testing.async(async () => {
+    const req = new Request('https://example.com', { method: 'POST', body: 'hi' });
+    testing.expectFalse(req.bodyUsed);
+    await req.text();
+    testing.expectTrue(req.bodyUsed);
+
+    // Re-consuming a used body rejects.
+    let rejected = false;
+    try { await req.text(); } catch (e) { rejected = true; }
+    testing.expectTrue(rejected);
+  });
+
+  testing.async(async () => {
+    // A request with no body is never "used".
+    const req = new Request('https://example.com');
+    testing.expectFalse(req.bodyUsed);
+    await req.text();
+    testing.expectFalse(req.bodyUsed);
+  });
+
+  testing.async(async () => {
+    // text() decodes as UTF-8, stripping a leading BOM.
+    const req = new Request('https://example.com', { method: 'POST', body: '﻿hi' });
+    testing.expectEqual('hi', await req.text());
+  });
+</script>
+
+<script id=content_type_from_body>
+  {
+    const req = new Request('https://example.com', { method: 'POST', body: 'x' });
+    testing.expectEqual('text/plain;charset=UTF-8', req.headers.get('content-type'));
+  }
+  {
+    // Buffer sources carry no default Content-Type.
+    const req = new Request('https://example.com', { method: 'POST', body: new Uint8Array([1, 2, 3]) });
+    testing.expectTrue(req.headers.get('content-type') === null);
+  }
+</script>
+
+<script id=priority>
+  {
+    new Request('https://example.com', { priority: 'high' });
+    new Request('https://example.com', { priority: 'low' });
+    new Request('https://example.com', { priority: 'auto' });
+    testing.expectTrue(true);
+  }
+  testing.expectError('TypeError', () => new Request('https://example.com', { priority: 'bogus' }));
+</script>

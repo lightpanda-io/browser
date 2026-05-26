@@ -1041,12 +1041,12 @@ fn writeName(
                 return .alt;
             }
 
-            switch (el.getTag()) {
+            const use_name_for_content: bool = switch (el.getTag()) {
                 .br => {
                     try writeString("\n", w);
                     return .contents;
                 },
-                .input => {
+                .input => blk: {
                     const input = el.as(DOMNode.Element.Html.Input);
                     switch (input._input_type) {
                         .reset, .button, .submit => |t| {
@@ -1063,6 +1063,7 @@ fn writeName(
                     }
                     // TODO Check for <label> with matching "for" attribute
                     // TODO Check if input is wrapped in a <label>
+                    break :blk false;
                 },
                 // zig fmt: off
                 .textarea, .select, .img, .audio, .video, .iframe, .embed,
@@ -1071,16 +1072,17 @@ fn writeName(
                 .thead, .tbody, .tfoot, .tr, .td, .div, .span, .p, .details, .li,
                 .style, .script, .html, .body,
                 // zig fmt: on
-                => {},
-                else => {
-                    // write text content if exists.
-                    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
-                    try writeAccessibleNameFallback(node, &buf.writer, frame);
-                    if (buf.written().len > 0) {
-                        try writeString(buf.written(), w);
-                        return .contents;
-                    }
-                },
+                => nameFromContentRole(axnode.role_attr),
+                else => true,
+            };
+
+            if (use_name_for_content) {
+                var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
+                try writeAccessibleNameFallback(node, &buf.writer, frame);
+                if (buf.written().len > 0) {
+                    try writeString(buf.written(), w);
+                    return .contents;
+                }
             }
 
             if (el.getAttributeSafe(comptime .wrap("title"))) |title| {
@@ -1157,6 +1159,36 @@ fn isLabellableTag(tag: DOMNode.Element.Tag) bool {
         .button, .meter, .output, .progress, .select, .textarea, .input => true,
         else => false,
     };
+}
+
+// ARIA roles whose accessible name may be computed from descendant content
+// (AccName "name from content"). Used so an explicit role can opt a host
+// element back into name-from-content when its tag wouldn't otherwise — e.g.
+// <div role="heading"> or <span role="button">.
+fn nameFromContentRole(role_: ?[]const u8) bool {
+    const role = role_ orelse return false;
+    const name_for_content_roles = std.StaticStringMap(void).initComptime(.{
+        .{ "button", {} },
+        .{ "cell", {} },
+        .{ "checkbox", {} },
+        .{ "columnheader", {} },
+        .{ "gridcell", {} },
+        .{ "heading", {} },
+        .{ "link", {} },
+        .{ "menuitem", {} },
+        .{ "menuitemcheckbox", {} },
+        .{ "menuitemradio", {} },
+        .{ "option", {} },
+        .{ "radio", {} },
+        .{ "row", {} },
+        .{ "rowheader", {} },
+        .{ "switch", {} },
+        .{ "tab", {} },
+        .{ "tooltip", {} },
+        .{ "treeitem", {} },
+        .{ "term", {} },
+    });
+    return name_for_content_roles.has(role);
 }
 
 // CSS-only toggle switches and custom radios commonly visually-style a
@@ -1861,4 +1893,44 @@ test "AXNode: Writer query no match returns empty array" {
     defer parsed.deinit();
 
     try testing.expectEqual(0, parsed.value.array.items.len);
+}
+
+test "AXNode: nameFromContentRole" {
+    try testing.expect(nameFromContentRole("heading"));
+    try testing.expect(nameFromContentRole("button"));
+    try testing.expect(nameFromContentRole("link"));
+    try testing.expect(nameFromContentRole("presentation") == false);
+    try testing.expect(nameFromContentRole(null) == false);
+}
+
+test "AXNode: getName name-from-content honors explicit role" {
+    var frame = try testing.pageTest("cdp/accname.html", .{});
+    defer frame._session.removePage();
+    var doc = frame.window._document;
+
+    const Case = struct { selector: []const u8, expected: ?[]const u8 };
+    const cases = [_]Case{
+        // Explicit name-from-content role opts a div/span into name-from-content.
+        .{ .selector = "#heading", .expected = "Hello World" },
+        .{ .selector = "#button", .expected = "Click me" },
+        // Recurses through child elements; the space here is real source whitespace.
+        .{ .selector = "#nested", .expected = "Read more" },
+        // No role, or a non-name-from-content role: no name from contents.
+        .{ .selector = "#plain", .expected = null },
+        .{ .selector = "#pres", .expected = null },
+    };
+
+    for (cases) |c| {
+        const el = (try doc.querySelector(.wrap(c.selector), frame)).?;
+        const axn = AXNode.fromNode(el.asNode());
+        const name = try axn.getName(frame, testing.allocator);
+        defer if (name) |n| testing.allocator.free(n);
+
+        if (c.expected) |exp| {
+            try testing.expect(name != null);
+            try testing.expectEqual(exp, name.?);
+        } else {
+            try testing.expect(name == null);
+        }
+    }
 }

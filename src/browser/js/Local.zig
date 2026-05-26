@@ -18,10 +18,10 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const string = @import("../../string.zig");
 
 const Page = @import("../Page.zig");
-const FinalizerCallback = @import("../Session.zig").FinalizerCallback;
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
@@ -33,6 +33,7 @@ const TaggedOpaque = @import("TaggedOpaque.zig");
 const v8 = js.v8;
 const log = lp.log;
 const CallOpts = Caller.CallOpts;
+const FinalizerCallback = js.FinalizerCallback;
 
 // Where js.Context has a lifetime tied to the frame, and holds the
 // v8::Global<v8::Context>, this has a much shorter lifetime and holds a
@@ -293,10 +294,11 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     finalizer_gop.value_ptr.* = try self.createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
                 }
                 const fc = finalizer_gop.value_ptr.*;
-                const identity_finalizer = try session.fc_identity_pool.create();
+                const browser = session.browser;
+                const identity_finalizer = try browser.fc_identity_pool.create();
                 identity_finalizer.* = .{
+                    .browser = browser,
                     .page = page,
-                    .session = session,
                     .identity = ctx.identity,
                     .finalizer_ptr_id = finalizer_ptr_id,
                     .resolved_ptr_id = resolved_ptr_id,
@@ -1248,22 +1250,29 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                     const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
                     const identity_finalizer: *FinalizerCallback.Identity = @ptrCast(@alignCast(ptr));
 
-                    // Identity is allocated from pool, so it's valid even after frame reset.
+                    // The Identity lives in browser.fc_identity_pool, which outlives
+                    // the page and the session, so freeing ourselves is always safe.
+                    // `browser` is the only field we may touch unconditionally.
+                    defer identity_finalizer.browser.fc_identity_pool.destroy(identity_finalizer);
+
+                    // If done, the owning scope (page / isolated world) was already
+                    // torn down: its identity.deinit() reset our Global and the FC
+                    // was already released. The page, identity_map and finalizer_ptr_id
+                    // are all stale (the Page may even be reused by a later Session),
+                    // so we must not dereference them — just free ourselves (defer).
+                    if (identity_finalizer.done) {
+                        return;
+                    }
+
                     const page = identity_finalizer.page;
                     const resolved_ptr_id = identity_finalizer.resolved_ptr_id;
-                    defer page.session.fc_identity_pool.destroy(identity_finalizer);
 
-                    // Always clean up the identity map entry
+                    // Clean up the identity map entry: the object is being collected,
+                    // so our Global to it is dead.
                     if (identity_finalizer.identity.identity_map.fetchRemove(resolved_ptr_id)) |kv| {
                         var global = kv.value;
                         v8.v8__Global__Reset(&global);
                     }
-
-                    // If done, FC was already cleaned up during Page teardown.
-                    // The finalizer_ptr_id may have been reused for a new object,
-                    // so we must not look it up in the map. It's also unsafe to
-                    // dereference identity_finalizer.page after done is true.
-                    if (identity_finalizer.done) return;
 
                     const finalizer_ptr_id = identity_finalizer.finalizer_ptr_id;
                     const fc = page.finalizer_callbacks.get(finalizer_ptr_id) orelse return;

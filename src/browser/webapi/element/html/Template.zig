@@ -48,7 +48,7 @@ pub const JsApi = struct {
     };
 
     pub const content = bridge.accessor(Template.getContent, null, .{});
-    pub const innerHTML = bridge.accessor(_getInnerHTML, Template.setInnerHTML, .{});
+    pub const innerHTML = bridge.accessor(_getInnerHTML, Template.setInnerHTML, .{ .ce_reactions = true });
     pub const outerHTML = bridge.accessor(_getOuterHTML, null, .{});
 
     fn _getInnerHTML(self: *Template, frame: *Frame) ![]const u8 {

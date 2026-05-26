@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Frame = @import("../../Frame.zig");
+const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
 
 const String = lp.String;
@@ -39,23 +39,23 @@ const CloseEventOptions = struct {
 
 const Options = Event.inheritOptions(CloseEvent, CloseEventOptions);
 
-pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*CloseEvent {
-    const arena = try frame.getArena(.tiny, "CloseEvent");
-    errdefer frame.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*CloseEvent {
+    const arena = try page.getArena(.tiny, "CloseEvent");
+    errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, _opts, false, frame);
+    return initWithTrusted(arena, type_string, _opts, false, page);
 }
 
-pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*CloseEvent {
-    const arena = try frame.getArena(.tiny, "CloseEvent.trusted");
-    errdefer frame.releaseArena(arena);
-    return initWithTrusted(arena, typ, _opts, true, frame);
+pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*CloseEvent {
+    const arena = try page.getArena(.tiny, "CloseEvent.trusted");
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, _opts, true, page);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*CloseEvent {
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*CloseEvent {
     const opts = _opts orelse Options{};
 
-    const event = try frame._factory.event(
+    const event = try page.factory.event(
         arena,
         typ,
         CloseEvent{

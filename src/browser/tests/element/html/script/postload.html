@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<head></head>
+<script src="../../../testing.js"></script>
+
+<!--
+  Scripts inserted *after* parsing is done (static_scripts_done == true). At that
+  point the deferred-script batch has already drained and won't run again, so a
+  non-blocking script must either run immediately (inline, nothing to fetch) or
+  still be queued for its fetch (remote). A module script's continuation after
+  the first `await` runs in this post-parse window, so we use it to do the
+  insertions.
+-->
+<script id=postload type=module>
+  const state = await testing.async();
+
+  // Inline (non-blocking, module) script must execute even though the defer
+  // batch is already done.
+  window.postload_inline_ran = false;
+  const inline_mod = document.createElement('script');
+  inline_mod.type = 'module';
+  inline_mod.textContent = 'window.postload_inline_ran = true;';
+  document.head.appendChild(inline_mod);
+
+  // Remote script must still be fetched and executed — NOT run synchronously
+  // with a not-yet-loaded status (which would drop it and free it mid-fetch).
+  window.loaded1 = 0;
+  const remote = document.createElement('script');
+  remote.src = 'dynamic1.js'; // does: loaded1 += 1
+  remote.onload = () => state.resolve();
+  remote.onerror = () => state.resolve(); // don't hang if it (wrongly) errors
+  document.head.appendChild(remote);
+
+  await state.done(() => {
+    testing.expectTrue(window.postload_inline_ran);
+    testing.expectEqual(1, window.loaded1);
+  });
+</script>

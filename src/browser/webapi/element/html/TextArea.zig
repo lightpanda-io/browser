@@ -405,12 +405,12 @@ pub const JsApi = struct {
     pub const setCustomValidity = bridge.function(TextArea.setCustomValidity, .{});
     pub const onselectionchange = bridge.accessor(TextArea.getOnSelectionChange, TextArea.setOnSelectionChange, .{});
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
-    pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{});
-    pub const disabled = bridge.accessor(TextArea.getDisabled, TextArea.setDisabled, .{});
-    pub const name = bridge.accessor(TextArea.getName, TextArea.setName, .{});
-    pub const required = bridge.accessor(TextArea.getRequired, TextArea.setRequired, .{});
-    pub const maxLength = bridge.accessor(TextArea.getMaxLength, TextArea.setMaxLength, .{ .dom_exception = true });
-    pub const minLength = bridge.accessor(TextArea.getMinLength, TextArea.setMinLength, .{ .dom_exception = true });
+    pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{ .ce_reactions = true });
+    pub const disabled = bridge.accessor(TextArea.getDisabled, TextArea.setDisabled, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(TextArea.getName, TextArea.setName, .{ .ce_reactions = true });
+    pub const required = bridge.accessor(TextArea.getRequired, TextArea.setRequired, .{ .ce_reactions = true });
+    pub const maxLength = bridge.accessor(TextArea.getMaxLength, TextArea.setMaxLength, .{ .dom_exception = true, .ce_reactions = true });
+    pub const minLength = bridge.accessor(TextArea.getMinLength, TextArea.setMinLength, .{ .dom_exception = true, .ce_reactions = true });
     pub const form = bridge.accessor(TextArea.getForm, null, .{});
     pub const select = bridge.function(TextArea.select, .{});
 

@@ -52,5 +52,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const value = bridge.accessor(Data.getValue, Data.setValue, .{});
+    pub const value = bridge.accessor(Data.getValue, Data.setValue, .{ .ce_reactions = true });
 };

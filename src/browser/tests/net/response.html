@@ -30,7 +30,7 @@
 
   {
     let response3 = new Response("Created", { status: 201, statusText: "Created" });
-    testing.expectEqual("basic", response3.type);
+    testing.expectEqual("default", response3.type);
     testing.expectEqual(201, response3.status);
     testing.expectEqual("Created", response3.statusText);
     testing.expectEqual(true, response3.ok);
@@ -198,4 +198,56 @@
     const body = response.body;
     testing.expectEqual(true, body instanceof ReadableStream);
   });
+</script>
+
+<script id=body_used>
+  testing.async(async () => {
+    const response = new Response('hi');
+    testing.expectFalse(response.bodyUsed);
+    await response.text();
+    testing.expectTrue(response.bodyUsed);
+
+    // Re-consuming a used body rejects.
+    let rejected = false;
+    try { await response.text(); } catch (e) { rejected = true; }
+    testing.expectTrue(rejected);
+  });
+
+  testing.async(async () => {
+    // A bodyless response is never "used".
+    const response = new Response();
+    testing.expectFalse(response.bodyUsed);
+    await response.text();
+    testing.expectFalse(response.bodyUsed);
+  });
+
+  testing.async(async () => {
+    // text() decodes as UTF-8, stripping a leading BOM.
+    const response = new Response('﻿hi');
+    testing.expectEqual('hi', await response.text());
+  });
+</script>
+
+<script id=default_type>
+  {
+    testing.expectEqual('default', new Response('x').type);
+  }
+</script>
+
+<script id=content_type_from_body>
+  {
+    testing.expectEqual('text/plain;charset=UTF-8', new Response('x').headers.get('content-type'));
+  }
+  {
+    const usp = new URLSearchParams({ a: '1' });
+    testing.expectEqual('application/x-www-form-urlencoded;charset=UTF-8', new Response(usp).headers.get('content-type'));
+  }
+  {
+    const blob = new Blob(['x'], { type: 'text/CustomCase' });
+    testing.expectEqual('text/customcase', new Response(blob).headers.get('content-type'));
+  }
+  {
+    // Buffer sources carry no default Content-Type.
+    testing.expectTrue(new Response(new Uint8Array([1, 2, 3])).headers.get('content-type') === null);
+  }
 </script>

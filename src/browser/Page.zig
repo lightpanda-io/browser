@@ -75,9 +75,9 @@ identity: js.Identity = .{},
 
 // Finalizer callbacks for Zig instances exposed to v8 in this Page. Keyed by
 // Zig instance ptr. The backing FinalizerCallback.Identity structs come from
-// Session.fc_identity_pool so they outlive the Page for v8 weak-callback
-// safety.
-finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *Session.FinalizerCallback) = .empty,
+// Browser.fc_identity_pool so they outlive the Page (and the Session) for v8
+// weak-callback safety.
+finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *js.FinalizerCallback) = .empty,
 
 // Tracked global v8 objects that need to be released when the Page tears down.
 globals: std.ArrayList(v8.Global) = .empty,

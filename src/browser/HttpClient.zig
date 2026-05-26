@@ -95,6 +95,10 @@ transfers: std.AutoHashMapUnmanaged(u32, *Transfer) = .empty,
 // When handles has no more available easys, requests get queued.
 queue: std.DoublyLinkedList = .{},
 
+// A queue for things that MUST happen on the next tick.
+next_tick_queue: std.DoublyLinkedList = .{},
+next_tick_count: usize = 0,
+
 // Queue is for Transfers that have no connection. ready_queue is for connections
 // that were initiated when performing == true and thus need to wait until
 // performing == false before being added. I'm hoping this is temporary and that
@@ -179,6 +183,17 @@ fn layerWith(self: anytype, next: Layer) Layer {
     return self.layer();
 }
 
+pub const NextTickNode = struct {
+    pub const Run =
+        *const fn (*Transfer, *anyopaque) void;
+    pub const Abort = *const fn (*anyopaque) void;
+
+    node: std.DoublyLinkedList.Node = .{},
+    ctx: *anyopaque,
+    run: Run,
+    abort: ?Abort = null,
+};
+
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
     errdefer handles.deinit();
@@ -229,6 +244,15 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
 pub fn deinit(self: *Client) void {
     self.abort();
+
+    if (comptime IS_DEBUG) {
+        lp.assert(
+            self.next_tick_count == 0,
+            "next_tick_count must be 0",
+            .{ .value = self.next_tick_count },
+        );
+    }
+
     self.handles.deinit();
 
     self.clearUserAgentOverride();
@@ -402,6 +426,7 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
         return error.ClientDisconnected;
     }
 
+    try self.drainNextTickQueue();
     try self.drainQueue();
     try self.perform(@intCast(timeout_ms));
     // perform/processMessages just released a batch of connections back to
@@ -414,6 +439,47 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     // nested call would fire CDP handlers mid-redirect, defeating the
     // "safe points only" guarantee.
     try self.drainInbox(mode);
+}
+
+pub fn runNextTick(
+    self: *Client,
+    transfer: *Transfer,
+    ctx: *anyopaque,
+    params: struct { run: NextTickNode.Run, abort: ?NextTickNode.Abort = null },
+) !void {
+    transfer._next_tick_node = .{ .ctx = ctx, .run = params.run, .abort = params.abort };
+
+    self.next_tick_count += 1;
+    self.next_tick_queue.append(&transfer._next_tick_node.?.node);
+}
+
+fn cancelNextTick(self: *Client, transfer: *Transfer) void {
+    if (transfer._next_tick_node) |*ntn| {
+        self.next_tick_queue.remove(&ntn.node);
+        self.next_tick_count -= 1;
+
+        if (ntn.abort) |abort_cb| {
+            abort_cb(ntn.ctx);
+        }
+    }
+}
+
+fn drainNextTickQueue(self: *Client) !void {
+    var remaining = self.next_tick_count;
+    while (remaining > 0) : (remaining -= 1) {
+        const node = self.next_tick_queue.popFirst() orelse break;
+        defer self.next_tick_count -= 1;
+        const n: *NextTickNode = @fieldParentPtr("node", node);
+
+        const transfer: *Transfer = @fieldParentPtr(
+            "_next_tick_node",
+            @as(*?NextTickNode, @ptrCast(n)),
+        );
+
+        const ntn = n.*;
+        transfer._next_tick_node = null;
+        ntn.run(transfer, ntn.ctx);
+    }
 }
 
 fn drainQueue(self: *Client) !void {
@@ -1254,6 +1320,9 @@ pub const Transfer = struct {
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
 
+    // for when a Transfer is queued for the next tick.
+    _next_tick_node: ?NextTickNode = null,
+
     pub const State = union(enum) {
         // Pre-commit. Only valid inside the request flow (Client.request
         // or a re-entry like continueTransfer / unpark) before any commit
@@ -1333,6 +1402,8 @@ pub const Transfer = struct {
         // Drop the id→*Transfer index entry before freeing the memory.
         // Any concurrent CDP lookup by id will now see this transfer as gone.
         _ = self.client.transfers.remove(self.id);
+
+        self.client.cancelNextTick(self);
 
         self.req.deinit();
         if (self.owner) |o| {

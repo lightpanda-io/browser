@@ -50,6 +50,7 @@ pub const Integer = @import("Integer.zig");
 pub const PromiseResolver = @import("PromiseResolver.zig");
 pub const PromiseRejection = @import("PromiseRejection.zig");
 
+const js = @This();
 const Allocator = std.mem.Allocator;
 
 pub fn Bridge(comptime T: type) type {
@@ -359,3 +360,60 @@ test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
     try std.testing.expectEqual(24, @sizeOf(@import("TaggedOpaque.zig")));
 }
+
+// Every finalizable instance of Zig gets 1 FinalizerCallback registered in the
+// Page. This is to ensure that, if v8 doesn't finalize the value, we can
+// release on Page teardown.
+pub const FinalizerCallback = struct {
+    page: *Page,
+    arena: Allocator,
+    resolved_ptr_id: usize,
+    finalizer_ptr_id: usize,
+    release_ref: *const fn (ptr_id: usize, page: *Page) void,
+
+    // Linked list of Identities referencing this FC.
+    identities: ?*FinalizerCallback.Identity = null,
+    // Count of active identities (for knowing when to clean up FC).
+    identity_count: u8 = 0,
+
+    const Page = @import("../Page.zig");
+    const Browser = @import("../Browser.zig");
+
+    // For every FinalizerCallback we'll have 1+ FinalizerCallback.Identity: one
+    // for every identity that gets the instance. In most cases, that'll be 1.
+    // Allocated from Browser.fc_identity_pool so it survives Page *and* Session
+    // teardowns — V8 may fire the weak callback any time before the Isolate is
+    // torn down — and lets the callback safely check the done flag.
+    pub const Identity = struct {
+        // The Page that owns the FinalizerCallback this Identity references.
+        // Only safe to dereference when `done == false`. When done is true,
+        // the Page may have been torn down and this pointer is stale.
+        page: *Page,
+
+        // Stable handle to the pool this struct came from. The weak callback
+        // reaches the pool through here (not via page/session) so it stays
+        // valid to self-destruct even when `done` and the page/session are gone.
+        browser: *Browser,
+
+        // The world's identity map. Only safe to dereference when `done == false`
+        // (see `browser` above) — its teardown already reset every Global.
+        identity: *js.Identity,
+        finalizer_ptr_id: usize,
+        resolved_ptr_id: usize,
+        next: ?*FinalizerCallback.Identity = null,
+        done: bool = false,
+    };
+
+    // Called during Page teardown to force cleanup regardless of identities.
+    pub fn deinit(self: *FinalizerCallback, page: *Page) void {
+        // Mark all identities as done so stale V8 weak callbacks
+        // won't find the wrong FC if resolved_ptr_id is reused.
+        var id = self.identities;
+        while (id) |identity| {
+            identity.done = true;
+            id = identity.next;
+        }
+        self.release_ref(self.finalizer_ptr_id, page);
+        page.releaseArena(self.arena);
+    }
+};

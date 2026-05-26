@@ -210,7 +210,13 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     };
 
     const is_blocking = mode == .normal;
-    if (is_blocking == false) {
+
+    // Once parsing is done, the deferred-script batch has already drained and
+    // won't run again, so a non-blocking script inserted afterwards would go
+    // unprocessed. Run it immediately instead. Remote scripts still need to
+    // be queued so they execute when their fetch completes.
+    const run_immediately = is_blocking or (self.base.static_scripts_done and remote_url == null);
+    if (run_immediately == false) {
         self.base.scriptList(script).append(&script.node);
     }
 
@@ -278,7 +284,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         handover = true;
     }
 
-    if (is_blocking == false) {
+    if (run_immediately == false) {
         return;
     }
 

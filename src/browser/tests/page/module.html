@@ -5,6 +5,20 @@
   testing.expectEqual('/src/browser/tests/page/module.html', new URL(import.meta.url).pathname)
 </script>
 
+<script id=meta-resolve type=module>
+  // Resolves relative to this module's URL.
+  testing.expectEqual('/src/browser/tests/page/mod1.js', new URL(import.meta.resolve('./mod1.js')).pathname);
+  testing.expectEqual('/src/browser/tests/page/modules/importer.js', new URL(import.meta.resolve('./modules/importer.js')).pathname);
+  testing.expectEqual('/src/browser/tests/testing.js', new URL(import.meta.resolve('../testing.js')).pathname);
+</script>
+
+<script id=meta-resolve-detached type=module>
+  // The base is bound to the module, so resolve still works when detached
+  // from import.meta.
+  const resolve = import.meta.resolve;
+  testing.expectEqual('/src/browser/tests/page/mod1.js', new URL(resolve('./mod1.js')).pathname, {script_id: 'meta-resolve-detached'});
+</script>
+
 <script id=basic-import type=module>
   import { "val1" as val1 } from "./mod1.js";
   testing.expectEqual('value-1', val1);

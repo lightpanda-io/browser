@@ -27,6 +27,7 @@ const Blob = @import("../Blob.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
+const body_init = @import("body_init.zig");
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -36,6 +37,7 @@ const Response = @This();
 pub const Type = enum {
     basic,
     cors,
+    default,
     @"error",
     @"opaque",
     opaqueredirect,
@@ -51,6 +53,7 @@ _status_text: []const u8,
 _url: [:0]const u8,
 _is_redirected: bool,
 _http_response: ?HttpClient.Response = null,
+_body_used: bool = false,
 
 const Body = union(enum) {
     empty,
@@ -64,12 +67,7 @@ const InitOpts = struct {
     statusText: ?[]const u8 = null,
 };
 
-/// Body can be: null, string ([]const u8), ReadableStream, Blob, ArrayBuffer
-pub const BodyInit = union(enum) {
-    stream: *ReadableStream,
-    bytes: []const u8,
-    js_val: js.Value,
-};
+pub const BodyInit = body_init.BodyInit;
 
 pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
     const session = exec.context.page.session;
@@ -79,21 +77,25 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Respon
     const opts = opts_ orelse InitOpts{};
     const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
 
-    // Parse body from the union
+    var content_type: ?[]const u8 = null;
     const body: Body = blk: {
         const b = body_ orelse break :blk .empty;
         switch (b) {
-            .bytes => |body_bytes| break :blk .{ .bytes = try arena.dupe(u8, body_bytes) },
             .stream => |stream| break :blk .{ .stream = stream },
-            .js_val => |js_val| {
-                if (js_val.isNullOrUndefined()) {
-                    break :blk .empty;
-                }
-                break :blk .{ .bytes = try arena.dupe(u8, try js_val.toStringSmart()) };
+            else => {
+                const extracted = try b.extract(arena);
+                content_type = extracted.content_type;
+                break :blk .{ .bytes = extracted.bytes };
             },
         }
-        break :blk .empty;
     };
+
+    const headers = try Headers.init(opts.headers, exec);
+    if (content_type) |ct| {
+        if (!headers.has("content-type", exec)) {
+            try headers.append("content-type", ct, exec);
+        }
+    }
 
     const self = try arena.create(Response);
     self.* = .{
@@ -102,9 +104,9 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Respon
         ._status_text = status_text,
         ._url = "",
         ._body = body,
-        ._type = .basic,
+        ._type = .default,
         ._is_redirected = false,
-        ._headers = try Headers.init(opts.headers, exec),
+        ._headers = headers,
     };
     return self;
 }
@@ -168,10 +170,34 @@ pub fn isOK(self: *const Response) bool {
     return self._status >= 200 and self._status <= 299;
 }
 
-pub fn getText(self: *const Response, exec: *const Execution) !js.Promise {
+pub fn getBodyUsed(self: *const Response) bool {
+    return switch (self._body) {
+        .empty => false,
+        else => self._body_used,
+    };
+}
+
+// Marks a present body consumed; returns a rejected promise if it already was.
+fn consume(self: *Response, local: *const js.Local) ?js.Promise {
+    switch (self._body) {
+        .empty => return null,
+        else => {},
+    }
+    if (self._body_used) {
+        return local.rejectPromise(.{ .type_error = "Body has already been read" });
+    }
+    self._body_used = true;
+    return null;
+}
+
+pub fn getText(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
     const body = switch (self._body) {
-        .bytes => |b| b,
+        .bytes => |b| body_init.stripUtf8Bom(b),
         .empty => "",
         .stream => return local.rejectPromise(.{ .type_error = "Cannot read text from stream body" }),
     };
@@ -180,8 +206,12 @@ pub fn getText(self: *const Response, exec: *const Execution) !js.Promise {
 
 pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
     const body = switch (self._body) {
-        .bytes => |b| b,
+        .bytes => |b| body_init.stripUtf8Bom(b),
         .empty => "",
         .stream => return local.rejectPromise(.{ .type_error = "Cannot read JSON from stream body" }),
     };
@@ -193,6 +223,10 @@ pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
 
 pub fn arrayBuffer(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
     return switch (self._body) {
         .bytes => |body| local.resolvePromise(js.ArrayBuffer{ .values = body }),
         .empty => local.resolvePromise(js.ArrayBuffer{ .values = "" }),
@@ -313,8 +347,9 @@ const StreamConsumer = struct {
     }
 };
 
-pub fn blob(self: *const Response, exec: *const Execution) !js.Promise {
+pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| return rejected;
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
@@ -325,8 +360,9 @@ pub fn blob(self: *const Response, exec: *const Execution) !js.Promise {
     return local.resolvePromise(b);
 }
 
-pub fn bytes(self: *const Response, exec: *const Execution) !js.Promise {
+pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| return rejected;
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
@@ -386,6 +422,7 @@ pub const JsApi = struct {
     pub const json = bridge.function(Response.getJson, .{});
     pub const headers = bridge.accessor(Response.getHeaders, null, .{});
     pub const body = bridge.accessor(Response.getBody, null, .{});
+    pub const bodyUsed = bridge.accessor(Response.getBodyUsed, null, .{});
     pub const url = bridge.accessor(Response.getURL, null, .{});
     pub const redirected = bridge.accessor(Response.isRedirected, null, .{});
     pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});

@@ -41,7 +41,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const cite = bridge.accessor(Quote.getCite, Quote.setCite, .{});
+    pub const cite = bridge.accessor(Quote.getCite, Quote.setCite, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../../testing.zig");
