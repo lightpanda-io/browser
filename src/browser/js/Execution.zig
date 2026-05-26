@@ -34,7 +34,6 @@ const Factory = @import("../Factory.zig");
 const HttpClient = @import("../HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
-const Blob = @import("../webapi/Blob.zig");
 const Event = @import("../webapi/Event.zig");
 const EventTarget = @import("../webapi/EventTarget.zig");
 const Performance = @import("../webapi/Performance.zig");
@@ -88,12 +87,6 @@ pub fn headersForRequest(self: *const Execution, headers: *HttpClient.Headers) !
 pub fn isSameOrigin(self: *const Execution, url: [:0]const u8) bool {
     return switch (self.context.global) {
         inline else => |g| g.isSameOrigin(url),
-    };
-}
-
-pub fn lookupBlobUrl(self: *const Execution, url: []const u8) ?*Blob {
-    return switch (self.context.global) {
-        inline else => |g| g.lookupBlobUrl(url),
     };
 }
 

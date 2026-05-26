@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<!--
+  data: <script src> resolves through the HTTP client's synthetic-scheme path
+  (no special-casing in ScriptManager). Execution mode is attribute-driven,
+  exactly like any other src: bare = blocking, defer/async = deferred.
+-->
+
+<!-- Blocking, parser-inserted: run in document order, before the check below. -->
+<script src="data:text/javascript,window.__plain = 3;"></script>
+<script src="data:text/javascript;base64,d2luZG93Ll9fYjY0ID0gNDI7"></script>
+<script src="data:text/javascript,window.__enc%20%3D%207%3B"></script>
+
+<script id=blocking_data_urls>
+{
+   testing.expectEqual(3, window.__plain);
+   testing.expectEqual(42, window.__b64);
+   testing.expectEqual(7, window.__enc);
+}
+</script>
+
+<!-- A deferred data: src must still run; proves mode follows the attribute. -->
+<script src="data:text/javascript,window.__deferred = 'ran';" defer></script>
+<script id=deferred_check>
+   testing.onload(() => {
+      testing.expectEqual('ran', window.__deferred);
+   });
+</script>

@@ -294,6 +294,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._event_manager = EventManager.init(arena, self),
     };
     self._to_load = &self._to_load_1;
+    self._http_owner.blob_urls = &self._blob_urls;
 
     var screen: *Screen = undefined;
     var visual_viewport: *VisualViewport = undefined;
@@ -505,11 +506,6 @@ pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     // Starting here, at least protocols are equals.
     // Compare hosts (domain:port) strictly
     return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
-}
-
-/// Look up a blob URL in this frame's registry.
-pub fn lookupBlobUrl(self: *Frame, url: []const u8) ?*Blob {
-    return self._blob_urls.get(url);
 }
 
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {

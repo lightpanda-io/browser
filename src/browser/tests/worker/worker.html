@@ -360,3 +360,25 @@
     });
   }
 </script>
+
+<script id="worker_from_blob_url" type=module>
+  // A blob: worker resolves its initial script through the HTTP client's
+  // synthetic-scheme path against the frame's blob registry, like any URL.
+  {
+    const state = await testing.async();
+    const blob = new Blob(["onmessage = (e) => postMessage({ echo: e.data, from: 'blob-worker' });"], { type: 'text/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    const worker = new Worker(blobUrl);
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    worker.postMessage({ greeting: 'from-blob' });
+
+    await state.done((response) => {
+      testing.expectEqual('from-blob', response.echo.greeting);
+      testing.expectEqual('blob-worker', response.from);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
