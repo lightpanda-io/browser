@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=websocket_in_worker type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./websocket-worker.js');
+    // The worker posts {ready:true} once its onmessage handler is wired.
+    // Wait for that before sending the command to avoid racing startup.
+    worker.onmessage = (e) => {
+      if (e.data && e.data.ready) {
+        worker.postMessage({ kind: 'echo' });
+        return;
+      }
+      state.resolve(e.data);
+    };
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker websocket error: ' + data.err);
+      testing.expectEqual(['echo-from-worker'], data.received);
+      testing.expectEqual('ws://127.0.0.1:9584/', data.url);
+      testing.expectEqual(3, data.ready_state); // CLOSED
+      testing.expectEqual(1000, data.code);
+      testing.expectEqual('bye', data.reason);
+      testing.expectEqual(true, data.was_clean);
+    });
+  }
+</script>

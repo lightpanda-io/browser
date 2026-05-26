@@ -986,13 +986,11 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
+    @import("../webapi/net/WebSocket.zig"),
     @import("../webapi/FileReader.zig"),
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
-    // EventCounts is reachable only via Performance.eventCounts, which is
-    // [Exposed=Window] (pruned from Worker by Snapshot.pruneExposed). The
-    // type itself is in PageJsApis via Performance.registerTypes().
 });
 
 // Master list of ALL JS APIs across all contexts.
