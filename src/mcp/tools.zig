@@ -1102,6 +1102,35 @@ test "MCP - waitForSelector: timeout" {
     }, out.written());
 }
 
+test "MCP - markdown: full page, selector scope, maxBytes truncation" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const full =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"markdown"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, full);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Hover Me") != null);
+
+    out.clearRetainingCapacity();
+    const scoped =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"markdown","arguments":{"selector":"#hoverTarget"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, scoped);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Hover Me") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") == null);
+
+    out.clearRetainingCapacity();
+    const capped =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"markdown","arguments":{"maxBytes":4}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, capped);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
+}
+
 test "MCP - html: full document, selector subtree, backendNodeId subtree" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
