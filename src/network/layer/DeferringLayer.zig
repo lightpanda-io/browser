@@ -33,9 +33,7 @@ const DeferringLayer = @This();
 
 allocator: std.mem.Allocator,
 network: *Network,
-
 next: Layer = undefined,
-
 active: std.DoublyLinkedList = .{},
 
 pub fn layer(self: *DeferringLayer) Layer {
@@ -149,6 +147,12 @@ const DeferredContext = struct {
         self.layer.network.app.arena_pool.release(self.arena);
     }
 
+    fn setStableResponse(self: *DeferredContext, response: Response) !void {
+        if (self.stable_resp == null) {
+            self.stable_resp = try Response.toStable(response, self.arena);
+        }
+    }
+
     fn shouldDefer(self: *DeferredContext) bool {
         const req = self.transfer.req;
         const blocking_id = self.transfer.client.blocking_requests.get(req.frame_id) orelse return false;
@@ -164,7 +168,7 @@ const DeferredContext = struct {
         }
 
         log.debug(.http, "deferring start callback", .{ .url = req.url });
-        self.stable_resp = try response.toStable(self.arena);
+        try self.setStableResponse(response);
         self.deferring = true;
         try self.buffered.append(self.arena, .start);
     }
@@ -178,7 +182,7 @@ const DeferredContext = struct {
         }
 
         log.debug(.http, "deferring header callback", .{ .url = req.url });
-        self.stable_resp = try response.toStable(self.arena);
+        try self.setStableResponse(response);
         self.deferring = true;
         try self.buffered.append(self.arena, .header);
         return true;
@@ -193,6 +197,7 @@ const DeferredContext = struct {
         }
 
         log.debug(.http, "deferring data callback", .{ .url = req.url });
+        try self.setStableResponse(response);
         self.deferring = true;
         try self.buffered.append(self.arena, .{ .data = try self.arena.dupe(u8, chunk) });
     }
@@ -252,12 +257,13 @@ const DeferredContext = struct {
         defer self.deinit();
 
         const req = self.transfer.req;
-        const stable_response = self.stable_resp.?;
-        const response = Response.fromStable(&stable_response);
 
         for (self.buffered.items) |event| {
             switch (event) {
                 .start => {
+                    const stable_response = self.stable_resp orelse @panic("stable_resp must be set for start events");
+                    const response = Response.fromStable(&stable_response);
+
                     self.forward.forwardStart(response) catch |err| {
                         log.err(.http, "deferred start callback", .{ .err = err, .url = req.url });
                         self.forward.forwardErr(err);
@@ -265,6 +271,9 @@ const DeferredContext = struct {
                     };
                 },
                 .header => {
+                    const stable_response = self.stable_resp orelse @panic("stable_resp must be set for header events");
+                    const response = Response.fromStable(&stable_response);
+
                     const proceed = self.forward.forwardHeader(response) catch |err| {
                         log.err(.http, "deferred header callback", .{ .err = err, .url = req.url });
                         self.forward.forwardErr(err);
@@ -276,6 +285,9 @@ const DeferredContext = struct {
                     }
                 },
                 .data => |chunk| {
+                    const stable_response = self.stable_resp orelse @panic("stable_resp must be set for data events");
+                    const response = Response.fromStable(&stable_response);
+
                     self.forward.forwardData(response, chunk) catch |err| {
                         log.err(.http, "deferred data callback", .{ .err = err, .url = req.url });
                         self.forward.forwardErr(err);
@@ -304,7 +316,7 @@ const DeferredContext = struct {
 
     fn firePartial(self: *DeferredContext) void {
         const req = self.transfer.req;
-        const stable_response = self.stable_resp orelse return;
+        const stable_response = self.stable_resp orelse @panic("stable_resp must be set for any of the partial fire events");
         const response = Response.fromStable(&stable_response);
 
         for (self.buffered.items) |event| {
