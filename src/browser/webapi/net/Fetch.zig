@@ -48,8 +48,14 @@ pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
-    const request = try Request.init(input, options, exec);
     const resolver = exec.context.local.?.createPromiseResolver();
+
+    // A bad RequestInit (e.g. an invalid priority) must reject the promise,
+    // not throw synchronously.
+    const request = Request.init(input, options, exec) catch {
+        resolver.rejectError("fetch init error", .{ .type_error = "Failed to construct Request" });
+        return resolver.promise();
+    };
 
     if (request._signal) |signal| {
         if (signal._aborted) {

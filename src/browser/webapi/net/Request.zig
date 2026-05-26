@@ -26,7 +26,8 @@ const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 
 const Headers = @import("Headers.zig");
-const BodyInit = @import("body_init.zig").BodyInit;
+const body_init = @import("body_init.zig");
+const BodyInit = body_init.BodyInit;
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -41,6 +42,7 @@ _arena: Allocator,
 _cache: Cache,
 _credentials: Credentials,
 _signal: ?*AbortSignal,
+_body_used: bool = false,
 
 pub const Input = union(enum) {
     request: *Request,
@@ -54,7 +56,10 @@ pub const InitOpts = struct {
     cache: Cache = .default,
     credentials: Credentials = .@"same-origin",
     signal: ?*AbortSignal = null,
+    priority: ?[]const u8 = null,
 };
+
+const Priority = enum { high, low, auto };
 
 const Credentials = enum {
     omit,
@@ -81,6 +86,12 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     };
 
     const opts = opts_ orelse InitOpts{};
+    if (opts.priority) |p| {
+        if (std.meta.stringToEnum(Priority, p) == null) {
+            return error.InvalidArgument;
+        }
+    }
+
     const method = if (opts.method) |m|
         try parseMethod(m, exec)
     else switch (input) {
@@ -182,36 +193,74 @@ pub fn getHeaders(self: *Request, exec: *const Execution) !*Headers {
     return headers;
 }
 
+pub fn getBodyUsed(self: *const Request) bool {
+    if (self._body == null) {
+        return false;
+    }
+    return self._body_used;
+}
+
+// Marks a present body consumed; returns a rejected promise if it already was.
+fn consume(self: *Request, local: *const js.Local) ?js.Promise {
+    if (self._body == null) {
+        return null;
+    }
+
+    if (self._body_used) {
+        return local.rejectPromise(.{ .type_error = "Body has already been read" });
+    }
+    self._body_used = true;
+    return null;
+}
+
 pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
     const body = self._body orelse "";
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse "";
 
     const b = try Blob.initFromBytes(body, content_type, true, exec.context.page);
-
-    return exec.context.local.?.resolvePromise(b);
+    return local.resolvePromise(b);
 }
 
-pub fn text(self: *const Request, exec: *const Execution) !js.Promise {
-    const body = self._body orelse "";
-    return exec.context.local.?.resolvePromise(body);
-}
-
-pub fn json(self: *const Request, exec: *const Execution) !js.Promise {
-    const body = self._body orelse "";
+pub fn text(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.context.local.?;
-    const value = local.parseJSON(body) catch {
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+    return local.resolvePromise(body_init.stripUtf8Bom(self._body orelse ""));
+}
+
+pub fn json(self: *Request, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
+    const value = local.parseJSON(body_init.stripUtf8Bom(self._body orelse "")) catch {
         return local.rejectPromise(.{ .syntax_error = "failed to parse" });
     };
     return local.resolvePromise(try value.persist());
 }
 
-pub fn arrayBuffer(self: *const Request, exec: *const Execution) !js.Promise {
-    return exec.context.local.?.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
+pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+    return local.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
 }
 
-pub fn bytes(self: *const Request, exec: *const Execution) !js.Promise {
-    return exec.context.local.?.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
+pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+    return local.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
 }
 
 pub fn clone(self: *const Request, exec: *const Execution) !*Request {
@@ -243,6 +292,7 @@ pub const JsApi = struct {
     pub const cache = bridge.accessor(Request.getCache, null, .{});
     pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
     pub const signal = bridge.accessor(Request.getSignal, null, .{});
+    pub const bodyUsed = bridge.accessor(Request.getBodyUsed, null, .{});
     pub const blob = bridge.function(Request.blob, .{});
     pub const text = bridge.function(Request.text, .{});
     pub const json = bridge.function(Request.json, .{});

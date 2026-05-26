@@ -125,16 +125,16 @@ fn validateMimeType(arena: Allocator, mime_type: []const u8, full_validation: bo
         _ = Mime.parse(buf) catch return "";
     } else {
         // Simple validation per FileAPI spec (for Blob constructor):
-        // - If any char is outside U+0020-U+007E, return empty string
-        // - Otherwise lowercase
+        // any char outside U+0020-U+007E yields the empty string.
         for (mime_type) |c| {
             if (c < 0x20 or c > 0x7E) {
                 return "";
             }
         }
-        _ = std.ascii.lowerString(buf, buf);
     }
 
+    // FileAPI: Blob.type is the type converted to ASCII lowercase.
+    _ = std.ascii.lowerString(buf, buf);
     return buf;
 }
 
