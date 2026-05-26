@@ -465,14 +465,11 @@ fn cancelNextTick(self: *Client, transfer: *Transfer) void {
 }
 
 fn drainNextTickQueue(self: *Client) !void {
-    var current = self.next_tick_queue.first;
-    self.next_tick_queue = .{};
-
-    while (current) |node| {
+    var remaining = self.next_tick_count;
+    while (remaining > 0) : (remaining -= 1) {
+        const node = self.next_tick_queue.popFirst() orelse break;
         defer self.next_tick_count -= 1;
-
         const n: *NextTickNode = @fieldParentPtr("node", node);
-        current = node.next;
 
         const transfer: *Transfer = @fieldParentPtr(
             "_next_tick_node",
