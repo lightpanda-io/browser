@@ -33,6 +33,14 @@ pub const TextArea = @import("TextArea.zig");
 const Form = @This();
 _proto: *HtmlElement,
 
+// Prevents submission of the form while we're in the process of submitting
+// the form. You can imagine an onsubmit = () => form.submit() endless loop.
+_firing_submission_events: bool = false,
+
+// Prevents submission of the form while we're building the entry list for the
+// form. You can imagine an formdata = () => form.submit() endless loop.
+_constructing_entry_list: bool = false,
+
 pub fn asHtmlElement(self: *Form) *HtmlElement {
     return self._proto;
 }

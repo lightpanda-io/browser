@@ -4046,6 +4046,11 @@ const SubmitFormOpts = struct {
 pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
 
+    // see the `_constructing_entry_list` field documentation
+    if (form._constructing_entry_list) {
+        return;
+    }
+
     if (submitter_) |submitter| {
         if (submitter.getAttributeSafe(comptime .wrap("disabled")) != null) {
             return;
@@ -4083,6 +4088,14 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     };
 
     if (submit_opts.fire_event) {
+        // Prevent a submit on the form from firing while we're submit the form.
+        // This is both spec-correct AND prevents infinite recursion.
+        if (form._firing_submission_events) {
+            return;
+        }
+        form._firing_submission_events = true;
+        defer form._firing_submission_events = false;
+
         // Per HTML spec "submit a form element" algorithm: SubmitEvent.submitter
         // must be null when the submitter is the form itself, which is what
         // Form.requestSubmit() passes when called with no submitter argument.

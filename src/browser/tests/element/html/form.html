@@ -561,3 +561,65 @@
   testing.expectEqual('big5', form.getAttribute('accept-charset'));
 }
 </script>
+
+<!-- Test: re-entrant submission from a `submit` handler is a no-op. Without the
+     "firing submission events" guard this recurses unbounded and fatally aborts
+     the V8 isolate. -->
+<form id="test_form_reentrant_submit" action="/should-not-navigate8" method="get">
+  <input type="text" name="q" value="test">
+</form>
+
+<script id="submit_reentrant_from_onsubmit_is_noop">
+{
+  const form = $('#test_form_reentrant_submit');
+  let count = 0;
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    count++;
+    // Re-entrant submit while submission events are firing must be ignored.
+    form.requestSubmit();
+  });
+
+  form.requestSubmit();
+  testing.expectEqual(1, count);
+}
+</script>
+
+<!-- Test: re-entrant submission from a `formdata` handler is a no-op. Without
+     the "constructing entry list" guard this recurses unbounded. -->
+<script id="submit_reentrant_from_formdata_is_noop">
+{
+  const form = document.createElement('form');
+  let count = 0;
+
+  form.addEventListener('formdata', () => {
+    count++;
+    // form.submit() while the entry list is being constructed must be ignored.
+    form.submit();
+  });
+
+  new FormData(form);
+  testing.expectEqual(1, count);
+}
+</script>
+
+<!-- Test: building another FormData from a `formdata` handler throws
+     InvalidStateError (and is guarded against unbounded recursion). -->
+<script id="formdata_reentrant_construction_throws">
+{
+  const form = document.createElement('form');
+  let caught = null;
+
+  form.addEventListener('formdata', () => {
+    try {
+      new FormData(form);
+    } catch (e) {
+      caught = e.name;
+    }
+  });
+
+  new FormData(form);
+  testing.expectEqual('InvalidStateError', caught);
+}
+</script>
