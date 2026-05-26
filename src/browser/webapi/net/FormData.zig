@@ -73,6 +73,14 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
         .worker => lp.assert(false, "FormData worker form", .{}),
     };
 
+    if (form._constructing_entry_list) {
+        // see the `_constructing_entry_list` field documentation
+        return error.InvalidStateError;
+    }
+
+    form._constructing_entry_list = true;
+    defer form._constructing_entry_list = false;
+
     const form_data = try exec._factory.create(FormData{
         ._arena = exec.arena,
         ._entries = try collectForm(frame.arena, form, submitter, frame),
@@ -397,7 +405,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(FormData.init, .{});
+    pub const constructor = bridge.constructor(FormData.init, .{ .dom_exception = true });
     pub const has = bridge.function(FormData.has, .{});
     pub const get = bridge.function(FormData.get, .{});
     pub const set = bridge.function(FormData.set, .{});
