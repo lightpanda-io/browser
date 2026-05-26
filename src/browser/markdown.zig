@@ -24,6 +24,7 @@ const TreeWalker = @import("webapi/TreeWalker.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
+const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
@@ -72,7 +73,7 @@ const LimitedWriter = struct {
             return;
         }
         if (self.remaining > 0) {
-            try self.inner.writeAll(bytes[0..self.remaining]);
+            try self.inner.writeAll(truncateUtf8(bytes, self.remaining));
             self.remaining = 0;
         }
         self.truncated = true;
