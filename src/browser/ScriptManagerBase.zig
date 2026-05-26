@@ -398,6 +398,16 @@ pub fn staticScriptsDone(self: *ScriptManagerBase) void {
     self.evaluate();
 }
 
+// A script-created parser (document.open/write/close) finished. Run any
+// deferred scripts it produced. Unlike staticScriptsDone, this can run after
+// the initial parse already completed (so it must not re-assert the flag): a
+// frame that was loaded (or document.write'd into multiple times) keeps
+// static_scripts_done set, and evaluate() only drains defer_scripts when it is.
+pub fn scriptCreatedParseDone(self: *ScriptManagerBase) void {
+    self.static_scripts_done = true;
+    self.evaluate();
+}
+
 pub fn evaluate(self: *ScriptManagerBase) void {
     if (self.is_evaluating) {
         // It's possible for a script.eval to cause evaluate to be called again.

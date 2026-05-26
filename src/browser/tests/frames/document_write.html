@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!--
+  document.write into an iframe must parse and run the written markup in the
+  IFRAME's own frame, not the calling (main) frame. Previously the scripts ran
+  in the caller's frame, so their globals / window / parent were the main
+  page's — which broke cross-frame messaging (parent resolved to self).
+-->
+<script id=iframe_write_runs_in_iframe>
+{
+  const iframe = document.createElement('iframe');
+  document.documentElement.appendChild(iframe);
+
+  const doc = iframe.contentDocument;
+  doc.write('<!DOCTYPE html><html><body><script>window.ranHere = true; window.parentIsSelf = (window.parent === window);<\/script></body></html>');
+  doc.close();
+
+  // Read the flags from the IFRAME's window. If the script had (wrongly) run in
+  // the main frame, they'd be set there and these would read undefined.
+  testing.expectEqual(true, iframe.contentWindow.ranHere);
+  // The script's `parent` is the main window, so parent !== self.
+  testing.expectEqual(false, iframe.contentWindow.parentIsSelf);
+}
+</script>
+
+<!--
+  A deferred (module) script written into an iframe must still run. A freshly
+  loaded iframe never fires its static-parse "done" signal, so document.close()
+  is what flushes the deferred scripts the write produced.
+-->
+<script id=iframe_write_flushes_deferred_module type=module>
+{
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  document.documentElement.appendChild(iframe);
+
+  const doc = iframe.contentDocument;
+  doc.write('<!DOCTYPE html><html><body><script type="module">window.moduleRan = true;<\/script></body></html>');
+  doc.close();
+
+  // Give the deferred module a tick to run, then confirm it executed in the
+  // iframe (not the main frame, where contentWindow.moduleRan would be unset).
+  setTimeout(() => state.resolve(), 5);
+  await state.done(() => {
+    testing.expectEqual(true, iframe.contentWindow.moduleRan);
+  });
+}
+</script>
