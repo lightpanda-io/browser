@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+<body>
+<div id="testDiv">abc<span>def</span>ghi</div>
+
+<script id=construct_element>
+{
+  const testDiv = $('#testDiv');
+  const sr = new StaticRange({startContainer: testDiv, startOffset: 1, endContainer: testDiv, endOffset: 2});
+  testing.expectEqual(testDiv, sr.startContainer);
+  testing.expectEqual(1, sr.startOffset);
+  testing.expectEqual(testDiv, sr.endContainer);
+  testing.expectEqual(2, sr.endOffset);
+  testing.expectEqual(false, sr.collapsed);
+}
+</script>
+
+<script id=construct_text>
+{
+  const text = $('#testDiv').firstChild;
+  const sr = new StaticRange({startContainer: text, startOffset: 1, endContainer: text, endOffset: 2});
+  testing.expectEqual(text, sr.startContainer);
+  testing.expectEqual(text, sr.endContainer);
+  testing.expectEqual(false, sr.collapsed);
+}
+</script>
+
+<script id=construct_mixed>
+{
+  const testDiv = $('#testDiv');
+  const text = testDiv.firstChild;
+  const sr = new StaticRange({startContainer: testDiv, startOffset: 0, endContainer: text, endOffset: 1});
+  testing.expectEqual(testDiv, sr.startContainer);
+  testing.expectEqual(0, sr.startOffset);
+  testing.expectEqual(text, sr.endContainer);
+  testing.expectEqual(1, sr.endOffset);
+}
+</script>
+
+<script id=construct_comment>
+{
+  const comment = document.createComment('abc');
+  const sr = new StaticRange({startContainer: comment, startOffset: 1, endContainer: comment, endOffset: 2});
+  testing.expectEqual(comment, sr.startContainer);
+  testing.expectEqual(2, sr.endOffset);
+}
+</script>
+
+<script id=construct_pi>
+{
+  const pi = document.createProcessingInstruction('foo', 'abc');
+  const sr = new StaticRange({startContainer: pi, startOffset: 1, endContainer: pi, endOffset: 2});
+  testing.expectEqual(pi, sr.startContainer);
+}
+</script>
+
+<script id=construct_document>
+{
+  const sr = new StaticRange({startContainer: document, startOffset: 0, endContainer: document, endOffset: 1});
+  testing.expectEqual(document, sr.startContainer);
+  testing.expectEqual(false, sr.collapsed);
+}
+</script>
+
+<script id=construct_fragment>
+{
+  const frag = document.createDocumentFragment();
+  const sr = new StaticRange({startContainer: frag, startOffset: 0, endContainer: frag, endOffset: 1});
+  testing.expectEqual(frag, sr.startContainer);
+}
+</script>
+
+<script id=collapsed>
+{
+  const testDiv = $('#testDiv');
+  const sr = new StaticRange({startContainer: testDiv, startOffset: 0, endContainer: testDiv, endOffset: 0});
+  testing.expectEqual(true, sr.collapsed);
+}
+</script>
+
+<script id=no_offset_validation>
+{
+  // StaticRange is static: it does NOT validate offsets against node length,
+  // nor reorder inverted endpoints (unlike Range).
+  const testDiv = $('#testDiv');
+  const sr = new StaticRange({startContainer: testDiv, startOffset: 0, endContainer: testDiv, endOffset: 15});
+  testing.expectEqual(0, sr.startOffset);
+  testing.expectEqual(15, sr.endOffset);
+
+  const inverted = new StaticRange({startContainer: testDiv, startOffset: 1, endContainer: document.body, endOffset: 0});
+  testing.expectEqual(testDiv, inverted.startContainer);
+  testing.expectEqual(document.body, inverted.endContainer);
+  testing.expectEqual(0, inverted.endOffset);
+}
+</script>
+
+<script id=prototype_chain>
+{
+  const testDiv = $('#testDiv');
+  const sr = new StaticRange({startContainer: testDiv, startOffset: 0, endContainer: testDiv, endOffset: 0});
+  testing.expectEqual(true, sr instanceof StaticRange);
+  testing.expectEqual(true, sr instanceof AbstractRange);
+  testing.expectEqual(false, sr instanceof Range);
+  // commonAncestorContainer is Range-only and must NOT leak onto StaticRange.
+  testing.expectEqual('undefined', typeof sr.commonAncestorContainer);
+  // ... but it remains on Range.
+  testing.expectEqual('object', typeof document.createRange().commonAncestorContainer);
+}
+</script>
+
+<script id=invalid_node_type>
+{
+  const testDiv = $('#testDiv');
+  testing.expectError('InvalidNodeTypeError', () => {
+    new StaticRange({startContainer: document.doctype, startOffset: 0, endContainer: document.doctype, endOffset: 0});
+  });
+  const attr = testDiv.getAttributeNode('id');
+  testing.expectError('InvalidNodeTypeError', () => {
+    new StaticRange({startContainer: attr, startOffset: 0, endContainer: attr, endOffset: 0});
+  });
+}
+</script>
+
+<script id=missing_arguments>
+{
+  const testDiv = $('#testDiv');
+  testing.expectError('TypeError', () => new StaticRange());
+  testing.expectError('TypeError', () => new StaticRange({startOffset: 0, endContainer: testDiv, endOffset: 0}));
+  testing.expectError('TypeError', () => new StaticRange({startContainer: testDiv, endContainer: testDiv, endOffset: 0}));
+  testing.expectError('TypeError', () => new StaticRange({startContainer: testDiv, startOffset: 0, endOffset: 0}));
+  testing.expectError('TypeError', () => new StaticRange({startContainer: testDiv, startOffset: 0, endContainer: testDiv}));
+  testing.expectError('TypeError', () => new StaticRange({startContainer: null, startOffset: 0, endContainer: testDiv, endOffset: 0}));
+  testing.expectError('TypeError', () => new StaticRange({startContainer: testDiv, startOffset: 0, endContainer: null, endOffset: 0}));
+}
+</script>
+</body>

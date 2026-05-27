@@ -24,6 +24,7 @@ const Page = @import("../Page.zig");
 
 const Node = @import("Node.zig");
 const Range = @import("Range.zig");
+const StaticRange = @import("StaticRange.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -48,8 +49,11 @@ pub fn acquireRef(self: *AbstractRange) void {
 }
 
 pub fn deinit(self: *AbstractRange, page: *Page) void {
-    if (page.findFrameByLoaderId(self._frame_loader_id)) |frame| {
-        frame._live_ranges.remove(&self._range_link);
+    // StaticRanges are never registered in the live-range list
+    if (self._type != .static_range) {
+        if (page.findFrameByLoaderId(self._frame_loader_id)) |frame| {
+            frame._live_ranges.remove(&self._range_link);
+        }
     }
     page.releaseArena(self._arena);
 }
@@ -60,7 +64,7 @@ pub fn releaseRef(self: *AbstractRange, page: *Page) void {
 
 pub const Type = union(enum) {
     range: *Range,
-    // TODO: static_range: *StaticRange,
+    static_range: *StaticRange,
 };
 
 pub fn as(self: *AbstractRange, comptime T: type) *T {
@@ -70,6 +74,7 @@ pub fn as(self: *AbstractRange, comptime T: type) *T {
 pub fn is(self: *AbstractRange, comptime T: type) ?*T {
     switch (self._type) {
         .range => |r| return if (T == Range) r else null,
+        .static_range => |sr| return if (T == StaticRange) sr else null,
     }
 }
 
@@ -339,5 +344,4 @@ pub const JsApi = struct {
     pub const endContainer = bridge.accessor(AbstractRange.getEndContainer, null, .{});
     pub const endOffset = bridge.accessor(AbstractRange.getEndOffset, null, .{});
     pub const collapsed = bridge.accessor(AbstractRange.getCollapsed, null, .{});
-    pub const commonAncestorContainer = bridge.accessor(AbstractRange.getCommonAncestorContainer, null, .{});
 };
