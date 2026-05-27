@@ -653,6 +653,15 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/src/browser/tests/401")) {
+        return req.respond("No", .{
+            .status = .unauthorized,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/404.js")) {
         // Valid JS body served with a 404 status. Used to assert that
         // ScriptManager does NOT execute the body of a failed script

@@ -4300,5 +4300,16 @@ test "Frame: httpMetadata 404" {
     defer testing.test_session.removePage();
     const meta = frame.httpMetadata();
     try testing.expect(meta.status != null);
-    try std.testing.expectEqual(@as(u16, 404), meta.status.?);
+    try testing.expectEqual(404, meta.status.?);
+}
+
+test "Frame: 401" {
+    var frame = try testing.pageTest("401", .{});
+    defer testing.reset();
+    defer frame._session.removePage();
+
+    var buf = std.Io.Writer.Allocating.init(testing.allocator);
+    defer buf.deinit();
+    try @import("dump.zig").root(frame.document, .{}, &buf.writer, frame);
+    try testing.expectEqual("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><pre>No</pre></body></html>", buf.written());
 }
