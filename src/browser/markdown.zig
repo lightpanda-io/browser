@@ -20,9 +20,12 @@ const std = @import("std");
 
 const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
-const TreeWalker = @import("webapi/TreeWalker.zig");
-const Element = @import("webapi/Element.zig");
+
 const Node = @import("webapi/Node.zig");
+const Element = @import("webapi/Element.zig");
+const TreeWalker = @import("webapi/TreeWalker.zig");
+const Slot = @import("webapi/element/html/Slot.zig");
+
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 pub const Opts = struct {};
@@ -133,6 +136,10 @@ const Context = struct {
     writer: *std.Io.Writer,
     frame: *Frame,
 
+    // When there's a slot-attribute, we skip rendering, unless this flag has
+    // bet set to true.
+    force_slot: bool = false,
+
     fn ensureNewline(self: *Context) !void {
         if (!self.state.last_char_was_newline) {
             try self.writer.writeByte('\n');
@@ -170,10 +177,36 @@ const Context = struct {
         }
     }
 
+    // Render a <slot>'s assigned light-DOM nodes, or its own children as
+    // fallback. Same as dump's dumpSlotContent.
+    fn renderSlotContent(self: *Context, slot: *Slot) !void {
+        const assigned = slot.assignedNodes(null, self.frame) catch return;
+        if (assigned.len == 0) {
+            return self.renderChildren(slot.asNode());
+        }
+        for (assigned) |node| {
+            // ensures that we don't skip this element when rending it.
+            self.force_slot = true;
+            try self.render(node);
+        }
+        self.force_slot = false;
+    }
+
     fn renderElement(self: *Context, el: *Element) !void {
+        const force_slot = self.force_slot;
+        self.force_slot = false;
+
         const tag = el.getTag();
 
         if (!isVisibleElement(el)) return;
+
+        if (!force_slot) {
+            if (el.getAttributeSafe(comptime .wrap("slot")) != null) {
+                // This element has a slot attribute, and we aren't forcing slot
+                // rendering (i.e. this is the light-DOM), skip it.
+                return;
+            }
+        }
 
         // Ensure block elements start on a new line
         if (tag.isBlock() and !self.state.in_table) {
@@ -342,10 +375,21 @@ const Context = struct {
                 }
                 return;
             },
+            .slot => return self.renderSlotContent(el.as(Slot)),
             else => {},
         }
 
-        try self.renderChildren(el.asNode());
+        // Composed tree: a shadow host renders its shadow tree in place of its
+        // light-DOM children (light DOM is visible only through <slot>). Applies
+        // to open and closed roots alike. markdown is always a rendered-content
+        // path (cf. dump.zig's default .rendered mode), so we always pierce; the
+        // early-return tags above can never be valid shadow hosts, so only this
+        // generic path needs the check.
+        if (self.frame._element_shadow_roots.get(el)) |shadow| {
+            try self.renderChildren(shadow.asNode());
+        } else {
+            try self.renderChildren(el.asNode());
+        }
 
         switch (tag) {
             .pre => {
@@ -713,4 +757,60 @@ test "browser.markdown: anchor fallback label" {
     try testMarkdownHTML(
         \\<a href="/no-label"><svg></svg></a>
     , "[](http://localhost/no-label)\n");
+}
+
+// Builds a shadow host <div>, populates its light DOM with `light` and its
+// (open) shadow tree with `shadow`, then dumps the host. Declarative shadow DOM
+// parsing isn't implemented, so the shadow tree is attached imperatively.
+fn testMarkdownShadow(light: []const u8, shadow: []const u8, expected: []const u8) !void {
+    const testing = @import("../testing.zig");
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+
+    const host = try doc.createElement("div", null, frame);
+    if (light.len > 0) {
+        try frame.parseHtmlAsChildren(host.asNode(), light);
+    }
+
+    const sr = try host.attachShadow("open", frame);
+    try frame.parseHtmlAsChildren(sr.asNode(), shadow);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(host.asNode(), .{}, &aw.writer, frame);
+
+    try testing.expectString(expected, aw.written());
+}
+
+test "browser.markdown: shadow content is pierced" {
+    try testMarkdownShadow("", "Shadow content", "Shadow content\n");
+}
+
+test "browser.markdown: slot projects assigned light DOM" {
+    // The slotted <span> renders at the slot's position in the shadow tree
+    // (inside the <h2>), and not a second time at its light-DOM position.
+    try testMarkdownShadow(
+        \\<span slot="title">Slotted</span>
+    ,
+        \\<h2><slot name="title"></slot></h2>
+    , "\n## Slotted\n");
+}
+
+test "browser.markdown: unassigned light DOM is omitted" {
+    // Light DOM is visible only through a <slot>; with no matching slot the
+    // light <p> must not appear — only the shadow tree's content does.
+    try testMarkdownShadow(
+        \\<p>orphan</p>
+    ,
+        \\<div>only shadow</div>
+    , "only shadow\n");
+}
+
+test "browser.markdown: slot fallback content when nothing assigned" {
+    try testMarkdownShadow("",
+        \\<slot name="x">Default text</slot>
+    , "Default text\n");
 }
