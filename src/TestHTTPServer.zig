@@ -90,8 +90,13 @@ fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !voi
         };
 
         self.handler(&req) catch |err| {
-            std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
-            try req.respond("server error", .{ .status = .internal_server_error });
+            switch (err) {
+                error.BrokenPipe => {},
+                else => {
+                    std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
+                    try req.respond("server error", .{ .status = .internal_server_error });
+                },
+            }
             return;
         };
     }

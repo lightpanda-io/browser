@@ -1871,7 +1871,7 @@ pub const Transfer = struct {
                 log.err(.http, "getResponseCode", .{ .err = err, .source = "body callback" });
                 return http.writefunc_error;
             };
-            if ((status >= 300 and status <= 399) or status == 401 or status == 407) {
+            if (status >= 300 and status <= 399) {
                 res.skip_body = true;
                 return @intCast(chunk_len);
             }
