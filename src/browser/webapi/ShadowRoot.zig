@@ -29,10 +29,6 @@ const ShadowRoot = @This();
 pub const Mode = enum {
     open,
     closed,
-
-    pub fn fromString(str: []const u8) !Mode {
-        return std.meta.stringToEnum(Mode, str) orelse error.InvalidMode;
-    }
 };
 
 _proto: *DocumentFragment,
@@ -68,6 +64,10 @@ pub fn getMode(self: *const ShadowRoot) []const u8 {
 
 pub fn getHost(self: *const ShadowRoot) *Element {
     return self._host;
+}
+
+pub fn setHTMLUnsafe(self: *ShadowRoot, html: []const u8, frame: *Frame) !void {
+    return self.asDocumentFragment().setHTMLUnsafe(html, frame);
 }
 
 pub fn getElementById(self: *ShadowRoot, id: []const u8, frame: *Frame) ?*Element {
@@ -137,6 +137,7 @@ pub const JsApi = struct {
         return self.getElementById(try value.toZig([]const u8), frame);
     }
     pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
+    pub const setHTMLUnsafe = bridge.function(ShadowRoot.setHTMLUnsafe, .{ .dom_exception = true, .ce_reactions = true });
 };
 
 const testing = @import("../../testing.zig");

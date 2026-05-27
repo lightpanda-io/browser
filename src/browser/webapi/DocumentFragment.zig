@@ -153,18 +153,13 @@ pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Fra
 
 pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
+    return parent.setHTML(html, false, frame);
+}
 
-    frame.domChanged();
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        frame.removeNode(parent, child, .{ .will_be_reconnected = false });
-    }
-
-    if (html.len == 0) {
-        return;
-    }
-
-    try frame.parseHtmlAsChildren(parent, html);
+/// allows declarative shadow dom
+pub fn setHTMLUnsafe(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
+    const parent = self.asNode();
+    return parent.setHTML(html, true, frame);
 }
 
 pub fn cloneFragment(self: *DocumentFragment, deep: bool, frame: *Frame) !*Node {

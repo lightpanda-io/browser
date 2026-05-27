@@ -62,6 +62,8 @@ pub struct Sink<'arena> {
     pub reparent_children_callback: ReparentChildrenCallback,
     pub append_before_sibling_callback: AppendBeforeSiblingCallback,
     pub append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
+    pub attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
+    pub allow_declarative_shadow: bool,
 }
 
 impl<'arena> TreeSink for Sink<'arena> {
@@ -284,6 +286,28 @@ impl<'arena> TreeSink for Sink<'arena> {
     fn reparent_children(&self, node: &Ref, new_parent: &Ref) {
         unsafe {
             (self.reparent_children_callback)(self.ctx, *node, *new_parent);
+        }
+    }
+
+    fn allow_declarative_shadow_roots(&self, _intended_parent: &Ref) -> bool {
+        self.allow_declarative_shadow
+    }
+
+    fn attach_declarative_shadow(&self, location: &Ref, template: &Ref, attrs: &[Attribute]) -> bool {
+        // html5ever only calls this when shadowrootmode is "open" or "closed",
+        // so anything other than "open" is treated as "closed".
+        let mode_is_open = attrs
+            .iter()
+            .find(|a| a.name.local.as_ref() == "shadowrootmode")
+            .map(|a| a.value.as_ref() == "open")
+            .unwrap_or(true);
+        unsafe {
+            (self.attach_declarative_shadow_callback)(
+                self.ctx,
+                *location,
+                *template,
+                if mode_is_open { 1 } else { 0 },
+            ) != 0
         }
     }
 }

@@ -142,6 +142,23 @@
   }
 </script>
 
+<!-- document.write processes declarative shadow roots, like the parser. -->
+<script id=write_declarative_shadow>
+  document.write('<div id="dw_dsd"><template shadowrootmode="open"><p>written shadow</p></template></div>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_declarative_shadow>
+  {
+    const host = document.getElementById('dw_dsd');
+    // The shadow root survives the fragment->live-DOM splice.
+    testing.expectEqual(true, host.shadowRoot !== null);
+    testing.expectEqual('written shadow', host.shadowRoot.querySelector('p').textContent);
+    // The <template> was consumed, not left in light DOM.
+    testing.expectEqual(null, host.querySelector('template'));
+  }
+</script>
+
 <!-- Phase 3 Tests: document.open/close would go here -->
 <!-- Note: Testing document.open/close requires async/setTimeout which doesn't -->
 <!-- work well with the test isolation. The implementation is tested manually. -->

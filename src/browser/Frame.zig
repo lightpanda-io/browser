@@ -576,7 +576,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             };
             const parse_arena = try self.getArena(.medium, "Frame.parseBlob");
             defer self.releaseArena(parse_arena);
-            var parser = Parser.init(parse_arena, self.document.asNode(), self);
+            var parser = Parser.init(parse_arena, self.document.asNode(), self, .{ .allow_declarative_shadow = true });
             parser.parse(blob._slice);
         } else {
             self.document.injectBlank(self) catch |err| {
@@ -1187,7 +1187,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
     const parse_arena = try self.getArena(.medium, "Frame.parse");
     defer self.releaseArena(parse_arena);
 
-    var parser = Parser.init(parse_arena, self.document.asNode(), self);
+    var parser = Parser.init(parse_arena, self.document.asNode(), self, .{ .allow_declarative_shadow = true });
 
     switch (self._parse_state) {
         .html => |*html| {
@@ -3563,11 +3563,20 @@ pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, chi
 
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
 pub fn parseHtmlAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
+    return self.parseHtmlAsChildrenInner(node, html, false);
+}
+
+// setHTMLUnsafe variant: parse a fragment that may contain declarative shadow node
+pub fn parseHtmlUnsafeAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
+    return self.parseHtmlAsChildrenInner(node, html, true);
+}
+
+fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, allow_declarative_shadow: bool) !void {
     const previous_parse_mode = self._parse_mode;
     self._parse_mode = .fragment;
     defer self._parse_mode = previous_parse_mode;
 
-    var parser = Parser.init(self.call_arena, node, self);
+    var parser = Parser.init(self.call_arena, node, self, .{ .allow_declarative_shadow = allow_declarative_shadow });
     parser.parseFragment(html);
 
     // html5ever wraps fragment output in an <html> element; unwrap so its

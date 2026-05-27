@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="host"></div>
+
+<!-- Declarative shadow root in the document markup itself: exercises the
+     document-parse path (the SSR scenario), not just setHTMLUnsafe. -->
+<div id="dochost"><template shadowrootmode="open"><p>doc shadow</p></template></div>
+
+<script id="document_parse_attaches_shadow">
+{
+    const host = $('#dochost');
+    testing.expectTrue(host.shadowRoot !== null);
+    testing.expectEqual('doc shadow', host.shadowRoot.querySelector('p').textContent);
+    testing.expectEqual(null, host.querySelector('template'));
+}
+</script>
+
+<script id="setHTMLUnsafe_open">
+{
+    const host = $('#host');
+    host.setHTMLUnsafe('<div id="inner"><template shadowrootmode="open"><p>shadow content</p></template></div>');
+
+    const inner = host.querySelector('#inner');
+    // A real shadow root was attached, and no <template> was left in light DOM.
+    testing.expectTrue(inner.shadowRoot !== null);
+    testing.expectEqual('open', inner.shadowRoot.mode);
+    testing.expectEqual('shadow content', inner.shadowRoot.querySelector('p').textContent);
+    testing.expectEqual(null, inner.querySelector('template'));
+}
+</script>
+
+<script id="setHTMLUnsafe_closed">
+{
+    const host = document.createElement('div');
+    host.setHTMLUnsafe('<div id="inner"><template shadowrootmode="closed"><p>x</p></template></div>');
+
+    const inner = host.querySelector('#inner');
+    // Closed shadow root: not exposed via .shadowRoot, but the template is consumed.
+    testing.expectEqual(null, inner.shadowRoot);
+    testing.expectEqual(null, inner.querySelector('template'));
+}
+</script>
+
+<script id="innerHTML_does_not_attach">
+{
+    const host = document.createElement('div');
+    // innerHTML must NOT process declarative shadow roots (only setHTMLUnsafe does).
+    host.innerHTML = '<div id="inner"><template shadowrootmode="open"><p>x</p></template></div>';
+
+    const inner = host.querySelector('#inner');
+    testing.expectEqual(null, inner.shadowRoot);
+    testing.expectTrue(inner.querySelector('template') !== null);
+}
+</script>
+
+<script id="second_declarative_template_retained">
+{
+    const host = document.createElement('div');
+    host.setHTMLUnsafe('<div id="inner"><template shadowrootmode="open"><p>first</p></template><template shadowrootmode="open"><p>second</p></template></div>');
+
+    const inner = host.querySelector('#inner');
+    testing.expectTrue(inner.shadowRoot !== null);
+    testing.expectEqual('first', inner.shadowRoot.querySelector('p').textContent);
+    // The host already has a shadow root, so the second template stays in light DOM.
+    testing.expectTrue(inner.querySelector('template') !== null);
+}
+</script>
+
+<script id="declarative_slot_projection">
+{
+    const host = document.createElement('div');
+    host.setHTMLUnsafe('<div id="inner"><template shadowrootmode="open"><slot></slot></template><p>light</p></div>');
+
+    const inner = host.querySelector('#inner');
+    const slot = inner.shadowRoot.querySelector('slot');
+    const assigned = slot.assignedNodes();
+    testing.expectEqual(1, assigned.length);
+    testing.expectEqual('light', assigned[0].textContent);
+}
+</script>
+
+<script id="attachShadow_invalid_host_throws">
+{
+    // Host validation: <input> cannot host a shadow root.
+    testing.expectError('NotSupportedError', () => {
+        document.createElement('input').attachShadow({ mode: 'open' });
+    });
+}
+</script>
+
+<script id="attachShadow_twice_throws">
+{
+    const host = document.createElement('div');
+    host.attachShadow({ mode: 'open' });
+    testing.expectError('NotSupportedError', () => {
+        host.attachShadow({ mode: 'open' });
+    });
+}
+</script>
+
+<script id="disabled_features_blocks_declarative_shadow">
+{
+    class ShadowDisabledElement extends HTMLElement {
+        static get disabledFeatures() { return ['shadow']; }
+    }
+    customElements.define('shadow-disabled-host', ShadowDisabledElement);
+
+    const host = document.createElement('div');
+    host.setHTMLUnsafe('<shadow-disabled-host><template shadowrootmode="open"><span>x</span></template></shadow-disabled-host>');
+
+    const sd = host.querySelector('shadow-disabled-host');
+    // disabledFeatures: ['shadow'] -> declarative attach must fail, template kept.
+    testing.expectEqual(null, sd.shadowRoot);
+    testing.expectTrue(sd.querySelector('template') !== null);
+}
+</script>
+
+<script id="disabled_features_blocks_imperative_shadow">
+{
+    const sd = document.createElement('shadow-disabled-host');
+    testing.expectError('NotSupportedError', () => sd.attachShadow({ mode: 'open' }));
+}
+</script>

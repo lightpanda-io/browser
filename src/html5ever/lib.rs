@@ -52,6 +52,8 @@ pub extern "C" fn html5ever_parse_document(
     reparent_children_callback: ReparentChildrenCallback,
     append_before_sibling_callback: AppendBeforeSiblingCallback,
     append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
+    attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
+    allow_declarative_shadow: bool,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -78,6 +80,8 @@ pub extern "C" fn html5ever_parse_document(
         reparent_children_callback: reparent_children_callback,
         append_before_sibling_callback: append_before_sibling_callback,
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
+        attach_declarative_shadow_callback: attach_declarative_shadow_callback,
+        allow_declarative_shadow: allow_declarative_shadow,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -111,6 +115,8 @@ pub extern "C" fn html5ever_parse_document_with_encoding(
     reparent_children_callback: ReparentChildrenCallback,
     append_before_sibling_callback: AppendBeforeSiblingCallback,
     append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
+    attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
+    allow_declarative_shadow: bool,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -148,6 +154,8 @@ pub extern "C" fn html5ever_parse_document_with_encoding(
         reparent_children_callback: reparent_children_callback,
         append_before_sibling_callback: append_before_sibling_callback,
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
+        attach_declarative_shadow_callback: attach_declarative_shadow_callback,
+        allow_declarative_shadow: allow_declarative_shadow,
     };
 
     // Parse directly from decoded string
@@ -472,6 +480,8 @@ pub extern "C" fn html5ever_parse_fragment(
     reparent_children_callback: ReparentChildrenCallback,
     append_before_sibling_callback: AppendBeforeSiblingCallback,
     append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
+    attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
+    allow_declarative_shadow: bool,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -498,6 +508,8 @@ pub extern "C" fn html5ever_parse_fragment(
         reparent_children_callback: reparent_children_callback,
         append_before_sibling_callback: append_before_sibling_callback,
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
+        attach_declarative_shadow_callback: attach_declarative_shadow_callback,
+        allow_declarative_shadow: allow_declarative_shadow,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -587,6 +599,8 @@ pub extern "C" fn html5ever_streaming_parser_create(
     reparent_children_callback: ReparentChildrenCallback,
     append_before_sibling_callback: AppendBeforeSiblingCallback,
     append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
+    attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
+    allow_declarative_shadow: bool,
 ) -> *mut c_void {
     let arena = Box::new(typed_arena::Arena::new());
 
@@ -615,6 +629,8 @@ pub extern "C" fn html5ever_streaming_parser_create(
         reparent_children_callback: reparent_children_callback,
         append_before_sibling_callback: append_before_sibling_callback,
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
+        attach_declarative_shadow_callback: attach_declarative_shadow_callback,
+        allow_declarative_shadow: allow_declarative_shadow,
     };
 
     // Create a parser which implements TendrilSink for streaming parsing
@@ -716,6 +732,8 @@ pub extern "C" fn xml5ever_parse_document(
     reparent_children_callback: ReparentChildrenCallback,
     append_before_sibling_callback: AppendBeforeSiblingCallback,
     append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
+    attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
+    allow_declarative_shadow: bool,
 ) -> () {
     if xml.is_null() || len == 0 {
         return ();
@@ -742,6 +760,8 @@ pub extern "C" fn xml5ever_parse_document(
         reparent_children_callback: reparent_children_callback,
         append_before_sibling_callback: append_before_sibling_callback,
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
+        attach_declarative_shadow_callback: attach_declarative_shadow_callback,
+        allow_declarative_shadow: allow_declarative_shadow,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(xml, len) };

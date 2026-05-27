@@ -37,6 +37,8 @@ pub extern "c" fn html5ever_parse_document(
     reparentChildrenCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void,
     appendBeforeSiblingCallback: *const fn (ctx: *anyopaque, sibling_ref: *anyopaque, NodeOrText) callconv(.c) void,
     appendBasedOnParentNodeCallback: *const fn (ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, NodeOrText) callconv(.c) void,
+    attachDeclarativeShadowCallback: *const fn (ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8,
+    allow_declarative_shadow: bool,
 ) void;
 
 /// Parse HTML document with encoding conversion. Converts from charset to UTF-8 before parsing.
@@ -61,6 +63,8 @@ pub extern "c" fn html5ever_parse_document_with_encoding(
     reparentChildrenCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void,
     appendBeforeSiblingCallback: *const fn (ctx: *anyopaque, sibling_ref: *anyopaque, NodeOrText) callconv(.c) void,
     appendBasedOnParentNodeCallback: *const fn (ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, NodeOrText) callconv(.c) void,
+    attachDeclarativeShadowCallback: *const fn (ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8,
+    allow_declarative_shadow: bool,
 ) void;
 
 pub extern "c" fn html5ever_parse_fragment(
@@ -82,6 +86,8 @@ pub extern "c" fn html5ever_parse_fragment(
     reparentChildrenCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void,
     appendBeforeSiblingCallback: *const fn (ctx: *anyopaque, sibling_ref: *anyopaque, NodeOrText) callconv(.c) void,
     appendBasedOnParentNodeCallback: *const fn (ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, NodeOrText) callconv(.c) void,
+    attachDeclarativeShadowCallback: *const fn (ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8,
+    allow_declarative_shadow: bool,
 ) void;
 
 pub extern "c" fn html5ever_attribute_iterator_next(ctx: *anyopaque) Nullable(Attribute);
@@ -112,6 +118,8 @@ pub extern "c" fn html5ever_streaming_parser_create(
     reparentChildrenCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void,
     appendBeforeSiblingCallback: *const fn (ctx: *anyopaque, sibling_ref: *anyopaque, NodeOrText) callconv(.c) void,
     appendBasedOnParentNodeCallback: *const fn (ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, NodeOrText) callconv(.c) void,
+    attachDeclarativeShadowCallback: *const fn (ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8,
+    allow_declarative_shadow: bool,
 ) ?*anyopaque;
 
 pub extern "c" fn html5ever_streaming_parser_feed(
@@ -215,6 +223,8 @@ pub extern "c" fn xml5ever_parse_document(
     reparentChildrenCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void,
     appendBeforeSiblingCallback: *const fn (ctx: *anyopaque, sibling_ref: *anyopaque, NodeOrText) callconv(.c) void,
     appendBasedOnParentNodeCallback: *const fn (ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, NodeOrText) callconv(.c) void,
+    attachDeclarativeShadowCallback: *const fn (ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8,
+    allow_declarative_shadow: bool,
 ) void;
 
 // General encoding api
