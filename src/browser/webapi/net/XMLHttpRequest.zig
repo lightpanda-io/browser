@@ -249,10 +249,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     const exec = self._exec;
 
-    if (std.mem.startsWith(u8, self._url, "blob:")) {
-        return self.handleBlobUrl(exec);
-    }
-
     const session = exec.context.page.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
@@ -291,38 +287,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         self.releaseSelfRef();
         return err;
     };
-}
-
-fn handleBlobUrl(self: *XMLHttpRequest, exec: *const Execution) !void {
-    const blob = exec.lookupBlobUrl(self._url) orelse {
-        self.handleError(error.BlobNotFound);
-        return;
-    };
-
-    self._response_status = 200;
-    self._response_url = self._url;
-
-    try self._response_data.appendSlice(self._arena, blob._slice);
-    self._response_len = blob._slice.len;
-
-    try self.stateChanged(.headers_received, exec);
-    try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, exec);
-    try self.stateChanged(.loading, exec);
-    try self._proto.dispatch(.progress, .{
-        .total = self._response_len orelse 0,
-        .loaded = self._response_data.items.len,
-    }, exec);
-    try self.stateChanged(.done, exec);
-
-    const loaded = self._response_data.items.len;
-    try self._proto.dispatch(.load, .{
-        .total = loaded,
-        .loaded = loaded,
-    }, exec);
-    try self._proto.dispatch(.load_end, .{
-        .total = loaded,
-        .loaded = loaded,
-    }, exec);
 }
 
 pub fn getReadyState(self: *const XMLHttpRequest) u32 {

@@ -24,7 +24,6 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const URL = @import("../../URL.zig");
 
-const Blob = @import("../Blob.zig");
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
 const AbortSignal = @import("../AbortSignal.zig");
@@ -62,10 +61,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
             resolver.reject("fetch aborted", DOMException.init("The operation was aborted.", "AbortError"));
             return resolver.promise();
         }
-    }
-
-    if (std.mem.startsWith(u8, request._url, "blob:")) {
-        return handleBlobUrl(request._url, resolver, exec);
     }
 
     const response = try Response.init(null, .{ .status = 0 }, exec);
@@ -124,26 +119,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     }) catch {};
-    return resolver.promise();
-}
-
-fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, exec: *const Execution) !js.Promise {
-    const blob: *Blob = exec.lookupBlobUrl(url) orelse {
-        resolver.rejectError("fetch blob error", .{ .type_error = "BlobNotFound" });
-        return resolver.promise();
-    };
-
-    const response = try Response.init(null, .{ .status = 200 }, exec);
-    response._body = .{ .bytes = try response._arena.dupe(u8, blob._slice) };
-    response._url = try response._arena.dupeZ(u8, url);
-    response._type = .basic;
-
-    if (blob._mime.len > 0) {
-        try response._headers.append("Content-Type", blob._mime, exec);
-    }
-
-    const js_val = try exec.context.local.?.zigValueToJs(response, .{});
-    resolver.resolve("fetch blob done", js_val);
     return resolver.promise();
 }
 

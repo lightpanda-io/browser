@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=data_url_navigation type=module>
+  // data: navigation flows through the HTTP client's synthetic-scheme path
+  // (resource_type=.document -> serveSynthetic), like any URL. The data:
+  // document is cross-origin (opaque origin), so we can't read its
+  // contentDocument — instead it reports its own parsed content back via
+  // postMessage, which proves serveSynthetic delivered the bytes and they
+  // parsed + ran.
+  {
+    const state = await testing.async();
+    window.addEventListener('message', (e) => state.resolve(e.data));
+
+    const f = document.createElement('iframe');
+    f.src = "data:text/html,<p>hello</p><script>parent.postMessage(document.querySelector('p').textContent, '*')<\/script>";
+    document.documentElement.appendChild(f);
+
+    await state.done((data) => {
+      testing.expectEqual('hello', data);
+    });
+  }
+</script>

@@ -144,6 +144,8 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
     });
     errdefer factory.destroy(self);
 
+    self._http_owner.blob_urls = &self._blob_urls;
+
     self._script_manager = ScriptManagerBase.init(
         arena,
         &session.browser.http_client,
@@ -229,10 +231,6 @@ pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
         return false;
     }
     return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
-}
-
-pub fn lookupBlobUrl(self: *WorkerGlobalScope, url: []const u8) ?*Blob {
-    return self._blob_urls.get(url);
 }
 
 pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
