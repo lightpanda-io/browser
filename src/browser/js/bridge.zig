@@ -827,6 +827,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/XMLSerializer.zig"),
     @import("../webapi/AbstractRange.zig"),
     @import("../webapi/Range.zig"),
+    @import("../webapi/StaticRange.zig"),
     @import("../webapi/NodeFilter.zig"),
     @import("../webapi/Element.zig"),
     @import("../webapi/element/DOMStringMap.zig"),

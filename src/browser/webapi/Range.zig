@@ -43,6 +43,10 @@ pub fn asAbstractRange(self: *Range) *AbstractRange {
     return self._proto;
 }
 
+pub fn getCommonAncestorContainer(self: *const Range) *Node {
+    return self._proto.getCommonAncestorContainer();
+}
+
 pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
     if (node._type == .document_type) {
         return error.InvalidNodeType;
@@ -703,6 +707,7 @@ pub const JsApi = struct {
     pub const END_TO_START = bridge.property(3, .{ .template = true });
 
     pub const constructor = bridge.constructor(Range.init, .{});
+    pub const commonAncestorContainer = bridge.accessor(Range.getCommonAncestorContainer, null, .{});
     pub const setStart = bridge.function(Range.setStart, .{ .dom_exception = true });
     pub const setEnd = bridge.function(Range.setEnd, .{ .dom_exception = true });
     pub const setStartBefore = bridge.function(Range.setStartBefore, .{ .dom_exception = true });
