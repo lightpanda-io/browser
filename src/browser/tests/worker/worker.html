@@ -172,6 +172,25 @@
   }
 </script>
 
+<script id="worker_replaceable" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./replaceable-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker replaceable error: ' + data.err);
+      testing.expectEqual(true, data.results.console_replaced);
+      testing.expectEqual(true, data.results.console_restored);
+      testing.expectEqual(true, data.results.self_replaced);
+      testing.expectEqual(true, data.results.self_restored);
+    });
+  }
+</script>
+
 <script id="worker_webapi_net" type=module>
   {
     const state = await testing.async();

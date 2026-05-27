@@ -1508,6 +1508,13 @@ pub fn newException(self: *const Local, ex: anytype) js.Exception {
     };
 }
 
+pub fn getGlobal(self: *const Local) js.Object {
+    return .{
+        .local = self,
+        .handle = v8.v8__Context__Global(self.handle).?,
+    };
+}
+
 // Convert a Global (or optional Global) to a Local (or optional Local).
 // Meant to be used from either frame.js.toLocal, where the context must have an
 // non-null local (orelse panic), or from a LocalScope
