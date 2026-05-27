@@ -959,6 +959,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/streams/TransformStream.zig"),
     @import("../webapi/Node.zig"),
     @import("../webapi/storage/storage.zig"),
+    @import("../webapi/storage/CookieStore.zig"),
+    @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/Window.zig"),
     @import("../webapi/Performance.zig"),
@@ -1038,6 +1040,8 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
+    @import("../webapi/storage/CookieStore.zig"),
+    @import("../webapi/event/CookieChangeEvent.zig"),
 });
 
 // Master list of ALL JS APIs across all contexts.

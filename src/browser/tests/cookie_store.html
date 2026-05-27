@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+<script id=interface>
+  testing.expectEqual('object', typeof cookieStore);
+  testing.expectEqual(cookieStore, window.cookieStore);
+  testing.expectEqual(true, cookieStore instanceof CookieStore);
+  testing.expectEqual(true, cookieStore instanceof EventTarget);
+  testing.expectEqual('function', typeof cookieStore.get);
+  testing.expectEqual('function', typeof cookieStore.getAll);
+  testing.expectEqual('function', typeof cookieStore.set);
+  testing.expectEqual('function', typeof cookieStore.delete);
+</script>
+
+<script id=set-and-get>
+  testing.async(async () => {
+    await cookieStore.set('user', 'lp');
+    const item = await cookieStore.get('user');
+    testing.expectEqual('user', item.name);
+    testing.expectEqual('lp', item.value);
+    testing.expectEqual('/', item.path);
+    testing.expectEqual('strict', item.sameSite);
+    testing.expectEqual(null, item.expires);
+    await cookieStore.delete('user');
+    testing.expectEqual(null, await cookieStore.get('user'));
+  });
+</script>
+
+<script id=set-options>
+  testing.async(async () => {
+    await cookieStore.set({ name: 'prefs', value: 'dark', sameSite: 'lax' });
+    const item = await cookieStore.get({ name: 'prefs' });
+    testing.expectEqual('prefs', item.name);
+    testing.expectEqual('dark', item.value);
+    testing.expectEqual('lax', item.sameSite);
+    await cookieStore.delete('prefs');
+  });
+</script>
+
+<script id=get-missing>
+  testing.async(async () => {
+    const item = await cookieStore.get('does-not-exist');
+    testing.expectEqual(null, item);
+  });
+</script>
+
+<script id=get-all>
+  testing.async(async () => {
+    await cookieStore.set('a', '1');
+    await cookieStore.set('b', '2');
+    const all = await cookieStore.getAll();
+    testing.expectEqual(true, all.length >= 2);
+    const names = all.map(c => c.name);
+    testing.expectEqual(true, names.includes('a'));
+    testing.expectEqual(true, names.includes('b'));
+
+    const justA = await cookieStore.getAll('a');
+    testing.expectEqual(1, justA.length);
+    testing.expectEqual('a', justA[0].name);
+    testing.expectEqual('1', justA[0].value);
+
+    await cookieStore.delete('a');
+    await cookieStore.delete('b');
+  });
+</script>
+
+<script id=delete-options>
+  testing.async(async () => {
+    await cookieStore.set('tmp', 'x');
+    await cookieStore.delete({ name: 'tmp' });
+    testing.expectEqual(null, await cookieStore.get('tmp'));
+  });
+</script>
+
+<script id=onchange-handler>
+  testing.expectEqual(null, cookieStore.onchange);
+  cookieStore.onchange = function() {};
+  testing.expectEqual('function', typeof cookieStore.onchange);
+  cookieStore.onchange = null;
+  testing.expectEqual(null, cookieStore.onchange);
+</script>
+
+<script id=cookie-change-event>
+  const ev = new CookieChangeEvent('change');
+  testing.expectEqual('change', ev.type);
+  testing.expectEqual(0, ev.changed.length);
+  testing.expectEqual(0, ev.deleted.length);
+</script>

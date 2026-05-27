@@ -49,6 +49,7 @@ pub const Type = union(enum) {
     file_reader: *@import("FileReader.zig"),
     font_face_set: *@import("css/FontFaceSet.zig"),
     websocket: *@import("net/WebSocket.zig"),
+    cookie_store: *@import("storage/CookieStore.zig"),
 };
 
 pub fn init(page: *Page) !*EventTarget {
@@ -159,6 +160,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .file_reader => writer.writeAll("<FileReader>"),
         .font_face_set => writer.writeAll("<FontFaceSet>"),
         .websocket => writer.writeAll("<WebSocket>"),
+        .cookie_store => writer.writeAll("<CookieStore>"),
     };
 }
 
@@ -181,6 +183,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .file_reader => return "[object FileReader]",
         .font_face_set => return "[object FontFaceSet]",
         .websocket => return "[object WebSocket]",
+        .cookie_store => return "[object CookieStore]",
     };
 }
 
