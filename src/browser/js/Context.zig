@@ -392,13 +392,27 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
 
         // Some module-loading errors aren't handled by TryCatch. We need to
         // get the error from the module itself.
+        const exception = mod.getException();
         const message = blk: {
-            const e = mod.getException().toString() catch break :blk "???";
+            const e = exception.toString() catch break :blk "???";
             break :blk e.toSlice() catch "???";
         };
+        const stack = blk: {
+            if (comptime IS_DEBUG == false) {
+                // SetCaptureStackTraceForUncaughtExceptions is only set in Debug
+                break :blk "";
+            }
+
+            const stack_handle = v8.v8__Exception__GetStackTrace(exception.handle) orelse break :blk "";
+            var buf = std.Io.Writer.Allocating.init(self.call_arena);
+            js.writeStackTrace(self.isolate.handle, stack_handle, &buf.writer) catch break :blk "???";
+            break :blk buf.written();
+        };
+
         log.warn(.js, "evaluate module", .{
-            .message = message,
+            .stack = stack,
             .specifier = url,
+            .message = message,
         });
         return error.EvaluationError;
     };
