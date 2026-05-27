@@ -209,6 +209,7 @@ pub fn getSessionStorage(self: *Window) *storage.Lookup {
 pub fn getCookieStore(self: *Window, frame: *Frame) !*CookieStore {
     if (self._cookie_store) |cs| return cs;
     const cs = try frame._factory.eventTarget(CookieStore{ ._proto = undefined });
+    try cs.attachToFrame(frame);
     self._cookie_store = cs;
     return cs;
 }

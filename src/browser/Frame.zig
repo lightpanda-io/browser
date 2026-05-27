@@ -379,6 +379,11 @@ pub fn deinit(self: *Frame) void {
 
     self._parse_state.deinit(self);
 
+    // Unregister CookieStore from session notifications before the JS
+    // context (and thus the scheduler) is destroyed, otherwise a late
+    // mutation could schedule a callback that never runs.
+    if (self.window._cookie_store) |cs| cs.detach();
+
     const page = self._page;
 
     if (self._queued_navigation) |qn| {

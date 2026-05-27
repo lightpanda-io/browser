@@ -56,6 +56,7 @@ const Allocator = std.mem.Allocator;
 // proper isolation between different CDP clients while allowing a single client
 // to receive events from all its tabs.
 const ModelContextTool = @import("browser/webapi/ModelContext.zig").Tool;
+const Cookie = @import("browser/webapi/storage/Cookie.zig");
 
 const Notification = @This();
 // Every event type (which are hard-coded), has a list of Listeners.
@@ -93,6 +94,7 @@ const EventListeners = struct {
     runtime_console_message: List = .{},
     model_context_tool_added: List = .{},
     model_context_tool_removed: List = .{},
+    cookie_changed: List = .{},
 };
 
 const Events = union(enum) {
@@ -118,6 +120,7 @@ const Events = union(enum) {
     runtime_console_message: *const ConsoleMessage,
     model_context_tool_added: *const ModelContextToolEvent,
     model_context_tool_removed: *const ModelContextToolEvent,
+    cookie_changed: *const CookieChanged,
 };
 const EventType = std.meta.FieldEnum(Events);
 
@@ -234,6 +237,23 @@ pub const JavascriptDialogOpening = struct {
 pub const ModelContextToolEvent = struct {
     exec: *const Execution,
     tool: *const ModelContextTool,
+};
+
+// Fired by Cookie.Jar after a mutation. Pointers and slices borrow from the
+// dispatcher's stack — listeners must copy whatever they need to retain.
+pub const CookieChanged = struct {
+    kind: Kind,
+    name: []const u8,
+    value: []const u8,
+    // Cookie domain in jar-canonical form (leading "." for explicit Domain
+    // attribute; bare host otherwise).
+    domain: []const u8,
+    path: []const u8,
+    secure: bool,
+    http_only: bool,
+    same_site: Cookie.SameSite,
+
+    pub const Kind = enum { changed, deleted };
 };
 
 pub const DialogResponse = struct {

@@ -17,16 +17,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
-const Session = @import("../../Session.zig");
+const Frame = @import("../../Frame.zig");
+const Notification = @import("../../../Notification.zig");
 
 const Cookie = @import("Cookie.zig");
 const EventTarget = @import("../EventTarget.zig");
+const CookieChangeEvent = @import("../event/CookieChangeEvent.zig");
 
-const log = lp.log;
 const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
 
@@ -39,10 +39,140 @@ const CookieStore = @This();
 
 _proto: *EventTarget,
 _on_change: ?js.Function.Global = null,
+// Owning Frame, used to filter incoming change notifications by document
+// scope and to schedule async event dispatch. Null when the store has no
+// frame context (e.g. WorkerGlobalScope), in which case change events are
+// not delivered.
+_frame: ?*Frame = null,
 
 pub fn asEventTarget(self: *CookieStore) *EventTarget {
     return self._proto;
 }
+
+/// Registers this CookieStore as a listener for jar-change notifications on
+/// the given frame's session. Must be called once after construction by the
+/// owning Window. Idempotent on re-call (replaces the frame).
+pub fn attachToFrame(self: *CookieStore, frame: *Frame) !void {
+    if (self._frame != null) return;
+    self._frame = frame;
+    try frame._session.notification.register(.cookie_changed, self, onCookieChanged);
+}
+
+/// Removes this CookieStore from the notification list. Called from
+/// Frame.deinit before tearing down the JS context.
+pub fn detach(self: *CookieStore) void {
+    const frame = self._frame orelse return;
+    frame._session.notification.unregisterAll(self);
+    self._frame = null;
+}
+
+fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !void {
+    const self: *CookieStore = @ptrCast(@alignCast(ctx));
+    const frame = self._frame orelse return;
+
+    // CookieStore exposes only cookies that script would see for the
+    // current document — same filter as `match` (HttpOnly hidden,
+    // same-site treated as first-party against the document URL).
+    const doc_url = frame.url;
+    const target = Cookie.PreparedUri{
+        .host = URL.getHostname(doc_url),
+        .path = URL.getPathname(doc_url),
+        .secure = URL.isHTTPS(doc_url),
+    };
+    if (target.host.len == 0) return;
+
+    const probe = Cookie{
+        .arena = undefined,
+        .name = data.name,
+        .value = data.value,
+        .domain = data.domain,
+        .path = data.path,
+        .expires = null,
+        .secure = data.secure,
+        .http_only = data.http_only,
+        .same_site = data.same_site,
+    };
+    if (!probe.appliesTo(&target, true, true, false)) return;
+
+    // Per spec, `change` is dispatched as a queued task — never synchronously
+    // from the mutation site. We snapshot the notification fields onto a
+    // small page arena that the scheduled callback releases after dispatch.
+    const arena = try frame.getArena(.tiny, "CookieStore.change");
+    errdefer frame.releaseArena(arena);
+
+    const cb = try arena.create(ChangeCallback);
+    cb.* = .{
+        .cookie_store = self,
+        .arena = arena,
+        .kind = data.kind,
+        .name = try arena.dupe(u8, data.name),
+        .value = try arena.dupe(u8, data.value),
+        .domain = try arena.dupe(u8, data.domain),
+        .path = try arena.dupe(u8, data.path),
+        .secure = data.secure,
+        .same_site = data.same_site,
+    };
+
+    try frame.js.scheduler.add(cb, ChangeCallback.run, 0, .{
+        .name = "CookieStore.change",
+        .low_priority = false,
+        .finalizer = ChangeCallback.cancelled,
+    });
+}
+
+const ChangeCallback = struct {
+    cookie_store: *CookieStore,
+    arena: Allocator,
+    kind: Notification.CookieChanged.Kind,
+    name: []const u8,
+    value: []const u8,
+    domain: []const u8,
+    path: []const u8,
+    secure: bool,
+    same_site: Cookie.SameSite,
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *ChangeCallback = @ptrCast(@alignCast(ctx));
+        self.releaseArena();
+    }
+
+    fn releaseArena(self: *ChangeCallback) void {
+        if (self.cookie_store._frame) |frame| {
+            frame.releaseArena(self.arena);
+        }
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *ChangeCallback = @ptrCast(@alignCast(ctx));
+        defer self.releaseArena();
+
+        const cs = self.cookie_store;
+        const frame = cs._frame orelse return null;
+        const target = cs.asEventTarget();
+
+        // Skip event construction when nobody is listening.
+        if (!frame._event_manager.hasDirectListeners(target, "change", cs._on_change)) {
+            return null;
+        }
+
+        const event = try CookieChangeEvent.initSingle(self.kind, .{
+            .kind = self.kind,
+            .name = self.name,
+            .value = self.value,
+            .domain = self.domain,
+            .path = self.path,
+            .secure = self.secure,
+            .http_only = false,
+            .same_site = self.same_site,
+        }, frame);
+
+        try frame._event_manager.dispatchDirect(target, event.asEvent(), cs._on_change, .{
+            .context = "CookieStore.change",
+        });
+
+        return null;
+    }
+};
 
 pub fn getOnChange(self: *const CookieStore) ?js.Function.Global {
     return self._on_change;

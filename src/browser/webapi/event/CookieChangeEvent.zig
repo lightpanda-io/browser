@@ -21,8 +21,10 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Notification = @import("../../../Notification.zig");
 
 const Event = @import("../Event.zig");
+const Cookie = @import("../storage/Cookie.zig");
 const CookieStore = @import("../storage/CookieStore.zig");
 
 const String = lp.String;
@@ -60,6 +62,53 @@ pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*CookieChangeEvent
     );
 
     Event.populatePrototypes(event, opts, false);
+    return event;
+}
+
+/// Internal constructor used by the change-notification dispatcher to
+/// build a trusted "change" event from a single-cookie mutation snapshot.
+/// The CookieListItem is materialised on the event's own arena.
+pub fn initSingle(
+    kind: Notification.CookieChanged.Kind,
+    snapshot: Notification.CookieChanged,
+    frame: *Frame,
+) !*CookieChangeEvent {
+    const arena = try frame.getArena(.tiny, "CookieChangeEvent");
+    errdefer frame.releaseArena(arena);
+    const type_string = try String.init(arena, "change", .{});
+
+    const item = try arena.create(CookieStore.CookieListItem);
+    item.* = .{
+        .name = try arena.dupe(u8, snapshot.name),
+        .value = try arena.dupe(u8, snapshot.value),
+        .domain = if (snapshot.domain.len > 0 and snapshot.domain[0] == '.')
+            try arena.dupe(u8, snapshot.domain[1..])
+        else
+            null,
+        .path = try arena.dupe(u8, snapshot.path),
+        .expires = null,
+        .secure = snapshot.secure,
+        .sameSite = switch (snapshot.same_site) {
+            .strict => .strict,
+            .lax => .lax,
+            .none => .none,
+        },
+        .partitioned = false,
+    };
+
+    const items = try arena.dupe(*CookieStore.CookieListItem, &.{item});
+
+    const event = try frame._factory.event(
+        arena,
+        type_string,
+        CookieChangeEvent{
+            ._proto = undefined,
+            ._changed = if (kind == .changed) items else &.{},
+            ._deleted = if (kind == .deleted) items else &.{},
+        },
+    );
+
+    Event.populatePrototypes(event, Options{}, true);
     return event;
 }
 
