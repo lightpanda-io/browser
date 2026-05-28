@@ -114,6 +114,42 @@
   });
 </script>
 
+<script id=set-rejects-invalid-input>
+  testing.async(async () => {
+    const expectReject = async (label, init, valueArg) => {
+      try {
+        if (valueArg !== undefined) {
+          await cookieStore.set(init, valueArg);
+        } else {
+          await cookieStore.set(init);
+        }
+        testing.fail(`expected ${label} to reject`);
+      } catch (err) {
+        testing.expectEqual('TypeError', err.name);
+      }
+    };
+
+    // Empty name.
+    await expectReject('empty name', '', 'v');
+    // Forbidden chars in name.
+    await expectReject('name with =', 'a=b', 'v');
+    await expectReject('name with ;', 'a;b', 'v');
+    await expectReject('name with newline', 'a\nb', 'v');
+    // Forbidden chars in value.
+    await expectReject('value with ;', 'k', 'v;injected=1');
+    await expectReject('value with CR', 'k', 'v\rinjected');
+    // Forbidden chars in path / domain.
+    await expectReject('path with ;', { name: 'k', value: 'v', path: '/;evil' });
+    await expectReject('domain with newline', { name: 'k', value: 'v', domain: 'bad\n.example' });
+
+    // A clean call still works after the rejections.
+    await cookieStore.set('after-validation', 'ok');
+    const item = await cookieStore.get('after-validation');
+    testing.expectEqual('ok', item.value);
+    await cookieStore.delete('after-validation');
+  });
+</script>
+
 <script id=change-event-delete-reports-removed-value>
   testing.async(async () => {
     const events = [];

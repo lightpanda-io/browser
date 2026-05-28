@@ -371,6 +371,17 @@ fn storeCookie(exec: *const Execution, init: CookieInit) !void {
     const session = exec.session;
     const url = exec.url.*;
 
+    // Reject inputs that would corrupt the serialised Set-Cookie header
+    // (or that the spec forbids outright). `=` is allowed in values but not
+    // in names; `;`/CR/LF/NUL are forbidden everywhere.
+    if (init.name.len == 0) return error.InvalidCookieName;
+    if (std.mem.indexOfAny(u8, init.name, "=;\r\n\x00") != null) return error.InvalidCookieName;
+    if (std.mem.indexOfAny(u8, init.value, ";\r\n\x00") != null) return error.InvalidCookieValue;
+    if (std.mem.indexOfAny(u8, init.path, ";\r\n\x00") != null) return error.InvalidCookiePath;
+    if (init.domain) |d| {
+        if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) return error.InvalidCookieDomain;
+    }
+
     // Reuse the Set-Cookie parser by serialising the dict back into a
     // header-shaped string. This keeps domain/path validation, public
     // suffix list checks and prefix rules in one place.
