@@ -47,8 +47,9 @@ pub fn asEventTarget(self: *CookieStore) *EventTarget {
 }
 
 /// Registers this CookieStore as a listener for jar-change notifications on
-/// the given session. Must be called once after construction by the
-/// owning Window. Idempotent on re-call.
+/// the given execution's session. Must be called once after construction by
+/// the owning global (Window today; WorkerGlobalScope once wired up).
+/// Idempotent on re-call.
 pub fn attach(self: *CookieStore, exec: *Execution) !void {
     if (self._exec != null) return;
     self._exec = exec;
@@ -120,7 +121,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
 const ChangeCallback = struct {
     cookie_store: *CookieStore,
     // Execution is stored only to ensure we can release the arena.
-    // The CookieStore could have been detached in the meantime, and so it's
+    // The CookieStore could have been detached in the meantime, and so its
     // _exec pointer could have been reset.
     exec: *Execution,
     arena: Allocator,
@@ -147,7 +148,7 @@ const ChangeCallback = struct {
 
         const cs = self.cookie_store;
         // We use the CookieStore's exec here instead of self.exec to detect if
-        // the store has beend detached. In this case, we don't dispatch the
+        // the store has been detached. In this case, we don't dispatch the
         // event.
         const exec = cs._exec orelse return null;
         const target = cs.asEventTarget();
