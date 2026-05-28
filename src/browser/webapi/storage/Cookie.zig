@@ -509,11 +509,18 @@ pub const Jar = struct {
                 return;
             }
 
-            c.deinit();
             if (is_expired) {
+                // Dispatch while c still points at the live old cookie,
+                // then free its arena, then remove from the array. After
+                // swapRemove, items[i] holds a different (still-live)
+                // entry, so deinit must happen before that.
+                self.dispatchChange(.deleted, c);
+                c.deinit();
                 _ = self.cookies.swapRemove(i);
-                self.dispatchChange(.deleted, &cookie);
             } else {
+                // Free the old cookie's arena before overwriting the slot;
+                // after the assignment, c points at the new cookie.
+                c.deinit();
                 self.cookies.items[i] = cookie;
                 self.dispatchChange(.changed, &self.cookies.items[i]);
             }

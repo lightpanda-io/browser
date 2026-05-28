@@ -114,6 +114,32 @@
   });
 </script>
 
+<script id=change-event-delete-reports-removed-value>
+  testing.async(async () => {
+    const events = [];
+    const handler = (e) => events.push(e);
+    cookieStore.addEventListener('change', handler);
+
+    await cookieStore.set('ev-delete-val', 'original');
+    await new Promise(r => setTimeout(r, 0));
+
+    // Sanity: the change event must report the value that was stored.
+    testing.expectEqual('original', events[0].changed[0].value);
+
+    await cookieStore.delete('ev-delete-val');
+    await new Promise(r => setTimeout(r, 0));
+
+    // The deleted CookieListItem should describe the cookie that was
+    // removed, so its value must be what the jar held ("original") —
+    // not the deletion payload's value ("").
+    testing.expectEqual(1, events[1].deleted.length);
+    testing.expectEqual('ev-delete-val', events[1].deleted[0].name);
+    testing.expectEqual('original', events[1].deleted[0].value);
+
+    cookieStore.removeEventListener('change', handler);
+  });
+</script>
+
 <script id=change-event-from-document-cookie>
   testing.async(async () => {
     const events = [];
