@@ -1,6 +1,20 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
+<script id=replaceable>
+    "use strict";
+    // console is [Replaceable] (Console Standard): assignment must replace it
+    // even in strict mode — neither throwing nor silently no-op'ing, and even
+    // after console has already been read.
+    const prev = window.console;
+    window.console = {marker: 42};
+    testing.expectEqual(42, window.console.marker);
+    testing.expectEqual(42, console.marker);
+    // restore: console is now a writable data property, so this just overwrites it.
+    window.console = prev;
+    testing.expectEqual(true, window.console === prev);
+</script>
+
 <script id=entries>
     {
         const entries = Object.entries(console);
