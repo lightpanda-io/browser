@@ -406,10 +406,12 @@ fn storeCookie(exec: *const Execution, init: CookieInit) !void {
     if (init.expires) |ms| {
         // CookieStore expires is a unix timestamp in milliseconds. The Jar
         // already tracks expiry in seconds — convert via Max-Age so we don't
-        // have to format an HTTP-date.
+        // have to format an HTTP-date. Clamp at 0 (anything <= now means the
+        // cookie is being deleted; emit a clean "Max-Age=0").
         const now_ms = std.time.timestamp() * 1000;
-        const delta_seconds = @divTrunc(@as(i64, @intFromFloat(ms)) - now_ms, 1000);
-        try w.print("; Max-Age={d}", .{delta_seconds});
+        const delta_ms = @as(i64, @intFromFloat(ms)) - now_ms;
+        const max_age: i64 = if (delta_ms <= 0) 0 else @divTrunc(delta_ms, 1000);
+        try w.print("; Max-Age={d}", .{max_age});
     }
 
     switch (init.sameSite) {
