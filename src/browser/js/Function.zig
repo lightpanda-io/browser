@@ -23,6 +23,7 @@ const js = @import("js.zig");
 
 const v8 = js.v8;
 const log = lp.log;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Function = @This();
 
@@ -51,6 +52,20 @@ pub fn withThis(self: *const Function, value: anytype) !Function {
 
 pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Object {
     const local = self.local;
+
+    if (comptime IS_DEBUG == false) {
+        // This should not be possible, yet it happens. In Release, we'll log an
+        // error and hope for the best. In Debug, we'll let the code execute
+        // and v8 will crash on the null reference. This null value almost
+        // certainly comes from a Global that was reset and thus gets unwrapped
+        // to null (but I haven't figured out the flow that can cause that). This
+        // does indicate that we might be in some shutdown state, so just
+        // return an error might not be too bad.
+        if (@intFromPtr(self.handle) == 0) {
+            log.err(.browser, "newInstance on dead handle", .{});
+            return error.DeadFunctionHandle;
+        }
+    }
 
     var try_catch: js.TryCatch = undefined;
     try_catch.init(local);
@@ -107,6 +122,20 @@ const CallOpts = struct {
 fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught, comptime opts: CallOpts) !T {
     caught.* = .{};
     const local = self.local;
+
+    if (comptime IS_DEBUG == false) {
+        // This should not be possible, yet it happens. In Release, we'll log an
+        // error and hope for the best. In Debug, we'll let the code execute
+        // and v8 will crash on the null reference. This null value almost
+        // certainly comes from a Global that was reset and thus gets unwrapped
+        // to null (but I haven't figured out the flow that can cause that). This
+        // does indicate that we might be in some shutdown state, so just
+        // return an error might not be too bad.
+        if (@intFromPtr(self.handle) == 0) {
+            log.err(.browser, "call on dead handle", .{});
+            return error.DeadFunctionHandle;
+        }
+    }
 
     // When we're calling a function from within JavaScript itself, this isn't
     // necessary. We're within a Caller instantiation, which will already have
