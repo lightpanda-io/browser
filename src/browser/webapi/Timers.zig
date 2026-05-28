@@ -108,7 +108,7 @@ pub fn schedule(
     };
     gop.value_ptr.* = callback;
 
-    try exec.context.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
+    try exec.js.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
         .name = opts.name,
         .low_priority = opts.low_priority,
         .finalizer = ScheduleCallback.cancelled,
@@ -135,7 +135,7 @@ pub const LegacyHandler = union(enum) {
         switch (handler) {
             .function => |fun| return fun,
             .string => |str| {
-                const fun = try exec.context.local.?.compileFunction(str, &.{}, &.{});
+                const fun = try exec.js.local.?.compileFunction(str, &.{}, &.{});
                 return fun.temp();
             },
         }
@@ -182,7 +182,7 @@ const ScheduleCallback = struct {
         }
 
         var ls: js.Local.Scope = undefined;
-        self.exec.context.localScope(&ls);
+        self.exec.js.localScope(&ls);
         defer ls.deinit();
 
         switch (self.mode) {
@@ -195,7 +195,7 @@ const ScheduleCallback = struct {
             .animation_frame => {
                 // requestAnimationFrame is window-only; if a worker ever
                 // schedules with this mode it's a programming error.
-                const window = switch (self.exec.context.global) {
+                const window = switch (self.exec.js.global) {
                     .frame => |frame| frame.window,
                     .worker => unreachable,
                 };

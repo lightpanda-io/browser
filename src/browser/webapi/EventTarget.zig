@@ -63,7 +63,7 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     }
     event._is_trusted = false;
 
-    switch (exec.context.global) {
+    switch (exec.js.global) {
         .frame => |frame| {
             event.acquireRef();
             defer _ = event.releaseRef(frame._page);
@@ -99,7 +99,7 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventLi
         };
     };
 
-    switch (exec.context.global) {
+    switch (exec.js.global) {
         inline else => |g| _ = try g._event_manager.register(self, typ, em_callback, options),
     }
 }
@@ -135,7 +135,7 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?Even
         };
     };
 
-    switch (exec.context.global) {
+    switch (exec.js.global) {
         inline else => |g| g._event_manager.remove(self, typ, em_callback, use_capture),
     }
 }

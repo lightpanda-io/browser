@@ -121,7 +121,7 @@ pub fn registerTool(
     // native MCP forwarder) can surface the new tool.
     const event: Notification.ModelContextToolEvent = .{ .exec = exec, .tool = entry };
 
-    const session = switch (exec.context.global) {
+    const session = switch (exec.js.global) {
         inline else => |g| g._session,
     };
 
@@ -147,7 +147,7 @@ pub fn findTool(self: *ModelContext, name: []const u8) ?*Tool {
 /// dispatching `model_context_tool_removed` for each. Cheap when no
 /// signals fired (which is the common case).
 fn markAborted(self: *ModelContext, tool: *Tool, exec: *const Execution) !void {
-    const session = switch (exec.context.global) {
+    const session = switch (exec.js.global) {
         inline else => |g| g._session,
     };
 
@@ -191,7 +191,7 @@ pub const ModelContextClient = struct {
         exec: *const Execution,
     ) !js.Promise {
         var ls: js.Local.Scope = undefined;
-        exec.context.global.getJs().localScope(&ls);
+        exec.js.global.getJs().localScope(&ls);
         defer ls.deinit();
         const resolver = ls.local.createPromiseResolver();
 

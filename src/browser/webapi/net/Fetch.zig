@@ -47,7 +47,7 @@ pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
-    const resolver = exec.context.local.?.createPromiseResolver();
+    const resolver = exec.js.local.?.createPromiseResolver();
 
     // A bad RequestInit (e.g. an invalid priority) must reject the promise,
     // not throw synchronously.
@@ -64,7 +64,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     }
 
     const response = try Response.init(null, .{ .status = 0 }, exec);
-    errdefer response.deinit(exec.context.page);
+    errdefer response.deinit(exec.page);
 
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
@@ -77,7 +77,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._signal = request._signal,
     };
 
-    const session = exec.context.page.session;
+    const session = exec.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
     if (request._headers) |h| {
@@ -213,7 +213,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     });
 
     var ls: js.Local.Scope = undefined;
-    self._exec.context.localScope(&ls);
+    self._exec.js.localScope(&ls);
     defer ls.deinit();
 
     const js_val = try ls.local.zigValueToJs(self._response, .{});
@@ -244,11 +244,11 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // clear this. (defer since `self is in the response's arena).
 
     defer if (owns_response) {
-        response.deinit(self._exec.context.page);
+        response.deinit(self._exec.page);
     };
 
     var ls: js.Local.Scope = undefined;
-    self._exec.context.localScope(&ls);
+    self._exec.js.localScope(&ls);
     defer ls.deinit();
 
     // fetch() must reject with a TypeError on network errors per spec
@@ -261,7 +261,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
     if (self._owns_response) {
         var response = self._response;
         response._http_response = null;
-        response.deinit(self._exec.context.page);
+        response.deinit(self._exec.page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
     }

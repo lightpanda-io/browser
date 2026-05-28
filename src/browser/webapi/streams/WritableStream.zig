@@ -111,7 +111,7 @@ pub fn writeChunk(self: *WritableStream, chunk: js.Value, exec: *const Execution
 
     if (self._write_fn) |write_fn| {
         var ls: js.Local.Scope = undefined;
-        exec.context.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
 
         try ls.toLocal(write_fn).call(void, .{ chunk, self._controller });
@@ -129,7 +129,7 @@ pub fn closeStream(self: *WritableStream, exec: *const Execution) !void {
 
     if (self._close_fn) |close_fn| {
         var ls: js.Local.Scope = undefined;
-        exec.context.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
 
         try ls.toLocal(close_fn).call(void, .{self._controller});

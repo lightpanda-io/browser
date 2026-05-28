@@ -68,7 +68,7 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
         });
     };
 
-    const frame = switch (exec.context.global) {
+    const frame = switch (exec.js.global) {
         .frame => |f| f,
         .worker => lp.assert(false, "FormData worker form", .{}),
     };

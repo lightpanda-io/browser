@@ -261,7 +261,7 @@ pub fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: 
 /// Returns a Promise that resolves with the contents of the blob
 /// as binary data contained in an ArrayBuffer.
 pub fn arrayBuffer(self: *const Blob, exec: *Execution) !js.Promise {
-    return exec.context.local.?.resolvePromise(js.ArrayBuffer{ .values = self._slice });
+    return exec.js.local.?.resolvePromise(js.ArrayBuffer{ .values = self._slice });
 }
 
 const ReadableStream = @import("streams/ReadableStream.zig");
@@ -274,7 +274,7 @@ pub fn stream(self: *const Blob, exec: *Execution) !*ReadableStream {
 /// Returns a Promise that resolves with a string containing
 /// the contents of the blob, interpreted as UTF-8.
 pub fn text(self: *const Blob, exec: *Execution) !js.Promise {
-    return exec.context.local.?.resolvePromise(self._slice);
+    return exec.js.local.?.resolvePromise(self._slice);
 }
 
 /// Extension to Blob; works on Firefox and Safari.
@@ -282,7 +282,7 @@ pub fn text(self: *const Blob, exec: *Execution) !js.Promise {
 /// Returns a Promise that resolves with a Uint8Array containing
 /// the contents of the blob as an array of bytes.
 pub fn bytes(self: *const Blob, exec: *Execution) !js.Promise {
-    return exec.context.local.?.resolvePromise(js.TypedArray(u8){ .values = self._slice });
+    return exec.js.local.?.resolvePromise(js.TypedArray(u8){ .values = self._slice });
 }
 
 /// Returns a new Blob object which contains data

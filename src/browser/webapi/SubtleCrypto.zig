@@ -51,7 +51,7 @@ pub fn generateKey(
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     switch (algo) {
         .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, exec),
         .aes_key_gen => |params| {
@@ -87,7 +87,7 @@ fn generateKeyFromName(
     exec: *const Execution,
 ) !js.Promise {
     return _generateKeyFromName(name, extractable, key_usages, exec) catch |err| {
-        return exec.context.local.?.rejectPromise(.{ .dom_exception = .{ .err = err } });
+        return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = err } });
     };
 }
 
@@ -147,7 +147,7 @@ pub fn exportKey(
     key: *CryptoKey,
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (!key.canExportKey()) {
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
     }
@@ -175,7 +175,7 @@ pub fn deriveBits(
     length: usize,
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     return switch (algo) {
         .ecdh_or_x25519 => |params| {
             const name = params.name;
@@ -213,7 +213,7 @@ pub fn sign(
         .hmac => return HMAC.sign(algo, key, data, exec),
         else => {
             log.warn(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
-            return exec.context.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+            return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
         },
     };
 }
@@ -227,7 +227,7 @@ pub fn verify(
     data: []const u8, // ArrayBuffer.
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (!algo.isHMAC()) {
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
     }
@@ -240,7 +240,7 @@ pub fn verify(
 
 /// Generates a digest of the given data, using the specified hash function.
 pub fn digest(_: *const SubtleCrypto, algo: []const u8, data: js.TypedArray(u8), exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
 
     if (algo.len > 10) {
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });

@@ -61,7 +61,7 @@ pub fn init(callback: js.Function.Global, exec: *const Execution) !*PerformanceO
         ._interests = 0,
         ._entries = .{},
         ._performance = exec.performance(),
-        ._js = exec.context,
+        ._js = exec.js,
         ._arena = exec.arena,
     });
 }

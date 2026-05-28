@@ -64,7 +64,7 @@ pub fn init(stream: *ReadableStream, high_water_mark: u32, exec: *const Executio
 }
 
 pub fn addPendingRead(self: *ReadableStreamDefaultController) !js.Promise {
-    const resolver = self._execution.context.local.?.createPromiseResolver();
+    const resolver = self._execution.js.local.?.createPromiseResolver();
     try self._pending_reads.append(self._arena, try resolver.persist());
     return resolver.promise();
 }
@@ -89,14 +89,14 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
     };
 
     if (comptime IS_DEBUG) {
-        if (exec.context.local == null) {
+        if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueue", .url = exec.url.* });
-            std.debug.assert(exec.context.local != null);
+            std.debug.assert(exec.js.local != null);
         }
     }
 
     var ls: js.Local.Scope = undefined;
-    exec.context.localScope(&ls);
+    exec.js.localScope(&ls);
     defer ls.deinit();
 
     ls.toLocal(resolver).resolve("stream enqueue", result);
@@ -124,14 +124,14 @@ pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !vo
     };
 
     if (comptime IS_DEBUG) {
-        if (exec.context.local == null) {
+        if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueueValue", .url = exec.url.* });
-            std.debug.assert(exec.context.local != null);
+            std.debug.assert(exec.js.local != null);
         }
     }
 
     var ls: js.Local.Scope = undefined;
-    exec.context.localScope(&ls);
+    exec.js.localScope(&ls);
     defer ls.deinit();
 
     ls.toLocal(resolver).resolve("stream enqueue value", result);
@@ -152,15 +152,15 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
 
     const exec = self._execution;
     if (comptime IS_DEBUG) {
-        if (exec.context.local == null) {
+        if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.close", .url = exec.url.* });
-            std.debug.assert(exec.context.local != null);
+            std.debug.assert(exec.js.local != null);
         }
     }
 
     for (self._pending_reads.items) |resolver| {
         var ls: js.Local.Scope = undefined;
-        exec.context.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
         ls.toLocal(resolver).resolve("stream close", result);
     }
@@ -178,7 +178,7 @@ pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
 
     // Reject all pending reads
     for (self._pending_reads.items) |resolver| {
-        self._execution.context.toLocal(resolver).reject("stream error", err);
+        self._execution.js.toLocal(resolver).reject("stream error", err);
     }
     self._pending_reads.clearRetainingCapacity();
 }
