@@ -251,7 +251,7 @@ pub fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {
     var uuid_buf: [36]u8 = undefined;
     @import("../../id.zig").uuidv4(&uuid_buf);
 
-    switch (exec.context.global) {
+    switch (exec.js.global) {
         inline else => |g| {
             const blob_url = try std.fmt.allocPrint(
                 g.arena,
@@ -271,7 +271,7 @@ pub fn revokeObjectURL(url: []const u8, exec: *const Execution) void {
         return;
     }
 
-    switch (exec.context.global) {
+    switch (exec.js.global) {
         inline else => |g| {
             if (g._blob_urls.fetchRemove(url)) |entry| {
                 entry.value.releaseRef(g._page);

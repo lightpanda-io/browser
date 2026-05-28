@@ -329,7 +329,7 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     // Add window at the end (unless we stopped at shadow boundary)
     if (!stopped_at_shadow_boundary) {
         if (path_len < path_buffer.len) {
-            switch (exec.context.global) {
+            switch (exec.js.global) {
                 .worker => {},
                 .frame => |frame| {
                     path_buffer[path_len] = frame.window.asEventTarget();

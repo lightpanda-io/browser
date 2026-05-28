@@ -37,7 +37,7 @@ pub fn init(
     // gather them together with a single alloc call. Not sure if factory
     // pattern is suitable for it though.
 
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
 
     // Calculate usages; only matters for private key.
     // Only deriveKey() and deriveBits() be used for X25519.

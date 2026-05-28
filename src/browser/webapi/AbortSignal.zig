@@ -130,7 +130,7 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
 fn dispatchAbortEvent(self: *AbortSignal, exec: *const Execution) !void {
     const target = self.asEventTarget();
     const on_abort = self._on_abort;
-    switch (exec.context.global) {
+    switch (exec.js.global) {
         inline else => |g| {
             if (g._event_manager.hasDirectListeners(target, "abort", on_abort)) {
                 const event = try Event.initTrusted(comptime .wrap("abort"), .{}, g._page);
@@ -191,7 +191,7 @@ const ThrowIfAborted = union(enum) {
     undefined: void,
 };
 pub fn throwIfAborted(self: *const AbortSignal, exec: *const Execution) !ThrowIfAborted {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
 
     if (self._aborted) {
         const exception = switch (self._reason) {

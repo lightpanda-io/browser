@@ -257,7 +257,7 @@ fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Pr
     const event = (try ProgressEvent.initTrusted(
         comptime .wrap(typ),
         .{ .total = progress.total, .loaded = progress.loaded },
-        exec.context.page,
+        exec.page,
     )).asEvent();
 
     return exec.dispatch(

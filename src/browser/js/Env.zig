@@ -304,11 +304,13 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     };
 
     context.execution = .{
+        .js = context,
         .url = &global.url,
         .buf = &global.buf,
         .charset = &global.charset,
-        .context = context,
         .arena = global.arena,
+        .page = context.page,
+        .session = page.session,
         .call_arena = params.call_arena,
         ._factory = global._factory,
         ._scheduler = &context.scheduler,

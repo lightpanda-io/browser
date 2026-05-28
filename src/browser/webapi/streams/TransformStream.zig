@@ -94,7 +94,7 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Exec
 
     if (self._controller._transform_fn) |transform_fn| {
         var ls: js.Local.Scope = undefined;
-        exec.context.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
 
         try ls.toLocal(transform_fn).call(void, .{ chunk, self._controller });
@@ -106,7 +106,7 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Exec
 pub fn transformClose(self: *TransformStream, exec: *const Execution) !void {
     if (self._controller._flush_fn) |flush_fn| {
         var ls: js.Local.Scope = undefined;
-        exec.context.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
 
         try ls.toLocal(flush_fn).call(void, .{self._controller});

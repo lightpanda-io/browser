@@ -58,7 +58,7 @@ pub const ReadResult = struct {
 };
 
 pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     const stream = self._stream orelse {
         return local.rejectPromise(.{ .type_error = "Reader has been released" });
     };
@@ -97,7 +97,7 @@ pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
 
 pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, exec: *const Execution) !js.Promise {
     const stream = self._stream orelse {
-        return exec.context.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
+        return exec.js.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
     };
 
     self.releaseLock();

@@ -61,7 +61,7 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
     const event = (try ProgressEvent.initTrusted(
         comptime .wrap(typ),
         .{ .total = progress.total, .loaded = progress.loaded },
-        exec.context.page,
+        exec.page,
     )).asEvent();
 
     return exec.dispatch(

@@ -70,7 +70,7 @@ const InitOpts = struct {
 pub const BodyInit = body_init.BodyInit;
 
 pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
-    const session = exec.context.page.session;
+    const session = exec.session;
     const arena = try session.getArena(.large, "Response");
     errdefer session.releaseArena(arena);
 
@@ -191,7 +191,7 @@ fn consume(self: *Response, local: *const js.Local) ?js.Promise {
 }
 
 pub fn getText(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
@@ -205,7 +205,7 @@ pub fn getText(self: *Response, exec: *const Execution) !js.Promise {
 }
 
 pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
@@ -222,7 +222,7 @@ pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
 }
 
 pub fn arrayBuffer(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
@@ -246,7 +246,7 @@ const StreamConsumer = struct {
     resolver: js.PromiseResolver.Global,
 
     fn start(stream: *ReadableStream, exec: *const Execution) !js.Promise {
-        const local = exec.context.local.?;
+        const local = exec.js.local.?;
         var resolver = local.createPromiseResolver();
         const promise = resolver.promise();
 
@@ -267,7 +267,7 @@ const StreamConsumer = struct {
     }
 
     fn pumpRead(self: *StreamConsumer) !void {
-        const local = self.execution.context.local.?;
+        const local = self.execution.js.local.?;
         const read_promise = try self.reader.read(self.execution);
 
         const then_fn = local.newCallback(onReadFulfilled, self);
@@ -284,7 +284,7 @@ const StreamConsumer = struct {
     };
 
     fn onReadFulfilled(self: *StreamConsumer, data_: ?ReadData) void {
-        const local = self.execution.context.local.?;
+        const local = self.execution.js.local.?;
 
         const data = data_ orelse {
             return self.finish(local, null);
@@ -297,7 +297,7 @@ const StreamConsumer = struct {
 
     fn _onReadFulfilled(self: *StreamConsumer, data: ReadData) !void {
         const exec = self.execution;
-        const local = exec.context.local.?;
+        const local = exec.js.local.?;
 
         if (data.done) {
             // Stream is finished, concatenate all chunks and resolve
@@ -328,7 +328,7 @@ const StreamConsumer = struct {
     }
 
     fn onReadRejected(self: *StreamConsumer) void {
-        self.finish(self.execution.context.local.?, null);
+        self.finish(self.execution.js.local.?, null);
     }
 
     fn concatenateChunks(self: *StreamConsumer, allocator: Allocator) ![]const u8 {
@@ -348,7 +348,7 @@ const StreamConsumer = struct {
 };
 
 pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| return rejected;
     const body = switch (self._body) {
         .bytes => |b| b,
@@ -356,12 +356,12 @@ pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
         .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
     };
     const content_type = try self._headers.get("content-type", exec) orelse "";
-    const b = try Blob.initFromBytes(body, content_type, true, exec.context.page);
+    const b = try Blob.initFromBytes(body, content_type, true, exec.page);
     return local.resolvePromise(b);
 }
 
 pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| return rejected;
     const body = switch (self._body) {
         .bytes => |b| b,
@@ -372,7 +372,7 @@ pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
 }
 
 pub fn clone(self: *const Response, exec: *const Execution) !*Response {
-    const session = exec.context.page.session;
+    const session = exec.session;
     const body_len = switch (self._body) {
         .bytes => |b| b.len,
         .empty => 0,

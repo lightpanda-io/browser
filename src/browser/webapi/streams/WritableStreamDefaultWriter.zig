@@ -32,7 +32,7 @@ pub fn init(stream: *WritableStream, exec: *const Execution) !*WritableStreamDef
 }
 
 pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     const stream = self._stream orelse {
         return local.rejectPromise(.{ .type_error = "Writer has been released" });
     };
@@ -47,7 +47,7 @@ pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, exec: *const E
 }
 
 pub fn close(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     const stream = self._stream orelse {
         return local.rejectPromise(.{ .type_error = "Writer has been released" });
     };
@@ -69,7 +69,7 @@ pub fn releaseLock(self: *WritableStreamDefaultWriter) void {
 }
 
 pub fn getClosed(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     const stream = self._stream orelse {
         return local.rejectPromise(.{ .type_error = "Writer has been released" });
     };
@@ -92,7 +92,7 @@ pub fn getDesiredSize(self: *const WritableStreamDefaultWriter) ?i32 {
 
 pub fn getReady(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
     _ = self;
-    return exec.context.local.?.resolvePromise(.{});
+    return exec.js.local.?.resolvePromise(.{});
 }
 
 pub const JsApi = struct {

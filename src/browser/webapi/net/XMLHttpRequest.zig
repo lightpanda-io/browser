@@ -146,7 +146,7 @@ fn releaseSelfRef(self: *XMLHttpRequest) void {
         return;
     }
     self._active_request = false;
-    self.releaseRef(self._exec.context.page);
+    self.releaseRef(self._exec.page);
 }
 
 pub fn releaseRef(self: *XMLHttpRequest, page: *Page) void {
@@ -249,7 +249,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     const exec = self._exec;
 
-    const session = exec.context.page.session;
+    const session = exec.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
 
@@ -367,13 +367,13 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
     const res: Response = switch (self._response_type) {
         .text => .{ .text = data },
         .json => blk: {
-            const value = try exec.context.local.?.parseJSON(data);
+            const value = try exec.js.local.?.parseJSON(data);
             break :blk .{ .json = try value.persist() };
         },
         .document => blk: {
             // responseType=document is only meaningful in a Frame; workers
             // have no DOM. Drastically different impls -> switch on global.
-            switch (exec.context.global) {
+            switch (exec.js.global) {
                 .frame => |frame| {
                     const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
                     try frame.parseHtmlAsChildren(document.asNode(), data);
@@ -449,7 +449,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
     const exec = self._exec;
 
     var ls: js.Local.Scope = undefined;
-    exec.context.localScope(&ls);
+    exec.js.localScope(&ls);
     defer ls.deinit();
 
     try self.stateChanged(.headers_received, exec);
@@ -570,7 +570,7 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, exec: *const Execution
 
     const target = self.asEventTarget();
     if (exec.hasDirectListeners(target, "readystatechange", self._on_ready_state_change)) {
-        const event = try Event.initTrusted(.wrap("readystatechange"), .{}, exec.context.page);
+        const event = try Event.initTrusted(.wrap("readystatechange"), .{}, exec.page);
         try exec.dispatch(target, event, self._on_ready_state_change, .{ .context = "XHR state change" });
     }
 }
