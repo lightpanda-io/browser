@@ -247,12 +247,12 @@ const SameSite = enum {
 pub fn get(_: *CookieStore, input: GetInput, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
 
-    const name: ?[]const u8 = switch (input) {
-        .name => |n| n,
-        .options => |o| o.name,
+    const name: ?[]const u8, const url: ?[]const u8 = switch (input) {
+        .name => |n| .{ n, null },
+        .options => |o| .{ o.name, o.url },
     };
 
-    const items = matchCookies(exec, name, true) catch |err| {
+    const items = matchCookies(exec, name, url, true) catch |err| {
         return local.rejectPromise(.{ .type_error = @errorName(err) });
     };
 
@@ -265,12 +265,12 @@ pub fn get(_: *CookieStore, input: GetInput, exec: *const Execution) !js.Promise
 pub fn getAll(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
 
-    const name: ?[]const u8 = if (input) |inp| switch (inp) {
-        .name => |n| n,
-        .options => |o| o.name,
-    } else null;
+    const name: ?[]const u8, const url: ?[]const u8 = if (input) |inp| switch (inp) {
+        .name => |n| .{ n, null },
+        .options => |o| .{ o.name, o.url },
+    } else .{ null, null };
 
-    const items = matchCookies(exec, name, false) catch |err| {
+    const items = matchCookies(exec, name, url, false) catch |err| {
         return local.rejectPromise(.{ .type_error = @errorName(err) });
     };
     return local.resolvePromise(items);
@@ -320,18 +320,38 @@ pub fn delete(_: *CookieStore, input: DeleteInput, exec: *const Execution) !js.P
     return local.resolvePromise({});
 }
 
+// Resolve the optional `url` per CookieStore.get/getAll spec. In a Window
+// context, only the document's own URL is allowed (matches the cookie scope
+// script already sees). In a Worker context, any same-origin URL is allowed.
+fn resolveQueryUrl(exec: *const Execution, _override: ?[]const u8) ![:0]const u8 {
+    const current = exec.url.*;
+    const override = _override orelse return current;
+
+    const resolved = try URL.resolve(exec.call_arena, exec.base(), override, .{ .always_dupe = true });
+    if (!exec.isSameOrigin(resolved)) return error.SecurityError;
+
+    switch (exec.js.global) {
+        .frame => {
+            if (!std.mem.eql(u8, resolved, current)) return error.InvalidUrl;
+        },
+        .worker => {},
+    }
+    return resolved;
+}
+
 fn matchCookies(
     exec: *const Execution,
     name: ?[]const u8,
+    url: ?[]const u8,
     first_only: bool,
 ) ![]*CookieListItem {
     const session = exec.session;
-    const url = exec.url.*;
+    const url_resolved = try resolveQueryUrl(exec, url);
 
     const target = Cookie.PreparedUri{
-        .host = URL.getHostname(url),
-        .path = URL.getPathname(url),
-        .secure = URL.isHTTPS(url),
+        .host = URL.getHostname(url_resolved),
+        .path = URL.getPathname(url_resolved),
+        .secure = URL.isHTTPS(url_resolved),
     };
     if (target.host.len == 0) return error.SecurityError;
 
