@@ -39,6 +39,7 @@ const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
+const MessagePort = @import("MessagePort.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
 const Element = @import("Element.zig");
@@ -597,7 +598,7 @@ pub fn close(self: *Window) void {
     };
 }
 
-pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, frame: *Frame) !void {
+pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
     _ = target_origin;
@@ -617,6 +618,7 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
         .frame = target_frame,
         .source = source_window,
         .origin = try arena.dupe(u8, origin),
+        .ports = if (transfer) |t| try arena.dupe(*MessagePort, t) else &.{},
     };
 
     try target_frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
@@ -832,6 +834,7 @@ const PostMessageCallback = struct {
     arena: Allocator,
     origin: []const u8,
     message: js.Value.Temp,
+    ports: []const *MessagePort,
 
     fn deinit(self: *PostMessageCallback) void {
         self.frame.releaseArena(self.arena);
@@ -855,6 +858,7 @@ const PostMessageCallback = struct {
                 .data = .{ .value = self.message },
                 .origin = self.origin,
                 .source = self.source,
+                .ports = self.ports,
                 .bubbles = false,
                 .cancelable = false,
             }, frame._page)).asEvent();
@@ -1032,8 +1036,8 @@ pub const JsApi = struct {
 const CrossOriginWindow = struct {
     window: *Window,
 
-    pub fn postMessage(self: *CrossOriginWindow, message: js.Value.Temp, target_origin: ?[]const u8, frame: *Frame) !void {
-        return self.window.postMessage(message, target_origin, frame);
+    pub fn postMessage(self: *CrossOriginWindow, message: js.Value.Temp, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
+        return self.window.postMessage(message, target_origin, transfer, frame);
     }
 
     pub fn getTop(self: *CrossOriginWindow, frame: *Frame) Access {

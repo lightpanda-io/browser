@@ -161,6 +161,32 @@
 }
 </script>
 
+<script id=postMessageTransfersPorts>
+{
+  // window.postMessage(data, targetOrigin, [port]) must deliver the transferred
+  // MessagePort as event.ports[0] (regression: ports used to always be empty,
+  // so receivers doing `e.ports[0].onmessage = ...` threw on undefined).
+  const channel = new MessageChannel();
+  let received = null;
+  let echoed = null;
+
+  channel.port1.onmessage = (e) => { echoed = e.data; };
+
+  const handler = (e) => {
+    received = e.ports[0];
+    received.postMessage('pong');
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage('ping', '*', [channel.port2]);
+
+  testing.onload(() => {
+    testing.expectEqual(true, received instanceof MessagePort);
+    testing.expectEqual('pong', echoed);
+  });
+}
+</script>
+
 <script id=messageEventOriginFromLocation>
 {
   let receivedOrigin = null;

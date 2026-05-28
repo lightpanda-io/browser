@@ -35,11 +35,13 @@ _proto: *Event,
 _data: ?Data = null,
 _origin: []const u8 = "",
 _source: ?*Window = null,
+_ports: []const *MessagePort = &.{},
 
 const MessageEventOptions = struct {
     data: ?Data = null,
     origin: ?[]const u8 = null,
     source: ?*Window = null,
+    ports: []const *MessagePort = &.{},
 };
 
 pub const Data = union(enum) {
@@ -75,6 +77,7 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
             ._data = opts.data,
             ._origin = if (opts.origin) |str| try arena.dupe(u8, str) else "",
             ._source = opts.source,
+            ._ports = if (opts.ports.len == 0) &.{} else try arena.dupe(*MessagePort, opts.ports),
         },
     );
 
@@ -117,8 +120,8 @@ pub fn getSource(self: *const MessageEvent) ?*Window {
     return self._source;
 }
 
-pub fn getPorts(_: *const MessageEvent) []*MessagePort {
-    return &.{};
+pub fn getPorts(self: *const MessageEvent) []const *MessagePort {
+    return self._ports;
 }
 
 pub const JsApi = struct {
