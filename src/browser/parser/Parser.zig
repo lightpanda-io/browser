@@ -71,7 +71,16 @@ pending_text: ?PendingText,
 // second chunk of a run, so the common case stays at one copy.
 buf: std.ArrayList(u8),
 
-pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
+// Whether `<template shadowrootmode>` is parsed into a real shadow root.
+// True for document navigation, document.write, and setHTMLUnsafe; false for
+// innerHTML and DOMParser (per spec). Set from Options at init.
+allow_declarative_shadow: bool = false,
+
+pub const Options = struct {
+    allow_declarative_shadow: bool = false,
+};
+
+pub fn init(arena: Allocator, node: *Node, frame: *Frame, opts: Options) Parser {
     return .{
         .err = null,
         .frame = frame,
@@ -83,6 +92,7 @@ pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
         },
         .pending_text = null,
         .buf = .empty,
+        .allow_declarative_shadow = opts.allow_declarative_shadow,
     };
 }
 
@@ -157,6 +167,7 @@ const Error = struct {
         reparent_children,
         append_before_sibling,
         append_based_on_parent_node,
+        attach_declarative_shadow,
     };
 };
 
@@ -180,6 +191,8 @@ pub fn parse(self: *Parser, html: []const u8) void {
         reparentChildrenCallback,
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
+        attachDeclarativeShadowCallback,
+        self.allow_declarative_shadow,
     );
     self.flushPendingText() catch |err| {
         if (self.err == null) self.err = .{ .err = err, .source = .append };
@@ -209,6 +222,8 @@ pub fn parseWithEncoding(self: *Parser, html: []const u8, charset: []const u8) v
         reparentChildrenCallback,
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
+        attachDeclarativeShadowCallback,
+        self.allow_declarative_shadow,
     );
     self.flushPendingText() catch |err| {
         if (self.err == null) self.err = .{ .err = err, .source = .append };
@@ -235,6 +250,8 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
         reparentChildrenCallback,
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
+        attachDeclarativeShadowCallback,
+        false,
     );
     self.flushPendingText() catch |err| {
         if (self.err == null) self.err = .{ .err = err, .source = .append };
@@ -261,6 +278,8 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         reparentChildrenCallback,
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
+        attachDeclarativeShadowCallback,
+        self.allow_declarative_shadow,
     );
     self.flushPendingText() catch |err| {
         if (self.err == null) self.err = .{ .err = err, .source = .append };
@@ -271,10 +290,10 @@ pub const Streaming = struct {
     parser: Parser,
     handle: ?*anyopaque,
 
-    pub fn init(arena: Allocator, node: *Node, frame: *Frame) Streaming {
+    pub fn init(arena: Allocator, node: *Node, frame: *Frame, opts: Options) Streaming {
         return .{
             .handle = null,
-            .parser = Parser.init(arena, node, frame),
+            .parser = Parser.init(arena, node, frame, opts),
         };
     }
 
@@ -304,6 +323,8 @@ pub const Streaming = struct {
             reparentChildrenCallback,
             appendBeforeSiblingCallback,
             appendBasedOnParentNodeCallback,
+            attachDeclarativeShadowCallback,
+            self.parser.allow_declarative_shadow,
         ) orelse return error.ParserCreationFailed;
     }
 
@@ -497,6 +518,34 @@ fn _getTemplateContentsCallback(self: *Parser, node: *Node) !*anyopaque {
         .node = content_node,
     };
     return pn;
+}
+
+// Called for `<template shadowrootmode>` when declarative shadow roots are
+// allowed. Attaches a shadow root to `host` and redirects the (stack-only)
+// template's contents into it, so html5ever parses the template's children
+// straight into the shadow root. Returns 1 on success, 0 to tell html5ever to
+// fall back to inserting the template as a normal light-DOM element.
+fn attachDeclarativeShadowCallback(ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8 {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    return self._attachDeclarativeShadowCallback(getNode(host_ref), getNode(template_ref), mode_is_open != 0) catch |err| {
+        self.err = .{ .err = err, .source = .attach_declarative_shadow };
+        return 0;
+    };
+}
+
+fn _attachDeclarativeShadowCallback(self: *Parser, host_node: *Node, template_node: *Node, mode_is_open: bool) !u8 {
+    // guaranteed by html5ever
+    const host = host_node.as(Element);
+    const mode: lp.String = if (mode_is_open) comptime .wrap("open") else comptime .wrap("closed");
+    const shadow = host.attachShadow(mode, self.frame) catch |err| switch (err) {
+        // Expected per-spec fall-backs (host can't host a shadow, or already
+        // has one): keep the <template> in the light DOM instead.
+        error.NotSupported => return 0,
+        else => return err,
+    };
+    const template = template_node.as(Element).is(Element.Html.Template) orelse return 0;
+    template._content = shadow.asDocumentFragment();
+    return 1;
 }
 
 fn getDataCallback(ctx: *anyopaque) callconv(.c) *anyopaque {

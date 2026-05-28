@@ -1076,6 +1076,25 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
     }
 }
 
+/// Shared implementation in Element and DocumentFragment
+pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, frame: *Frame) !void {
+    frame.domChanged();
+    var it = self.childrenIterator();
+    while (it.next()) |child| {
+        frame.removeNode(self, child, .{ .will_be_reconnected = false });
+    }
+
+    if (html.len == 0) {
+        return;
+    }
+
+    if (allow_declarative_shadow) {
+        try frame.parseHtmlUnsafeAsChildren(self, html);
+    } else {
+        try frame.parseHtmlAsChildren(self, html);
+    }
+}
+
 // Writes a JSON representation of the node and its children
 pub fn jsonStringify(self: *const Node, writer: *std.json.Stringify) !void {
     // stupid json api requires this to be const,

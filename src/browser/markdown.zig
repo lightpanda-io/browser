@@ -775,7 +775,7 @@ fn testMarkdownShadow(light: []const u8, shadow: []const u8, expected: []const u
         try frame.parseHtmlAsChildren(host.asNode(), light);
     }
 
-    const sr = try host.attachShadow("open", frame);
+    const sr = try host.attachShadow(comptime .wrap("open"), frame);
     try frame.parseHtmlAsChildren(sr.asNode(), shadow);
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -813,4 +813,25 @@ test "browser.markdown: slot fallback content when nothing assigned" {
     try testMarkdownShadow("",
         \\<slot name="x">Default text</slot>
     , "Default text\n");
+}
+
+// End-to-end: a declarative shadow root (parsed via setHTMLUnsafe) is attached
+// as a real shadow tree, and markdown's composed-tree piercing then renders it.
+test "browser.markdown: declarative shadow DOM renders through piercing" {
+    const testing = @import("../testing.zig");
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const host = try doc.createElement("div", null, frame);
+    try host.setHTMLUnsafe(
+        \\<div><template shadowrootmode="open"><p>shadow content</p></template></div>
+    , frame);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(host.asNode(), .{}, &aw.writer, frame);
+
+    try testing.expectString("\nshadow content\n", aw.written());
 }

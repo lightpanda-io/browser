@@ -484,18 +484,13 @@ pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void
 
 pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
+    return parent.setHTML(html, false, frame);
+}
 
-    frame.domChanged();
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        frame.removeNode(parent, child, .{ .will_be_reconnected = false });
-    }
-
-    if (html.len == 0) {
-        return;
-    }
-
-    try frame.parseHtmlAsChildren(parent, html);
+/// allows declarative shadow dom
+pub fn setHTMLUnsafe(self: *Element, html: []const u8, frame: *Frame) !void {
+    const parent = self.asNode();
+    return parent.setHTML(html, true, frame);
 }
 
 pub fn getId(self: *const Element) []const u8 {
@@ -726,11 +721,41 @@ pub fn getAssignedSlot(self: *Element, frame: *Frame) ?*Html.Slot {
     return frame._element_assigned_slots.get(self);
 }
 
-pub fn attachShadow(self: *Element, mode_str: []const u8, frame: *Frame) !*ShadowRoot {
-    if (frame._element_shadow_roots.get(self)) |_| {
-        return error.AlreadyHasShadowRoot;
+// Whether this element may host a shadow root
+fn isValidShadowHost(self: *const Element) bool {
+    if (self._namespace != .html) {
+        return false;
     }
-    const mode = try ShadowRoot.Mode.fromString(mode_str);
+
+    return switch (self.getTag()) {
+        .article, .aside, .blockquote, .body, .div, .footer, .header, .main, .nav, .p, .section, .span, .h1, .h2, .h3, .h4, .h5, .h6, .custom => true,
+        else => false,
+    };
+}
+
+pub fn attachShadow(self: *Element, mode_str: String, frame: *Frame) !*ShadowRoot {
+    if (frame._element_shadow_roots.get(self)) |_| {
+        return error.NotSupported;
+    }
+    if (!self.isValidShadowHost()) {
+        return error.NotSupported;
+    }
+
+    // A custom element whose definition lists "shadow" in disabledFeatures
+    // cannot host a shadow root (imperative or declarative).
+    if (self.is(Html.Custom)) |custom| {
+        if (frame.window._custom_elements._definitions.get(custom._tag_name.str())) |def| {
+            if (def.disable_shadow) {
+                return error.NotSupported;
+            }
+        }
+    }
+    const mode: ShadowRoot.Mode = blk: {
+        if (mode_str.eql(comptime .wrap("open"))) break :blk .open;
+        if (mode_str.eql(comptime .wrap("closed"))) break :blk .closed;
+        return error.InvalidArgument;
+    };
+
     const shadow_root = try ShadowRoot.init(self, mode, frame);
     try frame._element_shadow_roots.put(frame.arena, self, shadow_root);
     return shadow_root;
@@ -1792,11 +1817,12 @@ pub const JsApi = struct {
     pub const assignedSlot = bridge.accessor(Element.getAssignedSlot, null, .{});
     pub const attachShadow = bridge.function(_attachShadow, .{ .dom_exception = true });
     pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
+    pub const setHTMLUnsafe = bridge.function(Element.setHTMLUnsafe, .{ .dom_exception = true, .ce_reactions = true });
     pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .dom_exception = true, .ce_reactions = true });
     pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .dom_exception = true, .ce_reactions = true });
 
     const ShadowRootInit = struct {
-        mode: []const u8,
+        mode: String,
     };
     fn _attachShadow(self: *Element, init: ShadowRootInit, frame: *Frame) !*ShadowRoot {
         return self.attachShadow(init.mode, frame);

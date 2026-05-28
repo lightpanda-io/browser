@@ -65,6 +65,13 @@ pub type AddAttrsIfMissingCallback = unsafe extern "C" fn(
 
 pub type GetTemplateContentsCallback = unsafe extern "C" fn(ctx: Ref, target: Ref) -> Ref;
 
+pub type AttachDeclarativeShadowCallback = unsafe extern "C" fn(
+    ctx: Ref,
+    host: Ref,
+    template: Ref,
+    mode_is_open: u8,
+) -> u8;
+
 pub type RemoveFromParentCallback = unsafe extern "C" fn(ctx: Ref, target: Ref) -> ();
 
 pub type ReparentChildrenCallback = unsafe extern "C" fn(ctx: Ref, node: Ref, new_parent: Ref) -> ();
