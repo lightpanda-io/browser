@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<base href="https://www.example.com">
+<a id=a href=spice></a>
+
+<script id=base>
+  {
+    const b0 = $('base');
+
+    // initial condition
+    const a = $('#a');
+    testing.expectEqual('https://www.example.com/spice', a.href);
+
+    // add base AFTER the existing one
+    const b1 = document.createElement('base');
+    b0.after(b1);
+    b1.href = 'https://www.example.com/1/';
+    testing.expectEqual('https://www.example.com/spice', a.href);
+
+    // add base BEFORE existing one
+    const b2 = document.createElement('base');
+    b0.before(b2);
+    b2.href = 'https://www.example.com/2/';
+    testing.expectEqual('https://www.example.com/2/spice', a.href);
+  }
+</script>
