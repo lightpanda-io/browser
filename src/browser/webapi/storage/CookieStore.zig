@@ -392,9 +392,9 @@ fn storeCookie(exec: *const Execution, init: CookieInit) !void {
     const session = exec.session;
     const url = exec.url.*;
 
-    // Reject inputs that would corrupt the serialised Set-Cookie header
-    // (or that the spec forbids outright). `=` is allowed in values but not
-    // in names; `;`/CR/LF/NUL are forbidden everywhere.
+    // Reject inputs the cookie model can't represent. `=` is allowed in
+    // values but not in names; `;`/CR/LF/NUL break the cookie wire format
+    // everywhere and so are forbidden in every field.
     if (init.name.len == 0) return error.InvalidCookieName;
     if (std.mem.indexOfAny(u8, init.name, "=;\r\n\x00") != null) return error.InvalidCookieName;
     if (std.mem.indexOfAny(u8, init.value, ";\r\n\x00") != null) return error.InvalidCookieValue;
@@ -403,53 +403,55 @@ fn storeCookie(exec: *const Execution, init: CookieInit) !void {
         if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) return error.InvalidCookieDomain;
     }
 
-    // Reuse the Set-Cookie parser by serialising the dict back into a
-    // header-shaped string. This keeps domain/path validation, public
-    // suffix list checks and prefix rules in one place.
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(exec.call_arena);
-    const w = buf.writer(exec.call_arena);
+    const is_https = URL.isHTTPS(url);
+    // Per spec, SameSite=None requires Secure. CookieStore additionally
+    // marks any cookie written from an HTTPS document as Secure.
+    const secure = is_https or init.sameSite == .none;
 
-    try w.writeAll(init.name);
-    try w.writeByte('=');
-    try w.writeAll(init.value);
-
-    try w.writeAll("; Path=");
-    try w.writeAll(if (init.path.len > 0) init.path else "/");
-
-    if (init.domain) |d| {
-        if (d.len > 0) {
-            try w.writeAll("; Domain=");
-            try w.writeAll(d);
+    // Cookie-name-prefix rules — match Cookie.parse, case-insensitive to
+    // catch impersonation attempts (e.g. "__HoSt-").
+    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
+    if (std.ascii.startsWithIgnoreCase(init.name, "__Host-")) {
+        if (!is_https) return error.InvalidPrefixedCookie;
+        if (init.domain) |d| {
+            if (d.len > 0) return error.InvalidPrefixedCookie;
         }
+        const effective_path = if (init.path.len > 0) init.path else "/";
+        if (!std.mem.eql(u8, effective_path, "/")) return error.InvalidPrefixedCookie;
+    } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
+        if (!is_https) return error.InvalidPrefixedCookie;
     }
 
-    if (init.expires) |ms| {
-        // CookieStore expires is a unix timestamp in milliseconds. The Jar
-        // already tracks expiry in seconds — convert via Max-Age so we don't
-        // have to format an HTTP-date. Clamp at 0 (anything <= now means the
-        // cookie is being deleted; emit a clean "Max-Age=0").
-        const now_ms = std.time.timestamp() * 1000;
-        const delta_ms = @as(i64, @intFromFloat(ms)) - now_ms;
-        const max_age: i64 = if (delta_ms <= 0) 0 else @divTrunc(delta_ms, 1000);
-        try w.print("; Max-Age={d}", .{max_age});
-    }
+    var arena = std.heap.ArenaAllocator.init(session.cookie_jar.allocator);
+    errdefer arena.deinit();
+    const aa = arena.allocator();
 
-    switch (init.sameSite) {
-        .strict => try w.writeAll("; SameSite=Strict"),
-        .lax => try w.writeAll("; SameSite=Lax"),
-        .none => try w.writeAll("; SameSite=None; Secure"),
-    }
+    const owned_name = try aa.dupe(u8, init.name);
+    const owned_value = try aa.dupe(u8, init.value);
+    const owned_path = try Cookie.parsePath(aa, url, init.path);
+    const owned_domain = try Cookie.parseDomain(aa, url, init.domain);
 
-    // Per spec, CookieStore-written cookies that target an HTTPS page are
-    // Secure. We add the flag for https URLs (idempotent when SameSite=None
-    // already added it above).
-    if (URL.isHTTPS(url) and init.sameSite != .none) {
-        try w.writeAll("; Secure");
-    }
+    const cookie: Cookie = .{
+        .arena = arena,
+        .name = owned_name,
+        .value = owned_value,
+        .path = owned_path,
+        .domain = owned_domain,
 
-    const cookie = try Cookie.parse(session.cookie_jar.allocator, url, buf.items);
-    errdefer cookie.deinit();
+        // CookieStore.expires is a unix timestamp in milliseconds; Cookie tracks
+        // expiry in seconds. A timestamp at or before "now" deletes the cookie via
+        // the Jar's expiry path.
+        .expires = if (init.expires) |ms| ms / 1000.0 else null,
+
+        .secure = secure,
+        .http_only = false,
+        .same_site = switch (init.sameSite) {
+            .strict => .strict,
+            .lax => .lax,
+            .none => .none,
+        },
+    };
+
     // CookieStore is a script API, so is_http = false.
     try session.cookie_jar.add(cookie, std.time.timestamp(), false);
 }
