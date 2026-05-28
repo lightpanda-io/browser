@@ -3254,7 +3254,9 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     if (should_notify) {
         if (comptime from_parser == false) {
             // When the parser adds the node, nodeIsReady is only called when the
-            // nodeComplete() callback is executed.
+            // nodeComplete() callback is executed. nodeIsReady resolves the
+            // node's owning frame itself (only for the few node types that have
+            // ready work), so pass the incumbent `self`.
             try self.nodeIsReady(false, child);
 
             // Check if text was added to a script that hasn't started yet.
@@ -3614,6 +3616,15 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
         // we don't execute scripts added via innerHTML = '<script...';
         return;
     }
+    // A node's "ready" work (running a <script>, loading an <iframe> / <link> /
+    // <style>) must happen in the frame that owns the node's document — not
+    // necessarily `self`. When an async callback (e.g. a postMessage listener)
+    // running in frame A appends a node to frame B's document, `self` is the
+    // incumbent frame A, but the script's base URL and execution realm must come
+    // from B (its node document). Resolving that owner frame is a parent-chain
+    // walk, so we only do it once we've matched a node type that has ready work
+    // (the common text/element insertion does nothing here). The parser inserts
+    // into its own document, so from_parser always uses `self`.
     if (node.is(Element.Html.Script)) |script| {
         if ((comptime from_parser == false) and script._src.len == 0) {
             // Script was added via JavaScript without a src attribute.
@@ -3624,23 +3635,27 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
             }
         }
 
-        self.scriptAddedCallback(from_parser, script) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = self._type, .url = self.url });
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        frame.scriptAddedCallback(from_parser, script) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(IFrame)) |iframe| {
-        self.iframeAddedCallback(iframe) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        frame.iframeAddedCallback(iframe) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Link)) |link| {
-        link.linkAddedCallback(self) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        link.linkAddedCallback(frame) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
             return error.LinkLoadError;
         };
     } else if (node.is(Element.Html.Style)) |style| {
-        style.styleAddedCallback(self) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = self._type });
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        style.styleAddedCallback(frame) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = frame._type });
             return error.StyleLoadError;
         };
     }
