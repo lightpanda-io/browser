@@ -66,8 +66,23 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         .request_headers = req_header_list.items,
     })) |cached| {
         if (cached.expired) {
-            // If it is expired, evict from Cache.
-            transfer.client.network.cache.?.evict(req.url);
+            if (cached.metadata.hasValidators()) {
+                if (cached.metadata.etag) |etag| {
+                    log.debug(.cache, "revalidate with etag", .{ .url = req.url, .etag = etag });
+                    const header_value = try std.fmt.allocPrintSentinel(arena, "If-None-Match: {s}", .{etag}, 0);
+                    try req.headers.add(header_value.ptr);
+                } else if (cached.metadata.last_modified) |lm| {
+                    log.debug(.cache, "revalidate with last-modified", .{ .url = req.url, .last_modified = lm });
+                    const header_value = try std.fmt.allocPrintSentinel(arena, "If-Modified-Since: {s}", .{lm}, 0);
+                    try req.headers.add(header_value.ptr);
+                }
+
+                try installCacheContext(arena, transfer, cached);
+                return self.next.request(transfer);
+            } else {
+                // If it is expired, evict from Cache.
+                transfer.client.network.cache.?.evict(req.url);
+            }
         } else {
             // Dispatch that the Request was served from the Cache.
             transfer.req.notification.dispatch(
@@ -105,6 +120,16 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 
     // Cache miss: install wrappers so we can inspect the response and decide
     // whether to write the body into the cache when it's done.
+    try installCacheContext(arena, transfer, null);
+    return self.next.request(transfer);
+}
+
+fn installCacheContext(
+    arena: std.mem.Allocator,
+    transfer: *Transfer,
+    stale_entry: ?CachedResponse,
+) !void {
+    const req = &transfer.req;
     const ctx = try arena.create(CacheContext);
     ctx.* = .{
         .arena = arena,
@@ -112,6 +137,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         .forward = Forward.capture(req),
         .req_url = req.url,
         .req_headers = req.headers,
+        .stale_entry = stale_entry,
     };
 
     req.ctx = ctx;
@@ -120,16 +146,8 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     req.done_callback = CacheContext.doneCallback;
     req.error_callback = CacheContext.errorCallback;
 
-    if (ctx.forward.start != null) {
-        // req.ctx was changed, need to ovewrite this
-        req.start_callback = CacheContext.startCallback;
-    }
-    if (ctx.forward.shutdown != null) {
-        // req.ctx was changed, need to ovewrite this
-        req.shutdown_callback = CacheContext.shutdownCallback;
-    }
-
-    return self.next.request(transfer);
+    if (ctx.forward.start != null) req.start_callback = CacheContext.startCallback;
+    if (ctx.forward.shutdown != null) req.shutdown_callback = CacheContext.shutdownCallback;
 }
 
 fn serveFromCache(req: *Request, cached: *const CachedResponse) !void {
@@ -182,6 +200,7 @@ const CacheContext = struct {
     req_url: [:0]const u8,
     req_headers: @import("../http.zig").Headers,
     pending_metadata: ?*CachedMetadata = null,
+    stale_entry: ?CachedResponse = null,
 
     fn startCallback(response: Response) anyerror!void {
         const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
@@ -195,6 +214,12 @@ const CacheContext = struct {
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
+        defer {
+            if (self.stale_entry) |stale| {
+                stale.data.deinit();
+            }
+            self.stale_entry = null;
+        }
 
         // For non-transfer responses (fulfilled by interception, or future
         // cached-while-cached cases), there's nothing to inspect for caching
@@ -205,11 +230,46 @@ const CacheContext = struct {
         };
 
         const arena = self.arena;
-
         const conn = transfer._conn.?;
-        const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
-
         var rh = &transfer.res.header.?;
+
+        if (self.stale_entry != null and rh.status == 304) {
+            const stale = self.stale_entry.?;
+            self.stale_entry = null;
+
+            transfer.client.network.cache.?.revalidate(
+                arena,
+                self.req_url,
+                std.time.timestamp(),
+            ) catch |err| {
+                log.warn(.cache, "revalidate failed", .{ .err = err });
+            };
+
+            const ctx = try arena.create(CachedResponse);
+            ctx.* = stale;
+
+            try transfer.client.runNextTick(transfer, ctx, .{
+                .run = struct {
+                    fn run(t: *Transfer, ctx_ptr: *anyopaque) void {
+                        defer t.deinit();
+                        const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr));
+                        serveFromCache(&t.req, c) catch |err| {
+                            t.req.error_callback(t.req.ctx, err);
+                        };
+                    }
+                }.run,
+                .abort = struct {
+                    fn abort(ctx_ptr: *anyopaque) void {
+                        const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr));
+                        c.data.deinit();
+                    }
+                }.abort,
+            });
+
+            return false;
+        }
+
+        const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
         const maybe_cm = try Cache.tryCache(
             arena,
             std.time.timestamp(),
@@ -219,6 +279,8 @@ const CacheContext = struct {
             if (conn.getResponseHeader("cache-control", 0)) |h| h.value else null,
             vary,
             if (conn.getResponseHeader("age", 0)) |h| h.value else null,
+            if (conn.getResponseHeader("etag", 0)) |h| h.value else null,
+            if (conn.getResponseHeader("last-modified", 0)) |h| h.value else null,
             conn.getResponseHeader("set-cookie", 0) != null,
             conn.getResponseHeader("authorization", 0) != null,
         );

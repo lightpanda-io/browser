@@ -69,6 +69,7 @@ pub fn clear(self: *Cache) !void {
 
 pub const CacheControl = struct {
     max_age: u64,
+    must_revalidate: bool = false,
 
     pub fn parse(value: []const u8) ?CacheControl {
         var cc: CacheControl = .{ .max_age = undefined };
@@ -88,7 +89,8 @@ pub const CacheControl = struct {
                 return null;
             }
             if (std.mem.eql(u8, directive, "no-cache")) {
-                return null;
+                cc.must_revalidate = true;
+                continue;
             }
             if (std.mem.eql(u8, directive, "private")) {
                 return null;
@@ -132,15 +134,17 @@ pub const CachedMetadata = struct {
     vary_headers: []const Http.Header,
 
     // Validators for conditional requests.
-    etag: ?[]const u8 = null,
-    last_modified: ?[]const u8 = null,
+    etag: ?[]const u8,
+    last_modified: ?[]const u8,
 
     pub fn format(self: CachedMetadata, writer: *std.Io.Writer) !void {
-        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | vary=[", .{
+        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | etag={s} | last-modified={s} | vary=[", .{
             self.url,
             self.status,
             self.content_type,
             self.cache_control.max_age,
+            self.etag orelse "null",
+            self.last_modified orelse "null",
         });
 
         // Logging all headers gets pretty verbose...
@@ -156,6 +160,7 @@ pub const CachedMetadata = struct {
     }
 
     pub fn isStale(self: CachedMetadata, timestamp: i64) bool {
+        if (self.cache_control.must_revalidate) return true;
         const age = (timestamp - self.stored_at) + @as(i64, @intCast(self.age_at_store));
         return age >= @as(i64, @intCast(self.cache_control.max_age));
     }
@@ -178,6 +183,13 @@ pub const CachedData = union(enum) {
         offset: usize,
         len: usize,
     },
+
+    pub fn deinit(self: CachedData) void {
+        switch (self) {
+            .buffer => {},
+            .file => |*f| f.file.close(),
+        }
+    }
 
     pub fn format(self: CachedData, writer: *std.Io.Writer) !void {
         switch (self) {
@@ -210,6 +222,8 @@ pub fn tryCache(
     cache_control: ?[]const u8,
     vary: ?[]const u8,
     age: ?[]const u8,
+    etag: ?[]const u8,
+    last_modified: ?[]const u8,
     has_set_cookie: bool,
     has_authorization: bool,
 ) !?CachedMetadata {
@@ -250,6 +264,8 @@ pub fn tryCache(
         .cache_control = cc,
         .headers = &.{},
         .vary_headers = &.{},
+        .etag = if (etag) |e| try arena.dupe(u8, e) else null,
+        .last_modified = if (last_modified) |lm| try arena.dupe(u8, lm) else null,
     };
 }
 const testing = @import("../../testing.zig");
