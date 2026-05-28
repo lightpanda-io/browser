@@ -35,34 +35,51 @@ pub const Shed = struct {
         var it = self._origins.iterator();
         while (it.next()) |kv| {
             allocator.free(kv.key_ptr.*);
+            kv.value_ptr.*.deinit(allocator);
             allocator.destroy(kv.value_ptr.*);
         }
         self._origins.deinit(allocator);
     }
 
     pub fn getOrPut(self: *Shed, allocator: Allocator, origin: []const u8) !*Bucket {
-        const gop = try self._origins.getOrPut(allocator, origin);
-        if (gop.found_existing) {
-            return gop.value_ptr.*;
-        }
+        if (self._origins.get(origin)) |existing| return existing;
 
+        const key_owned = try allocator.dupe(u8, origin);
+        errdefer allocator.free(key_owned);
         const bucket = try allocator.create(Bucket);
-        errdefer allocator.free(bucket);
+        errdefer allocator.destroy(bucket);
         bucket.* = .{};
 
-        gop.key_ptr.* = try allocator.dupe(u8, origin);
-        gop.value_ptr.* = bucket;
+        try self._origins.put(allocator, key_owned, bucket);
         return bucket;
     }
 };
 
-pub const Bucket = struct { local: Lookup = .{}, session: Lookup = .{} };
+pub const Bucket = struct {
+    local: Lookup = .{},
+    session: Lookup = .{},
+
+    pub fn deinit(self: *Bucket, allocator: Allocator) void {
+        self.local.deinit(allocator);
+        self.session.deinit(allocator);
+    }
+};
 
 pub const Lookup = struct {
     _data: std.StringHashMapUnmanaged([]const u8) = .empty,
     _size: usize = 0,
 
     const max_size = 5 * 1024 * 1024;
+
+    pub fn deinit(self: *Lookup, allocator: Allocator) void {
+        var it = self._data.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        self._data.deinit(allocator);
+        self._size = 0;
+    }
 
     pub fn getItem(self: *const Lookup, key_: ?[]const u8) ?[]const u8 {
         const k = key_ orelse return null;
@@ -71,28 +88,47 @@ pub const Lookup = struct {
 
     pub fn setItem(self: *Lookup, key_: ?[]const u8, value: []const u8, frame: *Frame) !void {
         const k = key_ orelse return;
+        const allocator = frame._session.browser.app.allocator;
 
-        if (self._size + value.len > max_size) {
+        const old_len = if (self._data.get(k)) |old| old.len else 0;
+        std.debug.assert(old_len <= self._size);
+        if (self._size - old_len + value.len > max_size) {
             return error.QuotaExceeded;
         }
-        defer self._size += value.len;
 
-        const key_owned = try frame.dupeString(k);
-        const value_owned = try frame.dupeString(value);
+        if (self._data.getPtr(k)) |value_ptr| {
+            const value_owned = try allocator.dupe(u8, value);
+            self._size -= value_ptr.*.len;
+            allocator.free(value_ptr.*);
+            value_ptr.* = value_owned;
+            self._size += value.len;
+        } else {
+            const key_owned = try allocator.dupe(u8, k);
+            errdefer allocator.free(key_owned);
+            const value_owned = try allocator.dupe(u8, value);
+            errdefer allocator.free(value_owned);
 
-        const gop = try self._data.getOrPut(frame.arena, key_owned);
-        gop.value_ptr.* = value_owned;
-    }
-
-    pub fn removeItem(self: *Lookup, key_: ?[]const u8) void {
-        const k = key_ orelse return;
-        if (self._data.get(k)) |value| {
-            self._size -= value.len;
-            _ = self._data.remove(k);
+            try self._data.put(allocator, key_owned, value_owned);
+            self._size += value.len;
         }
     }
 
-    pub fn clear(self: *Lookup) void {
+    pub fn removeItem(self: *Lookup, key_: ?[]const u8, frame: *Frame) void {
+        const k = key_ orelse return;
+        const allocator = frame._session.browser.app.allocator;
+        const kv = self._data.fetchRemove(k) orelse return;
+        self._size -= kv.value.len;
+        allocator.free(kv.key);
+        allocator.free(kv.value);
+    }
+
+    pub fn clear(self: *Lookup, frame: *Frame) void {
+        const allocator = frame._session.browser.app.allocator;
+        var it = self._data.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
         self._data.clearRetainingCapacity();
         self._size = 0;
     }
