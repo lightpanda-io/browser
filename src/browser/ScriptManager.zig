@@ -141,12 +141,11 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     var remote_url: ?[:0]const u8 = null;
     const base_url = frame.base();
     if (element.getAttributeSafe(comptime .wrap("src"))) |src| {
-        if (try parseDataURI(arena, src)) |data_uri| {
-            source = .{ .@"inline" = data_uri };
-        } else {
-            remote_url = try URL.resolve(arena, base_url, src, .{ .encoding = frame.charset });
-            source = .{ .remote = .{} };
-        }
+        // data: and blob: srcs flow through the normal request path; HttpClient
+        // synthesizes the response. Execution mode (blocking vs async/defer) is
+        // attribute-driven, the same as any other src.
+        remote_url = try URL.resolve(arena, base_url, src, .{ .encoding = frame.charset });
+        source = .{ .remote = .{} };
     } else {
         var buf = std.Io.Writer.Allocating.init(arena);
         try element.asNode().getChildTextContent(&buf.writer);
@@ -338,66 +337,4 @@ pub fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
 
 pub fn staticScriptsDone(self: *ScriptManager) void {
     self.base.staticScriptsDone();
-}
-
-// Parses data:[<media-type>][;base64],<data>
-fn parseDataURI(allocator: Allocator, src: []const u8) !?[]const u8 {
-    if (!std.mem.startsWith(u8, src, "data:")) {
-        return null;
-    }
-
-    const uri = src[5..];
-    const data_starts = std.mem.indexOfScalar(u8, uri, ',') orelse return null;
-    const data = uri[data_starts + 1 ..];
-
-    const unescaped = try URL.unescape(allocator, data);
-
-    const metadata = uri[0..data_starts];
-    if (std.mem.endsWith(u8, metadata, ";base64") == false) {
-        return unescaped;
-    }
-
-    // Forgiving base64 decode per WHATWG spec:
-    // https://infra.spec.whatwg.org/#forgiving-base64-decode
-    // Step 1: Remove all ASCII whitespace
-    var stripped = try std.ArrayList(u8).initCapacity(allocator, unescaped.len);
-    for (unescaped) |c| {
-        if (!std.ascii.isWhitespace(c)) {
-            stripped.appendAssumeCapacity(c);
-        }
-    }
-    const trimmed = std.mem.trimRight(u8, stripped.items, "=");
-
-    // Length % 4 == 1 is invalid
-    if (trimmed.len % 4 == 1) {
-        return error.InvalidCharacterError;
-    }
-
-    const decoded_size = std.base64.standard_no_pad.Decoder.calcSizeForSlice(trimmed) catch return error.InvalidCharacterError;
-    const buffer = try allocator.alloc(u8, decoded_size);
-    std.base64.standard_no_pad.Decoder.decode(buffer, trimmed) catch return error.InvalidCharacterError;
-    return buffer;
-}
-
-const testing = @import("../testing.zig");
-test "DataURI: parse valid" {
-    try assertValidDataURI("data:text/javascript; charset=utf-8;base64,Zm9v", "foo");
-    try assertValidDataURI("data:text/javascript; charset=utf-8;,foo", "foo");
-    try assertValidDataURI("data:,foo", "foo");
-}
-
-test "DataURI: parse invalid" {
-    try assertInvalidDataURI("atad:,foo");
-    try assertInvalidDataURI("data:foo");
-    try assertInvalidDataURI("data:");
-}
-
-fn assertValidDataURI(uri: []const u8, expected: []const u8) !void {
-    defer testing.reset();
-    const data_uri = try parseDataURI(testing.arena_allocator, uri) orelse return error.TestFailed;
-    try testing.expectEqual(expected, data_uri);
-}
-
-fn assertInvalidDataURI(uri: []const u8) !void {
-    try testing.expectEqual(null, parseDataURI(undefined, uri));
 }

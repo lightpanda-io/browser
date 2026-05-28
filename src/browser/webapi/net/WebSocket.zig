@@ -117,7 +117,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
 
     const resolved_url = try URL.resolve(arena, exec.base(), url, .{ .always_dupe = true, .encoding = exec.charset.* });
 
-    const http_client = &exec.context.page.session.browser.http_client;
+    const http_client = &exec.session.browser.http_client;
     const conn = http_client.network.newConnection() orelse {
         return error.NoFreeConnection;
     };
@@ -240,7 +240,7 @@ fn cleanup(self: *WebSocket) void {
         self._http_client.removeConn(conn);
         self._req_headers.deinit();
         self._conn = null;
-        self.releaseRef(self._exec.context.page);
+        self.releaseRef(self._exec.page);
         self._send_queue.clearRetainingCapacity();
     }
 }
@@ -457,7 +457,7 @@ fn dispatchOpenEvent(self: *WebSocket) !void {
     const target = self.asEventTarget();
 
     if (exec.hasDirectListeners(target, "open", self._on_open)) {
-        const event = try Event.initTrusted(comptime .wrap("open"), .{}, exec.context.page);
+        const event = try Event.initTrusted(comptime .wrap("open"), .{}, exec.page);
         try exec.dispatch(target, event, self._on_open, .{ .context = "WebSocket open" });
     }
 }
@@ -471,7 +471,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
             switch (self._binary_type) {
                 .arraybuffer => .{ .arraybuffer = .{ .values = data } },
                 .blob => blk: {
-                    const blob = try Blob.initFromBytes(data, "", false, exec.context.page);
+                    const blob = try Blob.initFromBytes(data, "", false, exec.page);
                     blob.acquireRef();
                     break :blk .{ .blob = blob };
                 },
@@ -482,7 +482,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
         const event = try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = msg_data,
             .origin = "",
-        }, exec.context.page);
+        }, exec.page);
         try exec.dispatch(target, event.asEvent(), self._on_message, .{ .context = "WebSocket message" });
     }
 }
@@ -492,7 +492,7 @@ fn dispatchErrorEvent(self: *WebSocket) !void {
     const target = self.asEventTarget();
 
     if (exec.hasDirectListeners(target, "error", self._on_error)) {
-        const event = try Event.initTrusted(comptime .wrap("error"), .{}, exec.context.page);
+        const event = try Event.initTrusted(comptime .wrap("error"), .{}, exec.page);
         try exec.dispatch(target, event, self._on_error, .{ .context = "WebSocket error" });
     }
 }
@@ -506,7 +506,7 @@ fn dispatchCloseEvent(self: *WebSocket, code: u16, reason: []const u8, was_clean
             .code = code,
             .reason = reason,
             .wasClean = was_clean,
-        }, exec.context.page);
+        }, exec.page);
         try exec.dispatch(target, event.asEvent(), self._on_close, .{ .context = "WebSocket close" });
     }
 }
@@ -580,7 +580,7 @@ fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: M
 
     if (self._send_offset >= byte_msg.data.len) {
         const removed = self._send_queue.orderedRemove(0);
-        removed.deinit(self._exec.context.page);
+        removed.deinit(self._exec.page);
         if (comptime IS_DEBUG) {
             log.debug(.websocket, "send complete", .{ .url = self._url, .len = byte_msg.data.len, .queue = self._send_queue.items.len });
         }

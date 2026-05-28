@@ -144,6 +144,8 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
     });
     errdefer factory.destroy(self);
 
+    self._http_owner.blob_urls = &self._blob_urls;
+
     self._script_manager = ScriptManagerBase.init(
         arena,
         &session.browser.http_client,
@@ -231,10 +233,6 @@ pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
     return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
 }
 
-pub fn lookupBlobUrl(self: *WorkerGlobalScope, url: []const u8) ?*Blob {
-    return self._blob_urls.get(url);
-}
-
 pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
     return self._session.browser.http_client.request(req, &self._http_owner);
 }
@@ -245,6 +243,14 @@ pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
 
 pub fn getConsole(self: *WorkerGlobalScope) *Console {
     return &self._console;
+}
+
+pub fn setConsole(_: *WorkerGlobalScope, value: JS.Value) void {
+    replaceGlobalProperty(value, "console");
+}
+
+pub fn setSelf(_: *WorkerGlobalScope, value: JS.Value) void {
+    replaceGlobalProperty(value, "self");
 }
 
 pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
@@ -556,6 +562,14 @@ pub fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
+// `console` and `self` are [Replaceable] assignment redefines them as own data
+// properties on the global rather than throwing through the getter-only accessor
+// in strict mode.
+fn replaceGlobalProperty(value: JS.Value, comptime name: []const u8) void {
+    const global = value.local.getGlobal();
+    _ = global.defineOwnProperty(name, value, 0);
+}
+
 const FunctionSetter = union(enum) {
     func: JS.Function.Global,
     anything: JS.Value,
@@ -632,8 +646,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const self = bridge.accessor(WorkerGlobalScope.getSelf, null, .{});
-    pub const console = bridge.accessor(WorkerGlobalScope.getConsole, null, .{});
+    pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
+    pub const console = bridge.accessor(WorkerGlobalScope.getConsole, WorkerGlobalScope.setConsole, .{});
     pub const crypto = bridge.accessor(WorkerGlobalScope.getCrypto, null, .{});
     pub const performance = bridge.accessor(struct {
         // Unnecessary, But, our WebAPI getters are ALWAYS `fn getPerformance()...`.

@@ -567,6 +567,21 @@ fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
     // via transfer.abort which fires error_callback and deinits. `.created`
     // means no commit happened — anything else is held by an owner that
     // will clean up.
+
+    // Synthetic schemes never touch the network or the layer chain — they skip
+    // robots/cache/interception and deliver on the next tick
+    if (Synthetic.isSynthetic(req.url)) {
+        // The 2nd transfer is the callback context. We don't actually use it,
+        // we're just sticking transfer in there to have something.
+        self.runNextTick(transfer, transfer, .{ .run = Synthetic.run }) catch |err| {
+            if (transfer.state == .created) {
+                transfer.abort(err);
+            }
+            return err;
+        };
+        return transfer;
+    }
+
     self.entry_layer.request(transfer) catch |err| {
         if (transfer.state == .created) {
             transfer.abort(err);
@@ -576,6 +591,80 @@ fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
 
     return transfer;
 }
+
+// Non-network URL schemes whose response is synthesized in-process rather than
+// fetched, think blob data URLs.
+const Synthetic = struct {
+    const data_url = @import("data_url.zig");
+
+    fn isSynthetic(url: []const u8) bool {
+        return std.mem.startsWith(u8, url, "data:") or std.mem.startsWith(u8, url, "blob:");
+    }
+
+    fn run(transfer: *Transfer, _: *anyopaque) void {
+        defer transfer.deinit();
+
+        const fulfilled = build(transfer) catch |err| {
+            transfer.req.error_callback(transfer.req.ctx, err);
+            return;
+        };
+        deliver(&transfer.req, &fulfilled) catch |err| {
+            transfer.req.error_callback(transfer.req.ctx, err);
+        };
+    }
+
+    fn build(transfer: *Transfer) !FulfilledResponse {
+        const arena = transfer.arena;
+        const url = transfer.req.url;
+
+        var body: []const u8 = "";
+        var content_type: []const u8 = "";
+
+        if (std.mem.startsWith(u8, url, "data:")) {
+            const parsed = try data_url.parse(arena, url);
+            content_type = parsed.content_type;
+            body = parsed.body;
+        } else {
+            // blob: — resolved against the owning frame's registry.
+            const owner = transfer.owner orelse return error.BlobNotFound;
+            const blob_urls = owner.blob_urls orelse return error.BlobNotFound;
+            const blob = blob_urls.get(url) orelse return error.BlobNotFound;
+            content_type = blob._mime;
+            body = blob._slice;
+        }
+
+        // A blob with no type yields no Content-Type header.
+        const headers = if (content_type.len > 0) blk: {
+            const h = try arena.alloc(http.Header, 1);
+            h[0] = .{ .name = "content-type", .value = content_type };
+            break :blk h;
+        } else &[_]http.Header{};
+
+        return .{
+            .url = url,
+            .body = body,
+            .status = 200,
+            .headers = headers,
+        };
+    }
+
+    fn deliver(req: *Request, fulfilled: *const FulfilledResponse) !void {
+        const response = Response.fromFulfilled(req.ctx, fulfilled);
+        if (req.start_callback) |cb| {
+            try cb(response);
+        }
+        const proceed = try req.header_callback(response);
+        if (!proceed) {
+            return error.Abort;
+        }
+        if (fulfilled.body) |b| {
+            if (b.len > 0) {
+                try req.data_callback(response, b);
+            }
+        }
+        try req.done_callback(req.ctx);
+    }
+};
 
 const SyncContext = struct {
     allocator: Allocator,
@@ -1782,7 +1871,7 @@ pub const Transfer = struct {
                 log.err(.http, "getResponseCode", .{ .err = err, .source = "body callback" });
                 return http.writefunc_error;
             };
-            if ((status >= 300 and status <= 399) or status == 401 or status == 407) {
+            if (status >= 300 and status <= 399) {
                 res.skip_body = true;
                 return @intCast(chunk_len);
             }
@@ -1909,7 +1998,11 @@ pub const Owner = struct {
     transfers: std.DoublyLinkedList = .{},
     websockets: std.DoublyLinkedList = .{},
 
+    // The owning Frame's / WorkerGlobalScope's blob: registry,
+    blob_urls: ?*const std.StringHashMapUnmanaged(*Blob) = null,
+
     const WebSocket = @import("webapi/net/WebSocket.zig");
+    const Blob = @import("webapi/Blob.zig");
 
     pub fn addTransfer(self: *Owner, t: *Transfer) void {
         self.transfers.append(&t.owner_node);

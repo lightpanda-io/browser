@@ -34,7 +34,7 @@ _counts: std.StringHashMapUnmanaged(u64) = .{},
 pub const init: Console = .{};
 
 fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.ConsoleMessageType, exec: *js.Execution) void {
-    const notification = exec.context.page.session.notification;
+    const notification = exec.session.notification;
     const ts = datetime.timestamp(.monotonic);
 
     notification.dispatch(.console_message, &.{
@@ -54,7 +54,7 @@ fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.Console
 
 pub fn trace(_: *const Console, values: []js.Value, exec: *js.Execution) !void {
     logger.debug(.js, "console.trace", .{
-        .stack = exec.context.local.?.stackTrace() catch "???",
+        .stack = exec.js.local.?.stackTrace() catch "???",
         .args = ValueWriter{ .values = values },
     });
     dispatchConsoleMessage(values, .trace, exec);
@@ -91,7 +91,7 @@ pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, exec: 
 }
 
 pub fn @"error"(_: *const Console, values: []js.Value, exec: *js.Execution) void {
-    logger.warn(.js, "console.error", .{ValueWriter{ .values = values, .stack = exec.context.local.?.stackTrace() catch |err| @errorName(err) orelse "???" }});
+    logger.warn(.js, "console.error", .{ValueWriter{ .values = values, .stack = exec.js.local.?.stackTrace() catch |err| @errorName(err) orelse "???" }});
     dispatchConsoleMessage(values, .@"error", exec);
 }
 

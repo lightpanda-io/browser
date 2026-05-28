@@ -25,7 +25,6 @@ const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const HttpClient = @import("../HttpClient.zig");
 
-const Blob = @import("Blob.zig");
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
@@ -86,16 +85,6 @@ pub fn init(url: []const u8, frame: *Frame) !*Worker {
     // `subframe_loading_enabled` pattern for iframes.
     if (!session.worker_loading_enabled) {
         log.debug(.browser, "worker disabled", .{ .url = resolved_url });
-        return self;
-    }
-
-    if (std.mem.startsWith(u8, url, "blob:")) {
-        errdefer frame.removeWorker(self);
-        const blob: *Blob = frame.lookupBlobUrl(url) orelse {
-            log.warn(.js, "invalid blob", .{ .target = "worker" });
-            return error.BlobNotFound;
-        };
-        try self.loadInitialScript(blob._slice);
         return self;
     }
 

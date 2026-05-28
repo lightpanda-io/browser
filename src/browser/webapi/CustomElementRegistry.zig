@@ -81,6 +81,20 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         }
     }
 
+    // Read disabledFeatures static property: ["shadow"] makes attachShadow throw.
+    if (constructor.getPropertyValue("disabledFeatures") catch null) |disabled| {
+        if (disabled.isArray()) {
+            var js_arr = disabled.toArray();
+            for (0..js_arr.len()) |i| {
+                const val = js_arr.get(@intCast(i)) catch continue;
+                const feature = val.toSSO(false) catch continue;
+                if (feature.eql(comptime .wrap("shadow"))) {
+                    definition.disable_shadow = true;
+                }
+            }
+        }
+    }
+
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = definition;
 

@@ -30,11 +30,12 @@ const lp = @import("lightpanda");
 
 const Context = @import("Context.zig");
 const Scheduler = @import("Scheduler.zig");
+const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const Factory = @import("../Factory.zig");
 const HttpClient = @import("../HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
-const Blob = @import("../webapi/Blob.zig");
 const Event = @import("../webapi/Event.zig");
 const EventTarget = @import("../webapi/EventTarget.zig");
 const Performance = @import("../webapi/Performance.zig");
@@ -44,12 +45,15 @@ const Allocator = std.mem.Allocator;
 
 const Execution = @This();
 
-context: *Context,
+js: *Context,
 
 // Fields named to match Page for generic code (executor._factory works for both)
 buf: []u8,
 arena: Allocator,
 call_arena: Allocator,
+
+page: *Page,
+session: *Session,
 _factory: *Factory,
 _scheduler: *Scheduler,
 
@@ -61,7 +65,7 @@ charset: *[]const u8,
 
 // Returns the current base URL of the global scope.
 pub fn base(self: *const Execution) [:0]const u8 {
-    return self.context.global.base();
+    return self.js.global.base();
 }
 
 pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
@@ -72,33 +76,27 @@ pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
 }
 
 pub fn getArena(self: *const Execution, size_or_bucket: anytype, debug: []const u8) !Allocator {
-    return self.context.page.getArena(size_or_bucket, debug);
+    return self.page.getArena(size_or_bucket, debug);
 }
 
 pub fn releaseArena(self: *const Execution, allocator: Allocator) void {
-    self.context.page.releaseArena(allocator);
+    self.page.releaseArena(allocator);
 }
 
 pub fn headersForRequest(self: *const Execution, headers: *HttpClient.Headers) !void {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| g.headersForRequest(headers),
     };
 }
 
 pub fn isSameOrigin(self: *const Execution, url: [:0]const u8) bool {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| g.isSameOrigin(url),
     };
 }
 
-pub fn lookupBlobUrl(self: *const Execution, url: []const u8) ?*Blob {
-    return switch (self.context.global) {
-        inline else => |g| g.lookupBlobUrl(url),
-    };
-}
-
 pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| g.makeRequest(req),
     };
 }
@@ -108,7 +106,7 @@ pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
 // owning scope without caring whether it's a Frame or a Worker — e.g.
 // WebSocket.init appending to `.websockets`.
 pub fn httpOwner(self: *const Execution) *HttpClient.Owner {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| &g._http_owner,
     };
 }
@@ -120,31 +118,31 @@ pub fn dispatch(
     handler: anytype,
     comptime opts: EventManagerBase.DispatchDirectOptions,
 ) !void {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| g.dispatch(target, event, handler, opts),
     };
 }
 
 pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []const u8, handler: anytype) bool {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| g.hasDirectListeners(target, typ, handler),
     };
 }
 
 pub fn performance(self: *const Execution) *Performance {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| g.performance(),
     };
 }
 
 pub fn frameId(self: *const Execution) u32 {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| g._frame_id,
     };
 }
 
 pub fn loaderId(self: *const Execution) u32 {
-    return switch (self.context.global) {
+    return switch (self.js.global) {
         inline else => |g| g._loader_id,
     };
 }

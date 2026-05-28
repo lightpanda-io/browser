@@ -256,7 +256,7 @@ pub fn onToolAdded(
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
-    const global = event.exec.context.global;
+    const global = event.exec.js.global;
 
     var ls: js.Local.Scope = undefined;
     global.getJs().localScope(&ls);
@@ -280,7 +280,7 @@ pub fn onToolRemoved(
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
-    const frame_id = switch (event.exec.context.global) {
+    const frame_id = switch (event.exec.js.global) {
         inline else => |g| g._frame_id,
     };
     try bc.cdp.sendEvent("WebMCP.toolsRemoved", .{

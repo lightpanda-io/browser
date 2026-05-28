@@ -214,7 +214,7 @@ fn consume(self: *Request, local: *const js.Local) ?js.Promise {
 }
 
 pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
@@ -223,12 +223,12 @@ pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse "";
 
-    const b = try Blob.initFromBytes(body, content_type, true, exec.context.page);
+    const b = try Blob.initFromBytes(body, content_type, true, exec.page);
     return local.resolvePromise(b);
 }
 
 pub fn text(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
@@ -236,7 +236,7 @@ pub fn text(self: *Request, exec: *const Execution) !js.Promise {
 }
 
 pub fn json(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
@@ -248,7 +248,7 @@ pub fn json(self: *Request, exec: *const Execution) !js.Promise {
 }
 
 pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
@@ -256,7 +256,7 @@ pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
 }
 
 pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=replaceable>
+    "use strict";
+    // [Replaceable] attributes: assignment must replace the value (not throw,
+    // not silently no-op), even in strict mode, and survive being read first.
+    function checkReplaceable(name) {
+        const prev = window[name];
+        window[name] = "REPLACED:" + name;
+        testing.expectEqual("REPLACED:" + name, window[name]);
+        // now a writable own data property; this restores the original value.
+        window[name] = prev;
+        testing.expectEqual(true, window[name] === prev);
+    }
+    [
+        "console", "self", "frames", "parent", "length",
+        "scrollX", "scrollY", "pageXOffset", "pageYOffset",
+        "innerWidth", "innerHeight", "devicePixelRatio",
+    ].forEach(checkReplaceable);
+</script>
+
+<script id=not-replaceable>
+    "use strict";
+    // [LegacyUnforgeable] / plain readonly attributes must STILL throw on
+    // assignment in strict mode (location is excluded: it navigates).
+    function expectReadOnly(name) {
+        let threw = false;
+        try { window[name] = {}; } catch (e) { threw = true; }
+        testing.expectEqual(true, threw);
+    }
+    ["window", "top", "document", "navigator"].forEach(expectReadOnly);
+</script>

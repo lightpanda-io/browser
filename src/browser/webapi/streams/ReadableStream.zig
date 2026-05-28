@@ -145,9 +145,9 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
 
     const exec = self._execution;
     if (comptime IS_DEBUG) {
-        if (exec.context.local == null) {
+        if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStream.callPullIfNeeded", .url = exec.url.* });
-            std.debug.assert(exec.context.local != null);
+            std.debug.assert(exec.js.local != null);
         }
     }
 
@@ -155,7 +155,7 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
         const func = self._pull_fn orelse return;
 
         var ls: js.Local.Scope = undefined;
-        exec.context.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
 
         // Call the pull function
@@ -187,7 +187,7 @@ fn shouldCallPull(self: *const ReadableStream) bool {
 }
 
 pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
 
     if (self._state != .readable) {
         if (self._cancel) |c| {
@@ -257,10 +257,10 @@ pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const
 /// Returns a promise that resolves when piping is complete.
 pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, exec: *const Execution) !js.Promise {
     if (self.getLocked()) {
-        return exec.context.local.?.rejectPromise(.{ .type_error = "ReadableStream is locked" });
+        return exec.js.local.?.rejectPromise(.{ .type_error = "ReadableStream is locked" });
     }
 
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     var pipe_resolver = local.createPromiseResolver();
     const promise = pipe_resolver.promise();
     const persisted_resolver = try pipe_resolver.persist();
@@ -295,7 +295,7 @@ const PipeState = struct {
 
     fn pumpRead(state: *PipeState) !void {
         const exec = state.execution;
-        const local = exec.context.local.?;
+        const local = exec.js.local.?;
 
         // Call reader.read() which returns a Promise
         const read_promise = try state.reader.read(exec);
@@ -315,7 +315,7 @@ const PipeState = struct {
     };
     fn onReadFulfilled(self: *PipeState, data_: ?ReadData) void {
         const exec = self.execution;
-        const local = exec.context.local.?;
+        const local = exec.js.local.?;
         const data = data_ orelse {
             return self.finish(local);
         };
@@ -346,7 +346,7 @@ const PipeState = struct {
     }
 
     fn onReadRejected(self: *PipeState) void {
-        self.finish(self.execution.context.local.?);
+        self.finish(self.execution.js.local.?);
     }
 
     fn finish(self: *PipeState, local: *const js.Local) void {
@@ -399,7 +399,7 @@ pub const AsyncIterator = struct {
 
     pub fn @"return"(self: *AsyncIterator, exec: *const Execution) !js.Promise {
         self._reader.releaseLock();
-        return exec.context.local.?.resolvePromise(.{ .done = true, .value = null });
+        return exec.js.local.?.resolvePromise(.{ .done = true, .value = null });
     }
 
     pub const JsApi = struct {

@@ -161,6 +161,8 @@ pub fn deinit(self: *Session) void {
 
     self.cookie_jar.deinit();
 
+    self.browser.env.memoryPressureNotification(.critical);
+
     self.storage_shed.deinit(self.browser.app.allocator);
     self._console_messages.deinit();
     self.arena_pool.release(self.arena);

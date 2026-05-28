@@ -35,7 +35,7 @@ pub fn init(
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
     // Per spec, an unrecognized hash is caught during algorithm normalization
     // and surfaces as NotSupportedError.
     const digest = crypto.findDigest(switch (params.hash) {
@@ -99,7 +99,7 @@ pub fn sign(
     data: []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    var resolver = exec.context.local.?.createPromiseResolver();
+    var resolver = exec.js.local.?.createPromiseResolver();
 
     if (!algo.isHMAC() or !crypto_key.canSign()) {
         resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
@@ -135,7 +135,7 @@ pub fn verify(
     data: []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    var resolver = exec.context.local.?.createPromiseResolver();
+    var resolver = exec.js.local.?.createPromiseResolver();
 
     if (!crypto_key.canVerify()) {
         resolver.rejectError("HMAC.verify", .{ .dom_exception = .{ .err = error.InvalidAccessError } });

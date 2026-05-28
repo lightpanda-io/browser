@@ -39,6 +39,7 @@ const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
+const MessagePort = @import("MessagePort.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
 const Element = @import("Element.zig");
@@ -166,6 +167,42 @@ pub fn getDocument(self: *Window) *Document {
 
 pub fn getConsole(self: *Window) *Console {
     return &self._console;
+}
+
+pub fn setConsole(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "console");
+}
+
+pub fn setSelf(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "self");
+}
+
+pub fn setFrames(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "frames");
+}
+
+pub fn setParent(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "parent");
+}
+
+pub fn setLength(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "length");
+}
+
+pub fn setScrollX(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "scrollX");
+}
+
+pub fn setScrollY(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "scrollY");
+}
+
+pub fn setPageXOffset(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "pageXOffset");
+}
+
+pub fn setPageYOffset(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "pageYOffset");
 }
 
 pub fn getNavigator(self: *Window) *Navigator {
@@ -561,7 +598,7 @@ pub fn close(self: *Window) void {
     };
 }
 
-pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, frame: *Frame) !void {
+pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
     _ = target_origin;
@@ -581,6 +618,7 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
         .frame = target_frame,
         .source = source_window,
         .origin = try arena.dupe(u8, origin),
+        .ports = if (transfer) |t| try arena.dupe(*MessagePort, t) else &.{},
     };
 
     try target_frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
@@ -763,6 +801,14 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
     }
 }
 
+// `console` and a handful of other Window attributes are [Replaceable]: assigning
+// to them redefines the attribute as an own data property on the global instead
+// of throwing (which a getter-only accessor does in strict mode / modules).
+fn replaceGlobalProperty(value: js.Value, comptime name: []const u8) void {
+    const global = value.local.getGlobal();
+    _ = global.defineOwnProperty(name, value, 0);
+}
+
 pub const Access = union(enum) {
     window: *Window,
     cross_origin: *CrossOriginWindow,
@@ -788,6 +834,7 @@ const PostMessageCallback = struct {
     arena: Allocator,
     origin: []const u8,
     message: js.Value.Temp,
+    ports: []const *MessagePort,
 
     fn deinit(self: *PostMessageCallback) void {
         self.frame.releaseArena(self.arena);
@@ -811,6 +858,7 @@ const PostMessageCallback = struct {
                 .data = .{ .value = self.message },
                 .origin = self.origin,
                 .source = self.source,
+                .ports = self.ports,
                 .bubbles = false,
                 .cancelable = false,
             }, frame._page)).asEvent();
@@ -861,12 +909,12 @@ pub const JsApi = struct {
     };
 
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 }, .deletable = false });
-    pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = .{ .internal = 2 } });
+    pub const console = bridge.accessor(Window.getConsole, Window.setConsole, .{});
 
     pub const top = bridge.accessor(Window.getTop, null, .{});
-    pub const self = bridge.accessor(Window.getWindow, null, .{});
+    pub const self = bridge.accessor(Window.getWindow, Window.setSelf, .{});
     pub const window = bridge.accessor(Window.getWindow, null, .{});
-    pub const parent = bridge.accessor(Window.getParent, null, .{});
+    pub const parent = bridge.accessor(Window.getParent, Window.setParent, .{});
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
     pub const screen = bridge.accessor(Window.getScreen, null, .{});
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, null, .{});
@@ -910,13 +958,13 @@ pub const JsApi = struct {
     pub const getSelection = bridge.function(Window.getSelection, .{});
     pub const frameElement = bridge.accessor(Window.getFrameElement, null, .{});
 
-    pub const frames = bridge.accessor(Window.getWindow, null, .{});
+    pub const frames = bridge.accessor(Window.getWindow, Window.setFrames, .{});
     pub const index = bridge.indexed(Window.getFrame, null, .{ .null_as_undefined = true });
-    pub const length = bridge.accessor(Window.getFramesLength, null, .{});
-    pub const scrollX = bridge.accessor(Window.getScrollX, null, .{});
-    pub const scrollY = bridge.accessor(Window.getScrollY, null, .{});
-    pub const pageXOffset = bridge.accessor(Window.getScrollX, null, .{});
-    pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{});
+    pub const length = bridge.accessor(Window.getFramesLength, Window.setLength, .{});
+    pub const scrollX = bridge.accessor(Window.getScrollX, Window.setScrollX, .{});
+    pub const scrollY = bridge.accessor(Window.getScrollY, Window.setScrollY, .{});
+    pub const pageXOffset = bridge.accessor(Window.getScrollX, Window.setPageXOffset, .{});
+    pub const pageYOffset = bridge.accessor(Window.getScrollY, Window.setPageYOffset, .{});
     pub const scrollTo = bridge.function(Window.scrollTo, .{});
     pub const scroll = bridge.function(Window.scrollTo, .{});
     pub const scrollBy = bridge.function(Window.scrollBy, .{});
@@ -927,9 +975,10 @@ pub const JsApi = struct {
     // sites not to try to access those features
     pub const isSecureContext = bridge.property(false, .{ .template = false });
 
-    pub const innerWidth = bridge.property(1920, .{ .template = false });
-    pub const innerHeight = bridge.property(1080, .{ .template = false });
-    pub const devicePixelRatio = bridge.property(1, .{ .template = false });
+    // [Replaceable] (CSSOM-View): writable so assignment overwrites rather than throws.
+    pub const innerWidth = bridge.property(1920, .{ .template = false, .readonly = false });
+    pub const innerHeight = bridge.property(1080, .{ .template = false, .readonly = false });
+    pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
 
     pub const opener = bridge.accessor(Window.getOpener, null, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});
@@ -987,8 +1036,8 @@ pub const JsApi = struct {
 const CrossOriginWindow = struct {
     window: *Window,
 
-    pub fn postMessage(self: *CrossOriginWindow, message: js.Value.Temp, target_origin: ?[]const u8, frame: *Frame) !void {
-        return self.window.postMessage(message, target_origin, frame);
+    pub fn postMessage(self: *CrossOriginWindow, message: js.Value.Temp, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
+        return self.window.postMessage(message, target_origin, transfer, frame);
     }
 
     pub fn getTop(self: *CrossOriginWindow, frame: *Frame) Access {

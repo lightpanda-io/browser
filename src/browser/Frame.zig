@@ -307,6 +307,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._event_manager = EventManager.init(arena, self),
     };
     self._to_load = &self._to_load_1;
+    self._http_owner.blob_urls = &self._blob_urls;
 
     var screen: *Screen = undefined;
     var visual_viewport: *VisualViewport = undefined;
@@ -520,11 +521,6 @@ pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
 }
 
-/// Look up a blob URL in this frame's registry.
-pub fn lookupBlobUrl(self: *Frame, url: []const u8) ?*Blob {
-    return self._blob_urls.get(url);
-}
-
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
     lp.assert(self._load_state == .waiting, "frame.renavigate", .{});
     const session = self._session;
@@ -585,7 +581,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             };
             const parse_arena = try self.getArena(.medium, "Frame.parseBlob");
             defer self.releaseArena(parse_arena);
-            var parser = Parser.init(parse_arena, self.document.asNode(), self);
+            var parser = Parser.init(parse_arena, self.document.asNode(), self, .{ .allow_declarative_shadow = true });
             parser.parse(blob._slice);
         } else {
             self.document.injectBlank(self) catch |err| {
@@ -1196,7 +1192,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
     const parse_arena = try self.getArena(.medium, "Frame.parse");
     defer self.releaseArena(parse_arena);
 
-    var parser = Parser.init(parse_arena, self.document.asNode(), self);
+    var parser = Parser.init(parse_arena, self.document.asNode(), self, .{ .allow_declarative_shadow = true });
 
     switch (self._parse_state) {
         .html => |*html| {
@@ -3264,7 +3260,9 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     if (should_notify) {
         if (comptime from_parser == false) {
             // When the parser adds the node, nodeIsReady is only called when the
-            // nodeComplete() callback is executed.
+            // nodeComplete() callback is executed. nodeIsReady resolves the
+            // node's owning frame itself (only for the few node types that have
+            // ready work), so pass the incumbent `self`.
             try self.nodeIsReady(false, child);
 
             // Check if text was added to a script that hasn't started yet.
@@ -3573,11 +3571,20 @@ pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, chi
 
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
 pub fn parseHtmlAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
+    return self.parseHtmlAsChildrenInner(node, html, false);
+}
+
+// setHTMLUnsafe variant: parse a fragment that may contain declarative shadow node
+pub fn parseHtmlUnsafeAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
+    return self.parseHtmlAsChildrenInner(node, html, true);
+}
+
+fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, allow_declarative_shadow: bool) !void {
     const previous_parse_mode = self._parse_mode;
     self._parse_mode = .fragment;
     defer self._parse_mode = previous_parse_mode;
 
-    var parser = Parser.init(self.call_arena, node, self);
+    var parser = Parser.init(self.call_arena, node, self, .{ .allow_declarative_shadow = allow_declarative_shadow });
     parser.parseFragment(html);
 
     // html5ever wraps fragment output in an <html> element; unwrap so its
@@ -3615,6 +3622,15 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
         // we don't execute scripts added via innerHTML = '<script...';
         return;
     }
+    // A node's "ready" work (running a <script>, loading an <iframe> / <link> /
+    // <style>) must happen in the frame that owns the node's document — not
+    // necessarily `self`. When an async callback (e.g. a postMessage listener)
+    // running in frame A appends a node to frame B's document, `self` is the
+    // incumbent frame A, but the script's base URL and execution realm must come
+    // from B (its node document). Resolving that owner frame is a parent-chain
+    // walk, so we only do it once we've matched a node type that has ready work
+    // (the common text/element insertion does nothing here). The parser inserts
+    // into its own document, so from_parser always uses `self`.
     if (node.is(Element.Html.Script)) |script| {
         if ((comptime from_parser == false) and script._src.len == 0) {
             // Script was added via JavaScript without a src attribute.
@@ -3625,23 +3641,27 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
             }
         }
 
-        self.scriptAddedCallback(from_parser, script) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = self._type, .url = self.url });
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        frame.scriptAddedCallback(from_parser, script) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(IFrame)) |iframe| {
-        self.iframeAddedCallback(iframe) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        frame.iframeAddedCallback(iframe) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Link)) |link| {
-        link.linkAddedCallback(self) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        link.linkAddedCallback(frame) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
             return error.LinkLoadError;
         };
     } else if (node.is(Element.Html.Style)) |style| {
-        style.styleAddedCallback(self) catch |err| {
-            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = self._type });
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        style.styleAddedCallback(frame) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = frame._type });
             return error.StyleLoadError;
         };
     }
@@ -4310,5 +4330,16 @@ test "Frame: httpMetadata 404" {
     defer testing.test_session.removePage();
     const meta = frame.httpMetadata();
     try testing.expect(meta.status != null);
-    try std.testing.expectEqual(@as(u16, 404), meta.status.?);
+    try testing.expectEqual(404, meta.status.?);
+}
+
+test "Frame: 401" {
+    var frame = try testing.pageTest("401", .{});
+    defer testing.reset();
+    defer frame._session.removePage();
+
+    var buf = std.Io.Writer.Allocating.init(testing.allocator);
+    defer buf.deinit();
+    try @import("dump.zig").root(frame.document, .{}, &buf.writer, frame);
+    try testing.expectEqual("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><pre>No</pre></body></html>", buf.written());
 }

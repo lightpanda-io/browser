@@ -80,7 +80,7 @@ pub fn init(
     return exec._factory.create(ImageData{
         ._width = width,
         ._height = height,
-        ._data = try exec.context.local.?.createTypedArray(.uint8_clamped, size).persist(),
+        ._data = try exec.js.local.?.createTypedArray(.uint8_clamped, size).persist(),
     });
 }
 

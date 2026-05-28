@@ -104,10 +104,10 @@ pub fn build(b: *Build) !void {
     });
     check.dependOn(&check_lib.step);
 
-    // Extras (snapshot_creator, legacy_test) are off the default install to
+    // Extras (snapshot_creator) are off the default install to
     // avoid paying for three exe compiles on every edit. Build explicitly
     // with `zig build extras`.
-    const extras_step = b.step("extras", "Build snapshot_creator and legacy_test");
+    const extras_step = b.step("extras", "Build snapshot_creator");
 
     {
         // browser
@@ -186,38 +186,6 @@ pub fn build(b: *Build) !void {
         const run_tests = b.addRunArtifact(tests);
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_tests.step);
-    }
-
-    {
-        // browser
-        const exe = b.addExecutable(.{
-            .name = "legacy_test",
-            .use_llvm = true,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main_legacy_test.zig"),
-                .target = target,
-                .optimize = optimize,
-                .sanitize_c = enable_csan,
-                .sanitize_thread = enable_tsan,
-                .imports = &.{
-                    .{ .name = "lightpanda", .module = lightpanda_module },
-                },
-            }),
-        });
-        extras_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
-
-        const exe_check = b.addLibrary(.{
-            .name = "legacy_test_check",
-            .root_module = exe.root_module,
-        });
-        check.dependOn(&exe_check.step);
-
-        const run_cmd = b.addRunArtifact(exe);
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
-        const run_step = b.step("legacy_test", "Run the app");
-        run_step.dependOn(&run_cmd.step);
     }
 }
 

@@ -24,7 +24,6 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const URL = @import("../../URL.zig");
 
-const Blob = @import("../Blob.zig");
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
 const AbortSignal = @import("../AbortSignal.zig");
@@ -48,7 +47,7 @@ pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
-    const resolver = exec.context.local.?.createPromiseResolver();
+    const resolver = exec.js.local.?.createPromiseResolver();
 
     // A bad RequestInit (e.g. an invalid priority) must reject the promise,
     // not throw synchronously.
@@ -64,12 +63,8 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         }
     }
 
-    if (std.mem.startsWith(u8, request._url, "blob:")) {
-        return handleBlobUrl(request._url, resolver, exec);
-    }
-
     const response = try Response.init(null, .{ .status = 0 }, exec);
-    errdefer response.deinit(exec.context.page);
+    errdefer response.deinit(exec.page);
 
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
@@ -82,7 +77,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._signal = request._signal,
     };
 
-    const session = exec.context.page.session;
+    const session = exec.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
     if (request._headers) |h| {
@@ -124,26 +119,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     }) catch {};
-    return resolver.promise();
-}
-
-fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, exec: *const Execution) !js.Promise {
-    const blob: *Blob = exec.lookupBlobUrl(url) orelse {
-        resolver.rejectError("fetch blob error", .{ .type_error = "BlobNotFound" });
-        return resolver.promise();
-    };
-
-    const response = try Response.init(null, .{ .status = 200 }, exec);
-    response._body = .{ .bytes = try response._arena.dupe(u8, blob._slice) };
-    response._url = try response._arena.dupeZ(u8, url);
-    response._type = .basic;
-
-    if (blob._mime.len > 0) {
-        try response._headers.append("Content-Type", blob._mime, exec);
-    }
-
-    const js_val = try exec.context.local.?.zigValueToJs(response, .{});
-    resolver.resolve("fetch blob done", js_val);
     return resolver.promise();
 }
 
@@ -238,7 +213,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     });
 
     var ls: js.Local.Scope = undefined;
-    self._exec.context.localScope(&ls);
+    self._exec.js.localScope(&ls);
     defer ls.deinit();
 
     const js_val = try ls.local.zigValueToJs(self._response, .{});
@@ -269,11 +244,11 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // clear this. (defer since `self is in the response's arena).
 
     defer if (owns_response) {
-        response.deinit(self._exec.context.page);
+        response.deinit(self._exec.page);
     };
 
     var ls: js.Local.Scope = undefined;
-    self._exec.context.localScope(&ls);
+    self._exec.js.localScope(&ls);
     defer ls.deinit();
 
     // fetch() must reject with a TypeError on network errors per spec
@@ -286,7 +261,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
     if (self._owns_response) {
         var response = self._response;
         response._http_response = null;
-        response.deinit(self._exec.context.page);
+        response.deinit(self._exec.page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
     }

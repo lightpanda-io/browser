@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 pub const v8 = @import("v8").c;
 
 const string = @import("../../string.zig");
@@ -417,3 +419,19 @@ pub const FinalizerCallback = struct {
         page.releaseArena(self.arena);
     }
 };
+
+pub fn writeStackTrace(isolate: *v8.Isolate, stack_handle: *const v8.StackTrace, writer: *std.Io.Writer) !void {
+    const separator = lp.log.separator();
+    const frame_count = v8.v8__StackTrace__GetFrameCount(stack_handle);
+
+    for (0..@intCast(frame_count)) |i| {
+        const frame_handle = v8.v8__StackTrace__GetFrame(stack_handle, isolate, @intCast(i)).?;
+        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |name| {
+            var buf: [1024]u8 = undefined;
+            const n = v8.v8__String__WriteUtf8(name, isolate, &buf, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+            try writer.print("{s}{s}:{d}", .{ separator, buf[0..n], v8.v8__StackFrame__GetLineNumber(frame_handle) });
+        } else {
+            try writer.print("{s}<anonymous>:{d}", .{ separator, v8.v8__StackFrame__GetLineNumber(frame_handle) });
+        }
+    }
+}

@@ -282,7 +282,13 @@ pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, frame:
         ._type = unionInit(AbstractRange.Type, chain.get(1)),
     };
     chain.setLeaf(1, child);
-    frame._live_ranges.append(&abstract_range._range_link);
+
+    if (abstract_range._type != .static_range) {
+        // StaticRanges are not live, so they don't get added to the frame's
+        // live_ranges list.
+        frame._live_ranges.append(&abstract_range._range_link);
+    }
+
     return chain.get(1);
 }
 

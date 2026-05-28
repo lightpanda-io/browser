@@ -135,6 +135,10 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     v8.v8__Isolate__SetFatalErrorHandler(isolate_handle, fatalCallback);
     v8.v8__Isolate__SetOOMErrorHandler(isolate_handle, oomCallback);
 
+    if (comptime IS_DEBUG) {
+        v8.v8__Isolate__SetCaptureStackTraceForUncaughtExceptions(isolate_handle, true, 64);
+    }
+
     isolate.enter();
     errdefer isolate.exit();
 
@@ -304,11 +308,13 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     };
 
     context.execution = .{
+        .js = context,
         .url = &global.url,
         .buf = &global.buf,
         .charset = &global.charset,
-        .context = context,
         .arena = global.arena,
+        .page = context.page,
+        .session = page.session,
         .call_arena = params.call_arena,
         ._factory = global._factory,
         ._scheduler = &context.scheduler,

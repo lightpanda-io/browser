@@ -77,7 +77,7 @@ pub fn parseFromString(
             }
 
             // Parse HTML into the document
-            var parser = Parser.init(arena, doc.asNode(), frame);
+            var parser = Parser.init(arena, doc.asNode(), frame, .{});
             parser.parse(normalized);
 
             if (parser.err) |pe| {
@@ -94,13 +94,13 @@ pub fn parseFromString(
 
             // Parse XML into XMLDocument.
             const doc_node = doc.asNode();
-            var parser = Parser.init(arena, doc_node, frame);
+            var parser = Parser.init(arena, doc_node, frame, .{});
             parser.parseXML(html);
 
             if (parser.err != null or doc_node.firstChild() == null) {
                 // Return a document with a <parsererror> element per spec.
                 const err_doc = try frame._factory.document(XMLDocument{ ._proto = undefined });
-                var err_parser = Parser.init(arena, err_doc.asNode(), frame);
+                var err_parser = Parser.init(arena, err_doc.asNode(), frame, .{});
                 err_parser.parseXML("<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>");
                 return err_doc.asDocument();
             }

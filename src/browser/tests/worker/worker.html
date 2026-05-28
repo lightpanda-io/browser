@@ -172,6 +172,25 @@
   }
 </script>
 
+<script id="worker_replaceable" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./replaceable-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker replaceable error: ' + data.err);
+      testing.expectEqual(true, data.results.console_replaced);
+      testing.expectEqual(true, data.results.console_restored);
+      testing.expectEqual(true, data.results.self_replaced);
+      testing.expectEqual(true, data.results.self_restored);
+    });
+  }
+</script>
+
 <script id="worker_webapi_net" type=module>
   {
     const state = await testing.async();
@@ -357,6 +376,28 @@
     await state.done((response) => {
       testing.expectEqual('before-load', response.echo.greeting);
       testing.expectEqual('worker', response.from);
+    });
+  }
+</script>
+
+<script id="worker_from_blob_url" type=module>
+  // A blob: worker resolves its initial script through the HTTP client's
+  // synthetic-scheme path against the frame's blob registry, like any URL.
+  {
+    const state = await testing.async();
+    const blob = new Blob(["onmessage = (e) => postMessage({ echo: e.data, from: 'blob-worker' });"], { type: 'text/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    const worker = new Worker(blobUrl);
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    worker.postMessage({ greeting: 'from-blob' });
+
+    await state.done((response) => {
+      testing.expectEqual('from-blob', response.echo.greeting);
+      testing.expectEqual('blob-worker', response.from);
+      URL.revokeObjectURL(blobUrl);
     });
   }
 </script>

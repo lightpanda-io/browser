@@ -786,7 +786,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     const arena = try frame.getArena(.medium, "Document.write");
     defer frame.releaseArena(arena);
 
-    var parser = Parser.init(arena, fragment_node, frame);
+    var parser = Parser.init(arena, fragment_node, frame, .{ .allow_declarative_shadow = true });
     parser.parseFragment(html);
 
     // Extract children from wrapper HTML element (html5ever wraps fragments)
@@ -873,7 +873,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     self._implementation = null;
     self._ready_state = .loading;
 
-    self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame);
+    self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame, .{ .allow_declarative_shadow = true });
     try self._script_created_parser.?.start();
     frame._parse_mode = .document;
 
