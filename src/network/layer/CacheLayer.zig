@@ -65,37 +65,42 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
-        // Dispatch that the Request was served from the Cache.
-        transfer.req.notification.dispatch(
-            .http_request_served_from_cache,
-            &.{ .transfer = transfer },
-        );
+        if (cached.expired) {
+            // If it is expired, evict from Cache.
+            transfer.client.network.cache.?.evict(req.url);
+        } else {
+            // Dispatch that the Request was served from the Cache.
+            transfer.req.notification.dispatch(
+                .http_request_served_from_cache,
+                &.{ .transfer = transfer },
+            );
 
-        const ctx = try arena.create(CachedResponse);
-        ctx.* = cached;
+            const ctx = try arena.create(CachedResponse);
+            ctx.* = cached;
 
-        try transfer.client.runNextTick(transfer, ctx, .{
-            .run = struct {
-                fn run(t: *Transfer, ctx_ptr: ?*anyopaque) void {
-                    defer t.deinit();
+            try transfer.client.runNextTick(transfer, ctx, .{
+                .run = struct {
+                    fn run(t: *Transfer, ctx_ptr: ?*anyopaque) void {
+                        defer t.deinit();
 
-                    const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
-                    serveFromCache(&t.req, c) catch |err| {
-                        t.req.error_callback(t.req.ctx, err);
-                    };
-                }
-            }.run,
-            .abort = struct {
-                fn abort(ctx_ptr: ?*anyopaque) void {
-                    const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
-                    switch (c.data) {
-                        .buffer => |_| {},
-                        .file => |f| f.file.close(),
+                        const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
+                        serveFromCache(&t.req, c) catch |err| {
+                            t.req.error_callback(t.req.ctx, err);
+                        };
                     }
-                }
-            }.abort,
-        });
-        return;
+                }.run,
+                .abort = struct {
+                    fn abort(ctx_ptr: ?*anyopaque) void {
+                        const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
+                        switch (c.data) {
+                            .buffer => |_| {},
+                            .file => |f| f.file.close(),
+                        }
+                    }
+                }.abort,
+            });
+            return;
+        }
     }
 
     // Cache miss: install wrappers so we can inspect the response and decide
