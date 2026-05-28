@@ -34,12 +34,12 @@ const Allocator = std.mem.Allocator;
 const CookieChangeEvent = @This();
 
 _proto: *Event,
-_changed: []*CookieStore.CookieListItem,
-_deleted: []*CookieStore.CookieListItem,
+_changed: []CookieStore.CookieListItem,
+_deleted: []CookieStore.CookieListItem,
 
 const CookieChangeEventOptions = struct {
-    changed: ?[]*CookieStore.CookieListItem = null,
-    deleted: ?[]*CookieStore.CookieListItem = null,
+    changed: ?[]CookieStore.CookieListItem = null,
+    deleted: ?[]CookieStore.CookieListItem = null,
 };
 
 const Options = Event.inheritOptions(CookieChangeEvent, CookieChangeEventOptions);
@@ -96,15 +96,13 @@ pub fn initSingle(
         .partitioned = false,
     };
 
-    const items = try arena.dupe(*CookieStore.CookieListItem, &.{item});
-
     const event = try frame._factory.event(
         arena,
         type_string,
         CookieChangeEvent{
             ._proto = undefined,
-            ._changed = if (kind == .changed) items else &.{},
-            ._deleted = if (kind == .deleted) items else &.{},
+            ._changed = if (kind == .changed) item[0..1] else &.{},
+            ._deleted = if (kind == .deleted) item[0..1] else &.{},
         },
     );
 
@@ -116,11 +114,11 @@ pub fn asEvent(self: *CookieChangeEvent) *Event {
     return self._proto;
 }
 
-pub fn getChanged(self: *const CookieChangeEvent) []*CookieStore.CookieListItem {
+pub fn getChanged(self: *const CookieChangeEvent) []CookieStore.CookieListItem {
     return self._changed;
 }
 
-pub fn getDeleted(self: *const CookieChangeEvent) []*CookieStore.CookieListItem {
+pub fn getDeleted(self: *const CookieChangeEvent) []CookieStore.CookieListItem {
     return self._deleted;
 }
 
