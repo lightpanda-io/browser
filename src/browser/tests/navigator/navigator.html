@@ -27,6 +27,36 @@
   testing.expectEqual('Gecko', navigator.product);
   testing.expectEqual(false, navigator.javaEnabled());
   testing.expectEqual(false, navigator.webdriver);
+
+  testing.expectEqual(null, navigator.doNotTrack);
+
+  // Every Navigator attribute must be a native accessor on the prototype
+  for (const name of [
+    'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
+    'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
+    'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
+    'plugins', 'doNotTrack', 'globalPrivacyControl',
+  ]) {
+    const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
+    testing.expectEqual('function', typeof desc.get); // accessor on prototype
+    testing.expectEqual(undefined, desc.value);        // not a data property
+    testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(navigator, name)); // not own
+    testing.expectEqual(true, desc.get.toString().includes('[native code]'));
+  }
+</script>
+
+<script id=navigator_native_descriptor_walk>
+  // Mirror the bot-detection fingerprint: read every navigator property's
+  // descriptor and call toString() on its value/getter. This must not throw.
+  let obj = navigator;
+  do {
+    for (const name of Object.getOwnPropertyNames(obj)) {
+      const d = Object.getOwnPropertyDescriptor(obj, name);
+      if (d.value !== undefined) { d.value.toString(); }
+      else if (d.get !== undefined) { d.get.toString(); }
+    }
+  } while (obj = Object.getPrototypeOf(obj));
+  testing.expectEqual(null, navigator.doNotTrack);
 </script>
 
 <script id=permission_query type=module>
