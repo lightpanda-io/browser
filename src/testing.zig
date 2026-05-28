@@ -564,8 +564,11 @@ test "tests:afterAll" {
 
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
-    test_notification.deinit();
+    // Browser must be deinit'd before the notification — Session/Frame
+    // teardown may unregister notification listeners (e.g. CookieStore
+    // detach), which dereferences `notification.listeners`.
     test_browser.deinit();
+    test_notification.deinit();
     test_app.deinit();
     test_config.deinit(@import("root").tracking_allocator);
 }
