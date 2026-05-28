@@ -55,6 +55,12 @@ pub fn evict(self: *Cache, url: []const u8) void {
     };
 }
 
+pub fn revalidate(self: *Cache, arena: std.mem.Allocator, url: []const u8, timestamp: i64) !void {
+    return switch (self.kind) {
+        inline else => |*c| c.revalidate(arena, url, timestamp),
+    };
+}
+
 pub fn clear(self: *Cache) !void {
     return switch (self.kind) {
         inline else => |*c| c.clear(),
@@ -122,9 +128,12 @@ pub const CachedMetadata = struct {
     cache_control: CacheControl,
     /// Response Headers
     headers: []const Http.Header,
-
     /// These are Request Headers used by Vary.
     vary_headers: []const Http.Header,
+
+    // Validators for conditional requests.
+    etag: ?[]const u8 = null,
+    last_modified: ?[]const u8 = null,
 
     pub fn format(self: CachedMetadata, writer: *std.Io.Writer) !void {
         try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | vary=[", .{
@@ -144,6 +153,15 @@ pub const CachedMetadata = struct {
             }
         }
         try writer.print("]", .{});
+    }
+
+    pub fn isStale(self: CachedMetadata, timestamp: i64) bool {
+        const age = (timestamp - self.stored_at) + @as(i64, @intCast(self.age_at_store));
+        return age >= @as(i64, @intCast(self.cache_control.max_age));
+    }
+
+    pub fn hasValidators(self: CachedMetadata) bool {
+        return self.etag != null or self.last_modified != null;
     }
 };
 
@@ -172,8 +190,10 @@ pub const CachedData = union(enum) {
 pub const CachedResponse = struct {
     metadata: CachedMetadata,
     data: CachedData,
+    expired: bool,
 
     pub fn format(self: *const CachedResponse, writer: *std.Io.Writer) !void {
+        try writer.print("expired={}, ", .{self.expired});
         try writer.print("metadata=(", .{});
         try self.metadata.format(writer);
         try writer.print("), data=", .{});
