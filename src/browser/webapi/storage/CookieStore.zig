@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
@@ -30,6 +31,7 @@ const CookieChangeEvent = @import("../event/CookieChangeEvent.zig");
 
 const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
+const String = lp.String;
 
 pub fn registerTypes() []const type {
     return &.{ CookieStore, CookieListItem };
@@ -366,12 +368,15 @@ fn matchCookies(
             if (!std.mem.eql(u8, cookie.name, n)) continue;
         }
 
-        const item = try exec.call_arena.create(CookieListItem);
+        const item = try exec.arena.create(CookieListItem);
         item.* = .{
-            .name = cookie.name,
-            .value = cookie.value,
-            .domain = if (cookie.domain.len > 0 and cookie.domain[0] == '.') cookie.domain[1..] else null,
-            .path = cookie.path,
+            .name = String.wrap(cookie.name),
+            .value = String.wrap(cookie.value),
+            .domain = if (cookie.domain.len > 0 and cookie.domain[0] == '.')
+                String.wrap(cookie.domain[1..])
+            else
+                null,
+            .path = String.wrap(cookie.path),
             .expires = if (cookie.expires) |e| e * 1000.0 else null,
             .secure = cookie.secure,
             .sameSite = switch (cookie.same_site) {
@@ -475,25 +480,25 @@ pub const JsApi = struct {
 // CookieListItem: per CookieStore.get / getAll return shape, documented inline on
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore
 pub const CookieListItem = struct {
-    name: []const u8,
-    value: []const u8,
-    domain: ?[]const u8,
-    path: []const u8,
+    name: String,
+    value: String,
+    domain: ?String,
+    path: String,
     expires: ?f64,
     secure: bool,
     sameSite: SameSite,
     partitioned: bool,
 
-    fn getName(self: *const CookieListItem) []const u8 {
+    fn getName(self: *const CookieListItem) String {
         return self.name;
     }
-    fn getValue(self: *const CookieListItem) []const u8 {
+    fn getValue(self: *const CookieListItem) String {
         return self.value;
     }
-    fn getDomain(self: *const CookieListItem) ?[]const u8 {
+    fn getDomain(self: *const CookieListItem) ?String {
         return self.domain;
     }
-    fn getPath(self: *const CookieListItem) []const u8 {
+    fn getPath(self: *const CookieListItem) String {
         return self.path;
     }
     fn getExpires(self: *const CookieListItem) ?f64 {

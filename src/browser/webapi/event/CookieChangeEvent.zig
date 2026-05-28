@@ -79,13 +79,13 @@ pub fn initSingle(
 
     const item = try arena.create(CookieStore.CookieListItem);
     item.* = .{
-        .name = try arena.dupe(u8, snapshot.name),
-        .value = try arena.dupe(u8, snapshot.value),
+        .name = try String.init(arena, snapshot.name, .{}),
+        .value = try String.init(arena, snapshot.value, .{}),
         .domain = if (snapshot.domain.len > 0 and snapshot.domain[0] == '.')
-            try arena.dupe(u8, snapshot.domain[1..])
+            try String.init(arena, snapshot.domain[1..], .{})
         else
             null,
-        .path = try arena.dupe(u8, snapshot.path),
+        .path = try String.init(arena, snapshot.path, .{}),
         .expires = null,
         .secure = snapshot.secure,
         .sameSite = switch (snapshot.same_site) {
