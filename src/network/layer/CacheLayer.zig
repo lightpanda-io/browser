@@ -70,17 +70,17 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
                 if (cached.metadata.etag) |etag| {
                     log.debug(.cache, "revalidate with etag", .{ .url = req.url, .etag = etag });
                     const header_value = try std.fmt.allocPrintSentinel(arena, "If-None-Match: {s}", .{etag}, 0);
-                    try req.headers.add(header_value.ptr);
+                    try req.headers.add(header_value);
                 } else if (cached.metadata.last_modified) |lm| {
                     log.debug(.cache, "revalidate with last-modified", .{ .url = req.url, .last_modified = lm });
                     const header_value = try std.fmt.allocPrintSentinel(arena, "If-Modified-Since: {s}", .{lm}, 0);
-                    try req.headers.add(header_value.ptr);
+                    try req.headers.add(header_value);
                 }
 
                 try installCacheContext(arena, transfer, cached);
                 return self.next.request(transfer);
             } else {
-                // If it is expired, evict from Cache.
+                // If it is expired w/o validators, evict from Cache.
                 transfer.client.network.cache.?.evict(req.url);
             }
         } else {
@@ -152,10 +152,7 @@ fn installCacheContext(
 
 fn serveFromCache(req: *Request, cached: *const CachedResponse) !void {
     const response = Response.fromCached(req.ctx, cached);
-    defer switch (cached.data) {
-        .buffer => |_| {},
-        .file => |f| f.file.close(),
-    };
+    defer cached.data.deinit();
 
     if (req.start_callback) |cb| {
         try cb(response);
@@ -245,26 +242,14 @@ const CacheContext = struct {
                 log.warn(.cache, "revalidate failed", .{ .err = err });
             };
 
-            const ctx = try arena.create(CachedResponse);
-            ctx.* = stale;
+            transfer.req.notification.dispatch(
+                .http_request_served_from_cache,
+                &.{ .transfer = transfer },
+            );
 
-            try transfer.client.runNextTick(transfer, ctx, .{
-                .run = struct {
-                    fn run(t: *Transfer, ctx_ptr: *anyopaque) void {
-                        defer t.deinit();
-                        const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr));
-                        serveFromCache(&t.req, c) catch |err| {
-                            t.req.error_callback(t.req.ctx, err);
-                        };
-                    }
-                }.run,
-                .abort = struct {
-                    fn abort(ctx_ptr: *anyopaque) void {
-                        const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr));
-                        c.data.deinit();
-                    }
-                }.abort,
-            });
+            serveFromCache(&transfer.req, &stale) catch |err| {
+                self.forward.forwardErr(err);
+            };
 
             return false;
         }
