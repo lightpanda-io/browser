@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Frame = @import("../../Frame.zig");
 const Notification = @import("../../../Notification.zig");
 
 const Event = @import("../Event.zig");
@@ -29,6 +28,7 @@ const CookieStore = @import("../storage/CookieStore.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
+const Execution = js.Execution;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieChangeEvent
 const CookieChangeEvent = @This();
@@ -44,14 +44,14 @@ const CookieChangeEventOptions = struct {
 
 const Options = Event.inheritOptions(CookieChangeEvent, CookieChangeEventOptions);
 
-pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*CookieChangeEvent {
-    const arena = try frame.getArena(.tiny, "CookieChangeEvent");
-    errdefer frame.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, exec: *const Execution) !*CookieChangeEvent {
+    const arena = try exec.getArena(.tiny, "CookieChangeEvent");
+    errdefer exec.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
     const opts = _opts orelse Options{};
 
-    const event = try frame._factory.event(
+    const event = try exec._factory.event(
         arena,
         type_string,
         CookieChangeEvent{
@@ -71,10 +71,10 @@ pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*CookieChangeEvent
 pub fn initSingle(
     kind: Notification.CookieChanged.Kind,
     snapshot: Notification.CookieChanged,
-    frame: *Frame,
+    exec: *const Execution,
 ) !*CookieChangeEvent {
-    const arena = try frame.getArena(.tiny, "CookieChangeEvent");
-    errdefer frame.releaseArena(arena);
+    const arena = try exec.getArena(.tiny, "CookieChangeEvent");
+    errdefer exec.releaseArena(arena);
     const type_string = try String.init(arena, "change", .{});
 
     const item = try arena.create(CookieStore.CookieListItem);
@@ -96,7 +96,7 @@ pub fn initSingle(
         .partitioned = false,
     };
 
-    const event = try frame._factory.event(
+    const event = try exec._factory.event(
         arena,
         type_string,
         CookieChangeEvent{

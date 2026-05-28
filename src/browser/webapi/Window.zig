@@ -53,6 +53,7 @@ const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
 const Allocator = std.mem.Allocator;
+const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
     return &.{ Window, CrossOriginWindow };
@@ -206,10 +207,10 @@ pub fn getSessionStorage(self: *Window) *storage.Lookup {
     return &self._storage_bucket.session;
 }
 
-pub fn getCookieStore(self: *Window, frame: *Frame) !*CookieStore {
+pub fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
     if (self._cookie_store) |cs| return cs;
-    const cs = try frame._factory.eventTarget(CookieStore{ ._proto = undefined });
-    try cs.attachToFrame(frame);
+    const cs = try exec._factory.eventTarget(CookieStore{ ._proto = undefined });
+    try cs.attach(exec);
     self._cookie_store = cs;
     return cs;
 }

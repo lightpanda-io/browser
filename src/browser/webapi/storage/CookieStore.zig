@@ -21,6 +21,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
 const Frame = @import("../../Frame.zig");
+const Session = @import("../../Session.zig");
 const Notification = @import("../../../Notification.zig");
 
 const Cookie = @import("Cookie.zig");
@@ -39,41 +40,36 @@ const CookieStore = @This();
 
 _proto: *EventTarget,
 _on_change: ?js.Function.Global = null,
-// Owning Frame, used to filter incoming change notifications by document
-// scope and to schedule async event dispatch. Null when the store has no
-// frame context (e.g. WorkerGlobalScope), in which case change events are
-// not delivered.
-_frame: ?*Frame = null,
+_exec: ?*Execution = null,
 
 pub fn asEventTarget(self: *CookieStore) *EventTarget {
     return self._proto;
 }
 
 /// Registers this CookieStore as a listener for jar-change notifications on
-/// the given frame's session. Must be called once after construction by the
+/// the given session. Must be called once after construction by the
 /// owning Window. Idempotent on re-call.
-pub fn attachToFrame(self: *CookieStore, frame: *Frame) !void {
-    if (self._frame != null) return;
-    self._frame = frame;
-    try frame._session.notification.register(.cookie_changed, self, onCookieChanged);
+pub fn attach(self: *CookieStore, exec: *Execution) !void {
+    if (self._exec != null) return;
+    self._exec = exec;
+    try exec.session.notification.register(.cookie_changed, self, onCookieChanged);
 }
 
-/// Removes this CookieStore from the notification list. Called from
-/// Frame.deinit before tearing down the JS context.
+/// Removes this CookieStore from the notification list.
 pub fn detach(self: *CookieStore) void {
-    const frame = self._frame orelse return;
-    frame._session.notification.unregisterAll(self);
-    self._frame = null;
+    const exec = self._exec orelse return;
+    exec.session.notification.unregisterAll(self);
+    self._exec = null;
 }
 
 fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !void {
     const self: *CookieStore = @ptrCast(@alignCast(ctx));
-    const frame = self._frame orelse return;
+    const exec = self._exec orelse return;
 
     // CookieStore exposes only cookies that script would see for the
     // current document — same filter as `match` (HttpOnly hidden,
     // same-site treated as first-party against the document URL).
-    const doc_url = frame.url;
+    const doc_url = exec.url.*;
     const target = Cookie.PreparedUri{
         .host = URL.getHostname(doc_url),
         .path = URL.getPathname(doc_url),
@@ -97,12 +93,13 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
     // Per spec, `change` is dispatched as a queued task — never synchronously
     // from the mutation site. We snapshot the notification fields onto a
     // small page arena that the scheduled callback releases after dispatch.
-    const arena = try frame.getArena(.tiny, "CookieStore.change");
-    errdefer frame.releaseArena(arena);
+    const arena = try exec.getArena(.tiny, "CookieStore.change");
+    errdefer exec.releaseArena(arena);
 
     const cb = try arena.create(ChangeCallback);
     cb.* = .{
         .cookie_store = self,
+        .exec = exec,
         .arena = arena,
         .kind = data.kind,
         .name = try arena.dupe(u8, data.name),
@@ -113,7 +110,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
         .same_site = data.same_site,
     };
 
-    try frame.js.scheduler.add(cb, ChangeCallback.run, 0, .{
+    try exec.js.scheduler.add(cb, ChangeCallback.run, 0, .{
         .name = "CookieStore.change",
         .low_priority = false,
         .finalizer = ChangeCallback.cancelled,
@@ -122,6 +119,10 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
 
 const ChangeCallback = struct {
     cookie_store: *CookieStore,
+    // Execution is stored only to ensure we can release the arena.
+    // The CookieStore could have been detached in the meantime, and so it's
+    // _exec pointer could have been reset.
+    exec: *Execution,
     arena: Allocator,
     kind: Notification.CookieChanged.Kind,
     name: []const u8,
@@ -137,9 +138,7 @@ const ChangeCallback = struct {
     }
 
     fn releaseArena(self: *ChangeCallback) void {
-        if (self.cookie_store._frame) |frame| {
-            frame.releaseArena(self.arena);
-        }
+        self.exec.releaseArena(self.arena);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
@@ -147,11 +146,14 @@ const ChangeCallback = struct {
         defer self.releaseArena();
 
         const cs = self.cookie_store;
-        const frame = cs._frame orelse return null;
+        // We use the CookieStore's exec here instead of self.exec to detect if
+        // the store has beend detached. In this case, we don't dispatch the
+        // event.
+        const exec = cs._exec orelse return null;
         const target = cs.asEventTarget();
 
         // Skip event construction when nobody is listening.
-        if (!frame._event_manager.hasDirectListeners(target, "change", cs._on_change)) {
+        if (!exec.hasDirectListeners(target, "change", cs._on_change)) {
             return null;
         }
 
@@ -164,9 +166,9 @@ const ChangeCallback = struct {
             .secure = self.secure,
             .http_only = false,
             .same_site = self.same_site,
-        }, frame);
+        }, exec);
 
-        try frame._event_manager.dispatchDirect(target, event.asEvent(), cs._on_change, .{
+        try exec.dispatch(target, event.asEvent(), cs._on_change, .{
             .context = "CookieStore.change",
         });
 
@@ -242,7 +244,7 @@ const SameSite = enum {
 };
 
 pub fn get(_: *CookieStore, input: GetInput, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
 
     const name: ?[]const u8 = switch (input) {
         .name => |n| n,
@@ -260,7 +262,7 @@ pub fn get(_: *CookieStore, input: GetInput, exec: *const Execution) !js.Promise
 }
 
 pub fn getAll(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
 
     const name: ?[]const u8 = if (input) |inp| switch (inp) {
         .name => |n| n,
@@ -274,7 +276,7 @@ pub fn getAll(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Pro
 }
 
 pub fn set(_: *CookieStore, input: SetInput, value: ?[]const u8, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
 
     const init: CookieInit = switch (input) {
         .options => |o| o,
@@ -292,7 +294,7 @@ pub fn set(_: *CookieStore, input: SetInput, value: ?[]const u8, exec: *const Ex
 }
 
 pub fn delete(_: *CookieStore, input: DeleteInput, exec: *const Execution) !js.Promise {
-    const local = exec.context.local.?;
+    const local = exec.js.local.?;
 
     const opts: DeleteOptions = switch (input) {
         .options => |o| o,
@@ -322,9 +324,7 @@ fn matchCookies(
     name: ?[]const u8,
     first_only: bool,
 ) ![]*CookieListItem {
-    const session = switch (exec.context.global) {
-        inline else => |g| g._session,
-    };
+    const session = exec.session;
     const url = exec.url.*;
 
     const target = Cookie.PreparedUri{
@@ -368,9 +368,7 @@ fn matchCookies(
 }
 
 fn storeCookie(exec: *const Execution, init: CookieInit) !void {
-    const session = switch (exec.context.global) {
-        inline else => |g| g._session,
-    };
+    const session = exec.session;
     const url = exec.url.*;
 
     // Reuse the Set-Cookie parser by serialising the dict back into a
