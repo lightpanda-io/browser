@@ -1080,7 +1080,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // Handle redirects: reuse the same connection to preserve TCP state.
     if (msg.err == null) {
         const status = try msg.conn.getResponseCode();
-        if (status >= 300 and status <= 399) {
+        if (status >= 300 and status <= 399 and status != 304) {
             try transfer.handleRedirect();
 
             const conn = transfer._conn.?;
