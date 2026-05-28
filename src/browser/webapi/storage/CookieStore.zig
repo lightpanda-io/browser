@@ -51,7 +51,7 @@ pub fn asEventTarget(self: *CookieStore) *EventTarget {
 
 /// Registers this CookieStore as a listener for jar-change notifications on
 /// the given frame's session. Must be called once after construction by the
-/// owning Window. Idempotent on re-call (replaces the frame).
+/// owning Window. Idempotent on re-call.
 pub fn attachToFrame(self: *CookieStore, frame: *Frame) !void {
     if (self._frame != null) return;
     self._frame = frame;
