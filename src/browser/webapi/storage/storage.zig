@@ -61,8 +61,8 @@ pub const Bucket = struct {
 
     pub fn init(allocator: Allocator) Bucket {
         return .{
-            .local = .{ .allocator = allocator },
-            .session = .{ .allocator = allocator },
+            .local = .{ ._allocator = allocator },
+            .session = .{ ._allocator = allocator },
         };
     }
 
@@ -75,17 +75,17 @@ pub const Bucket = struct {
 pub const Lookup = struct {
     _data: std.StringHashMapUnmanaged([]const u8) = .empty,
     _size: usize = 0,
-    allocator: Allocator,
+    _allocator: Allocator,
 
     const max_size = 5 * 1024 * 1024;
 
     pub fn deinit(self: *Lookup) void {
         var it = self._data.iterator();
         while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+            self._allocator.free(entry.key_ptr.*);
+            self._allocator.free(entry.value_ptr.*);
         }
-        self._data.deinit(self.allocator);
+        self._data.deinit(self._allocator);
         self._size = 0;
     }
 
@@ -104,18 +104,18 @@ pub const Lookup = struct {
         }
 
         if (self._data.getPtr(k)) |value_ptr| {
-            const value_owned = try self.allocator.dupe(u8, value);
+            const value_owned = try self._allocator.dupe(u8, value);
             self._size -= value_ptr.*.len;
-            self.allocator.free(value_ptr.*);
+            self._allocator.free(value_ptr.*);
             value_ptr.* = value_owned;
             self._size += value.len;
         } else {
-            const key_owned = try self.allocator.dupe(u8, k);
-            errdefer self.allocator.free(key_owned);
-            const value_owned = try self.allocator.dupe(u8, value);
-            errdefer self.allocator.free(value_owned);
+            const key_owned = try self._allocator.dupe(u8, k);
+            errdefer self._allocator.free(key_owned);
+            const value_owned = try self._allocator.dupe(u8, value);
+            errdefer self._allocator.free(value_owned);
 
-            try self._data.put(self.allocator, key_owned, value_owned);
+            try self._data.put(self._allocator, key_owned, value_owned);
             self._size += value.len;
         }
     }
@@ -124,15 +124,15 @@ pub const Lookup = struct {
         const k = key_ orelse return;
         const kv = self._data.fetchRemove(k) orelse return;
         self._size -= kv.value.len;
-        self.allocator.free(kv.key);
-        self.allocator.free(kv.value);
+        self._allocator.free(kv.key);
+        self._allocator.free(kv.value);
     }
 
     pub fn clear(self: *Lookup) void {
         var it = self._data.iterator();
         while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+            self._allocator.free(entry.key_ptr.*);
+            self._allocator.free(entry.value_ptr.*);
         }
         self._data.clearRetainingCapacity();
         self._size = 0;
