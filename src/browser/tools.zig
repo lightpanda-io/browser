@@ -185,7 +185,7 @@ pub const Tool = enum {
                 .input_schema = url_params_schema,
             },
             .eval => .{
-                .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
+                .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of eval, surviving navigation; values previously set via `/extract save=` or `/eval save=` appear as `lp.<name>`.",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -193,7 +193,8 @@ pub const Tool = enum {
                     \\    "script": { "type": "string" },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
+                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The eval's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evals. Value must be JSON; wrap non-strings with JSON.stringify(...)." }
                     \\  },
                     \\  "required": ["script"]
                     \\}
@@ -219,7 +220,8 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." }
+                    \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." },
+                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The extracted JSON is stored under this name and exposed as `lp.<name>` in subsequent /eval calls." }
                     \\  },
                     \\  "required": ["schema"]
                     \\}
@@ -918,10 +920,17 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
         waitUntil: ?lp.Config.WaitUntil = null,
+        save: ?[]const u8 = null,
     };
     const args = try parseArgs(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
     const before = session.currentFrame();
+    const app_allocator = session.browser.app.allocator;
+
+    // Install `globalThis.lp` from the bridge store so the user script can
+    // read prior `save=`d values or auto-synced state from earlier evals.
+    const prelude = bridgePrelude(arena, &session.bridge_store) catch return ToolError.OutOfMemory;
+    _ = try runEval(arena, page, prelude);
 
     // Block-scope so top-level `let`/`const` don't leak across calls.
     const block_script = std.fmt.allocPrintSentinel(
@@ -944,6 +953,29 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     }
     if (result.is_error == true) return result;
 
+    // Sync `lp.*` back to the store before any queued navigation tears
+    // down this page's JS context. Bad JSON / non-object lp drops silently.
+    if (runEval(arena, page, bridge_postlude)) |postlude_result| {
+        if (!postlude_result.is_error) {
+            bridgeSync(app_allocator, &session.bridge_store, postlude_result.text) catch |err| switch (err) {
+                error.OutOfMemory => return ToolError.OutOfMemory,
+                else => {},
+            };
+        }
+    } else |_| {}
+
+    // save=name persists this eval's result text under `name`. The caller
+    // must produce a JSON-encodable value (use `JSON.stringify(...)`).
+    if (args.save) |name| {
+        bridgeStoreSet(app_allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
+            error.InvalidJson => return .{
+                .text = "save= requires the eval to return JSON; wrap with JSON.stringify(...)",
+                .is_error = true,
+            },
+        };
+    }
+
     // Script may have queued a navigation (e.g. `top.location = …`).
     try awaitQueuedNavigation(session);
     const after = session.currentFrame() orelse return result;
@@ -958,9 +990,23 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
 }
 
 fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
-    const Params = struct { schema: []const u8 };
+    const Params = struct {
+        schema: []const u8,
+        save: ?[]const u8 = null,
+    };
     const args = try parseArgs(Params, arena, arguments);
-    return extract(arena, session, registry, args.schema);
+    const result = try extract(arena, session, registry, args.schema);
+
+    if (!result.is_error) if (args.save) |name| {
+        bridgeStoreSet(session.browser.app.allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
+            // Extract's walker stringifies its own output, so invalid JSON
+            // here means the walker mis-emitted — surface as an error.
+            error.InvalidJson => return .{ .text = "extract: walker produced non-JSON output", .is_error = true },
+        };
+    };
+
+    return result;
 }
 
 fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) ToolError!ToolResult {
@@ -989,6 +1035,78 @@ fn formatJsError(arena: std.mem.Allocator, try_catch: *lp.js.TryCatch, err: anye
         error.WriteFailed => return error.OutOfMemory,
     };
     return aw.written();
+}
+
+const BridgeStore = std.StringHashMapUnmanaged([]const u8);
+
+/// Build the JS prelude that materializes the bridge store as `globalThis.lp`.
+/// Stored values are already JSON, so they splice directly into the object
+/// literal without a re-encode round-trip.
+fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try aw.writer.writeAll("globalThis.lp = {");
+    var it = store.iterator();
+    var first = true;
+    while (it.next()) |kv| {
+        if (!first) try aw.writer.writeByte(',');
+        first = false;
+        try std.json.Stringify.value(kv.key_ptr.*, .{}, &aw.writer);
+        try aw.writer.writeByte(':');
+        try aw.writer.writeAll(kv.value_ptr.*);
+    }
+    try aw.writer.writeAll("};");
+    return arena.dupeZ(u8, aw.written());
+}
+
+const bridge_postlude: [:0]const u8 = "JSON.stringify(globalThis.lp)";
+
+/// Re-sync the bridge store from the postlude result. Keys present in the
+/// new object are upserted; keys missing from it are dropped (so JS-side
+/// `delete lp.foo` actually removes from the store).
+fn bridgeSync(allocator: std.mem.Allocator, store: *BridgeStore, postlude_json: []const u8) !void {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, postlude_json, .{}) catch return;
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    const new_obj = parsed.value.object;
+
+    var to_remove: std.ArrayList([]const u8) = .empty;
+    defer to_remove.deinit(allocator);
+    var key_it = store.keyIterator();
+    while (key_it.next()) |k| {
+        if (!new_obj.contains(k.*)) try to_remove.append(allocator, k.*);
+    }
+    for (to_remove.items) |k| {
+        if (store.fetchRemove(k)) |kv| {
+            allocator.free(kv.key);
+            allocator.free(kv.value);
+        }
+    }
+
+    var it = new_obj.iterator();
+    while (it.next()) |entry| {
+        var val_aw: std.Io.Writer.Allocating = .init(allocator);
+        defer val_aw.deinit();
+        try std.json.Stringify.value(entry.value_ptr.*, .{}, &val_aw.writer);
+        try bridgeStoreSet(allocator, store, entry.key_ptr.*, val_aw.written());
+    }
+}
+
+/// Write a single (already-JSON) value into the store under `name`.
+/// Used by `/extract save=` and `/eval save=` to surface a one-shot result.
+fn bridgeStoreSet(allocator: std.mem.Allocator, store: *BridgeStore, name: []const u8, json_value: []const u8) !void {
+    if (!try std.json.validate(allocator, json_value)) return error.InvalidJson;
+    if (store.getPtr(name)) |slot| {
+        if (std.mem.eql(u8, slot.*, json_value)) return;
+        const new_val = try allocator.dupe(u8, json_value);
+        allocator.free(slot.*);
+        slot.* = new_val;
+        return;
+    }
+    const key_owned = try allocator.dupe(u8, name);
+    errdefer allocator.free(key_owned);
+    const val_owned = try allocator.dupe(u8, json_value);
+    errdefer allocator.free(val_owned);
+    try store.put(allocator, key_owned, val_owned);
 }
 
 /// Resolve a target element from either a CSS selector or a backendNodeId.

@@ -653,6 +653,222 @@ test "MCP - eval: localStorage persists across navigations and is origin-scoped"
     } }, out.written());
 }
 
+test "MCP - eval: save= value is readable via lp.<name> in next eval" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const save_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "JSON.stringify('hello')", "save": "greeting" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, save_msg);
+
+    out.clearRetainingCapacity();
+    const read_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.greeting" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, read_msg);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "hello" }},
+    } }, out.written());
+}
+
+test "MCP - eval: lp.* mutations auto-sync between evals" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const first =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.counter = 7; lp.counter" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, first);
+
+    out.clearRetainingCapacity();
+    const second =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.counter + 1" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, second);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "8" }},
+    } }, out.written());
+}
+
+test "MCP - eval: lp.* survives navigation" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const set_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.token = 'abc'" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, set_msg);
+
+    out.clearRetainingCapacity();
+    const nav_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "goto",
+        \\    "arguments": { "url": "http://127.0.0.1:9582/src/browser/tests/mcp_actions.html" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, nav_msg);
+
+    out.clearRetainingCapacity();
+    const read_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.token" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, read_msg);
+    try testing.expectJson(.{ .id = 3, .result = .{
+        .content = &.{.{ .type = "text", .text = "abc" }},
+    } }, out.written());
+}
+
+test "MCP - eval: delete lp.<key> removes from bridge store" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const set_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.tmp = 1" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, set_msg);
+
+    out.clearRetainingCapacity();
+    const del_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "delete lp.tmp; 0" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, del_msg);
+
+    out.clearRetainingCapacity();
+    const check_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "typeof lp.tmp" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, check_msg);
+    try testing.expectJson(.{ .id = 3, .result = .{
+        .content = &.{.{ .type = "text", .text = "undefined" }},
+    } }, out.written());
+}
+
+test "MCP - extract: save= exposes the result as lp.<name>" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const extract_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "extract",
+        \\    "arguments": {
+        \\      "schema": "{\"btn\":\"#btn\"}",
+        \\      "save": "page"
+        \\    }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, extract_msg);
+
+    out.clearRetainingCapacity();
+    const read_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.page.btn" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, read_msg);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "Click Me" }},
+    } }, out.written());
+}
+
 test "MCP - indexLines: exact match returns line + trailing newline" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
