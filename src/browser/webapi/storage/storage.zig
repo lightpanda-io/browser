@@ -42,15 +42,16 @@ pub const Shed = struct {
     }
 
     pub fn getOrPut(self: *Shed, allocator: Allocator, origin: []const u8) !*Bucket {
-        if (self._origins.get(origin)) |existing| return existing;
+        const gop = try self._origins.getOrPut(allocator, origin);
+        if (gop.found_existing) return gop.value_ptr.*;
+        errdefer std.debug.assert(self._origins.remove(origin));
 
-        const key_owned = try allocator.dupe(u8, origin);
-        errdefer allocator.free(key_owned);
         const bucket = try allocator.create(Bucket);
         errdefer allocator.destroy(bucket);
         bucket.* = .{};
 
-        try self._origins.put(allocator, key_owned, bucket);
+        gop.key_ptr.* = try allocator.dupe(u8, origin);
+        gop.value_ptr.* = bucket;
         return bucket;
     }
 };
