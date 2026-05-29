@@ -77,7 +77,6 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
         };
 
         jar.add(cookie, now, true) catch |err| {
-            cookie.deinit();
             log.warn(.app, "invalid cookie", .{ .name = jc.name, .err = err });
             continue;
         };

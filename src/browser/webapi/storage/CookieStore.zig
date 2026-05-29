@@ -427,34 +427,38 @@ fn storeCookie(exec: *const Execution, init: CookieInit) !void {
         if (!is_https) return error.InvalidPrefixedCookie;
     }
 
-    var arena = std.heap.ArenaAllocator.init(session.cookie_jar.allocator);
-    errdefer arena.deinit();
-    const aa = arena.allocator();
+    // The errdefer only protects construction failures. Once we `break :blk`
+    // with the Cookie value, `Jar.add` owns its lifetime.
+    const cookie: Cookie = blk: {
+        var arena = std.heap.ArenaAllocator.init(session.cookie_jar.allocator);
+        errdefer arena.deinit();
+        const aa = arena.allocator();
 
-    const owned_name = try aa.dupe(u8, init.name);
-    const owned_value = try aa.dupe(u8, init.value);
-    const owned_path = try Cookie.parsePath(aa, url, init.path);
-    const owned_domain = try Cookie.parseDomain(aa, url, init.domain);
+        const owned_name = try aa.dupe(u8, init.name);
+        const owned_value = try aa.dupe(u8, init.value);
+        const owned_path = try Cookie.parsePath(aa, url, init.path);
+        const owned_domain = try Cookie.parseDomain(aa, url, init.domain);
 
-    const cookie: Cookie = .{
-        .arena = arena,
-        .name = owned_name,
-        .value = owned_value,
-        .path = owned_path,
-        .domain = owned_domain,
+        break :blk .{
+            .arena = arena,
+            .name = owned_name,
+            .value = owned_value,
+            .path = owned_path,
+            .domain = owned_domain,
 
-        // CookieStore.expires is a unix timestamp in milliseconds; Cookie tracks
-        // expiry in seconds. A timestamp at or before "now" deletes the cookie via
-        // the Jar's expiry path.
-        .expires = if (init.expires) |ms| ms / 1000.0 else null,
+            // CookieStore.expires is a unix timestamp in milliseconds; Cookie tracks
+            // expiry in seconds. A timestamp at or before "now" deletes the cookie via
+            // the Jar's expiry path.
+            .expires = if (init.expires) |ms| ms / 1000.0 else null,
 
-        .secure = secure,
-        .http_only = false,
-        .same_site = switch (init.sameSite) {
-            .strict => .strict,
-            .lax => .lax,
-            .none => .none,
-        },
+            .secure = secure,
+            .http_only = false,
+            .same_site = switch (init.sameSite) {
+                .strict => .strict,
+                .lax => .lax,
+                .none => .none,
+            },
+        };
     };
 
     // CookieStore is a script API, so is_http = false.
