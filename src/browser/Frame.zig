@@ -379,6 +379,11 @@ pub fn deinit(self: *Frame) void {
 
     self._parse_state.deinit(self);
 
+    // Unregister CookieStore from session notifications before the JS
+    // context (and thus the scheduler) is destroyed, otherwise a late
+    // mutation could schedule a callback that never runs.
+    if (self.window._cookie_store) |cs| cs.detach();
+
     const page = self._page;
 
     if (self._queued_navigation) |qn| {
@@ -632,7 +637,12 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     self._http_status = null;
     self._http_headers = .empty;
 
-    self.url = try self.arena.dupeZ(u8, request_url);
+    self.url = blk: {
+        if (URL.isCompleteHTTPUrl(request_url)) {
+            break :blk try self.arena.dupeZ(u8, request_url);
+        }
+        break :blk try std.mem.concatWithSentinel(self.arena, u8, &.{ "http://", request_url }, 0);
+    };
     self.origin = try URL.getOrigin(self.arena, self.url);
 
     self._req_id = req_id;

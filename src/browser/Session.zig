@@ -112,7 +112,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .storage_shed = .{},
         .browser = browser,
         .notification = notification,
-        .cookie_jar = storage.Cookie.Jar.init(allocator),
+        .cookie_jar = storage.Cookie.Jar.init(allocator, notification),
         // CLI defaults; LP.configureLoading can flip these per-session.
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
         .worker_loading_enabled = !browser.app.config.disableWorkers(),

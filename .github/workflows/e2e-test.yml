@@ -103,10 +103,13 @@ jobs:
       - if: matrix.wba == true
         run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
 
+      # Always activate cache
+      - run: mkdir -p /tmp/lp-cache
+
       - id: args
         name: build LP args
         run: |
-          args=""
+          args="--http-cache-dir /tmp/lp-cache"
           [ "${{ matrix.proxy }}" = "true" ] && args="$args --http-proxy http://127.0.0.1:3000"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
@@ -159,10 +162,13 @@ jobs:
       - if: matrix.wba == true
         run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
 
+      # Always activate cache
+      - run: mkdir -p /tmp/lp-cache
+
       - id: args
         name: build LP args
         run: |
-          args=""
+          args="--http-cache-dir /tmp/lp-cache"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}"
