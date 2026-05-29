@@ -563,6 +563,96 @@ test "MCP - eval: bare expression still returns its value" {
     } }, out.written());
 }
 
+test "MCP - eval: localStorage persists across navigations and is origin-scoped" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    // 1. Set a value in localStorage on localhost
+    const first =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "localStorage.setItem('foo', 'bar'); localStorage.getItem('foo')" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, first);
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "bar" }},
+    } }, out.written());
+
+    // 2. Navigate to another origin (127.0.0.1)
+    out.clearRetainingCapacity();
+    const navigate_other =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "goto",
+        \\    "arguments": { "url": "http://127.0.0.1:9582/src/browser/tests/mcp_actions.html" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, navigate_other);
+
+    // 3. Get the value on 127.0.0.1, verify it is null (isolated origin storage)
+    out.clearRetainingCapacity();
+    const second =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "localStorage.getItem('foo')" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, second);
+    try testing.expectJson(.{ .id = 3, .result = .{
+        .content = &.{.{ .type = "text", .text = "null" }},
+    } }, out.written());
+
+    // 4. Navigate back to localhost
+    out.clearRetainingCapacity();
+    const navigate_back =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 4,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "goto",
+        \\    "arguments": { "url": "http://localhost:9582/src/browser/tests/mcp_actions.html" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, navigate_back);
+
+    // 5. Get the value on localhost, verify it is still 'bar'
+    out.clearRetainingCapacity();
+    const third =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 5,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "localStorage.getItem('foo')" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, third);
+    try testing.expectJson(.{ .id = 5, .result = .{
+        .content = &.{.{ .type = "text", .text = "bar" }},
+    } }, out.written());
+}
+
 test "MCP - indexLines: exact match returns line + trailing newline" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();

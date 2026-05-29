@@ -565,7 +565,7 @@ pub extern "C" fn html5ever_get_memory_usage() -> Memory {
     use tikv_jemalloc_ctl::{epoch, stats};
 
     // many statistics are cached and only updated when the epoch is advanced.
-    drop(epoch::advance());
+    let _ = epoch::advance();
 
     Memory {
         resident: stats::resident::read().unwrap_or(0),

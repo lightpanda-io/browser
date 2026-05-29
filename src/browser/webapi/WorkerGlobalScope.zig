@@ -44,6 +44,7 @@ const WorkerLocation = @import("WorkerLocation.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
+const CookieStore = @import("storage/CookieStore.zig");
 
 const builtin = @import("builtin");
 const IS_DEBUG = builtin.mode == .Debug;
@@ -102,6 +103,7 @@ _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
 _on_message: ?JS.Function.Global = null,
 _on_messageerror: ?JS.Function.Global = null,
+_cookie_store: ?*CookieStore = null,
 
 _location: WorkerLocation,
 
@@ -263,6 +265,13 @@ pub fn performance(self: *WorkerGlobalScope) *Performance {
 
 pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
     return &self._location;
+}
+
+pub fn getCookieStore(self: *WorkerGlobalScope) !*CookieStore {
+    if (self._cookie_store) |cs| return cs;
+    const cs = try self._factory.eventTargetWithAllocator(self.arena, CookieStore{ ._proto = undefined });
+    self._cookie_store = cs;
+    return cs;
 }
 
 pub fn getOnError(self: *const WorkerGlobalScope) ?JS.Function.Global {
@@ -659,6 +668,7 @@ pub const JsApi = struct {
         }
     }.wrap, null, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
+    pub const cookieStore = bridge.accessor(WorkerGlobalScope.getCookieStore, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});

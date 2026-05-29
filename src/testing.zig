@@ -564,7 +564,9 @@ test "tests:afterAll" {
 
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
-    // Sessions hold registrations on test_notification, so browser first.
+    // Browser must be deinit'd before the notification — Session/Frame
+    // teardown may unregister notification listeners (e.g. CookieStore
+    // detach), which dereferences `notification.listeners`.
     test_browser.deinit();
     test_notification.deinit();
     test_app.deinit();
