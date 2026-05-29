@@ -133,6 +133,71 @@ fn disable(self: *Recorder, err: anyerror) void {
     }
 }
 
+/// In-memory recorder used by the REPL `/save` command. It intentionally
+/// shares the same command filter/formatter/scrubber as file recording, but
+/// leaves persistence timing to the caller.
+pub const Memory = struct {
+    allocator: std.mem.Allocator,
+    lines: u32,
+    content: std.Io.Writer.Allocating,
+    buf: std.Io.Writer.Allocating,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(allocator: std.mem.Allocator) Memory {
+        return .{
+            .allocator = allocator,
+            .lines = 0,
+            .content = .init(allocator),
+            .buf = .init(allocator),
+            .arena = .init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Memory) void {
+        self.content.deinit();
+        self.buf.deinit();
+        self.arena.deinit();
+    }
+
+    pub fn bytes(self: *Memory) []const u8 {
+        return self.content.written();
+    }
+
+    pub fn reset(self: *Memory) void {
+        self.lines = 0;
+        self.content.clearRetainingCapacity();
+        self.buf.clearRetainingCapacity();
+        _ = self.arena.reset(.retain_capacity);
+    }
+
+    pub fn record(self: *Memory, cmd: Command) !void {
+        if (!cmd.isRecorded()) return;
+        self.buf.clearRetainingCapacity();
+        try cmd.format(&self.buf.writer);
+        try self.buf.writer.writeByte('\n');
+        try self.appendScrubbed();
+    }
+
+    pub fn recordComment(self: *Memory, comment: []const u8) !void {
+        self.buf.clearRetainingCapacity();
+        var it = std.mem.splitScalar(u8, comment, '\n');
+        while (it.next()) |line| {
+            const trimmed = std.mem.trimRight(u8, line, "\r");
+            try self.buf.writer.writeAll("# ");
+            try self.buf.writer.writeAll(trimmed);
+            try self.buf.writer.writeByte('\n');
+        }
+        try self.appendScrubbed();
+    }
+
+    fn appendScrubbed(self: *Memory) !void {
+        _ = self.arena.reset(.retain_capacity);
+        const scrubbed = try lp.tools.reverseSubstituteEnvVars(self.arena.allocator(), self.buf.written());
+        try self.content.writer.writeAll(scrubbed);
+        self.lines += @intCast(std.mem.count(u8, scrubbed, "\n"));
+    }
+};
+
 // --- Tests ---
 
 fn parseLine(arena: std.mem.Allocator, line: []const u8) Command {
@@ -401,4 +466,32 @@ test "record and parse: triple-quote round-trip" {
     const original_val = original_cmd.tool_call.args.?.object.get("schema").?.string;
     const parsed_val = parsed_cmd.tool_call.args.?.object.get("schema").?.string;
     try std.testing.expectEqualStrings(original_val, parsed_val);
+}
+
+test "memory recorder mirrors file recorder filtering" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var memory: Memory = .init(std.testing.allocator);
+    defer memory.deinit();
+
+    try memory.record(parseLine(aa, "/goto https://example.com"));
+    try memory.record(parseLine(aa, "/tree"));
+    try memory.record(parseLine(aa, "/click selector='Login'"));
+    try memory.recordComment("search for login");
+
+    try std.testing.expectEqualStrings(
+        "/goto 'https://example.com'\n/click selector='Login'\n# search for login\n",
+        memory.bytes(),
+    );
+    try std.testing.expectEqual(@as(u32, 3), memory.lines);
+
+    memory.reset();
+    try std.testing.expectEqualStrings("", memory.bytes());
+    try std.testing.expectEqual(@as(u32, 0), memory.lines);
+
+    try memory.record(parseLine(aa, "/scroll y=200"));
+    try std.testing.expectEqualStrings("/scroll y=200\n", memory.bytes());
+    try std.testing.expectEqual(@as(u32, 1), memory.lines);
 }

@@ -141,6 +141,8 @@ node_registry: CDPNode.Registry,
 terminal: Terminal,
 verifier: Verifier,
 recorder: ?Recorder,
+save_buffer: Recorder.Memory,
+save_path: ?[]u8,
 messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
 model: []u8,
@@ -242,6 +244,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
         .verifier = undefined,
         .recorder = null,
+        .save_buffer = .init(allocator),
+        .save_path = null,
         .messages = .empty,
         .message_arena = .init(allocator),
         .model = model,
@@ -303,6 +307,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 pub fn deinit(self: *Agent) void {
     self.terminal.uninstallLogSink();
     if (self.recorder) |*r| r.deinit();
+    self.save_buffer.deinit();
+    if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
@@ -389,6 +395,7 @@ fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
 pub const TurnInput = struct {
     prompt: []const u8,
     record_comment: ?[]const u8 = null,
+    capture_for_save: bool = false,
     attachments: ?[]const []const u8 = null,
     label: []const u8 = "Request",
 };
@@ -494,7 +501,7 @@ fn runRepl(self: *Agent) void {
                     self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.", .{});
                     continue :repl;
                 }
-                _ = self.runTurn(.{ .prompt = line, .record_comment = line });
+                _ = self.runTurn(.{ .prompt = line, .record_comment = line, .capture_for_save = true });
                 continue :repl;
             },
             else => |e| {
@@ -514,7 +521,7 @@ fn runRepl(self: *Agent) void {
             .login, .acceptCookies => {
                 const label: []const u8 = if (cmd == .login) "/login" else "/acceptCookies";
                 const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
-                _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
+                _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
             },
             .tool_call => |tc| {
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
@@ -522,6 +529,7 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(cmd, result);
                 if (self.recorder) |*r| r.record(cmd);
+                self.recordSaveCommand(cmd);
                 self.recordSlashToolCall(trimmed, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
                 };
@@ -532,14 +540,15 @@ fn runRepl(self: *Agent) void {
     self.terminal.printInfo("Goodbye!", .{});
 }
 
-/// Handle a meta slash command (/quit, /help, /verbosity). These aren't part
-/// of PandaScript — they're REPL-only and never recorded. Returns `true` if
-/// the user asked to quit.
+/// Handle a REPL-only meta slash command. These aren't part of PandaScript
+/// and never reach the browser tool dispatcher. Returns `true` if the user
+/// asked to quit.
 fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.MetaCommand, rest: []const u8) bool {
     switch (meta.tag) {
         .quit => return true,
         .help => self.printSlashHelp(arena, rest),
         .verbosity => self.handleVerbosity(rest),
+        .save => self.handleSave(arena, rest),
     }
     return false;
 }
@@ -555,6 +564,145 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     };
     self.terminal.verbosity = level;
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
+}
+
+const SaveMode = enum { replace, append };
+
+fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
+    const filename = parseSaveFilename(rest) catch |err| {
+        const msg: []const u8 = switch (err) {
+            error.TooManyArguments => "usage: /save [filename.lp]",
+            error.UnterminatedQuote => "unterminated filename quote",
+            error.EmptyFilename => "filename cannot be empty",
+            error.InvalidFilename => "filename must be a local file name, not a path",
+        };
+        self.terminal.printError("{s}", .{msg});
+        return;
+    };
+
+    const path: []const u8, const mode: SaveMode = if (self.save_path) |saved| blk: {
+        if (filename) |name| {
+            if (!std.mem.eql(u8, saved, name)) {
+                self.terminal.printError("already saving to {s}; use /save without a filename to append to it", .{saved});
+                return;
+            }
+        }
+        break :blk .{ saved, .append };
+    } else blk: {
+        const path = filename orelse randomSaveFilename(arena) catch |err| {
+            self.terminal.printError("failed to choose save filename: {s}", .{@errorName(err)});
+            return;
+        };
+        const exists = fileExists(path) catch |err| {
+            self.terminal.printError("failed to inspect {s}: {s}", .{ path, @errorName(err) });
+            return;
+        };
+        const mode: SaveMode = if (exists)
+            self.promptSaveMode(path) orelse return
+        else
+            .replace;
+        break :blk .{ path, mode };
+    };
+
+    // `path` aliases either an arena-owned string (first save) or
+    // `self.save_path` (subsequent saves to the same destination); only
+    // the former needs to be persisted into agent-owned memory.
+    var new_save_path: ?[]u8 = if (self.save_path == null)
+        self.allocator.dupe(u8, path) catch |err| {
+            self.terminal.printError("failed to remember save destination {s}: {s}", .{ path, @errorName(err) });
+            return;
+        }
+    else
+        null;
+    defer if (new_save_path) |p| self.allocator.free(p);
+
+    self.writeSaveFile(path, mode) catch |err| {
+        self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
+        return;
+    };
+
+    if (new_save_path) |p| {
+        self.save_path = p;
+        new_save_path = null;
+    }
+    const saved_lines = self.save_buffer.lines;
+    self.save_buffer.reset();
+    self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, self.save_path.? });
+}
+
+fn parseSaveFilename(rest: []const u8) !?[]const u8 {
+    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+
+    const name = if (trimmed[0] == '\'' or trimmed[0] == '"') blk: {
+        const quote = trimmed[0];
+        const end = std.mem.indexOfScalarPos(u8, trimmed, 1, quote) orelse return error.UnterminatedQuote;
+        if (std.mem.trim(u8, trimmed[end + 1 ..], &std.ascii.whitespace).len != 0) return error.TooManyArguments;
+        break :blk trimmed[1..end];
+    } else blk: {
+        if (std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) != null) return error.TooManyArguments;
+        break :blk trimmed;
+    };
+
+    if (name.len == 0) return error.EmptyFilename;
+    if (std.fs.path.isAbsolute(name)) return error.InvalidFilename;
+    if (std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidFilename;
+    if (std.mem.indexOfScalar(u8, name, '\\') != null) return error.InvalidFilename;
+    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.InvalidFilename;
+    return name;
+}
+
+fn randomSaveFilename(arena: std.mem.Allocator) ![]const u8 {
+    for (0..100) |_| {
+        const n = std.crypto.random.int(u64);
+        const path = try std.fmt.allocPrint(arena, "session-{x}.lp", .{n});
+        if (!(try fileExists(path))) return path;
+    }
+    return error.NameCollision;
+}
+
+fn fileExists(path: []const u8) !bool {
+    std.fs.cwd().access(path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    return true;
+}
+
+fn promptSaveMode(self: *Agent, path: []const u8) ?SaveMode {
+    var header_buf: [256]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, "{s} already exists. Pick save mode:", .{path}) catch
+        "File already exists. Pick save mode:";
+    const labels: []const []const u8 = &.{ "replace", "append" };
+    const idx = Terminal.promptNumberedChoice(header, labels, null) catch {
+        self.terminal.printInfo("Save cancelled.", .{});
+        return null;
+    };
+    return if (idx == 0) .replace else .append;
+}
+
+fn writeSaveFile(self: *Agent, path: []const u8, mode: SaveMode) !void {
+    const content = self.save_buffer.bytes();
+    const file = try std.fs.cwd().createFile(path, .{ .truncate = mode == .replace });
+    defer file.close();
+    if (mode == .append) {
+        try file.seekFromEnd(0);
+        const pos = try file.getPos();
+        if (pos > 0 and content.len > 0) try file.writeAll("\n");
+    }
+    try file.writeAll(content);
+}
+
+fn recordSaveCommand(self: *Agent, cmd: Command) void {
+    self.save_buffer.record(cmd) catch |err| {
+        self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
+    };
+}
+
+fn recordSaveComment(self: *Agent, comment: []const u8) void {
+    self.save_buffer.recordComment(comment) catch |err| {
+        self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
+    };
 }
 
 fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {
@@ -596,6 +744,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
             .verbosity => self.terminal.printInfo(
                 "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
                 .{@tagName(self.terminal.verbosity)},
+            ),
+            .save => self.terminal.printInfo(
+                "/save [filename.lp] — save recorded REPL actions to [filename.lp]. Without a filename, creates a random session-*.lp file in the current directory.",
+                .{},
             ),
         }
         return;
@@ -1145,7 +1297,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
 
     if (result.cancelled) return self.drainCancellation(msg_baseline);
 
-    if (self.recorder) |*r| if (r.isActive()) {
+    const file_recorder: ?*Recorder = if (self.recorder) |*r| (if (r.isActive()) r else null) else null;
+    const record_to_memory = input.capture_for_save;
+    if (file_recorder != null or record_to_memory) {
         // When the LLM tries multiple `extract` schemas in one turn, only the
         // last successful one is the answer — earlier probes are noise.
         var last_extract_idx: ?usize = null;
@@ -1163,15 +1317,19 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             const cmd = Command.fromToolCall(tool, args);
             if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
-                if (input.record_comment) |c| r.recordComment(c);
+                if (input.record_comment) |c| {
+                    if (file_recorder) |r| r.recordComment(c);
+                    if (record_to_memory) self.recordSaveComment(c);
+                }
                 recorded_any = true;
             }
-            r.record(cmd);
+            if (file_recorder) |r| r.record(cmd);
+            if (record_to_memory) self.recordSaveCommand(cmd);
         }
-        if (!r.isActive()) {
+        if (file_recorder) |r| if (!r.isActive()) {
             self.terminal.printError("recording disabled (write failed); see logs", .{});
-        }
-    };
+        };
+    }
 
     // Dupe into `message_arena` — RunToolsResult arenas are deinited below.
     const final_text: ?[]const u8 = blk: {

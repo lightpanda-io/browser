@@ -44,13 +44,14 @@ pub const MetaCommand = struct {
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
     /// a new meta command is a compile error until it's wired up there too.
-    const Tag = enum { help, quit, verbosity };
+    const Tag = enum { help, quit, verbosity, save };
 };
 
 pub const meta_commands = [_]MetaCommand{
     .{ .tag = .help, .name = "help", .hint = "", .values = &.{}, .description = "Show help for a slash command, or list all when no name is given" },
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
     .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set REPL agent verbosity; bare /verbosity prints the current level" },
+    .{ .tag = .save, .name = "save", .hint = "[filename.lp]", .values = &.{}, .description = "Save this REPL session as a PandaScript file" },
 };
 
 /// LLM-driven slash commands. Parsed via `script.Command.parse` (they're
