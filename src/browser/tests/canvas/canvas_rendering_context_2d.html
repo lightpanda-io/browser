@@ -158,3 +158,16 @@
   testing.expectEqual(null, element.getContext('webgl'));
 }
 </script>
+
+<script id="CanvasRenderingContext2D#drawImage">
+{
+  const ctx = document.createElement('canvas').getContext('2d');
+  const img = new Image();
+  const src = document.createElement('canvas');
+  // No-op, but must accept the (image, dx, dy), (image, dx, dy, dw, dh) and
+  // 9-arg overloads without throwing.
+  ctx.drawImage(img, 0, 0);
+  ctx.drawImage(src, 0, 0, 10, 10);
+  testing.expectEqual(undefined, ctx.drawImage(src, 0, 0, 10, 10, 0, 0, 10, 10));
+}
+</script>
