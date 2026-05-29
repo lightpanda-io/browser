@@ -235,7 +235,7 @@ pub fn getPerformance(self: *Window) *Performance {
 fn bucketForOrigin(self: *Window) *storage.Bucket {
     return self._frame._session.storage_shed.getOrPut(
         self._frame._session.browser.app.allocator,
-        self.getOrigin(),
+        self._frame.js.origin.key,
     ) catch @panic("OOM");
 }
 
