@@ -185,7 +185,7 @@ pub const Tool = enum {
                 .input_schema = url_params_schema,
             },
             .eval => .{
-                .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
+                .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of eval, surviving navigation; values previously set via `/extract save=` or `/eval save=` appear as `lp.<name>`.",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -193,7 +193,8 @@ pub const Tool = enum {
                     \\    "script": { "type": "string" },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
+                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The eval's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evals. Value must be JSON; wrap non-strings with JSON.stringify(...)." }
                     \\  },
                     \\  "required": ["script"]
                     \\}
@@ -204,14 +205,16 @@ pub const Tool = enum {
                 \\Extract structured data via a JSON schema. The only tool whose result is recorded as an `/extract` PandaScript line (replay-friendly); answering from `markdown` content in chat is not. Schema is a JSON object literal passed as a string in `schema`. Each value picks what to lift:
                 \\  "<sel>"                                → first match's textContent.trim() (string|null)
                 \\  ""                                     → element's own textContent.trim() (only meaningful inside `fields`)
-                \\  ["<sel>"]                              → every match's text (string[])
+                \\  ["<sel>"]                              → every match's text (string[]) — sugar for [{"selector":"<sel>"}]
                 \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute (string|null)
                 \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
                 \\  [{"selector":"<sel>","fields":{…}}]    → array of objects, fields resolved relative to each match
+                \\  add `"limit": N` inside any array's object spec to cap matches at N (works for text, attr, and fields shapes)
                 \\
                 \\Examples (schema → result):
                 \\  {"karma": "#karma"} → {"karma":"42"}
                 \\  {"items": [".story .title"]} → {"items":["Title 1","Title 2"]}
+                \\  {"top3": [{"selector":".story .title","limit":3}]} → {"top3":["A","B","C"]}
                 \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
                 \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
                 ,
@@ -219,7 +222,8 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." }
+                    \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." },
+                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The extracted JSON is stored under this name and exposed as `lp.<name>` in subsequent /eval calls." }
                     \\  },
                     \\  "required": ["schema"]
                     \\}
@@ -669,11 +673,10 @@ const schema_walker_prefix =
     \\      return m ? m.textContent.trim() : null;
     \\    }
     \\    if (Array.isArray(v)) {
-    \\      const inner = v[0];
-    \\      if (typeof inner === 'string') {
-    \\        return Array.from(el.querySelectorAll(inner)).map(function(m){ return m.textContent.trim(); });
-    \\      }
-    \\      return Array.from(el.querySelectorAll(inner.selector)).map(function(m){ return valueOf(m, inner); });
+    \\      const inner = typeof v[0] === 'string' ? { selector: v[0] } : v[0];
+    \\      let matches = Array.from(el.querySelectorAll(inner.selector));
+    \\      if (typeof inner.limit === 'number') matches = matches.slice(0, inner.limit);
+    \\      return matches.map(function(m){ return valueOf(m, inner); });
     \\    }
     \\    const t = v.selector ? el.querySelector(v.selector) : el;
     \\    if (!t) return null;
@@ -918,10 +921,15 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
         waitUntil: ?lp.Config.WaitUntil = null,
+        save: ?[]const u8 = null,
     };
     const args = try parseArgs(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
     const before = session.currentFrame();
+    const app_allocator = session.browser.app.allocator;
+
+    const prelude = bridgePrelude(arena, &session.bridge_store) catch return ToolError.OutOfMemory;
+    _ = try runEval(arena, page, prelude);
 
     // Block-scope so top-level `let`/`const` don't leak across calls.
     const block_script = std.fmt.allocPrintSentinel(
@@ -944,12 +952,38 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     }
     if (result.is_error == true) return result;
 
+    // Sync lp.* before any queued navigation tears down this JS context.
+    const postlude_result: ?ToolResult = runEval(arena, page, bridge_postlude) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => null,
+    };
+    if (postlude_result) |pr| if (!pr.is_error) {
+        bridgeSync(app_allocator, &session.bridge_store, pr.text) catch |err| switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
+            else => {},
+        };
+    };
+
+    // Silence on save= success so stdout pipes stay clean.
+    if (args.save) |name| {
+        bridgeStoreSet(app_allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
+            error.InvalidJson => return .{
+                .text = "save= requires the eval to return JSON; wrap with JSON.stringify(...)",
+                .is_error = true,
+            },
+        };
+        result = .{ .text = "" };
+    }
+
     // Script may have queued a navigation (e.g. `top.location = …`).
     try awaitQueuedNavigation(session);
     const after = session.currentFrame() orelse return result;
     if (before == null or before.? == after) return result;
 
     registry.reset();
+    if (result.text.len == 0) return result; // silenced save=; don't re-emit via nav suffix
+
     const page_title = after.getTitle() catch null;
     const text = std.fmt.allocPrint(arena, "{s}\n(Navigated to {s}, title: {s})", .{
         result.text, after.url, page_title orelse "(none)",
@@ -958,10 +992,25 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
 }
 
 fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
-    const Params = struct { schema: []const u8 };
+    const Params = struct {
+        schema: []const u8,
+        save: ?[]const u8 = null,
+    };
     const args = try parseArgs(Params, arena, arguments);
-    return extract(arena, session, registry, args.schema);
+    const result = try extract(arena, session, registry, args.schema);
+
+    if (!result.is_error) if (args.save) |name| {
+        bridgeStoreSet(session.browser.app.allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
+            error.InvalidJson => return .{ .text = "extract: walker produced non-JSON output", .is_error = true },
+        };
+        return .{ .text = "" };
+    };
+
+    return result;
 }
+
+const eval_promise_timeout_ms: u32 = 30_000;
 
 fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) ToolError!ToolResult {
     var ls: lp.js.Local.Scope = undefined;
@@ -974,6 +1023,36 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) Tool
 
     const js_result = ls.local.compileAndRun(script, null) catch |err|
         return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true };
+
+    if (js_result.isPromise()) {
+        const promise = js_result.toPromise();
+        promise.markAsHandled();
+
+        var runner = page._session.runner(.{}) catch {
+            return .{ .text = "promise: no runner available", .is_error = true };
+        };
+        var timer = std.time.Timer.start() catch unreachable;
+        while (promise.state() == .pending) {
+            const elapsed_ms: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+            if (elapsed_ms >= eval_promise_timeout_ms) {
+                return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
+            }
+            const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
+            _ = runner.tick(.{ .ms = budget }) catch |err| switch (err) {
+                error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
+                else => return .{ .text = "promise: tick failed", .is_error = true },
+            };
+        }
+
+        const settled = promise.result();
+        // No-return async IIFE → undefined → silence, so pipes stay clean.
+        if (promise.state() == .fulfilled and settled.isUndefined()) return .{ .text = "" };
+        const text = settled.toStringSliceWithAlloc(arena) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
+        };
+        return .{ .text = text, .is_error = (promise.state() == .rejected) };
+    }
 
     const text = js_result.toStringSliceWithAlloc(arena) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -989,6 +1068,88 @@ fn formatJsError(arena: std.mem.Allocator, try_catch: *lp.js.TryCatch, err: anye
         error.WriteFailed => return error.OutOfMemory,
     };
     return aw.written();
+}
+
+const BridgeStore = std.StringHashMapUnmanaged([]const u8);
+
+/// Stored values are already JSON; splice them straight into the literal
+/// instead of round-tripping through json.Value.
+fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try aw.writer.writeAll("globalThis.lp = {");
+    var it = store.iterator();
+    var first = true;
+    while (it.next()) |kv| {
+        if (!first) try aw.writer.writeByte(',');
+        first = false;
+        try std.json.Stringify.value(kv.key_ptr.*, .{}, &aw.writer);
+        try aw.writer.writeByte(':');
+        try aw.writer.writeAll(kv.value_ptr.*);
+    }
+    try aw.writer.writeAll("};");
+    return arena.dupeZ(u8, aw.written());
+}
+
+const bridge_postlude: [:0]const u8 = "JSON.stringify(globalThis.lp)";
+
+/// Drops keys missing from the postlude so `delete lp.foo` propagates.
+fn bridgeSync(allocator: std.mem.Allocator, store: *BridgeStore, postlude_json: []const u8) !void {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, postlude_json, .{}) catch return;
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    const new_obj = parsed.value.object;
+
+    var to_remove: std.ArrayList([]const u8) = .empty;
+    defer to_remove.deinit(allocator);
+    var key_it = store.keyIterator();
+    while (key_it.next()) |k| {
+        if (!new_obj.contains(k.*)) try to_remove.append(allocator, k.*);
+    }
+    for (to_remove.items) |k| {
+        if (store.fetchRemove(k)) |kv| {
+            allocator.free(kv.key);
+            allocator.free(kv.value);
+        }
+    }
+
+    var it = new_obj.iterator();
+    while (it.next()) |entry| {
+        var val_aw: std.Io.Writer.Allocating = .init(allocator);
+        defer val_aw.deinit();
+        try std.json.Stringify.value(entry.value_ptr.*, .{}, &val_aw.writer);
+        // Trusted JSON path: value was just stringified from a parsed Value.
+        try bridgeStorePut(allocator, store, entry.key_ptr.*, val_aw.written());
+    }
+}
+
+fn bridgeStoreSet(allocator: std.mem.Allocator, store: *BridgeStore, name: []const u8, json_value: []const u8) !void {
+    if (store.getPtr(name)) |slot| {
+        if (std.mem.eql(u8, slot.*, json_value)) return;
+        if (!try std.json.validate(allocator, json_value)) return error.InvalidJson;
+        const new_val = try allocator.dupe(u8, json_value);
+        allocator.free(slot.*);
+        slot.* = new_val;
+        return;
+    }
+    if (!try std.json.validate(allocator, json_value)) return error.InvalidJson;
+    try bridgeStorePut(allocator, store, name, json_value);
+}
+
+/// Same as bridgeStoreSet but skips JSON validation. Use only when the
+/// caller already produced canonical JSON (e.g. via json.Stringify.value).
+fn bridgeStorePut(allocator: std.mem.Allocator, store: *BridgeStore, name: []const u8, json_value: []const u8) !void {
+    if (store.getPtr(name)) |slot| {
+        if (std.mem.eql(u8, slot.*, json_value)) return;
+        const new_val = try allocator.dupe(u8, json_value);
+        allocator.free(slot.*);
+        slot.* = new_val;
+        return;
+    }
+    const key_owned = try allocator.dupe(u8, name);
+    errdefer allocator.free(key_owned);
+    const val_owned = try allocator.dupe(u8, json_value);
+    errdefer allocator.free(val_owned);
+    try store.put(allocator, key_owned, val_owned);
 }
 
 /// Resolve a target element from either a CSS selector or a backendNodeId.

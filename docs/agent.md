@@ -131,16 +131,93 @@ as a single JSON object. Supported value forms:
 
 - `"<sel>"` — `textContent.trim()` of the first match (string or `null`).
 - `""` — the matched element's own text (only inside a `fields` block).
-- `["<sel>"]` — text of every match (string array).
+- `["<sel>"]` — text of every match (string array). Sugar for
+  `[{"selector": "<sel>"}]`.
 - `{"selector": "<sel>", "attr": "<name>"}` — attribute of the first match.
 - `[{"selector": "<sel>", "fields": {…}}]` — array of records, each
   `fields` value resolved relative to the matched element.
+- Add `"limit": N` inside any array's object spec to cap matches at N
+  (works for text, attribute, and `fields` shapes — e.g.
+  `[{"selector": ".story .title", "limit": 5}]` for top 5 titles).
 
 Use `/extract '''…'''` (or `"""…"""`) to spread a schema across multiple
 lines. The schema is parsed in Zig before the page-side walker runs,
 so a malformed schema fails with `Error: invalid /extract schema JSON`
 rather than a V8 stack trace. See [agent-tutorial.md](agent-tutorial.md)
 section 3 for a worked example against Hacker News.
+
+### Cross-call state with `lp.*`
+
+`/extract` and `/eval` each return one value per call, but real scrapes
+often need to carry data forward — capture a list on one page, then walk
+it across navigations. Two primitives keep that simple.
+
+**`save=<name>`** on `/extract` or `/eval` stashes the result in a
+Session-scoped store keyed by `<name>` instead of dumping it to stdout.
+The stored value is then exposed to every subsequent `/eval` as
+`globalThis.lp.<name>`:
+
+```pandascript
+/goto 'https://news.ycombinator.com/'
+
+/extract save=front '''
+{
+  "stories": [{
+    "selector": "tr.athing",
+    "limit": 5,
+    "fields": {
+      "id":    {"attr": "id"},
+      "title": ".titleline > a"
+    }
+  }]
+}
+'''
+
+/eval '''
+console.log(lp.front.stories[0].title);
+'''
+```
+
+`save=`d commands print nothing on success so scripts pipe cleanly.
+
+**Auto-sync.** Any mutation of `lp.*` inside an `/eval` is persisted at
+the end of the call. Adding a key (`lp.x = …`), updating a nested value
+(`lp.front.stories[0].comments = […]`), or removing a key
+(`delete lp.x`) all propagate to the store. The next `/eval` sees the
+update — even after a navigation, because the store lives Session-side,
+not on the page.
+
+**Async eval.** If your `/eval` body returns a Promise, `runEval`
+pumps the event loop until it settles, then surfaces the resolved value
+(or the rejection as an error). Combined with the bridge this lets a
+single `/eval` do an async `fetch` loop over `lp.*` data:
+
+```pandascript
+/eval '''
+(async () => {
+  for (const s of lp.front.stories) {
+    const html = await fetch('/item?id=' + s.id).then(r => r.text());
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    s.comments = [...doc.querySelectorAll('tr.athing.comtr')].slice(0, 3)
+      .map(r => r.querySelector('.commtext')?.textContent.trim())
+      .filter(Boolean);
+  }
+})()
+'''
+
+/eval '''
+JSON.stringify(lp.front.stories)
+'''
+```
+
+An async IIFE with no explicit `return` resolves to `undefined`, which
+the eval treats as silent — so the loop above prints nothing, and only
+the final `JSON.stringify` lands on stdout.
+
+The store is **script-run scoped**: it's bound to the Session that runs
+the script, and goes away when that Session does. There is no
+cross-session persistence; if you need that, use `localStorage` (which
+is now origin-scoped and persists across navigations within a session).
 
 ### Recording
 

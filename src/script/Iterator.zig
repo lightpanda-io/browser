@@ -74,7 +74,14 @@ pub fn next(self: *Iterator) command.ParseError!?Entry {
             // it if any allocation between here and successful return fails.
             errdefer self.allocator.free(body);
             const span_end = self.lines.index orelse self.lines.buffer.len;
+
             var obj: std.json.ObjectMap = .init(self.allocator);
+            if (opener.inline_args.len > 0) {
+                if (try opener.schema.parseInlineKv(self.allocator, opener.inline_args)) |v| if (v == .object) {
+                    var it = v.object.iterator();
+                    while (it.next()) |kv| try obj.put(kv.key_ptr.*, kv.value_ptr.*);
+                };
+            }
             try obj.put(opener.field, .{ .string = body });
             return .{
                 .line_num = start_line,
@@ -100,16 +107,24 @@ pub fn next(self: *Iterator) command.ParseError!?Entry {
 
 const BlockOpener = struct {
     tool: BrowserTool,
+    schema: *const Schema,
     field: []const u8,
     quote_type: Schema.QuoteType,
+    /// Slice between the tool name and the triple-quote, e.g.
+    /// `save=stories` in `/extract save=stories '''`.
+    inline_args: []const u8,
 };
 
 fn tryBlockOpener(line: []const u8) ?BlockOpener {
     const split = Schema.parseSlashCommand(line) orelse return null;
     const s = Schema.findByName(split.name) orelse return null;
     if (!s.isMultiLineCapable()) return null;
-    const qt = Schema.QuoteType.fromLiteral(split.rest) orelse return null;
-    return .{ .tool = s.tool, .field = s.required[0], .quote_type = qt };
+
+    const rest = std.mem.trimRight(u8, split.rest, &std.ascii.whitespace);
+    if (rest.len < 3) return null;
+    const qt = Schema.QuoteType.fromLiteral(rest[rest.len - 3 ..]) orelse return null;
+    const inline_args = std.mem.trim(u8, rest[0 .. rest.len - 3], &std.ascii.whitespace);
+    return .{ .tool = s.tool, .schema = s, .field = s.required[0], .quote_type = qt, .inline_args = inline_args };
 }
 
 fn collectMultiLineBlock(self: *Iterator, quote_type: Schema.QuoteType) std.mem.Allocator.Error!?[]const u8 {

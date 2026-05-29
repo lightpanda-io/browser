@@ -222,6 +222,24 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
     return try self.buildValue(arena, list.items, diag);
 }
 
+/// Like `parseValueDiag` but skips the required-field check: the
+/// multi-line body fills the required field via a separate path.
+pub fn parseInlineKv(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8) ParseError!?std.json.Value {
+    const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
+    if (rest.len == 0) return null;
+
+    const tokens = try tokenize(arena, rest);
+    var list = try std.ArrayList(KvPair).initCapacity(arena, tokens.len);
+    for (tokens) |tok| {
+        const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return error.MalformedKv;
+        if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
+        const key = tok[0..eq];
+        const field = self.findField(key) orelse return error.UnknownField;
+        list.appendAssumeCapacity(.{ .key = field.name, .value = stripQuotes(tok[eq + 1 ..]) });
+    }
+    return try self.buildValue(arena, list.items, null);
+}
+
 fn validateAndFillObject(self: Schema, obj: *std.json.ObjectMap) ParseError!void {
     // Stricter than the LLM path: an unknown field is a user typo, not noise to drop.
     var it = obj.iterator();

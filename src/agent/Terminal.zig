@@ -701,6 +701,7 @@ pub fn promptNumberedChoice(header: []const u8, items: []const []const u8, defau
 }
 
 pub fn printAssistant(_: *Terminal, text: []const u8) void {
+    if (text.len == 0) return;
     const fd = std.posix.STDOUT_FILENO;
     _ = std.posix.write(fd, text) catch {};
     _ = std.posix.write(fd, "\n") catch {};

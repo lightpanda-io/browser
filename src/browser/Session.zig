@@ -55,6 +55,9 @@ arena: Allocator,
 history: History,
 navigation: Navigation,
 storage_shed: storage.Shed,
+// Backs `globalThis.lp.*`; values pre-stringified so the prelude splices
+// them in without re-encoding.
+bridge_store: std.StringHashMapUnmanaged([]const u8) = .empty,
 notification: *Notification,
 cookie_jar: storage.Cookie.Jar,
 /// User-provided scripts to inject into header.
@@ -164,6 +167,15 @@ pub fn deinit(self: *Session) void {
     self.browser.env.memoryPressureNotification(.critical);
 
     self.storage_shed.deinit(self.browser.app.allocator);
+    {
+        const allocator = self.browser.app.allocator;
+        var it = self.bridge_store.iterator();
+        while (it.next()) |kv| {
+            allocator.free(kv.key_ptr.*);
+            allocator.free(kv.value_ptr.*);
+        }
+        self.bridge_store.deinit(allocator);
+    }
     self._console_messages.deinit();
     self.arena_pool.release(self.arena);
 }
