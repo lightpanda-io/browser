@@ -35,6 +35,20 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, o
     const needs_dupe = comptime !isNullTerminated(PT);
     var path: [:0]const u8 = if (needs_dupe or opts.always_dupe) try allocator.dupeZ(u8, source_path) else source_path;
 
+    if (std.mem.indexOfAny(u8, path, "\t\r\n")) |first| {
+        path = blk: {
+            var buf: std.ArrayList(u8) = try .initCapacity(allocator, path.len);
+            buf.appendSliceAssumeCapacity(path[0..first]);
+            for (path[first + 1 ..]) |c| {
+                if (c != '\t' and c != '\r' and c != '\n') {
+                    buf.appendAssumeCapacity(c);
+                }
+            }
+            buf.appendAssumeCapacity(0);
+            break :blk buf.items[0 .. buf.items.len - 1 :0];
+        };
+    }
+
     if (base.len == 0) {
         return processResolved(allocator, path, opts);
     }
@@ -196,11 +210,13 @@ fn processResolved(allocator: Allocator, url: [:0]const u8, opts: ResolveOpts) !
     return ensureEncoded(allocator, url, encoding);
 }
 
-/// IDNA-only pass: converts a non-ASCII host (`räksmörgås.se`) to its
-/// punycode form (`xn--rksmrgs-5wao1o.se`) and leaves everything else alone.
+/// IDNA pass: converts a non-ASCII host (`räksmörgås.se`) to its punycode form
+/// (`xn--rksmrgs-5wao1o.se`), validates any ASCII punycode (`xn--…`) labels,
+/// and leaves everything else alone. Returns `error.Idna` for an invalid
+/// domain (e.g. malformed punycode), which surfaces as a URL parse failure.
 fn ensureHostAscii(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     const hostname = getHostname(url);
-    if (hostname.len == 0 or !idna.needsAscii(hostname)) {
+    if (hostname.len == 0 or (!idna.needsAscii(hostname) and !hasAceLabel(hostname))) {
         return url;
     }
 
@@ -215,6 +231,30 @@ fn ensureHostAscii(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     buf.appendSliceAssumeCapacity(url[end..]);
     buf.appendAssumeCapacity(0);
     return buf.items[0 .. buf.items.len - 1 :0];
+}
+
+/// True if any dot-separated label of `host` begins with the IDNA ACE prefix
+/// "xn--" (case-insensitive). Such labels are punycode: even though they're
+/// pure ASCII, UTS#46 must decode and validate them, so they can't take the
+/// `needsAscii` fast path.
+fn hasAceLabel(host: []const u8) bool {
+    var pos: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, host, pos, '-')) |i| {
+        pos = i + 1;
+        if (i < 2 or i + 1 >= host.len or host[i + 1] != '-') {
+            continue;
+        }
+
+        if (!std.ascii.eqlIgnoreCase(host[i - 2 .. i], "xn")) {
+            continue;
+        }
+
+        const label_start = i - 2;
+        if (label_start == 0 or host[label_start - 1] == '.') {
+            return true;
+        }
+    }
+    return false;
 }
 
 pub fn ensureEncoded(allocator: Allocator, url_in: [:0]const u8, encoding: []const u8) ![:0]const u8 {
@@ -1084,6 +1124,70 @@ test "URL: resolve" {
         const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
         try testing.expectString(case.expected, result);
     }
+}
+
+test "URL: resolve strips tab and newline from input" {
+    defer testing.reset();
+
+    const Case = struct {
+        base: [:0]const u8,
+        path: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        // Control char inside the host of an absolute URL.
+        .{ .base = "https://x/", .path = "https://exa\tmple.com/p", .expected = "https://example.com/p" },
+        .{ .base = "https://x/", .path = "https://example.com/\n\rp", .expected = "https://example.com/p" },
+        // Leading control char (first == 0).
+        .{ .base = "https://example/", .path = "\tfoo.js", .expected = "https://example/foo.js" },
+        // Consecutive control chars.
+        .{ .base = "https://example/", .path = "a\t\r\nb.js", .expected = "https://example/ab.js" },
+        // Control chars spread through the path.
+        .{ .base = "https://example/", .path = "a\tb\nc\rd.js", .expected = "https://example/abcd.js" },
+        // Trailing control char.
+        .{ .base = "https://example/", .path = "foo.js\n", .expected = "https://example/foo.js" },
+        // All-strippable relative path collapses to the base.
+        .{ .base = "https://example/dir/", .path = "\t\r\n", .expected = "https://example/dir/" },
+        // No control chars: unchanged (the fast path).
+        .{ .base = "https://example/", .path = "clean.js", .expected = "https://example/clean.js" },
+    };
+
+    for (cases) |case| {
+        const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+        try testing.expectString(case.expected, result);
+    }
+}
+
+test "URL: resolve validates ASCII punycode (xn--) labels" {
+    defer testing.reset();
+
+    // Valid punycode is left untouched (the needsAscii fast path would skip it,
+    // so this exercises the xn-- gate going through toAscii and back).
+    const ok = try resolve(testing.arena_allocator, "", "https://xn--rksmrgs-5wao1o.se/x", .{});
+    try testing.expectString("https://xn--rksmrgs-5wao1o.se/x", ok);
+
+    // Malformed punycode must be rejected rather than passed through verbatim.
+    // (URL.init remaps this error.Idna to TypeError for `new URL`.)
+    try testing.expectError(error.Idna, resolve(testing.arena_allocator, "", "https://xn--0.pt/x", .{}));
+    try testing.expectError(error.Idna, resolve(testing.arena_allocator, "", "https://xn--a.pt/x", .{}));
+}
+
+test "URL: hasAceLabel" {
+    // ACE prefix at a label start (case-insensitive).
+    try testing.expectEqual(true, hasAceLabel("xn--a"));
+    try testing.expectEqual(true, hasAceLabel("xn--rksmrgs-5wao1o.se"));
+    try testing.expectEqual(true, hasAceLabel("a.xn--b.com"));
+    try testing.expectEqual(true, hasAceLabel("XN--ab.com"));
+    try testing.expectEqual(true, hasAceLabel("foo.example.xn--p1ai"));
+
+    // Has '-', but no ACE label.
+    try testing.expectEqual(false, hasAceLabel("example.com"));
+    try testing.expectEqual(false, hasAceLabel("my-site.com"));
+    try testing.expectEqual(false, hasAceLabel("axn--b.com")); // xn-- not at a label start
+    try testing.expectEqual(false, hasAceLabel("x-n--a.com")); // not "xn" before the '-'
+    try testing.expectEqual(false, hasAceLabel("-.com"));
+    try testing.expectEqual(false, hasAceLabel(""));
 }
 
 test "URL: ensureEncoded" {

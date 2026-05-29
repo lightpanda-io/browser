@@ -109,12 +109,6 @@ frame: Frame,
 // to the original page like this.
 popups: std.ArrayList(*Frame) = .empty,
 
-// Popups that have called window.close() but whose teardown is deferred to
-// Page.deinit. We can't deinit synchronously from window.close() because
-// that's invoked from JS still running on top of the Frame's V8 context (or
-// from a script eval whose parser still holds the Frame).
-queued_close: std.ArrayList(*Frame) = .empty,
-
 // Lifecycle state. A Page is `.pending` while we hold it as the in-flight
 // destination of a root navigation — its V8 context exists but is not yet the
 // session's active context. Flipped to `.active` by Session.commitPendingPage
@@ -142,8 +136,6 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
 // Tear down the Page and its root Frame. Equivalent to the old
 // Session.removePage + Session.resetFrameResources.
 pub fn deinit(self: *Page) void {
-    self.cleanupClosedPopups();
-
     for (self.popups.items) |popup| {
         popup.deinit();
     }
@@ -195,13 +187,6 @@ pub fn deinit(self: *Page) void {
     }
 
     session.arena_pool.release(self.frame_arena);
-}
-
-pub fn cleanupClosedPopups(self: *Page) void {
-    for (self.queued_close.items) |popup| {
-        popup.deinit();
-    }
-    self.queued_close = .empty;
 }
 
 pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {

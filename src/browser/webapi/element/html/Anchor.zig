@@ -165,6 +165,28 @@ pub fn setProtocol(self: *Anchor, value: []const u8, frame: *Frame) !void {
     try setHref(self, new_href, frame);
 }
 
+pub fn getUsername(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
+    return URL.getUsername(href);
+}
+
+pub fn setUsername(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setUsername(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
+}
+
+pub fn getPassword(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
+    return URL.getPassword(href);
+}
+
+pub fn setPassword(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setPassword(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
+}
+
 pub fn getType(self: *Anchor) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "";
 }
@@ -221,6 +243,8 @@ pub const JsApi = struct {
     pub const protocol = bridge.accessor(Anchor.getProtocol, Anchor.setProtocol, .{ .ce_reactions = true });
     pub const host = bridge.accessor(Anchor.getHost, Anchor.setHost, .{ .ce_reactions = true });
     pub const hostname = bridge.accessor(Anchor.getHostname, Anchor.setHostname, .{ .ce_reactions = true });
+    pub const username = bridge.accessor(Anchor.getUsername, Anchor.setUsername, .{ .ce_reactions = true });
+    pub const password = bridge.accessor(Anchor.getPassword, Anchor.setPassword, .{ .ce_reactions = true });
     pub const port = bridge.accessor(Anchor.getPort, Anchor.setPort, .{ .ce_reactions = true });
     pub const pathname = bridge.accessor(Anchor.getPathname, Anchor.setPathname, .{ .ce_reactions = true });
     pub const search = bridge.accessor(Anchor.getSearch, Anchor.setSearch, .{ .ce_reactions = true });
