@@ -205,15 +205,16 @@ pub const Tool = enum {
                 \\Extract structured data via a JSON schema. The only tool whose result is recorded as an `/extract` PandaScript line (replay-friendly); answering from `markdown` content in chat is not. Schema is a JSON object literal passed as a string in `schema`. Each value picks what to lift:
                 \\  "<sel>"                                → first match's textContent.trim() (string|null)
                 \\  ""                                     → element's own textContent.trim() (only meaningful inside `fields`)
-                \\  ["<sel>"]                              → every match's text (string[])
+                \\  ["<sel>"]                              → every match's text (string[]) — sugar for [{"selector":"<sel>"}]
                 \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute (string|null)
                 \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
                 \\  [{"selector":"<sel>","fields":{…}}]    → array of objects, fields resolved relative to each match
-                \\  add `"limit": N` inside an array's object spec to cap matches at N (top-N)
+                \\  add `"limit": N` inside any array's object spec to cap matches at N (works for text, attr, and fields shapes)
                 \\
                 \\Examples (schema → result):
                 \\  {"karma": "#karma"} → {"karma":"42"}
                 \\  {"items": [".story .title"]} → {"items":["Title 1","Title 2"]}
+                \\  {"top3": [{"selector":".story .title","limit":3}]} → {"top3":["A","B","C"]}
                 \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
                 \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
                 ,
@@ -672,10 +673,7 @@ const schema_walker_prefix =
     \\      return m ? m.textContent.trim() : null;
     \\    }
     \\    if (Array.isArray(v)) {
-    \\      const inner = v[0];
-    \\      if (typeof inner === 'string') {
-    \\        return Array.from(el.querySelectorAll(inner)).map(function(m){ return m.textContent.trim(); });
-    \\      }
+    \\      const inner = typeof v[0] === 'string' ? { selector: v[0] } : v[0];
     \\      let matches = Array.from(el.querySelectorAll(inner.selector));
     \\      if (typeof inner.limit === 'number') matches = matches.slice(0, inner.limit);
     \\      return matches.map(function(m){ return valueOf(m, inner); });
