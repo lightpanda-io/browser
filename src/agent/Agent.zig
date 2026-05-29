@@ -551,13 +551,12 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
 const SaveMode = enum { replace, append };
 
 fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
-    const filename = self.parseSaveFilename(arena, rest) catch |err| {
+    const filename = parseSaveFilename(rest) catch |err| {
         const msg: []const u8 = switch (err) {
             error.TooManyArguments => "usage: /save [filename.lp]",
             error.UnterminatedQuote => "unterminated filename quote",
             error.EmptyFilename => "filename cannot be empty",
             error.InvalidFilename => "filename must be a local file name, not a path",
-            error.OutOfMemory => "out of memory",
         };
         self.terminal.printError("{s}", .{msg});
         return;
@@ -572,11 +571,11 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         }
         break :blk .{ saved, .append };
     } else blk: {
-        const path = filename orelse self.randomSaveFilename(arena) catch |err| {
+        const path = filename orelse randomSaveFilename(arena) catch |err| {
             self.terminal.printError("failed to choose save filename: {s}", .{@errorName(err)});
             return;
         };
-        const exists = self.fileExists(path) catch |err| {
+        const exists = fileExists(path) catch |err| {
             self.terminal.printError("failed to inspect {s}: {s}", .{ path, @errorName(err) });
             return;
         };
@@ -587,10 +586,16 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         break :blk .{ path, mode };
     };
 
-    var new_save_path = self.dupeSavePathIfNeeded(path) catch |err| {
-        self.terminal.printError("failed to remember save destination {s}: {s}", .{ path, @errorName(err) });
-        return;
-    };
+    // `path` aliases either an arena-owned string (first save) or
+    // `self.save_path` (subsequent saves to the same destination); only
+    // the former needs to be persisted into agent-owned memory.
+    var new_save_path: ?[]u8 = if (self.save_path == null)
+        self.allocator.dupe(u8, path) catch |err| {
+            self.terminal.printError("failed to remember save destination {s}: {s}", .{ path, @errorName(err) });
+            return;
+        }
+    else
+        null;
     defer if (new_save_path) |p| self.allocator.free(p);
 
     self.writeSaveFile(path, mode) catch |err| {
@@ -599,7 +604,6 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     };
 
     if (new_save_path) |p| {
-        if (self.save_path) |prev| self.allocator.free(prev);
         self.save_path = p;
         new_save_path = null;
     }
@@ -608,8 +612,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, self.save_path.? });
 }
 
-fn parseSaveFilename(self: *Agent, arena: std.mem.Allocator, rest: []const u8) !?[]const u8 {
-    _ = self;
+fn parseSaveFilename(rest: []const u8) !?[]const u8 {
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
     if (trimmed.len == 0) return null;
 
@@ -628,20 +631,19 @@ fn parseSaveFilename(self: *Agent, arena: std.mem.Allocator, rest: []const u8) !
     if (std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidFilename;
     if (std.mem.indexOfScalar(u8, name, '\\') != null) return error.InvalidFilename;
     if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.InvalidFilename;
-    return try arena.dupe(u8, name);
+    return name;
 }
 
-fn randomSaveFilename(self: *Agent, arena: std.mem.Allocator) ![]const u8 {
+fn randomSaveFilename(arena: std.mem.Allocator) ![]const u8 {
     for (0..100) |_| {
         const n = std.crypto.random.int(u64);
         const path = try std.fmt.allocPrint(arena, "session-{x}.lp", .{n});
-        if (!(try self.fileExists(path))) return path;
+        if (!(try fileExists(path))) return path;
     }
     return error.NameCollision;
 }
 
-fn fileExists(self: *Agent, path: []const u8) !bool {
-    _ = self;
+fn fileExists(path: []const u8) !bool {
     std.fs.cwd().access(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
@@ -663,29 +665,14 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?SaveMode {
 
 fn writeSaveFile(self: *Agent, path: []const u8, mode: SaveMode) !void {
     const content = self.save_buffer.bytes();
-    const cwd = std.fs.cwd();
-    switch (mode) {
-        .replace => {
-            const file = try cwd.createFile(path, .{ .truncate = true });
-            defer file.close();
-            try file.writeAll(content);
-        },
-        .append => {
-            const file = try cwd.createFile(path, .{ .truncate = false });
-            defer file.close();
-            try file.seekFromEnd(0);
-            const pos = try file.getPos();
-            if (pos > 0 and content.len > 0) try file.writeAll("\n");
-            try file.writeAll(content);
-        },
+    const file = try std.fs.cwd().createFile(path, .{ .truncate = mode == .replace });
+    defer file.close();
+    if (mode == .append) {
+        try file.seekFromEnd(0);
+        const pos = try file.getPos();
+        if (pos > 0 and content.len > 0) try file.writeAll("\n");
     }
-}
-
-fn dupeSavePathIfNeeded(self: *Agent, path: []const u8) !?[]u8 {
-    if (self.save_path) |prev| {
-        if (prev.ptr == path.ptr and prev.len == path.len) return null;
-    }
-    return try self.allocator.dupe(u8, path);
+    try file.writeAll(content);
 }
 
 fn recordSaveCommand(self: *Agent, cmd: Command) void {
@@ -1290,9 +1277,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
 
     if (result.cancelled) return self.drainCancellation(msg_baseline);
 
-    const record_to_file = if (self.recorder) |*r| r.isActive() else false;
+    const file_recorder: ?*Recorder = if (self.recorder) |*r| (if (r.isActive()) r else null) else null;
     const record_to_memory = input.capture_for_save;
-    if (record_to_file or record_to_memory) {
+    if (file_recorder != null or record_to_memory) {
         // When the LLM tries multiple `extract` schemas in one turn, only the
         // last successful one is the answer — earlier probes are noise.
         var last_extract_idx: ?usize = null;
@@ -1311,15 +1298,15 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| {
-                    if (record_to_file) if (self.recorder) |*r| r.recordComment(c);
+                    if (file_recorder) |r| r.recordComment(c);
                     if (record_to_memory) self.recordSaveComment(c);
                 }
                 recorded_any = true;
             }
-            if (record_to_file) if (self.recorder) |*r| r.record(cmd);
+            if (file_recorder) |r| r.record(cmd);
             if (record_to_memory) self.recordSaveCommand(cmd);
         }
-        if (record_to_file) if (self.recorder) |*r| if (!r.isActive()) {
+        if (file_recorder) |r| if (!r.isActive()) {
             self.terminal.printError("recording disabled (write failed); see logs", .{});
         };
     }
