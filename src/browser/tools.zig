@@ -953,18 +953,20 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     if (result.is_error == true) return result;
 
     // Sync lp.* before any queued navigation tears down this JS context.
-    if (runEval(arena, page, bridge_postlude)) |postlude_result| {
-        if (!postlude_result.is_error) {
-            bridgeSync(app_allocator, &session.bridge_store, postlude_result.text) catch |err| switch (err) {
-                error.OutOfMemory => return ToolError.OutOfMemory,
-                else => {},
-            };
-        }
-    } else |_| {}
+    const postlude_result: ?ToolResult = runEval(arena, page, bridge_postlude) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => null,
+    };
+    if (postlude_result) |pr| if (!pr.is_error) {
+        bridgeSync(app_allocator, &session.bridge_store, pr.text) catch |err| switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
+            else => {},
+        };
+    };
 
     // Silence on save= success so stdout pipes stay clean.
-    if (args.save) |_| {
-        bridgeStoreSet(app_allocator, &session.bridge_store, args.save.?, result.text) catch |err| switch (err) {
+    if (args.save) |name| {
+        bridgeStoreSet(app_allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
             error.OutOfMemory => return ToolError.OutOfMemory,
             error.InvalidJson => return .{
                 .text = "save= requires the eval to return JSON; wrap with JSON.stringify(...)",
@@ -1115,12 +1117,27 @@ fn bridgeSync(allocator: std.mem.Allocator, store: *BridgeStore, postlude_json: 
         var val_aw: std.Io.Writer.Allocating = .init(allocator);
         defer val_aw.deinit();
         try std.json.Stringify.value(entry.value_ptr.*, .{}, &val_aw.writer);
-        try bridgeStoreSet(allocator, store, entry.key_ptr.*, val_aw.written());
+        // Trusted JSON path: value was just stringified from a parsed Value.
+        try bridgeStorePut(allocator, store, entry.key_ptr.*, val_aw.written());
     }
 }
 
 fn bridgeStoreSet(allocator: std.mem.Allocator, store: *BridgeStore, name: []const u8, json_value: []const u8) !void {
+    if (store.getPtr(name)) |slot| {
+        if (std.mem.eql(u8, slot.*, json_value)) return;
+        if (!try std.json.validate(allocator, json_value)) return error.InvalidJson;
+        const new_val = try allocator.dupe(u8, json_value);
+        allocator.free(slot.*);
+        slot.* = new_val;
+        return;
+    }
     if (!try std.json.validate(allocator, json_value)) return error.InvalidJson;
+    try bridgeStorePut(allocator, store, name, json_value);
+}
+
+/// Same as bridgeStoreSet but skips JSON validation. Use only when the
+/// caller already produced canonical JSON (e.g. via json.Stringify.value).
+fn bridgeStorePut(allocator: std.mem.Allocator, store: *BridgeStore, name: []const u8, json_value: []const u8) !void {
     if (store.getPtr(name)) |slot| {
         if (std.mem.eql(u8, slot.*, json_value)) return;
         const new_val = try allocator.dupe(u8, json_value);

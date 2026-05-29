@@ -77,8 +77,7 @@ pub fn next(self: *Iterator) command.ParseError!?Entry {
 
             var obj: std.json.ObjectMap = .init(self.allocator);
             if (opener.inline_args.len > 0) {
-                const s = Schema.findByName(Schema.parseSlashCommand(trimmed).?.name).?;
-                if (try s.parseInlineKv(self.allocator, opener.inline_args)) |v| if (v == .object) {
+                if (try opener.schema.parseInlineKv(self.allocator, opener.inline_args)) |v| if (v == .object) {
                     var it = v.object.iterator();
                     while (it.next()) |kv| try obj.put(kv.key_ptr.*, kv.value_ptr.*);
                 };
@@ -108,6 +107,7 @@ pub fn next(self: *Iterator) command.ParseError!?Entry {
 
 const BlockOpener = struct {
     tool: BrowserTool,
+    schema: *const Schema,
     field: []const u8,
     quote_type: Schema.QuoteType,
     /// Slice between the tool name and the triple-quote, e.g.
@@ -124,7 +124,7 @@ fn tryBlockOpener(line: []const u8) ?BlockOpener {
     if (rest.len < 3) return null;
     const qt = Schema.QuoteType.fromLiteral(rest[rest.len - 3 ..]) orelse return null;
     const inline_args = std.mem.trim(u8, rest[0 .. rest.len - 3], &std.ascii.whitespace);
-    return .{ .tool = s.tool, .field = s.required[0], .quote_type = qt, .inline_args = inline_args };
+    return .{ .tool = s.tool, .schema = s, .field = s.required[0], .quote_type = qt, .inline_args = inline_args };
 }
 
 fn collectMultiLineBlock(self: *Iterator, quote_type: Schema.QuoteType) std.mem.Allocator.Error!?[]const u8 {
