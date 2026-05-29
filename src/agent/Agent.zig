@@ -162,6 +162,11 @@ one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
 cancel_requested: std.atomic.Value(bool) = .init(false),
 synthetic_tool_call_id: u32 = 0,
+/// Aggregate Anthropic/OpenAI/Gemini token usage across every model call
+/// this Agent has made. Printed as a structured `$usage ...` line on stderr
+/// at the end of `--task` (one-shot) mode so wrappers can capture
+/// per-task cost.
+total_usage: zenai.provider.Usage = .{},
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     if (opts.task != null and opts.script_file != null) {
@@ -400,10 +405,14 @@ pub const TurnInput = struct {
 
 /// Returns true on success.
 pub fn run(self: *Agent) bool {
-    if (self.one_shot_task) |task| return self.runTurn(.{
-        .prompt = task,
-        .attachments = self.one_shot_attachments,
-    });
+    if (self.one_shot_task) |task| {
+        const ok = self.runTurn(.{
+            .prompt = task,
+            .attachments = self.one_shot_attachments,
+        });
+        self.printUsageSummary();
+        return ok;
+    }
     if (self.script_file) |path| {
         const script_ok = self.runScript(path);
         if (!self.interactive) return script_ok;
@@ -414,6 +423,25 @@ pub fn run(self: *Agent) bool {
 
 /// Final answer goes to stdout; errors go to stderr, so a caller can
 /// pipe stdout to capture a clean answer.
+/// Print a single-line summary of cumulative token usage to stderr, so
+/// wrappers driving `lightpanda agent --task ...` can capture per-task cost
+/// by `grep`-ing for the `$usage` prefix. Format is stable and key=value:
+///   $usage prompt=N completion=N total=N cached=N cache_creation=N
+/// Fields are emitted with value 0 when the provider didn't report them.
+fn printUsageSummary(self: *Agent) void {
+    const u = self.total_usage;
+    std.debug.print(
+        "$usage prompt={d} completion={d} total={d} cached={d} cache_creation={d}\n",
+        .{
+            u.prompt_tokens orelse 0,
+            u.completion_tokens orelse 0,
+            u.total_tokens orelse 0,
+            u.cached_tokens orelse 0,
+            u.cache_creation_tokens orelse 0,
+        },
+    );
+}
+
 fn runTurn(self: *Agent, input: TurnInput) bool {
     const text = self.processUserMessage(input) catch |err| switch (err) {
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
@@ -957,6 +985,7 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     };
     self.terminal.spinner.stop();
     defer result.deinit();
+    self.total_usage.add(result.usage);
 
     var cmds: std.ArrayList(Command) = .empty;
     for (result.tool_calls_made) |tc| {
@@ -1122,6 +1151,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     };
     self.terminal.spinner.stop();
     defer result.deinit();
+    self.total_usage.add(result.usage);
 
     if (result.cancelled) return self.drainCancellation(msg_baseline);
 
@@ -1189,6 +1219,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             break :blk null;
         };
         defer synth.deinit();
+        self.total_usage.add(synth.usage);
 
         if (synth.cancelled) return self.drainCancellation(msg_baseline);
 
