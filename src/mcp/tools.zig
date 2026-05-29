@@ -937,6 +937,29 @@ test "MCP - eval: rejected Promise surfaces as is_error" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "nope") != null);
 }
 
+test "MCP - eval: async IIFE without explicit return resolves to empty text" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "(async () => { lp.touched = true; })()" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "" }},
+    } }, out.written());
+}
+
 test "MCP - eval: lp.* mutations inside async IIFE survive to the next eval" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);

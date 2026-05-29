@@ -1045,6 +1045,8 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) Tool
         }
 
         const settled = promise.result();
+        // No-return async IIFE → undefined → silence, so pipes stay clean.
+        if (promise.state() == .fulfilled and settled.isUndefined()) return .{ .text = "" };
         const text = settled.toStringSliceWithAlloc(arena) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
