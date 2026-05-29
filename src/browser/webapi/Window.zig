@@ -42,6 +42,7 @@ const MessageEvent = @import("event/MessageEvent.zig");
 const MessagePort = @import("MessagePort.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
+const CookieStore = @import("storage/CookieStore.zig");
 const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
@@ -53,6 +54,7 @@ const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
 const Allocator = std.mem.Allocator;
+const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
     return &.{ Window, CrossOriginWindow };
@@ -72,6 +74,7 @@ _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
 _storage_bucket: storage.Bucket = .{},
+_cookie_store: ?*CookieStore = null,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
@@ -239,6 +242,14 @@ pub fn getLocalStorage(self: *Window) *storage.Lookup {
 
 pub fn getSessionStorage(self: *Window) *storage.Lookup {
     return &self._storage_bucket.session;
+}
+
+pub fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
+    if (self._cookie_store) |cs| return cs;
+    const cs = try exec._factory.eventTarget(CookieStore{ ._proto = undefined });
+    try cs.attach(exec);
+    self._cookie_store = cs;
+    return cs;
 }
 
 pub fn getOrigin(self: *const Window) []const u8 {
@@ -921,6 +932,7 @@ pub const JsApi = struct {
     pub const performance = bridge.accessor(Window.getPerformance, null, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
+    pub const cookieStore = bridge.accessor(Window.getCookieStore, null, .{});
     pub const origin = bridge.accessor(Window.getOrigin, null, .{});
     pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .deletable = false });
     pub const history = bridge.accessor(Window.getHistory, null, .{});

@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const URL = @import("../../URL.zig");
 const DateTime = @import("../../../datetime.zig").DateTime;
+const Notification = @import("../../../Notification.zig");
 const public_suffix_list = @import("../../../data/public_suffix_list.zig").lookup;
 
 const log = lp.log;
@@ -449,11 +450,16 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, 
 pub const Jar = struct {
     allocator: Allocator,
     cookies: std.ArrayList(Cookie),
+    // Optional notifier for cookie change events. When set, `add` dispatches
+    // `cookie_changed` after a real mutation. Session populates this; the
+    // standalone test construction leaves it null.
+    notification: ?*Notification = null,
 
-    pub fn init(allocator: Allocator) Jar {
+    pub fn init(allocator: Allocator, notification: ?*Notification) Jar {
         return .{
             .cookies = .{},
             .allocator = allocator,
+            .notification = notification,
         };
     }
 
@@ -503,18 +509,46 @@ pub const Jar = struct {
                 return;
             }
 
-            c.deinit();
             if (is_expired) {
+                // Dispatch while c still points at the live old cookie,
+                // then free its arena, then remove from the array. After
+                // swapRemove, items[i] holds a different (still-live)
+                // entry, so deinit must happen before that.
+                self.dispatchChange(.deleted, c);
+                c.deinit();
                 _ = self.cookies.swapRemove(i);
             } else {
+                // Free the old cookie's arena before overwriting the slot;
+                // after the assignment, c points at the new cookie.
+                c.deinit();
                 self.cookies.items[i] = cookie;
+                self.dispatchChange(.changed, &self.cookies.items[i]);
             }
             return;
         }
 
         if (!is_expired) {
             try self.cookies.append(self.allocator, cookie);
+            self.dispatchChange(.changed, &self.cookies.items[self.cookies.items.len - 1]);
         }
+    }
+
+    fn dispatchChange(
+        self: *Jar,
+        kind: Notification.CookieChanged.Kind,
+        cookie: *const Cookie,
+    ) void {
+        const notification = self.notification orelse return;
+        notification.dispatch(.cookie_changed, &.{
+            .kind = kind,
+            .name = cookie.name,
+            .value = cookie.value,
+            .domain = cookie.domain,
+            .path = cookie.path,
+            .secure = cookie.secure,
+            .http_only = cookie.http_only,
+            .same_site = cookie.same_site,
+        });
     }
 
     pub fn removeExpired(self: *Jar, request_time: ?i64) void {
@@ -691,7 +725,7 @@ test "Jar: add" {
 
     const now = std.time.timestamp();
 
-    var jar = Jar.init(testing.allocator);
+    var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
     try expectCookies(&.{}, jar);
 
@@ -723,7 +757,7 @@ test "Jar: add" {
 test "Jar: non-HTTP add must not replace or duplicate an HttpOnly cookie" {
     const now = std.time.timestamp();
 
-    var jar = Jar.init(testing.allocator);
+    var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
 
     try jar.add(try Cookie.parse(testing.allocator, test_url, "session=REAL;Path=/;HttpOnly"), now, true);
@@ -740,7 +774,7 @@ test "Jar: non-HTTP add must not replace or duplicate an HttpOnly cookie" {
 }
 
 test "Jar: add limit" {
-    var jar = Jar.init(testing.allocator);
+    var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
 
     const now = std.time.timestamp();
@@ -802,7 +836,7 @@ test "Jar: forRequest" {
 
     const now = std.time.timestamp();
 
-    var jar = Jar.init(testing.allocator);
+    var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
 
     const url2 = "http://test.lightpanda.io/";
@@ -948,7 +982,7 @@ test "Jar: forRequest SameSite=Strict on cross-site navigation" {
         }
     }.expect;
 
-    var jar = Jar.init(testing.allocator);
+    var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
 
     const victim_url: [:0]const u8 = "http://victim.example/";
