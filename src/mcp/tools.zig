@@ -869,6 +869,111 @@ test "MCP - extract: save= exposes the result as lp.<name>" {
     } }, out.written());
 }
 
+test "MCP - eval: Promise.resolve return value is awaited" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "Promise.resolve(7)" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "7" }},
+    } }, out.written());
+}
+
+test "MCP - eval: async IIFE resolves to returned value" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "(async () => { const xs = [1,2,3]; let s = 0; for (const x of xs) s += await Promise.resolve(x); return s; })()" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "6" }},
+    } }, out.written());
+}
+
+test "MCP - eval: rejected Promise surfaces as is_error" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "(async () => { throw new Error('nope'); })()" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "nope") != null);
+}
+
+test "MCP - eval: lp.* mutations inside async IIFE survive to the next eval" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const first =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "(async () => { lp.total = 0; for (const n of [10, 20, 30]) lp.total += await Promise.resolve(n); })()" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, first);
+
+    out.clearRetainingCapacity();
+    const second =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.total" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, second);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "60" }},
+    } }, out.written());
+}
+
 test "MCP - indexLines: exact match returns line + trailing newline" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();

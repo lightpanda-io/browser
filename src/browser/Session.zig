@@ -55,9 +55,8 @@ arena: Allocator,
 history: History,
 navigation: Navigation,
 storage_shed: storage.Shed,
-// Cross-call value store exposed to `/eval` as `globalThis.lp.*`. Values
-// are kept as pre-stringified JSON so the prelude can splice them into
-// each eval without re-encoding. Lifetime = Session; cleared on deinit.
+// Backs `globalThis.lp.*`; values pre-stringified so the prelude splices
+// them in without re-encoding.
 bridge_store: std.StringHashMapUnmanaged([]const u8) = .empty,
 notification: *Notification,
 cookie_jar: storage.Cookie.Jar,

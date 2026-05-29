@@ -209,6 +209,7 @@ pub const Tool = enum {
                 \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute (string|null)
                 \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
                 \\  [{"selector":"<sel>","fields":{…}}]    → array of objects, fields resolved relative to each match
+                \\  add `"limit": N` inside an array's object spec to cap matches at N (top-N)
                 \\
                 \\Examples (schema → result):
                 \\  {"karma": "#karma"} → {"karma":"42"}
@@ -675,7 +676,9 @@ const schema_walker_prefix =
     \\      if (typeof inner === 'string') {
     \\        return Array.from(el.querySelectorAll(inner)).map(function(m){ return m.textContent.trim(); });
     \\      }
-    \\      return Array.from(el.querySelectorAll(inner.selector)).map(function(m){ return valueOf(m, inner); });
+    \\      let matches = Array.from(el.querySelectorAll(inner.selector));
+    \\      if (typeof inner.limit === 'number') matches = matches.slice(0, inner.limit);
+    \\      return matches.map(function(m){ return valueOf(m, inner); });
     \\    }
     \\    const t = v.selector ? el.querySelector(v.selector) : el;
     \\    if (!t) return null;
@@ -927,8 +930,6 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const before = session.currentFrame();
     const app_allocator = session.browser.app.allocator;
 
-    // Install `globalThis.lp` from the bridge store so the user script can
-    // read prior `save=`d values or auto-synced state from earlier evals.
     const prelude = bridgePrelude(arena, &session.bridge_store) catch return ToolError.OutOfMemory;
     _ = try runEval(arena, page, prelude);
 
@@ -953,8 +954,7 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     }
     if (result.is_error == true) return result;
 
-    // Sync `lp.*` back to the store before any queued navigation tears
-    // down this page's JS context. Bad JSON / non-object lp drops silently.
+    // Sync lp.* before any queued navigation tears down this JS context.
     if (runEval(arena, page, bridge_postlude)) |postlude_result| {
         if (!postlude_result.is_error) {
             bridgeSync(app_allocator, &session.bridge_store, postlude_result.text) catch |err| switch (err) {
@@ -964,16 +964,16 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         }
     } else |_| {}
 
-    // save=name persists this eval's result text under `name`. The caller
-    // must produce a JSON-encodable value (use `JSON.stringify(...)`).
-    if (args.save) |name| {
-        bridgeStoreSet(app_allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
+    // Silence on save= success so stdout pipes stay clean.
+    if (args.save) |_| {
+        bridgeStoreSet(app_allocator, &session.bridge_store, args.save.?, result.text) catch |err| switch (err) {
             error.OutOfMemory => return ToolError.OutOfMemory,
             error.InvalidJson => return .{
                 .text = "save= requires the eval to return JSON; wrap with JSON.stringify(...)",
                 .is_error = true,
             },
         };
+        result = .{ .text = "" };
     }
 
     // Script may have queued a navigation (e.g. `top.location = …`).
@@ -982,6 +982,8 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     if (before == null or before.? == after) return result;
 
     registry.reset();
+    if (result.text.len == 0) return result; // silenced save=; don't re-emit via nav suffix
+
     const page_title = after.getTitle() catch null;
     const text = std.fmt.allocPrint(arena, "{s}\n(Navigated to {s}, title: {s})", .{
         result.text, after.url, page_title orelse "(none)",
@@ -1000,14 +1002,15 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNod
     if (!result.is_error) if (args.save) |name| {
         bridgeStoreSet(session.browser.app.allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
             error.OutOfMemory => return ToolError.OutOfMemory,
-            // Extract's walker stringifies its own output, so invalid JSON
-            // here means the walker mis-emitted — surface as an error.
             error.InvalidJson => return .{ .text = "extract: walker produced non-JSON output", .is_error = true },
         };
+        return .{ .text = "" };
     };
 
     return result;
 }
+
+const eval_promise_timeout_ms: u32 = 30_000;
 
 fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) ToolError!ToolResult {
     var ls: lp.js.Local.Scope = undefined;
@@ -1020,6 +1023,34 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) Tool
 
     const js_result = ls.local.compileAndRun(script, null) catch |err|
         return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true };
+
+    if (js_result.isPromise()) {
+        const promise = js_result.toPromise();
+        promise.markAsHandled();
+
+        var runner = page._session.runner(.{}) catch {
+            return .{ .text = "promise: no runner available", .is_error = true };
+        };
+        var timer = std.time.Timer.start() catch unreachable;
+        while (promise.state() == .pending) {
+            const elapsed_ms: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+            if (elapsed_ms >= eval_promise_timeout_ms) {
+                return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
+            }
+            const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
+            _ = runner.tick(.{ .ms = budget }) catch |err| switch (err) {
+                error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
+                else => return .{ .text = "promise: tick failed", .is_error = true },
+            };
+        }
+
+        const settled = promise.result();
+        const text = settled.toStringSliceWithAlloc(arena) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
+        };
+        return .{ .text = text, .is_error = (promise.state() == .rejected) };
+    }
 
     const text = js_result.toStringSliceWithAlloc(arena) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -1039,9 +1070,8 @@ fn formatJsError(arena: std.mem.Allocator, try_catch: *lp.js.TryCatch, err: anye
 
 const BridgeStore = std.StringHashMapUnmanaged([]const u8);
 
-/// Build the JS prelude that materializes the bridge store as `globalThis.lp`.
-/// Stored values are already JSON, so they splice directly into the object
-/// literal without a re-encode round-trip.
+/// Stored values are already JSON; splice them straight into the literal
+/// instead of round-tripping through json.Value.
 fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     try aw.writer.writeAll("globalThis.lp = {");
@@ -1060,9 +1090,7 @@ fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const
 
 const bridge_postlude: [:0]const u8 = "JSON.stringify(globalThis.lp)";
 
-/// Re-sync the bridge store from the postlude result. Keys present in the
-/// new object are upserted; keys missing from it are dropped (so JS-side
-/// `delete lp.foo` actually removes from the store).
+/// Drops keys missing from the postlude so `delete lp.foo` propagates.
 fn bridgeSync(allocator: std.mem.Allocator, store: *BridgeStore, postlude_json: []const u8) !void {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, postlude_json, .{}) catch return;
     defer parsed.deinit();
@@ -1091,8 +1119,6 @@ fn bridgeSync(allocator: std.mem.Allocator, store: *BridgeStore, postlude_json: 
     }
 }
 
-/// Write a single (already-JSON) value into the store under `name`.
-/// Used by `/extract save=` and `/eval save=` to surface a one-shot result.
 fn bridgeStoreSet(allocator: std.mem.Allocator, store: *BridgeStore, name: []const u8, json_value: []const u8) !void {
     if (!try std.json.validate(allocator, json_value)) return error.InvalidJson;
     if (store.getPtr(name)) |slot| {
