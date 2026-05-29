@@ -73,7 +73,6 @@ _model_context: ModelContext = .init,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
-_storage_bucket: storage.Bucket = .{},
 _cookie_store: ?*CookieStore = null,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
@@ -236,12 +235,19 @@ pub fn getPerformance(self: *Window) *Performance {
     return &self._performance;
 }
 
+fn bucketForOrigin(self: *Window) *storage.Bucket {
+    return self._frame._session.storage_shed.getOrPut(
+        self._frame._session.browser.app.allocator,
+        self._frame.js.origin.key,
+    ) catch @panic("OOM");
+}
+
 pub fn getLocalStorage(self: *Window) *storage.Lookup {
-    return &self._storage_bucket.local;
+    return &self.bucketForOrigin().local;
 }
 
 pub fn getSessionStorage(self: *Window) *storage.Lookup {
-    return &self._storage_bucket.session;
+    return &self.bucketForOrigin().session;
 }
 
 pub fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
