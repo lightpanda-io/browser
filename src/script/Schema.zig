@@ -339,10 +339,6 @@ pub fn all() []const Schema {
     return global_storage[0..browser_tools.tool_defs.len];
 }
 
-pub fn lessByName(_: void, a: *const Schema, b: *const Schema) bool {
-    return std.mem.lessThan(u8, a.tool_name, b.tool_name);
-}
-
 var global_storage: [browser_tools.tool_defs.len]Schema = undefined;
 var global_arena: std.heap.ArenaAllocator = undefined;
 var global_once = std.once(initGlobal);

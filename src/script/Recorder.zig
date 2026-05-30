@@ -96,17 +96,22 @@ pub fn recordComment(self: *Recorder, comment: []const u8) void {
 
 fn tryRecordComment(self: *Recorder, comment: []const u8) !void {
     self.buf.clearRetainingCapacity();
-    // Embedded newlines would smuggle an executable line into the script on
-    // replay (e.g. `# foo\n/goto https://attacker`). Emit each line of the
-    // comment as its own `# ` line; strip lone CRs.
+    try writeCommentLines(&self.buf.writer, comment);
+    try self.writeScrubbed();
+}
+
+/// Emit each line of `comment` as its own `# ` line, stripping lone CRs.
+/// Splitting on newlines is load-bearing: an embedded newline would otherwise
+/// smuggle an executable line into the script on replay (e.g.
+/// `# foo\n/goto https://attacker`).
+fn writeCommentLines(w: *std.Io.Writer, comment: []const u8) !void {
     var it = std.mem.splitScalar(u8, comment, '\n');
     while (it.next()) |line| {
         const trimmed = std.mem.trimRight(u8, line, "\r");
-        try self.buf.writer.writeAll("# ");
-        try self.buf.writer.writeAll(trimmed);
-        try self.buf.writer.writeByte('\n');
+        try w.writeAll("# ");
+        try w.writeAll(trimmed);
+        try w.writeByte('\n');
     }
-    try self.writeScrubbed();
 }
 
 fn writeScrubbed(self: *Recorder) !void {
@@ -180,13 +185,7 @@ pub const Memory = struct {
 
     pub fn recordComment(self: *Memory, comment: []const u8) !void {
         self.buf.clearRetainingCapacity();
-        var it = std.mem.splitScalar(u8, comment, '\n');
-        while (it.next()) |line| {
-            const trimmed = std.mem.trimRight(u8, line, "\r");
-            try self.buf.writer.writeAll("# ");
-            try self.buf.writer.writeAll(trimmed);
-            try self.buf.writer.writeByte('\n');
-        }
+        try writeCommentLines(&self.buf.writer, comment);
         try self.appendScrubbed();
     }
 

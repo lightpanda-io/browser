@@ -46,20 +46,7 @@ pub const ErrorCode = enum(i64) {
     Timeout = -32002,
 };
 
-pub const Notification = struct {
-    jsonrpc: []const u8 = "2.0",
-    method: []const u8,
-    params: ?std.json.Value = null,
-};
-
 // Core MCP Types mapping to official specification
-pub const InitializeRequest = struct {
-    jsonrpc: []const u8 = "2.0",
-    id: std.json.Value,
-    method: []const u8 = "initialize",
-    params: InitializeParams,
-};
-
 pub const InitializeParams = struct {
     protocolVersion: []const u8,
     capabilities: Capabilities,
