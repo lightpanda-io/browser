@@ -162,6 +162,8 @@
     \\
     \\                           Allowed values:
     \\                             "anthropic", "openai", "gemini", "ollama".
+    \\                           In the REPL, use /provider to list and change
+    \\                           providers.
     \\
     \\--no-llm                   Force the basic REPL even when an API key is
     \\                           present or --provider is set. Useful for testing

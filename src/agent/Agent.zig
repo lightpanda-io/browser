@@ -275,26 +275,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
     self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
 
-    self.ai_client = if (llm) |l| switch (l.provider) {
-        inline else => |tag| blk: {
-            const ProviderClient = zenai.provider.Client;
-            const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
-            const Client = @typeInfo(ClientPtr).pointer.child;
-            const client = try allocator.create(Client);
-            const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
-            client.* = .init(allocator, l.key, if (url) |u|
-                .{ .base_url = u, .retry_policy = .long_running }
-            else
-                .{ .retry_policy = .long_running });
-            break :blk @unionInit(ProviderClient, @tagName(tag), client);
-        },
-    } else null;
-    errdefer if (self.ai_client) |c| switch (c) {
-        inline else => |client| {
-            client.deinit();
-            allocator.destroy(client);
-        },
-    };
+    self.ai_client = if (llm) |l| try initAiClient(allocator, l, opts.base_url) else null;
+    errdefer if (self.ai_client) |c| deinitAiClient(allocator, c);
 
     if (will_repl) self.terminal.attachCompleter();
 
@@ -556,6 +538,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .verbosity => self.handleVerbosity(rest),
         .save => self.handleSave(arena, rest),
         .model => self.handleModel(arena, rest),
+        .provider => self.handleProvider(arena, rest),
     }
     return false;
 }
@@ -618,6 +601,62 @@ fn setModel(self: *Agent, model: []const u8) !void {
     const new_model = try self.allocator.dupe(u8, model);
     self.allocator.free(self.model);
     self.model = new_model;
+    self.terminal.printInfo("model: {s}", .{self.model});
+}
+
+fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
+    const current = self.model_credentials orelse {
+        self.terminal.printError("/provider requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{});
+        return;
+    };
+
+    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
+    if (trimmed.len != 0) {
+        self.terminal.printError("usage: /provider", .{});
+        return;
+    }
+
+    var buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
+    const providers = availableProviders(&buf);
+    if (providers.len == 0) {
+        self.terminal.printError("no providers available", .{});
+        return;
+    }
+
+    var labels: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
+    var current_idx: ?usize = null;
+    for (providers, 0..) |p, i| {
+        labels[i] = @tagName(p.provider);
+        if (p.provider == current.provider) current_idx = i;
+    }
+
+    self.terminal.printInfo("Current provider: {s}", .{@tagName(current.provider)});
+    const idx = Terminal.promptNumberedChoice("Pick provider:", labels[0..providers.len], current_idx) catch {
+        self.terminal.printInfo("Provider unchanged.", .{});
+        return;
+    };
+    const selected = providers[idx];
+    if (selected.provider == current.provider) {
+        self.terminal.printInfo("provider: {s}", .{@tagName(current.provider)});
+        return;
+    }
+
+    self.setProvider(selected) catch |err| {
+        self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
+    };
+}
+
+fn setProvider(self: *Agent, credentials: Credentials) !void {
+    const new_client = try initAiClient(self.allocator, credentials, self.model_base_url);
+    errdefer deinitAiClient(self.allocator, new_client);
+
+    const new_model = try self.allocator.dupe(u8, defaultModel(credentials.provider));
+    if (self.ai_client) |client| deinitAiClient(self.allocator, client);
+    self.ai_client = new_client;
+    self.model_credentials = credentials;
+    self.allocator.free(self.model);
+    self.model = new_model;
+    self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
     self.terminal.printInfo("model: {s}", .{self.model});
 }
 
@@ -806,6 +845,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
             ),
             .model => self.terminal.printInfo(
                 "/model — Show available models and change the current model",
+                .{},
+            ),
+            .provider => self.terminal.printInfo(
+                "/provider — Show available providers and change the current provider",
                 .{},
             ),
         }
@@ -1609,6 +1652,45 @@ fn defaultModel(p: Config.AiProvider) []const u8 {
         .gemini => "gemini-3.5-flash",
         .ollama => "gemma4",
     };
+}
+
+fn initAiClient(allocator: std.mem.Allocator, credentials: Credentials, base_url: ?[:0]const u8) !zenai.provider.Client {
+    return switch (credentials.provider) {
+        inline else => |tag| blk: {
+            const ProviderClient = zenai.provider.Client;
+            const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
+            const Client = @typeInfo(ClientPtr).pointer.child;
+            const client = try allocator.create(Client);
+            errdefer allocator.destroy(client);
+            const url: ?[]const u8 = base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
+            client.* = .init(allocator, credentials.key, if (url) |u|
+                .{ .base_url = u, .retry_policy = .long_running }
+            else
+                .{ .retry_policy = .long_running });
+            break :blk @unionInit(ProviderClient, @tagName(tag), client);
+        },
+    };
+}
+
+fn deinitAiClient(allocator: std.mem.Allocator, ai_client: zenai.provider.Client) void {
+    switch (ai_client) {
+        inline else => |client| {
+            client.deinit();
+            allocator.destroy(client);
+        },
+    }
+}
+
+fn availableProviders(buf: []Credentials) []Credentials {
+    var n: usize = 0;
+    inline for (@typeInfo(Config.AiProvider).@"enum".fields) |field| {
+        const provider: Config.AiProvider = @enumFromInt(field.value);
+        if (zenai.provider.envApiKey(provider)) |key| {
+            buf[n] = .{ .provider = provider, .key = key };
+            n += 1;
+        }
+    }
+    return buf[0..n];
 }
 
 fn pickProvider(found: []const Credentials) !Credentials {
