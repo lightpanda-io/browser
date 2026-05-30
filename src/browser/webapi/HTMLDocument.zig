@@ -241,7 +241,6 @@ pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, frame: *Frame) ![]con
         // Invalid cookies should be silently ignored, not throw errors
         return "";
     };
-    errdefer c.deinit();
     if (c.http_only) {
         c.deinit();
         return ""; // HttpOnly cookies cannot be set from JS

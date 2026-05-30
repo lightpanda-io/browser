@@ -484,10 +484,9 @@ pub const Jar = struct {
         /// Checks if addition comes from HTTP request or JS context.
         comptime is_http: bool,
     ) !void {
-        const is_expired = isCookieExpired(&cookie, request_time);
-        defer if (is_expired) {
-            cookie.deinit();
-        };
+        // `add` takes ownership of `cookie` unconditionally on entry.
+        var stored = false;
+        defer if (!stored) cookie.deinit();
 
         if (self.cookies.items.len >= max_jar_size) {
             return error.CookieJarQuotaExceeded;
@@ -495,6 +494,8 @@ pub const Jar = struct {
         if (cookie.value.len > max_cookie_size) {
             return error.CookieSizeExceeded;
         }
+
+        const is_expired = isCookieExpired(&cookie, request_time);
 
         for (self.cookies.items, 0..) |*c, i| {
             // We're only looking for the equal one.
@@ -505,7 +506,6 @@ pub const Jar = struct {
             // RFC 6265bis 5.7.2: a non-HTTP API (e.g. document.cookie) must
             // not replace an HttpOnly cookie.
             if (c.http_only and is_http == false) {
-                if (is_expired == false) cookie.deinit();
                 return;
             }
 
@@ -522,6 +522,7 @@ pub const Jar = struct {
                 // after the assignment, c points at the new cookie.
                 c.deinit();
                 self.cookies.items[i] = cookie;
+                stored = true;
                 self.dispatchChange(.changed, &self.cookies.items[i]);
             }
             return;
@@ -529,6 +530,7 @@ pub const Jar = struct {
 
         if (!is_expired) {
             try self.cookies.append(self.allocator, cookie);
+            stored = true;
             self.dispatchChange(.changed, &self.cookies.items[self.cookies.items.len - 1]);
         }
     }
