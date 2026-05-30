@@ -150,7 +150,7 @@ pub fn processDestroyQueues(self: *Session) void {
     }
 
     {
-        const queue = self._page_descruction_queue.items;
+        const queue = self._page_destruction_queue.items;
         if (queue.len > 0) {
             for (queue) |page| {
                 page.deinit();
