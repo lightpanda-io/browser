@@ -49,6 +49,12 @@ pub const ansi = struct {
     pub const clear_eol = "\x1b[K";
 };
 
+/// Wraps a comptime format fragment in the bold-cyan style used for command
+/// names, so highlighted commands match the look of the `/help` listing.
+pub fn highlightCmd(comptime fragment: []const u8) []const u8 {
+    return ansi.bold ++ ansi.cyan ++ fragment ++ ansi.reset;
+}
+
 const Verbosity = Config.AgentVerbosity;
 
 fn atLeast(level: Verbosity, min: Verbosity) bool {
@@ -573,6 +579,39 @@ fn slashHasPrefix(name: []const u8) bool {
         if (std.ascii.startsWithIgnoreCase(n, name)) return true;
     }
     return false;
+}
+
+/// Closest command name to `name` within two edits, for "did you mean?"
+/// suggestions on a typo'd command. Null when nothing is near enough to propose.
+pub fn closestCommand(name: []const u8) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_dist: usize = std.math.maxInt(usize);
+    for (all_slash_names) |cand| {
+        const dist = editDistance(name, cand);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = cand;
+        }
+    }
+    return if (best_dist <= 2) best else null;
+}
+
+/// Case-insensitive Levenshtein distance via a dynamic-programming table.
+/// `dp[i][j]` is the edit distance between `a[0..i]` and `b[0..j]`. Returns
+/// `maxInt` for inputs exceeding the table (no slash command is that long).
+fn editDistance(a: []const u8, b: []const u8) usize {
+    const max = 32;
+    if (a.len >= max or b.len >= max) return std.math.maxInt(usize);
+    var dp: [max][max]usize = undefined;
+    for (0..a.len + 1) |i| dp[i][0] = i;
+    for (0..b.len + 1) |j| dp[0][j] = j;
+    for (a, 1..) |ca, i| {
+        for (b, 1..) |cb, j| {
+            const cost: usize = if (std.ascii.toLower(ca) == std.ascii.toLower(cb)) 0 else 1;
+            dp[i][j] = @min(@min(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
+        }
+    }
+    return dp[a.len][b.len];
 }
 
 fn slashHasParams(name: []const u8) bool {

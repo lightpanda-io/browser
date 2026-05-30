@@ -813,8 +813,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         printHelpSection(&self.terminal, "\nMeta commands:", meta);
         return;
     }
-    const lookup = if (target[0] == '/') target[1..] else target;
-    if (SlashCommand.findMeta(lookup)) |meta| {
+    if (SlashCommand.findMeta(target)) |meta| {
         switch (meta.tag) {
             .help => self.terminal.printInfo("/help [name] — show help for a command, or list all when [name] is omitted", .{}),
             .quit => self.terminal.printInfo("/quit — exit the REPL", .{}),
@@ -837,8 +836,12 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         }
         return;
     }
-    const tool_schema = Schema.findByName(lookup) orelse {
-        self.terminal.printError("unknown command: {s}", .{lookup});
+    const tool_schema = Schema.findByName(target) orelse {
+        if (Terminal.closestCommand(target)) |near| {
+            self.terminal.printError("unknown command: {s}. Did you mean " ++ Terminal.highlightCmd("/help {s}") ++ "?", .{ target, near });
+        } else {
+            self.terminal.printError("unknown command: {s}", .{target});
+        }
         return;
     };
     self.terminal.printInfo("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
@@ -856,7 +859,12 @@ fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8, 
         };
     }
     const reason: []const u8 = switch (err) {
-        error.UnknownTool => return self.terminal.printError("{s}: unknown command. Try /help.", .{name}),
+        error.UnknownTool => {
+            if (Terminal.closestCommand(name)) |near| {
+                return self.terminal.printError("{s}: unknown command. Did you mean " ++ Terminal.highlightCmd("/{s}") ++ "? Try /help.", .{ name, near });
+            }
+            return self.terminal.printError("{s}: unknown command. Try /help.", .{name});
+        },
         error.MissingName => return self.terminal.printError("missing command name. Try /help.", .{}),
         error.MissingRequired => "missing required argument",
         error.MalformedKv => "malformed key=value. Use key=value or {json}",
