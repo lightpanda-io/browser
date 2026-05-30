@@ -98,30 +98,6 @@ const self_heal_prompt_instructions =
     \\  The script will continue executing the remaining commands after the heal.
 ;
 
-const login_prompt =
-    \\Find the login form on the current page. Fill in the credentials using
-    \\$LP_* placeholders — the substitution happens inside the Lightpanda
-    \\subprocess so the secret never enters your context. Do NOT call getEnv
-    \\with a credential name (it would return the value).
-    \\
-    \\Call getEnv with NO `name` argument first to see which LP_* variables
-    \\are set (names only, values never included). Then pick:
-    \\- Site-prefixed form (LP_<SITE>_<FIELD>) when the list shows one for
-    \\  the current site — e.g. $LP_HN_USERNAME for news.ycombinator.com,
-    \\  $LP_GH_TOKEN for github.com.
-    \\- Otherwise fall back to the unprefixed $LP_USERNAME / $LP_PASSWORD
-    \\  (or $LP_EMAIL) form.
-    \\
-    \\Handle any cookie banners or popups first, then submit the form by
-    \\clicking its submit button or pressing Enter in a filled field — there
-    \\is no dedicated submit tool.
-;
-
-const accept_cookies_prompt =
-    \\Find and dismiss the cookie consent banner on the current page.
-    \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
-;
-
 const synthesis_prompt =
     \\You have used your tool budget or cannot finish the exploration.
     \\Give your best final answer NOW based ONLY on what you actually observed
@@ -530,17 +506,17 @@ fn runRepl(self: *Agent) void {
             },
         };
 
-        if (cmd.needsLlm() and self.ai_client == null) {
-            self.terminal.printError("/{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{@tagName(std.meta.activeTag(cmd))});
+        if (cmd == .llm and self.ai_client == null) {
+            self.terminal.printError("/{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{@tagName(cmd.llm)});
             continue :repl;
         }
 
         switch (cmd) {
             .comment => continue :repl,
-            .login, .acceptCookies => {
-                const label: []const u8 = if (cmd == .login) "/login" else "/acceptCookies";
-                const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
-                _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
+            .llm => |lc| {
+                var label_buf: [32]u8 = undefined;
+                const label = std.fmt.bufPrint(&label_buf, "/{s}", .{@tagName(lc)}) catch "/?";
+                _ = self.runTurn(.{ .prompt = lc.prompt(), .record_comment = line, .capture_for_save = true, .label = label });
             },
             .tool_call => |tc| {
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
@@ -889,8 +865,8 @@ fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8, 
 
 const Replacement = script.Replacement;
 
-/// Caller contract: `cmd` must be `.tool_call` — `.comment`, `.login`, and
-/// `.acceptCookies` are filtered upstream because they have no tool mapping.
+/// Caller contract: `cmd` must be `.tool_call` — `.comment` and `.llm` are
+/// filtered upstream because they have no tool mapping.
 fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tools.ToolResult {
     const tc = switch (cmd) {
         .tool_call => |t| t,
@@ -954,7 +930,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 }
                 continue;
             },
-            .login, .acceptCookies => {
+            .llm => |lc| {
                 if (self.ai_client == null) {
                     self.terminal.printError("line {d}: {s} requires --provider", .{
                         entry.line_num,
@@ -963,7 +939,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                     self.flushReplacements(path, content, replacements.items);
                     return false;
                 }
-                const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
+                const prompt = lc.prompt();
                 const text = self.processUserMessage(.{ .prompt = prompt }) catch |err| {
                     self.terminal.printError("line {d}: {s} failed: {s}", .{
                         entry.line_num,

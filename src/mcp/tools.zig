@@ -269,7 +269,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     };
 
     if (cmd.needsLlm()) {
-        return sendErrorContent(server, id, "/login and /acceptCookies require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
+        return sendErrorContent(server, id, "this command requires an LLM and is not handled by lightpanda mcp; the calling agent owns it");
     }
 
     if (cmd == .comment) {
@@ -1109,7 +1109,7 @@ test "MCP - scriptStep rejects /login (LLM-required)" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"/login"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "require an LLM") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "requires an LLM") != null);
 }
 
 test "MCP - scriptStep rejects bare prose" {

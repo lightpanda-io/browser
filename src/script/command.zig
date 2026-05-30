@@ -16,9 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! PandaScript Command: slash command, `#`-comment, or `/login` /
-//! `/acceptCookies` LLM trigger. Multi-line `'''…'''` blocks are
-//! assembled by `script.Iterator` before parse.
+//! PandaScript Command: a tool slash command, a `#`-comment, or an
+//! `LlmCommand` trigger (`/login`, `/logout`, `/acceptCookies`). Multi-line
+//! `'''…'''` blocks are assembled by `script.Iterator` before parse.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -29,15 +29,67 @@ pub const ParseError = Schema.ParseError || error{
     NotASlashCommand,
 };
 
+const login_prompt =
+    \\Find the login form on the current page. Fill in the credentials using
+    \\$LP_* placeholders — the substitution happens inside the Lightpanda
+    \\subprocess so the secret never enters your context. Do NOT call getEnv
+    \\with a credential name (it would return the value).
+    \\
+    \\Call getEnv with NO `name` argument first to see which LP_* variables
+    \\are set (names only, values never included). Then pick:
+    \\- Site-prefixed form (LP_<SITE>_<FIELD>) when the list shows one for
+    \\  the current site — e.g. $LP_HN_USERNAME for news.ycombinator.com,
+    \\  $LP_GH_TOKEN for github.com.
+    \\- Otherwise fall back to the unprefixed $LP_USERNAME / $LP_PASSWORD
+    \\  (or $LP_EMAIL) form.
+    \\
+    \\Handle any cookie banners or popups first, then submit the form by
+    \\clicking its submit button or pressing Enter in a filled field — there
+    \\is no dedicated submit tool.
+;
+
+const logout_prompt =
+    \\Log out of the current site. Find the logout control — often a link or
+    \\button labeled "Log out", "Logout", or "Sign out", possibly inside an
+    \\account or user menu you must open first — and click it. Handle any
+    \\confirmation prompt, then verify the logged-out state (e.g. a login link
+    \\reappears).
+;
+
+const accept_cookies_prompt =
+    \\Find and dismiss the cookie consent banner on the current page.
+    \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
+;
+
 pub const Command = union(enum) {
     tool_call: ToolCall,
-    login: void,
-    acceptCookies: void,
+    llm: LlmCommand,
     comment: void,
 
-    /// Union tags that fire an LLM trigger. Tag names match the wire-format
-    /// slash command, so `@tagName` is the single source of truth.
-    pub const llm_tags: []const std.meta.Tag(Command) = &.{ .login, .acceptCookies };
+    /// An LLM-driven command: `@tagName` is the wire-format slash name, and
+    /// each value owns its `prompt()` (sent to the model) and `description()`
+    /// (shown in `/help`) — mirroring how `tool_call` wraps `BrowserTool`.
+    pub const LlmCommand = enum {
+        login,
+        logout,
+        acceptCookies,
+
+        pub fn prompt(self: LlmCommand) []const u8 {
+            return switch (self) {
+                .login => login_prompt,
+                .logout => logout_prompt,
+                .acceptCookies => accept_cookies_prompt,
+            };
+        }
+
+        pub fn description(self: LlmCommand) []const u8 {
+            return switch (self) {
+                .login => "Log in using $LP_* credentials",
+                .logout => "Log out of the current site",
+                .acceptCookies => "Dismiss the cookie consent banner",
+            };
+        }
+    };
 
     pub const ToolCall = struct {
         tool: BrowserTool,
@@ -115,7 +167,7 @@ pub const Command = union(enum) {
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
             .comment => false,
-            .login, .acceptCookies => true,
+            .llm => true,
             .tool_call => |tc| tc.isRecorded(),
         };
     }
@@ -135,9 +187,7 @@ pub const Command = union(enum) {
     }
 
     pub fn needsLlm(self: Command) bool {
-        return inline for (llm_tags) |tag| {
-            if (self == tag) break true;
-        } else false;
+        return self == .llm;
     }
 
     pub fn isRetryable(self: Command) bool {
@@ -160,10 +210,10 @@ pub const Command = union(enum) {
 
         const split = Schema.splitNameRest(trimmed[1..]) orelse return error.MissingName;
 
-        inline for (llm_tags) |tag| {
-            if (std.ascii.eqlIgnoreCase(split.name, @tagName(tag))) {
+        inline for (std.meta.fields(LlmCommand)) |f| {
+            if (std.ascii.eqlIgnoreCase(split.name, f.name)) {
                 if (split.rest.len > 0) return error.MalformedKv;
-                return @unionInit(Command, @tagName(tag), {});
+                return .{ .llm = @field(LlmCommand, f.name) };
             }
         }
 
@@ -175,7 +225,7 @@ pub const Command = union(enum) {
     /// Canonical recorder format. Round-trips with `parse`.
     pub fn format(self: Command, writer: *std.Io.Writer) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
         switch (self) {
-            inline .login, .acceptCookies => |_, tag| try writer.writeAll("/" ++ @tagName(tag)),
+            .llm => |lc| try writer.print("/{s}", .{@tagName(lc)}),
             .comment => try writer.writeAll("#"),
             .tool_call => |tc| try tc.format(writer),
         }
@@ -210,8 +260,8 @@ test "parse: bare prose errors" {
 test "parse: /login and /acceptCookies" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expect((try Command.parse(arena.allocator(), "/login")) == .login);
-    try testing.expect((try Command.parse(arena.allocator(), "/acceptCookies")) == .acceptCookies);
+    try testing.expectEqual(Command.LlmCommand.login, (try Command.parse(arena.allocator(), "/login")).llm);
+    try testing.expectEqual(Command.LlmCommand.acceptCookies, (try Command.parse(arena.allocator(), "/acceptCookies")).llm);
 }
 
 test "parse: /goto positional" {
@@ -309,12 +359,12 @@ test "format: /setChecked omits checked=true (default), keeps checked=false" {
 test "format: /login and /acceptCookies" {
     var aw1: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw1.deinit();
-    try (Command{ .login = {} }).format(&aw1.writer);
+    try (Command{ .llm = .login }).format(&aw1.writer);
     try testing.expectString("/login", aw1.written());
 
     var aw2: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw2.deinit();
-    try (Command{ .acceptCookies = {} }).format(&aw2.writer);
+    try (Command{ .llm = .acceptCookies }).format(&aw2.writer);
     try testing.expectString("/acceptCookies", aw2.written());
 }
 
@@ -333,8 +383,8 @@ test "canHeal: only page-local DOM commands are allowed" {
         try testing.expect(!cmd.canHeal());
     }
 
-    try testing.expect(!(Command{ .login = {} }).canHeal());
-    try testing.expect(!(Command{ .acceptCookies = {} }).canHeal());
+    try testing.expect(!(Command{ .llm = .login }).canHeal());
+    try testing.expect(!(Command{ .llm = .acceptCookies }).canHeal());
     try testing.expect(!(Command{ .comment = {} }).canHeal());
 }
 
@@ -351,7 +401,7 @@ test "isRecorded / canHeal / producesData via tool flags" {
     try testing.expect(!tree.isRecorded());
     try testing.expect(tree.producesData());
 
-    const login: Command = .{ .login = {} };
+    const login: Command = .{ .llm = .login };
     try testing.expect(login.isRecorded());
     try testing.expect(!login.canHeal());
 }

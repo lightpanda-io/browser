@@ -76,15 +76,16 @@ pub const CompletionSource = struct {
 };
 
 // Flat name list for the "match any slash command" search/completion paths.
-const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_tags.len][]const u8 = blk: {
-    var arr: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_tags.len][]const u8 = undefined;
+const llm_values = std.enums.values(Command.LlmCommand);
+const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + llm_values.len][]const u8 = blk: {
+    var arr: [browser_tools.names.len + SlashCommand.meta_commands.len + llm_values.len][]const u8 = undefined;
     var idx: usize = 0;
     for (browser_tools.names) |n| {
         arr[idx] = n;
         idx += 1;
     }
-    for (Command.llm_tags) |tag| {
-        arr[idx] = @tagName(tag);
+    for (llm_values) |lc| {
+        arr[idx] = @tagName(lc);
         idx += 1;
     }
     for (SlashCommand.meta_commands) |m| {

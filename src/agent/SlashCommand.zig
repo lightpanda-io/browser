@@ -59,22 +59,14 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .provider, .name = "provider", .hint = "[name]", .values = &.{}, .description = "Change the provider" },
 };
 
-/// Names derive from `Command.llm_tags` so a new trigger there surfaces
-/// here automatically; only the description is local.
+/// Derived from `Command.LlmCommand` — name and description both come from
+/// the enum, so a new trigger there surfaces here automatically.
 pub const llm_commands = blk: {
-    const tags = Command.llm_tags;
-    var rows: [tags.len]Help = undefined;
-    for (tags, &rows) |tag, *row| row.* = .{ .name = @tagName(tag), .description = llmDescription(tag) };
+    const values = std.enums.values(Command.LlmCommand);
+    var rows: [values.len]Help = undefined;
+    for (values, &rows) |lc, *row| row.* = .{ .name = @tagName(lc), .description = lc.description() };
     break :blk rows;
 };
-
-fn llmDescription(tag: std.meta.Tag(Command)) []const u8 {
-    return switch (tag) {
-        .login => "Log in using $LP_* credentials",
-        .acceptCookies => "Dismiss the cookie consent banner",
-        else => unreachable, // llm_tags only contains the cases above
-    };
-}
 
 pub fn findMeta(name: []const u8) ?*const MetaCommand {
     for (&meta_commands) |*m| {
