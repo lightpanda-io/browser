@@ -1194,7 +1194,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     const frame = server.session.currentFrame().?;
 
     {
-        // Test Click
         const btn = frame.document.getElementById("btn", frame).?.asNode();
         const btn_id = (try server.node_registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
@@ -1207,7 +1206,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        // Test Fill Input
         const inp = frame.document.getElementById("inp", frame).?.asNode();
         const inp_id = (try server.node_registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
@@ -1220,7 +1218,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        // Test Fill Select
         const sel = frame.document.getElementById("sel", frame).?.asNode();
         const sel_id = (try server.node_registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
@@ -1233,7 +1230,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        // Test Scroll
         const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
         const scrollbox_id = (try server.node_registry.register(scrollbox)).id;
         var scroll_id_buf: [12]u8 = undefined;
@@ -1245,7 +1241,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        // Test Hover
         const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
@@ -1257,7 +1252,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        // Test Press
         const el = frame.document.getElementById("keyTarget", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
@@ -1269,7 +1263,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        // Test SelectOption
         const el = frame.document.getElementById("sel2", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
@@ -1281,7 +1274,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        // Test SetChecked (checkbox)
         const el = frame.document.getElementById("chk", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
@@ -1293,7 +1285,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
-        // Test SetChecked (radio)
         const el = frame.document.getElementById("rad", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
@@ -1304,7 +1295,6 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         out.clearRetainingCapacity();
     }
 
-    // Evaluate JS assertions for all actions
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -1368,7 +1358,6 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     const page = server.session.currentPage().?;
 
     {
-        // Hover by selector
         const msg =
             \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#hoverTarget"}}}
         ;
@@ -1379,7 +1368,6 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     }
 
     {
-        // SelectOption by selector
         const msg =
             \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"selectOption","arguments":{"selector":"#sel2","value":"c"}}}
         ;
@@ -1390,7 +1378,6 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     }
 
     {
-        // SetChecked checkbox by selector
         const msg =
             \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#chk","checked":true}}}
         ;
@@ -1401,7 +1388,6 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     }
 
     {
-        // SetChecked radio by selector
         const msg =
             \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#rad","checked":true}}}
         ;
@@ -1411,7 +1397,6 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
         out.clearRetainingCapacity();
     }
 
-    // Verify the underlying actions actually fired their handlers
     var ls: js.Local.Scope = undefined;
     page.frame.js.localScope(&ls);
     defer ls.deinit();
@@ -1439,7 +1424,6 @@ test "MCP - findElement" {
     defer server.deinit();
 
     {
-        // Find by role
         const msg =
             \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
         ;
@@ -1449,7 +1433,6 @@ test "MCP - findElement" {
     }
 
     {
-        // Find by name (case-insensitive substring)
         const msg =
             \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
         ;
@@ -1459,7 +1442,6 @@ test "MCP - findElement" {
     }
 
     {
-        // Find with no matches
         const msg =
             \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
         ;
@@ -1469,7 +1451,6 @@ test "MCP - findElement" {
     }
 
     {
-        // Error: no params provided
         const msg =
             \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
         ;

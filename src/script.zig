@@ -261,8 +261,6 @@ test {
     _ = Verifier;
 }
 
-// --- Tests ---
-
 test "applyReplacements: empty list returns copy" {
     const content = "/click selector='a'\n/click selector='b'\n";
     const out = try applyReplacements(std.testing.allocator, content, &.{});

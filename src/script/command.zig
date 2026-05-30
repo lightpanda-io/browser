@@ -190,8 +190,6 @@ pub const Command = union(enum) {
     }
 };
 
-// --- Tests ---
-
 const testing = @import("../testing.zig");
 
 test "parse: blank and # lines are comments" {

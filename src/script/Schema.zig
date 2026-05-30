@@ -89,8 +89,6 @@ pub const Diag = struct {
     bad_value: []const u8 = "",
 };
 
-// --- Per-instance methods ---
-
 /// True when the tool can be addressed as `/<tool> '''<body>'''` —
 /// sole required field is a string AND no runtime locator needed.
 pub fn isMultiLineCapable(self: Schema) bool {
@@ -296,8 +294,6 @@ fn coerce(self: Schema, arena: std.mem.Allocator, key: []const u8, value: []cons
     }
     return .{ .string = try arena.dupe(u8, value) };
 }
-
-// --- Module-level helpers ---
 
 /// Split a slash-command body into `<name> <rest>`. Null on empty input.
 pub fn splitNameRest(input: []const u8) ?Split {
@@ -530,10 +526,8 @@ fn looksLikeKv(tok: []const u8) bool {
     return true;
 }
 
-// --- Recorder-side formatting primitives ---
-//
-// Counterparts to `parseValue` / `tokenize` above. Kept here so the
-// format → parse round-trip lives in one file.
+// Recorder-side counterparts to `parseValue` / `tokenize` above. Kept here so
+// the format → parse round-trip lives in one file.
 
 pub const QuoteType = enum {
     triple_double,
@@ -646,8 +640,6 @@ fn writeQuoted(writer: *std.Io.Writer, s: []const u8) (std.Io.Writer.Error || er
     try writer.writeAll(s);
     try writer.writeByte(q);
 }
-
-// --- Tests ---
 
 const testing = @import("../testing.zig");
 

@@ -149,8 +149,6 @@ fn collectMultiLineBlock(self: *Iterator, quote_type: Schema.QuoteType) std.mem.
     return null;
 }
 
-// --- Tests ---
-
 const testing = @import("../testing.zig");
 
 test "basic slash commands" {

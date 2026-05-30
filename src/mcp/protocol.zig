@@ -213,7 +213,6 @@ test "MCP.protocol - request parsing" {
     try testing.expectEqual(@as(i64, 1), req.id.?.integer);
     try testing.expect(req.params != null);
 
-    // Test nested parsing of InitializeParams
     const init_params = try std.json.parseFromValue(InitializeParams, testing.arena_allocator, req.params.?, .{ .ignore_unknown_fields = true });
     defer init_params.deinit();
 
