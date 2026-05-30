@@ -266,16 +266,18 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !void {
     }
 }
 
+// Floored to 1 so timeout_ms=0 still gets one check instead of failing outright.
+fn remainingMs(timeout_ms: u32, timer: *std.time.Timer) u32 {
+    const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+    return @max(1, timeout_ms -| elapsed);
+}
+
 pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Session) !*DOMNode {
     var timer = try std.time.Timer.start();
     var runner = try session.runner(.{});
     try runner.wait(.{ .ms = timeout_ms, .until = .load });
 
-    const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-    // floor to 1 so timeout=0 still gets one check
-    const remaining = @max(1, timeout_ms -| elapsed);
-
-    const el = try runner.waitForSelector(selector, remaining);
+    const el = try runner.waitForSelector(selector, remainingMs(timeout_ms, &timer));
     return el.asNode();
 }
 
@@ -284,9 +286,5 @@ pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, session: *Session) !
     var runner = try session.runner(.{});
     try runner.wait(.{ .ms = timeout_ms, .until = .load });
 
-    const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-    // floor to 1 so timeout=0 still gets one check
-    const remaining = @max(1, timeout_ms -| elapsed);
-
-    return runner.waitForScript(script, remaining);
+    return runner.waitForScript(script, remainingMs(timeout_ms, &timer));
 }

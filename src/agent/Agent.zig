@@ -790,9 +790,7 @@ fn printHelpSection(term: *Terminal, header: []const u8, rows: []SlashCommand.He
     if (rows.len == 0) return;
     std.sort.pdq(SlashCommand.Help, rows, {}, helpLessThan);
     term.printInfo("{s}{s}{s}", .{ Terminal.ansi.bold, header, Terminal.ansi.reset });
-    for (rows) |r| term.printInfo("  {s}{s}/{s}{s} — {s}", .{
-        Terminal.ansi.bold, Terminal.ansi.cyan, r.name, Terminal.ansi.reset, r.description,
-    });
+    for (rows) |r| term.printInfo("  " ++ Terminal.highlightCmd("/{s}") ++ " — {s}", .{ r.name, r.description });
 }
 
 fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) void {
@@ -915,21 +913,11 @@ fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResu
     self.terminal.printToolOutcome(tc.name(), result.text, result.is_error);
 }
 
-// REPL-only: re-indent JSON output for the terminal. MCP keeps renderJson's
-// compact form. Non-JSON output (markdown, tree, urls) prints unchanged.
+// Re-indent JSON for the terminal; MCP keeps renderJson's compact form.
 fn printData(self: *Agent, text: []const u8) void {
-    const trimmed = std.mem.trimLeft(u8, text, &std.ascii.whitespace);
-    if (trimmed.len > 0 and (trimmed[0] == '{' or trimmed[0] == '[')) {
-        if (std.json.parseFromSlice(std.json.Value, self.allocator, text, .{})) |parsed| {
-            defer parsed.deinit();
-            if (std.json.Stringify.valueAlloc(self.allocator, parsed.value, .{ .whitespace = .indent_2 })) |pretty| {
-                defer self.allocator.free(pretty);
-                self.terminal.printAssistant(pretty);
-                return;
-            } else |_| {}
-        } else |_| {}
-    }
-    self.terminal.printAssistant(text);
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+    self.terminal.printAssistant(Terminal.reindentJson(arena.allocator(), text) orelse text);
 }
 
 fn runScript(self: *Agent, path: []const u8) bool {

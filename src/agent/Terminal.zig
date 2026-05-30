@@ -49,8 +49,7 @@ pub const ansi = struct {
     pub const clear_eol = "\x1b[K";
 };
 
-/// Wraps a comptime format fragment in the bold-cyan style used for command
-/// names, so highlighted commands match the look of the `/help` listing.
+/// Bold-cyan command styling, shared with the `/help` listing.
 pub fn highlightCmd(comptime fragment: []const u8) []const u8 {
     return ansi.bold ++ ansi.cyan ++ fragment ++ ansi.reset;
 }
@@ -581,8 +580,7 @@ fn slashHasPrefix(name: []const u8) bool {
     return false;
 }
 
-/// Closest command name to `name` within two edits, for "did you mean?"
-/// suggestions on a typo'd command. Null when nothing is near enough to propose.
+/// Closest command name within two edits, or null — for "did you mean?" on typos.
 pub fn closestCommand(name: []const u8) ?[]const u8 {
     var best: ?[]const u8 = null;
     var best_dist: usize = std.math.maxInt(usize);
@@ -596,9 +594,8 @@ pub fn closestCommand(name: []const u8) ?[]const u8 {
     return if (best_dist <= 2) best else null;
 }
 
-/// Case-insensitive Levenshtein distance via a dynamic-programming table.
-/// `dp[i][j]` is the edit distance between `a[0..i]` and `b[0..j]`. Returns
-/// `maxInt` for inputs exceeding the table (no slash command is that long).
+/// Case-insensitive Levenshtein distance. Returns `maxInt` for inputs longer
+/// than the table (no slash command is that long).
 fn editDistance(a: []const u8, b: []const u8) usize {
     const max = 32;
     if (a.len >= max or b.len >= max) return std.math.maxInt(usize);
@@ -817,6 +814,18 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
     std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi.dim, color, name, ansi.reset, truncated, ellipsis });
 }
 
+/// Re-indents `text` as two-space JSON, or null when it isn't a JSON object/array.
+/// The `{`/`[` sniff skips the parse for the common plain-text case — `text` may
+/// be up to 1 MiB.
+pub fn reindentJson(arena: std.mem.Allocator, text: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trimLeft(u8, text, " \t\r\n");
+    if (trimmed.len == 0 or (trimmed[0] != '{' and trimmed[0] != '[')) return null;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch return null;
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    std.json.Stringify.value(parsed, .{ .whitespace = .indent_2 }, &aw.writer) catch return null;
+    return aw.written();
+}
+
 /// REPL outcome line: colored ● marker followed by the body, pretty-printed
 /// if JSON. Builds the entire payload in the arena so callers can route it
 /// past the spinner (`emitAbove`) without interleaving with frame writes.
@@ -824,25 +833,11 @@ fn formatReplOutcome(arena: std.mem.Allocator, text: []const u8, is_error: bool)
     var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
 
-    // Most tool results are plain text (markdown, URLs, action confirmations).
-    // Skip the JSON parse + Value tree allocation unless the payload could
-    // plausibly be JSON — `text` may be up to 1 MiB.
-    const trimmed = std.mem.trimLeft(u8, text, " \t\r\n");
-    const looks_json = trimmed.len > 0 and (trimmed[0] == '{' or trimmed[0] == '[');
-    const parsed: ?std.json.Value = if (looks_json)
-        std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch null
-    else
-        null;
-    const sep: []const u8 = if (parsed != null) "\n" else " ";
+    const pretty = reindentJson(arena, text);
+    const sep: []const u8 = if (pretty != null) "\n" else " ";
     const color: []const u8 = if (is_error) ansi.red else ansi.green;
     try w.print("{s}●{s}{s}", .{ color, ansi.reset, sep });
-    if (parsed) |v| {
-        std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, w) catch {
-            try w.writeAll(text);
-        };
-    } else {
-        try w.writeAll(text);
-    }
+    try w.writeAll(pretty orelse text);
     try w.writeByte('\n');
     return aw.written();
 }
