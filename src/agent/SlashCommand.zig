@@ -23,6 +23,8 @@
 //! `lp.script.Schema`; consumers should import that directly.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+const Command = lp.script.Command;
 
 /// Shared row format for the `/help` listing — `name` is the command name
 /// (no `/`), `description` is a terse one-liner.
@@ -57,13 +59,22 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .provider, .name = "provider", .hint = "[name]", .values = &.{}, .description = "Change the provider" },
 };
 
-/// LLM-driven slash commands. Parsed via `script.Command.parse` (they're
-/// variants of the `Command` union) — listed here only so the help
-/// renderer and completer have a single source of names + descriptions.
-pub const llm_commands = [_]Help{
-    .{ .name = "login", .description = "Log in using $LP_* credentials" },
-    .{ .name = "acceptCookies", .description = "Dismiss the cookie consent banner" },
+/// Names derive from `Command.llm_tags` so a new trigger there surfaces
+/// here automatically; only the description is local.
+pub const llm_commands = blk: {
+    const tags = Command.llm_tags;
+    var rows: [tags.len]Help = undefined;
+    for (tags, &rows) |tag, *row| row.* = .{ .name = @tagName(tag), .description = llmDescription(tag) };
+    break :blk rows;
 };
+
+fn llmDescription(tag: std.meta.Tag(Command)) []const u8 {
+    return switch (tag) {
+        .login => "Log in using $LP_* credentials",
+        .acceptCookies => "Dismiss the cookie consent banner",
+        else => unreachable, // llm_tags only contains the cases above
+    };
+}
 
 pub fn findMeta(name: []const u8) ?*const MetaCommand {
     for (&meta_commands) |*m| {

@@ -112,8 +112,7 @@ pub const Tool = enum {
     /// on the enclosing `Tool` enum; this struct just carries the strings.
     pub const Definition = struct {
         description: []const u8,
-        /// Terse one-liner for the REPL `/help` listing. The full
-        /// `description` is reserved for MCP tool defs and `/help <name>`.
+        /// Listing-only; the long `description` feeds MCP and `/help <name>`.
         summary: []const u8,
         input_schema: []const u8,
     };
