@@ -255,7 +255,7 @@
     \\          Fetch external <link rel=stylesheet> resources so their rules
     \\          contribute to computed styles (and therefore to visibility checks like
     \\          display, visibility, opacity, pointer-events).
-    \\          Defaults to false.
+    \\          Defaults to false, except in agent mode with an LLM, where it is on.
     \\  --block-private-networks
     \\          Block HTTP requests to private/internal IP addresses after DNS
     \\          resolution.

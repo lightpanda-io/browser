@@ -277,6 +277,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     self.ai_client = if (llm) |l| try initAiClient(allocator, l, opts.base_url) else null;
     errdefer if (self.ai_client) |c| deinitAiClient(allocator, c);
 
+    // An LLM driver reasons about visibility/computed styles, so fetch external
+    // stylesheets by default. Pure replay and --no-llm keep the cheap fast path.
+    // The --enable-external-stylesheets flag is already folded into the session
+    // default, so this only ever turns the feature on.
+    if (self.ai_client != null) {
+        self.session.load_external_stylesheets = true;
+    }
+
     if (will_repl) {
         self.terminal.attachCompleter();
         self.terminal.completion_source = .{
