@@ -1675,15 +1675,7 @@ fn deinitAiClient(allocator: std.mem.Allocator, ai_client: zenai.provider.Client
 }
 
 fn availableProviders(buf: []Credentials) []Credentials {
-    var n: usize = 0;
-    inline for (@typeInfo(Config.AiProvider).@"enum".fields) |field| {
-        const provider: Config.AiProvider = @enumFromInt(field.value);
-        if (zenai.provider.envApiKey(provider)) |key| {
-            buf[n] = .{ .provider = provider, .key = key };
-            n += 1;
-        }
-    }
-    return buf[0..n];
+    return zenai.provider.detectKeys(buf, std.enums.values(Config.AiProvider));
 }
 
 fn pickProvider(found: []const Credentials) !Credentials {
