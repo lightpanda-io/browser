@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! REPL-only meta slash commands (`/help`, `/quit`, `/verbosity`). Meta
+//! REPL-only meta slash commands (`/help`, `/quit`, `/verbosity`, `/model`). Meta
 //! commands aren't PandaScript — they're handled by `Agent.handleMeta`
 //! and never reach the recorder. PandaScript schema primitives live in
 //! `lp.script.Schema`; consumers should import that directly.
@@ -44,7 +44,7 @@ pub const MetaCommand = struct {
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
     /// a new meta command is a compile error until it's wired up there too.
-    const Tag = enum { help, quit, verbosity, save };
+    const Tag = enum { help, quit, verbosity, save, model };
 };
 
 pub const meta_commands = [_]MetaCommand{
@@ -52,6 +52,7 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
     .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set REPL agent verbosity; bare /verbosity prints the current level" },
     .{ .tag = .save, .name = "save", .hint = "[filename.lp]", .values = &.{}, .description = "Save this REPL session as a PandaScript file" },
+    .{ .tag = .model, .name = "model", .hint = "", .values = &.{}, .description = "Show available models and change the current model" },
 };
 
 /// LLM-driven slash commands. Parsed via `script.Command.parse` (they're

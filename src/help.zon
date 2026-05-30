@@ -171,12 +171,8 @@
     \\
     \\--model <MODEL>            The model name to use.
     \\                           Defaults to a sensible default per provider.
-    \\                           Wins over --pick-model.
-    \\
-    \\--pick-model               Fetch the provider's model list and prompt you
-    \\                           to pick one at startup, instead of using the
-    \\                           baked-in default. Requires a TTY. Ignored when
-    \\                           --model is also passed.
+    \\                           In the REPL, use /model to list and change
+    \\                           models for the active provider.
     \\
     \\--base-url <URL>           Override the API base URL for the provider.
     \\                           Defaults to the provider's standard endpoint.

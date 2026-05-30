@@ -140,6 +140,8 @@ const synthesis_prompt =
 
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
+model_credentials: ?Credentials,
+model_base_url: ?[:0]const u8,
 notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
@@ -199,7 +201,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // the REPL accepts natural language and an absent API key would only
     // surface at the first non-PandaScript line — too late to be useful.
     // Pure replay (`agent <script>.lp`) stays allowed: no REPL, no LLM needed.
-    const requires_llm = is_one_shot or opts.self_heal or opts.pick_model or (will_repl and !opts.no_llm);
+    const requires_llm = is_one_shot or opts.self_heal or (will_repl and !opts.no_llm);
 
     // Skip resolve when --no-llm forces no client, or no mode could use one
     // (pure replay) — otherwise resolve prints "No API key detected" for a
@@ -211,19 +213,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             std.debug.print("--no-llm forbids LLM use; drop it to run this mode.\n", .{});
         } else if (opts.self_heal) {
             std.debug.print("--self-heal needs an LLM — set an API key.\n", .{});
-        } else if (opts.pick_model) {
-            std.debug.print("--pick-model needs an LLM — set an API key.\n", .{});
         }
         return error.MissingProvider;
     }
 
-    // Resolve model BEFORE the heavy init so --pick-model's prompt fires
-    // before browser / ai_client setup.
-    // Precedence: --model > --pick-model > defaultModel.
+    // Precedence: --model > defaultModel.
     const model: []u8 = if (opts.model) |m|
         try allocator.dupe(u8, m)
     else if (llm) |l|
-        if (opts.pick_model) try pickModel(allocator, l, opts.base_url) else try allocator.dupe(u8, defaultModel(l.provider))
+        try allocator.dupe(u8, defaultModel(l.provider))
     else
         try allocator.dupe(u8, "");
     errdefer allocator.free(model);
@@ -243,6 +241,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     self.* = .{
         .allocator = allocator,
         .ai_client = null,
+        .model_credentials = llm,
+        .model_base_url = opts.base_url,
         .notification = notification,
         .browser = undefined,
         .session = undefined,
@@ -555,6 +555,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .help => self.printSlashHelp(arena, rest),
         .verbosity => self.handleVerbosity(rest),
         .save => self.handleSave(arena, rest),
+        .model => self.handleModel(arena, rest),
     }
     return false;
 }
@@ -570,6 +571,54 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     };
     self.terminal.verbosity = level;
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
+}
+
+fn handleModel(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
+    const llm = self.model_credentials orelse {
+        self.terminal.printError("/model requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{});
+        return;
+    };
+
+    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
+    if (trimmed.len != 0) {
+        self.terminal.printError("usage: /model", .{});
+        return;
+    }
+
+    self.terminal.printInfo("Current model: {s}", .{self.model});
+    self.terminal.printInfo("Fetching models for {s}...", .{@tagName(llm.provider)});
+
+    const ids = zenai.provider.listChatModelIds(self.allocator, arena, llm.provider, llm.key, self.model_base_url) catch |err| {
+        self.terminal.printError("list models failed: {s}", .{@errorName(err)});
+        return;
+    };
+    if (ids.len == 0) {
+        self.terminal.printError("no models returned for {s}", .{@tagName(llm.provider)});
+        return;
+    }
+
+    var current_idx: ?usize = null;
+    for (ids, 0..) |id, i| if (std.mem.eql(u8, id, self.model)) {
+        current_idx = i;
+        break;
+    };
+
+    const header = std.fmt.allocPrint(arena, "Pick model for {s}:", .{@tagName(llm.provider)}) catch
+        "Pick model:";
+    const idx = Terminal.promptNumberedChoice(header, ids, current_idx) catch {
+        self.terminal.printInfo("Model unchanged.", .{});
+        return;
+    };
+    self.setModel(ids[idx]) catch |err| {
+        self.terminal.printError("failed to set model: {s}", .{@errorName(err)});
+    };
+}
+
+fn setModel(self: *Agent, model: []const u8) !void {
+    const new_model = try self.allocator.dupe(u8, model);
+    self.allocator.free(self.model);
+    self.model = new_model;
+    self.terminal.printInfo("model: {s}", .{self.model});
 }
 
 const SaveMode = enum { replace, append };
@@ -753,6 +802,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
             ),
             .save => self.terminal.printInfo(
                 "/save [filename.lp] — save recorded REPL actions to [filename.lp]. Without a filename, creates a random session-*.lp file in the current directory.",
+                .{},
+            ),
+            .model => self.terminal.printInfo(
+                "/model — Show available models and change the current model",
                 .{},
             ),
         }
@@ -1530,7 +1583,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         return error.ConflictingFlags;
     }
     if (opts.task != null or opts.self_heal or opts.interactive or
-        opts.script_file != null or opts.pick_model)
+        opts.script_file != null)
     {
         log.fatal(.app, "list-models is exclusive", .{
             .hint = "--list-models only takes --provider/--model/--base-url",
@@ -1574,52 +1627,6 @@ fn pickProvider(found: []const Credentials) !Credentials {
         return error.UserCancelled;
     };
     return found[idx];
-}
-
-/// Fetch the provider's chat-capable model list and prompt the user to pick
-/// one. Empty input picks the baked-in default. Always returns an owned
-/// heap buffer (including for the default case) so the caller has one
-/// uniform free path.
-fn pickModel(allocator: std.mem.Allocator, llm: Credentials, base_url: ?[:0]const u8) ![]u8 {
-    if (!Terminal.interactiveTty()) {
-        log.fatal(.app, "pick-model needs a TTY", .{
-            .hint = "rerun in a terminal or pass --model explicitly",
-        });
-        return error.NotInteractive;
-    }
-
-    var arena: std.heap.ArenaAllocator = .init(allocator);
-    defer arena.deinit();
-
-    // Runs before `SigBridge.attach` — Ctrl-C during the synchronous HTTP
-    // fetch is dropped; the picker prompt catches the next press via stdin EINTR.
-    std.debug.print("Fetching models for {s}…\n", .{@tagName(llm.provider)});
-    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, base_url) catch |err| {
-        log.fatal(.app, "list models failed", .{ .err = @errorName(err) });
-        return err;
-    };
-    if (ids.len == 0) {
-        log.fatal(.app, "no models returned", .{ .provider = @tagName(llm.provider) });
-        return error.NoModels;
-    }
-
-    const default_model = defaultModel(llm.provider);
-    var default_idx: ?usize = null;
-    for (ids, 0..) |id, i| if (std.mem.eql(u8, id, default_model)) {
-        default_idx = i;
-        break;
-    };
-
-    var header_buf: [128]u8 = undefined;
-    const enter_hint: []const u8 = if (default_idx == null) "" else " (Enter for default)";
-    const header = std.fmt.bufPrint(&header_buf, "Pick model for {s}{s}:", .{ @tagName(llm.provider), enter_hint }) catch
-        "Pick model:";
-
-    const idx = Terminal.promptNumberedChoice(header, ids, default_idx) catch {
-        std.debug.print("Cancelled — pass --model to skip the picker.\n", .{});
-        return error.UserCancelled;
-    };
-    return try allocator.dupe(u8, ids[idx]);
 }
 
 test "capToolOutput: truncates at UTF-8 codepoint boundary" {

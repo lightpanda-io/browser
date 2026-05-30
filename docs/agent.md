@@ -50,8 +50,10 @@ etc.) without giving Lightpanda its own API key.
 | Gemini      | `--provider gemini`    | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
 | Ollama      | `--provider ollama`    | none (local)                         |
 
-Defaults: `--model` falls back to a sensible per-provider default; `--base-url`
-overrides the API endpoint (Ollama defaults to `http://localhost:11434/v1`).
+Defaults: `--model` falls back to a sensible per-provider default; in the REPL,
+`/model` lists models for the active provider and changes the current selection.
+`--base-url` overrides the API endpoint (Ollama defaults to
+`http://localhost:11434/v1`).
 
 ### Provider auto-detection
 
@@ -255,8 +257,9 @@ from selector drift, not to redesign the script.
   match.
 - **Persistent history**: stored in `.lp-history` in the working directory.
 - **Meta slash commands**: `/help` lists tools (`/help <tool>` prints the
-  JSON schema), `/quit` exits the REPL, `/verbosity <low|medium|high>` tunes
-  the log level. These are REPL-only and never recorded.
+  JSON schema), `/model` lists and changes the active model, `/quit` exits the
+  REPL, `/verbosity <low|medium|high>` tunes the log level. These are REPL-only
+  and never recorded.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit
