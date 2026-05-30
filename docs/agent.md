@@ -50,22 +50,27 @@ etc.) without giving Lightpanda its own API key.
 | Gemini      | `--provider gemini`    | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
 | Ollama      | `--provider ollama`    | none (local)                         |
 
-Defaults: `--model` falls back to a sensible per-provider default; `--base-url`
-overrides the API endpoint (Ollama defaults to `http://localhost:11434/v1`).
+Defaults: `--model` falls back to a sensible per-provider default; in the REPL,
+`/provider <name>` and `/model <name>` change the current selection (Tab
+completes the candidates). `--base-url` overrides the API endpoint (Ollama
+defaults to `http://localhost:11434/v1`).
 
 ### Provider auto-detection
 
-When `--provider` is omitted, lightpanda inspects the environment and picks one:
+When `--provider` is omitted, lightpanda picks one in this order, printing a
+one-line notice (on stderr) of what it chose:
 
-- **No keys set** → falls back to the basic REPL (PandaScript only). Natural
-  language, `/login`, `/acceptCookies`, and `--self-heal` will reject. A
-  one-line notice is printed so you know which mode you landed in.
-- **Exactly one key set** → that provider is used. A one-line notice
-  identifies the env var that won.
-- **Multiple keys set, on a TTY** → a numbered prompt asks which to use.
-- **Multiple keys set, non-interactive** → the agent fails fast and tells
-  you to pass `--provider` explicitly. Ollama is never auto-detected
-  (no env var to look at) — pass `--provider ollama` if you want it.
+1. **Remembered** → the provider/model you last selected with `/provider` or
+   `/model`, persisted per-directory in `.lp-agent`, as long as its key is
+   still set.
+2. **Auto-detected** → otherwise the first key found in priority order
+   (`ANTHROPIC_API_KEY` → `GOOGLE_API_KEY`/`GEMINI_API_KEY` → `OPENAI_API_KEY`).
+   Switch any time with `/provider` in the REPL, or override with `--provider`.
+3. **No keys set** → falls back to the basic REPL (PandaScript only). Natural
+   language, `/login`, `/acceptCookies`, and `--self-heal` will reject.
+
+Ollama is never auto-detected (no env var to look at) — pass `--provider
+ollama`, or select it once with `/provider ollama` and it'll be remembered.
 
 `--no-llm` is the explicit bypass: it forces the basic REPL even when an
 API key is present or `--provider` is set. Use it to test PandaScript
@@ -255,8 +260,11 @@ from selector drift, not to redesign the script.
   match.
 - **Persistent history**: stored in `.lp-history` in the working directory.
 - **Meta slash commands**: `/help` lists tools (`/help <tool>` prints the
-  JSON schema), `/quit` exits the REPL, `/verbosity <low|medium|high>` tunes
-  the log level. These are REPL-only and never recorded.
+  JSON schema), `/provider [name]` and `/model [name]` change the active
+  provider/model — Tab after the space completes from detected providers and
+  the provider's fetched model list, and bare `/provider`/`/model` print the
+  current selection — `/quit` exits the REPL, `/verbosity <low|medium|high>`
+  tunes the log level. These are REPL-only and never recorded.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit

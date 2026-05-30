@@ -64,6 +64,16 @@ verbosity: Verbosity,
 repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 spinner: Spinner,
+completion_source: ?CompletionSource = null,
+
+/// Lets the completer/hinter pull dynamic candidates from the `Agent` without
+/// `Terminal` depending on it (same idiom as `Session.cancel_hook`).
+pub const CompletionSource = struct {
+    context: *anyopaque,
+    providers: *const fn (context: *anyopaque, arena: std.mem.Allocator) []const []const u8,
+    /// May block on an HTTP fetch.
+    models: *const fn (context: *anyopaque, arena: std.mem.Allocator) []const []const u8,
+};
 
 // Flat name list for the "match any slash command" search/completion paths.
 const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + Command.llm_tags.len][]const u8 = blk: {
@@ -288,20 +298,33 @@ fn addPartialKeyCompletions(
 }
 
 fn addMetaValueCompletions(
+    self: *Terminal,
     cenv: ?*c.ic_completion_env_t,
     input: []const u8,
     body: []const u8,
     meta: *const SlashCommand.MetaCommand,
     buf: *[completion_buf_len:0]u8,
 ) void {
-    if (meta.values.len == 0) return;
     // Past the first positional arg — don't offer value completions anymore.
     if (std.mem.indexOfAny(u8, body, &std.ascii.whitespace) != null) return;
-    const partial = body;
-    const prefix = input[0 .. input.len - partial.len];
-    for (meta.values) |v| {
-        addPrefixedCompletion(cenv, buf, input, prefix, v, "", partial);
-    }
+    const prefix = input[0 .. input.len - body.len];
+
+    // `/provider` / `/model` candidates are resolved at runtime, not in `meta.values`.
+    if (self.completion_source) |src| switch (meta.tag) {
+        .provider, .model => {
+            var name_buf: [512]u8 = undefined;
+            var fba: std.heap.FixedBufferAllocator = .init(&name_buf);
+            const names = if (meta.tag == .provider)
+                src.providers(src.context, fba.allocator())
+            else
+                src.models(src.context, fba.allocator());
+            for (names) |v| addPrefixedCompletion(cenv, buf, input, prefix, v, "", body);
+            return;
+        },
+        else => {},
+    };
+
+    for (meta.values) |v| addPrefixedCompletion(cenv, buf, input, prefix, v, "", body);
 }
 
 // Completes `$LP_*` against the live process environment.
@@ -326,6 +349,7 @@ fn addEnvVarCompletions(
 }
 
 fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callconv(.c) void {
+    const self: *Terminal = @ptrCast(@alignCast(c.ic_completion_arg(cenv) orelse return));
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(prefix)), 0);
 
     var buf: [completion_buf_len:0]u8 = undefined;
@@ -346,7 +370,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
                 if (Schema.findByName(parts.name)) |schema| {
                     addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
                 } else if (SlashCommand.findMeta(parts.name)) |meta| {
-                    addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
+                    self.addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
                 }
             };
             // Fall through so `value=$LP_` picks up env completions.
@@ -373,7 +397,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
 var hint_buf: [completion_buf_len:0]u8 = undefined;
 
 fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const u8 {
-    _ = arg;
+    const self: *Terminal = @ptrCast(@alignCast(arg orelse return null));
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input_c)), 0);
     if (input.len == 0) return null;
 
@@ -389,7 +413,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
             return renderSchemaHint(schema, parts.rest, ends_ws);
         }
         if (SlashCommand.findMeta(parts.name)) |meta| {
-            return renderMetaHint(meta, parts.rest, ends_ws);
+            return self.renderMetaHint(meta, parts.rest, ends_ws);
         }
         return null;
     }
@@ -423,20 +447,42 @@ fn writeHints(lead: []const u8, fragments: []const []const u8) [*c]const u8 {
     return @ptrCast(&hint_buf);
 }
 
-// Renders a meta command's value hint, e.g. `<low|medium|high>` for
-// `/verbosity`. While the user is mid-typing a value, shows the matching
-// value's suffix.
-fn renderMetaHint(meta: *const SlashCommand.MetaCommand, body: []const u8, ends_ws: bool) [*c]const u8 {
+// Ghosts a meta command's argument: detected providers are synchronous, so
+// `/provider` previews a real name from the start; `/model` needs a fetch, so
+// it shows the `[name]` placeholder until the name is committed (`/model `),
+// then the first fetch blocks and is cached. Static values (`/verbosity`)
+// match `meta.values`.
+fn renderMetaHint(self: *Terminal, meta: *const SlashCommand.MetaCommand, body: []const u8, ends_ws: bool) [*c]const u8 {
     if (meta.hint.len == 0) return null;
+    if (ends_ws and body.len != 0) return null; // value already committed
+
+    if (self.completion_source) |src| {
+        var name_buf: [512]u8 = undefined;
+        var fba: std.heap.FixedBufferAllocator = .init(&name_buf);
+        if (meta.tag == .provider) {
+            const lead: []const u8 = if (body.len == 0 and !ends_ws) " " else "";
+            return ghostFirstMatch(src.providers(src.context, fba.allocator()), body, lead);
+        }
+        if (meta.tag == .model and (ends_ws or body.len != 0)) {
+            return ghostFirstMatch(src.models(src.context, fba.allocator()), body, "");
+        }
+    }
+
     if (body.len == 0) {
         var frags: [1][]const u8 = .{meta.hint};
         return writeHints(if (ends_ws) "" else " ", &frags);
     }
-    // Value already committed (trailing space past it) or past the first arg.
     if (ends_ws) return null;
-    for (meta.values) |v| {
+    return ghostFirstMatch(meta.values, body, "");
+}
+
+/// Ghosts `lead` + the suffix of the first `names` entry that prefix-matches
+/// `body`. `names` is `anytype` to accept both the `[:0]`-terminated
+/// `meta.values` and a runtime `[]const []const u8`.
+fn ghostFirstMatch(names: anytype, body: []const u8, lead: []const u8) [*c]const u8 {
+    for (names) |v| {
         if (!std.ascii.startsWithIgnoreCase(v, body)) continue;
-        const text = std.fmt.bufPrintZ(&hint_buf, "{s}", .{v[body.len..]}) catch return null;
+        const text = std.fmt.bufPrintZ(&hint_buf, "{s}{s}", .{ lead, v[body.len..] }) catch return null;
         return text.ptr;
     }
     return null;
@@ -643,10 +689,6 @@ fn logSink(bytes: []const u8) void {
     std.debug.lockStdErr();
     defer std.debug.unlockStdErr();
     _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
-}
-
-pub fn interactiveTty() bool {
-    return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
 }
 
 /// Current terminal width in columns, queried via TIOCGWINSZ on stderr.

@@ -232,7 +232,6 @@ const Commands = cli.Builder(.{
             .{ .name = "verbosity", .type = ?AgentVerbosity },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
-            .{ .name = "pick_model", .type = bool },
         },
         .shared_options = CommonOptions,
     },
