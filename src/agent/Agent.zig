@@ -142,6 +142,10 @@ allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 model_credentials: ?Credentials,
 model_base_url: ?[:0]const u8,
+/// Cached chat-model ids for the current provider, backed by
+/// `model_completion_arena` and invalidated on `/provider` switch.
+model_completions: ?ModelCompletions,
+model_completion_arena: std.heap.ArenaAllocator,
 notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
@@ -242,6 +246,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .ai_client = null,
         .model_credentials = llm,
         .model_base_url = opts.base_url,
+        .model_completions = null,
+        .model_completion_arena = .init(allocator),
         .notification = notification,
         .browser = undefined,
         .session = undefined,
@@ -277,7 +283,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     self.ai_client = if (llm) |l| try initAiClient(allocator, l, opts.base_url) else null;
     errdefer if (self.ai_client) |c| deinitAiClient(allocator, c);
 
-    if (will_repl) self.terminal.attachCompleter();
+    if (will_repl) {
+        self.terminal.attachCompleter();
+        self.terminal.completion_source = .{
+            .context = @ptrCast(self),
+            .providers = completionProviders,
+            .models = completionModels,
+        };
+    }
 
     if (recorder_path) |p| {
         if (Recorder.init(allocator, std.fs.cwd(), p)) |r| {
@@ -298,6 +311,7 @@ pub fn deinit(self: *Agent) void {
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
     self.message_arena.deinit();
+    self.model_completion_arena.deinit();
     self.messages.deinit(self.allocator);
     self.node_registry.deinit();
     self.browser.deinit();
@@ -555,46 +569,22 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
 }
 
-fn requireLlmNoArg(self: *Agent, name: []const u8, rest: []const u8) ?Credentials {
-    const llm = self.model_credentials orelse {
+fn requireLlm(self: *Agent, name: []const u8) ?Credentials {
+    return self.model_credentials orelse {
         self.terminal.printError("{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{name});
         return null;
     };
-    if (std.mem.trim(u8, rest, &std.ascii.whitespace).len != 0) {
-        self.terminal.printError("usage: {s}", .{name});
-        return null;
-    }
-    return llm;
 }
 
-fn handleModel(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
-    const llm = self.requireLlmNoArg("/model", rest) orelse return;
+fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
+    if (self.requireLlm("/model") == null) return;
 
-    self.terminal.printInfo("Current model: {s}", .{self.model});
-    self.terminal.printInfo("Fetching models for {s}...", .{@tagName(llm.provider)});
-
-    const ids = zenai.provider.listChatModelIds(self.allocator, arena, llm.provider, llm.key, self.model_base_url) catch |err| {
-        self.terminal.printError("list models failed: {s}", .{@errorName(err)});
-        return;
-    };
-    if (ids.len == 0) {
-        self.terminal.printError("no models returned for {s}", .{@tagName(llm.provider)});
+    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
+    if (trimmed.len == 0) {
+        self.terminal.printInfo("Current model: {s} (Tab to list)", .{self.model});
         return;
     }
-
-    var current_idx: ?usize = null;
-    for (ids, 0..) |id, i| if (std.mem.eql(u8, id, self.model)) {
-        current_idx = i;
-        break;
-    };
-
-    const header = std.fmt.allocPrint(arena, "Pick model for {s}:", .{@tagName(llm.provider)}) catch
-        "Pick model:";
-    const idx = Terminal.promptNumberedChoice(header, ids, current_idx) catch {
-        self.terminal.printInfo("Model unchanged.", .{});
-        return;
-    };
-    self.setModel(ids[idx]) catch |err| {
+    self.setModel(trimmed) catch |err| {
         self.terminal.printError("failed to set model: {s}", .{@errorName(err)});
     };
 }
@@ -607,34 +597,27 @@ fn setModel(self: *Agent, model: []const u8) !void {
 }
 
 fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
-    const current = self.requireLlmNoArg("/provider", rest) orelse return;
+    const current = self.requireLlm("/provider") orelse return;
 
-    var buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
-    const providers = availableProviders(&buf);
-    if (providers.len == 0) {
-        self.terminal.printError("no providers available", .{});
+    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
+    if (trimmed.len == 0) {
+        self.terminal.printInfo("Current provider: {s} (Tab to list)", .{@tagName(current.provider)});
         return;
     }
 
-    var labels: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
-    var current_idx: ?usize = null;
-    for (providers, 0..) |p, i| {
-        labels[i] = @tagName(p.provider);
-        if (p.provider == current.provider) current_idx = i;
-    }
-
-    self.terminal.printInfo("Current provider: {s}", .{@tagName(current.provider)});
-    const idx = Terminal.promptNumberedChoice("Pick provider:", labels[0..providers.len], current_idx) catch {
-        self.terminal.printInfo("Provider unchanged.", .{});
+    const provider = std.meta.stringToEnum(Config.AiProvider, trimmed) orelse {
+        self.terminal.printError("unknown provider: {s}", .{trimmed});
         return;
     };
-    const selected = providers[idx];
-    if (selected.provider == current.provider) {
-        self.terminal.printInfo("provider: {s}", .{@tagName(current.provider)});
+    if (provider == current.provider) {
+        self.terminal.printInfo("provider: {s}", .{@tagName(provider)});
         return;
     }
-
-    self.setProvider(selected) catch |err| {
+    const key = zenai.provider.envApiKey(provider) orelse {
+        self.terminal.printError("no API key for {s}; set {s}", .{ @tagName(provider), zenai.provider.envVarName(provider) });
+        return;
+    };
+    self.setProvider(.{ .provider = provider, .key = key }) catch |err| {
         self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
     };
 }
@@ -647,6 +630,7 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
     if (self.ai_client) |client| deinitAiClient(self.allocator, client);
     self.ai_client = new_client;
     self.model_credentials = credentials;
+    self.model_completions = null;
     self.allocator.free(self.model);
     self.model = new_model;
     self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
@@ -837,11 +821,11 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .model => self.terminal.printInfo(
-                "/model — Show available models and change the current model",
+                "/model [name] — change the model; Tab completes the provider's models, bare /model shows the current one",
                 .{},
             ),
             .provider => self.terminal.printInfo(
-                "/provider — Show available providers and change the current provider",
+                "/provider [name] — change the provider; Tab completes detected providers, bare /provider shows the current one",
                 .{},
             ),
         }
@@ -1676,6 +1660,43 @@ fn deinitAiClient(allocator: std.mem.Allocator, ai_client: zenai.provider.Client
 
 fn availableProviders(buf: []Credentials) []Credentials {
     return zenai.provider.detectKeys(buf, std.enums.values(Config.AiProvider));
+}
+
+const ModelCompletions = struct {
+    provider: Config.AiProvider,
+    /// Empty when the fetch failed — cached so the per-keystroke hinter doesn't
+    /// re-hit the network on every press.
+    ids: []const []const u8,
+};
+
+/// `CompletionSource.providers`. Stateless — `context` (the `*Agent`) is unused,
+/// present only for the shared callback shape.
+fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []const u8 {
+    _ = context;
+    var buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
+    const found = availableProviders(&buf);
+    const names = arena.alloc([]const u8, found.len) catch return &.{};
+    for (found, 0..) |f, i| names[i] = @tagName(f.provider);
+    return names;
+}
+
+/// `CompletionSource.models`. Blocks on a one-time fetch per provider, caching
+/// success or empty so the per-keystroke hinter pays the round-trip only once.
+fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u8 {
+    const self: *Agent = @ptrCast(@alignCast(context));
+    const llm = self.model_credentials orelse return &.{};
+    if (self.model_completions) |c| if (c.provider == llm.provider) return c.ids;
+
+    _ = self.model_completion_arena.reset(.retain_capacity);
+    const ids = zenai.provider.listChatModelIds(
+        self.allocator,
+        self.model_completion_arena.allocator(),
+        llm.provider,
+        llm.key,
+        self.model_base_url,
+    ) catch &.{};
+    self.model_completions = .{ .provider = llm.provider, .ids = ids };
+    return ids;
 }
 
 fn pickProvider(found: []const Credentials) !Credentials {

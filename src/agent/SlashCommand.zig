@@ -53,8 +53,8 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
     .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set REPL agent verbosity; bare /verbosity prints the current level" },
     .{ .tag = .save, .name = "save", .hint = "[filename.lp]", .values = &.{}, .description = "Save this REPL session as a PandaScript file" },
-    .{ .tag = .model, .name = "model", .hint = "", .values = &.{}, .description = "Show available models and change the current model" },
-    .{ .tag = .provider, .name = "provider", .hint = "", .values = &.{}, .description = "Show available providers and change the current provider" },
+    .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model (Tab completes the provider's models); bare /model shows the current one" },
+    .{ .tag = .provider, .name = "provider", .hint = "[name]", .values = &.{}, .description = "Change the provider (Tab completes detected providers); bare /provider shows the current one" },
 };
 
 /// LLM-driven slash commands. Parsed via `script.Command.parse` (they're
