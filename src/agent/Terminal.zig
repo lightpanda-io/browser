@@ -416,6 +416,9 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
         if (SlashCommand.findMeta(parts.name)) |meta| {
             return self.renderMetaHint(meta, parts.rest, ends_ws);
         }
+        if (std.mem.indexOfScalar(u8, input, ' ') == null) {
+            return ghostFirstMatch(all_slash_names, parts.name, "");
+        }
         return null;
     }
 
