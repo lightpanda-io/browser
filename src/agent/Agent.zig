@@ -901,10 +901,27 @@ fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResu
         else => return,
     };
     if (cmd.producesData() and !result.is_error) {
-        self.terminal.printAssistant(result.text);
+        self.printData(result.text);
         return;
     }
     self.terminal.printToolOutcome(tc.name(), result.text, result.is_error);
+}
+
+// REPL-only: re-indent JSON output for the terminal. MCP keeps renderJson's
+// compact form. Non-JSON output (markdown, tree, urls) prints unchanged.
+fn printData(self: *Agent, text: []const u8) void {
+    const trimmed = std.mem.trimLeft(u8, text, &std.ascii.whitespace);
+    if (trimmed.len > 0 and (trimmed[0] == '{' or trimmed[0] == '[')) {
+        if (std.json.parseFromSlice(std.json.Value, self.allocator, text, .{})) |parsed| {
+            defer parsed.deinit();
+            if (std.json.Stringify.valueAlloc(self.allocator, parsed.value, .{ .whitespace = .indent_2 })) |pretty| {
+                defer self.allocator.free(pretty);
+                self.terminal.printAssistant(pretty);
+                return;
+            } else |_| {}
+        } else |_| {}
+    }
+    self.terminal.printAssistant(text);
 }
 
 fn runScript(self: *Agent, path: []const u8) bool {
