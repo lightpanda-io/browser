@@ -61,7 +61,7 @@ When `--provider` is omitted, lightpanda picks one in this order, printing a
 one-line notice (on stderr) of what it chose:
 
 1. **Remembered** → the provider/model you last selected with `/provider` or
-   `/model`, persisted per-directory in `.lp-agent`, as long as its key is
+   `/model`, persisted per-directory in `.lp-agent.zon`, as long as its key is
    still set.
 2. **Auto-detected** → otherwise the first key found in priority order
    (`ANTHROPIC_API_KEY` → `GOOGLE_API_KEY`/`GEMINI_API_KEY` → `OPENAI_API_KEY`).

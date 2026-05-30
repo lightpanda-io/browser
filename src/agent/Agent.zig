@@ -210,7 +210,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // run that does not need one.
     const resolve = !opts.no_llm and requires_llm;
     const remembered: ?Remembered = if (resolve) loadRemembered(allocator) else null;
-    defer if (remembered) |r| allocator.free(r.model);
+    defer if (remembered) |r| std.zon.parse.free(allocator, r);
 
     const resolved: ?ResolvedProvider = if (resolve) try resolveCredentials(opts, remembered) else null;
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
@@ -238,7 +238,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (resolved) |r| switch (r.source) {
         .flag => {},
         .remembered => std.debug.print(
-            "Resuming provider {s}, model {s} (remembered in ./.lp-agent). Change with --provider/--model or /provider, /model.\n",
+            "Resuming provider {s}, model {s} (remembered in ./.lp-agent.zon). Change with --provider/--model or /provider, /model.\n",
             .{ @tagName(r.credentials.provider), model },
         ),
         .detected => std.debug.print(
@@ -1619,9 +1619,9 @@ fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered) !?ResolvedPro
     return .{ .credentials = found[0], .source = .detected };
 }
 
-const remembered_path = ".lp-agent";
+const remembered_path = ".lp-agent.zon";
 
-/// Last user-selected provider/model, persisted per-directory in `.lp-agent`.
+/// Last user-selected provider/model, persisted per-directory in `.lp-agent.zon`.
 /// `model` is owned by the caller.
 const Remembered = struct {
     provider: Config.AiProvider,
@@ -1629,21 +1629,22 @@ const Remembered = struct {
 };
 
 fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
-    const data = std.fs.cwd().readFileAlloc(allocator, remembered_path, 1024) catch return null;
+    const data = std.fs.cwd().readFileAllocOptions(allocator, remembered_path, 1024, null, .of(u8), 0) catch return null;
     defer allocator.free(data);
-    var it = std.mem.tokenizeScalar(u8, data, '\n');
-    const p_str = std.mem.trim(u8, it.next() orelse return null, &std.ascii.whitespace);
-    const m_str = std.mem.trim(u8, it.next() orelse return null, &std.ascii.whitespace);
-    const provider = std.meta.stringToEnum(Config.AiProvider, p_str) orelse return null;
-    if (m_str.len == 0) return null;
-    return .{ .provider = provider, .model = allocator.dupe(u8, m_str) catch return null };
+    const remembered = std.zon.parse.fromSlice(Remembered, allocator, data, null, .{}) catch return null;
+    if (remembered.model.len == 0) {
+        std.zon.parse.free(allocator, remembered);
+        return null;
+    }
+    return remembered;
 }
 
 /// Best-effort persist of the current selection; failures are ignored.
 fn saveRemembered(provider: Config.AiProvider, model: []const u8) void {
     var buf: [512]u8 = undefined;
-    const data = std.fmt.bufPrint(&buf, "{s}\n{s}\n", .{ @tagName(provider), model }) catch return;
-    std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = data }) catch {};
+    var w: std.Io.Writer = .fixed(&buf);
+    std.zon.stringify.serialize(Remembered{ .provider = provider, .model = model }, .{}, &w) catch return;
+    std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = w.buffered() }) catch {};
 }
 
 /// One-shot for `--list-models`: resolve provider+key, fetch chat-capable
