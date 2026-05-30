@@ -48,6 +48,7 @@ pub const ansi = struct {
     pub const red = "\x1b[31m";
     pub const clear_eol = "\x1b[K";
     pub const clear_line = "\x1b[2K";
+    pub const clear_below = "\x1b[0J";
 };
 
 const Verbosity = Config.AgentVerbosity;
@@ -681,20 +682,13 @@ pub fn rows() ?u16 {
 pub fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
     if (items.len == 0) return error.NoChoice;
     const valid_default: ?usize = if (default) |d| if (d < items.len) d else null else null;
-    // A picker block taller than the terminal scrolls, drifting the in-place
-    // cursor redraw into garbage; use the line prompt when it won't fit.
-    if (interactiveTty() and choiceBlockFits(items.len)) {
+    if (interactiveTty()) {
         return promptInteractiveChoice(header, items, valid_default) catch |err| switch (err) {
             error.NotInteractive => try promptNumberedChoiceLine(header, items, valid_default),
             else => err,
         };
     }
     return promptNumberedChoiceLine(header, items, valid_default);
-}
-
-fn choiceBlockFits(item_count: usize) bool {
-    const terminal_rows = rows() orelse return true; // unknown height: allow it
-    return item_count + 2 <= terminal_rows; // header + items + hint
 }
 
 /// Line-oriented fallback. Errors with NoChoice after 3 invalid attempts.
@@ -735,6 +729,7 @@ const ChoiceInput = enum { up, down, enter, cancel, ignore };
 
 const ChoiceState = struct {
     selected: usize,
+    top: usize = 0,
 
     fn init(default: ?usize) ChoiceState {
         return .{ .selected = default orelse 0 };
@@ -748,6 +743,17 @@ const ChoiceState = struct {
             .cancel, .ignore => {},
         }
         return null;
+    }
+
+    /// Slide the `visible`-row window so `selected` stays inside it, keeping the
+    /// window within the list (a grown viewport must not run past the end).
+    fn scrollInto(self: *ChoiceState, visible: usize, item_count: usize) void {
+        if (self.selected < self.top) {
+            self.top = self.selected;
+        } else if (self.selected >= self.top + visible) {
+            self.top = self.selected - visible + 1;
+        }
+        if (self.top + visible > item_count) self.top = item_count - visible;
     }
 };
 
@@ -781,23 +787,31 @@ const RawTerminal = struct {
 };
 
 fn promptInteractiveChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
+    // Need the height to bound the scroll window; without it (or with no room
+    // for even one item row) defer to the scrolling line prompt.
+    if ((rows() orelse return error.NotInteractive) < 3) return error.NotInteractive;
+
     var raw = try RawTerminal.enable();
     defer raw.restore();
 
     var state = ChoiceState.init(default);
-    const line_count = items.len + 2;
-    var first_render = true;
+    // Re-read the height every frame so resizing the terminal (or the font)
+    // between keystrokes resizes the window instead of garbling the redraw.
+    var prev_lines: usize = 0;
     while (true) {
-        renderChoice(header, items, default, state.selected, first_render);
-        first_render = false;
+        const terminal_rows = @max(rows() orelse 3, 3);
+        const visible = @min(items.len, terminal_rows - 2);
+        state.scrollInto(visible, items.len);
+        renderChoice(header, items, default, &state, visible, prev_lines);
+        prev_lines = visible + 2;
 
         const input = readChoiceInput() catch return error.UserCancelled;
         if (input == .cancel) {
-            clearChoiceRender(line_count);
+            clearChoiceRender(prev_lines);
             return error.UserCancelled;
         }
         if (state.apply(input, items.len)) |idx| {
-            clearChoiceRender(line_count);
+            clearChoiceRender(prev_lines);
             std.debug.print("{s} {s}\r\n", .{ header, items[idx] });
             return idx;
         }
@@ -806,11 +820,7 @@ fn promptInteractiveChoice(header: []const u8, items: []const []const u8, defaul
 
 fn clearChoiceRender(line_count: usize) void {
     moveChoiceRenderStart(line_count);
-    for (0..line_count) |i| {
-        std.debug.print(ansi.clear_line, .{});
-        if (i + 1 < line_count) std.debug.print("\r\n", .{});
-    }
-    moveChoiceRenderStart(line_count);
+    std.debug.print(ansi.clear_below, .{});
 }
 
 fn moveChoiceRenderStart(line_count: usize) void {
@@ -821,18 +831,34 @@ fn moveChoiceRenderStart(line_count: usize) void {
     }
 }
 
-fn renderChoice(header: []const u8, items: []const []const u8, default: ?usize, selected: usize, first_render: bool) void {
-    if (!first_render) moveChoiceRenderStart(items.len + 2);
-    std.debug.print(ansi.clear_line ++ "{s}\r\n", .{header});
-    for (items, 0..) |item, idx| {
-        const on_row = idx == selected;
+fn renderChoice(header: []const u8, items: []const []const u8, default: ?usize, state: *const ChoiceState, visible: usize, prev_lines: usize) void {
+    // Rewind over the previous frame, then wipe it (and any rows a now-shorter
+    // frame leaves behind) before drawing.
+    if (prev_lines > 0) moveChoiceRenderStart(prev_lines);
+    std.debug.print(ansi.clear_below, .{});
+    const max_cols = columns();
+    std.debug.print("{s}\r\n", .{header});
+    for (items[state.top..][0..visible], state.top..) |item, idx| {
+        const on_row = idx == state.selected;
         const marker: []const u8 = if (on_row) ">" else " ";
         const style: []const u8 = if (on_row) ansi.bold ++ ansi.cyan else "";
         const reset: []const u8 = if (on_row) ansi.reset else "";
         const default_marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
-        std.debug.print(ansi.clear_line ++ "  {s} {s}{s}{s}{s}\r\n", .{ marker, style, item, default_marker, reset });
+        const shown = truncateChoiceItem(item, max_cols, default_marker.len);
+        std.debug.print("  {s} {s}{s}{s}{s}{s}\r\n", .{ marker, style, shown.text, shown.ellipsis, default_marker, reset });
     }
-    std.debug.print(ansi.clear_line ++ "{s}Use Up/Down then Enter. Esc cancels.{s}", .{ ansi.dim, ansi.reset });
+    std.debug.print("{s}Use Up/Down then Enter. Esc cancels.{s}", .{ ansi.dim, ansi.reset });
+}
+
+/// Trim an item so its row fits one line: `  > name… (default)`. Reserves the
+/// 4-column row prefix and `suffix_len` for the default marker. Byte-sliced, so
+/// it assumes ASCII items (model/provider names); null width passes through.
+fn truncateChoiceItem(item: []const u8, max_cols: ?u16, suffix_len: usize) struct { text: []const u8, ellipsis: []const u8 } {
+    const cols = max_cols orelse return .{ .text = item, .ellipsis = "" };
+    const budget = @as(usize, cols) -| (4 + suffix_len);
+    if (item.len <= budget) return .{ .text = item, .ellipsis = "" };
+    if (budget == 0) return .{ .text = "", .ellipsis = "…" };
+    return .{ .text = item[0 .. budget - 1], .ellipsis = "…" };
 }
 
 fn readChoiceInput() !ChoiceInput {
@@ -884,6 +910,70 @@ test "ChoiceState: starts on default and enter returns it" {
     var state = ChoiceState.init(2);
     try std.testing.expectEqual(@as(usize, 2), state.selected);
     try std.testing.expectEqual(@as(?usize, 2), state.apply(.enter, 3));
+}
+
+test "ChoiceState: viewport follows selection down and on up-wrap" {
+    const visible = 3;
+    const count = 6;
+    var state = ChoiceState.init(null);
+
+    state.scrollInto(visible, count);
+    try std.testing.expectEqual(@as(usize, 0), state.top);
+
+    // Walk down past the window bottom; top trails to keep selection visible.
+    for (0..3) |_| _ = state.apply(.down, count);
+    state.scrollInto(visible, count);
+    try std.testing.expectEqual(@as(usize, 3), state.selected);
+    try std.testing.expectEqual(@as(usize, 1), state.top);
+
+    // Selection still inside the window leaves top put.
+    _ = state.apply(.up, count);
+    state.scrollInto(visible, count);
+    try std.testing.expectEqual(@as(usize, 1), state.top);
+}
+
+test "ChoiceState: up-wrap from top jumps the window to the last item" {
+    const visible = 3;
+    const count = 6;
+    var state = ChoiceState.init(null);
+
+    _ = state.apply(.up, count);
+    state.scrollInto(visible, count);
+    try std.testing.expectEqual(@as(usize, 5), state.selected);
+    try std.testing.expectEqual(@as(usize, 3), state.top);
+}
+
+test "ChoiceState: a grown viewport pulls top back within the list" {
+    const count = 6;
+    var state = ChoiceState.init(null);
+
+    // Scrolled to the bottom with a 3-row window: top = 3.
+    _ = state.apply(.up, count); // selected = 5
+    state.scrollInto(3, count);
+    try std.testing.expectEqual(@as(usize, 3), state.top);
+
+    // Window grows to 5; top must retreat so top + visible stays <= count.
+    state.scrollInto(5, count);
+    try std.testing.expectEqual(@as(usize, 1), state.top);
+
+    // Window grows to the whole list; top pins to 0.
+    state.scrollInto(6, count);
+    try std.testing.expectEqual(@as(usize, 0), state.top);
+}
+
+test "truncateChoiceItem: trims to width and passes short items through" {
+    const fits = truncateChoiceItem("gpt-4o", 40, 0);
+    try std.testing.expectEqualStrings("gpt-4o", fits.text);
+    try std.testing.expectEqualStrings("", fits.ellipsis);
+
+    // 10 cols, 4 reserved for prefix -> 6 budget, last col is the ellipsis.
+    const cut = truncateChoiceItem("anthropic-claude", 10, 0);
+    try std.testing.expectEqualStrings("anthr", cut.text);
+    try std.testing.expectEqualStrings("…", cut.ellipsis);
+
+    // Unknown width never truncates.
+    const unknown = truncateChoiceItem("anthropic-claude", null, 0);
+    try std.testing.expectEqualStrings("anthropic-claude", unknown.text);
 }
 
 pub fn printAssistant(_: *Terminal, text: []const u8) void {
