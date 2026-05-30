@@ -856,7 +856,7 @@ fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8, 
         };
     }
     const reason: []const u8 = switch (err) {
-        error.UnknownTool => "unknown command",
+        error.UnknownTool => return self.terminal.printError("{s}: unknown command. Try /help.", .{name}),
         error.MissingName => return self.terminal.printError("missing command name. Try /help.", .{}),
         error.MissingRequired => "missing required argument",
         error.MalformedKv => "malformed key=value. Use key=value or {json}",
@@ -881,10 +881,11 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
     return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| .{
-        .text = if (err == error.OutOfMemory)
-            "out of memory"
-        else
-            std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), @errorName(err) }) catch "tool failed",
+        .text = switch (err) {
+            error.OutOfMemory => "out of memory",
+            error.FrameNotLoaded => "no page loaded — run /goto <url> first",
+            else => std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), @errorName(err) }) catch "tool failed",
+        },
         .is_error = true,
     };
 }
