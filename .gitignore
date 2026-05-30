@@ -1,6 +1,7 @@
 /.zig-cache/
 /.lp-cache/
 /.lp-history
+/.lp-agent
 /zig-pkg/
 zig-out
 lightpanda.id

@@ -210,7 +210,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // Skip resolve when --no-llm forces no client, or no mode could use one
     // (pure replay) — otherwise resolve prints "No API key detected" for a
     // run that does not need one.
-    const llm: ?Credentials = if (opts.no_llm or !requires_llm) null else try resolveCredentials(opts);
+    const resolve = !opts.no_llm and requires_llm;
+    const remembered: ?Remembered = if (resolve) loadRemembered(allocator) else null;
+    defer if (remembered) |r| allocator.free(r.model);
+
+    const resolved: ?ResolvedProvider = if (resolve) try resolveCredentials(opts, remembered) else null;
+    const llm: ?Credentials = if (resolved) |r| r.credentials else null;
 
     if (llm == null and requires_llm) {
         if (opts.no_llm) {
@@ -223,11 +228,23 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const model: []u8 = if (opts.model) |m|
         try allocator.dupe(u8, m)
-    else if (llm) |l|
-        try allocator.dupe(u8, defaultModel(l.provider))
-    else
-        try allocator.dupe(u8, "");
+    else if (llm) |l| blk: {
+        if (resolved) |r| if (r.source == .remembered) break :blk try allocator.dupe(u8, remembered.?.model);
+        break :blk try allocator.dupe(u8, defaultModel(l.provider));
+    } else try allocator.dupe(u8, "");
     errdefer allocator.free(model);
+
+    if (resolved) |r| switch (r.source) {
+        .flag => {},
+        .remembered => std.debug.print(
+            "Resuming provider {s}, model {s} (remembered in ./.lp-agent). Change with --provider/--model or /provider, /model.\n",
+            .{ @tagName(r.credentials.provider), model },
+        ),
+        .detected => std.debug.print(
+            "Auto-selected provider {s}, model {s}. Set --provider/--model or use /provider, /model to change.\n",
+            .{ @tagName(r.credentials.provider), model },
+        ),
+    };
 
     const notification: *lp.Notification = try .init(allocator);
     errdefer notification.deinit();
@@ -593,6 +610,7 @@ fn setModel(self: *Agent, model: []const u8) !void {
     const new_model = try self.allocator.dupe(u8, model);
     self.allocator.free(self.model);
     self.model = new_model;
+    if (self.model_credentials) |c| saveRemembered(c.provider, self.model);
     self.terminal.printInfo("model: {s}", .{self.model});
 }
 
@@ -633,6 +651,7 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
     self.model_completions = null;
     self.allocator.free(self.model);
     self.model = new_model;
+    saveRemembered(credentials.provider, self.model);
     self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
     self.terminal.printInfo("model: {s}", .{self.model});
 }
@@ -1561,7 +1580,14 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
 /// decides whether that's fatal — basic REPL tolerates it).
-fn resolveCredentials(opts: Config.Agent) !?Credentials {
+const ResolvedProvider = struct {
+    credentials: Credentials,
+    source: enum { flag, remembered, detected },
+};
+
+/// Precedence: `--provider` > remembered (if its key is still set) > first
+/// detected. Null means no key at all (the reason is already printed).
+fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered) !?ResolvedProvider {
     if (opts.provider) |p| {
         const key = zenai.provider.envApiKey(p) orelse {
             std.debug.print(
@@ -1570,27 +1596,51 @@ fn resolveCredentials(opts: Config.Agent) !?Credentials {
             );
             return error.MissingApiKey;
         };
-        return .{ .provider = p, .key = key };
+        return .{ .credentials = .{ .provider = p, .key = key }, .source = .flag };
     }
+
+    if (remembered) |r| if (zenai.provider.envApiKey(r.provider)) |key| {
+        return .{ .credentials = .{ .provider = r.provider, .key = key }, .source = .remembered };
+    };
 
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
     const found = zenai.provider.detectKeys(&buf, zenai.provider.default_candidates);
+    if (found.len == 0) {
+        std.debug.print(
+            \\No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
+            \\If you want to use the REPL in basic mode (without LLM integration) you can pass the --no-llm option.
+            \\
+        , .{});
+        return null;
+    }
+    return .{ .credentials = found[0], .source = .detected };
+}
 
-    return switch (found.len) {
-        0 => blk: {
-            std.debug.print(
-                \\No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
-                \\If you want to use the REPL in basic mode (without LLM integration) you can pass the --no-llm option.
-                \\
-            , .{});
-            break :blk null;
-        },
-        1 => blk: {
-            std.debug.print("Detected {s} — using --provider {s}.\n", .{ zenai.provider.envVarName(found[0].provider), @tagName(found[0].provider) });
-            break :blk found[0];
-        },
-        else => try pickProvider(found),
-    };
+const remembered_path = ".lp-agent";
+
+/// Last user-selected provider/model, persisted per-directory in `.lp-agent`.
+/// `model` is owned by the caller.
+const Remembered = struct {
+    provider: Config.AiProvider,
+    model: []const u8,
+};
+
+fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
+    const data = std.fs.cwd().readFileAlloc(allocator, remembered_path, 1024) catch return null;
+    defer allocator.free(data);
+    var it = std.mem.tokenizeScalar(u8, data, '\n');
+    const p_str = std.mem.trim(u8, it.next() orelse return null, &std.ascii.whitespace);
+    const m_str = std.mem.trim(u8, it.next() orelse return null, &std.ascii.whitespace);
+    const provider = std.meta.stringToEnum(Config.AiProvider, p_str) orelse return null;
+    if (m_str.len == 0) return null;
+    return .{ .provider = provider, .model = allocator.dupe(u8, m_str) catch return null };
+}
+
+/// Best-effort persist of the current selection; failures are ignored.
+fn saveRemembered(provider: Config.AiProvider, model: []const u8) void {
+    var buf: [512]u8 = undefined;
+    const data = std.fmt.bufPrint(&buf, "{s}\n{s}\n", .{ @tagName(provider), model }) catch return;
+    std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = data }) catch {};
 }
 
 /// One-shot for `--list-models`: resolve provider+key, fetch chat-capable
@@ -1610,7 +1660,8 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    const llm = (try resolveCredentials(opts)) orelse return error.MissingProvider;
+    const resolved = (try resolveCredentials(opts, null)) orelse return error.MissingProvider;
+    const llm = resolved.credentials;
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -1697,24 +1748,6 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
     ) catch &.{};
     self.model_completions = .{ .provider = llm.provider, .ids = ids };
     return ids;
-}
-
-fn pickProvider(found: []const Credentials) !Credentials {
-    if (!Terminal.interactiveTty()) {
-        log.fatal(.app, "multiple API keys detected", .{
-            .hint = "Pass --provider explicitly when running non-interactively",
-        });
-        return error.AmbiguousProvider;
-    }
-
-    var labels: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
-    for (found, 0..) |f, i| labels[i] = @tagName(f.provider);
-
-    const idx = Terminal.promptNumberedChoice("Multiple API keys detected. Pick provider:", labels[0..found.len], null) catch {
-        std.debug.print("Cancelled — pass --provider to skip the picker.\n", .{});
-        return error.UserCancelled;
-    };
-    return found[idx];
 }
 
 test "capToolOutput: truncates at UTF-8 codepoint boundary" {

@@ -691,10 +691,6 @@ fn logSink(bytes: []const u8) void {
     _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
 }
 
-pub fn interactiveTty() bool {
-    return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
-}
-
 /// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
 /// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
 /// (some pseudo-ttys leave the field unset). Cheap enough to call per
