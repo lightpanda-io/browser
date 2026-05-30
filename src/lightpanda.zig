@@ -67,6 +67,7 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     defer notification.deinit();
 
     var session = try browser.newSession(notification);
+    defer browser.closeSession();
 
     if (app.config.cookieFile()) |cookie_path| {
         cookies.loadFromFile(session, cookie_path);
