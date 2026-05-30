@@ -55,7 +55,6 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         break :blk tag;
     } else null;
 
-
     // Do not use getOrPut here to hold the GetOrPut entry until we need to write
     // the definition. constructor.getPropertyValue() can fire a get accessor
     // which could callback here and alter self._definitions, invalidating any
