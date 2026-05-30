@@ -354,7 +354,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
 
     var buf: [completion_buf_len:0]u8 = undefined;
 
-    // `/help <name>`: arg is a tool name, not a value — skip env-var fallthrough.
+    // `/help <name>`: arg is a command name, not a value — skip env-var fallthrough.
     if (parseHelpArgPrefix(input)) |partial| {
         for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, help_arg_prefix, name, "", partial);
         return;
@@ -401,8 +401,8 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input_c)), 0);
     if (input.len == 0) return null;
 
-    // `/help <partial>`: leave the inline hint to the completion-derived path.
-    if (parseHelpArgPrefix(input)) |_| return null;
+    // `/help <partial>`: ghost the first command name that matches the arg.
+    if (parseHelpArgPrefix(input)) |partial| return ghostFirstMatch(all_slash_names, partial, "");
 
     // Inside an open `'''…'''` body the buffer is script text, not kv args.
     if (Schema.hasUnclosedTripleQuote(input)) return null;
