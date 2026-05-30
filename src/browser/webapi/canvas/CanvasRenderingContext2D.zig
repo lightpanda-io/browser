@@ -83,6 +83,10 @@ pub fn createImageData(
 
 pub fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
 
+// CanvasImageSource (HTMLImageElement, HTMLCanvasElement, ImageBitmap, ...) is
+// just taken as a js.Value for now since we don't use it, and that's much easier.
+pub fn drawImage(_: *const CanvasRenderingContext2D, _: js.Value, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+
 pub fn getImageData(
     _: *const CanvasRenderingContext2D,
     _: i32, // sx
@@ -150,6 +154,7 @@ pub const JsApi = struct {
     pub const createImageData = bridge.function(CanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
 
     pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{ .noop = true });
+    pub const drawImage = bridge.function(CanvasRenderingContext2D.drawImage, .{ .noop = true });
     pub const getImageData = bridge.function(CanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
     pub const save = bridge.function(CanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(CanvasRenderingContext2D.restore, .{ .noop = true });

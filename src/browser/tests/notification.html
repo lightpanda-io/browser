@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<script src="./testing.js"></script>
+
+<script id=Notification>
+{
+  testing.expectEqual("function", typeof Notification);
+  testing.expectEqual("default", Notification.permission);
+  testing.expectEqual(2, Notification.maxActions);
+}
+</script>
+
+<script id=Notification#requestPermission>
+{
+  testing.async(async () => {
+    testing.expectEqual("default", await Notification.requestPermission());
+  });
+}
+</script>
+
+<script id=Notification#constructor>
+{
+  const n = new Notification("hello", { body: "world", icon: "i.png", tag: "t", lang: "en", dir: "rtl", silent: true });
+  testing.expectEqual(true, n instanceof Notification);
+  testing.expectEqual(true, n instanceof EventTarget);
+  testing.expectEqual("hello", n.title);
+  testing.expectEqual("world", n.body);
+  testing.expectEqual("i.png", n.icon);
+  testing.expectEqual("t", n.tag);
+  testing.expectEqual("en", n.lang);
+  testing.expectEqual("rtl", n.dir);
+  testing.expectEqual(true, n.silent);
+  testing.expectEqual("[object Notification]", Object.prototype.toString.call(n));
+}
+</script>
+
+<script id=Notification#defaults>
+{
+  const n = new Notification("only-title");
+  testing.expectEqual("only-title", n.title);
+  testing.expectEqual("", n.body);
+  testing.expectEqual("auto", n.dir);
+  testing.expectEqual(false, n.silent);
+  testing.expectEqual(false, n.requireInteraction);
+  // close() is a no-op but must exist and not throw.
+  n.close();
+}
+</script>
