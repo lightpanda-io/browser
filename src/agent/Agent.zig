@@ -46,8 +46,6 @@ pub const UserError = error{
     MissingApiKey,
     MissingProvider,
     ConflictingFlags,
-    AmbiguousProvider,
-    NotInteractive,
 };
 
 pub fn isUserError(err: anyerror) bool {
@@ -228,10 +226,13 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const model: []u8 = if (opts.model) |m|
         try allocator.dupe(u8, m)
-    else if (llm) |l| blk: {
-        if (resolved) |r| if (r.source == .remembered) break :blk try allocator.dupe(u8, remembered.?.model);
-        break :blk try allocator.dupe(u8, defaultModel(l.provider));
-    } else try allocator.dupe(u8, "");
+    else if (resolved) |r|
+        if (r.source == .remembered)
+            try allocator.dupe(u8, remembered.?.model)
+        else
+            try allocator.dupe(u8, defaultModel(r.credentials.provider))
+    else
+        try allocator.dupe(u8, "");
     errdefer allocator.free(model);
 
     if (resolved) |r| switch (r.source) {
@@ -586,15 +587,16 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
 }
 
-fn requireLlm(self: *Agent, name: []const u8) ?Credentials {
-    return self.model_credentials orelse {
+fn requireLlm(self: *Agent, name: []const u8) bool {
+    if (self.model_credentials == null) {
         self.terminal.printError("{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{name});
-        return null;
-    };
+        return false;
+    }
+    return true;
 }
 
 fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
-    if (self.requireLlm("/model") == null) return;
+    if (!self.requireLlm("/model")) return;
 
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
     if (trimmed.len == 0) {
@@ -615,7 +617,8 @@ fn setModel(self: *Agent, model: []const u8) !void {
 }
 
 fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
-    const current = self.requireLlm("/provider") orelse return;
+    if (!self.requireLlm("/provider")) return;
+    const current = self.model_credentials.?;
 
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
     if (trimmed.len == 0) {
