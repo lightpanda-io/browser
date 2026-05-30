@@ -272,8 +272,8 @@ pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Sessio
     try runner.wait(.{ .ms = timeout_ms, .until = .load });
 
     const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-    const remaining = timeout_ms -| elapsed;
-    if (remaining == 0) return error.Timeout;
+    // floor to 1 so timeout=0 still gets one check
+    const remaining = @max(1, timeout_ms -| elapsed);
 
     const el = try runner.waitForSelector(selector, remaining);
     return el.asNode();
@@ -285,8 +285,8 @@ pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, session: *Session) !
     try runner.wait(.{ .ms = timeout_ms, .until = .load });
 
     const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-    const remaining = timeout_ms -| elapsed;
-    if (remaining == 0) return error.Timeout;
+    // floor to 1 so timeout=0 still gets one check
+    const remaining = @max(1, timeout_ms -| elapsed);
 
     return runner.waitForScript(script, remaining);
 }
