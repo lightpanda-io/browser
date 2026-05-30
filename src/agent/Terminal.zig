@@ -47,6 +47,7 @@ pub const ansi = struct {
     pub const yellow = "\x1b[33m";
     pub const red = "\x1b[31m";
     pub const clear_eol = "\x1b[K";
+    pub const clear_line = "\x1b[2K";
 };
 
 const Verbosity = Config.AgentVerbosity;
@@ -713,21 +714,10 @@ fn promptNumberedChoiceLine(header: []const u8, items: []const []const u8, defau
     return error.NoChoice;
 }
 
-const ChoiceInput = union(enum) {
-    up,
-    down,
-    enter,
-    backspace,
-    cancel,
-    digit: u8,
-    ignore,
-};
+const ChoiceInput = enum { up, down, enter, cancel, ignore };
 
 const ChoiceState = struct {
     selected: usize,
-    typed: [16]u8 = undefined,
-    typed_len: usize = 0,
-    invalid: bool = false,
 
     fn init(default: ?usize) ChoiceState {
         return .{ .selected = default orelse 0 };
@@ -735,42 +725,12 @@ const ChoiceState = struct {
 
     fn apply(self: *ChoiceState, input: ChoiceInput, item_count: usize) ?usize {
         switch (input) {
-            .up => {
-                self.typed_len = 0;
-                self.invalid = false;
-                self.selected = if (self.selected == 0) item_count - 1 else self.selected - 1;
-            },
-            .down => {
-                self.typed_len = 0;
-                self.invalid = false;
-                self.selected = (self.selected + 1) % item_count;
-            },
-            .enter => {
-                if (self.typed_len > 0) {
-                    const parsed = std.fmt.parseInt(usize, self.typed[0..self.typed_len], 10) catch return null;
-                    if (parsed >= 1 and parsed <= item_count) return parsed - 1;
-                    self.invalid = true;
-                    return null;
-                }
-                return self.selected;
-            },
-            .backspace => if (self.typed_len > 0) {
-                self.typed_len -= 1;
-                self.invalid = false;
-            },
-            .digit => |d| if (self.typed_len < self.typed.len) {
-                if (self.invalid) self.typed_len = 0;
-                self.typed[self.typed_len] = d;
-                self.typed_len += 1;
-                self.invalid = false;
-            },
+            .up => self.selected = if (self.selected == 0) item_count - 1 else self.selected - 1,
+            .down => self.selected = (self.selected + 1) % item_count,
+            .enter => return self.selected,
             .cancel, .ignore => {},
         }
         return null;
-    }
-
-    fn typedSlice(self: *const ChoiceState) []const u8 {
-        return self.typed[0..self.typed_len];
     }
 };
 
@@ -808,18 +768,19 @@ fn promptInteractiveChoice(header: []const u8, items: []const []const u8, defaul
     defer raw.restore();
 
     var state = ChoiceState.init(default);
+    const line_count = items.len + 2;
     var first_render = true;
     while (true) {
-        renderChoice(header, items, default, &state, first_render);
+        renderChoice(header, items, default, state.selected, first_render);
         first_render = false;
 
         const input = readChoiceInput() catch return error.UserCancelled;
         if (input == .cancel) {
-            clearChoiceRender(items.len + 2);
+            clearChoiceRender(line_count);
             return error.UserCancelled;
         }
         if (state.apply(input, items.len)) |idx| {
-            clearChoiceRender(items.len + 2);
+            clearChoiceRender(line_count);
             std.debug.print("{s} {s}\r\n", .{ header, items[idx] });
             return idx;
         }
@@ -829,7 +790,7 @@ fn promptInteractiveChoice(header: []const u8, items: []const []const u8, defaul
 fn clearChoiceRender(line_count: usize) void {
     moveChoiceRenderStart(line_count);
     for (0..line_count) |i| {
-        std.debug.print("\x1b[2K", .{});
+        std.debug.print(ansi.clear_line, .{});
         if (i + 1 < line_count) std.debug.print("\r\n", .{});
     }
     moveChoiceRenderStart(line_count);
@@ -843,36 +804,18 @@ fn moveChoiceRenderStart(line_count: usize) void {
     }
 }
 
-fn renderChoice(header: []const u8, items: []const []const u8, default: ?usize, state: *const ChoiceState, first_render: bool) void {
-    const line_count = items.len + 2;
-    const number_width = decimalWidth(items.len);
-    if (!first_render) moveChoiceRenderStart(line_count);
-    std.debug.print("\x1b[2K{s}\r\n", .{header});
+fn renderChoice(header: []const u8, items: []const []const u8, default: ?usize, selected: usize, first_render: bool) void {
+    if (!first_render) moveChoiceRenderStart(items.len + 2);
+    std.debug.print(ansi.clear_line ++ "{s}\r\n", .{header});
     for (items, 0..) |item, idx| {
-        const marker: []const u8 = if (idx == state.selected) ">" else " ";
-        const style: []const u8 = if (idx == state.selected) ansi.bold ++ ansi.cyan else "";
-        const reset: []const u8 = if (idx == state.selected) ansi.reset else "";
+        const on_row = idx == selected;
+        const marker: []const u8 = if (on_row) ">" else " ";
+        const style: []const u8 = if (on_row) ansi.bold ++ ansi.cyan else "";
+        const reset: []const u8 = if (on_row) ansi.reset else "";
         const default_marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
-        std.debug.print("\x1b[2K  {s} {s}", .{ marker, style });
-        const row_number = idx + 1;
-        for (decimalWidth(row_number)..number_width) |_| std.debug.print(" ", .{});
-        std.debug.print("{d}) {s}{s}{s}\r\n", .{ row_number, item, default_marker, reset });
+        std.debug.print(ansi.clear_line ++ "  {s} {s}{s}{s}{s}\r\n", .{ marker, style, item, default_marker, reset });
     }
-    const typed = state.typedSlice();
-    if (state.invalid) {
-        std.debug.print("\x1b[2KInvalid choice: {s}", .{typed});
-    } else if (typed.len > 0) {
-        std.debug.print("\x1b[2K> {s}", .{typed});
-    } else {
-        std.debug.print("\x1b[2K{s}Use Up/Down then Enter, or type a number. Esc cancels.{s}", .{ ansi.dim, ansi.reset });
-    }
-}
-
-fn decimalWidth(n: usize) usize {
-    var width: usize = 1;
-    var value = n;
-    while (value >= 10) : (value /= 10) width += 1;
-    return width;
+    std.debug.print(ansi.clear_line ++ "{s}Use Up/Down then Enter. Esc cancels.{s}", .{ ansi.dim, ansi.reset });
 }
 
 fn readChoiceInput() !ChoiceInput {
@@ -891,8 +834,6 @@ fn readChoiceInput() !ChoiceInput {
                 };
             },
             '\r', '\n' => .enter,
-            127, 8 => .backspace,
-            '0'...'9' => .{ .digit = ch },
             else => .ignore,
         };
     }
@@ -922,16 +863,10 @@ test "ChoiceState: arrows wrap and enter selects highlighted item" {
     try std.testing.expectEqual(@as(?usize, 0), state.apply(.enter, 3));
 }
 
-test "ChoiceState: typed number selects matching item on enter" {
+test "ChoiceState: starts on default and enter returns it" {
     var state = ChoiceState.init(2);
-
-    try std.testing.expectEqual(@as(?usize, null), state.apply(.{ .digit = '2' }, 3));
-    try std.testing.expectEqualStrings("2", state.typedSlice());
-    try std.testing.expectEqual(@as(?usize, 1), state.apply(.enter, 3));
-
-    state = ChoiceState.init(null);
-    try std.testing.expectEqual(@as(?usize, null), state.apply(.{ .digit = '9' }, 3));
-    try std.testing.expectEqual(@as(?usize, null), state.apply(.enter, 3));
+    try std.testing.expectEqual(@as(usize, 2), state.selected);
+    try std.testing.expectEqual(@as(?usize, 2), state.apply(.enter, 3));
 }
 
 pub fn printAssistant(_: *Terminal, text: []const u8) void {
