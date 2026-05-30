@@ -665,9 +665,22 @@ pub fn columns() ?u16 {
 }
 
 /// Numbered TTY picker. `default` (if set) marks that row "(default)" and
-/// makes Enter return that index. Errors with NoChoice after 3 invalid
-/// attempts.
+/// makes Enter start on that index. Up/Down moves the active row; Enter
+/// selects it. Numbered input still works for users who prefer typing.
 pub fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
+    if (items.len == 0) return error.NoChoice;
+    const valid_default: ?usize = if (default) |d| if (d < items.len) d else null else null;
+    if (interactiveTty()) {
+        return promptInteractiveChoice(header, items, valid_default) catch |err| switch (err) {
+            error.NotInteractive => try promptNumberedChoiceLine(header, items, valid_default),
+            else => err,
+        };
+    }
+    return promptNumberedChoiceLine(header, items, valid_default);
+}
+
+/// Line-oriented fallback. Errors with NoChoice after 3 invalid attempts.
+fn promptNumberedChoiceLine(header: []const u8, items: []const []const u8, default: ?usize) !usize {
     var stdin_buf: [128]u8 = undefined;
     var stdin = std.fs.File.stdin().reader(&stdin_buf);
 
@@ -698,6 +711,227 @@ pub fn promptNumberedChoice(header: []const u8, items: []const []const u8, defau
         std.debug.print("Out of range.\n", .{});
     }
     return error.NoChoice;
+}
+
+const ChoiceInput = union(enum) {
+    up,
+    down,
+    enter,
+    backspace,
+    cancel,
+    digit: u8,
+    ignore,
+};
+
+const ChoiceState = struct {
+    selected: usize,
+    typed: [16]u8 = undefined,
+    typed_len: usize = 0,
+    invalid: bool = false,
+
+    fn init(default: ?usize) ChoiceState {
+        return .{ .selected = default orelse 0 };
+    }
+
+    fn apply(self: *ChoiceState, input: ChoiceInput, item_count: usize) ?usize {
+        switch (input) {
+            .up => {
+                self.typed_len = 0;
+                self.invalid = false;
+                self.selected = if (self.selected == 0) item_count - 1 else self.selected - 1;
+            },
+            .down => {
+                self.typed_len = 0;
+                self.invalid = false;
+                self.selected = (self.selected + 1) % item_count;
+            },
+            .enter => {
+                if (self.typed_len > 0) {
+                    const parsed = std.fmt.parseInt(usize, self.typed[0..self.typed_len], 10) catch return null;
+                    if (parsed >= 1 and parsed <= item_count) return parsed - 1;
+                    self.invalid = true;
+                    return null;
+                }
+                return self.selected;
+            },
+            .backspace => if (self.typed_len > 0) {
+                self.typed_len -= 1;
+                self.invalid = false;
+            },
+            .digit => |d| if (self.typed_len < self.typed.len) {
+                if (self.invalid) self.typed_len = 0;
+                self.typed[self.typed_len] = d;
+                self.typed_len += 1;
+                self.invalid = false;
+            },
+            .cancel, .ignore => {},
+        }
+        return null;
+    }
+
+    fn typedSlice(self: *const ChoiceState) []const u8 {
+        return self.typed[0..self.typed_len];
+    }
+};
+
+const RawTerminal = struct {
+    original: std.posix.termios,
+
+    fn enable() !RawTerminal {
+        if (!interactiveTty()) return error.NotInteractive;
+        const original = try std.posix.tcgetattr(std.posix.STDIN_FILENO);
+        var raw = original;
+        raw.iflag.BRKINT = false;
+        raw.iflag.ICRNL = false;
+        raw.iflag.INPCK = false;
+        raw.iflag.ISTRIP = false;
+        raw.iflag.IXON = false;
+        raw.oflag.OPOST = false;
+        raw.cflag.CSIZE = .CS8;
+        raw.lflag.ECHO = false;
+        raw.lflag.ICANON = false;
+        raw.lflag.IEXTEN = false;
+        raw.lflag.ISIG = false;
+        raw.cc[@intFromEnum(std.c.V.MIN)] = 0;
+        raw.cc[@intFromEnum(std.c.V.TIME)] = 1;
+        try std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw);
+        return .{ .original = original };
+    }
+
+    fn restore(self: *const RawTerminal) void {
+        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
+    }
+};
+
+fn promptInteractiveChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
+    var raw = try RawTerminal.enable();
+    defer raw.restore();
+
+    var state = ChoiceState.init(default);
+    var first_render = true;
+    while (true) {
+        renderChoice(header, items, default, &state, first_render);
+        first_render = false;
+
+        const input = readChoiceInput() catch return error.UserCancelled;
+        if (input == .cancel) {
+            clearChoiceRender(items.len + 2);
+            return error.UserCancelled;
+        }
+        if (state.apply(input, items.len)) |idx| {
+            clearChoiceRender(items.len + 2);
+            std.debug.print("{s} {s}\r\n", .{ header, items[idx] });
+            return idx;
+        }
+    }
+}
+
+fn clearChoiceRender(line_count: usize) void {
+    moveChoiceRenderStart(line_count);
+    for (0..line_count) |i| {
+        std.debug.print("\x1b[2K", .{});
+        if (i + 1 < line_count) std.debug.print("\r\n", .{});
+    }
+    moveChoiceRenderStart(line_count);
+}
+
+fn moveChoiceRenderStart(line_count: usize) void {
+    if (line_count > 1) {
+        std.debug.print("\x1b[{d}F", .{line_count - 1});
+    } else {
+        std.debug.print("\r", .{});
+    }
+}
+
+fn renderChoice(header: []const u8, items: []const []const u8, default: ?usize, state: *const ChoiceState, first_render: bool) void {
+    const line_count = items.len + 2;
+    const number_width = decimalWidth(items.len);
+    if (!first_render) moveChoiceRenderStart(line_count);
+    std.debug.print("\x1b[2K{s}\r\n", .{header});
+    for (items, 0..) |item, idx| {
+        const marker: []const u8 = if (idx == state.selected) ">" else " ";
+        const style: []const u8 = if (idx == state.selected) ansi.bold ++ ansi.cyan else "";
+        const reset: []const u8 = if (idx == state.selected) ansi.reset else "";
+        const default_marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
+        std.debug.print("\x1b[2K  {s} {s}", .{ marker, style });
+        const row_number = idx + 1;
+        for (decimalWidth(row_number)..number_width) |_| std.debug.print(" ", .{});
+        std.debug.print("{d}) {s}{s}{s}\r\n", .{ row_number, item, default_marker, reset });
+    }
+    const typed = state.typedSlice();
+    if (state.invalid) {
+        std.debug.print("\x1b[2KInvalid choice: {s}", .{typed});
+    } else if (typed.len > 0) {
+        std.debug.print("\x1b[2K> {s}", .{typed});
+    } else {
+        std.debug.print("\x1b[2K{s}Use Up/Down then Enter, or type a number. Esc cancels.{s}", .{ ansi.dim, ansi.reset });
+    }
+}
+
+fn decimalWidth(n: usize) usize {
+    var width: usize = 1;
+    var value = n;
+    while (value >= 10) : (value /= 10) width += 1;
+    return width;
+}
+
+fn readChoiceInput() !ChoiceInput {
+    while (true) {
+        const ch = try readChoiceByte() orelse continue;
+        return switch (ch) {
+            3, 4, 27 => esc: {
+                if (ch != 27) break :esc .cancel;
+                const b1 = try readChoiceByte() orelse break :esc .cancel;
+                if (b1 != '[' and b1 != 'O') break :esc .cancel;
+                const b2 = try readChoiceByte() orelse break :esc .cancel;
+                break :esc switch (b2) {
+                    'A' => .up,
+                    'B' => .down,
+                    else => .ignore,
+                };
+            },
+            '\r', '\n' => .enter,
+            127, 8 => .backspace,
+            '0'...'9' => .{ .digit = ch },
+            else => .ignore,
+        };
+    }
+}
+
+fn readChoiceByte() !?u8 {
+    var buf: [1]u8 = undefined;
+    const n = std.posix.read(std.posix.STDIN_FILENO, &buf) catch |err| switch (err) {
+        error.WouldBlock => return null,
+        error.InputOutput => return error.ReadFailed,
+        else => return err,
+    };
+    if (n == 0) return null;
+    return buf[0];
+}
+
+test "ChoiceState: arrows wrap and enter selects highlighted item" {
+    var state = ChoiceState.init(null);
+    try std.testing.expectEqual(@as(usize, 0), state.selected);
+
+    try std.testing.expectEqual(@as(?usize, null), state.apply(.up, 3));
+    try std.testing.expectEqual(@as(usize, 2), state.selected);
+
+    try std.testing.expectEqual(@as(?usize, null), state.apply(.down, 3));
+    try std.testing.expectEqual(@as(usize, 0), state.selected);
+
+    try std.testing.expectEqual(@as(?usize, 0), state.apply(.enter, 3));
+}
+
+test "ChoiceState: typed number selects matching item on enter" {
+    var state = ChoiceState.init(2);
+
+    try std.testing.expectEqual(@as(?usize, null), state.apply(.{ .digit = '2' }, 3));
+    try std.testing.expectEqualStrings("2", state.typedSlice());
+    try std.testing.expectEqual(@as(?usize, 1), state.apply(.enter, 3));
+
+    state = ChoiceState.init(null);
+    try std.testing.expectEqual(@as(?usize, null), state.apply(.{ .digit = '9' }, 3));
+    try std.testing.expectEqual(@as(?usize, null), state.apply(.enter, 3));
 }
 
 pub fn printAssistant(_: *Terminal, text: []const u8) void {
