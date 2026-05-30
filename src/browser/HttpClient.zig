@@ -602,6 +602,9 @@ const Synthetic = struct {
     }
 
     fn run(transfer: *Transfer, _: *anyopaque) void {
+        // prevents a callback that triggers a navigation queue from killing
+        // this transfer from under us.
+        transfer.state = .completing;
         defer transfer.deinit();
 
         const fulfilled = build(transfer) catch |err| {

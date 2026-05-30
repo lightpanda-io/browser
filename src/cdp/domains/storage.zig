@@ -142,30 +142,34 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
         return error.NotImplemented;
     }
 
-    var arena = std.heap.ArenaAllocator.init(cookie_jar.allocator);
-    errdefer arena.deinit();
-    const a = arena.allocator();
+    // The errdefer only protects construction failures. Once we `break :blk`
+    // with the Cookie value, `Jar.add` owns its lifetime.
+    const cookie = blk: {
+        var arena = std.heap.ArenaAllocator.init(cookie_jar.allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
 
-    // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
-    const domain = try Cookie.parseDomain(a, param.url, param.domain);
-    const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
+        // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
+        const domain = try Cookie.parseDomain(a, param.url, param.domain);
+        const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
 
-    const secure = if (param.secure) |s| s else if (param.url) |url| URL.isHTTPS(url) else false;
+        const secure = if (param.secure) |s| s else if (param.url) |url| URL.isHTTPS(url) else false;
 
-    const cookie = Cookie{
-        .arena = arena,
-        .name = try a.dupe(u8, param.name),
-        .value = try a.dupe(u8, param.value),
-        .path = path,
-        .domain = domain,
-        .expires = param.expires,
-        .secure = secure,
-        .http_only = param.httpOnly,
-        .same_site = switch (param.sameSite) {
-            .Strict => .strict,
-            .Lax => .lax,
-            .None => .none,
-        },
+        break :blk Cookie{
+            .arena = arena,
+            .name = try a.dupe(u8, param.name),
+            .value = try a.dupe(u8, param.value),
+            .path = path,
+            .domain = domain,
+            .expires = param.expires,
+            .secure = secure,
+            .http_only = param.httpOnly,
+            .same_site = switch (param.sameSite) {
+                .Strict => .strict,
+                .Lax => .lax,
+                .None => .none,
+            },
+        };
     };
     try cookie_jar.add(cookie, std.time.timestamp(), true);
 }
