@@ -725,8 +725,10 @@ const schema_walker_suffix = "))";
 
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
-    try performGoto(session, registry, args.url, args.timeout, args.waitUntil);
-    return "Navigated successfully.";
+    return switch (try performGoto(session, registry, args.url, args.timeout, args.waitUntil)) {
+        .completed => "Navigated successfully.",
+        .timeout => "Navigation started but the page did not finish loading before the timeout.",
+    };
 }
 
 pub const SearchParams = struct {
@@ -757,7 +759,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
         .{encoded},
         0,
     ) catch return ToolError.OutOfMemory;
-    try performGoto(session, registry, ddg_url, args.timeout, args.waitUntil);
+    _ = try performGoto(session, registry, ddg_url, args.timeout, args.waitUntil);
     const ddg_frame = try requireFrame(session);
     return renderFrameMarkdown(arena, ddg_frame);
 }
@@ -1342,6 +1344,10 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
         },
     };
 
+    // script may have queued a navigation (e.g. top.location=…); drain it so
+    // the next command reads post-navigation state
+    try awaitQueuedNavigation(session);
+
     return "Script returned truthy.";
 }
 
@@ -1568,12 +1574,12 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
         if (session.currentFrame()) |frame| {
             if (std.mem.eql(u8, frame.url, u)) return frame;
         }
-        try performGoto(session, registry, u, timeout, waitUntil);
+        _ = try performGoto(session, registry, u, timeout, waitUntil);
     }
     return session.currentFrame() orelse ToolError.FrameNotLoaded;
 }
 
-fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!void {
+fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!lp.Session.Runner.WaitResult {
     if (session.hasPage()) {
         registry.reset();
         session.removePage();
@@ -1585,13 +1591,14 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
     }) catch return ToolError.NavigationFailed;
 
     var runner = session.runner(.{}) catch return ToolError.NavigationFailed;
-    runner.wait(.{
+    const result = runner.waitResult(.{
         .ms = timeout orelse 10000,
         .until = waitUntil orelse .done,
     }) catch |err| return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 
     const frame = session.currentFrame() orelse return ToolError.NavigationFailed;
     if (frame._last_navigate_error != null) return ToolError.NavigationFailed;
+    return result;
 }
 
 fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {

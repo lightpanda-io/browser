@@ -54,17 +54,24 @@ pub const WaitOpts = struct {
     until: lp.Config.WaitUntil = .done,
 };
 
+pub const WaitResult = enum { completed, timeout };
+
 pub fn wait(self: *Runner, opts: WaitOpts) !void {
-    return self._wait(false, opts);
+    _ = try self._wait(false, opts);
 }
 
 pub fn waitCDP(self: *Runner, opts: WaitOpts) !void {
-    return self._wait(true, opts);
+    _ = try self._wait(true, opts);
+}
+
+// `wait` that surfaces whether the goal was reached or the timeout fired.
+pub fn waitResult(self: *Runner, opts: WaitOpts) !WaitResult {
+    return self._wait(false, opts);
 }
 
 // Wait until either a parse-state / load goal is reached or `opts.ms`
 // elapses. Returns as soon as _tick reports .done.
-fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
+fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !WaitResult {
     const session = self.session;
     const browser = session.browser;
 
@@ -110,7 +117,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
             .ok => |next_ms| next_ms,
             .done => done_blk: {
                 if (comptime is_cdp == false) {
-                    return;
+                    return .completed;
                 }
 
                 // is_cdp keeps the loop alive past .done so the worker
@@ -118,7 +125,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
                 // but we can ask the http_client to wait for CDP messages.
                 const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
                 if (elapsed >= opts.ms) {
-                    return;
+                    return .timeout;
                 }
                 try self.http_client.tick(@min(opts.ms - elapsed, 200), .all);
                 break :done_blk 0;
@@ -127,7 +134,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
 
         const ms_elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         if (ms_elapsed >= opts.ms) {
-            return;
+            return .timeout;
         }
         if (next_ms > 0) {
             std.Thread.sleep(std.time.ns_per_ms * next_ms);
