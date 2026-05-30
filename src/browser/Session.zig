@@ -70,7 +70,7 @@ _active: ?*Page = null,
 // In-flight root navigation
 _pending: ?*Page = null,
 
-_page_descruction_queue: std.ArrayList(*Page) = .{},
+_page_destruction_queue: std.ArrayList(*Page) = .{},
 _frame_destruction_queue: std.ArrayList(*Frame) = .{},
 
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
@@ -156,7 +156,7 @@ pub fn processDestroyQueues(self: *Session) void {
                 page.deinit();
                 self.browser.page_pool.destroy(page);
             }
-            self._page_descruction_queue.clearRetainingCapacity();
+            self._page_destruction_queue.clearRetainingCapacity();
         }
     }
 }
@@ -178,7 +178,7 @@ fn allocatePage(self: *Session, frame_id: u32) !*Page {
 
 // Tear down and free a Page allocated via allocatePage.
 fn queuePageDestruction(self: *Session, page: *Page) void {
-    self._page_descruction_queue.append(self.arena, page) catch @panic("OOM");
+    self._page_destruction_queue.append(self.arena, page) catch @panic("OOM");
 }
 
 pub fn queueFrameDestruction(self: *Session, frame: *Frame) void {
