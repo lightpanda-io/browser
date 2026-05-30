@@ -429,7 +429,7 @@ fn getAccessibleName(el: *Element, arena: Allocator) !?[]const u8 {
     return try getTextContent(el.asNode(), arena);
 }
 
-fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
+pub fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
     var tw: TreeWalker.FullExcludeSelf = .init(node, .{});
 
     var arr: std.ArrayList(u8) = .empty;

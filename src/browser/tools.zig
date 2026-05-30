@@ -187,7 +187,7 @@ pub const Tool = enum {
                 ),
             },
             .links => .{
-                .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
+                .description = "Extract all links in the opened page as JSON objects with `text` (visible anchor text), `href` (resolved URL), and `backendNodeId` (pass to click/nodeDetails). If a url is provided, it navigates to that url first.",
                 .summary = "List all links on the page",
                 .input_schema = url_params_schema,
             },
@@ -870,8 +870,9 @@ fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
 
     const links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
         return ToolError.InternalError;
-
-    return std.mem.join(arena, "\n", links_list) catch return ToolError.InternalError;
+    lp.links.registerNodes(links_list, registry) catch
+        return ToolError.InternalError;
+    return renderJson(arena, links_list);
 }
 
 fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
