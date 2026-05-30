@@ -217,7 +217,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         return error.MissingProvider;
     }
 
-    // Precedence: --model > defaultModel.
     const model: []u8 = if (opts.model) |m|
         try allocator.dupe(u8, m)
     else if (llm) |l|
@@ -556,17 +555,20 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
 }
 
-fn handleModel(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
+fn requireLlmNoArg(self: *Agent, name: []const u8, rest: []const u8) ?Credentials {
     const llm = self.model_credentials orelse {
-        self.terminal.printError("/model requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{});
-        return;
+        self.terminal.printError("{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{name});
+        return null;
     };
-
-    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
-    if (trimmed.len != 0) {
-        self.terminal.printError("usage: /model", .{});
-        return;
+    if (std.mem.trim(u8, rest, &std.ascii.whitespace).len != 0) {
+        self.terminal.printError("usage: {s}", .{name});
+        return null;
     }
+    return llm;
+}
+
+fn handleModel(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
+    const llm = self.requireLlmNoArg("/model", rest) orelse return;
 
     self.terminal.printInfo("Current model: {s}", .{self.model});
     self.terminal.printInfo("Fetching models for {s}...", .{@tagName(llm.provider)});
@@ -605,16 +607,7 @@ fn setModel(self: *Agent, model: []const u8) !void {
 }
 
 fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
-    const current = self.model_credentials orelse {
-        self.terminal.printError("/provider requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{});
-        return;
-    };
-
-    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
-    if (trimmed.len != 0) {
-        self.terminal.printError("usage: /provider", .{});
-        return;
-    }
+    const current = self.requireLlmNoArg("/provider", rest) orelse return;
 
     var buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
     const providers = availableProviders(&buf);
