@@ -650,19 +650,29 @@ pub fn interactiveTty() bool {
     return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
 }
 
-/// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
-/// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
-/// (some pseudo-ttys leave the field unset). Cheap enough to call per
-/// render frame — picks up resizes without SIGWINCH plumbing.
-pub fn columns() ?u16 {
+fn windowSize() ?std.posix.winsize {
     var ws: std.posix.winsize = undefined;
     // bitcast via c_uint: on archs where `_IOR` sets the direction bit
     // (MIPS/PPC/SPARC), `IOCGWINSZ` exceeds i32 range — a plain @intCast
     // panics there. The bitcast preserves the bit pattern.
     const req: c_int = @bitCast(@as(c_uint, std.posix.T.IOCGWINSZ));
-    const rc = std.c.ioctl(std.posix.STDERR_FILENO, req, &ws);
-    if (rc != 0 or ws.col == 0) return null;
-    return ws.col;
+    if (std.c.ioctl(std.posix.STDERR_FILENO, req, &ws) != 0) return null;
+    return ws;
+}
+
+/// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
+/// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
+/// (some pseudo-ttys leave the field unset). Cheap enough to call per
+/// render frame — picks up resizes without SIGWINCH plumbing.
+pub fn columns() ?u16 {
+    const ws = windowSize() orelse return null;
+    return if (ws.col == 0) null else ws.col;
+}
+
+/// Current terminal height in rows; see `columns` for null conditions.
+pub fn rows() ?u16 {
+    const ws = windowSize() orelse return null;
+    return if (ws.row == 0) null else ws.row;
 }
 
 /// Numbered TTY picker. `default` (if set) marks that row "(default)" and
@@ -671,13 +681,20 @@ pub fn columns() ?u16 {
 pub fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
     if (items.len == 0) return error.NoChoice;
     const valid_default: ?usize = if (default) |d| if (d < items.len) d else null else null;
-    if (interactiveTty()) {
+    // A picker block taller than the terminal scrolls, drifting the in-place
+    // cursor redraw into garbage; use the line prompt when it won't fit.
+    if (interactiveTty() and choiceBlockFits(items.len)) {
         return promptInteractiveChoice(header, items, valid_default) catch |err| switch (err) {
             error.NotInteractive => try promptNumberedChoiceLine(header, items, valid_default),
             else => err,
         };
     }
     return promptNumberedChoiceLine(header, items, valid_default);
+}
+
+fn choiceBlockFits(item_count: usize) bool {
+    const terminal_rows = rows() orelse return true; // unknown height: allow it
+    return item_count + 2 <= terminal_rows; // header + items + hint
 }
 
 /// Line-oriented fallback. Errors with NoChoice after 3 invalid attempts.
