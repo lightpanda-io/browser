@@ -49,7 +49,7 @@ pub const MetaCommand = struct {
 };
 
 pub const meta_commands = [_]MetaCommand{
-    .{ .tag = .help, .name = "help", .hint = "", .values = &.{}, .description = "List commands, or show help for one" },
+    .{ .tag = .help, .name = "help", .hint = "[command]", .values = &.{}, .description = "List commands, or show help for one" },
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
     .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set agent verbosity" },
     .{ .tag = .save, .name = "save", .hint = "[filename.lp]", .values = &.{}, .description = "Save this session to a file" },
