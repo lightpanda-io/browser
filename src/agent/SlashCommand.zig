@@ -24,8 +24,8 @@
 
 const std = @import("std");
 
-/// Shared row format for the `/help` listing — `name` is the slash name
-/// (no `/`), `description` is a single-sentence summary.
+/// Shared row format for the `/help` listing — `name` is the command name
+/// (no `/`), `description` is a terse one-liner.
 pub const Help = struct {
     name: []const u8,
     description: []const u8,
@@ -39,8 +39,8 @@ pub const MetaCommand = struct {
     hint: []const u8,
     /// Tab-completion candidates for the first positional arg.
     values: []const [:0]const u8,
-    /// First-sentence summary for `/help`; longer detail is rendered by
-    /// `Agent.printSlashHelp` for the per-command lookup.
+    /// Terse one-liner for the `/help` listing; longer detail is rendered
+    /// by `Agent.printSlashHelp` for the per-command lookup.
     description: []const u8,
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
@@ -49,20 +49,20 @@ pub const MetaCommand = struct {
 };
 
 pub const meta_commands = [_]MetaCommand{
-    .{ .tag = .help, .name = "help", .hint = "", .values = &.{}, .description = "Show help for a slash command, or list all when no name is given" },
+    .{ .tag = .help, .name = "help", .hint = "", .values = &.{}, .description = "List commands, or show help for one" },
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
-    .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set REPL agent verbosity; bare /verbosity prints the current level" },
-    .{ .tag = .save, .name = "save", .hint = "[filename.lp]", .values = &.{}, .description = "Save this REPL session as a PandaScript file" },
-    .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model (Tab completes the provider's models); bare /model shows the current one" },
-    .{ .tag = .provider, .name = "provider", .hint = "[name]", .values = &.{}, .description = "Change the provider (Tab completes detected providers); bare /provider shows the current one" },
+    .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set agent verbosity" },
+    .{ .tag = .save, .name = "save", .hint = "[filename.lp]", .values = &.{}, .description = "Save this session to a file" },
+    .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model" },
+    .{ .tag = .provider, .name = "provider", .hint = "[name]", .values = &.{}, .description = "Change the provider" },
 };
 
 /// LLM-driven slash commands. Parsed via `script.Command.parse` (they're
 /// variants of the `Command` union) — listed here only so the help
 /// renderer and completer have a single source of names + descriptions.
 pub const llm_commands = [_]Help{
-    .{ .name = "login", .description = "Log in to the current site using $LP_* env-var credentials" },
-    .{ .name = "acceptCookies", .description = "Find and dismiss the cookie consent banner" },
+    .{ .name = "login", .description = "Log in using $LP_* credentials" },
+    .{ .name = "acceptCookies", .description = "Dismiss the cookie consent banner" },
 };
 
 pub fn findMeta(name: []const u8) ?*const MetaCommand {

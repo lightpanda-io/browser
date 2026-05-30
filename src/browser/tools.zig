@@ -112,6 +112,9 @@ pub const Tool = enum {
     /// on the enclosing `Tool` enum; this struct just carries the strings.
     pub const Definition = struct {
         description: []const u8,
+        /// Terse one-liner for the REPL `/help` listing. The full
+        /// `description` is reserved for MCP tool defs and `/help <name>`.
+        summary: []const u8,
         input_schema: []const u8,
     };
 
@@ -123,6 +126,7 @@ pub const Tool = enum {
         return switch (self) {
             .goto => .{
                 .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
+                .summary = "Open a URL and keep the page in memory",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -137,6 +141,7 @@ pub const Tool = enum {
             },
             .search => .{
                 .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
+                .summary = "Web search, results as markdown",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -151,6 +156,7 @@ pub const Tool = enum {
             },
             .markdown => .{
                 .description = "Render the page (or a subtree) as markdown. Scope with `selector` or `backendNodeId` to read just the relevant region — full-page markdown is the last resort. Use `maxBytes` to cap long pages.",
+                .summary = "Render the page or a subtree as markdown",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -167,6 +173,7 @@ pub const Tool = enum {
             },
             .html => .{
                 .description = "Raw HTML for the document or, with `selector`/`backendNodeId`, a single node's outerHTML. Verbose; use only when you need attributes that markdown discards.",
+                .summary = "Raw HTML of the page or a node",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -182,10 +189,12 @@ pub const Tool = enum {
             },
             .links => .{
                 .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
+                .summary = "List all links on the page",
                 .input_schema = url_params_schema,
             },
             .eval => .{
                 .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of eval, surviving navigation; values previously set via `/extract save=` or `/eval save=` appear as `lp.<name>`.",
+                .summary = "Run JavaScript in the page",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -218,6 +227,7 @@ pub const Tool = enum {
                 \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
                 \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
                 ,
+                .summary = "Extract structured data via a JSON schema",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -231,6 +241,7 @@ pub const Tool = enum {
             },
             .tree => .{
                 .description = "Simplified semantic DOM tree (role, name, value, backendNodeId per node). Pass `backendNodeId` to scope, `maxDepth` to limit depth.",
+                .summary = "Semantic DOM tree of the page",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -246,6 +257,7 @@ pub const Tool = enum {
             },
             .nodeDetails => .{
                 .description = "Details for a node by backendNodeId: tag, role, name, interactivity, disabled, value, input type, placeholder, href, id, class, checked, select options. Canonical way to turn a tree backendNodeId into a CSS selector.",
+                .summary = "Inspect a node by backendNodeId",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -258,18 +270,22 @@ pub const Tool = enum {
             },
             .interactiveElements => .{
                 .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
+                .summary = "List interactive elements on the page",
                 .input_schema = url_params_schema,
             },
             .structuredData => .{
                 .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
+                .summary = "Extract JSON-LD / OpenGraph data",
                 .input_schema = url_params_schema,
             },
             .detectForms => .{
                 .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
+                .summary = "List forms and their fields",
                 .input_schema = url_params_schema,
             },
             .click => .{
                 .description = "Click on an interactive element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Returns the current page URL and title after the click.",
+                .summary = "Click an element",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -282,6 +298,7 @@ pub const Tool = enum {
             },
             .fill => .{
                 .description = "Fill text into an input element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId.",
+                .summary = "Type text into an input",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -296,6 +313,7 @@ pub const Tool = enum {
             },
             .scroll => .{
                 .description = "Scroll the page or a specific element. Returns the scroll position and current page URL and title.",
+                .summary = "Scroll the page or an element",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -309,6 +327,7 @@ pub const Tool = enum {
             },
             .waitForSelector => .{
                 .description = "Wait for an element matching a CSS selector to appear in the page. Returns the backend node ID of the matched element.",
+                .summary = "Wait for an element to appear",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -322,6 +341,7 @@ pub const Tool = enum {
             },
             .waitForScript => .{
                 .description = "Wait until a JS expression returns truthy. Re-evaluates on each tick of the event loop. Use for synchronization beyond what CSS selectors can express — e.g. `window.dataLoaded === true`, `document.readyState === 'complete'`, `document.querySelectorAll('.row').length >= 5`.",
+                .summary = "Wait until a JS expression is truthy",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -335,6 +355,7 @@ pub const Tool = enum {
             },
             .hover => .{
                 .description = "Hover over an element, triggering mouseover and mouseenter events. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Useful for menus, tooltips, and hover states.",
+                .summary = "Hover over an element",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -347,6 +368,7 @@ pub const Tool = enum {
             },
             .press => .{
                 .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'. Common shorthand is normalized: 'enter'/'return' → 'Enter', 'esc' → 'Escape', 'up'/'down'/'left'/'right' → 'Arrow*', 'space' → ' '. Pressing 'Enter' on a form input or submit button triggers implicit form submission.",
+                .summary = "Press a keyboard key",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -361,6 +383,7 @@ pub const Tool = enum {
             },
             .selectOption => .{
                 .description = "Select an option in a <select> dropdown element by its value. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Dispatches input and change events.",
+                .summary = "Select an option in a dropdown",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -375,6 +398,7 @@ pub const Tool = enum {
             },
             .setChecked => .{
                 .description = "Check or uncheck a checkbox or radio button. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Dispatches input, change, and click events.",
+                .summary = "Check or uncheck a box",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -389,6 +413,7 @@ pub const Tool = enum {
             },
             .findElement => .{
                 .description = "Find interactive elements by role and/or accessible name. Returns matching elements with their backend node IDs. Useful for locating specific elements without parsing the full semantic tree.",
+                .summary = "Find elements by role or name",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -401,18 +426,21 @@ pub const Tool = enum {
             },
             .consoleLogs => .{
                 .description = "Get buffered console.log/warn/error messages from the current page. Returns all messages since last call and clears the buffer.",
+                .summary = "Read buffered console messages",
                 .input_schema = minify(
                     \\{ "type": "object", "properties": {} }
                 ),
             },
             .getUrl => .{
-                .description = "Current page URL. The browser may already have a page loaded (slash command, replayed script) not visible in this conversation — call this before assuming nothing is loaded when the user references the current page/site. Also useful to verify a navigation or detect a redirect.",
+                .description = "Current page URL. The browser may already have a page loaded (command, replayed script) not visible in this conversation — call this before assuming nothing is loaded when the user references the current page/site. Also useful to verify a navigation or detect a redirect.",
+                .summary = "Show the current page URL",
                 .input_schema = minify(
                     \\{ "type": "object", "properties": {} }
                 ),
             },
             .getCookies => .{
                 .description = "Cookies stored in the browser. Defaults to cookies whose domain matches the current page's host. Pass `url=<URL>` to filter for another host, or `all=true` to dump every cookie regardless of host. Useful for debugging authentication and session state.",
+                .summary = "Show stored cookies",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
@@ -425,6 +453,7 @@ pub const Tool = enum {
             },
             .getEnv => .{
                 .description = "With `name`: read an LP_* env var (other namespaces report as not set) — for non-secret config only (base URLs, flags). Without `name`: list LP_* names that are set (no values) — safe credential discovery. For secrets, pass `$LP_*` placeholders in tool args; never request a credential by name (the value would land in your context).",
+                .summary = "Read or list LP_* env vars",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",

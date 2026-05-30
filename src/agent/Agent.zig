@@ -517,7 +517,7 @@ fn runRepl(self: *Agent) void {
         const cmd = Command.parseDiag(aa, line, &diag) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
-                    self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.", .{});
+                    self.terminal.printError("Basic REPL (--no-llm) accepts only commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.", .{});
                     continue :repl;
                 }
                 _ = self.runTurn(.{ .prompt = line, .record_comment = line, .capture_for_save = true });
@@ -815,7 +815,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
     if (target.len == 0) {
         const all = Schema.all();
         const browser = arena.alloc(SlashCommand.Help, all.len) catch return;
-        for (all, browser) |*s, *e| e.* = .{ .name = s.tool_name, .description = firstSentence(s.description) };
+        for (all, browser) |*s, *e| e.* = .{ .name = s.tool_name, .description = s.summary };
         printHelpSection(&self.terminal, "Browser commands:", browser);
 
         if (self.ai_client != null) {
@@ -832,7 +832,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
     const lookup = if (target[0] == '/') target[1..] else target;
     if (SlashCommand.findMeta(lookup)) |meta| {
         switch (meta.tag) {
-            .help => self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted", .{}),
+            .help => self.terminal.printInfo("/help [name] — show help for a command, or list all when [name] is omitted", .{}),
             .quit => self.terminal.printInfo("/quit — exit the REPL", .{}),
             .verbosity => self.terminal.printInfo(
                 "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
@@ -854,7 +854,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         return;
     }
     const tool_schema = Schema.findByName(lookup) orelse {
-        self.terminal.printError("unknown tool: {s}", .{lookup});
+        self.terminal.printError("unknown command: {s}", .{lookup});
         return;
     };
     self.terminal.printInfo("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
@@ -872,29 +872,19 @@ fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8, 
         };
     }
     const reason: []const u8 = switch (err) {
-        error.UnknownTool => "unknown tool",
-        error.MissingName => return self.terminal.printError("missing tool name. Try /help.", .{}),
+        error.UnknownTool => "unknown command",
+        error.MissingName => return self.terminal.printError("missing command name. Try /help.", .{}),
         error.MissingRequired => "missing required argument",
         error.MalformedKv => "malformed key=value. Use key=value or {json}",
         error.UnknownField => "unknown field (typo?)",
         error.DuplicateField => "the same field was supplied twice (check for case-variants like Selector vs selector)",
-        error.PositionalNotAllowed => "positional only works for tools with one required field. Use key=value",
+        error.PositionalNotAllowed => "positional only works for commands with one required field. Use key=value",
         error.UnterminatedQuote => "unterminated quote",
         error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
         error.InvalidValue => "invalid value (check argument type)",
         error.OutOfMemory => return self.terminal.printError("out of memory", .{}),
     };
     self.terminal.printError("{s}: {s}. Try /help {s}.", .{ name, reason, name });
-}
-
-fn firstSentence(text: []const u8) []const u8 {
-    // Plain "." is too aggressive — descriptions reference "console.log",
-    // "JSON-LD, OpenGraph, etc.", and similar abbreviations.
-    var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, text, i, '.')) |idx| : (i = idx + 1) {
-        if (idx + 1 == text.len or std.ascii.isWhitespace(text[idx + 1])) return text[0..idx];
-    }
-    return text;
 }
 
 const Replacement = script.Replacement;
