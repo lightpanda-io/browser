@@ -556,13 +556,7 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*a
         }
         highlightSlashArgs(henv, text, i);
     } else {
-        // A bare token whose first word matches a tool name suggests the user
-        // forgot the leading `/`. Flag it in error red.
-        if (closed and isKnownSlashName(cmd)) {
-            c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), style_err.ptr);
-        }
-        // Natural-language prompts still benefit from `$LP_*` highlighting on
-        // any embedded env-var references.
+        // No leading `/`: a natural-language prompt, so no command validation.
         highlightDollarVars(henv, text, i);
     }
 }
