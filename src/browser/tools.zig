@@ -192,7 +192,7 @@ pub const Tool = enum {
                 .input_schema = url_params_schema,
             },
             .eval => .{
-                .description = "Evaluate JavaScript in the current page context. A bare trailing expression yields its value; top-level `await` and `return` are supported (the body then runs as an async function, so use `return` to produce a value). If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of eval, surviving navigation; values previously set via `/extract save=` or `/eval save=` appear as `lp.<name>`.",
+                .description = "Evaluate JavaScript in the current page context. A bare trailing expression yields its value; top-level `await` and `return` are supported (the body then runs as an async function, so use `return` to produce a value). Objects and arrays are returned as JSON, so no `JSON.stringify` is needed. If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of eval, surviving navigation; values previously set via `/extract save=` or `/eval save=` appear as `lp.<name>`.",
                 .summary = "Run JavaScript in the page",
                 .input_schema = minify(
                     \\{
@@ -202,7 +202,7 @@ pub const Tool = enum {
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
-                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The eval's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evals. Value must be JSON; wrap non-strings with JSON.stringify(...)." }
+                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The eval's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evals. Objects and arrays are stored as JSON automatically; a returned value must be JSON-serializable." }
                     \\  },
                     \\  "required": ["script"]
                     \\}

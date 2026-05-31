@@ -210,13 +210,14 @@ for (const s of lp.front.stories) {
 '''
 
 /eval '''
-JSON.stringify(lp.front.stories)
+lp.front.stories
 '''
 ```
 
 A body with no explicit `return` resolves to `undefined`, which the eval
-treats as silent — so the loop above prints nothing, and only the final
-`JSON.stringify` lands on stdout.
+treats as silent — so the loop above prints nothing. The final `/eval`
+yields the array, which lands on stdout as JSON: objects and arrays are
+serialized automatically, so no `JSON.stringify` is needed.
 
 The store is **script-run scoped**: it's bound to the Session that runs
 the script, and goes away when that Session does. There is no
