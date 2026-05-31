@@ -144,6 +144,15 @@ as a single JSON object. Supported value forms:
 - Add `"limit": N` inside any array's object spec to cap matches at N
   (works for text, attribute, and `fields` shapes — e.g.
   `[{"selector": ".story .title", "limit": 5}]` for top 5 titles).
+- Add `"follow": <url>` to a spec to fetch a per-row sub-page and resolve
+  the spec's `selector`/`limit`/`fields` against *that* document instead
+  of the current element — a declarative "scrape a list, then visit each
+  row." `<url>` is either a string template whose `{name}` placeholders
+  fill from sibling fields on the same row (`"/item?id={id}"`), or an
+  element-spec read off the row (`{"selector": "a.comments", "attr":
+  "href"}`). Fetches resolve relative to the current page and run
+  sequentially; a failed fetch yields `null` (or `[]`) for that field.
+  See the worked example below.
 
 Use `/extract '''…'''` (or `"""…"""`) to spread a schema across multiple
 lines. The schema is parsed in Zig before the page-side walker runs,
@@ -192,32 +201,46 @@ the end of the call. Adding a key (`lp.x = …`), updating a nested value
 update — even after a navigation, because the store lives Session-side,
 not on the page.
 
-**Async eval.** Top-level `await` works directly — the body runs as an
-async function, so use `return` to produce a value. `runEval` pumps the
-event loop until it settles, then surfaces the resolved value (or the
-rejection as an error). Combined with the bridge this lets a single
-`/eval` do an async `fetch` loop over `lp.*` data:
+**List → detail with `follow`.** A common scrape captures a list, then
+visits each row for more data. `/extract`'s `follow` does that in one
+declarative call — no `lp.*` round-trip, no hand-written loop. The HN
+front page plus the top comments of each story:
 
 ```pandascript
-/eval '''
-for (const s of lp.front.stories) {
-  const html = await fetch('/item?id=' + s.id).then(r => r.text());
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  s.comments = [...doc.querySelectorAll('tr.athing.comtr')].slice(0, 3)
-    .map(r => r.querySelector('.commtext')?.textContent.trim())
-    .filter(Boolean);
-}
-'''
+/goto 'https://news.ycombinator.com/'
 
-/eval '''
-lp.front.stories
+/extract '''
+{
+  "stories": [{
+    "selector": "tr.athing",
+    "limit": 5,
+    "fields": {
+      "id":    {"attr": "id"},
+      "title": ".titleline > a",
+      "comments": [{
+        "follow": "/item?id={id}",
+        "selector": "tr.athing.comtr:has(td.ind img[width=\"0\"]):has(.commtext)",
+        "limit": 3,
+        "fields": {"author": ".hnuser", "text": ".commtext"}
+      }]
+    }
+  }]
+}
 '''
 ```
 
-A body with no explicit `return` resolves to `undefined`, which the eval
-treats as silent — so the loop above prints nothing. The final `/eval`
-yields the array, which lands on stdout as JSON: objects and arrays are
-serialized automatically, so no `JSON.stringify` is needed.
+`{id}` fills from each story's `id` field; the walker fetches
+`/item?id=<id>`, parses it, and resolves the inner `selector`/`fields`
+against that page. The whole nested result prints to stdout as one JSON
+object.
+
+**Async eval.** When a scrape needs logic `follow` can't express, `/eval`
+is the escape hatch: top-level `await` works directly — the body runs as
+an async function, so use `return` to produce a value. `runEval` pumps
+the event loop until it settles, then surfaces the resolved value (or the
+rejection as an error). A body with no explicit `return` resolves to
+`undefined`, which the eval treats as silent. Returned objects and arrays
+are serialized to JSON automatically, so no `JSON.stringify` is needed.
 
 The store is **script-run scoped**: it's bound to the Session that runs
 the script, and goes away when that Session does. There is no
