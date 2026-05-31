@@ -527,7 +527,6 @@ fn hasForbiddenChar(s: []const u8) bool {
     return false;
 }
 
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CookieStore);
 
