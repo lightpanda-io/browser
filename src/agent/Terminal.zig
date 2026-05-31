@@ -747,6 +747,10 @@ pub fn columns() ?u16 {
     return ws.col;
 }
 
+pub fn interactiveTty() bool {
+    return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
+}
+
 /// Numbered TTY picker. `default` (if set) marks that row "(default)" and
 /// makes Enter start on that index. Up/Down moves the active row; Enter
 /// selects it. Numbered input still works for users who prefer typing.

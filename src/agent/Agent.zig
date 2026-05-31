@@ -188,7 +188,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const remembered: ?Remembered = if (resolve) loadRemembered(allocator) else null;
     defer if (remembered) |r| std.zon.parse.free(allocator, r);
 
-    const resolved: ?ResolvedProvider = if (resolve) try resolveCredentials(opts, remembered) else null;
+    const resolved: ?ResolvedProvider = if (resolve) try resolveCredentials(opts, remembered, will_repl) else null;
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
 
     if (llm == null and requires_llm) {
@@ -221,6 +221,13 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             "Auto-selected provider {s}, model {s}. Set --provider/--model or use /provider, /model to change.\n",
             .{ @tagName(r.credentials.provider), model },
         ),
+        .picked => {
+            saveRemembered(r.credentials.provider, model);
+            std.debug.print(
+                "Selected provider {s}, model {s} (saved to ./.lp-agent.zon). Change with /provider, /model.\n",
+                .{ @tagName(r.credentials.provider), model },
+            );
+        },
     };
 
     const notification: *lp.Notification = try .init(allocator);
@@ -1573,12 +1580,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 /// decides whether that's fatal — basic REPL tolerates it).
 const ResolvedProvider = struct {
     credentials: Credentials,
-    source: enum { flag, remembered, detected },
+    source: enum { flag, remembered, detected, picked },
 };
 
 /// Precedence: `--provider` > remembered (if its key is still set) > first
 /// detected. Null means no key at all (the reason is already printed).
-fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered) !?ResolvedProvider {
+fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pick: bool) !?ResolvedProvider {
     if (opts.provider) |p| {
         const key = zenai.provider.envApiKey(p) orelse {
             std.debug.print(
@@ -1604,7 +1611,18 @@ fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered) !?ResolvedPro
         , .{});
         return null;
     }
-    return .{ .credentials = found[0], .source = .detected };
+    // A single key needs no choice; non-interactive callers (--list-models,
+    // one-shot tasks, pipes) must not block on a prompt — take the first.
+    if (!allow_pick or found.len == 1 or !Terminal.interactiveTty()) {
+        return .{ .credentials = found[0], .source = .detected };
+    }
+
+    var names: [zenai.provider.default_candidates.len][]const u8 = undefined;
+    for (found, 0..) |cred, i| names[i] = @tagName(cred.provider);
+    const idx = Terminal.promptNumberedChoice("Select a provider:", names[0..found.len], 0) catch {
+        return .{ .credentials = found[0], .source = .detected };
+    };
+    return .{ .credentials = found[idx], .source = .picked };
 }
 
 const remembered_path = ".lp-agent.zon";
@@ -1652,7 +1670,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    const resolved = (try resolveCredentials(opts, null)) orelse return error.MissingProvider;
+    const resolved = (try resolveCredentials(opts, null, false)) orelse return error.MissingProvider;
     const llm = resolved.credentials;
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
