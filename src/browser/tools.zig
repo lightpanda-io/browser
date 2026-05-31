@@ -192,7 +192,7 @@ pub const Tool = enum {
                 .input_schema = url_params_schema,
             },
             .eval => .{
-                .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of eval, surviving navigation; values previously set via `/extract save=` or `/eval save=` appear as `lp.<name>`.",
+                .description = "Evaluate JavaScript in the current page context. A bare trailing expression yields its value; top-level `await` and `return` are supported (the body then runs as an async function, so use `return` to produce a value). If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of eval, surviving navigation; values previously set via `/extract save=` or `/eval save=` appear as `lp.<name>`.",
                 .summary = "Run JavaScript in the page",
                 .input_schema = minify(
                     \\{
@@ -659,7 +659,7 @@ pub fn evalScript(
 ) ToolError!ToolResult {
     const z = try arena.dupeZ(u8, script);
     const page = try ensurePage(session, registry, null, null, null);
-    return runEval(arena, page, z);
+    return runEval(arena, page, z, null);
 }
 
 /// Schema-driven extraction. The schema is parsed in Zig so a syntax error
@@ -678,7 +678,7 @@ pub fn extract(
 
     const script = try std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0);
     const page = try ensurePage(session, registry, null, null, null);
-    return runEval(arena, page, script);
+    return runEval(arena, page, script, null);
 }
 
 // The schema literal is spliced between prefix and suffix verbatim — a format
@@ -960,31 +960,27 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const app_allocator = session.browser.app.allocator;
 
     const prelude = bridgePrelude(arena, &session.bridge_store) catch return ToolError.OutOfMemory;
-    _ = try runEval(arena, page, prelude);
+    _ = try runEval(arena, page, prelude, null);
 
-    // Block-scope so top-level `let`/`const` don't leak across calls.
+    // Block scope preserves a trailing expression's value and keeps top-level
+    // `let`/`const` from leaking; top-level `await`/`return` need the async IIFE.
     const block_script = std.fmt.allocPrintSentinel(
         arena,
         "{{\n{s}\n}}",
         .{args.script},
         0,
     ) catch return ToolError.OutOfMemory;
-    var result = try runEval(arena, page, block_script);
-
-    // Recover from top-level `return` by retrying inside an IIFE.
-    if (result.is_error == true and std.mem.indexOf(u8, result.text, "Illegal return statement") != null) {
-        const iife_script = std.fmt.allocPrintSentinel(
-            arena,
-            "(function(){{ \"use strict\"; {s} }})()",
-            .{args.script},
-            0,
-        ) catch return ToolError.OutOfMemory;
-        result = try runEval(arena, page, iife_script);
-    }
-    if (result.is_error == true) return result;
+    const iife_script = std.fmt.allocPrintSentinel(
+        arena,
+        "(async function(){{ \"use strict\"; {s} }})()",
+        .{args.script},
+        0,
+    ) catch return ToolError.OutOfMemory;
+    var result = try runEval(arena, page, block_script, iife_script);
+    if (result.is_error) return result;
 
     // Sync lp.* before any queued navigation tears down this JS context.
-    const postlude_result: ?ToolResult = runEval(arena, page, bridge_postlude) catch |err| switch (err) {
+    const postlude_result: ?ToolResult = runEval(arena, page, bridge_postlude, null) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => null,
     };
@@ -1043,7 +1039,9 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNod
 
 const eval_promise_timeout_ms: u32 = 30_000;
 
-fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) ToolError!ToolResult {
+/// Runs `fallback` only if `script` fails to *compile* — a compile failure ran
+/// nothing, so retrying is safe; a runtime throw keeps `script`'s error.
+fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fallback: ?[:0]const u8) ToolError!ToolResult {
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
@@ -1052,8 +1050,10 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) Tool
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    const js_result = ls.local.compileAndRun(script, null) catch |err|
+    const js_result = ls.local.compileAndRun(script, null) catch |err| {
+        if (err == error.CompilationError) if (fallback) |fb| return runEval(arena, page, fb, null);
         return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true };
+    };
 
     if (js_result.isPromise()) {
         const promise = js_result.toPromise();

@@ -477,7 +477,7 @@ test "MCP - eval error reporting" {
     } }, out.written());
 }
 
-test "MCP - eval: top-level return retried inside IIFE" {
+test "MCP - eval: top-level return runs in an async wrapper" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -491,6 +491,30 @@ test "MCP - eval: top-level return retried inside IIFE" {
         \\  "params": {
         \\    "name": "eval",
         \\    "arguments": { "script": "const x = 41; return x + 1;" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "42" }},
+    } }, out.written());
+}
+
+test "MCP - eval: top-level await runs in an async wrapper" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "const v = await Promise.resolve(41); return v + 1;" }
         \\  }
         \\}
     ;

@@ -192,22 +192,21 @@ the end of the call. Adding a key (`lp.x = …`), updating a nested value
 update — even after a navigation, because the store lives Session-side,
 not on the page.
 
-**Async eval.** If your `/eval` body returns a Promise, `runEval`
-pumps the event loop until it settles, then surfaces the resolved value
-(or the rejection as an error). Combined with the bridge this lets a
-single `/eval` do an async `fetch` loop over `lp.*` data:
+**Async eval.** Top-level `await` works directly — the body runs as an
+async function, so use `return` to produce a value. `runEval` pumps the
+event loop until it settles, then surfaces the resolved value (or the
+rejection as an error). Combined with the bridge this lets a single
+`/eval` do an async `fetch` loop over `lp.*` data:
 
 ```pandascript
 /eval '''
-(async () => {
-  for (const s of lp.front.stories) {
-    const html = await fetch('/item?id=' + s.id).then(r => r.text());
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    s.comments = [...doc.querySelectorAll('tr.athing.comtr')].slice(0, 3)
-      .map(r => r.querySelector('.commtext')?.textContent.trim())
-      .filter(Boolean);
-  }
-})()
+for (const s of lp.front.stories) {
+  const html = await fetch('/item?id=' + s.id).then(r => r.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  s.comments = [...doc.querySelectorAll('tr.athing.comtr')].slice(0, 3)
+    .map(r => r.querySelector('.commtext')?.textContent.trim())
+    .filter(Boolean);
+}
 '''
 
 /eval '''
@@ -215,9 +214,9 @@ JSON.stringify(lp.front.stories)
 '''
 ```
 
-An async IIFE with no explicit `return` resolves to `undefined`, which
-the eval treats as silent — so the loop above prints nothing, and only
-the final `JSON.stringify` lands on stdout.
+A body with no explicit `return` resolves to `undefined`, which the eval
+treats as silent — so the loop above prints nothing, and only the final
+`JSON.stringify` lands on stdout.
 
 The store is **script-run scoped**: it's bound to the Session that runs
 the script, and goes away when that Session does. There is no
