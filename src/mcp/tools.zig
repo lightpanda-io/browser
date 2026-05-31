@@ -587,6 +587,30 @@ test "MCP - eval: bare expression still returns its value" {
     } }, out.written());
 }
 
+test "MCP - eval: object return serializes as JSON" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "return { n: 42, items: [1, 2] };" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "{\"n\":42,\"items\":[1,2]}" }},
+    } }, out.written());
+}
+
 test "MCP - eval: localStorage persists across navigations and is origin-scoped" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);

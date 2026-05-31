@@ -1076,20 +1076,30 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
         }
 
         const settled = promise.result();
+        const rejected = promise.state() == .rejected;
         // No-return async IIFE → undefined → silence, so pipes stay clean.
-        if (promise.state() == .fulfilled and settled.isUndefined()) return .{ .text = "" };
-        const text = settled.toStringSliceWithAlloc(arena) catch |err| switch (err) {
+        if (!rejected and settled.isUndefined()) return .{ .text = "" };
+        const text = (if (rejected) settled.toStringSliceWithAlloc(arena) else evalResultText(arena, settled)) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
         };
-        return .{ .text = text, .is_error = (promise.state() == .rejected) };
+        return .{ .text = text, .is_error = rejected };
     }
 
-    const text = js_result.toStringSliceWithAlloc(arena) catch |err| switch (err) {
+    const text = evalResultText(arena, js_result) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
     };
     return .{ .text = text };
+}
+
+/// Objects/arrays serialize as JSON so `return obj` prints data, not
+/// `[object Object]`; errors and primitives keep their string form.
+fn evalResultText(arena: std.mem.Allocator, value: lp.js.Value) ![]u8 {
+    if (value.isObject() and !value.isFunction() and !value.isNativeError()) {
+        return value.toJson(arena);
+    }
+    return value.toStringSliceWithAlloc(arena);
 }
 
 fn formatJsError(arena: std.mem.Allocator, try_catch: *lp.js.TryCatch, err: anyerror) error{OutOfMemory}![]const u8 {
