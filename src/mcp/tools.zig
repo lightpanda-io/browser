@@ -738,6 +738,43 @@ test "MCP - eval: save= value is readable via lp.<name> in next eval" {
     } }, out.written());
 }
 
+test "MCP - eval: save= a bare string round-trips without JSON.stringify" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const save_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "return document.title || 'untitled';", "save": "title" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, save_msg);
+
+    out.clearRetainingCapacity();
+    const read_msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "eval",
+        \\    "arguments": { "script": "lp.title" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, read_msg);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "untitled" }},
+    } }, out.written());
+}
+
 test "MCP - eval: lp.* mutations auto-sync between evals" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);

@@ -202,7 +202,7 @@ pub const Tool = enum {
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
-                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The eval's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evals. Objects and arrays are stored as JSON automatically; a returned value must be JSON-serializable." }
+                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The eval's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evals. Objects, arrays, and strings are serialized automatically — no JSON.stringify needed." }
                     \\  },
                     \\  "required": ["script"]
                     \\}
@@ -966,7 +966,7 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     // `let`/`const` from leaking; top-level `await`/`return` need the async IIFE.
     const block_script = std.fmt.allocPrintSentinel(
         arena,
-        "{{\n{s}\n}}",
+        "{{ {s}\n}}",
         .{args.script},
         0,
     ) catch return ToolError.OutOfMemory;
@@ -991,14 +991,17 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         };
     };
 
-    // Silence on save= success so stdout pipes stay clean.
+    // Silence on save= success so stdout pipes stay clean. Objects/arrays
+    // already render as JSON; a bare string (or other non-JSON text) is
+    // JSON-encoded so it round-trips to `lp.<name>`.
     if (args.save) |name| {
-        bridgeStoreSet(app_allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
+        const json_value = if (std.json.validate(arena, result.text) catch false)
+            result.text
+        else
+            std.json.Stringify.valueAlloc(arena, result.text, .{}) catch return ToolError.OutOfMemory;
+        bridgeStoreSet(app_allocator, &session.bridge_store, name, json_value) catch |err| switch (err) {
             error.OutOfMemory => return ToolError.OutOfMemory,
-            error.InvalidJson => return .{
-                .text = "save= requires the eval to return JSON; wrap with JSON.stringify(...)",
-                .is_error = true,
-            },
+            error.InvalidJson => unreachable,
         };
         result = .{ .text = "" };
     }
