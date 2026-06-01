@@ -36,6 +36,8 @@ const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
+const settings = @import("settings.zig");
+const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
 const Agent = @This();
 
@@ -185,10 +187,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // (pure replay) — otherwise resolve prints "No API key detected" for a
     // run that does not need one.
     const resolve = !opts.no_llm and requires_llm;
-    const remembered: ?Remembered = if (resolve) loadRemembered(allocator) else null;
+    const remembered: ?settings.Remembered = if (resolve) settings.loadRemembered(allocator) else null;
     defer if (remembered) |r| std.zon.parse.free(allocator, r);
 
-    const resolved: ?ResolvedProvider = if (resolve) try resolveCredentials(opts, remembered, will_repl) else null;
+    const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(opts, remembered, will_repl) else null;
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
 
     if (llm == null and requires_llm) {
@@ -206,7 +208,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         if (r.source == .remembered)
             try allocator.dupe(u8, remembered.?.model)
         else
-            try allocator.dupe(u8, defaultModel(r.credentials.provider))
+            try allocator.dupe(u8, zenai.provider.defaultModel(r.credentials.provider))
     else
         try allocator.dupe(u8, "");
     errdefer allocator.free(model);
@@ -222,7 +224,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             .{ @tagName(r.credentials.provider), model },
         ),
         .picked => {
-            saveRemembered(r.credentials.provider, model);
+            settings.saveRemembered(r.credentials.provider, model);
             std.debug.print(
                 "Selected provider {s}, model {s} (saved to ./.lp-agent.zon). Change with /provider, /model.\n",
                 .{ @tagName(r.credentials.provider), model },
@@ -281,8 +283,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
     self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
 
-    self.ai_client = if (llm) |l| try initAiClient(allocator, l, opts.base_url) else null;
-    errdefer if (self.ai_client) |c| deinitAiClient(allocator, c);
+    self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running }) else null;
+    errdefer if (self.ai_client) |c| c.deinit(allocator);
 
     // An LLM driver reasons about visibility/computed styles, so fetch external
     // stylesheets by default. Pure replay and --no-llm keep the cheap fast path.
@@ -325,14 +327,7 @@ pub fn deinit(self: *Agent) void {
     self.node_registry.deinit();
     self.browser.deinit();
     self.notification.deinit();
-    if (self.ai_client) |ai_client| {
-        switch (ai_client) {
-            inline else => |c| {
-                c.deinit();
-                self.allocator.destroy(c);
-            },
-        }
-    }
+    if (self.ai_client) |ai_client| ai_client.deinit(self.allocator);
     self.allocator.free(self.model);
     self.allocator.destroy(self);
 }
@@ -577,7 +572,7 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
 }
 
-const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY";
+const api_keys_hint = settings.api_keys_hint;
 const llm_setup_hint = "drop --no-llm and set an API key (" ++ api_keys_hint ++ ")";
 
 fn requireLlm(self: *Agent, name: []const u8) bool {
@@ -605,7 +600,7 @@ fn setModel(self: *Agent, model: []const u8) !void {
     const new_model = try self.allocator.dupe(u8, model);
     self.allocator.free(self.model);
     self.model = new_model;
-    if (self.model_credentials) |c| saveRemembered(c.provider, self.model);
+    if (self.model_credentials) |c| settings.saveRemembered(c.provider, self.model);
     self.terminal.printInfo("model: {s}", .{self.model});
 }
 
@@ -637,17 +632,17 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
 }
 
 fn setProvider(self: *Agent, credentials: Credentials) !void {
-    const new_client = try initAiClient(self.allocator, credentials, self.model_base_url);
-    errdefer deinitAiClient(self.allocator, new_client);
+    const new_client = try zenai.provider.Client.init(self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running });
+    errdefer new_client.deinit(self.allocator);
 
-    const new_model = try self.allocator.dupe(u8, defaultModel(credentials.provider));
-    if (self.ai_client) |client| deinitAiClient(self.allocator, client);
+    const new_model = try self.allocator.dupe(u8, zenai.provider.defaultModel(credentials.provider));
+    if (self.ai_client) |client| client.deinit(self.allocator);
     self.ai_client = new_client;
     self.model_credentials = credentials;
     self.model_completions = null;
     self.allocator.free(self.model);
     self.model = new_model;
-    saveRemembered(credentials.provider, self.model);
+    settings.saveRemembered(credentials.provider, self.model);
     self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
     self.terminal.printInfo("model: {s}", .{self.model});
 }
@@ -1538,13 +1533,7 @@ const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
     if (output.len <= tool_output_max_bytes) return output;
-    // Walk back at most 3 bytes (max UTF-8 sequence is 4); on malformed input
-    // fall back to the raw cap so we don't drop everything.
-    var end: usize = tool_output_max_bytes;
-    const floor = end -| 3;
-    while (end > floor and (output[end] & 0b1100_0000) == 0b1000_0000) : (end -= 1) {}
-    if ((output[end] & 0b1100_0000) == 0b1000_0000) end = tool_output_max_bytes;
-    const prefix = output[0..end];
+    const prefix = truncateUtf8(output, tool_output_max_bytes);
     var suffix_buf: [64]u8 = undefined;
     const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
@@ -1577,84 +1566,6 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     }
 }
 
-/// Determine which provider to use and read its env key. Returns null
-/// only when no `--provider` was given AND no env key exists (the caller
-/// decides whether that's fatal — basic REPL tolerates it).
-const ResolvedProvider = struct {
-    credentials: Credentials,
-    source: enum { flag, remembered, detected, picked },
-};
-
-/// Precedence: `--provider` > remembered (if its key is still set) > first
-/// detected. Null means no key at all (the reason is already printed).
-fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pick: bool) !?ResolvedProvider {
-    if (opts.provider) |p| {
-        const key = zenai.provider.envApiKey(p) orelse {
-            std.debug.print(
-                "Missing API key for --provider {s}: set {s} — or pass --no-llm for the basic REPL.\n",
-                .{ @tagName(p), zenai.provider.envVarName(p) },
-            );
-            return error.MissingApiKey;
-        };
-        return .{ .credentials = .{ .provider = p, .key = key }, .source = .flag };
-    }
-
-    if (remembered) |r| if (zenai.provider.envApiKey(r.provider)) |key| {
-        return .{ .credentials = .{ .provider = r.provider, .key = key }, .source = .remembered };
-    };
-
-    var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
-    const found = zenai.provider.detectKeys(&buf, zenai.provider.default_candidates);
-    if (found.len == 0) {
-        std.debug.print(
-            \\No API key detected. Set {s}.
-            \\If you want to use the REPL in basic mode (without LLM integration) you can pass the --no-llm option.
-            \\
-        , .{api_keys_hint});
-        return null;
-    }
-    // A single key needs no choice; non-interactive callers (--list-models,
-    // one-shot tasks, pipes) must not block on a prompt — take the first.
-    if (!allow_pick or found.len == 1 or !Terminal.interactiveTty()) {
-        return .{ .credentials = found[0], .source = .detected };
-    }
-
-    var names: [zenai.provider.default_candidates.len][]const u8 = undefined;
-    for (found, 0..) |cred, i| names[i] = @tagName(cred.provider);
-    const idx = Terminal.promptNumberedChoice("Select a provider:", names[0..found.len], 0) catch {
-        return .{ .credentials = found[0], .source = .detected };
-    };
-    return .{ .credentials = found[idx], .source = .picked };
-}
-
-const remembered_path = ".lp-agent.zon";
-
-/// Last user-selected provider/model, persisted per-directory in `.lp-agent.zon`.
-/// `model` is owned by the caller.
-const Remembered = struct {
-    provider: Config.AiProvider,
-    model: []const u8,
-};
-
-fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
-    const data = std.fs.cwd().readFileAllocOptions(allocator, remembered_path, 1024, null, .of(u8), 0) catch return null;
-    defer allocator.free(data);
-    const remembered = std.zon.parse.fromSlice(Remembered, allocator, data, null, .{}) catch return null;
-    if (remembered.model.len == 0) {
-        std.zon.parse.free(allocator, remembered);
-        return null;
-    }
-    return remembered;
-}
-
-/// Best-effort persist of the current selection; failures are ignored.
-fn saveRemembered(provider: Config.AiProvider, model: []const u8) void {
-    var buf: [512]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
-    std.zon.stringify.serialize(Remembered{ .provider = provider, .model = model }, .{}, &w) catch return;
-    std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = w.buffered() }) catch {};
-}
-
 /// One-shot for `--list-models`: resolve provider+key, fetch chat-capable
 /// model IDs, print to stdout (one per line).
 pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
@@ -1672,7 +1583,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    const resolved = (try resolveCredentials(opts, null, false)) orelse return error.MissingProvider;
+    const resolved = (try settings.resolveCredentials(opts, null, false)) orelse return error.MissingProvider;
     const llm = resolved.credentials;
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
@@ -1683,46 +1594,6 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     const w = &stdout_file.interface;
     for (ids) |id| try w.print("{s}\n", .{id});
     try w.flush();
-}
-
-fn defaultModel(p: Config.AiProvider) []const u8 {
-    return switch (p) {
-        .anthropic => "claude-sonnet-4-6",
-        .openai => "gpt-5.5",
-        .gemini => "gemini-3.5-flash",
-        .ollama => "gemma4",
-    };
-}
-
-fn initAiClient(allocator: std.mem.Allocator, credentials: Credentials, base_url: ?[:0]const u8) !zenai.provider.Client {
-    return switch (credentials.provider) {
-        inline else => |tag| blk: {
-            const ProviderClient = zenai.provider.Client;
-            const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
-            const Client = @typeInfo(ClientPtr).pointer.child;
-            const client = try allocator.create(Client);
-            errdefer allocator.destroy(client);
-            const url: ?[]const u8 = base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
-            client.* = .init(allocator, credentials.key, if (url) |u|
-                .{ .base_url = u, .retry_policy = .long_running }
-            else
-                .{ .retry_policy = .long_running });
-            break :blk @unionInit(ProviderClient, @tagName(tag), client);
-        },
-    };
-}
-
-fn deinitAiClient(allocator: std.mem.Allocator, ai_client: zenai.provider.Client) void {
-    switch (ai_client) {
-        inline else => |client| {
-            client.deinit();
-            allocator.destroy(client);
-        },
-    }
-}
-
-fn availableProviders(buf: []Credentials) []Credentials {
-    return zenai.provider.detectKeys(buf, std.enums.values(Config.AiProvider));
 }
 
 const ModelCompletions = struct {
@@ -1737,7 +1608,7 @@ const ModelCompletions = struct {
 fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []const u8 {
     _ = context;
     var buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
-    const found = availableProviders(&buf);
+    const found = settings.availableProviders(&buf);
     const names = arena.alloc([]const u8, found.len) catch return &.{};
     for (found, 0..) |f, i| names[i] = @tagName(f.provider);
     return names;
@@ -1762,13 +1633,21 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
     return ids;
 }
 
-test "capToolOutput: truncates at UTF-8 codepoint boundary" {
+test "capToolOutput: passes through when under cap" {
+    const ta = std.testing.allocator;
+    const out = capToolOutput(ta, "short");
+    try std.testing.expectEqualStrings("short", out);
+}
+
+// Boundary correctness lives in string.zig's `truncateUtf8` tests; here we only
+// assert the agent-specific policy: an over-cap body keeps valid UTF-8 and gains
+// the truncation marker.
+test "capToolOutput: appends a marker when truncating" {
     const ta = std.testing.allocator;
 
     // 3-byte Hangul codepoint (U+D55C '한' = 0xED 0x95 0x9C) straddling the cap.
-    // A naive byte-slice would leave the truncated body invalid UTF-8.
     const cap = tool_output_max_bytes;
-    var buf = try ta.alloc(u8, cap + 8);
+    const buf = try ta.alloc(u8, cap + 8);
     defer ta.free(buf);
     @memset(buf[0 .. cap - 1], 'a');
     buf[cap - 1] = 0xED;
@@ -1780,23 +1659,5 @@ test "capToolOutput: truncates at UTF-8 codepoint boundary" {
     defer if (out.ptr != buf.ptr) ta.free(out);
 
     try std.testing.expect(std.unicode.utf8ValidateSlice(out));
-}
-
-test "capToolOutput: passes through when under cap" {
-    const ta = std.testing.allocator;
-    const out = capToolOutput(ta, "short");
-    try std.testing.expectEqualStrings("short", out);
-}
-
-test "capToolOutput: malformed UTF-8 around cap falls back to raw boundary" {
-    const ta = std.testing.allocator;
-    const cap = tool_output_max_bytes;
-    const buf = try ta.alloc(u8, cap + 8);
-    defer ta.free(buf);
-    @memset(buf, 0x80);
-
-    const out = capToolOutput(ta, buf);
-    defer if (out.ptr != buf.ptr) ta.free(out);
-
-    try std.testing.expect(out.len > cap);
+    try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
 }
