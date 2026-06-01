@@ -139,16 +139,9 @@
 </script>
 
 <script id=getBattery type=module>
-  {
-    const state = await testing.async();
-    try {
-      await navigator.getBattery();
-      state.resolve()
-      await state.done(() => { testing.fail('getBattery should reject'); });
-    } catch (err) {
-      state.resolve()
-      await state.done(() => { testing.expectEqual('NotSupportedError', err.name); });
-    }
-  }
+  // Like Firefox, we don't expose navigator.getBattery. Sites already
+  // have to handle it being undefined, so this is a real-browser shape
+  // rather than a stub that always rejects.
+  testing.expectEqual('undefined', typeof navigator.getBattery);
 </script>
 

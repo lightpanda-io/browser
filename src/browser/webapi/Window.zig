@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("../js/js.zig");
+const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
@@ -506,6 +507,14 @@ pub fn open(self: *Window, url_: ?[]const u8, target_: ?[]const u8, features_: ?
 
     const no_opener = hasFeatureToken(features, "noopener") or hasFeatureToken(features, "noreferrer");
 
+    if (raw_url.len > 0) {
+        // Per spec, we should validate the url
+        _ = URL.resolve(frame.call_arena, frame.base(), raw_url, .{}) catch |err| switch (err) {
+            error.OutOfMemory => |e| return e,
+            else => return error.SyntaxError,
+        };
+    }
+
     // _self / _parent / _top navigate the current browsing context.
     if (std.ascii.eqlIgnoreCase(target, "_self") or
         std.ascii.eqlIgnoreCase(target, "_parent") or
@@ -610,9 +619,7 @@ pub fn close(self: *Window) void {
     // eval whose parser is still holding the Frame. Destroying the context
     // now leaves dangling pointers in the unwinding script eval (load event
     // dispatch, runMacrotasks, etc.). Defer to Page.deinit instead.
-    page.queued_close.append(page.frame_arena, frame) catch |err| {
-        log.err(.frame, "queue popup close", .{ .err = err });
-    };
+    page.session.queueFrameDestruction(frame);
 }
 
 pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
@@ -1001,7 +1008,7 @@ pub const JsApi = struct {
     pub const opener = bridge.accessor(Window.getOpener, null, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});
     pub const name = bridge.accessor(Window.getName, Window.setName, .{});
-    pub const open = bridge.function(Window.open, .{});
+    pub const open = bridge.function(Window.open, .{ .dom_exception = true });
     pub const close = bridge.function(Window.close, .{});
 
     pub const alert = bridge.function(struct {

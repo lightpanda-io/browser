@@ -139,11 +139,6 @@ pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
     return &frame.window._model_context;
 }
 
-pub fn getBattery(_: *const Navigator, frame: *Frame) !js.Promise {
-    log.info(.not_implemented, "navigator.getBattery", .{});
-    return frame.js.local.?.rejectErrorPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
-}
-
 pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, frame);
@@ -248,7 +243,6 @@ pub const JsApi = struct {
 
     // Methods
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
-    pub const getBattery = bridge.function(Navigator.getBattery, .{});
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});

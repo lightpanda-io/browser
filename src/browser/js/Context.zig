@@ -502,11 +502,16 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
     const script_manager = self.script_manager;
     for (0..request_len) |i| {
         const specifier = requests.get(i).specifier(local);
-        const normalized_specifier = try script_manager.resolveSpecifier(
+        const normalized_specifier = script_manager.resolveSpecifier(
             self.call_arena,
             url,
             try specifier.toSliceZ(),
-        );
+        ) catch |err| switch (err) {
+            error.SpecifierResolutionFailed => {
+                _ = self.isolate.throwException(self.isolate.createTypeError("Failed to resolve module specifier"));
+                return err;
+            },
+        };
         const nested_gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
         if (!nested_gop.found_existing) {
             const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
@@ -560,6 +565,9 @@ fn resolveModuleCallback(
     const referrer = js.Module{ .local = &local, .handle = c_referrer.? };
 
     return self._resolveModuleCallback(referrer, specifier, &local) catch |err| {
+        if (err == error.SpecifierResolutionFailed) {
+            _ = self.isolate.throwException(self.isolate.createTypeError("Failed to resolve module specifier"));
+        }
         log.err(.js, "resolve module", .{
             .err = err,
             .specifier = specifier,
@@ -609,9 +617,10 @@ pub fn dynamicModuleCallback(
         self.arena, // might need to survive until the module is loaded
         resource,
         specifier,
-    ) catch |err| {
-        log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback3" });
-        return @constCast(local.rejectPromise(.{ .generic_error = "Out of memory" }).handle);
+    ) catch |err| switch (err) {
+        error.SpecifierResolutionFailed => {
+            return @constCast(local.rejectPromise(.{ .type_error = "Failed to resolve module specifier" }).handle);
+        },
     };
 
     const promise = self._dynamicModuleCallback(normalized_specifier, resource, &local) catch |err| blk: {

@@ -33,10 +33,6 @@ const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
 const String = lp.String;
 
-pub fn registerTypes() []const type {
-    return &.{ CookieStore, CookieListItem };
-}
-
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore
 const CookieStore = @This();
 
@@ -76,7 +72,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
     const target = Cookie.PreparedUri{
         .host = URL.getHostname(doc_url),
         .path = URL.getPathname(doc_url),
-        .secure = URL.isHTTPS(doc_url),
+        .secure = URL.isSecure(doc_url),
     };
     if (target.host.len == 0) return;
 
@@ -259,7 +255,7 @@ pub fn get(_: *CookieStore, input: GetInput, exec: *const Execution) !js.Promise
     };
 
     if (items.len == 0) {
-        return local.resolvePromise(@as(?*CookieListItem, null));
+        return local.resolvePromise(@as(?CookieListItem, null));
     }
     return local.resolvePromise(items[0]);
 }
@@ -289,7 +285,7 @@ pub fn set(_: *CookieStore, input: SetInput, value: ?[]const u8, exec: *const Ex
         },
     };
 
-    storeCookie(exec, init) catch |err| {
+    storeCookie(exec, init, false) catch |err| {
         return local.rejectPromise(.{ .type_error = @errorName(err) });
     };
 
@@ -315,7 +311,7 @@ pub fn delete(_: *CookieStore, input: DeleteInput, exec: *const Execution) !js.P
         .path = opts.path,
         .sameSite = .strict,
         .partitioned = opts.partitioned,
-    }) catch |err| {
+    }, true) catch |err| {
         return local.rejectPromise(.{ .type_error = @errorName(err) });
     };
 
@@ -346,20 +342,20 @@ fn matchCookies(
     name: ?[]const u8,
     url: ?[]const u8,
     first_only: bool,
-) ![]*CookieListItem {
+) ![]CookieListItem {
     const session = exec.session;
     const url_resolved = try resolveQueryUrl(exec, url);
 
     const target = Cookie.PreparedUri{
         .host = URL.getHostname(url_resolved),
         .path = URL.getPathname(url_resolved),
-        .secure = URL.isHTTPS(url_resolved),
+        .secure = URL.isSecure(url_resolved),
     };
     if (target.host.len == 0) return error.SecurityError;
 
     session.cookie_jar.removeExpired(null);
 
-    var items: std.ArrayList(*CookieListItem) = .empty;
+    var items: std.ArrayList(CookieListItem) = .empty;
     for (session.cookie_jar.cookies.items) |*cookie| {
         // CookieStore exposes only cookies that script would see for the
         // current document. HttpOnly cookies stay hidden.
@@ -368,8 +364,7 @@ fn matchCookies(
             if (!std.mem.eql(u8, cookie.name, n)) continue;
         }
 
-        const item = try exec.arena.create(CookieListItem);
-        item.* = .{
+        try items.append(exec.call_arena, .{
             .name = String.wrap(cookie.name),
             .value = String.wrap(cookie.value),
             .domain = if (cookie.domain.len > 0 and cookie.domain[0] == '.')
@@ -380,51 +375,106 @@ fn matchCookies(
             .expires = if (cookie.expires) |e| e * 1000.0 else null,
             .secure = cookie.secure,
             .sameSite = switch (cookie.same_site) {
-                .strict => .strict,
-                .lax => .lax,
-                .none => .none,
+                .strict => "strict",
+                .lax => "lax",
+                .none => "none",
             },
             .partitioned = false,
-        };
-        try items.append(exec.call_arena, item);
+        });
         if (first_only) break;
     }
 
     return items.items;
 }
 
-fn storeCookie(exec: *const Execution, init: CookieInit) !void {
+fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void {
     const session = exec.session;
     const url = exec.url.*;
 
-    // Reject inputs the cookie model can't represent. `=` is allowed in
-    // values but not in names; `;`/CR/LF/NUL break the cookie wire format
-    // everywhere and so are forbidden in every field.
-    if (init.name.len == 0) return error.InvalidCookieName;
-    if (std.mem.indexOfAny(u8, init.name, "=;\r\n\x00") != null) return error.InvalidCookieName;
-    if (std.mem.indexOfAny(u8, init.value, ";\r\n\x00") != null) return error.InvalidCookieValue;
-    if (std.mem.indexOfAny(u8, init.path, ";\r\n\x00") != null) return error.InvalidCookiePath;
-    if (init.domain) |d| {
-        if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) return error.InvalidCookieDomain;
+    var init = init_;
+
+    init.name = std.mem.trim(u8, init.name, " \t");
+    init.value = std.mem.trim(u8, init.value, " \t");
+
+    // delete() may legitimately target a nameless cookie — its value is always empty.
+    if (!is_delete and init.name.len == 0) {
+        if (init.value.len == 0) {
+            return error.InvalidCookieName;
+        }
+        if (std.mem.indexOfScalar(u8, init.value, '=') != null) {
+            return error.InvalidCookieName;
+        }
     }
 
-    const is_https = URL.isHTTPS(url);
+    // Reject inputs the cookie model can't represent. `=` is allowed in
+    // values but not in names; `;` and the control characters (U+0000–U+001F,
+    // U+007F) break the cookie wire format and so are forbidden in both.
+    if (std.mem.indexOfScalar(u8, init.name, '=') != null) {
+        return error.InvalidCookieName;
+    }
+    if (hasForbiddenChar(init.name)) {
+        return error.InvalidCookieName;
+    }
+    if (hasForbiddenChar(init.value)) {
+        return error.InvalidCookieValue;
+    }
+
+    // A path attribute, when given, must be absolute. The Cookie path/domain
+    // attribute values are also capped at 1024 bytes per spec.
+    // https://cookiestore.spec.whatwg.org/#cookie-maximum-attribute-value-size
+    if (init.path.len > 0 and init.path[0] != '/') {
+        return error.InvalidCookiePath;
+    }
+    if (init.path.len > 1024) {
+        return error.InvalidCookiePath;
+    }
+    if (std.mem.indexOfAny(u8, init.path, ";\r\n\x00") != null) {
+        return error.InvalidCookiePath;
+    }
+    if (init.domain) |d| {
+        // CookieStore (unlike the HTTP cookie syntax) rejects a leading dot.
+        if (d.len > 0 and d[0] == '.') {
+            return error.InvalidCookieDomain;
+        }
+        if (d.len > 1024) {
+            return error.InvalidCookieDomain;
+        }
+        if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) {
+            return error.InvalidCookieDomain;
+        }
+    }
+
+    const is_https = URL.isSecure(url);
     // Per spec, SameSite=None requires Secure. CookieStore additionally
     // marks any cookie written from an HTTPS document as Secure.
     const secure = is_https or init.sameSite == .none;
+
+    // The `__Http-` and `__Host-Http-` prefixes are reserved for HTTP-state
+    // cookies; the (script) CookieStore API can never set them, on any origin.
+    if (std.ascii.startsWithIgnoreCase(init.name, "__Http-") or std.ascii.startsWithIgnoreCase(init.name, "__Host-Http-")) {
+        return error.InvalidPrefixedCookie;
+    }
 
     // Cookie-name-prefix rules — match Cookie.parse, case-insensitive to
     // catch impersonation attempts (e.g. "__HoSt-").
     // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
     if (std.ascii.startsWithIgnoreCase(init.name, "__Host-")) {
-        if (!is_https) return error.InvalidPrefixedCookie;
+        if (!is_https) {
+            return error.InvalidPrefixedCookie;
+        }
         if (init.domain) |d| {
-            if (d.len > 0) return error.InvalidPrefixedCookie;
+            if (d.len > 0) {
+                return error.InvalidPrefixedCookie;
+            }
         }
         const effective_path = if (init.path.len > 0) init.path else "/";
-        if (!std.mem.eql(u8, effective_path, "/")) return error.InvalidPrefixedCookie;
+        if (!std.mem.eql(u8, effective_path, "/")) {
+            return error.InvalidPrefixedCookie;
+        }
     } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
-        if (!is_https) return error.InvalidPrefixedCookie;
+        if (!is_https) {
+            return error.InvalidPrefixedCookie;
+        }
     }
 
     // The errdefer only protects construction failures. Once we `break :blk`
@@ -465,6 +515,18 @@ fn storeCookie(exec: *const Execution, init: CookieInit) !void {
     try session.cookie_jar.add(cookie, std.time.timestamp(), false);
 }
 
+// Control characters (U+0000–U+001F and U+007F DEL) and `;` cannot appear in
+// a cookie name or value. The whitespace chars TAB and SPACE are trimmed
+// before this check, so the surviving controls are all genuinely invalid.
+fn hasForbiddenChar(s: []const u8) bool {
+    for (s) |c| {
+        if (c <= 0x1F or c == 0x7F or c == ';') {
+            return true;
+        }
+    }
+    return false;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CookieStore);
 
@@ -481,59 +543,21 @@ pub const JsApi = struct {
     pub const onchange = bridge.accessor(CookieStore.getOnChange, CookieStore.setOnChange, .{});
 };
 
-// CookieListItem: per CookieStore.get / getAll return shape, documented inline on
-// https://developer.mozilla.org/en-US/docs/Web/API/CookieStore
+// CookieListItem is an plain JavaScript object, not an interface. The bridge
+// automatically translate a Zig struct -> JS Object This should _not_ have a
+// JsApi.
 pub const CookieListItem = struct {
     name: String,
-    value: String,
+    // Optional because a deletion change-event reports the removed cookie with
+    // `value` omitted (serialized as undefined via the `deleted` accessor's
+    // null_as_undefined). For get/getAll and `changed` items it is always set.
+    value: ?String,
     domain: ?String,
     path: String,
     expires: ?f64,
     secure: bool,
-    sameSite: SameSite,
+    sameSite: []const u8,
     partitioned: bool,
-
-    fn getName(self: *const CookieListItem) String {
-        return self.name;
-    }
-    fn getValue(self: *const CookieListItem) String {
-        return self.value;
-    }
-    fn getDomain(self: *const CookieListItem) ?String {
-        return self.domain;
-    }
-    fn getPath(self: *const CookieListItem) String {
-        return self.path;
-    }
-    fn getExpires(self: *const CookieListItem) ?f64 {
-        return self.expires;
-    }
-    fn getSecure(self: *const CookieListItem) bool {
-        return self.secure;
-    }
-    fn getSameSite(self: *const CookieListItem) []const u8 {
-        return @tagName(self.sameSite);
-    }
-    fn getPartitioned(self: *const CookieListItem) bool {
-        return self.partitioned;
-    }
-
-    pub const JsApi = struct {
-        pub const bridge = js.Bridge(CookieListItem);
-        pub const Meta = struct {
-            pub const name = "CookieListItem";
-            pub const prototype_chain = bridge.prototypeChain();
-            pub var class_id: bridge.ClassId = undefined;
-        };
-        pub const name = bridge.accessor(CookieListItem.getName, null, .{});
-        pub const value = bridge.accessor(CookieListItem.getValue, null, .{});
-        pub const domain = bridge.accessor(CookieListItem.getDomain, null, .{});
-        pub const path = bridge.accessor(CookieListItem.getPath, null, .{});
-        pub const expires = bridge.accessor(CookieListItem.getExpires, null, .{});
-        pub const secure = bridge.accessor(CookieListItem.getSecure, null, .{});
-        pub const sameSite = bridge.accessor(CookieListItem.getSameSite, null, .{});
-        pub const partitioned = bridge.accessor(CookieListItem.getPartitioned, null, .{});
-    };
 };
 
 const testing = @import("../../../testing.zig");

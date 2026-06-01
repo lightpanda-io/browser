@@ -574,7 +574,7 @@ pub const Jar = struct {
         const target = PreparedUri{
             .host = URL.getHostname(target_url),
             .path = URL.getPathname(target_url),
-            .secure = URL.isHTTPS(target_url),
+            .secure = URL.isSecure(target_url),
         };
         const same_site = try areSameSite(opts.origin_url, target.host);
 
