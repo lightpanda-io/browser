@@ -428,8 +428,6 @@ pub fn run(self: *Agent) bool {
     return true;
 }
 
-/// Final answer goes to stdout; errors go to stderr, so a caller can
-/// pipe stdout to capture a clean answer.
 /// Print a single-line summary of cumulative token usage to stderr, so
 /// wrappers driving `lightpanda agent --task ...` can capture per-task cost
 /// by `grep`-ing for the `$usage` prefix. Format is stable and key=value:
@@ -476,7 +474,7 @@ fn runRepl(self: *Agent) void {
         self.terminal.printDimmed("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
         self.terminal.printDimmed("Basic REPL (--no-llm) — PandaScript only.", .{});
-        self.terminal.printDimmed("Drop --no-llm and set a provider API key to enable natural-language commands.", .{});
+        self.terminal.printDimmed("To enable natural-language commands, " ++ llm_setup_hint ++ ".", .{});
     }
 
     repl: while (true) {
@@ -508,7 +506,7 @@ fn runRepl(self: *Agent) void {
         const cmd = Command.parseDiag(aa, line, &diag) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
-                    self.terminal.printError("Basic REPL (--no-llm) accepts only commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.", .{});
+                    self.terminal.printError("Basic REPL (--no-llm) accepts only commands. Try /help, or " ++ llm_setup_hint ++ " to enable natural-language prompts.", .{});
                     continue :repl;
                 }
                 _ = self.runTurn(.{ .prompt = line, .record_comment = line, .capture_for_save = true });
@@ -521,9 +519,10 @@ fn runRepl(self: *Agent) void {
             },
         };
 
-        if (cmd == .llm and self.ai_client == null) {
-            self.terminal.printError("/{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{@tagName(cmd.llm)});
-            continue :repl;
+        if (cmd == .llm) {
+            var name_buf: [32]u8 = undefined;
+            const name = std.fmt.bufPrint(&name_buf, "/{s}", .{@tagName(cmd.llm)}) catch "/?";
+            if (!self.requireLlm(name)) continue :repl;
         }
 
         switch (cmd) {
@@ -578,9 +577,12 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
 }
 
+const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY";
+const llm_setup_hint = "drop --no-llm and set an API key (" ++ api_keys_hint ++ ")";
+
 fn requireLlm(self: *Agent, name: []const u8) bool {
     if (self.model_credentials == null) {
-        self.terminal.printError("{s} requires an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).", .{name});
+        self.terminal.printError("{s} requires an LLM — " ++ llm_setup_hint ++ ".", .{name});
         return false;
     }
     return true;
@@ -1605,10 +1607,10 @@ fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pick: b
     const found = zenai.provider.detectKeys(&buf, zenai.provider.default_candidates);
     if (found.len == 0) {
         std.debug.print(
-            \\No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
+            \\No API key detected. Set {s}.
             \\If you want to use the REPL in basic mode (without LLM integration) you can pass the --no-llm option.
             \\
-        , .{});
+        , .{api_keys_hint});
         return null;
     }
     // A single key needs no choice; non-interactive callers (--list-models,
