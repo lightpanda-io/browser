@@ -264,7 +264,7 @@ fn formatJsToolCall(tc: Command.ToolCall, arena: std.mem.Allocator, writer: *std
         const visible = s.visibleArgCount(args);
         const positional = s.required.len == 1 and visible == 1 and s.isSinglePositional(args);
         if (positional) {
-            try writeJsPositional(arena, writer, tc.tool, s.required[0], args.get(s.required[0]).?);
+            try writeJsFieldValue(arena, writer, tc.tool, s.required[0], args.get(s.required[0]).?);
         } else {
             try writeJsToolObject(arena, writer, tc.tool, s, args);
         }
@@ -310,20 +310,6 @@ fn writeJsFieldValue(
     const prefer_template = (tool == .eval and std.mem.eql(u8, field, "script")) or
         (tool == .waitForScript and std.mem.eql(u8, field, "script"));
     try writeJsValue(arena, writer, value, .{ .prefer_template = prefer_template });
-}
-
-fn writeJsPositional(
-    arena: std.mem.Allocator,
-    writer: *std.Io.Writer,
-    tool: BrowserTool,
-    field: []const u8,
-    value: std.json.Value,
-) (std.Io.Writer.Error || error{OutOfMemory})!void {
-    if (tool == .extract and std.mem.eql(u8, field, "schema") and value == .string) {
-        try writeExtractSchema(arena, writer, value.string);
-        return;
-    }
-    try writeJsFieldValue(arena, writer, tool, field, value);
 }
 
 const JsValueOpts = struct {

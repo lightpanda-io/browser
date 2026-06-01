@@ -35,8 +35,8 @@ env: lp.js.Env,
 context: v8.Global,
 has_context: bool,
 call_arena: std.heap.ArenaAllocator,
-primitive_data: [primitive_specs.len]PrimitiveData,
-console_data: [console_specs.len]ConsoleData,
+primitive_data: [std.enums.values(Primitive).len]PrimitiveData,
+console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 
 const Primitive = enum {
     goto,
@@ -52,40 +52,11 @@ const Primitive = enum {
     selectOption,
     setChecked,
 
+    /// Every `Primitive` tag shares its name with a `BrowserTool` tag; the
+    /// runtime installs exactly the recorded subset of tools as primitives.
     fn tool(self: Primitive) BrowserTool {
-        return switch (self) {
-            .goto => .goto,
-            .eval => .eval,
-            .extract => .extract,
-            .click => .click,
-            .fill => .fill,
-            .scroll => .scroll,
-            .waitForSelector => .waitForSelector,
-            .waitForScript => .waitForScript,
-            .hover => .hover,
-            .press => .press,
-            .selectOption => .selectOption,
-            .setChecked => .setChecked,
-        };
+        return std.meta.stringToEnum(BrowserTool, @tagName(self)).?;
     }
-};
-
-const primitive_specs = [_]struct {
-    primitive: Primitive,
-    name: []const u8,
-}{
-    .{ .primitive = .goto, .name = "goto" },
-    .{ .primitive = .eval, .name = "eval" },
-    .{ .primitive = .extract, .name = "extract" },
-    .{ .primitive = .click, .name = "click" },
-    .{ .primitive = .fill, .name = "fill" },
-    .{ .primitive = .scroll, .name = "scroll" },
-    .{ .primitive = .waitForSelector, .name = "waitForSelector" },
-    .{ .primitive = .waitForScript, .name = "waitForScript" },
-    .{ .primitive = .hover, .name = "hover" },
-    .{ .primitive = .press, .name = "press" },
-    .{ .primitive = .selectOption, .name = "selectOption" },
-    .{ .primitive = .setChecked, .name = "setChecked" },
 };
 
 const PrimitiveData = struct {
@@ -106,17 +77,6 @@ const ConsoleMethod = enum {
             .debug, .info, .log => false,
         };
     }
-};
-
-const console_specs = [_]struct {
-    method: ConsoleMethod,
-    name: []const u8,
-}{
-    .{ .method = .debug, .name = "debug" },
-    .{ .method = .@"error", .name = "error" },
-    .{ .method = .info, .name = "info" },
-    .{ .method = .log, .name = "log" },
-    .{ .method = .warn, .name = "warn" },
 };
 
 const ConsoleData = struct {
@@ -196,9 +156,9 @@ fn createContext(self: *ScriptRuntime) InitError!void {
     defer v8.v8__Context__Exit(context);
 
     const global = v8.v8__Context__Global(context) orelse return error.RuntimeInitFailed;
-    for (primitive_specs, 0..) |spec, i| {
-        self.primitive_data[i] = .{ .runtime = self, .primitive = spec.primitive };
-        try self.installPrimitive(context, global, spec.name, &self.primitive_data[i]);
+    for (std.enums.values(Primitive), 0..) |primitive, i| {
+        self.primitive_data[i] = .{ .runtime = self, .primitive = primitive };
+        try self.installPrimitive(context, global, @tagName(primitive), &self.primitive_data[i]);
     }
     try self.installConsole(context, global);
 }
@@ -239,12 +199,12 @@ fn installConsole(
     const console = v8.v8__Object__New(self.env.isolate.handle) orelse
         return error.RuntimeInitFailed;
 
-    for (console_specs, 0..) |spec, i| {
-        self.console_data[i] = .{ .runtime = self, .method = spec.method };
+    for (std.enums.values(ConsoleMethod), 0..) |method, i| {
+        self.console_data[i] = .{ .runtime = self, .method = method };
         const external = self.env.isolate.createExternal(&self.console_data[i]);
         const func = v8.v8__Function__New__DEFAULT2(context, consoleCallback, external) orelse
             return error.RuntimeInitFailed;
-        try setObjectProperty(self, context, console, spec.name, @ptrCast(func));
+        try setObjectProperty(self, context, console, @tagName(method), @ptrCast(func));
     }
 
     try setObjectProperty(self, context, global, "console", @ptrCast(console));
@@ -380,15 +340,7 @@ fn invokeConsole(self: *ScriptRuntime, method: ConsoleMethod, info: *const v8.Fu
 
 fn writeConsoleLine(_: *ScriptRuntime, method: ConsoleMethod, line: []const u8) void {
     var buf: [4096]u8 = undefined;
-    if (method.writesStderr()) {
-        var file = std.fs.File.stderr();
-        var writer = file.writer(&buf);
-        writer.interface.print("{s}\n", .{line}) catch return;
-        writer.interface.flush() catch return;
-        return;
-    }
-
-    var file = std.fs.File.stdout();
+    var file = if (method.writesStderr()) std.fs.File.stderr() else std.fs.File.stdout();
     var writer = file.writer(&buf);
     writer.interface.print("{s}\n", .{line}) catch return;
     writer.interface.flush() catch return;
