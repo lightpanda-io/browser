@@ -129,8 +129,10 @@
       }
     };
 
-    // Empty name.
-    await expectReject('empty name', '', 'v');
+    // Empty name only rejects when the value is empty too or carries an '='.
+    // A nameless cookie with an ordinary value is valid (cf. `Set-Cookie: =v`).
+    await expectReject('empty name and empty value', '', '');
+    await expectReject('empty name with = in value', '', 'a=b');
     // Forbidden chars in name.
     await expectReject('name with =', 'a=b', 'v');
     await expectReject('name with ;', 'a;b', 'v');
@@ -142,6 +144,13 @@
     await expectReject('path with ;', { name: 'k', value: 'v', path: '/;evil' });
     await expectReject('domain with newline', { name: 'k', value: 'v', domain: 'bad\n.example' });
 
+    // A nameless cookie with an ordinary value is accepted, and delete('')
+    // targets it without rejecting on the empty name.
+    await cookieStore.set('', 'nameless');
+    testing.expectEqual('nameless', (await cookieStore.get('')).value);
+    await cookieStore.delete('');
+    testing.expectEqual(null, await cookieStore.get(''));
+
     // A clean call still works after the rejections.
     await cookieStore.set('after-validation', 'ok');
     const item = await cookieStore.get('after-validation');
@@ -150,7 +159,7 @@
   });
 </script>
 
-<script id=change-event-delete-reports-removed-value>
+<script id=change-event-delete-omits-value>
   testing.async(async () => {
     const events = [];
     const handler = (e) => events.push(e);
@@ -165,12 +174,11 @@
     await cookieStore.delete('ev-delete-val');
     await new Promise(r => setTimeout(r, 0));
 
-    // The deleted CookieListItem should describe the cookie that was
-    // removed, so its value must be what the jar held ("original") —
-    // not the deletion payload's value ("").
+    // Per spec, deletion change events identify the removed cookie by name
+    // but carry no value (it is reported as undefined).
     testing.expectEqual(1, events[1].deleted.length);
     testing.expectEqual('ev-delete-val', events[1].deleted[0].name);
-    testing.expectEqual('original', events[1].deleted[0].value);
+    testing.expectEqual(undefined, events[1].deleted[0].value);
 
     cookieStore.removeEventListener('change', handler);
   });

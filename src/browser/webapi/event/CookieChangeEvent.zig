@@ -80,7 +80,9 @@ pub fn initSingle(
     const item = try arena.create(CookieStore.CookieListItem);
     item.* = .{
         .name = try String.init(arena, snapshot.name, .{}),
-        .value = try String.init(arena, snapshot.value, .{}),
+        // Deletions report no value (the `deleted` accessor serializes the
+        // resulting null as undefined); changes carry the new value.
+        .value = if (kind == .deleted) null else try String.init(arena, snapshot.value, .{}),
         .domain = if (snapshot.domain.len > 0 and snapshot.domain[0] == '.')
             try String.init(arena, snapshot.domain[1..], .{})
         else
@@ -89,9 +91,9 @@ pub fn initSingle(
         .expires = null,
         .secure = snapshot.secure,
         .sameSite = switch (snapshot.same_site) {
-            .strict => .strict,
-            .lax => .lax,
-            .none => .none,
+            .strict => "strict",
+            .lax => "lax",
+            .none => "none",
         },
         .partitioned = false,
     };
@@ -133,5 +135,6 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(CookieChangeEvent.init, .{});
     pub const changed = bridge.accessor(CookieChangeEvent.getChanged, null, .{});
-    pub const deleted = bridge.accessor(CookieChangeEvent.getDeleted, null, .{});
+    // null_as_undefined trickles down to the serialization of the CookieListItem fields
+    pub const deleted = bridge.accessor(CookieChangeEvent.getDeleted, null, .{ .null_as_undefined = true });
 };
