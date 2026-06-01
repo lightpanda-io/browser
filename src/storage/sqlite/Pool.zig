@@ -19,8 +19,6 @@
 const std = @import("std");
 const Sqlite = @import("Sqlite.zig");
 
-const c = Sqlite.c;
-
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 

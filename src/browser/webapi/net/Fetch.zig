@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 const HttpClient = @import("../../HttpClient.zig");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 const URL = @import("../../URL.zig");
 
 const Request = @import("Request.zig");

@@ -18,7 +18,6 @@
 
 const DOMRect = @This();
 
-const std = @import("std");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 

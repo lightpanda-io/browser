@@ -24,7 +24,6 @@ const Notification = @import("../../Notification.zig");
 const datetime = @import("../../datetime.zig");
 
 const logger = lp.log;
-const LogLevel = lp.log.Level;
 
 const Console = @This();
 

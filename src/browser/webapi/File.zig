@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");

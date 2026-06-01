@@ -20,8 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Layer = @import("../../browser/HttpClient.zig").Layer;
-const Client = @import("../../browser/HttpClient.zig").Client;
-const NextTickNode = @import("../../browser/HttpClient.zig").NextTickNode;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;

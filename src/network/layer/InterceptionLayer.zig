@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const builtin = @import("builtin");
 const lp = @import("lightpanda");
 const log = lp.log;
@@ -24,7 +23,6 @@ const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
 const http = @import("../http.zig");
-const Client = @import("../../browser/HttpClient.zig").Client;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;

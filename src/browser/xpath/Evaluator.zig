@@ -39,7 +39,6 @@ const functions = @import("functions.zig");
 
 const Frame = lp.Frame;
 const Element = Node.Element;
-const Document = Node.Document;
 const Allocator = std.mem.Allocator;
 
 const Evaluator = @This();
@@ -794,7 +793,6 @@ fn lessThanDocOrder(_: void, a: *Node, b: *Node) bool {
 // ---------------------------------------------------------------------
 
 const testing = std.testing;
-const Tokenizer = @import("Tokenizer.zig");
 
 test "Evaluator: cmpNumber NaN semantics" {
     const nan = std.math.nan(f64);

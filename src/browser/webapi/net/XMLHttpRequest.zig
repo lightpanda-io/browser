@@ -32,7 +32,6 @@ const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
 
 const Headers = @import("Headers.zig");
-const Request = @import("Request.zig");
 const BodyInit = @import("body_init.zig").BodyInit;
 const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 
