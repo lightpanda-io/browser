@@ -351,8 +351,9 @@ pub fn processQueuedNavigation(self: *Session) !void {
             continue;
         }
 
-        self.processFrameNavigation(frame, qn) catch |err| {
-            log.warn(.frame, "frame navigation", .{ .url = qn.url, .err = err });
+        // qn is invalid after this
+        self.processFrameNavigation(frame, qn) catch {
+            // already logged
         };
     }
 
@@ -362,6 +363,7 @@ pub fn processQueuedNavigation(self: *Session) !void {
     // These may trigger new navigations which go into queued_navigation
     for (about_blank_queue.items) |frame| {
         const qn = frame._queued_navigation.?;
+        // qn is invalid after this
         try self.processFrameNavigation(frame, qn);
     }
 
@@ -384,6 +386,15 @@ pub fn processQueuedNavigation(self: *Session) !void {
 }
 
 fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
+    frame._queued_navigation = null;
+    defer self.releaseArena(qn.arena);
+    self._processFrameNavigation(frame, qn) catch |err| {
+        log.warn(.frame, "frame navigation", .{ .url = qn.url, .err = err });
+        return err;
+    };
+}
+
+fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
     // Popups live on the Page as top-level browsing contexts without a
     // parent or iframe element. Their re-navigation path is simpler than
     // iframes — no parent bookkeeping to patch.
@@ -395,9 +406,6 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
 
     const iframe = frame.iframe.?;
     const parent = frame.parent.?;
-
-    frame._queued_navigation = null;
-    defer self.releaseArena(qn.arena);
 
     errdefer iframe._window = null;
 
@@ -445,9 +453,6 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
 // (scripts in the opener may hold a cached Window ref — though the Window
 // object inside is replaced, matching how iframes behave on navigation).
 fn processPopupNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
-    frame._queued_navigation = null;
-    defer self.releaseArena(qn.arena);
-
     // Preserve popup identity fields. _name lives in the Page arena and
     // survives Frame.deinit; _opener is just a pointer.
     const saved_name = frame.window._name;
