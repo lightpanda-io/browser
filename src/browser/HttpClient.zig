@@ -521,24 +521,50 @@ fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
         return err;
     };
 
-    const transfer = arena.create(Transfer) catch |err| {
-        req.headers.deinit();
-        self.arena_pool.release(arena);
-        return err;
-    };
+    const transfer = blk: {
+        errdefer {
+            req.headers.deinit();
+            self.arena_pool.release(arena);
+        }
 
-    transfer.* = .{
-        .req = req,
-        .client = self,
-        .arena = arena,
-        .id = self.incrReqId(),
-        .start_time = timestamp(.monotonic),
-        // owner is set AFTER we've actually appended to the owner list,
-        // so transfer.deinit's `if (self.owner)` branch only fires when
-        // we're truly linked. Otherwise we'd try to remove a node from
-        // a list it was never in.
-        .owner = null,
-        .owner_node = .{},
+        var owned = req;
+        // Most of the time, the req data will outlive the transfer. But not
+        // always. The most problematic case is with a QueuedNavigation which
+        // is freed quite quickly and would definetly not survive a queued
+        // request.
+        //
+        // These are all small, so duping them into the transfer's arena is
+        // cheap and can solve some nasty UAF.
+        owned.url = try arena.dupeZ(u8, req.url);
+        owned.cookie_origin = try arena.dupeZ(u8, req.cookie_origin);
+        if (req.credentials) |c| {
+            owned.credentials = try arena.dupeZ(u8, c);
+        }
+
+        // The body can be larger, so callers can signal, via the
+        // `body_outlives_request` flag that they guarantee that the body
+        // will outlive the transfer (and thus doesn't need to be duped)
+        if (req.body) |b| {
+            if (req.body_outlives_request == false) {
+                owned.body = try arena.dupe(u8, b);
+            }
+        }
+
+        const t = try arena.create(Transfer);
+        t.* = .{
+            .req = owned,
+            .client = self,
+            .arena = arena,
+            .id = self.incrReqId(),
+            .start_time = timestamp(.monotonic),
+            // owner is set AFTER we've actually appended to the owner list,
+            // so transfer.deinit's `if (self.owner)` branch only fires when
+            // we're truly linked. Otherwise we'd try to remove a node from
+            // a list it was never in.
+            .owner = null,
+            .owner_node = .{},
+        };
+        break :blk t;
     };
 
     // From here, transfer owns req+arena. Any subsequent failure flows
@@ -1225,6 +1251,10 @@ pub const Request = struct {
     notification: *Notification,
     timeout_ms: u32 = 0,
     skip_robots: bool = false,
+
+    // When false, the caller does not guarantee that the body outlives the
+    // transfer, and thus we'll need to dupe it.
+    body_outlives_request: bool = false,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,

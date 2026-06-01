@@ -282,6 +282,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
+        .body_outlives_request = true,
     }) catch |err| {
         self.releaseSelfRef();
         return err;
