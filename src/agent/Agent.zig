@@ -36,6 +36,7 @@ const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
+const ScriptRuntime = @import("ScriptRuntime.zig");
 
 const Agent = @This();
 
@@ -129,6 +130,8 @@ verifier: Verifier,
 recorder: ?Recorder,
 save_buffer: Recorder.Memory,
 save_path: ?[]u8,
+script_runtime_mutex: std.Thread.Mutex = .{},
+active_script_runtime: ?*ScriptRuntime = null,
 messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
 model: []u8,
@@ -159,9 +162,17 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         });
         return error.ConflictingFlags;
     }
-    if (opts.self_heal and opts.script_file == null) {
-        log.fatal(.app, "self-heal needs a script", .{
-            .hint = "--self-heal rewrites a recorded .lp on drift; pass a script path",
+    if (opts.self_heal) {
+        // JavaScript scripts throw on tool errors instead of replaying a
+        // line-oriented PandaScript, so the CLI `--self-heal` flow no longer
+        // has a place to hook in. The heal machinery below (runActionEntry,
+        // attemptSelfHeal, retryCommand, flushReplacements, the self_heal_*
+        // prompts, and the `self_heal`/`verifier` fields) is intentionally
+        // retained — currently unreachable — for a future self-healing pass
+        // over JS scripts. MCP scriptStep/scriptHeal remains the supported
+        // PandaScript healing path in the meantime.
+        log.fatal(.app, "self-heal unsupported", .{
+            .hint = "JavaScript scripts throw on tool errors; use MCP scriptStep/scriptHeal for PandaScript healing",
         });
         return error.ConflictingFlags;
     }
@@ -178,11 +189,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // Basic-mode REPL (no LLM) must be opted into via --no-llm. Without it,
     // the REPL accepts natural language and an absent API key would only
     // surface at the first non-PandaScript line — too late to be useful.
-    // Pure replay (`agent <script>.lp`) stays allowed: no REPL, no LLM needed.
-    const requires_llm = is_one_shot or opts.self_heal or (will_repl and !opts.no_llm);
+    // Pure JavaScript script runs stay allowed: no REPL, no LLM needed.
+    const requires_llm = is_one_shot or (will_repl and !opts.no_llm);
 
     // Skip resolve when --no-llm forces no client, or no mode could use one
-    // (pure replay) — otherwise resolve prints "No API key detected" for a
+    // (pure script run) — otherwise resolve prints "No API key detected" for a
     // run that does not need one.
     const resolve = !opts.no_llm and requires_llm;
     const remembered: ?Remembered = if (resolve) loadRemembered(allocator) else null;
@@ -194,8 +205,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (llm == null and requires_llm) {
         if (opts.no_llm) {
             std.debug.print("--no-llm forbids LLM use; drop it to run this mode.\n", .{});
-        } else if (opts.self_heal) {
-            std.debug.print("--self-heal needs an LLM — set an API key.\n", .{});
         }
         return error.MissingProvider;
     }
@@ -238,8 +247,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
 
-    // `-i <file>` means "replay then grow this file"; a script path alone is
-    // pure replay and must not be mutated.
+    // `-i <file>` means "run then grow this file"; a script path alone is
+    // a pure script run and must not be mutated.
     const recorder_path: ?[]const u8 = if (opts.interactive) opts.script_file else null;
 
     self.* = .{
@@ -285,7 +294,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer if (self.ai_client) |c| deinitAiClient(allocator, c);
 
     // An LLM driver reasons about visibility/computed styles, so fetch external
-    // stylesheets by default. Pure replay and --no-llm keep the cheap fast path.
+    // stylesheets by default. Pure script runs and --no-llm keep the cheap fast path.
     // The --enable-external-stylesheets flag is already folded into the session
     // default, so this only ever turns the feature on.
     if (self.ai_client != null) {
@@ -359,6 +368,13 @@ fn globalTools() []const ProviderTool {
 /// touches from this context.
 pub fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
+    {
+        self.script_runtime_mutex.lock();
+        defer self.script_runtime_mutex.unlock();
+        if (self.active_script_runtime) |runtime| {
+            runtime.terminate();
+        }
+    }
     self.browser.env.terminate();
 }
 
@@ -655,7 +671,7 @@ const SaveMode = enum { replace, append };
 fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     const filename = parseSaveFilename(rest) catch |err| {
         const msg: []const u8 = switch (err) {
-            error.TooManyArguments => "usage: /save [filename.lp]",
+            error.TooManyArguments => "usage: /save [filename.js]",
             error.UnterminatedQuote => "unterminated filename quote",
             error.EmptyFilename => "filename cannot be empty",
             error.InvalidFilename => "filename must be a local file name, not a path",
@@ -739,7 +755,7 @@ fn parseSaveFilename(rest: []const u8) !?[]const u8 {
 fn randomSaveFilename(arena: std.mem.Allocator) ![]const u8 {
     for (0..100) |_| {
         const n = std.crypto.random.int(u64);
-        const path = try std.fmt.allocPrint(arena, "session-{x}.lp", .{n});
+        const path = try std.fmt.allocPrint(arena, "session-{x}.js", .{n});
         if (!(try fileExists(path))) return path;
     }
     return error.NameCollision;
@@ -827,7 +843,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{@tagName(self.terminal.verbosity)},
             ),
             .save => self.terminal.printInfo(
-                "/save [filename.lp] — save recorded REPL actions to [filename.lp]. Without a filename, creates a random session-*.lp file in the current directory.",
+                "/save [filename.js] — save recorded REPL actions to [filename.js]. Without a filename, creates a random session-*.js file in the current directory.",
                 .{},
             ),
             .model => self.terminal.printInfo(
@@ -932,77 +948,37 @@ fn runScript(self: *Agent, path: []const u8) bool {
 
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
-    const sa = script_arena.allocator();
 
-    const content = std.fs.cwd().readFileAlloc(sa, path, 10 * 1024 * 1024) catch |err| {
+    const content = std.fs.cwd().readFileAlloc(script_arena.allocator(), path, 10 * 1024 * 1024) catch |err| {
         self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
         return false;
     };
 
-    var iter: script.Iterator = .init(sa, content);
-    var last_comment: ?[]const u8 = null;
-    var replacements: std.ArrayList(Replacement) = .empty;
-
-    while (true) {
-        const entry = (iter.next() catch |err| {
-            self.terminal.printError("line {d}: {s} parsing script", .{ iter.line_num, @errorName(err) });
-            self.flushReplacements(path, content, replacements.items);
-            return false;
-        }) orelse break;
-        switch (entry.command) {
-            .comment => {
-                // `#` prefix lines preceding a recorded action are the
-                // natural-language prompt that produced it — kept for
-                // self-heal context.
-                if (entry.opener_line.len > 2 and entry.opener_line[0] == '#') {
-                    last_comment = std.mem.trim(u8, entry.opener_line[1..], &std.ascii.whitespace);
-                }
-                continue;
-            },
-            .llm => |lc| {
-                if (self.ai_client == null) {
-                    self.terminal.printError("line {d}: {s} requires --provider", .{
-                        entry.line_num,
-                        entry.opener_line,
-                    });
-                    self.flushReplacements(path, content, replacements.items);
-                    return false;
-                }
-                const prompt = lc.prompt();
-                const text = self.processUserMessage(.{ .prompt = prompt }) catch |err| {
-                    self.terminal.printError("line {d}: {s} failed: {s}", .{
-                        entry.line_num,
-                        entry.opener_line,
-                        @errorName(err),
-                    });
-                    self.flushReplacements(path, content, replacements.items);
-                    return false;
-                };
-                if (text) |t| self.terminal.printAssistant(t);
-                self.pruneMessages();
-            },
-            .tool_call => {
-                self.terminal.printInfo("[{d}] {s}", .{ entry.line_num, entry.opener_line });
-                switch (self.runActionEntry(sa, entry, last_comment)) {
-                    .ok => {},
-                    .healed => |r| replacements.append(sa, r) catch |err| {
-                        self.flushReplacements(path, content, replacements.items);
-                        self.terminal.printError(
-                            "line {d}: out of memory recording heal: {s}",
-                            .{ entry.line_num, @errorName(err) },
-                        );
-                        return false;
-                    },
-                    .fail => {
-                        self.flushReplacements(path, content, replacements.items);
-                        return false;
-                    },
-                }
-            },
-        }
+    const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch |err| {
+        self.terminal.printError("Failed to initialize script runtime: {s}", .{@errorName(err)});
+        return false;
+    };
+    defer runtime.deinit();
+    self.script_runtime_mutex.lock();
+    self.active_script_runtime = runtime;
+    self.script_runtime_mutex.unlock();
+    defer {
+        self.script_runtime_mutex.lock();
+        self.active_script_runtime = null;
+        self.script_runtime_mutex.unlock();
+        runtime.cancelTerminate();
+        self.browser.env.cancelTerminate();
+        self.cancel_requested.store(false, .release);
     }
 
-    self.flushReplacements(path, content, replacements.items);
+    if (runtime.runSource(content, path) catch |err| {
+        self.terminal.printError("Script failed: {s}", .{@errorName(err)});
+        return false;
+    }) |message| {
+        self.terminal.printError("{s}", .{message});
+        return false;
+    }
+
     self.terminal.printInfo("Script completed.", .{});
     return true;
 }
@@ -1016,6 +992,12 @@ const ActionOutcome = union(enum) {
 
 /// Execute one action-style script entry, including post-execution
 /// verification, transient-failure retry, and LLM self-heal escalation.
+///
+/// Currently unreachable: the CLI replaced PandaScript replay with the JS
+/// `ScriptRuntime`, and `--self-heal` is rejected at init. Kept intentionally
+/// for a future self-healing pass over JS scripts — see the `opts.self_heal`
+/// check in `init`. This and its helpers (retryCommand, attemptSelfHeal,
+/// flushReplacements) are the dormant heal path.
 fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.Entry, last_comment: ?[]const u8) ActionOutcome {
     var cmd_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer cmd_arena.deinit();

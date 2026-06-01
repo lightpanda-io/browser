@@ -16,11 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! PandaScript: a tiny DSL for recording and replaying browser sessions.
+//! Slash-command scripting helpers for the agent REPL and MCP `scriptStep`.
 //!
 //! Sits above `browser/` (alongside `agent/` and `mcp/`) — both the LLM
 //! REPL and the external-agent server consume it to translate between
-//! recorded `.lp` files and the shared `browser/tools.zig` action surface.
+//! slash commands, JavaScript recordings, and the shared `browser/tools.zig`
+//! action surface.
 //!
 //! This file owns the deterministic helpers (line splicing, atomic file
 //! rewrite, path validation, the shared `driver_guidance` system prompt)
@@ -44,7 +45,7 @@ pub const Verifier = @import("script/Verifier.zig");
 /// MCP-aware clients (Claude Code, etc.) fold it into their context
 /// automatically. One source of truth for "how to drive Lightpanda
 /// correctly" — most importantly the selector rule that keeps sessions
-/// recordable as PandaScript.
+/// recordable as JavaScript agent scripts.
 pub const driver_guidance =
     \\You are driving Lightpanda — a text-only headless browser. You reason
     \\over pages through tools; there is no rendering, no images, no PDFs.
@@ -75,7 +76,7 @@ pub const driver_guidance =
     \\  snapshots do NOT reflect the new DOM.
     \\- For any task asking for a specific value or list, finish with
     \\  `extract` (JSON-schema-driven). Only `extract` calls survive replay
-    \\  as `/extract` PandaScript lines; answering from `markdown` content
+    \\  as recorded `extract(...)` script calls; answering from `markdown` content
     \\  in chat does NOT. Do NOT guess selectors from memorized site
     \\  structure — even well-known sites (HN, GitHub, …) are where models
     \\  go wrong by pattern-matching training data.
@@ -91,8 +92,8 @@ pub const driver_guidance =
     \\Selector rules:
     \\- NEVER pass backendNodeId to click/fill/hover/selectOption/setChecked.
     \\  Always use a CSS selector. This is load-bearing: backendNodeId calls
-    \\  cannot be recorded as PandaScript, so any session that uses them is
-    \\  not replayable. Use `findElement` to locate candidates by role/name,
+    \\  cannot be recorded as reusable JavaScript calls, so any session that
+    \\  uses them is not replayable. Use `findElement` to locate candidates by role/name,
     \\  then synthesize a CSS selector from the id/class/tag_name it returns
     \\  (it does NOT hand back a selector string).
     \\- Make selectors uniquely identifying — include value/name/position to

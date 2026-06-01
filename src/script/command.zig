@@ -167,7 +167,7 @@ pub const Command = union(enum) {
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
             .comment => false,
-            .llm => true,
+            .llm => false,
             .tool_call => |tc| tc.isRecorded(),
         };
     }
@@ -231,6 +231,17 @@ pub const Command = union(enum) {
         }
     }
 
+    /// JavaScript recorder format for `lightpanda agent <script>.js`.
+    /// Slash command parsing stays separate; this renders recorded browser
+    /// primitives as blocking global function calls in the agent script
+    /// runtime.
+    pub fn formatJs(self: Command, arena: std.mem.Allocator, writer: *std.Io.Writer) (std.Io.Writer.Error || error{OutOfMemory})!void {
+        switch (self) {
+            .comment, .llm => return,
+            .tool_call => |tc| try formatJsToolCall(tc, arena, writer),
+        }
+    }
+
     /// `arguments` must outlive the returned Command. Callers that hand the
     /// Command to anything past the args' arena lifetime (e.g. heal, which
     /// reuses cmds after `RunToolsResult.deinit`) must deep-copy the arguments
@@ -239,6 +250,175 @@ pub const Command = union(enum) {
         return .{ .tool_call = .{ .tool = tool, .args = arguments } };
     }
 };
+
+fn formatJsToolCall(tc: Command.ToolCall, arena: std.mem.Allocator, writer: *std.Io.Writer) (std.Io.Writer.Error || error{OutOfMemory})!void {
+    const s = tc.schema();
+    const args_val = tc.args orelse {
+        try writer.print("{s}();", .{s.tool_name});
+        return;
+    };
+
+    try writer.print("{s}(", .{s.tool_name});
+    if (args_val == .object) {
+        const args = args_val.object;
+        const visible = s.visibleArgCount(args);
+        const positional = s.required.len == 1 and visible == 1 and s.isSinglePositional(args);
+        if (positional) {
+            try writeJsPositional(arena, writer, tc.tool, s.required[0], args.get(s.required[0]).?);
+        } else {
+            try writeJsToolObject(arena, writer, tc.tool, s, args);
+        }
+    } else {
+        try writeJsValue(arena, writer, args_val, .{});
+    }
+    try writer.writeAll(");");
+}
+
+fn writeJsToolObject(
+    arena: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    tool: BrowserTool,
+    schema: *const Schema,
+    args: std.json.ObjectMap,
+) (std.Io.Writer.Error || error{OutOfMemory})!void {
+    try writer.writeAll("{ ");
+    var any = false;
+    for (schema.fields) |f| {
+        const v = args.get(f.name) orelse continue;
+        if (tool == .extract and std.mem.eql(u8, f.name, "save")) continue;
+        if (f.skipForFormat(v)) continue;
+        if (any) try writer.writeAll(", ");
+        any = true;
+        try writeJsObjectKey(writer, f.name);
+        try writer.writeAll(": ");
+        try writeJsFieldValue(arena, writer, tool, f.name, v);
+    }
+    try writer.writeAll(" }");
+}
+
+fn writeJsFieldValue(
+    arena: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    tool: BrowserTool,
+    field: []const u8,
+    value: std.json.Value,
+) (std.Io.Writer.Error || error{OutOfMemory})!void {
+    if (tool == .extract and std.mem.eql(u8, field, "schema") and value == .string) {
+        try writeExtractSchema(arena, writer, value.string);
+        return;
+    }
+    const prefer_template = (tool == .eval and std.mem.eql(u8, field, "script")) or
+        (tool == .waitForScript and std.mem.eql(u8, field, "script"));
+    try writeJsValue(arena, writer, value, .{ .prefer_template = prefer_template });
+}
+
+fn writeJsPositional(
+    arena: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    tool: BrowserTool,
+    field: []const u8,
+    value: std.json.Value,
+) (std.Io.Writer.Error || error{OutOfMemory})!void {
+    if (tool == .extract and std.mem.eql(u8, field, "schema") and value == .string) {
+        try writeExtractSchema(arena, writer, value.string);
+        return;
+    }
+    try writeJsFieldValue(arena, writer, tool, field, value);
+}
+
+const JsValueOpts = struct {
+    prefer_template: bool = false,
+};
+
+fn writeJsValue(
+    arena: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    value: std.json.Value,
+    opts: JsValueOpts,
+) (std.Io.Writer.Error || error{OutOfMemory})!void {
+    switch (value) {
+        .null => try writer.writeAll("null"),
+        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+        .integer => |n| try writer.print("{d}", .{n}),
+        .float => |n| try writer.print("{d}", .{n}),
+        .number_string => |s| try writer.writeAll(s),
+        .string => |str| {
+            if (opts.prefer_template and canUseTemplateLiteral(str)) {
+                try writer.writeByte('`');
+                try writer.writeAll(str);
+                try writer.writeByte('`');
+            } else {
+                try writeJsonString(writer, str);
+            }
+        },
+        .array => |arr| {
+            try writer.writeByte('[');
+            for (arr.items, 0..) |item, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try writeJsValue(arena, writer, item, .{});
+            }
+            try writer.writeByte(']');
+        },
+        .object => |obj| {
+            try writer.writeAll("{ ");
+            var it = obj.iterator();
+            var any = false;
+            while (it.next()) |entry| {
+                if (any) try writer.writeAll(", ");
+                any = true;
+                try writeJsObjectKey(writer, entry.key_ptr.*);
+                try writer.writeAll(": ");
+                try writeJsValue(arena, writer, entry.value_ptr.*, .{});
+            }
+            try writer.writeAll(" }");
+        },
+    }
+}
+
+fn writeExtractSchema(
+    arena: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    schema_src: []const u8,
+) (std.Io.Writer.Error || error{OutOfMemory})!void {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, schema_src, .{}) catch {
+        return writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.indexOfScalar(u8, schema_src, '\n') != null });
+    };
+    if (parsed == .object) {
+        try writeJsValue(arena, writer, parsed, .{});
+    } else {
+        try writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.indexOfScalar(u8, schema_src, '\n') != null });
+    }
+}
+
+fn writeJsObjectKey(writer: *std.Io.Writer, key: []const u8) std.Io.Writer.Error!void {
+    if (isJsIdentifier(key)) {
+        try writer.writeAll(key);
+    } else {
+        try writeJsonString(writer, key);
+    }
+}
+
+fn writeJsonString(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Error!void {
+    std.json.Stringify.value(value, .{}, writer) catch return error.WriteFailed;
+}
+
+fn canUseTemplateLiteral(value: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, value, '\n') == null) return false;
+    if (std.mem.indexOfScalar(u8, value, '`') != null) return false;
+    if (std.mem.indexOf(u8, value, "${") != null) return false;
+    if (std.mem.indexOfScalar(u8, value, '\\') != null) return false;
+    if (std.mem.indexOfScalar(u8, value, '\r') != null) return false;
+    return true;
+}
+
+fn isJsIdentifier(value: []const u8) bool {
+    if (value.len == 0) return false;
+    if (!std.ascii.isAlphabetic(value[0]) and value[0] != '_' and value[0] != '$') return false;
+    for (value[1..]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '$') return false;
+    }
+    return true;
+}
 
 const testing = @import("../testing.zig");
 
@@ -368,6 +548,61 @@ test "format: /login and /acceptCookies" {
     try testing.expectString("/acceptCookies", aw2.written());
 }
 
+test "formatJs: positional and object arguments" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "/goto https://example.com", .expected = "goto(\"https://example.com\");" },
+        .{ .input = "/click selector='Login'", .expected = "click({ selector: \"Login\" });" },
+        .{ .input = "/scroll y=200", .expected = "scroll({ y: 200 });" },
+        .{ .input = "/setChecked selector='#x' checked=false", .expected = "setChecked({ selector: \"#x\", checked: false });" },
+    };
+    for (cases) |case| {
+        const cmd = try Command.parse(aa, case.input);
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString(case.expected, aw.written());
+    }
+}
+
+test "formatJs: eval and extract strings" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    {
+        const cmd = try Command.parse(aa, "/eval '''\nconst x = 1;\nreturn x;\n'''");
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString("eval(`\nconst x = 1;\nreturn x;\n`);", aw.written());
+    }
+    {
+        const cmd = try Command.parse(aa, "/eval 'return `tick` + ${x};'");
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString("eval(\"return `tick` + ${x};\");", aw.written());
+    }
+    {
+        const cmd = try Command.parse(aa, "/extract '{\"title\":\"h1\",\"bad-key\":\".x\"}'");
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString("extract({ title: \"h1\", \"bad-key\": \".x\" });", aw.written());
+    }
+    {
+        const cmd = try Command.parse(aa, "/extract '{\"title\":\"h1\"}' save=snap");
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString("extract({ schema: { title: \"h1\" } });", aw.written());
+    }
+}
+
 test "canHeal: only page-local DOM commands are allowed" {
     // Table-driven over the live tool flags so adding a new tool can't
     // silently drift from the heal allow-list.
@@ -402,7 +637,7 @@ test "isRecorded / canHeal / producesData via tool flags" {
     try testing.expect(tree.producesData());
 
     const login: Command = .{ .llm = .login };
-    try testing.expect(login.isRecorded());
+    try testing.expect(!login.isRecorded());
     try testing.expect(!login.canHeal());
 }
 

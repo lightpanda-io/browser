@@ -173,9 +173,9 @@ A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpand
 
 `lightpanda agent` runs an interactive agent on top of the same browser. It
 supports an LLM-driven REPL (Anthropic, OpenAI, Gemini, Ollama), a one-shot
-`--task` mode that prints the answer to stdout, and a small scripting
-language (PandaScript) for recording and deterministically replaying browser
-sessions, with optional `--self-heal` recovery from selector drift.
+`--task` mode that prints the answer to stdout, and JavaScript scripts for
+recording and deterministically replaying browser sessions. The interactive
+REPL remains slash-command based.
 
 To drive Lightpanda from another LLM agent (Claude Code, an MCP-aware client,
 etc.), use `lightpanda mcp` above — it exposes the same browser tools without
@@ -185,12 +185,13 @@ needing an LLM (or API key) inside Lightpanda.
 ./lightpanda agent                                    # auto-detects API key from env
 ./lightpanda agent --task "top story on news.ycombinator.com?"
 ./lightpanda agent --no-llm                           # basic REPL, no LLM
-./lightpanda agent session.lp                         # replay a recorded script
+./lightpanda agent session.js                         # run a recorded script
 ./lightpanda agent --provider gemini --task "..."     # force a specific provider
 ```
 
-See [docs/agent.md](docs/agent.md) for the full reference, or
-[docs/agent-tutorial.md](docs/agent-tutorial.md) for a step-by-step
+See [docs/agent.md](docs/agent.md) for the full reference,
+[docs/agent-script.md](docs/agent-script.md) for the JavaScript script format,
+or [docs/agent-tutorial.md](docs/agent-tutorial.md) for a step-by-step
 end-to-end walkthrough.
 
 ### Telemetry

@@ -51,6 +51,7 @@ pub const script = @import("script.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
+pub const AgentScriptRuntime = @import("agent/ScriptRuntime.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 

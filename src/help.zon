@@ -132,18 +132,18 @@
     \\  {0s} agent --provider anthropic --model claude-sonnet-4-6
     \\  {0s} agent --provider ollama --model gemma4
     \\  {0s} agent --no-llm                       (basic PandaScript-only REPL)
-    \\  {0s} agent script.lp                      (replay a recorded script)
-    \\  {0s} agent -i script.lp                   (replay then drop into REPL,
+    \\  {0s} agent script.js                      (run a recorded script)
+    \\  {0s} agent -i script.js                   (run then drop into REPL,
     \\                                             appending new commands to the file)
     \\
     \\Arguments:
-    \\[SCRIPT]                   Optional path to a .lp script.
-    \\                           Without -i: replays the script (no LLM calls).
-    \\                           With -i: replays if present, then enters the REPL
+    \\[SCRIPT]                   Optional path to a .js script.
+    \\                           Without -i: runs the script (no LLM calls).
+    \\                           With -i: runs if present, then enters the REPL
     \\                           and appends new commands to the file (creating
     \\                           it if it does not yet exist).
-    \\                           Caution: .lp files can contain EVAL blocks that
-    \\                           run arbitrary JavaScript in the page. Only replay
+    \\                           Caution: .js files can contain eval(...) calls
+    \\                           that run arbitrary JavaScript in the page. Only run
     \\                           scripts you trust, the same way you would a shell
     \\                           script.
     \\
@@ -182,11 +182,11 @@
     \\
     \\--system-prompt <STRING>   Override the default system prompt.
     \\
-    \\--self-heal                On tool errors, ask the model to recover by
-    \\                           retrying with fresh page state instead of
-    \\                           aborting.
+    \\--self-heal                Not supported for JavaScript agent scripts.
+    \\                           Use MCP scriptStep/scriptHeal for PandaScript
+    \\                           healing workflows.
     \\
-    \\-i, --interactive          After replaying the positional script (if any),
+    \\-i, --interactive          After running the positional script (if any),
     \\                           drop into the REPL with the browser state
     \\                           preserved. When a positional script is present,
     \\                           any new commands entered in the REPL are appended

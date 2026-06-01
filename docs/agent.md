@@ -2,14 +2,18 @@
 
 > Looking for a step-by-step walkthrough instead of a reference?
 > See [agent-tutorial.md](agent-tutorial.md) — it builds one end-to-end
-> Hacker News scenario covering the REPL, recording, replay,
-> `--self-heal`, and the MCP roundtrip.
+> Hacker News scenario covering the REPL, recording, replay, and the MCP
+> roundtrip.
+>
+> Looking for the JavaScript script format?
+> See [agent-script.md](agent-script.md) for the runtime contract and
+> primitive API.
 
 `lightpanda agent` runs a browsing agent backed by Lightpanda's headless engine.
 It can act as:
 
 - an **LLM agent** that drives the browser with tool calls (`--provider`),
-- a **scripted runner** that replays a `.lp` script deterministically,
+- a **scripted runner** that runs a recorded `.js` script deterministically,
 - a **basic REPL** for hand-driven PandaScript with no LLM at all,
 - a **one-shot task runner** that prints a single answer to stdout (`--task`).
 
@@ -31,11 +35,11 @@ etc.) without giving Lightpanda its own API key.
 # Basic REPL (no LLM, PandaScript only)
 ./lightpanda agent --no-llm
 
-# Replay a recorded script
-./lightpanda agent session.lp
+# Run a recorded script
+./lightpanda agent session.js
 
 # Replay then continue interactively, appending new commands to the file
-./lightpanda agent -i session.lp
+./lightpanda agent -i session.js
 
 # One-shot: ask a question, capture the answer on stdout
 ./lightpanda agent --task "what is on the front page of hn?"
@@ -77,11 +81,12 @@ API key is present or `--provider` is set. Use it to test PandaScript
 without burning tokens, or to disable the LLM in a saved command without
 editing the existing flags. `--no-llm` wins over `--provider`.
 
-## PandaScript
+## REPL Slash Commands
 
-PandaScript is a tiny, line-oriented DSL for browser actions. Each line is a
-slash command (`/<tool> [args]`), a `#` comment, or blank. There is no other
-syntax: anything that doesn't match those three forms is a parse error.
+The REPL uses a tiny slash-command language for browser actions. Each command is
+`/<tool> [args]`, a `#` comment, or blank. There is no other syntax in basic
+REPL mode or MCP `scriptStep`: anything that doesn't match those three forms is
+a parse error.
 
 Slash commands accept any of:
 
@@ -94,11 +99,12 @@ Slash commands accept any of:
 
 Tools whose selector is optional (e.g. `/click`, `/hover`, `/findElement`)
 have zero required fields, so they don't take a positional and must be
-written as `key=value`: `/click selector='Login'`, not `/click 'Login'`.
+written as `key=value`: `/click selector='a.login'`, not `/click 'a.login'`.
 
 Quoting is content-aware: `'…'`, `"…"`, and triple-quoted `'''…'''` /
 `"""…"""` for values that mix both quote styles or span multiple lines.
-Recorded scripts round-trip through the parser without escapes.
+Recorded JavaScript scripts use the equivalent function-call form instead of
+slash lines.
 
 Two slash commands have no underlying tool — they trigger an LLM turn that
 the agent translates into actual tool calls:
@@ -112,8 +118,8 @@ Both require an LLM. `--no-llm` rejects them.
 
 In the REPL (and only the REPL), a line that isn't a slash command and
 doesn't start with `#` is sent to the LLM as a natural-language prompt. In
-`.lp` scripts and through MCP `scriptStep`, the same input is a parse
-error. To leave the REPL, use the `/quit` meta command.
+MCP `scriptStep`, the same input is a parse error. To leave the REPL, use the
+`/quit` meta command.
 
 ### Example script
 
@@ -249,32 +255,42 @@ is now origin-scoped and persists across navigations within a session).
 
 ### Recording
 
-Interactive sessions can write back to a `.lp` file:
+Interactive sessions can write back to a `.js` file:
 
 ```console
-./lightpanda agent -i session.lp
+./lightpanda agent -i session.js
 ```
 
 State-mutating commands (`/goto`, `/click`, `/fill`, `/scroll`, `/hover`,
 `/selectOption`, `/setChecked`, `/waitForSelector`, `/press`, `/eval`,
 `/extract`) are appended; read-only commands (`/tree`, `/markdown`,
 `/links`, `/findElement`, …) and the natural-language turns that produced
-them are not. Natural-language turns are recorded as `# <prompt>` comments
-above the resulting slash commands so the script stays readable.
+them are not. Natural-language turns are recorded as `// <prompt>` comments
+above the resulting JavaScript calls so the script stays readable.
 
-### Replay and self-healing
+### JavaScript Script Running
 
-`./lightpanda agent script.lp` replays without making any LLM call.
+`./lightpanda agent script.js` runs without making any LLM call. Agent scripts
+are plain synchronous JavaScript plus the installed Lightpanda primitives:
 
-With `--self-heal --provider <p>`, a failed command (typically a stale
-selector after the page changed) triggers a short LLM turn that inspects the
-current page and emits a replacement command. The healed command runs, and
-the original script line is rewritten in place so the next replay succeeds
-deterministically.
+```js
+goto("https://example.com");
+click({ selector: "a.login" });
+eval("document.title");
+```
 
-Self-heal is constrained: at most one replacement per failure, capped LLM
-budget, no navigation away from the current page. It is meant to recover
-from selector drift, not to redesign the script.
+The script runs in an agent-only V8 context. It has no `window`, `document`, or
+DOM APIs. Browser interaction happens only through the installed primitives
+(`goto`, `click`, `fill`, `eval`, `extract`, and the other recorded browser
+actions). It is not Node.js either: there is no `require`, `process`, `fs`, npm
+package loading, or Node standard library. The `eval(...)` primitive executes
+its string in the current page context; page scripts cannot see agent variables
+or agent primitives.
+
+Tool errors throw JavaScript exceptions and stop execution. `--self-heal` is not
+available for JavaScript agent scripts; MCP `scriptStep`/`scriptHeal` remains
+available for external agents that still want a PandaScript line-healing loop.
+See [agent-script.md](agent-script.md) for the full script format reference.
 
 ## REPL features
 
@@ -344,23 +360,22 @@ For sub-task delegation in the other direction — calling Lightpanda's
 own LLM-driven agent in a one-shot fashion — use `--task` on stdin
 instead.
 
-### Recording PandaScript over MCP
+### Recording JavaScript over MCP
 
 `lightpanda mcp` exposes three recording tools so an external agent can
-capture a session as a `.lp` script for later deterministic replay:
+capture a session as a `.js` script for later deterministic replay:
 
 | Tool            | Args                  | Effect                                                                                         |
 |-----------------|-----------------------|------------------------------------------------------------------------------------------------|
 | `recordStart`   | `{ path: string }`    | Begin appending state-mutating tool calls to `path` (relative, no `..`). Errors if already on. |
 | `recordStop`    | `{}`                  | Close the recording and return `{path, line_count}`. Errors if no recording is active.         |
-| `recordComment` | `{ text: string }`    | Write `# <text>` to the active recording — useful as a breadcrumb above LLM-driven steps.      |
+| `recordComment` | `{ text: string }`    | Write `// <text>` to the active recording — useful as a breadcrumb above LLM-driven steps.     |
 
 While recording is active, every `goto` / `click` / `fill` / `scroll` /
 `hover` / `selectOption` / `setChecked` / `waitForSelector` / `eval`
-that succeeds is appended verbatim. Query-only tools (`tree`,
+that succeeds is appended as JavaScript. Query-only tools (`tree`,
 `markdown`, `findElement`, `consoleLogs`, …) are not recorded. The
-resulting file replays without an LLM via `./lightpanda agent
-session.lp`.
+resulting file runs without an LLM via `./lightpanda agent session.js`.
 
 ### Replay + self-heal over MCP
 

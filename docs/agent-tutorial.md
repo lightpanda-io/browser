@@ -1,12 +1,13 @@
 # Agent tutorial — Hacker News, end-to-end
 
 This walks you from "I just built `./lightpanda`" to a recorded,
-replayable, self-healing browser script — and then drives the same
-script from an external MCP client. Every section ends with a command
-you can run; nothing references later sections.
+replayable JavaScript browser script, then captures the same flow from
+an external MCP client. Every section ends with a command you can run;
+nothing references later sections.
 
 For the flag/command/tool tables, see [agent.md](agent.md). This
-document is the tutorial; that one is the reference.
+document is the tutorial; that one is the reference. For the JavaScript
+runtime contract, see [agent-script.md](agent-script.md).
 
 ## What you'll build
 
@@ -14,22 +15,18 @@ One session against Hacker News:
 
 1. Log in with your account.
 2. Confirm the login by reading the username out of the header.
-3. Record the whole flow to a `.lp` file.
-4. Replay it offline, with no LLM.
-5. Break a selector on purpose; watch `--self-heal` repair the file.
-6. Drive the same script from an external agent over MCP.
-
-The finished artifact already exists in the repo as
-[`hn_login.lp`](../hn_login.lp). Diff your recording against it at the
-end as a sanity check.
+3. Record the whole flow to a `.js` file.
+4. Run it offline, with no LLM.
+5. Add local JavaScript logic around `extract(...)` results.
+6. Record the same browser actions from an external agent over MCP.
 
 ## Prerequisites
 
 - `./lightpanda` on your PATH (build with `zig build`).
 - A Hacker News account.
-- One LLM API key for sections that need natural language and
-  self-healing — Anthropic, OpenAI, Gemini, or a local Ollama. Sections
-  4–7 work with no key at all.
+- One LLM API key for sections that use natural language — Anthropic,
+  OpenAI, Gemini, or a local Ollama. Recorded `.js` scripts run with no
+  key at all.
 
 Export your HN credentials as `LP_*` env vars. The convention is
 `LP_<SITE>_<FIELD>` — a short site identifier (`HN` for Hacker News,
@@ -131,7 +128,7 @@ showed.
 `/goto` takes a single URL argument (positional, optionally quoted). The page
 is now loaded.
 
-> PandaScript is just slash commands. `click '#foo'` (no leading slash) is
+> The REPL scripting surface is slash commands. `click '#foo'` (no leading slash) is
 > forwarded to the LLM as a natural-language prompt; only `/click '#foo'`
 > runs as a command. TAB completion in the REPL helps you find the right
 > tool name.
@@ -190,7 +187,8 @@ create-account form, then key on the input's `name` attribute.
 `/fill`, `/hover`, `/selectOption`, `/setChecked`) accept CSS selectors
 only. The backend node IDs `findElement` and `detectForms` return are
 invalidated by any DOM mutation, and they cannot be serialized into
-PandaScript — a session that uses them is not replayable. Always
+durable JavaScript recordings — a session that uses them is not
+replayable. Always
 synthesize a CSS selector from the attributes (`id`, `class`,
 `name`, `action`, `tag_name`) and use that.
 
@@ -287,7 +285,7 @@ schema JSON` instead of a confusing V8 stack trace.
 The same flow, but recorded to a file. Quit the REPL, then:
 
 ```console
-./lightpanda agent -i hn.lp
+./lightpanda agent -i hn_login.js
 ```
 
 `-i <path>` opens an interactive REPL that appends state-mutating
@@ -298,90 +296,112 @@ structured pull (`/goto`, multi-line `/extract`) — then `/quit`.
 Inspect the result:
 
 ```console
-cat hn.lp
+cat hn_login.js
 ```
 
 You should see the seven mutating commands and nothing else — no
 `/tree`, no `/markdown`, no read-only lookups. The recorder filters on a
 per-tool flag (`ToolDef.recorded`) so read-only inspection never
 pollutes the script; `/extract` *is* recorded (it changes what the
-script will output on replay even though it doesn't mutate the page).
+script can read on replay even though it doesn't mutate the page).
+The saved file is JavaScript:
 
-Diff it against the checked-in fixture:
+```js
+goto("https://news.ycombinator.com/login");
+fill({ selector: "form[action=\"login\"] input[name=\"acct\"]", value: "$LP_HN_USERNAME" });
+fill({ selector: "form[action=\"login\"] input[name=\"pw\"]", value: "$LP_HN_PASSWORD" });
+click({ selector: "form[action=\"login\"] input[type=\"submit\"][value=\"login\"]" });
+waitForSelector("#logout");
+goto("https://news.ycombinator.com");
+extract({ topStories: [{ selector: ".athing", fields: { rank: ".rank", title: ".titleline > a", url: { selector: ".titleline > a", attr: "href" } } }] });
+```
+
+Natural-language REPL turns are not saved as executable JavaScript.
+When a natural-language turn produces recorded browser actions, the
+prompt is kept as a `//` comment above those actions.
+
+## 5. Running deterministically
 
 ```console
-diff hn.lp hn_login.lp
+./lightpanda agent hn_login.js
 ```
 
-Modulo trailing newlines, they should match. That fixture is what the
-rest of this tutorial uses.
+No `--provider`, no LLM, no token spend. The recorded script runs top
+to bottom against a fresh browser. This is the form you want for
+regression tests and CI.
 
-## 5. Replaying deterministically
+A JavaScript script does not print its final expression automatically.
+The recorded `extract(...)` call returns a local JavaScript value, so
+edit the final line when you want replay output:
+
+```js
+const topStories = extract({
+  topStories: [{
+    selector: ".athing",
+    fields: {
+      rank: ".rank",
+      title: ".titleline > a",
+      url: { selector: ".titleline > a", attr: "href" }
+    }
+  }]
+});
+
+console.log(JSON.stringify({ topStories }, null, 2));
+```
+
+Run it again and stdout is clean JSON:
 
 ```console
-./lightpanda agent hn_login.lp
+./lightpanda agent hn_login.js > stories.json
 ```
 
-No `--provider`, no LLM, no token spend. The recorded script runs
-top to bottom against a fresh browser. This is the form you want for
-regression tests and CI: it's pure replay.
+`/login` and `/acceptCookies` are REPL-only LLM triggers. A pure
+recording from `-i` never contains them; the recorder captures the
+resulting browser tool calls instead. Lines that are neither slash
+commands nor comments are also REPL-only conveniences, not script
+syntax.
 
-`/login` and `/acceptCookies` are the only script entries that require
-an LLM. A pure recording from `-i` never contains them (the recorder
-captures the LLM's resulting tool calls, not the trigger), so it always
-replays without `--provider`. Natural-language lines aren't valid
-PandaScript syntax in the first place — they're a REPL-only convenience.
+## 6. Local JavaScript logic
 
-## 6. Selector drift and `--self-heal`
+Agent scripts run in a separate JavaScript context from the web page.
+There is no `window`, `document`, DOM API, `require`, `process`, or
+Node standard library in that context. Browser interaction happens
+through the installed primitives, and `extract(...)` is the usual way
+to move page data into local script logic.
 
-Real pages change. Simulate selector drift by editing your copy:
+For example, turn the extraction result into a smaller report without
+running any page-side JavaScript:
 
-```console
-cp hn_login.lp hn_broken.lp
-sed -i 's/input\[name="acct"\]/input[name="user"]/' hn_broken.lp
+```js
+goto("https://news.ycombinator.com");
+
+const topStories = extract({
+  topStories: [{
+    selector: ".athing",
+    limit: 5,
+    fields: {
+      rank: ".rank",
+      title: ".titleline > a",
+      url: { selector: ".titleline > a", attr: "href" }
+    }
+  }]
+});
+
+const report = topStories.map((story) => ({
+  rank: story.rank,
+  title: story.title,
+  url: story.url
+}));
+
+console.log(JSON.stringify({ report }, null, 2));
 ```
 
-`input[name="user"]` doesn't exist on HN's login form, so a plain
-replay fails:
+Use the `eval(...)` primitive only when you intentionally want to run a
+string in the current page's JavaScript context. Page eval cannot see
+agent variables or call `goto`, `extract`, and the other agent
+primitives.
 
-```console
-./lightpanda agent hn_broken.lp
-```
-
-`/fill`, `/setChecked`, and `/selectOption` go a step further than just
-"did the selector resolve" — a post-exec verifier checks that the DOM
-actually reflects the intent (the input ended up with the value you
-typed, the checkbox flipped, the option got selected). That's what
-catches silent drift before it propagates.
-
-Now re-run with self-heal:
-
-```console
-./lightpanda agent --self-heal --provider anthropic hn_broken.lp
-```
-
-(Substitute your provider.) On failure, the agent runs a short,
-budget-capped LLM turn against the *current* page state, gets a
-replacement command, runs it, and atomically rewrites `hn_broken.lp`
-in place. A `hn_broken.lp.bak` is written before any mutation, and
-the rewritten line is prefixed with a header:
-
-```pandascript
-# [Auto-healed] Original: /fill selector='form[action="login"] input[name="user"]' value='$LP_USERNAME'
-/fill selector='form[action="login"] input[name="acct"]' value='$LP_USERNAME'
-```
-
-Self-heal is intentionally narrow: one replacement per failure, no
-navigation, capped budget. It's there to recover from selector
-drift, not to redesign the script.
-
-Re-run without `--self-heal` to prove replay is back to deterministic:
-
-```console
-./lightpanda agent hn_broken.lp
-```
-
-## 7. Same script, external agent (MCP)
+## 7. Same flow, external agent (MCP)
 
 Everything above used Lightpanda's built-in agent. If you're driving
 Lightpanda from a different agent (Claude Code, a custom MCP client,
@@ -406,31 +426,36 @@ Register the server with your MCP client:
 
 From the external agent, call:
 
-1. `recordStart { "path": "hn.lp" }` — begins appending state-mutating
-   tool calls to `hn.lp`. The path must be relative and free of `..`.
+1. `recordStart { "path": "hn_login.js" }` — begins appending
+   state-mutating tool calls as JavaScript to `hn_login.js`. The path
+   must be relative and free of `..`.
 2. The same browser tools you'd call anyway: `goto`, `fill`, `click`,
-   `waitForSelector`. Each one that succeeds is appended verbatim;
+   `waitForSelector`. Each one that succeeds is appended as a
+   JavaScript primitive call;
    query-only tools (`tree`, `markdown`, `findElement`, `consoleLogs`)
    are never recorded.
-3. `recordComment { "text": "logged in" }` — drop a breadcrumb above
+3. `recordComment { "text": "logged in" }` — drop a `//` breadcrumb above
    the next recorded line. Useful for marking the boundary between
    LLM-driven phases.
 4. `recordStop {}` — closes the recording and returns
    `{path, line_count}`.
 
-The output file is byte-equivalent to what `-i hn.lp` produced in
-section 4. It replays via the agent CLI without modification:
+The output file uses the same JavaScript format as `-i hn_login.js`
+from section 4. It runs via the agent CLI without modification:
 
 ```console
-./lightpanda agent hn.lp
+./lightpanda agent hn_login.js
 ```
 
-### Replay with self-heal over MCP
+### About `scriptStep` and `scriptHeal`
 
-MCP doesn't carry a `--self-heal` flag — self-heal is a two-tool
-roundtrip the calling agent orchestrates:
+`recordStart` now records JavaScript agent scripts. The MCP
+`scriptStep` and `scriptHeal` tools are still available for external
+agents that want to run and repair one slash-command line at a time,
+but that is a separate PandaScript line-healing workflow:
 
-1. Read the script. For each non-blank, non-comment line, call
+1. Read the PandaScript file you are healing. For each non-blank,
+   non-comment line, call
    `scriptStep { "line": "<line>" }`. Comments and blanks are no-ops
    on the Lightpanda side.
 2. On `isError: true`, the structured error message tells you what
@@ -442,7 +467,7 @@ roundtrip the calling agent orchestrates:
    Each `original_line` must match verbatim. Lightpanda writes
    `<path>.bak` first, then atomically rewrites the file with the
    `# [Auto-healed] Original: …` header prepended to the first
-   replacement — same format as section 6.
+   replacement.
 4. Continue from the next line.
 
 `scriptStep` deliberately does *not* auto-record: the script is
@@ -453,9 +478,10 @@ the caller's responsibility.
 
 ## Where to go next
 
-- [agent.md](agent.md) — full reference: every flag, every PandaScript
+- [agent.md](agent.md) — full reference: every flag, every slash
   command, every browser tool, plus the security model and
   auto-detection rules.
-- [`hn_login.lp`](../hn_login.lp) — the fixture this tutorial builds.
+- [agent-script.md](agent-script.md) — JavaScript runtime, primitives,
+  return values, and complete script examples.
 - `lightpanda mcp --help` and `lightpanda agent --help` — current
   flag listings straight from the binary.

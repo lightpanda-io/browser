@@ -60,7 +60,7 @@ pub const Tool = enum {
     getCookies,
     getEnv,
 
-    /// State-mutating: surfaces in `.lp` recordings. Read-only tools
+    /// State-mutating: surfaces in JavaScript recordings. Read-only tools
     /// (queries, env probes) stay out so a replay doesn't bloat the script
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
@@ -210,7 +210,7 @@ pub const Tool = enum {
             },
             .extract => .{
                 .description =
-                \\Extract structured data via a JSON schema. The only tool whose result is recorded as an `/extract` PandaScript line (replay-friendly); answering from `markdown` content in chat is not. Schema is a JSON object literal passed as a string in `schema`. Each value picks what to lift:
+                \\Extract structured data via a JSON schema. The only tool whose result is recorded as an `extract(...)` script call (replay-friendly); answering from `markdown` content in chat is not. Schema is a JSON object literal passed as a string in `schema`. Each value picks what to lift:
                 \\  "<sel>"                                → first match's textContent.trim() (string|null)
                 \\  ""                                     → element's own textContent.trim() (only meaningful inside `fields`)
                 \\  ["<sel>"]                              → every match's text (string[]) — sugar for [{"selector":"<sel>"}]

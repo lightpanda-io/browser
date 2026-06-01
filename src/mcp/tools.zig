@@ -32,7 +32,7 @@ const record_start_schema = browser_tools.minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) where PandaScript commands will be appended. The file is created if missing. Only one recording can be active at a time." }
+    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) where JavaScript agent calls will be appended. The file is created if missing. Only one recording can be active at a time." }
     \\  },
     \\  "required": ["path"]
     \\}
@@ -49,7 +49,7 @@ const record_comment_schema = browser_tools.minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "text": { "type": "string", "description": "Comment text. Written as `# <text>` to the active recording. Errors if no recording is active." }
+    \\    "text": { "type": "string", "description": "Comment text. Written as `// <text>` to the active recording. Errors if no recording is active." }
     \\  },
     \\  "required": ["text"]
     \\}
@@ -90,7 +90,7 @@ const script_heal_schema = browser_tools.minify(
 const extra_tools = [_]McpTool{
     .{
         .name = "recordStart",
-        .description = "Start recording state-mutating browser tool calls into a PandaScript file. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, `eval`, and `extract` get appended as PandaScript lines. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
+        .description = "Start recording state-mutating browser tool calls into a JavaScript agent script. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, `eval`, and `extract` get appended as JavaScript calls. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
         .inputSchema = record_start_schema,
     },
     .{
@@ -100,7 +100,7 @@ const extra_tools = [_]McpTool{
     },
     .{
         .name = "recordComment",
-        .description = "Append a `# <text>` comment line to the active recording. Useful as a breadcrumb above LLM-driven steps.",
+        .description = "Append a `// <text>` comment line to the active recording. Useful as a breadcrumb above LLM-driven steps.",
         .inputSchema = record_comment_schema,
     },
     .{
