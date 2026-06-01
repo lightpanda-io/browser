@@ -90,13 +90,6 @@ pub const Diag = struct {
     bad_value: []const u8 = "",
 };
 
-/// True when the tool can be addressed as `/<tool> '''<body>'''` —
-/// sole required field is a string AND no runtime locator needed.
-pub fn isMultiLineCapable(self: Schema) bool {
-    if (self.tool.needsLocator()) return false;
-    return self.required.len == 1 and self.fieldType(self.required[0]) == .string;
-}
-
 pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
     for (self.fields) |f| {
         if (std.ascii.eqlIgnoreCase(f.name, key)) return f;
@@ -219,24 +212,6 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
     }
 
     return try self.buildValue(arena, list.items, diag);
-}
-
-/// Like `parseValueDiag` but skips the required-field check: the
-/// multi-line body fills the required field via a separate path.
-pub fn parseInlineKv(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8) ParseError!?std.json.Value {
-    const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
-    if (rest.len == 0) return null;
-
-    const tokens = try tokenize(arena, rest);
-    var list = try std.ArrayList(KvPair).initCapacity(arena, tokens.len);
-    for (tokens) |tok| {
-        const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return error.MalformedKv;
-        if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
-        const key = tok[0..eq];
-        const field = self.findField(key) orelse return error.UnknownField;
-        list.appendAssumeCapacity(.{ .key = field.name, .value = stripQuotes(tok[eq + 1 ..]) });
-    }
-    return try self.buildValue(arena, list.items, null);
 }
 
 fn validateAndFillObject(self: Schema, obj: *std.json.ObjectMap) ParseError!void {
@@ -528,41 +503,6 @@ fn looksLikeKv(tok: []const u8) bool {
     return true;
 }
 
-// Recorder-side counterparts to `parseValue` / `tokenize` above. Kept here so
-// the format → parse round-trip lives in one file.
-
-pub const QuoteType = enum {
-    triple_double,
-    triple_single,
-
-    pub fn fromLiteral(s: []const u8) ?QuoteType {
-        return if (s.len == 3) fromPrefix(s) else null;
-    }
-
-    fn fromPrefix(s: []const u8) ?QuoteType {
-        if (std.mem.startsWith(u8, s, "\"\"\"")) return .triple_double;
-        if (std.mem.startsWith(u8, s, "'''")) return .triple_single;
-        return null;
-    }
-
-    pub fn toLiteral(self: QuoteType) []const u8 {
-        return switch (self) {
-            .triple_double => "\"\"\"",
-            .triple_single => "'''",
-        };
-    }
-
-    /// Pick a triple-quote delimiter not appearing in `body`. Null when
-    /// both appear and neither can wrap unambiguously.
-    fn pickFor(body: []const u8) ?QuoteType {
-        const has_single = std.mem.indexOf(u8, body, "'''") != null;
-        const has_double = std.mem.indexOf(u8, body, "\"\"\"") != null;
-        if (has_single and has_double) return null;
-        if (has_single) return .triple_double;
-        return .triple_single;
-    }
-};
-
 /// True when `input` opens a `'''` or `"""` block that hasn't been closed
 /// yet. The REPL hinter/completer call this to silence arg ghost-text once
 /// the user is typing inside a multi-line body.
@@ -598,61 +538,14 @@ pub fn quotableInline(s: []const u8, body: bool) bool {
     return true;
 }
 
-pub fn writeBodyString(writer: *std.Io.Writer, s: []const u8) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
-    if (std.mem.indexOfScalar(u8, s, '\n') != null) {
-        const q = (QuoteType.pickFor(s) orelse return error.AmbiguousQuoting).toLiteral();
-        try writer.writeAll(q);
-        try writer.writeByte('\n');
-        try writer.writeAll(s);
-        try writer.writeByte('\n');
-        try writer.writeAll(q);
-        return;
-    }
-    try writeQuoted(writer, s);
-}
-
-pub fn writeInlineValue(writer: *std.Io.Writer, v: std.json.Value) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
-    switch (v) {
-        .string => |s| try writeQuoted(writer, s),
-        .integer => |n| try writer.print("{d}", .{n}),
-        .float => |n| try writer.print("{d}", .{n}),
-        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-        .null => try writer.writeAll("null"),
-        else => std.json.Stringify.value(v, .{}, writer) catch return error.WriteFailed,
-    }
-}
-
-/// Caller must filter via `quotableInline` first; remaining ambiguous
-/// cases trap as `WriteFailed` so a stray path can't emit a broken line.
-fn writeQuoted(writer: *std.Io.Writer, s: []const u8) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
-    if (std.mem.indexOfScalar(u8, s, '\n') != null) return error.WriteFailed;
-
-    const has_single = std.mem.indexOfScalar(u8, s, '\'') != null;
-    const has_double = std.mem.indexOfScalar(u8, s, '"') != null;
-
-    if (has_single and has_double) {
-        const q = (QuoteType.pickFor(s) orelse return error.AmbiguousQuoting).toLiteral();
-        try writer.writeAll(q);
-        try writer.writeAll(s);
-        try writer.writeAll(q);
-        return;
-    }
-    const q: u8 = if (has_single) '"' else '\'';
-    try writer.writeByte(q);
-    try writer.writeAll(s);
-    try writer.writeByte(q);
-}
-
 const testing = @import("../testing.zig");
 
 test "all: comptime tool defs reduce cleanly" {
     const schemas = Schema.all();
     try testing.expect(schemas.len == browser_tools.tool_defs.len);
     const goto = Schema.find(schemas, "goto").?;
-    try testing.expect(goto.isMultiLineCapable());
     try testing.expect(goto.tool.isRecorded());
     const scroll = Schema.find(schemas, "scroll").?;
-    try testing.expect(!scroll.isMultiLineCapable());
     try testing.expect(scroll.tool.isRecorded());
     const tree = Schema.find(schemas, "tree").?;
     try testing.expect(!tree.tool.isRecorded());
