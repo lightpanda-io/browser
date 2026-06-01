@@ -132,6 +132,10 @@ pub const AgentVerbosity = enum {
     medium,
     /// + the matching `[result: …]` body for each call.
     high,
+
+    pub fn atLeast(self: AgentVerbosity, min: AgentVerbosity) bool {
+        return @intFromEnum(self) >= @intFromEnum(min);
+    }
 };
 
 fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator) !?[:0]const u8 {

@@ -50,16 +50,12 @@ pub const ansi = struct {
     pub const clear_line = "\x1b[2K";
 };
 
-/// Bold-cyan command styling, shared with the `/help` listing.
+/// Command styling shared with the `/help` listing.
 pub fn highlightCmd(comptime fragment: []const u8) []const u8 {
     return ansi.bold ++ ansi.cyan ++ fragment ++ ansi.reset;
 }
 
 const Verbosity = Config.AgentVerbosity;
-
-fn atLeast(level: Verbosity, min: Verbosity) bool {
-    return @intFromEnum(level) >= @intFromEnum(min);
-}
 
 allocator: std.mem.Allocator,
 verbosity: Verbosity,
@@ -171,7 +167,7 @@ pub fn endTool(self: *Terminal) void {
 /// In non-TTY contexts ANSI is still emitted — pipes that strip color see
 /// plain text via the bullet character.
 pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
-    if (!atLeast(self.verbosity, .medium)) return;
+    if (!self.verbosity.atLeast(.medium)) return;
     const spinner_on = self.spinner.isEnabled();
 
     if (spinner_on) {
@@ -334,7 +330,7 @@ fn addMetaValueCompletions(
     for (meta.values) |v| addPrefixedCompletion(cenv, buf, input, prefix, v, "", body);
 }
 
-// Completes `$LP_*` against the live process environment.
+/// Completes `$LP_*` against the live process environment.
 fn addEnvVarCompletions(
     cenv: ?*c.ic_completion_env_t,
     buf: *[completion_buf_len:0]u8,
@@ -408,8 +404,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input_c)), 0);
     if (input.len == 0) return null;
 
-    // `/help <partial>`: ghost the first command name that matches the arg.
-    if (parseHelpArgPrefix(input)) |partial| return ghostFirstMatch(all_slash_names, partial, "");
+    if (parseHelpArgPrefix(input)) |partial| return ghostFirstMatch(&all_slash_names, partial, "");
 
     // Inside an open `'''…'''` body the buffer is script text, not kv args.
     if (Schema.hasUnclosedTripleQuote(input)) return null;
@@ -423,7 +418,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
             return self.renderMetaHint(meta, parts.rest, ends_ws);
         }
         if (std.mem.indexOfScalar(u8, input, ' ') == null) {
-            return ghostFirstMatch(all_slash_names, parts.name, "");
+            return ghostFirstMatch(&all_slash_names, parts.name, "");
         }
         return null;
     }
@@ -457,11 +452,9 @@ fn writeHints(lead: []const u8, fragments: []const []const u8) [*c]const u8 {
     return @ptrCast(&hint_buf);
 }
 
-// Ghosts a meta command's argument: detected providers are synchronous, so
-// `/provider` previews a real name from the start; `/model` needs a fetch, so
-// it shows the `[name]` placeholder until the name is committed (`/model `),
-// then the first fetch blocks and is cached. Static values (`/verbosity`)
-// match `meta.values`.
+/// Ghosts a meta command's argument: providers resolve synchronously, `/model`
+/// needs a blocking fetch (placeholder until committed), static values match
+/// `meta.values`.
 fn renderMetaHint(self: *Terminal, meta: *const SlashCommand.MetaCommand, body: []const u8, ends_ws: bool) [*c]const u8 {
     if (meta.hint.len == 0) return null;
     if (ends_ws and body.len != 0) return null; // value already committed
@@ -487,9 +480,8 @@ fn renderMetaHint(self: *Terminal, meta: *const SlashCommand.MetaCommand, body: 
 }
 
 /// Ghosts `lead` + the suffix of the first `names` entry that prefix-matches
-/// `body`. `names` is `anytype` to accept both the `[:0]`-terminated
-/// `meta.values` and a runtime `[]const []const u8`.
-fn ghostFirstMatch(names: anytype, body: []const u8, lead: []const u8) [*c]const u8 {
+/// `body`.
+fn ghostFirstMatch(names: []const []const u8, body: []const u8, lead: []const u8) [*c]const u8 {
     for (names) |v| {
         if (!std.ascii.startsWithIgnoreCase(v, body)) continue;
         const text = std.fmt.bufPrintZ(&hint_buf, "{s}{s}", .{ lead, v[body.len..] }) catch return null;
@@ -498,8 +490,8 @@ fn ghostFirstMatch(names: anytype, body: []const u8, lead: []const u8) [*c]const
     return null;
 }
 
-// Renders `<required>` and `[optional=…]` for each unused field, or
-// `<keyname>=…` when the user is typing a key prefix.
+/// Renders `<required>` and `[optional=…]` for each unused field, or
+/// `<keyname>=…` when the user is typing a key prefix.
 fn renderSchemaHint(schema: *const Schema, body: []const u8, ends_ws: bool) [*c]const u8 {
     const a = analyzeBody(schema, body, ends_ws);
 
@@ -523,20 +515,20 @@ fn renderSchemaHint(schema: *const Schema, body: []const u8, ends_ws: bool) [*c]
     return writeHints(if (ends_ws) "" else " ", frags[0..n]);
 }
 
-// Advances `i` past whitespace; returns true if more text remains.
-fn skipWs(text: []const u8, i: *usize) bool {
-    while (i.* < text.len and std.ascii.isWhitespace(text[i.*])) i.* += 1;
-    return i.* < text.len;
+/// Index of the next non-whitespace byte at or after `start`, or null if only
+/// whitespace remains.
+fn skipWhitespace(text: []const u8, start: usize) ?usize {
+    var i = start;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
+    return if (i < text.len) i else null;
 }
 
-// Byte offsets to ic_highlight are not UTF-8 code points; safe because we
-// only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
+/// Byte offsets to ic_highlight are not UTF-8 code points; safe because we
+/// only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
 fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*anyopaque) callconv(.c) void {
     const text = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input)), 0);
-    var i: usize = 0;
-    if (!skipWs(text, &i)) return;
-
-    const cmd_start = i;
+    const cmd_start = skipWhitespace(text, 0) orelse return;
+    var i = cmd_start;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
     const cmd = text[cmd_start..i];
     // Commit to red once the user has moved past the token, OR as soon as the
@@ -628,8 +620,8 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     } else |_| {}
 }
 
-// Returns the index just past the matching closing quote, or `text.len` if
-// unterminated. Does not handle backslash escapes (matches Schema.tokenize).
+/// Returns the index just past the matching closing quote, or `text.len` if
+/// unterminated. Does not handle backslash escapes (matches Schema.tokenize).
 fn scanQuoted(text: []const u8, start: usize) usize {
     if (start >= text.len) return start;
     const ch = text[start];
@@ -666,8 +658,8 @@ fn highlightDollarVars(henv: ?*c.ic_highlight_env_t, text: []const u8, start: us
 
 fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
     var i = start;
-    while (skipWs(text, &i)) {
-        const tok_start = i;
+    while (skipWhitespace(text, i)) |tok_start| {
+        i = tok_start;
         if (text[i] == '\'' or text[i] == '"') {
             i = scanQuoted(text, i);
             c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_string.ptr);
@@ -974,7 +966,7 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
         _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
         return;
     }
-    if (!is_error and !atLeast(self.verbosity, .medium)) return;
+    if (!is_error and !self.verbosity.atLeast(.medium)) return;
     const truncated = text[0..@min(text.len, max_result_display_len)];
     const ellipsis: []const u8 = if (text.len > max_result_display_len) "..." else "";
     const color: []const u8 = if (is_error) ansi.red else ansi.green;
@@ -1031,11 +1023,11 @@ fn printSeverity(self: *Terminal, color: []const u8, label: []const u8, comptime
 }
 
 pub fn printInfo(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
-    if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
+    if (!self.isRepl() and !self.verbosity.atLeast(.medium)) return;
     std.debug.print(fmt ++ "\n", args);
 }
 
 pub fn printDimmed(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
-    if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
+    if (!self.isRepl() and !self.verbosity.atLeast(.medium)) return;
     std.debug.print(ansi.dim ++ fmt ++ ansi.reset ++ "\n", args);
 }

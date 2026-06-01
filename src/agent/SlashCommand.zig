@@ -40,7 +40,7 @@ pub const MetaCommand = struct {
     /// command takes no args (`/help`, `/quit`).
     hint: []const u8,
     /// Tab-completion candidates for the first positional arg.
-    values: []const [:0]const u8,
+    values: []const []const u8,
     /// Terse one-liner for the `/help` listing; longer detail is rendered
     /// by `Agent.printSlashHelp` for the per-command lookup.
     description: []const u8,

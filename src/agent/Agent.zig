@@ -252,7 +252,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .notification = notification,
         .browser = undefined,
         .session = undefined,
-        .node_registry = CDPNode.Registry.init(allocator),
+        .node_registry = .init(allocator),
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
         .verifier = undefined,
         .recorder = null,
@@ -476,7 +476,7 @@ fn runRepl(self: *Agent) void {
         self.terminal.printDimmed("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
         self.terminal.printDimmed("Basic REPL (--no-llm) — PandaScript only.", .{});
-        self.terminal.printDimmed("Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language, /login, and /acceptCookies.", .{});
+        self.terminal.printDimmed("Drop --no-llm and set a provider API key to enable natural-language commands.", .{});
     }
 
     repl: while (true) {
