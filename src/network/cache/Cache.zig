@@ -55,9 +55,9 @@ pub fn evict(self: *Cache, url: []const u8) void {
     };
 }
 
-pub fn revalidate(self: *Cache, arena: std.mem.Allocator, url: []const u8, timestamp: i64) !void {
+pub fn renew(self: *Cache, arena: std.mem.Allocator, url: []const u8, timestamp: i64) !void {
     return switch (self.kind) {
-        inline else => |*c| c.revalidate(arena, url, timestamp),
+        inline else => |*c| c.renew(arena, url, timestamp),
     };
 }
 

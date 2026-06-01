@@ -234,12 +234,12 @@ const CacheContext = struct {
             const stale = self.stale_entry.?;
             self.stale_entry = null;
 
-            transfer.client.network.cache.?.revalidate(
+            transfer.client.network.cache.?.renew(
                 arena,
                 self.req_url,
                 std.time.timestamp(),
             ) catch |err| {
-                log.warn(.cache, "revalidate failed", .{ .err = err });
+                log.warn(.cache, "renew failed", .{ .err = err });
             };
 
             transfer.req.notification.dispatch(
