@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<head>
+<script src="../testing.js"></script>
+</head>
+<body>
+<!-- Regression test for a SIGSEGV triggered by re-entrant document.write().
+
+     Once the page has loaded, frame._load_state is no longer .parsing, so
+     document.write() drives a *script-created* parser. If the written markup
+     contains a <script> that itself calls document.write(), the nested call
+     must not re-enter the same html5ever feed that is still on the stack
+     popping that <script>.
+
+     html5ever's streaming parser is not re-entrant: feeding it while it is
+     inside process_to_completion corrupts its tree-builder state. That
+     produced an "impossible case in Text mode" panic and left the
+     custom-element pop callback's frame pointer dangling, segfaulting in
+     CustomElementReactions.popAndInvoke. A custom element in the written
+     markup ensures a reaction is queued in the pop scope that crashed. -->
+<script id="reentrant_write">
+window.nestedWriteRan = false;
+window.connectedRan = false;
+
+class ReentrantWrite extends HTMLElement {
+    connectedCallback() {
+        window.connectedRan = true;
+    }
+}
+customElements.define('reentrant-write', ReentrantWrite);
+
+// onload runs after the initial parse, so document.write() goes through the
+// script-created parser (the path that crashed).
+testing.onload(function () {
+    document.open();
+    document.write(
+        '<reentrant-write></reentrant-write>' +
+        '<scr' + 'ipt>' +
+        'window.nestedWriteRan = true;' +
+        'document.write("<p>nested</p>");' +
+        '</scr' + 'ipt>'
+    );
+    document.close();
+
+    // Reaching here without crashing is the whole point of the test.
+    testing.expectTrue(window.nestedWriteRan);
+    testing.expectTrue(window.connectedRan);
+});
+</script>
+</body>
+</html>
