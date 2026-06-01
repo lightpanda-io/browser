@@ -25,11 +25,9 @@ const ProviderTool = zenai.provider.Tool;
 
 const log = lp.log;
 const Config = lp.Config;
-const script = lp.script;
-const Command = lp.script.Command;
-const Schema = lp.script.Schema;
-const Recorder = lp.script.Recorder;
-const Verifier = lp.script.Verifier;
+const Command = lp.Command;
+const Schema = lp.Schema;
+const Recorder = lp.Recorder;
 const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
@@ -58,7 +56,7 @@ pub fn isUserError(err: anyerror) bool {
     return false;
 }
 
-const default_system_prompt = script.driver_guidance ++
+const default_system_prompt = browser_tools.driver_guidance ++
     \\
     \\Agent-specific behavior:
     \\- Call a tool for every browser action. NEVER claim you performed an
@@ -74,31 +72,6 @@ const default_system_prompt = script.driver_guidance ++
     \\- If the user asks for account-scoped data (karma, profile, inbox, …)
     \\  and the page shows you're not signed in, log in proactively (per
     \\  the Credentials section above) before reporting unavailable.
-;
-
-const self_heal_prompt_prefix =
-    \\A PandaScript command failed during replay. The command that failed was:
-    \\
-;
-
-const self_heal_prompt_page_state =
-    \\
-    \\The current page URL is:
-    \\
-;
-
-const self_heal_prompt_instructions =
-    \\
-    \\IMPORTANT:
-    \\- Do NOT navigate away from the current page. The page is already loaded and
-    \\  contains the element you need — the selector just needs to be fixed.
-    \\- Use the tree or interactiveElements tools WITHOUT a url parameter to inspect
-    \\  the current page, find the correct selector, and execute the equivalent action.
-    \\- If the action is blocked by a popup, cookie banner, or surprise modal,
-    \\  handle it first (e.g., click "Accept") before executing the fixed command.
-    \\- ONLY fix the failed command and handle immediate blockers. STOP immediately
-    \\  once the intent of the original command is achieved.
-    \\  The script will continue executing the remaining commands after the heal.
 ;
 
 const synthesis_prompt =
@@ -128,7 +101,6 @@ browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
 terminal: Terminal,
-verifier: Verifier,
 recorder: ?Recorder,
 save_buffer: Recorder.Memory,
 save_path: ?[]u8,
@@ -139,7 +111,6 @@ message_arena: std.heap.ArenaAllocator,
 model: []u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
-self_heal: bool,
 interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
@@ -164,20 +135,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         });
         return error.ConflictingFlags;
     }
-    if (opts.self_heal) {
-        // JavaScript scripts throw on tool errors instead of replaying a
-        // line-oriented PandaScript, so the CLI `--self-heal` flow no longer
-        // has a place to hook in. The heal machinery below (runActionEntry,
-        // attemptSelfHeal, retryCommand, flushReplacements, the self_heal_*
-        // prompts, and the `self_heal`/`verifier` fields) is intentionally
-        // retained — currently unreachable — for a future self-healing pass
-        // over JS scripts. MCP scriptStep/scriptHeal remains the supported
-        // PandaScript healing path in the meantime.
-        log.fatal(.app, "self-heal unsupported", .{
-            .hint = "JavaScript scripts throw on tool errors; use MCP scriptStep/scriptHeal for PandaScript healing",
-        });
-        return error.ConflictingFlags;
-    }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
     }
@@ -190,7 +147,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     // Basic-mode REPL (no LLM) must be opted into via --no-llm. Without it,
     // the REPL accepts natural language and an absent API key would only
-    // surface at the first non-PandaScript line — too late to be useful.
+    // surface at the first non-slash-command line — too late to be useful.
     // Pure JavaScript script runs stay allowed: no REPL, no LLM needed.
     const requires_llm = is_one_shot or (will_repl and !opts.no_llm);
 
@@ -265,7 +222,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .session = undefined,
         .node_registry = .init(allocator),
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
-        .verifier = undefined,
         .recorder = null,
         .save_buffer = .init(allocator),
         .save_path = null,
@@ -274,7 +230,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .model = model,
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
-        .self_heal = opts.self_heal,
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
@@ -290,7 +245,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     self.session = try self.browser.newSession(notification);
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
-    self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
 
     self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
@@ -484,7 +438,7 @@ fn runRepl(self: *Agent) void {
     if (self.ai_client) |ai_client| {
         self.terminal.printDimmed("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printDimmed("Basic REPL (--no-llm) — PandaScript only.", .{});
+        self.terminal.printDimmed("Basic REPL (--no-llm) — slash commands only.", .{});
         self.terminal.printDimmed("To enable natural-language commands, " ++ llm_setup_hint ++ ".", .{});
     }
 
@@ -560,7 +514,7 @@ fn runRepl(self: *Agent) void {
     self.terminal.printInfo("Goodbye!", .{});
 }
 
-/// Handle a REPL-only meta slash command. These aren't part of PandaScript
+/// Handle a REPL-only meta slash command. These aren't tool slash commands
 /// and never reach the browser tool dispatcher. Returns `true` if the user
 /// asked to quit.
 fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.MetaCommand, rest: []const u8) bool {
@@ -858,8 +812,6 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
     self.terminal.printInfo("schema:\n{s}", .{aw.written()});
 }
 
-const Replacement = script.Replacement;
-
 /// Caller contract: `cmd` must be `.tool_call` — `.comment` and `.llm` are
 /// filtered upstream because they have no tool mapping.
 fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tools.ToolResult {
@@ -940,106 +892,6 @@ fn runScript(self: *Agent, path: []const u8) bool {
     self.terminal.printInfo("Script completed.", .{});
     return true;
 }
-
-const ActionOutcome = union(enum) {
-    ok,
-    healed: Replacement,
-    /// The per-line error has already been printed; caller must not re-report.
-    fail,
-};
-
-/// Execute one action-style script entry, including post-execution
-/// verification, transient-failure retry, and LLM self-heal escalation.
-///
-/// Currently unreachable: the CLI replaced PandaScript replay with the JS
-/// `ScriptRuntime`, and `--self-heal` is rejected at init. Kept intentionally
-/// for a future self-healing pass over JS scripts — see the `opts.self_heal`
-/// check in `init`. This and its helpers (retryCommand, attemptSelfHeal,
-/// flushReplacements) are the dormant heal path.
-fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: script.Iterator.Entry, last_comment: ?[]const u8) ActionOutcome {
-    var cmd_arena: std.heap.ArenaAllocator = .init(self.allocator);
-    defer cmd_arena.deinit();
-    const ca = cmd_arena.allocator();
-
-    const result = self.runCommand(ca, entry.command);
-    self.printCommandResult(entry.command, result);
-
-    const verification: Verifier.VerifyResult = if (!result.is_error and self.self_heal)
-        self.verifier.verify(ca, entry.command)
-    else
-        .inconclusive;
-
-    if (!result.is_error and verification != .failed) return .ok;
-
-    if (self.self_heal and self.ai_client != null) {
-        // Verification-only failures often resolve with a brief wait
-        // (animations, lazy-load); skip the LLM round-trip when they do.
-        if (!result.is_error and entry.command.isRetryable() and self.retryCommand(ca, entry.command)) {
-            return .ok;
-        }
-
-        const msg = if (result.is_error)
-            "Command failed, attempting self-healing..."
-        else
-            "Command succeeded but verification failed, attempting self-healing...";
-        self.terminal.printInfo("{s}", .{msg});
-
-        const reason: ?[]const u8 = switch (verification) {
-            .failed => |r| r,
-            .passed, .inconclusive => null,
-        };
-        // For multi-line blocks (`/eval '''…'''`, `/extract '''…'''`) the
-        // opener alone is useless to the LLM — feed it the full block body.
-        const failed_text = std.mem.trimRight(u8, entry.raw_span, &std.ascii.whitespace);
-        if (self.attemptSelfHeal(sa, failed_text, reason, last_comment)) |healed_cmds| {
-            const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.opener_line, .{ .cmds = healed_cmds }) catch |err| {
-                self.terminal.printError(
-                    "line {d}: failed to record heal: {s} (script left unchanged)",
-                    .{ entry.line_num, @errorName(err) },
-                );
-                return .fail;
-            };
-            return .{ .healed = replacement };
-        }
-    }
-    self.terminal.printError("line {d}: command failed: {s}", .{
-        entry.line_num,
-        entry.opener_line,
-    });
-    return .fail;
-}
-
-/// Re-run a verification-failed command with bounded backoff. Returns true
-/// once both execution and verification pass, false after 3 attempts.
-fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command) bool {
-    for (0..3) |i| {
-        std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
-        self.terminal.printInfo("Retrying command...", .{});
-        const retry_result = self.runCommand(ca, cmd);
-        if (retry_result.is_error) continue;
-        if (self.verifier.verify(ca, cmd) == .failed) continue;
-        self.printCommandResult(cmd, retry_result);
-        return true;
-    }
-    return false;
-}
-
-fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replacements: []const Replacement) void {
-    if (replacements.len == 0) return;
-    script.writeAtomic(self.allocator, std.fs.cwd(), path, content, replacements) catch |err| {
-        self.terminal.printError(
-            "Failed to update script {s}: {s} {s}",
-            .{ path, @errorName(err), script.writeAtomicErrorTail(err) },
-        );
-        return;
-    };
-    self.terminal.printInfo(
-        "Script updated with {d} healed command(s); backup at {s}.bak",
-        .{ replacements.len, path },
-    );
-}
-
-const self_heal_max_attempts = 3;
 
 fn ensureSystemPrompt(self: *Agent) !void {
     if (self.messages.items.len == 0) {
@@ -1130,121 +982,17 @@ fn pruneMessages(self: *Agent) void {
     self.message_arena = new_arena;
 }
 
-/// Runs a single LLM turn, captures the commands it called without recording
-/// them — so the caller can splice healed commands into the script directly.
-fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Command {
-    const provider_client = self.ai_client orelse return error.NoAiClient;
-    const ma = self.message_arena.allocator();
-
-    try self.ensureSystemPrompt();
-
-    try self.messages.append(self.allocator, .{
-        .role = .user,
-        .content = try ma.dupe(u8, prompt),
-    });
-
-    self.terminal.spinner.start();
-    var result = provider_client.runTools(
-        self.model,
-        &self.messages,
-        self.allocator,
-        ma,
-        .{ .context = @ptrCast(self), .callFn = handleToolCall },
-        .{
-            .tools = globalTools(),
-            .max_tool_calls = 4,
-            .max_tokens = 4096,
-            .tool_choice = .auto,
-        },
-    ) catch |err| {
-        self.terminal.spinner.cancel();
-        log.err(.app, "AI API error", .{ .err = err });
-        return error.ApiError;
-    };
-    self.terminal.spinner.stop();
-    defer result.deinit();
-    self.total_usage.add(result.usage);
-
-    var cmds: std.ArrayList(Command) = .empty;
-    for (result.tool_calls_made) |tc| {
-        if (tc.is_error) continue;
-        const tool = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
-        // `result.deinit()` (deferred above) frees the args arena before the
-        // caller formats `cmds`; deep-copy into `arena` to outlive it.
-        const owned_args = if (tc.arguments) |v| try zenai.json.dupeValue(arena, v) else null;
-        const cmd = Command.fromToolCall(tool, owned_args);
-        if (!cmd.canHeal()) {
-            self.terminal.printInfo(
-                "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
-                .{tc.name},
-            );
-            continue;
-        }
-        try cmds.append(arena, cmd);
-    }
-
-    if (result.text) |text| {
-        self.terminal.printAssistant(text);
-    }
-
-    return cmds.toOwnedSlice(arena);
-}
-
-fn attemptSelfHeal(self: *Agent, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command {
-    // Build the prompt in `arena` (the caller's per-replay arena), not in
-    // `message_arena`. The prompt is re-used across attempts, so it must
-    // survive arena rebuilds done between failed attempts.
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    aw.writer.print("{s}{s}{s}{s}", .{
-        self_heal_prompt_prefix,
-        failed_command,
-        self_heal_prompt_page_state,
-        browser_tools.currentUrlOrPlaceholder(self.session),
-    }) catch return null;
-    if (context_comment) |c|
-        aw.writer.print("\n\nThe original user request that generated this command was:\n{s}", .{c}) catch return null;
-    if (verify_context) |ctx|
-        aw.writer.print("\n\nVerification detected a problem:\n{s}", .{ctx}) catch return null;
-    aw.writer.writeAll(self_heal_prompt_instructions) catch return null;
-    const prompt = aw.written();
-
-    // Save message count so we can roll back between attempts — each failed
-    // heal turn would otherwise accumulate in context, confusing the next try.
-    const msg_baseline = self.messages.items.len;
-
-    var attempt: u8 = 0;
-    while (attempt < self_heal_max_attempts) : (attempt += 1) {
-        const cmds = self.runHealTurn(arena, prompt) catch |err| {
-            self.terminal.printError("self-heal attempt {d}/{d} failed: {s}", .{
-                attempt + 1,
-                self_heal_max_attempts,
-                @errorName(err),
-            });
-            self.rollbackMessages(msg_baseline);
-            continue;
-        };
-        if (cmds.len > 0) {
-            self.pruneMessages();
-            return cmds;
-        }
-        self.rollbackMessages(msg_baseline);
-        break;
-    }
-    return null;
-}
-
 /// Shrink `self.messages` back to `baseline` and rebuild the arena. Used
-/// after a failed turn (API error, self-heal attempt, synthesis) so the
-/// next turn doesn't replay the dropped messages and the arena doesn't
-/// accumulate their bytes.
+/// after a failed turn (API error, synthesis) so the next turn doesn't
+/// replay the dropped messages and the arena doesn't accumulate their bytes.
 fn rollbackMessages(self: *Agent, baseline: usize) void {
     self.messages.shrinkRetainingCapacity(baseline);
     self.rebuildMessageArena();
 }
 
 /// Rebuild `message_arena` keeping only the messages currently in
-/// `self.messages`. Used between failed self-heal attempts so the arena
-/// doesn't accumulate prompt/tool-output bytes from doomed turns.
+/// `self.messages`. Used after a rolled-back turn so the arena doesn't
+/// accumulate prompt/tool-output bytes from doomed turns.
 fn rebuildMessageArena(self: *Agent) void {
     const msgs = self.messages.items;
     if (msgs.len <= 1) {
@@ -1518,9 +1266,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    if (opts.task != null or opts.self_heal or opts.interactive or
-        opts.script_file != null)
-    {
+    if (opts.task != null or opts.interactive or opts.script_file != null) {
         log.fatal(.app, "list-models is exclusive", .{
             .hint = "--list-models only takes --provider/--model/--base-url",
         });

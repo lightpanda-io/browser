@@ -10,8 +10,7 @@ const router = @import("router.zig");
 const tools = @import("tools.zig");
 const Transport = @import("Transport.zig");
 const CDPNode = @import("../cdp/Node.zig");
-const Recorder = lp.script.Recorder;
-const Verifier = lp.script.Verifier;
+const Recorder = lp.Recorder;
 
 const Self = @This();
 
@@ -22,13 +21,12 @@ notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
-verifier: Verifier,
 
 transport: Transport,
 
-/// Optional PandaScript recorder. Activated by the `recordStart` tool;
-/// cleared by `recordStop`. State-mutating browser tool calls are
-/// serialized into the active recorder via `Command.fromToolCall`.
+/// Optional recorder. Activated by the `recordStart` tool; cleared by
+/// `recordStop`. State-mutating browser tool calls are serialized into
+/// the active recorder as JavaScript via `Command.fromToolCall`.
 recorder: ?Recorder = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
@@ -46,14 +44,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
         .notification = notification,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
-        .verifier = undefined,
     };
 
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
-    self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
 
     if (app.config.cookieFile()) |cookie_path| {
         lp.cookies.loadFromFile(self.session, cookie_path);
@@ -94,7 +90,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
             .tools = .{},
         },
         .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
-        .instructions = lp.script.driver_guidance,
+        .instructions = lp.tools.driver_guidance,
     });
 }
 
