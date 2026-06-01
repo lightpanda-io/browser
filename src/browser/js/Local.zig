@@ -767,14 +767,8 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             if (!js_str.containsOnlyOneByte()) return error.InvalidCharacterError;
             return .{ .bytes = try js_str.toOneByteSlice(self.call_arena) };
         },
-        string.String => {
-            const js_str = js_val.isString() orelse return null;
-            return try js_str.toSSO(false);
-        },
-        string.Global => {
-            const js_str = js_val.isString() orelse return null;
-            return try js_str.toSSO(true);
-        },
+        string.String => try js_val.toSSO(false),
+        string.Global => try js_val.toSSO(true),
         else => {
             if (!js_val.isObject()) {
                 return null;
