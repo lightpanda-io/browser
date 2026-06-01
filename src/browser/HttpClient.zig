@@ -191,11 +191,11 @@ fn layerWith(self: anytype, next: Layer) Layer {
 
 pub const NextTickNode = struct {
     pub const Run =
-        *const fn (*Transfer, *anyopaque) void;
-    pub const Abort = *const fn (*anyopaque) void;
+        *const fn (*Transfer, ?*anyopaque) void;
+    pub const Abort = *const fn (?*anyopaque) void;
 
     node: std.DoublyLinkedList.Node = .{},
-    ctx: *anyopaque,
+    ctx: ?*anyopaque,
     run: Run,
     abort: ?Abort = null,
 };
@@ -473,7 +473,7 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
 pub fn runNextTick(
     self: *Client,
     transfer: *Transfer,
-    ctx: *anyopaque,
+    ctx: ?*anyopaque,
     params: struct { run: NextTickNode.Run, abort: ?NextTickNode.Abort = null },
 ) !void {
     transfer._next_tick_node = .{ .ctx = ctx, .run = params.run, .abort = params.abort };
@@ -656,7 +656,7 @@ const Synthetic = struct {
         return std.mem.startsWith(u8, url, "data:") or std.mem.startsWith(u8, url, "blob:");
     }
 
-    fn run(transfer: *Transfer, _: *anyopaque) void {
+    fn run(transfer: *Transfer, _: ?*anyopaque) void {
         // prevents a callback that triggers a navigation queue from killing
         // this transfer from under us.
         transfer.state = .completing;
