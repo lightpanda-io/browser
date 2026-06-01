@@ -148,7 +148,7 @@ fn fetchRobotsThenRequest(
 }
 
 fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) void {
-    var queued = self.pending.fetchRemove(robots_url) orelse @panic("RobotsLayer.flushPending: missing queue");
+    var queued = self.pending.fetchRemove(robots_url) orelse return;
     defer queued.value.deinit(self.allocator);
 
     for (queued.value.items) |transfer| {
@@ -179,8 +179,7 @@ fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) voi
 // without owner teardown, this assumption breaks — see comment above
 // detachOrDeinit in HttpClient.zig.)
 fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8) void {
-    var pending = self.pending.fetchRemove(robots_url) orelse
-        @panic("RobotsLayer.flushPendingShutdown: missing queue");
+    var pending = self.pending.fetchRemove(robots_url) orelse return;
     pending.value.deinit(self.allocator);
 }
 
