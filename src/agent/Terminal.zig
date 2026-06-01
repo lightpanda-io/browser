@@ -1031,3 +1031,45 @@ pub fn printDimmed(self: *Terminal, comptime fmt: []const u8, args: anytype) voi
     if (!self.isRepl() and !self.verbosity.atLeast(.medium)) return;
     std.debug.print(ansi.dim ++ fmt ++ ansi.reset ++ "\n", args);
 }
+
+fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {
+    return std.mem.lessThan(u8, a.name, b.name);
+}
+
+/// Sort `rows` by name and list them under `header` as `/cmd — description`.
+pub fn printHelpSection(self: *Terminal, header: []const u8, rows: []SlashCommand.Help) void {
+    if (rows.len == 0) return;
+    std.sort.pdq(SlashCommand.Help, rows, {}, helpLessThan);
+    self.printInfo("{s}{s}{s}", .{ ansi.bold, header, ansi.reset });
+    for (rows) |r| self.printInfo("  " ++ highlightCmd("/{s}") ++ " — {s}", .{ r.name, r.description });
+}
+
+/// Render a slash-command parse error, with a "did you mean?" suggestion for
+/// unknown commands and a field/type hint when a value failed to coerce.
+pub fn printSlashParseError(self: *Terminal, err: Schema.ParseError, name: []const u8, diag: ?*const Schema.Diag) void {
+    if (err == error.InvalidValue) {
+        if (diag) |d| if (d.bad_field.len > 0) {
+            self.printError("{s}: {s}: expected {s}, got '{s}'. Try /help {s}.", .{ name, d.bad_field, @tagName(d.expected_type), d.bad_value, name });
+            return;
+        };
+    }
+    const reason: []const u8 = switch (err) {
+        error.UnknownTool => {
+            if (closestCommand(name)) |near| {
+                return self.printError("{s}: unknown command. Did you mean " ++ highlightCmd("/{s}") ++ "? Try /help.", .{ name, near });
+            }
+            return self.printError("{s}: unknown command. Try /help.", .{name});
+        },
+        error.MissingName => return self.printError("missing command name. Try /help.", .{}),
+        error.MissingRequired => "missing required argument",
+        error.MalformedKv => "malformed key=value. Use key=value or {json}",
+        error.UnknownField => "unknown field (typo?)",
+        error.DuplicateField => "the same field was supplied twice (check for case-variants like Selector vs selector)",
+        error.PositionalNotAllowed => "positional only works for commands with one required field. Use key=value",
+        error.UnterminatedQuote => "unterminated quote",
+        error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
+        error.InvalidValue => "invalid value (check argument type)",
+        error.OutOfMemory => return self.printError("out of memory", .{}),
+    };
+    self.printError("{s}: {s}. Try /help {s}.", .{ name, reason, name });
+}

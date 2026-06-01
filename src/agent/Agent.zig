@@ -509,7 +509,7 @@ fn runRepl(self: *Agent) void {
             },
             else => |e| {
                 const name = if (slash_split) |sp| sp.name else line;
-                self.printSlashParseError(e, name, &diag);
+                self.terminal.printSlashParseError(e, name, &diag);
                 continue :repl;
             },
         };
@@ -786,33 +786,22 @@ fn recordSaveComment(self: *Agent, comment: []const u8) void {
     };
 }
 
-fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {
-    return std.mem.lessThan(u8, a.name, b.name);
-}
-
-fn printHelpSection(term: *Terminal, header: []const u8, rows: []SlashCommand.Help) void {
-    if (rows.len == 0) return;
-    std.sort.pdq(SlashCommand.Help, rows, {}, helpLessThan);
-    term.printInfo("{s}{s}{s}", .{ Terminal.ansi.bold, header, Terminal.ansi.reset });
-    for (rows) |r| term.printInfo("  " ++ Terminal.highlightCmd("/{s}") ++ " — {s}", .{ r.name, r.description });
-}
-
 fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) void {
     if (target.len == 0) {
         const all = Schema.all();
         const browser = arena.alloc(SlashCommand.Help, all.len) catch return;
         for (all, browser) |*s, *e| e.* = .{ .name = s.tool_name, .description = s.summary };
-        printHelpSection(&self.terminal, "Browser commands:", browser);
+        self.terminal.printHelpSection("Browser commands:", browser);
 
         if (self.ai_client != null) {
             const llm = arena.alloc(SlashCommand.Help, SlashCommand.llm_commands.len) catch return;
             @memcpy(llm, &SlashCommand.llm_commands);
-            printHelpSection(&self.terminal, "\nLLM commands:", llm);
+            self.terminal.printHelpSection("\nLLM commands:", llm);
         }
 
         const meta = arena.alloc(SlashCommand.Help, SlashCommand.meta_commands.len) catch return;
         for (SlashCommand.meta_commands, meta) |m, *e| e.* = .{ .name = m.name, .description = m.description };
-        printHelpSection(&self.terminal, "\nMeta commands:", meta);
+        self.terminal.printHelpSection("\nMeta commands:", meta);
         return;
     }
     if (SlashCommand.findMeta(target)) |meta| {
@@ -851,34 +840,6 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
     var aw: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(tool_schema.parameters, .{ .whitespace = .indent_2 }, &aw.writer) catch return;
     self.terminal.printInfo("schema:\n{s}", .{aw.written()});
-}
-
-fn printSlashParseError(self: *Agent, err: Schema.ParseError, name: []const u8, diag: ?*const Schema.Diag) void {
-    if (err == error.InvalidValue) {
-        if (diag) |d| if (d.bad_field.len > 0) {
-            self.terminal.printError("{s}: {s}: expected {s}, got '{s}'. Try /help {s}.", .{ name, d.bad_field, @tagName(d.expected_type), d.bad_value, name });
-            return;
-        };
-    }
-    const reason: []const u8 = switch (err) {
-        error.UnknownTool => {
-            if (Terminal.closestCommand(name)) |near| {
-                return self.terminal.printError("{s}: unknown command. Did you mean " ++ Terminal.highlightCmd("/{s}") ++ "? Try /help.", .{ name, near });
-            }
-            return self.terminal.printError("{s}: unknown command. Try /help.", .{name});
-        },
-        error.MissingName => return self.terminal.printError("missing command name. Try /help.", .{}),
-        error.MissingRequired => "missing required argument",
-        error.MalformedKv => "malformed key=value. Use key=value or {json}",
-        error.UnknownField => "unknown field (typo?)",
-        error.DuplicateField => "the same field was supplied twice (check for case-variants like Selector vs selector)",
-        error.PositionalNotAllowed => "positional only works for commands with one required field. Use key=value",
-        error.UnterminatedQuote => "unterminated quote",
-        error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
-        error.InvalidValue => "invalid value (check argument type)",
-        error.OutOfMemory => return self.terminal.printError("out of memory", .{}),
-    };
-    self.terminal.printError("{s}: {s}. Try /help {s}.", .{ name, reason, name });
 }
 
 const Replacement = script.Replacement;
