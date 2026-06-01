@@ -131,7 +131,7 @@
     \\  {0s} agent                                (auto-detects API key from env)
     \\  {0s} agent --provider anthropic --model claude-sonnet-4-6
     \\  {0s} agent --provider ollama --model gemma4
-    \\  {0s} agent --no-llm                       (basic PandaScript-only REPL)
+    \\  {0s} agent --no-llm                       (basic slash-command-only REPL)
     \\  {0s} agent script.js                      (run a recorded script)
     \\  {0s} agent -i script.js                   (run then drop into REPL,
     \\                                             appending new commands to the file)
@@ -156,9 +156,9 @@
     \\                           With multiple keys on a TTY: you'll be prompted
     \\                           to pick; in non-interactive contexts, pass
     \\                           --provider explicitly. With no keys set: falls
-    \\                           back to the basic REPL (PandaScript only, no
+    \\                           back to the basic REPL (slash commands only, no
     \\                           natural-language input, no LOGIN /
-    \\                           ACCEPT_COOKIES keywords, no --self-heal).
+    \\                           ACCEPT_COOKIES keywords).
     \\
     \\                           Allowed values:
     \\                             "anthropic", "openai", "gemini", "ollama".
@@ -167,7 +167,7 @@
     \\
     \\--no-llm                   Force the basic REPL even when an API key is
     \\                           present or --provider is set. Useful for testing
-    \\                           PandaScript without burning tokens, or for
+    \\                           slash commands without burning tokens, or for
     \\                           disabling the LLM in a saved command without
     \\                           editing the existing flags. Wins over --provider.
     \\
@@ -181,10 +181,6 @@
     \\                           Ollama default: http://localhost:11434/v1.
     \\
     \\--system-prompt <STRING>   Override the default system prompt.
-    \\
-    \\--self-heal                Not supported for JavaScript agent scripts.
-    \\                           Use MCP scriptStep/scriptHeal for PandaScript
-    \\                           healing workflows.
     \\
     \\-i, --interactive          After running the positional script (if any),
     \\                           drop into the REPL with the browser state

@@ -4,9 +4,8 @@ const lp = @import("lightpanda");
 const js = lp.js;
 const browser_tools = lp.tools;
 const BrowserTool = browser_tools.Tool;
-const script = lp.script;
-const Command = lp.script.Command;
-const Recorder = lp.script.Recorder;
+const Command = lp.Command;
+const Recorder = lp.Recorder;
 
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
@@ -55,38 +54,6 @@ const record_comment_schema = browser_tools.minify(
     \\}
 );
 
-const script_step_schema = browser_tools.minify(
-    \\{
-    \\  "type": "object",
-    \\  "properties": {
-    \\    "line": { "type": "string", "description": "A single PandaScript slash command (e.g. `/goto 'https://x'`, `/click selector='#btn'`, `/fill selector='#email' value='a@b.c'`). Comments (`# …`) and blank lines are accepted as no-ops. LLM-driven slash commands (`/login`, `/acceptCookies`) and anything that isn't a slash command are rejected — the calling agent owns those." }
-    \\  },
-    \\  "required": ["line"]
-    \\}
-);
-
-const script_heal_schema = browser_tools.minify(
-    \\{
-    \\  "type": "object",
-    \\  "properties": {
-    \\    "path": { "type": "string", "description": "Relative path of the .lp script to rewrite (no '..' segments). A `<path>.bak` of the original is written before any in-place edit." },
-    \\    "replacements": {
-    \\      "type": "array",
-    \\      "description": "List of in-place line splices applied atomically.",
-    \\      "items": {
-    \\        "type": "object",
-    \\        "properties": {
-    \\          "original_line": { "type": "string", "description": "Verbatim line to replace, exactly as it appears in the script (without trailing newline)." },
-    \\          "replacement_lines": { "type": "array", "items": { "type": "string" }, "description": "New lines (without trailing newlines) to splice in. The first replacement is prefixed with `# [Auto-healed] Original: <original_line>` automatically." }
-    \\        },
-    \\        "required": ["original_line", "replacement_lines"]
-    \\      }
-    \\    }
-    \\  },
-    \\  "required": ["path", "replacements"]
-    \\}
-);
-
 const extra_tools = [_]McpTool{
     .{
         .name = "recordStart",
@@ -103,16 +70,6 @@ const extra_tools = [_]McpTool{
         .description = "Append a `// <text>` comment line to the active recording. Useful as a breadcrumb above LLM-driven steps.",
         .inputSchema = record_comment_schema,
     },
-    .{
-        .name = "scriptStep",
-        .description = "Parse and execute one PandaScript line on the current browser session. Returns success or a structured failure descriptor (failed line, page URL, error reason) so the calling agent can synthesize a heal step. Comments and blank lines are accepted as no-ops.",
-        .inputSchema = script_step_schema,
-    },
-    .{
-        .name = "scriptHeal",
-        .description = "Atomically rewrite a .lp script with in-place line replacements. A `.bak` of the original is written first. Designed for the scriptStep → fail → scriptHeal roundtrip where the calling agent owns the LLM that synthesizes replacements.",
-        .inputSchema = script_heal_schema,
-    },
 };
 
 const all_tools = browser_tool_list ++ extra_tools;
@@ -122,8 +79,6 @@ const ExtraTool = enum {
     recordStart,
     recordStop,
     recordComment,
-    scriptStep,
-    scriptHeal,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -145,8 +100,6 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .recordStart => handleRecordStart(server, arena, id, call_params.arguments),
             .recordStop => handleRecordStop(server, arena, id),
             .recordComment => handleRecordComment(server, arena, id, call_params.arguments),
-            .scriptStep => handleScriptStep(server, arena, id, call_params.arguments),
-            .scriptHeal => handleScriptHeal(server, arena, id, call_params.arguments),
         };
     }
 
@@ -206,7 +159,7 @@ fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         return server.sendError(id, .InvalidParams, "expected { path: string }");
     };
 
-    if (!script.isPathSafe(args.path)) {
+    if (!browser_tools.isPathSafe(args.path)) {
         return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
     }
 
@@ -251,189 +204,6 @@ fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.V
     server.recorder.?.recordComment(args.text);
 
     try sendToolResultText(server, id, "ok", false);
-}
-
-fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Args = struct { line: []const u8 };
-    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.sendError(id, .InvalidParams, "expected { line: string }");
-    };
-
-    var diag: lp.script.Schema.Diag = .{};
-    const cmd = Command.parseDiag(arena, args.line, &diag) catch |err| {
-        const msg = if (err == error.InvalidValue and diag.bad_field.len > 0)
-            std.fmt.allocPrint(arena, "could not parse step `{s}`: {s}: expected {s}, got '{s}'", .{ args.line, diag.bad_field, @tagName(diag.expected_type), diag.bad_value }) catch @errorName(err)
-        else
-            std.fmt.allocPrint(arena, "could not parse step `{s}`: {s}", .{ args.line, @errorName(err) }) catch @errorName(err);
-        return sendErrorContent(server, id, msg);
-    };
-
-    if (cmd.needsLlm()) {
-        return sendErrorContent(server, id, "this command requires an LLM and is not handled by lightpanda mcp; the calling agent owns it");
-    }
-
-    if (cmd == .comment) {
-        return sendToolResultText(server, id, "comment", false);
-    }
-
-    const tc = cmd.tool_call;
-    const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name(), tc.args) catch |err| {
-        if (surfacesErrorInBand(tc.tool)) {
-            return sendErrorContent(server, id, @errorName(err));
-        }
-        const url = browser_tools.currentUrlOrPlaceholder(server.session);
-        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name(), args.line, url, @errorName(err) }) catch @errorName(err);
-        return sendErrorContent(server, id, msg);
-    };
-
-    // Post-exec verification drives the heal roundtrip on fill/setChecked/selectOption;
-    // for eval/extract `verify` is a no-op (.inconclusive).
-    switch (server.verifier.verify(arena, cmd)) {
-        .failed => |reason| {
-            const url = browser_tools.currentUrlOrPlaceholder(server.session);
-            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name(), args.line, url, reason }) catch reason;
-            return sendErrorContent(server, id, msg);
-        },
-        .passed, .inconclusive => {},
-    }
-
-    try sendToolResultText(server, id, result.text, result.is_error);
-}
-
-fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const ReplacementSpec = struct {
-        original_line: []const u8,
-        replacement_lines: []const []const u8,
-    };
-    const Args = struct {
-        path: []const u8,
-        replacements: []const ReplacementSpec,
-    };
-    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.sendError(id, .InvalidParams, "expected { path: string, replacements: [{ original_line, replacement_lines }] }");
-    };
-
-    if (!script.isPathSafe(args.path)) {
-        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
-    }
-
-    const content = std.fs.cwd().readFileAlloc(arena, args.path, 10 * 1024 * 1024) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "failed to read {s}: {s}", .{ args.path, @errorName(err) }) catch @errorName(err);
-        return sendErrorContent(server, id, msg);
-    };
-
-    if (args.replacements.len == 0) {
-        const msg = std.fmt.allocPrint(arena, "healed 0 line(s) in {s}", .{args.path}) catch "ok";
-        try sendToolResultText(server, id, msg, false);
-        return;
-    }
-
-    var splices = arena.alloc(script.Replacement, args.replacements.len) catch return sendErrorContent(server, id, "out of memory");
-
-    const index = indexLines(arena, content) catch return sendErrorContent(server, id, "out of memory");
-
-    for (args.replacements, 0..) |spec, i| {
-        const entry = index.get(spec.original_line) orelse {
-            const msg = std.fmt.allocPrint(arena, "original_line not found verbatim: `{s}`", .{spec.original_line}) catch "original_line not found verbatim";
-            return sendErrorContent(server, id, msg);
-        };
-        if (entry.dup) {
-            const msg = std.fmt.allocPrint(arena, "original_line matches more than one line; make it unique to disambiguate: `{s}`", .{spec.original_line}) catch "original_line matches more than one line; make it unique to disambiguate";
-            return sendErrorContent(server, id, msg);
-        }
-
-        splices[i] = script.formatHealReplacement(arena, entry.span, spec.original_line, .{ .lines = spec.replacement_lines }) catch |err|
-            return sendErrorContent(server, id, @errorName(err));
-    }
-
-    // applyReplacements requires spans in file order and non-overlapping.
-    // The LLM may emit replacements unordered, and two specs can resolve to
-    // the same line. Sort by span offset, then reject duplicates so a single
-    // line can't be healed twice.
-    std.mem.sort(script.Replacement, splices, {}, struct {
-        fn lt(_: void, a: script.Replacement, b: script.Replacement) bool {
-            return @intFromPtr(a.original_span.ptr) < @intFromPtr(b.original_span.ptr);
-        }
-    }.lt);
-    for (splices[1..], splices[0 .. splices.len - 1]) |cur, prev| {
-        if (@intFromPtr(cur.original_span.ptr) == @intFromPtr(prev.original_span.ptr)) {
-            return sendErrorContent(server, id, "two replacements target the same original_line; merge them into one entry");
-        }
-    }
-
-    script.writeAtomic(arena, std.fs.cwd(), args.path, content, splices) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "failed to write {s}: {s} {s}", .{ args.path, @errorName(err), script.writeAtomicErrorTail(err) }) catch @errorName(err);
-        return sendErrorContent(server, id, msg);
-    };
-
-    const msg = std.fmt.allocPrint(arena, "healed {d} line(s) in {s}; backup at {s}.bak", .{ args.replacements.len, args.path, args.path }) catch "ok";
-    try sendToolResultText(server, id, msg, false);
-}
-
-const LineEntry = struct { span: []const u8, dup: bool };
-
-/// Walk `content` once and map each unique line to the slice covering that
-/// line plus its terminating `\n`. Duplicate lines are flagged via `dup` so
-/// the caller can reject ambiguous matches — `applyReplacements`'
-/// non-overlapping invariant would break if two specs resolved to the same
-/// span.
-fn indexLines(arena: std.mem.Allocator, content: []const u8) !std.StringHashMapUnmanaged(LineEntry) {
-    var index: std.StringHashMapUnmanaged(LineEntry) = .empty;
-    var pos: usize = 0;
-    while (pos <= content.len) {
-        const nl = std.mem.indexOfScalarPos(u8, content, pos, '\n') orelse content.len;
-        // Strip the CR from CRLF before keying so an LLM-supplied `original_line`
-        // (always plain `\n`) matches a file saved with Windows / autocrlf endings.
-        // The span still covers the full `\r\n` so the splice replaces both bytes.
-        const lookup_key = std.mem.trimRight(u8, content[pos..nl], "\r");
-        const line_end = if (nl < content.len) nl + 1 else nl;
-
-        // Multi-line block openers (`/eval '''`, `/extract """`, …) must
-        // index the whole block as one span — keyed by the opener line —
-        // so a splice doesn't orphan the body and closing fence.
-        const span_end = blk: {
-            const trimmed = std.mem.trim(u8, content[pos..nl], &std.ascii.whitespace);
-            const split = script.Schema.parseSlashCommand(trimmed) orelse break :blk line_end;
-            const s = script.Schema.findByName(split.name) orelse break :blk line_end;
-            if (!s.isMultiLineCapable()) break :blk line_end;
-            const qt = script.Schema.QuoteType.fromLiteral(split.rest) orelse break :blk line_end;
-            break :blk findBlockClose(content, line_end, qt.toLiteral()) orelse line_end;
-        };
-
-        const gop = try index.getOrPut(arena, lookup_key);
-        if (gop.found_existing) {
-            gop.value_ptr.dup = true;
-        } else {
-            gop.value_ptr.* = .{ .span = content[pos..span_end], .dup = false };
-        }
-
-        if (span_end > line_end) {
-            if (span_end >= content.len) break;
-            pos = span_end;
-        } else {
-            if (nl == content.len) break;
-            pos = nl + 1;
-        }
-    }
-    return index;
-}
-
-/// Scan from `start` for a line whose trimmed-right (CR-stripped) content
-/// equals `closer`. Returns the byte position immediately after that
-/// line's terminating `\n` (or `content.len` if the closer is the tail
-/// line with no trailing newline). Returns null if the closer is missing.
-fn findBlockClose(content: []const u8, start: usize, closer: []const u8) ?usize {
-    var pos = start;
-    while (pos <= content.len) {
-        const nl = std.mem.indexOfScalarPos(u8, content, pos, '\n') orelse content.len;
-        const scrubbed = std.mem.trimRight(u8, content[pos..nl], "\r");
-        if (std.mem.eql(u8, scrubbed, closer)) {
-            return if (nl < content.len) nl + 1 else nl;
-        }
-        if (nl == content.len) return null;
-        pos = nl + 1;
-    }
-    return null;
 }
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
@@ -1157,82 +927,6 @@ test "MCP - eval: lp.* mutations inside async IIFE survive to the next eval" {
     } }, out.written());
 }
 
-test "MCP - indexLines: exact match returns line + trailing newline" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const content = "/goto 'https://x'\n/click selector='old'\n/waitForSelector '.thanks'\n";
-    const index = try indexLines(arena.allocator(), content);
-    const entry = index.get("/click selector='old'").?;
-    try std.testing.expect(!entry.dup);
-    try std.testing.expectEqualStrings("/click selector='old'\n", entry.span);
-}
-
-test "MCP - indexLines: missing line absent from index" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const content = "/goto 'https://x'\n/click selector='a'\n";
-    const index = try indexLines(arena.allocator(), content);
-    try std.testing.expect(index.get("/click selector='b'") == null);
-}
-
-test "MCP - indexLines: last line without trailing newline" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const content = "/goto 'https://x'\n/click selector='last'";
-    const index = try indexLines(arena.allocator(), content);
-    try std.testing.expectEqualStrings("/click selector='last'", index.get("/click selector='last'").?.span);
-}
-
-test "MCP - indexLines: duplicate line flagged dup" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const content = "/click selector='go'\n/waitForSelector '.x'\n/click selector='go'\n";
-    const index = try indexLines(arena.allocator(), content);
-    try std.testing.expect(index.get("/click selector='go'").?.dup);
-}
-
-test "MCP - indexLines: multi-line block span covers opener through closer" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const content = "/goto 'https://x'\n/eval '''\nconst x = 1;\nreturn x;\n'''\n/tree\n";
-    const index = try indexLines(arena.allocator(), content);
-
-    const block = index.get("/eval '''").?;
-    try std.testing.expect(!block.dup);
-    try std.testing.expectEqualStrings("/eval '''\nconst x = 1;\nreturn x;\n'''\n", block.span);
-
-    // Body lines stay out of the index — splicing them individually would
-    // corrupt the block.
-    try std.testing.expect(index.get("const x = 1;") == null);
-    try std.testing.expect(index.get("return x;") == null);
-    try std.testing.expect(index.get("'''") == null);
-
-    // Siblings before/after the block remain individually addressable.
-    try std.testing.expectEqualStrings("/goto 'https://x'\n", index.get("/goto 'https://x'").?.span);
-    try std.testing.expectEqualStrings("/tree\n", index.get("/tree").?.span);
-}
-
-test "MCP - indexLines: unterminated block falls back to single-line indexing" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const content = "/eval '''\nconst x = 1;\n";
-    const index = try indexLines(arena.allocator(), content);
-    // No closer found → opener is indexed as a normal single line so the
-    // user can still heal it (e.g. to add the missing fence).
-    try std.testing.expectEqualStrings("/eval '''\n", index.get("/eval '''").?.span);
-    try std.testing.expectEqualStrings("const x = 1;\n", index.get("const x = 1;").?.span);
-}
-
-test "MCP - indexLines: CRLF line endings still match plain LLM keys" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const content = "/goto 'https://x'\r\n/click selector='old'\r\n/waitForSelector '.thanks'\r\n";
-    const index = try indexLines(arena.allocator(), content);
-    const entry = index.get("/click selector='old'").?;
-    try std.testing.expect(!entry.dup);
-    try std.testing.expectEqualStrings("/click selector='old'\r\n", entry.span);
-}
-
 test "MCP - recordStart rejects unsafe path" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
@@ -1257,61 +951,6 @@ test "MCP - recordStop without active recording errors" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "no recording is active") != null);
-}
-
-test "MCP - scriptStep rejects /login (LLM-required)" {
-    defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage("about:blank", &out.writer);
-    defer server.deinit();
-
-    const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"/login"}}}
-    ;
-    try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "requires an LLM") != null);
-}
-
-test "MCP - scriptStep rejects bare prose" {
-    defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage("about:blank", &out.writer);
-    defer server.deinit();
-
-    const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"please summarize this page"}}}
-    ;
-    try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "could not parse step") != null);
-}
-
-test "MCP - scriptStep runs /fill and verifier passes" {
-    defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
-    defer server.deinit();
-
-    // /fill on the input that exists on the test page; verifier checks
-    // the field's `value` property after execution.
-    const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"/fill selector='#inp' value='hello world'"}}}
-    ;
-    try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "verification failed") == null);
-}
-
-test "MCP - scriptStep accepts comment line" {
-    defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage("about:blank", &out.writer);
-    defer server.deinit();
-
-    const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"scriptStep","arguments":{"line":"# fetch the homepage"}}}
-    ;
-    try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
 }
 
 test "MCP - tree rejects stale backendNodeId instead of dumping whole document" {

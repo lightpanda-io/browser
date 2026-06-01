@@ -229,7 +229,6 @@ const Commands = cli.Builder(.{
             .{ .name = "model", .type = ?[:0]const u8 },
             .{ .name = "base_url", .type = ?[:0]const u8 },
             .{ .name = "system_prompt", .type = ?[:0]const u8 },
-            .{ .name = "self_heal", .type = bool },
             .{ .name = "interactive", .short = 'i', .type = bool },
             .{ .name = "task", .type = ?[]const u8 },
             .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },

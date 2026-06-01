@@ -17,14 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! REPL-only meta slash commands (`/help`, `/quit`, `/verbosity`, `/model`,
-//! `/provider`). Meta
-//! commands aren't PandaScript — they're handled by `Agent.handleMeta`
-//! and never reach the recorder. PandaScript schema primitives live in
-//! `lp.script.Schema`; consumers should import that directly.
+//! `/provider`). Meta commands aren't tool slash commands — they're handled
+//! by `Agent.handleMeta` and never reach the recorder. Tool slash-command
+//! schema primitives live in `lp.Schema`; consumers should import that
+//! directly.
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const Command = lp.script.Command;
+const Command = lp.Command;
 
 /// Shared row format for the `/help` listing — `name` is the command name
 /// (no `/`), `description` is a terse one-liner.

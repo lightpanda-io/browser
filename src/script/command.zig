@@ -16,9 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! PandaScript Command: a tool slash command, a `#`-comment, or an
+//! A parsed slash command: a tool slash command, a `#`-comment, or an
 //! `LlmCommand` trigger (`/login`, `/logout`, `/acceptCookies`). Multi-line
-//! `'''…'''` blocks are assembled by `script.Iterator` before parse.
+//! `'''…'''` blocks are assembled by the REPL before parse.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -128,40 +128,6 @@ pub const Command = union(enum) {
             }
             return true;
         }
-
-        /// Canonical recorder format. Round-trips with `Command.parse`.
-        fn format(self: ToolCall, writer: *std.Io.Writer) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
-            const s = self.schema();
-            try writer.writeByte('/');
-            try writer.writeAll(s.tool_name);
-
-            const args_val = self.args orelse return;
-            if (args_val != .object) return;
-            const args = args_val.object;
-            if (args.count() == 0) return;
-
-            const visible = s.visibleArgCount(args);
-            const positional = s.required.len == 1 and visible == 1 and s.isSinglePositional(args);
-
-            if (positional) {
-                const v = args.get(s.required[0]).?;
-                try writer.writeByte(' ');
-                try Schema.writeBodyString(writer, v.string);
-                return;
-            }
-
-            // Iterate the schema (not the ObjectMap) so the line order is
-            // stable across providers — MCP scriptHeal looks lines up
-            // verbatim.
-            for (s.fields) |f| {
-                const v = args.get(f.name) orelse continue;
-                if (f.skipForFormat(v)) continue;
-                try writer.writeByte(' ');
-                try writer.writeAll(f.name);
-                try writer.writeByte('=');
-                try Schema.writeInlineValue(writer, v);
-            }
-        }
     };
 
     pub fn isRecorded(self: Command) bool {
@@ -175,24 +141,6 @@ pub const Command = union(enum) {
     pub fn producesData(self: Command) bool {
         return switch (self) {
             .tool_call => |tc| tc.tool.producesData(),
-            else => false,
-        };
-    }
-
-    pub fn canHeal(self: Command) bool {
-        return switch (self) {
-            .tool_call => |tc| tc.tool.canHeal(),
-            else => false,
-        };
-    }
-
-    pub fn needsLlm(self: Command) bool {
-        return self == .llm;
-    }
-
-    pub fn isRetryable(self: Command) bool {
-        return switch (self) {
-            .tool_call => |tc| tc.tool.isRetryable(),
             else => false,
         };
     }
@@ -220,15 +168,6 @@ pub const Command = union(enum) {
         const s = Schema.findByName(split.name) orelse return error.UnknownTool;
         const args = try s.parseValueDiag(arena, split.rest, diag);
         return .{ .tool_call = .{ .tool = s.tool, .args = args } };
-    }
-
-    /// Canonical recorder format. Round-trips with `parse`.
-    pub fn format(self: Command, writer: *std.Io.Writer) (std.Io.Writer.Error || error{AmbiguousQuoting})!void {
-        switch (self) {
-            .llm => |lc| try writer.print("/{s}", .{@tagName(lc)}),
-            .comment => try writer.writeAll("#"),
-            .tool_call => |tc| try tc.format(writer),
-        }
     }
 
     /// JavaScript recorder format for `lightpanda agent <script>.js`.
@@ -468,72 +407,6 @@ test "parse: unknown tool errors" {
     try testing.expectError(error.UnknownTool, Command.parse(arena.allocator(), "/bogus"));
 }
 
-test "format: /goto round-trip" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const cmd = try Command.parse(arena.allocator(), "/goto https://example.com");
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try cmd.format(&aw.writer);
-    try testing.expectString("/goto 'https://example.com'", aw.written());
-}
-
-test "format: /click stays kv (zero required fields)" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const cmd = try Command.parse(arena.allocator(), "/click selector='Login'");
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try cmd.format(&aw.writer);
-    try testing.expectString("/click selector='Login'", aw.written());
-}
-
-test "format: /eval emits triple-quote block for multi-line script" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const args = blk: {
-        var obj: std.json.ObjectMap = .init(arena.allocator());
-        try obj.put("script", .{ .string = "const x = 1;\nreturn x;" });
-        break :blk std.json.Value{ .object = obj };
-    };
-    const cmd: Command = .{ .tool_call = .{ .tool = .eval, .args = args } };
-
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try cmd.format(&aw.writer);
-    try testing.expectString("/eval '''\nconst x = 1;\nreturn x;\n'''", aw.written());
-}
-
-test "format: /setChecked omits checked=true (default), keeps checked=false" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const cases = [_]struct { input: []const u8, expected: []const u8 }{
-        .{ .input = "/setChecked selector='#agree' checked=true", .expected = "/setChecked selector='#agree'" },
-        .{ .input = "/setChecked selector='#x' checked=false", .expected = "/setChecked selector='#x' checked=false" },
-    };
-    for (cases) |case| {
-        const cmd = try Command.parse(aa, case.input);
-        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-        defer aw.deinit();
-        try cmd.format(&aw.writer);
-        try testing.expectString(case.expected, aw.written());
-    }
-}
-
-test "format: /login and /acceptCookies" {
-    var aw1: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw1.deinit();
-    try (Command{ .llm = .login }).format(&aw1.writer);
-    try testing.expectString("/login", aw1.written());
-
-    var aw2: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw2.deinit();
-    try (Command{ .llm = .acceptCookies }).format(&aw2.writer);
-    try testing.expectString("/acceptCookies", aw2.written());
-}
-
 test "formatJs: positional and object arguments" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
@@ -589,33 +462,12 @@ test "formatJs: eval and extract strings" {
     }
 }
 
-test "canHeal: only page-local DOM commands are allowed" {
-    // Table-driven over the live tool flags so adding a new tool can't
-    // silently drift from the heal allow-list.
-    const allow = [_]BrowserTool{ .click, .hover, .waitForSelector, .fill, .selectOption, .setChecked, .scroll, .extract, .press };
-    const deny = [_]BrowserTool{ .goto, .eval, .tree, .markdown, .search, .links };
-
-    for (allow) |action| {
-        const cmd = Command.fromToolCall(action, null);
-        try testing.expect(cmd.canHeal());
-    }
-    for (deny) |action| {
-        const cmd = Command.fromToolCall(action, null);
-        try testing.expect(!cmd.canHeal());
-    }
-
-    try testing.expect(!(Command{ .llm = .login }).canHeal());
-    try testing.expect(!(Command{ .llm = .acceptCookies }).canHeal());
-    try testing.expect(!(Command{ .comment = {} }).canHeal());
-}
-
-test "isRecorded / canHeal / producesData via tool flags" {
+test "isRecorded / producesData via tool flags" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
     const goto = try Command.parse(arena.allocator(), "/goto https://x");
     try testing.expect(goto.isRecorded());
-    try testing.expect(!goto.canHeal()); // navigation excluded from heal
     try testing.expect(!goto.producesData());
 
     const tree = try Command.parse(arena.allocator(), "/tree");
@@ -624,7 +476,6 @@ test "isRecorded / canHeal / producesData via tool flags" {
 
     const login: Command = .{ .llm = .login };
     try testing.expect(!login.isRecorded());
-    try testing.expect(!login.canHeal());
 }
 
 test "isRecorded: args shape and locator semantics" {
@@ -644,18 +495,13 @@ test "isRecorded: args shape and locator semantics" {
     try testing.expect(Command.fromToolCall(.goto, .{ .string = "https://x" }).isRecorded());
     try testing.expect(!Command.fromToolCall(.click, .{ .string = "#submit" }).isRecorded());
 
-    // selector + backendNodeId: keep the call, drop the backendNodeId.
+    // selector + backendNodeId: still recorded (a usable selector is present).
     {
         var obj: std.json.ObjectMap = .init(aa);
         try obj.put("selector", .{ .string = "#submit" });
         try obj.put("backendNodeId", .{ .integer = 42 });
         const cmd = Command.fromToolCall(.click, .{ .object = obj });
         try testing.expect(cmd.isRecorded());
-
-        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-        defer aw.deinit();
-        try cmd.format(&aw.writer);
-        try testing.expectString("/click selector='#submit'", aw.written());
     }
 
     // backendNodeId only: skipped — no replayable identifier.

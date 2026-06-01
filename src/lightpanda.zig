@@ -47,7 +47,9 @@ pub const HttpClient = @import("browser/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
 pub const Agent = @import("agent/Agent.zig");
-pub const script = @import("script.zig");
+pub const Command = @import("script/command.zig").Command;
+pub const Recorder = @import("script/Recorder.zig");
+pub const Schema = @import("script/Schema.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");

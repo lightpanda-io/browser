@@ -14,7 +14,7 @@ It can act as:
 
 - an **LLM agent** that drives the browser with tool calls (`--provider`),
 - a **scripted runner** that runs a recorded `.js` script deterministically,
-- a **basic REPL** for hand-driven PandaScript with no LLM at all,
+- a **basic REPL** for hand-driven slash commands with no LLM at all,
 - a **one-shot task runner** that prints a single answer to stdout (`--task`).
 
 All four modes share the same browser tools (`goto`, `click`, `fill`, `tree`,
@@ -32,7 +32,7 @@ etc.) without giving Lightpanda its own API key.
 # Force a specific provider
 ./lightpanda agent --provider anthropic
 
-# Basic REPL (no LLM, PandaScript only)
+# Basic REPL (no LLM, slash commands only)
 ./lightpanda agent --no-llm
 
 # Run a recorded script
@@ -70,8 +70,8 @@ one-line notice (on stderr) of what it chose:
 2. **Auto-detected** → otherwise the first key found in priority order
    (`ANTHROPIC_API_KEY` → `GOOGLE_API_KEY`/`GEMINI_API_KEY` → `OPENAI_API_KEY`).
    Switch any time with `/provider` in the REPL, or override with `--provider`.
-3. **No keys set** → falls back to the basic REPL (PandaScript only). Natural
-   language, `/login`, `/acceptCookies`, and `--self-heal` will reject.
+3. **No keys set** → falls back to the basic REPL (slash commands only).
+   Natural language, `/login`, and `/acceptCookies` will reject.
 
 Ollama is never auto-detected (no env var to look at) — pass `--provider
 ollama`, or select it once with `/provider ollama` and it'll be remembered.
