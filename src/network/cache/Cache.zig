@@ -285,7 +285,10 @@ test "Cache: CacheControl.parse" {
     try testing.expectEqual(null, CacheControl.parse("no-cache"));
     try testing.expectEqual(null, CacheControl.parse("private"));
     try testing.expectEqual(null, CacheControl.parse("max-age=300, no-store"));
-    try testing.expectEqual(null, CacheControl.parse("no-cache, max-age=300"));
+    try testing.expectEqual(
+        CacheControl{ .max_age = 300, .must_revalidate = true },
+        CacheControl.parse("no-cache, max-age=300"),
+    );
     try testing.expectEqual(null, CacheControl.parse("Private, max-age=300"));
 
     try testing.expectEqual(null, CacheControl.parse("max-age=0"));
