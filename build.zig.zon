@@ -39,7 +39,7 @@
             .hash = "zenai-0.0.0-iOY_VC7NAwCnmTysnca1dT2ht-85vzp5Ku72-NtVnY4h",
         },
         .isocline = .{
-            .url = "git+https://github.com/arrufat/isocline.git#2344a60f2089e3e317215c310cdec6569a2a3bec",
+            .url = "git+https://github.com/arrufat/isocline#c37c12b9d0b7b59c6226fd6cae193ddad92559cc",
             .hash = "N-V-__8AAFU6EwBTjIK87kHbuVP7KtrHrObK3tmPziJUGI4M",
         },
     },
