@@ -518,6 +518,18 @@ pub fn cancelTerminate(self: *Env) void {
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
 
+/// Drains the isolate's default microtask queue. Unlike `runMicrotasks`, which
+/// walks the per-context queues tracked in `contexts`, this serves contexts
+/// created outside `createContext` (e.g. the agent runtime's bare context) that
+/// use the isolate-default queue. Guarded the same way as `runMicrotasks` so a
+/// terminate from the sighandler thread can't land mid-checkpoint.
+pub fn performIsolateMicrotasks(self: *Env) void {
+    self.terminate_mutex.lock();
+    defer self.terminate_mutex.unlock();
+    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) return;
+    v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
+}
+
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
     const promise_event = v8.v8__PromiseRejectMessage__GetEvent(&message_handle);
     if (promise_event != v8.kPromiseRejectWithNoHandler and promise_event != v8.kPromiseHandlerAddedAfterReject) {

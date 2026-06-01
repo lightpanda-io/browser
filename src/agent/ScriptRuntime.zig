@@ -267,6 +267,13 @@ pub fn runSource(self: *ScriptRuntime, source: []const u8, name: []const u8) Run
     _ = v8.v8__Script__Run(script, context) orelse
         return try self.formatCaught(context, &try_catch, "script failed");
 
+    // The agent isolate uses an explicit microtask policy, so promise
+    // continuations (`.then`, async/await) only run when we drain the queue.
+    self.env.performIsolateMicrotasks();
+    if (v8.v8__TryCatch__HasCaught(&try_catch)) {
+        return try self.formatCaught(context, &try_catch, "script failed");
+    }
+
     return null;
 }
 
@@ -288,10 +295,7 @@ fn invoke(self: *ScriptRuntime, primitive: Primitive, info: *const v8.FunctionCa
     _ = self.call_arena.reset(.retain_capacity);
 
     const arena = self.call_arena.allocator();
-    const context = v8.v8__Object__GetCreationContext(v8.v8__FunctionCallbackInfo__This(info) orelse {
-        self.throwError("internal: missing callback receiver");
-        return;
-    }) orelse {
+    const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse {
         self.throwError("internal: missing callback context");
         return;
     };
@@ -324,7 +328,7 @@ fn invokeConsole(self: *ScriptRuntime, method: ConsoleMethod, info: *const v8.Fu
     _ = self.call_arena.reset(.retain_capacity);
 
     const arena = self.call_arena.allocator();
-    const context = v8.v8__Object__GetCreationContext(v8.v8__FunctionCallbackInfo__This(info) orelse return) orelse return;
+    const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse return;
     const argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
 
     var aw: std.Io.Writer.Allocating = .init(arena);
@@ -695,6 +699,45 @@ test "agent script runtime: extract returns a JavaScript object" {
         \\  rejectedSaveOption = true;
         \\}
         \\if (!rejectedSaveOption) throw new Error("extract save option should be rejected");
+    );
+}
+
+test "agent script runtime: strict-mode scripts can call primitives" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\"use strict";
+        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\if (!nav.includes("Navigated")) throw new Error("strict-mode goto failed: " + nav);
+        \\const text = eval("document.getElementById('btn').textContent");
+        \\if (text !== "Click Me") throw new Error("strict-mode eval failed: " + text);
+    );
+}
+
+test "agent script runtime: promise microtasks run to completion" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\let microtaskRan = false;
+        \\Promise.resolve().then(() => { microtaskRan = true; });
+        \\if (microtaskRan) throw new Error("microtask ran before the checkpoint");
+    );
+
+    try runTestScript(runtime,
+        \\if (!microtaskRan) throw new Error("microtask did not run after the script");
     );
 }
 
