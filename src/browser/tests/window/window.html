@@ -412,3 +412,32 @@
     testing.expectEqual(iframe, iframe.contentWindow.frameElement);
   }
 </script>
+
+<script id=global_flattening_own_props>
+  // WebIDL [Global] flattening: members of the Window interface (and the
+  // interfaces it inherits, e.g. EventTarget) must be OWN properties of the
+  // global object, not merely inherited via the prototype chain. Otherwise a
+  // top-level `var navigator = ...` shadows the inherited accessor with an own
+  // `undefined` (CreateGlobalVarBinding only skips when the name is already own).
+  const hop = Object.prototype.hasOwnProperty;
+  testing.expectEqual(true, hop.call(globalThis, 'navigator'));   // Window attribute
+  testing.expectEqual(true, hop.call(globalThis, 'document'));    // Window attribute
+  testing.expectEqual(true, hop.call(globalThis, 'location'));    // Window attribute
+  testing.expectEqual(true, hop.call(globalThis, 'addEventListener')); // inherited EventTarget method
+
+  // They still work when invoked on the global.
+  testing.expectEqual(document, globalThis.document);
+  testing.expectEqual(navigator, globalThis.navigator);
+</script>
+
+<script id=global_flattening_var_navigator>
+  // Reproduces the espn.com breakage: a top-level (sloppy-mode) classic script
+  // doing `var navigator = window.navigator || {}`. With flattening, the `var`
+  // declaration is a no-op (navigator is already own) and the assignment to the
+  // read-only accessor silently fails, so navigator is preserved instead of
+  // being clobbered with `{}`.
+  var navigator = window.navigator || {};
+  testing.expectEqual(true, navigator === window.navigator);
+  testing.expectEqual(true, typeof navigator.userAgent === 'string');
+  testing.expectEqual(true, navigator.userAgent.length > 0);
+</script>
