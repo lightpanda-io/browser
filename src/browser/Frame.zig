@@ -555,8 +555,14 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
+            if (is_about_blank) {
+                self.base_url = parent.base();
+            }
         } else if (self.window._opener) |opener| {
             self.origin = opener._frame.origin;
+            if (is_about_blank) {
+                self.base_url = opener._frame.base();
+            }
         } else {
             self.origin = null;
         }
