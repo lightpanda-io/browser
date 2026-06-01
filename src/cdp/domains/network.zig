@@ -233,7 +233,7 @@ fn getCookies(cmd: *CDP.Command) !void {
         urls.appendAssumeCapacity(.{
             .host = try Cookie.parseDomain(cmd.arena, url, null),
             .path = try Cookie.parsePath(cmd.arena, url, null),
-            .secure = URL.isHTTPS(url),
+            .secure = URL.isSecure(url),
         });
     }
 

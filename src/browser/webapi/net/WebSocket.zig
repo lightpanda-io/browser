@@ -133,9 +133,29 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
 
     var headers = try http_client.newHeaders();
     errdefer headers.deinit();
+    var has_extra_headers = false;
+
     if (protocols.len > 0) {
         const header = try std.fmt.allocPrintSentinel(arena, "Sec-WebSocket-Protocol: {s}", .{try std.mem.join(arena, ", ", protocols)}, 0);
         try headers.add(header);
+        has_extra_headers = true;
+    }
+
+    {
+        var buf: std.Io.Writer.Allocating = .init(arena);
+        try exec.session.cookie_jar.forRequest(resolved_url, &buf.writer, .{
+            .is_http = true,
+            .is_navigation = false,
+            .origin_url = exec.url.*,
+        });
+        if (buf.written().len > 0) {
+            try buf.writer.writeByte(0);
+            const written = buf.written();
+            try conn.setCookies(written.ptr[0 .. written.len - 1 :0]);
+        }
+    }
+
+    if (has_extra_headers) {
         try conn.setHeaders(&headers);
     }
 

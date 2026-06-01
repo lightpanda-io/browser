@@ -95,6 +95,22 @@ fn handleClient(client: posix.socket_t) void {
     const key_end = std.mem.indexOfScalarPos(u8, request, key_line_start, '\r') orelse return;
     const key = request[key_line_start..key_end];
 
+    // Capture the request's Cookie header value (if any) so the test
+    // fixture can ask for it back via the `get-cookie` command. Copy out
+    // of `request` because the WS frame loop below reuses `buf` for
+    // incoming frames, invalidating the slice. Buffer is sized to match
+    // `buf` since any cookie that fit in the request fits here.
+    var cookie_buf: [4096]u8 = undefined;
+    var cookie_len: usize = 0;
+    const cookie_header = "Cookie: ";
+    if (std.mem.indexOf(u8, request, cookie_header)) |cookie_start| {
+        const value_start = cookie_start + cookie_header.len;
+        const value_end = std.mem.indexOfScalarPos(u8, request, value_start, '\r') orelse value_start;
+        const value = request[value_start..value_end];
+        cookie_len = @min(value.len, cookie_buf.len);
+        @memcpy(cookie_buf[0..cookie_len], value[0..cookie_len]);
+    }
+
     // Compute accept key
     var hasher = std.crypto.hash.Sha1.init(.{});
     hasher.update(key);
@@ -128,7 +144,7 @@ fn handleClient(client: posix.socket_t) void {
 
         // Handle commands or echo
         if (frame.opcode == 1) { // Text
-            handleTextMessage(client, frame.payload) catch break;
+            handleTextMessage(client, frame.payload, cookie_buf[0..cookie_len]) catch break;
         } else if (frame.opcode == 2) { // Binary
             handleBinaryMessage(client, frame.payload) catch break;
         }
@@ -233,10 +249,18 @@ const RecvBuffer = struct {
     }
 };
 
-fn handleTextMessage(client: posix.socket_t, payload: []const u8) !void {
+fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header: []const u8) !void {
     // Command: force-close - close socket immediately without close frame
     if (std.mem.eql(u8, payload, "force-close")) {
         return error.ForceClose;
+    }
+
+    // Command: get-cookie - send the Cookie header value the upgrade
+    // request carried (empty string if none). Used by the cookie-on-
+    // upgrade regression test.
+    if (std.mem.eql(u8, payload, "get-cookie")) {
+        try sendFrame(client, 1, "cookie:", cookie_header);
+        return;
     }
 
     // Command: send-large:N - send a message of N bytes

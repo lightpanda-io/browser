@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_relative_url_ignores_hash_route type=module>
+  {
+    const state = await testing.async();
+    const originalUrl = location.href;
+
+    history.replaceState(null, '', '/#/login');
+    const response = await fetch('xhr', { method: 'POST', body: 'foo' });
+    const text = await response.text();
+
+    history.replaceState(null, '', originalUrl);
+    state.resolve({
+      ok: response.ok,
+      status: response.status,
+      url: response.url,
+      length: text.length,
+    });
+
+    await state.done((data) => {
+      testing.expectEqual(true, data.ok);
+      testing.expectEqual(200, data.status);
+      testing.expectEqual('http://127.0.0.1:9582/xhr', data.url);
+      testing.expectEqual(100, data.length);
+    });
+  }
+</script>

@@ -121,7 +121,8 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, o
 
     const scheme_end = std.mem.indexOf(u8, base, "://");
     const authority_start = if (scheme_end) |end| end + 3 else 0;
-    const path_start = std.mem.indexOfScalarPos(u8, base, authority_start, '/') orelse base.len;
+    const path_start = std.mem.indexOfAnyPos(u8, base, authority_start, "/?#") orelse base.len;
+    const path_end = std.mem.indexOfAnyPos(u8, base, path_start, "?#") orelse base.len;
 
     if (path[0] == '/') {
         const result = try std.mem.joinZ(allocator, "", &.{ base[0..path_start], path });
@@ -129,8 +130,8 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, o
     }
 
     var normalized_base: []const u8 = base[0..path_start];
-    if (path_start < base.len) {
-        if (std.mem.lastIndexOfScalar(u8, base[path_start + 1 ..], '/')) |pos| {
+    if (path_start < path_end) {
+        if (std.mem.lastIndexOfScalar(u8, base[path_start + 1 .. path_end], '/')) |pos| {
             normalized_base = base[0 .. path_start + 1 + pos];
         }
     }
@@ -482,8 +483,8 @@ pub fn getProtocol(raw: [:0]const u8) []const u8 {
     return raw[0 .. pos + 1];
 }
 
-pub fn isHTTPS(raw: [:0]const u8) bool {
-    return std.mem.startsWith(u8, raw, "https:");
+pub fn isSecure(raw: [:0]const u8) bool {
+    return std.mem.startsWith(u8, raw, "https:") or std.mem.startsWith(u8, raw, "wss:");
 }
 
 pub fn getHostname(raw: [:0]const u8) []const u8 {
@@ -990,6 +991,66 @@ test "URL: resolve" {
             .base = "https://example/xyz/abc/123",
             .path = "something.js",
             .expected = "https://example/xyz/abc/something.js",
+        },
+        .{
+            .base = "http://127.0.0.1:8123/#/login",
+            .path = "api/users/login",
+            .expected = "http://127.0.0.1:8123/api/users/login",
+        },
+        .{
+            .base = "https://example/app/page?next=/foo/bar",
+            .path = "api/users/login",
+            .expected = "https://example/app/api/users/login",
+        },
+        .{
+            .base = "https://example/app/page#/foo/bar",
+            .path = "api/users/login",
+            .expected = "https://example/app/api/users/login",
+        },
+        .{
+            .base = "https://example?next=/foo/bar",
+            .path = "api/users/login",
+            .expected = "https://example/api/users/login",
+        },
+        .{
+            .base = "https://example#/foo/bar",
+            .path = "api/users/login",
+            .expected = "https://example/api/users/login",
+        },
+        .{
+            .base = "https://example?next=/foo/bar",
+            .path = "/api/users/login",
+            .expected = "https://example/api/users/login",
+        },
+        .{
+            .base = "https://example/app/page?next=/foo/bar",
+            .path = "../api/users/login",
+            .expected = "https://example/api/users/login",
+        },
+        .{
+            .base = "https://example/app/page#/foo/bar",
+            .path = "../api/users/login",
+            .expected = "https://example/api/users/login",
+        },
+        .{
+            .base = "https://example/app/dir/?next=/foo/bar",
+            .path = "../api/users/login",
+            .expected = "https://example/app/api/users/login",
+        },
+        .{
+            .base = "https://example/app/dir/#/foo/bar",
+            .path = "../api/users/login",
+            .expected = "https://example/app/api/users/login",
+        },
+        .{
+            .base = "https://example/app/page?next=/foo/bar",
+            .path = "?q=/api/users/login",
+            .expected = "https://example/app/page?q=/api/users/login",
+        },
+        .{
+            .base = "https://example/app/page#/foo/bar",
+            .path = "#/api/users/login",
+            .expected = "https://example/app/page#/api/users/login",
         },
         .{
             .base = "https://example/xyz/abc/123",

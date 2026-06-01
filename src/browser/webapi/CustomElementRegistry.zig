@@ -55,8 +55,11 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         break :blk tag;
     } else null;
 
-    const gop = try self._definitions.getOrPut(frame.arena, name);
-    if (gop.found_existing) {
+    // Do not use getOrPut here to hold the GetOrPut entry until we need to write
+    // the definition. constructor.getPropertyValue() can fire a get accessor
+    // which could callback here and alter self._definitions, invalidating any
+    // GOP pointer we have.
+    if (self._definitions.contains(name)) {
         // Yes, this is the correct error to return when trying to redefine a name
         return error.NotSupported;
     }
@@ -95,6 +98,10 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         }
     }
 
+    const gop = try self._definitions.getOrPut(frame.arena, owned_name);
+    if (gop.found_existing) {
+        return error.NotSupported;
+    }
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = definition;
 
