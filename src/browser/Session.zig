@@ -23,7 +23,6 @@ const builtin = @import("builtin");
 const App = @import("../App.zig");
 
 const js = @import("js/js.zig");
-const v8 = js.v8;
 const storage = @import("webapi/storage/storage.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 const History = @import("webapi/History.zig");

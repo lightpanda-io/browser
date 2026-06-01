@@ -31,7 +31,6 @@ const ErrorEvent = @import("event/ErrorEvent.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 
 const log = lp.log;
-const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 

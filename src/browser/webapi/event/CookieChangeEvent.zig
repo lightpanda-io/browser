@@ -16,18 +16,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Notification = @import("../../../Notification.zig");
 
 const Event = @import("../Event.zig");
-const Cookie = @import("../storage/Cookie.zig");
 const CookieStore = @import("../storage/CookieStore.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieChangeEvent

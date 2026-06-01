@@ -25,7 +25,6 @@ const HttpClient = @import("HttpClient.zig");
 const js = @import("js/js.zig");
 const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
-const ImportMap = @import("ImportMap.zig");
 const ScriptManagerBase = @import("ScriptManagerBase.zig");
 
 const Element = @import("webapi/Element.zig");

@@ -28,7 +28,6 @@ const URL = @import("URL.zig");
 const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 
 const http = @import("../network/http.zig");
-const Robots = @import("../network/Robots.zig");
 const Network = @import("../network/Network.zig");
 
 const CDP = @import("../cdp/CDP.zig");
@@ -41,9 +40,7 @@ pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
 pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 
 const log = lp.log;
-const posix = std.posix;
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
 pub const Method = http.Method;

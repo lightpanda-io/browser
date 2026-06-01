@@ -17,10 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 const builtin = @import("builtin");
-
-const App = @import("../App.zig");
 
 const js = @import("js/js.zig");
 const v8 = js.v8;
@@ -29,7 +26,6 @@ const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
 
-const log = lp.log;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 

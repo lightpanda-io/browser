@@ -24,7 +24,6 @@ const HttpClient = @import("HttpClient.zig");
 const http = @import("../network/http.zig");
 
 const js = @import("js/js.zig");
-const URL = @import("URL.zig");
 const Session = @import("Session.zig");
 const Frame = @import("Frame.zig");
 const ImportMap = @import("ImportMap.zig");

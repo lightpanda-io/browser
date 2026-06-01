@@ -24,7 +24,6 @@ const builtin = @import("builtin");
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
 
-const mcp = @import("mcp.zig");
 const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 

@@ -21,14 +21,11 @@ const lp = @import("lightpanda");
 
 const URL = @import("../../browser/URL.zig");
 const Layer = @import("../../browser/HttpClient.zig").Layer;
-const Client = @import("../../browser/HttpClient.zig").Client;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
 
 const Robots = @import("../Robots.zig");
 const Network = @import("../Network.zig");
-
-const Forward = @import("Forward.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;

@@ -27,7 +27,6 @@ const std = @import("std");
 
 const Node = @import("../webapi/Node.zig");
 
-const CData = Node.CData;
 const Allocator = std.mem.Allocator;
 
 pub const Result = union(enum) {

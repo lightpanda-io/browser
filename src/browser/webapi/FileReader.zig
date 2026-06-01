@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
-const Frame = @import("../Frame.zig");
 const EventTarget = @import("EventTarget.zig");
 const ProgressEvent = @import("event/ProgressEvent.zig");
 const Blob = @import("Blob.zig");
