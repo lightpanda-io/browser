@@ -27,6 +27,7 @@ const js = @import("js/js.zig");
 const URL = @import("URL.zig");
 const Session = @import("Session.zig");
 const Frame = @import("Frame.zig");
+const ImportMap = @import("ImportMap.zig");
 const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
 const Element = @import("webapi/Element.zig");
@@ -118,11 +119,8 @@ allocator: Allocator,
 // See ScriptManager.zig for the type's documentation.
 imported_modules: std.StringHashMapUnmanaged(ImportedModule),
 
-// Mapping between module specifier and resolution.
-// see https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/script/type/importmap
-// For workers this stays empty (only Frame authors importmaps via
-// ScriptManager.parseImportmap).
-importmap: std.StringHashMapUnmanaged([:0]const u8),
+// For workers this stays empty
+importmap: ImportMap,
 
 // Called at the end of evaluate() after all Base-owned work has run. Frame
 // wrapper uses this to drain defer_scripts and fire documentIsLoaded /
@@ -150,8 +148,6 @@ pub fn deinit(self: *ScriptManagerBase) void {
     self.reset();
 
     self.imported_modules.deinit(self.allocator);
-    // we don't deinit self.importmap b/c we use the owner's arena for its
-    // allocations.
 }
 
 pub fn reset(self: *ScriptManagerBase) void {
@@ -164,9 +160,8 @@ pub fn reset(self: *ScriptManagerBase) void {
     }
     self.imported_modules.clearRetainingCapacity();
 
-    // The importmap's keys/values were allocated from the owner's arena, which
-    // has been reset. Can't use clearAndRetainCapacity — that space is no
-    // longer ours.
+    // The importmap's contents were allocated from the owner's arena, which
+    // has been reset, so just zero the struct.
     self.importmap = .empty;
 
     clearList(&self.defer_scripts);
@@ -209,13 +204,12 @@ pub fn scriptList(self: *ScriptManagerBase, script: *const Script) *std.DoublyLi
 
 // Resolve a module specifier to a valid URL.
 pub fn resolveSpecifier(self: *ScriptManagerBase, arena: Allocator, base: [:0]const u8, specifier: [:0]const u8) ![:0]const u8 {
-    // If the specifier is mapped in the importmap, return the pre-resolved
-    // value. For workers this map is empty.
-    if (self.importmap.get(specifier)) |s| {
-        return s;
+    if (try self.importmap.resolve(arena, base, specifier)) |url| {
+        return url;
     }
-
-    return URL.resolve(arena, base, specifier, .{ .always_dupe = true });
+    // The importmap _always_ resolves specifies if they're valid, falling back
+    // to the base + specifier itself. So we can only be here on something invalid.
+    return error.SpecifierResolutionFailed;
 }
 
 pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []const u8) !void {
@@ -736,10 +730,10 @@ pub const Script = struct {
 
         const local = &ls.local;
 
-        // Handle importmap special case here: the content is a JSON containing
-        // imports.
+        // Handle importmap special case here: the content is a JSON containing imports.
+        // Multiple <script type="importmap"> elements merge with first-wins semantics.
         if (fe.kind == .importmap) {
-            frame._script_manager.parseImportmap(self) catch |err| {
+            self.manager.importmap.merge(frame.arena, frame.base(), self.source.content()) catch |err| {
                 log.err(.browser, "parse importmap script", .{
                     .err = err,
                     .src = url,

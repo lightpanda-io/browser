@@ -138,21 +138,23 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, o
     const path_start = std.mem.indexOfAnyPos(u8, base, authority_start, "/?#") orelse base.len;
     const path_end = std.mem.indexOfAnyPos(u8, base, path_start, "?#") orelse base.len;
 
+    var out: []u8 = undefined;
     if (path[0] == '/') {
-        const result = try std.mem.joinZ(allocator, "", &.{ base[0..path_start], path });
-        return processResolved(allocator, result, opts);
-    }
-
-    var normalized_base: []const u8 = base[0..path_start];
-    if (path_start < path_end) {
-        if (std.mem.lastIndexOfScalar(u8, base[path_start + 1 .. path_end], '/')) |pos| {
-            normalized_base = base[0 .. path_start + 1 + pos];
+        // Absolute path — keep base authority, replace path. Two trailing
+        // spaces give us safe lookahead for the dot-segment loop below.
+        out = try std.mem.join(allocator, "", &.{ base[0..path_start], path, "  " });
+    } else {
+        var normalized_base: []const u8 = base[0..path_start];
+        if (path_start < path_end) {
+            if (std.mem.lastIndexOfScalar(u8, base[path_start + 1 .. path_end], '/')) |pos| {
+                normalized_base = base[0 .. path_start + 1 + pos];
+            }
         }
-    }
 
-    // trailing space so that we always have space to append the null terminator
-    // and so that we can compare the next two characters without needing to length check
-    var out = try std.mem.join(allocator, "", &.{ normalized_base, "/", path, "  " });
+        // trailing space so that we always have space to append the null terminator
+        // and so that we can compare the next two characters without needing to length check
+        out = try std.mem.join(allocator, "", &.{ normalized_base, "/", path, "  " });
+    }
 
     const end = out.len - 2;
 
@@ -170,8 +172,10 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, o
                 in_i += 2;
                 continue;
             }
-            if (out[in_i + 1] == '.' and out[in_i + 2] == '/') { // always safe, because we added two whitespaces
-                // /../
+            if (out[in_i + 1] == '.' and (out[in_i + 2] == '/' or in_i + 2 == end)) {
+                // /../ or trailing /.. — both step up one segment. The
+                // trailing slash stays implicit (out_i ends up right after
+                // the previous '/'), matching `new URL("..", base)`.
                 if (out_i > path_marker) {
                     // go back before the /
                     out_i -= 2;
@@ -1178,6 +1182,36 @@ test "URL: resolve" {
             .base = "https://www.example.com/hello/world/",
             .path = "../../../../example/about",
             .expected = "https://www.example.com/example/about",
+        },
+        .{
+            .base = "https://example.com/a/b/c/",
+            .path = "..",
+            .expected = "https://example.com/a/b/",
+        },
+        .{
+            .base = "https://example.com/a/b/c",
+            .path = "..",
+            .expected = "https://example.com/a/",
+        },
+        .{
+            .base = "https://example.com/js/app.mjs",
+            .path = "/test/..",
+            .expected = "https://example.com/",
+        },
+        .{
+            .base = "https://example.com/js/app.mjs",
+            .path = "/a/b/../c",
+            .expected = "https://example.com/a/c",
+        },
+        .{
+            .base = "https://example.com/js/app.mjs",
+            .path = "/../../foo/bar",
+            .expected = "https://example.com/foo/bar",
+        },
+        .{
+            .base = "https://example.com/js/app.mjs",
+            .path = "/../foo/../bar",
+            .expected = "https://example.com/bar",
         },
     };
 
