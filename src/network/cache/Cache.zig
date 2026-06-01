@@ -134,8 +134,8 @@ pub const CachedMetadata = struct {
     vary_headers: []const Http.Header,
 
     // Validators for conditional requests.
-    etag: ?[]const u8,
-    last_modified: ?[]const u8,
+    etag: ?[]const u8 = null,
+    last_modified: ?[]const u8 = null,
 
     pub fn format(self: CachedMetadata, writer: *std.Io.Writer) !void {
         try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | etag={s} | last-modified={s} | vary=[", .{
