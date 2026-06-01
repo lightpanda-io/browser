@@ -15,12 +15,19 @@
 
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("idn2.h");
-});
-
 const Allocator = std.mem.Allocator;
-pub const Error = error{Idna} || Allocator.Error;
+
+// WHATWG "domain to ASCII" lives in the rust-url FFI (src/html5ever/url.rs),
+// which uses the UTS#46-conformant `idna` crate — the same engine rust-url
+// itself uses.
+extern "c" fn lpurl_domain_to_ascii(
+    host_ptr: [*]const u8,
+    host_len: usize,
+    out_ptr: *?[*]u8,
+    out_len: *usize,
+) i32;
+
+extern "c" fn lpurl_free(ptr: ?[*]u8, len: usize) void;
 
 /// True if `host` contains any non-ASCII byte and therefore needs IDNA
 /// processing. Pure-ASCII hostnames are returned unchanged by `toAscii`,
@@ -35,21 +42,16 @@ pub fn needsAscii(host: []const u8) bool {
 }
 
 /// Convert a UTF-8 hostname to its ASCII (Punycode) form per UTS#46
-/// IDNA 2008 with non-transitional processing — the algorithm WHATWG URL
-/// invokes as "domain to ASCII". Returns an allocator-owned slice.
-pub fn toAscii(allocator: Allocator, host: []const u8) Error![]u8 {
-    const host_z = try allocator.dupeZ(u8, host);
-    defer allocator.free(host_z);
-
-    var out_ptr: [*c]u8 = undefined;
-    const flags: c_int = c.IDN2_NFC_INPUT | c.IDN2_NONTRANSITIONAL;
-    const rc = c.idn2_to_ascii_8z(host_z.ptr, &out_ptr, flags);
-    if (rc != c.IDN2_OK) {
+/// non-transitional processing — the algorithm WHATWG URL invokes as
+/// "domain to ASCII". Returns an allocator-owned slice.
+pub fn toAscii(allocator: Allocator, host: []const u8) ![]u8 {
+    var out_len: usize = 0;
+    var out_ptr: ?[*]u8 = null;
+    if (lpurl_domain_to_ascii(host.ptr, host.len, &out_ptr, &out_len) != 0) {
         return error.Idna;
     }
-    defer c.idn2_free(out_ptr);
-
-    return try allocator.dupe(u8, std.mem.span(@as([*:0]const u8, @ptrCast(out_ptr))));
+    defer lpurl_free(out_ptr, out_len);
+    return allocator.dupe(u8, out_ptr.?[0..out_len]);
 }
 
 const testing = @import("../testing.zig");
@@ -73,4 +75,40 @@ test "idna: German sharp s with non-transitional processing" {
     const out = try toAscii(testing.allocator, "faß.de");
     defer testing.allocator.free(out);
     try testing.expectString("xn--fa-hia.de", out);
+}
+
+test "idna: needsAscii" {
+    try testing.expectEqual(false, needsAscii(""));
+    try testing.expectEqual(false, needsAscii("xn--fa-hia.de"));
+    try testing.expectEqual(true, needsAscii("faß.de"));
+    try testing.expectEqual(true, needsAscii("\xff"));
+}
+
+test "idna: UTS#46 lowercases ASCII" {
+    const out = try toAscii(testing.allocator, "EXAMPLE.COM");
+    defer testing.allocator.free(out);
+    try testing.expectString("example.com", out);
+}
+
+test "idna: already-punycode is idempotent" {
+    const out = try toAscii(testing.allocator, "xn--rksmrgs-5wao1o.se");
+    defer testing.allocator.free(out);
+    try testing.expectString("xn--rksmrgs-5wao1o.se", out);
+}
+
+test "idna: mixed ASCII and non-ASCII labels" {
+    const out = try toAscii(testing.allocator, "münchen.example.com");
+    defer testing.allocator.free(out);
+    try testing.expectString("xn--mnchen-3ya.example.com", out);
+}
+
+test "idna: multi-label CJK" {
+    const out = try toAscii(testing.allocator, "日本.jp");
+    defer testing.allocator.free(out);
+    try testing.expectString("xn--wgv71a.jp", out);
+}
+
+test "idna: invalid domain returns error" {
+    // U+FFFD (REPLACEMENT CHARACTER) is disallowed under UTS#46.
+    try testing.expectError(error.Idna, toAscii(testing.allocator, "\u{FFFD}.com"));
 }

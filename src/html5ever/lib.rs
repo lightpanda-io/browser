@@ -18,6 +18,7 @@
 
 mod sink;
 mod types;
+mod url;
 
 #[cfg(debug_assertions)]
 #[global_allocator]
@@ -159,8 +160,7 @@ pub extern "C" fn html5ever_parse_document_with_encoding(
     };
 
     // Parse directly from decoded string
-    parse_document(sink, Default::default())
-        .one(StrTendril::from(decoded.as_ref()));
+    parse_document(sink, Default::default()).one(StrTendril::from(decoded.as_ref()));
 }
 
 // === Encoding API for TextDecoder ===
@@ -180,10 +180,7 @@ pub struct EncodingInfo {
 
 /// Look up an encoding by its label (case-insensitive, whitespace-trimmed)
 #[no_mangle]
-pub extern "C" fn encoding_for_label(
-    label: *const c_uchar,
-    label_len: usize,
-) -> EncodingInfo {
+pub extern "C" fn encoding_for_label(label: *const c_uchar, label_len: usize) -> EncodingInfo {
     if label.is_null() || label_len == 0 {
         return EncodingInfo {
             found: 0,

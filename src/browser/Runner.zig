@@ -86,10 +86,9 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
     while (true) {
         if (gc_hint_timer.read() >= gc_hint_period_ns) {
             gc_hint_timer.reset();
-            self.frame._page.cleanupClosedPopups();
             browser.env.memoryPressureNotification(.moderate);
         }
-        session.processQueuedDestroyed();
+        session.processDestroyQueues();
 
         const tick_result = self._tick(is_cdp, tick_opts) catch |err| {
             switch (err) {

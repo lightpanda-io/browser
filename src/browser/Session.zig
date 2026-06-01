@@ -70,7 +70,8 @@ _active: ?*Page = null,
 // In-flight root navigation
 _pending: ?*Page = null,
 
-_queued_destroy: std.ArrayList(*Page) = .{},
+_page_destruction_queue: std.ArrayList(*Page) = .{},
+_frame_destruction_queue: std.ArrayList(*Frame) = .{},
 
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
@@ -127,7 +128,7 @@ pub fn deinit(self: *Session) void {
     if (self._active != null) {
         self.removePage();
     }
-    self.processQueuedDestroyed();
+    self.processDestroyQueues();
 
     self.cookie_jar.deinit();
 
@@ -137,12 +138,27 @@ pub fn deinit(self: *Session) void {
     self.arena_pool.release(self.arena);
 }
 
-pub fn processQueuedDestroyed(self: *Session) void {
-    for (self._queued_destroy.items) |page| {
-        page.deinit();
-        self.browser.page_pool.destroy(page);
+pub fn processDestroyQueues(self: *Session) void {
+    {
+        const queue = self._frame_destruction_queue.items;
+        if (queue.len > 0) {
+            for (queue) |frame| {
+                frame.deinit();
+            }
+            self._frame_destruction_queue.clearRetainingCapacity();
+        }
     }
-    self._queued_destroy.clearRetainingCapacity();
+
+    {
+        const queue = self._page_destruction_queue.items;
+        if (queue.len > 0) {
+            for (queue) |page| {
+                page.deinit();
+                self.browser.page_pool.destroy(page);
+            }
+            self._page_destruction_queue.clearRetainingCapacity();
+        }
+    }
 }
 
 // True iff there is an active Page. CDP / external callers should use this
@@ -161,8 +177,12 @@ fn allocatePage(self: *Session, frame_id: u32) !*Page {
 }
 
 // Tear down and free a Page allocated via allocatePage.
-fn destroyPage(self: *Session, page: *Page) void {
-    self._queued_destroy.append(self.arena, page) catch @panic("OOM");
+fn queuePageDestruction(self: *Session, page: *Page) void {
+    self._page_destruction_queue.append(self.arena, page) catch @panic("OOM");
+}
+
+pub fn queueFrameDestruction(self: *Session, frame: *Frame) void {
+    self._frame_destruction_queue.append(self.arena, frame) catch @panic("OOM");
 }
 
 // Tear down the currently-active Page. Dispatches `frame_remove` first
@@ -193,7 +213,7 @@ fn tearDownActivePage(self: *Session) void {
     };
 
     page.frame.abortTransfers();
-    self.destroyPage(page);
+    self.queuePageDestruction(page);
     self._active = null;
     self.navigation.onRemoveFrame();
 }
@@ -209,7 +229,7 @@ fn tearDownActivePage(self: *Session) void {
 // for any prior teardown of an old page).
 fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     const page = try self.allocatePage(frame_id);
-    errdefer self.destroyPage(page);
+    errdefer self.queuePageDestruction(page);
     self._active = page;
     errdefer self._active = null;
 
@@ -227,7 +247,7 @@ pub fn createPage(self: *Session) !*Frame {
     lp.assert(self._active == null, "Session.createPage - page not null", .{});
 
     // Drain any pending Page deinits now, while we're at a known-safe point
-    self.processQueuedDestroyed();
+    self.processDestroyQueues();
 
     if (comptime IS_DEBUG) {
         log.debug(.browser, "create page", .{});
@@ -522,7 +542,7 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
     }
 
     const page = try self.allocatePage(frame_id);
-    errdefer self.destroyPage(page);
+    errdefer self.queuePageDestruction(page);
 
     page._state = .pending;
     self._pending = page;
@@ -604,7 +624,7 @@ pub fn commitPendingPage(self: *Session) !void {
     // done_callback after this point would re-enter against the new
     // _active and trip the half-torn-down session.
     old_active.frame.abortTransfers();
-    self.destroyPage(old_active);
+    self.queuePageDestruction(old_active);
 }
 
 // Discard a pending Page without committing. Used for failure paths
@@ -622,7 +642,7 @@ pub fn discardPendingPage(self: *Session) void {
     page.frame.abortTransfers();
 
     self._pending = null;
-    self.destroyPage(page);
+    self.queuePageDestruction(page);
 }
 
 // Frame IDs come from `Browser` (per-CDP-connection scope), not

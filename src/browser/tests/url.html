@@ -98,6 +98,28 @@
   }
 
   {
+    // IDN hosts are converted to punycode (UTS#46).
+    const url = new URL('https://räksmörgås.se/x');
+    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
+    testing.expectEqual('https://xn--rksmrgs-5wao1o.se/x', url.href);
+  }
+
+  {
+    // Valid punycode passes through unchanged.
+    const url = new URL('https://xn--rksmrgs-5wao1o.se/x');
+    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
+  }
+
+  {
+    // An invalid domain (malformed punycode) is a parse failure -> TypeError.
+    testing.withError((err) => {
+      testing.expectEqual(true, err.toString().includes('TypeError'));
+    }, () => {
+      const url = new URL('https://xn--0.pt/x');
+    });
+  }
+
+  {
     const base = 'http://example.com/a/b/c/d';
     const url = new URL('../../../../../foo', base);
     testing.expectEqual('http://example.com/foo', url.toString());
