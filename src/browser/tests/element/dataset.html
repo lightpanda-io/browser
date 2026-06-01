@@ -36,6 +36,11 @@
 
   testing.expectEqual('value', el.dataset.newAttr);
   testing.expectEqual('value', el.getAttribute('data-new-attr'));
+
+  el.dataset.newAttr = true;
+
+  testing.expectEqual('true', el.dataset.newAttr);
+  testing.expectEqual('true', el.getAttribute('data-new-attr'));
 }
 </script>
 
