@@ -447,35 +447,24 @@ fn extractArgs(
 ) BuildArgsError!std.json.Value {
     if (argc != 1) return error.InvalidArguments;
     const value = try self.argJson(arena, context, info, 0);
-    switch (value) {
-        .string => |str| return try objectWith(arena, "schema", .{
-            .string = try normalizeExtractSchemaString(arena, str),
-        }),
-        .array => return try objectWith(arena, "schema", .{
-            .string = try extractSchemaString(arena, value),
-        }),
-        .object => |obj| {
-            if (obj.get("schema")) |schema| {
-                if (obj.count() != 1) return error.InvalidArguments;
-                return try objectWith(arena, "schema", .{
-                    .string = try extractSchemaString(arena, schema),
-                });
-            }
-            return try objectWith(arena, "schema", .{
-                .string = try std.json.Stringify.valueAlloc(arena, std.json.Value{ .object = obj }, .{}),
-            });
-        },
+    const schema = switch (value) {
+        .string, .array => try extractSchemaString(arena, value),
+        .object => |obj| if (obj.get("schema")) |inner| blk: {
+            if (obj.count() != 1) return error.InvalidArguments;
+            break :blk try extractSchemaString(arena, inner);
+        } else try extractSchemaString(arena, value),
         else => return error.InvalidArguments,
-    }
+    };
+    return try objectWith(arena, "schema", .{ .string = schema });
 }
 
 fn extractSchemaString(arena: std.mem.Allocator, value: std.json.Value) error{OutOfMemory}![]const u8 {
     return switch (value) {
         .string => |str| normalizeExtractSchemaString(arena, str),
-        .array => |arr| blk: {
-            const body = try std.json.Stringify.valueAlloc(arena, std.json.Value{ .array = arr }, .{});
-            break :blk try std.fmt.allocPrint(arena, "{{\"__root\":{s}}}", .{body});
-        },
+        .array => |arr| normalizeExtractSchemaString(
+            arena,
+            try std.json.Stringify.valueAlloc(arena, std.json.Value{ .array = arr }, .{}),
+        ),
         else => try std.json.Stringify.valueAlloc(arena, value, .{}),
     };
 }
