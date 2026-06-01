@@ -60,67 +60,69 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     var iter = req.headers.iterator();
     const req_header_list = try iter.collect(arena);
 
-    if (transfer.client.network.cache.?.get(arena, .{
+    const cached = transfer.client.network.cache.?.get(arena, .{
         .url = req.url,
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
-    })) |cached| {
-        if (cached.expired) {
-            if (cached.metadata.hasValidators()) {
-                if (cached.metadata.etag) |etag| {
-                    log.debug(.cache, "revalidate with etag", .{ .url = req.url, .etag = etag });
-                    const header_value = try std.fmt.allocPrintSentinel(arena, "If-None-Match: {s}", .{etag}, 0);
-                    try req.headers.add(header_value);
-                } else if (cached.metadata.last_modified) |lm| {
-                    log.debug(.cache, "revalidate with last-modified", .{ .url = req.url, .last_modified = lm });
-                    const header_value = try std.fmt.allocPrintSentinel(arena, "If-Modified-Since: {s}", .{lm}, 0);
-                    try req.headers.add(header_value);
+    }) orelse {
+        // Cache miss: install wrappers so we can inspect the response and decide
+        // whether to write the body into the cache when it's done.
+        try installCacheContext(arena, transfer, null);
+        return self.next.request(transfer);
+    };
+
+    if (!cached.expired) {
+        // Dispatch that the Request was served from the Cache.
+        transfer.req.notification.dispatch(
+            .http_request_served_from_cache,
+            &.{ .transfer = transfer },
+        );
+
+        const ctx = try arena.create(CachedResponse);
+        ctx.* = cached;
+
+        try transfer.client.runNextTick(transfer, ctx, .{
+            .run = struct {
+                fn run(t: *Transfer, ctx_ptr: ?*anyopaque) void {
+                    defer t.deinit();
+
+                    const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
+                    serveFromCache(&t.req, c) catch |err| {
+                        t.req.error_callback(t.req.ctx, err);
+                    };
                 }
-
-                try installCacheContext(arena, transfer, cached);
-                return self.next.request(transfer);
-            } else {
-                // If it is expired w/o validators, evict from Cache.
-                transfer.client.network.cache.?.evict(req.url);
-            }
-        } else {
-            // Dispatch that the Request was served from the Cache.
-            transfer.req.notification.dispatch(
-                .http_request_served_from_cache,
-                &.{ .transfer = transfer },
-            );
-
-            const ctx = try arena.create(CachedResponse);
-            ctx.* = cached;
-
-            try transfer.client.runNextTick(transfer, ctx, .{
-                .run = struct {
-                    fn run(t: *Transfer, ctx_ptr: ?*anyopaque) void {
-                        defer t.deinit();
-
-                        const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
-                        serveFromCache(&t.req, c) catch |err| {
-                            t.req.error_callback(t.req.ctx, err);
-                        };
+            }.run,
+            .abort = struct {
+                fn abort(ctx_ptr: ?*anyopaque) void {
+                    const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
+                    switch (c.data) {
+                        .buffer => |_| {},
+                        .file => |f| f.file.close(),
                     }
-                }.run,
-                .abort = struct {
-                    fn abort(ctx_ptr: ?*anyopaque) void {
-                        const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
-                        switch (c.data) {
-                            .buffer => |_| {},
-                            .file => |f| f.file.close(),
-                        }
-                    }
-                }.abort,
-            });
-            return;
-        }
+                }
+            }.abort,
+        });
+        return;
     }
 
-    // Cache miss: install wrappers so we can inspect the response and decide
-    // whether to write the body into the cache when it's done.
-    try installCacheContext(arena, transfer, null);
+    if (cached.metadata.hasValidators()) {
+        if (cached.metadata.etag) |etag| {
+            log.debug(.cache, "revalidate with etag", .{ .url = req.url, .etag = etag });
+            const header_value = try std.fmt.allocPrintSentinel(arena, "If-None-Match: {s}", .{etag}, 0);
+            try req.headers.add(header_value);
+        } else if (cached.metadata.last_modified) |lm| {
+            log.debug(.cache, "revalidate with last-modified", .{ .url = req.url, .last_modified = lm });
+            const header_value = try std.fmt.allocPrintSentinel(arena, "If-Modified-Since: {s}", .{lm}, 0);
+            try req.headers.add(header_value);
+        }
+
+        try installCacheContext(arena, transfer, cached);
+    } else {
+        // If it is expired w/o validators, evict from Cache.
+        transfer.client.network.cache.?.evict(req.url);
+        try installCacheContext(arena, transfer, null);
+    }
+
     return self.next.request(transfer);
 }
 
