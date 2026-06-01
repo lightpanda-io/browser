@@ -76,7 +76,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
     const target = Cookie.PreparedUri{
         .host = URL.getHostname(doc_url),
         .path = URL.getPathname(doc_url),
-        .secure = URL.isHTTPS(doc_url),
+        .secure = URL.isSecure(doc_url),
     };
     if (target.host.len == 0) return;
 
@@ -353,7 +353,7 @@ fn matchCookies(
     const target = Cookie.PreparedUri{
         .host = URL.getHostname(url_resolved),
         .path = URL.getPathname(url_resolved),
-        .secure = URL.isHTTPS(url_resolved),
+        .secure = URL.isSecure(url_resolved),
     };
     if (target.host.len == 0) return error.SecurityError;
 
@@ -408,7 +408,7 @@ fn storeCookie(exec: *const Execution, init: CookieInit) !void {
         if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) return error.InvalidCookieDomain;
     }
 
-    const is_https = URL.isHTTPS(url);
+    const is_https = URL.isSecure(url);
     // Per spec, SameSite=None requires Secure. CookieStore additionally
     // marks any cookie written from an HTTPS document as Secure.
     const secure = is_https or init.sameSite == .none;

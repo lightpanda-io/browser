@@ -579,3 +579,169 @@
   });
 }
 </script>
+
+<script id=cookies_on_upgrade type=module>
+{
+  // Cookies set on the page should ride along with the WebSocket
+  // upgrade request as a Cookie header — same as any other same-origin
+  // HTTP request. Without this, cookie-authenticated WS endpoints
+  // (Phoenix LiveView, anything session-gated) reject the upgrade.
+  //
+  // RFC 6455 §4.1: the upgrade is an HTTP/1.1 request and follows
+  // normal HTTP cookie semantics.
+  // RFC 6265 §5.4: cookies attach to "any HTTP request" matching
+  // the cookie's domain/path; ports are not part of cookie scope, so
+  // a cookie set on 127.0.0.1:9582 attaches to a 127.0.0.1:9584 WS.
+  // Set with path=/ so the cookie applies to the WS server's "/" path
+  // (without an explicit Path attribute, default-path uses the page's
+  // directory which doesn't match the WS endpoint).
+  document.cookie = 'ws_token=session_xyz; path=/';
+
+  // Sanity-check the cookie did land in the jar before opening the WS.
+  testing.expectEqual(true, document.cookie.includes('ws_token=session_xyz'));
+
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    ws.send('get-cookie');
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data);
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['cookie:ws_token=session_xyz'], received);
+  });
+
+  // Clean up so other tests on this fixture don't see this cookie.
+  document.cookie = 'ws_token=; path=/; Max-Age=0';
+}
+</script>
+
+<script id=cookies_on_upgrade_path_scoped_out type=module>
+{
+  // Path scoping: a cookie scoped to /restricted MUST NOT attach to
+  // a WS upgrade for "/". Guards against the patch over-sending cookies.
+  // Each test starts by clearing all cookies on path=/ since this
+  // fixture's <script> blocks share a single page/cookie jar.
+  for (const pair of document.cookie.split(';')) {
+    const name = pair.split('=')[0].trim();
+    if (name) document.cookie = `${name}=; path=/; Max-Age=0`;
+  }
+  document.cookie = 'restricted=nope; path=/restricted';
+
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => { ws.send('get-cookie'); });
+  ws.addEventListener('message', (e) => { received.push(e.data); ws.close(); });
+  ws.addEventListener('close', () => { state.resolve(); });
+
+  await state.done(() => {
+    // Server should report an empty Cookie header.
+    testing.expectEqual(['cookie:'], received);
+  });
+
+  document.cookie = 'restricted=; path=/restricted; Max-Age=0';
+}
+</script>
+
+<script id=cookies_on_upgrade_samesite_strict type=module>
+{
+  // SameSite=Strict on a same-site upgrade (origin and target share
+  // host 127.0.0.1) MUST attach. The patch passes is_navigation=false;
+  // the cookie jar's SameSite logic only blocks Strict cookies when
+  // the request is cross-site, regardless of navigation status. This
+  // test pins the same-site path so a regression that breaks same-site
+  // detection on WS upgrades fails loudly.
+  for (const pair of document.cookie.split(';')) {
+    const name = pair.split('=')[0].trim();
+    if (name) document.cookie = `${name}=; path=/; Max-Age=0`;
+  }
+  document.cookie = 'strict_token=s; path=/; SameSite=Strict';
+
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => { ws.send('get-cookie'); });
+  ws.addEventListener('message', (e) => { received.push(e.data); ws.close(); });
+  ws.addEventListener('close', () => { state.resolve(); });
+
+  await state.done(() => {
+    testing.expectEqual(['cookie:strict_token=s'], received);
+  });
+
+  document.cookie = 'strict_token=; path=/; Max-Age=0';
+}
+</script>
+
+<script id=cookies_on_upgrade_empty_jar type=module>
+{
+  // With no matching cookies, no Cookie header should be added.
+  // The patch has a `if (cookie_buf.written().len > 0)` guard;
+  // this test exercises the false branch so a regression that
+  // sends an empty `Cookie: ` header is caught.
+  for (const pair of document.cookie.split(';')) {
+    const name = pair.split('=')[0].trim();
+    if (name) document.cookie = `${name}=; path=/; Max-Age=0`;
+  }
+
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => { ws.send('get-cookie'); });
+  ws.addEventListener('message', (e) => { received.push(e.data); ws.close(); });
+  ws.addEventListener('close', () => { state.resolve(); });
+
+  await state.done(() => {
+    // Server's get-cookie returns "cookie:" with whatever Cookie header
+    // value it captured — empty string means no header was sent.
+    testing.expectEqual(['cookie:'], received);
+  });
+}
+</script>
+
+<script id=cookies_on_upgrade_multiple type=module>
+{
+  // Multiple matching cookies must be joined with "; " per RFC 6265 §5.4.
+  for (const pair of document.cookie.split(';')) {
+    const name = pair.split('=')[0].trim();
+    if (name) document.cookie = `${name}=; path=/; Max-Age=0`;
+  }
+  document.cookie = 'a=1; path=/';
+  document.cookie = 'b=2; path=/';
+
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => { ws.send('get-cookie'); });
+  ws.addEventListener('message', (e) => { received.push(e.data); ws.close(); });
+  ws.addEventListener('close', () => { state.resolve(); });
+
+  await state.done(() => {
+    // Order in the Cookie header isn't strictly specified by RFC 6265
+    // but the jar iterates insertion order, so a=1 lands first.
+    testing.expectEqual(['cookie:a=1; b=2'], received);
+  });
+
+  document.cookie = 'a=; path=/; Max-Age=0';
+  document.cookie = 'b=; path=/; Max-Age=0';
+}
+</script>

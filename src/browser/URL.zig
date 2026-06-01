@@ -464,8 +464,8 @@ pub fn getProtocol(raw: [:0]const u8) []const u8 {
     return raw[0 .. pos + 1];
 }
 
-pub fn isHTTPS(raw: [:0]const u8) bool {
-    return std.mem.startsWith(u8, raw, "https:");
+pub fn isSecure(raw: [:0]const u8) bool {
+    return std.mem.startsWith(u8, raw, "https:") or std.mem.startsWith(u8, raw, "wss:");
 }
 
 pub fn getHostname(raw: [:0]const u8) []const u8 {
