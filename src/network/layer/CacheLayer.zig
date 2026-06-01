@@ -72,12 +72,6 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     };
 
     if (!cached.expired) {
-        // Dispatch that the Request was served from the Cache.
-        transfer.req.notification.dispatch(
-            .http_request_served_from_cache,
-            &.{ .transfer = transfer },
-        );
-
         const ctx = try arena.create(CachedResponse);
         ctx.* = cached;
 
@@ -87,7 +81,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
                     defer t.deinit();
 
                     const c: *CachedResponse = @ptrCast(@alignCast(ctx_ptr.?));
-                    serveFromCache(&t.req, c) catch |err| {
+                    serveFromCache(t, c) catch |err| {
                         t.req.error_callback(t.req.ctx, err);
                     };
                 }
@@ -152,7 +146,13 @@ fn installCacheContext(
     if (ctx.forward.shutdown != null) req.shutdown_callback = CacheContext.shutdownCallback;
 }
 
-fn serveFromCache(req: *Request, cached: *const CachedResponse) !void {
+fn serveFromCache(transfer: *Transfer, cached: *const CachedResponse) !void {
+    transfer.req.notification.dispatch(
+        .http_request_served_from_cache,
+        &.{ .transfer = transfer },
+    );
+
+    const req = &transfer.req;
     const response = Response.fromCached(req.ctx, cached);
     defer cached.data.deinit();
 
@@ -244,12 +244,7 @@ const CacheContext = struct {
                 log.warn(.cache, "renew failed", .{ .err = err });
             };
 
-            transfer.req.notification.dispatch(
-                .http_request_served_from_cache,
-                &.{ .transfer = transfer },
-            );
-
-            serveFromCache(&transfer.req, &stale) catch |err| {
+            serveFromCache(transfer, &stale) catch |err| {
                 self.forward.forwardErr(err);
             };
 
