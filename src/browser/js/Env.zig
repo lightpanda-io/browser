@@ -518,11 +518,10 @@ pub fn cancelTerminate(self: *Env) void {
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
 
-/// Drains the isolate's default microtask queue. Unlike `runMicrotasks`, which
-/// walks the per-context queues tracked in `contexts`, this serves contexts
-/// created outside `createContext` (e.g. the agent runtime's bare context) that
-/// use the isolate-default queue. Guarded the same way as `runMicrotasks` so a
-/// terminate from the sighandler thread can't land mid-checkpoint.
+/// Like `runMicrotasks`, but for the isolate-default queue used by contexts
+/// created outside `createContext` (the agent runtime's bare context), which
+/// aren't tracked in `contexts`. Guarded so a sighandler-thread terminate
+/// can't land mid-checkpoint.
 pub fn performIsolateMicrotasks(self: *Env) void {
     self.terminate_mutex.lock();
     defer self.terminate_mutex.unlock();

@@ -117,6 +117,8 @@ pub fn init(
     };
     errdefer self.call_arena.deinit();
 
+    // Separate isolate from the page. The full `Env` is used only as an isolate
+    // + terminate/microtask carrier; the agent context is bare (no WebAPIs).
     self.env = lp.js.Env.init(app, .{}) catch return error.RuntimeInitFailed;
     errdefer self.env.deinit();
 
@@ -267,8 +269,7 @@ pub fn runSource(self: *ScriptRuntime, source: []const u8, name: []const u8) Run
     _ = v8.v8__Script__Run(script, context) orelse
         return try self.formatCaught(context, &try_catch, "script failed");
 
-    // The agent isolate uses an explicit microtask policy, so promise
-    // continuations (`.then`, async/await) only run when we drain the queue.
+    // Explicit microtask policy: promise continuations only run once drained.
     self.env.performIsolateMicrotasks();
     if (v8.v8__TryCatch__HasCaught(&try_catch)) {
         return try self.formatCaught(context, &try_catch, "script failed");
@@ -292,9 +293,12 @@ fn consoleCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) vo
 }
 
 fn invoke(self: *ScriptRuntime, primitive: Primitive, info: *const v8.FunctionCallbackInfo) void {
-    _ = self.call_arena.reset(.retain_capacity);
+    // Owned, not shared: marshalling runs JS (`toJSON`) that can re-enter a
+    // primitive; a shared arena would let the nested call reset ours mid-flight.
+    var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    const arena = self.call_arena.allocator();
     const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse {
         self.throwError("internal: missing callback context");
         return;
@@ -325,9 +329,12 @@ fn invoke(self: *ScriptRuntime, primitive: Primitive, info: *const v8.FunctionCa
 }
 
 fn invokeConsole(self: *ScriptRuntime, method: ConsoleMethod, info: *const v8.FunctionCallbackInfo) void {
-    _ = self.call_arena.reset(.retain_capacity);
+    // Owned arena (see `invoke`): an argument's `toString` can re-enter a
+    // primitive mid-loop and must not reset the buffer we're accumulating.
+    var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    const arena = self.call_arena.allocator();
     const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse return;
     const argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
 
@@ -738,6 +745,28 @@ test "agent script runtime: promise microtasks run to completion" {
 
     try runTestScript(runtime,
         \\if (!microtaskRan) throw new Error("microtask did not run after the script");
+    );
+}
+
+test "agent script runtime: primitives re-entered from argument callbacks stay isolated" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\// toJSON re-enters eval mid-marshal; the outer extract must still see "#btn".
+        \\const data = extract({ button: { toJSON() { return eval("'#btn'"); } } });
+        \\if (data.button !== "Click Me") throw new Error("re-entrant extract corrupted: " + JSON.stringify(data));
+        \\// toString re-enters a primitive mid-loop; the console buffer must survive.
+        \\let probed = 0;
+        \\console.log("value", { toString() { probed += 1; return eval("'ok'"); } }, "tail");
+        \\if (probed !== 1) throw new Error("console toString re-entry not exercised");
     );
 }
 
