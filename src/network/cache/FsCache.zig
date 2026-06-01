@@ -298,7 +298,7 @@ pub fn evict(self: *FsCache, url: []const u8) void {
     };
 }
 
-pub fn revalidate(self: *FsCache, arena: std.mem.Allocator, url: []const u8, timestamp: i64) !void {
+pub fn renew(self: *FsCache, arena: std.mem.Allocator, url: []const u8, timestamp: i64) !void {
     const hashed_key = hashKey(url);
     const cache_p = cachePath(&hashed_key);
 
@@ -307,7 +307,7 @@ pub fn revalidate(self: *FsCache, arena: std.mem.Allocator, url: []const u8, tim
     defer lock.unlock();
 
     const file = self.dir.openFile(&cache_p, .{ .mode = .read_only }) catch |e| {
-        log.warn(.cache, "revalidate open failed", .{ .url = url, .err = e });
+        log.warn(.cache, "renew open failed", .{ .url = url, .err = e });
         return e;
     };
     defer file.close();
@@ -318,7 +318,7 @@ pub fn revalidate(self: *FsCache, arena: std.mem.Allocator, url: []const u8, tim
 
     var len_buf: [BODY_LEN_HEADER_LEN]u8 = undefined;
     r.readSliceAll(&len_buf) catch |e| {
-        log.warn(.cache, "revalidate read len", .{ .url = url, .err = e });
+        log.warn(.cache, "renew read len", .{ .url = url, .err = e });
         return e;
     };
     const body_len = std.mem.readInt(u64, &len_buf, .little);
@@ -332,7 +332,7 @@ pub fn revalidate(self: *FsCache, arena: std.mem.Allocator, url: []const u8, tim
         &json_reader,
         .{ .allocate = .alloc_always },
     ) catch |e| {
-        log.warn(.cache, "revalidate parse", .{ .url = url, .err = e });
+        log.warn(.cache, "renew parse", .{ .url = url, .err = e });
         return e;
     };
 
@@ -342,11 +342,11 @@ pub fn revalidate(self: *FsCache, arena: std.mem.Allocator, url: []const u8, tim
     try file_reader.seekTo(BODY_LEN_HEADER_LEN);
 
     self.writeCacheFile(&hashed_key, r, body_len, parsed.metadata) catch |e| {
-        log.warn(.cache, "revalidate write", .{ .url = url, .err = e });
+        log.warn(.cache, "renew write", .{ .url = url, .err = e });
         return e;
     };
 
-    log.debug(.cache, "revalidated", .{ .url = url });
+    log.debug(.cache, "renewed", .{ .url = url });
 }
 
 const testing = std.testing;
@@ -887,7 +887,7 @@ test "FsCache: evict removes entry" {
     ));
 }
 
-test "FsCache: revalidate refreshes expiry" {
+test "FsCache: renew refreshes expiry" {
     var setup = try setupCache();
     defer {
         setup.cache.deinit();
@@ -915,8 +915,8 @@ test "FsCache: revalidate refreshes expiry" {
 
     try cache.put(meta, "hello world");
 
-    // Revalidate while still fresh at now+500
-    try cache.revalidate(arena.allocator(), "https://example.com", now + 500);
+    // renew while still fresh at now+500
+    try cache.renew(arena.allocator(), "https://example.com", now + 500);
 
     // Without revalidation would expire at now+1000, but clock reset to now+500
     // so still fresh at now+1200
@@ -943,7 +943,7 @@ test "FsCache: revalidate refreshes expiry" {
     try testing.expectEqual(true, stale1.expired);
 }
 
-test "FsCache: revalidate preserves body" {
+test "FsCache: renew preserves body" {
     var setup = try setupCache();
     defer {
         setup.cache.deinit();
@@ -970,7 +970,7 @@ test "FsCache: revalidate preserves body" {
     const body = "original body";
     try cache.put(meta, body);
 
-    try cache.revalidate(arena.allocator(), "https://example.com", now + 100);
+    try cache.renew(arena.allocator(), "https://example.com", now + 100);
 
     const result = cache.get(arena.allocator(), .{
         .url = "https://example.com",
