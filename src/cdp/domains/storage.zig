@@ -153,7 +153,7 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
         const domain = try Cookie.parseDomain(a, param.url, param.domain);
         const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
 
-        const secure = if (param.secure) |s| s else if (param.url) |url| URL.isHTTPS(url) else false;
+        const secure = if (param.secure) |s| s else if (param.url) |url| URL.isSecure(url) else false;
 
         break :blk Cookie{
             .arena = arena,

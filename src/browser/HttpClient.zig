@@ -1247,10 +1247,12 @@ pub const Request = struct {
             .origin_url = self.cookie_origin,
             .is_navigation = self.resource_type == .document,
         });
-        const written = aw.written();
-        if (written.len == 0) return null;
+        if (aw.written().len == 0) {
+            return null;
+        }
         try aw.writer.writeByte(0);
-        return written.ptr[0..written.len :0];
+        const written = aw.written();
+        return written.ptr[0 .. written.len - 1 :0];
     }
 
     pub fn deinit(self: *const Request) void {
