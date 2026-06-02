@@ -63,6 +63,7 @@ _implementation: ?*DOMImplementation = null,
 _fonts: ?*FontFaceSet = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
+_close_requested: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
 
@@ -764,7 +765,20 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
                         log.warn(.dom, "flush after parser panic", .{ .err = flush_err });
                     };
                     self._script_created_parser = null;
+                    self._close_requested = false;
                 };
+            }
+        }
+
+        if (self._close_requested) {
+            // document.close was executed during a document.write. We couldn't
+            // execute that during the write, but we can now.
+            if (self._script_created_parser) |*parser| {
+                if (parser.feeding == false) {
+                    try self.finishScriptCreatedParser(frame);
+                }
+            } else {
+                self._close_requested = false;
             }
         }
         return;
@@ -891,9 +905,22 @@ pub fn close(self: *Document, call_frame: *Frame) !void {
         return error.InvalidStateError;
     }
 
-    if (self._script_created_parser == null) {
+    if (self._script_created_parser) |*parser| {
+        if (parser.feeding) {
+            // we're currently in a document.write, we cannot close. We flag
+            // the close and process it at the next safe spot.
+            self._close_requested = true;
+            return;
+        }
+    } else {
         return;
     }
+
+    try self.finishScriptCreatedParser(frame);
+}
+
+fn finishScriptCreatedParser(self: *Document, frame: *Frame) !void {
+    self._close_requested = false;
 
     // done() finishes html5ever's handle and runs the final flushPendingText.
     // Even if flushPendingText errors, the handle is already finished and we
