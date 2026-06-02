@@ -108,6 +108,7 @@ pub fn attachCompleter(self: *Terminal) void {
     c.ic_set_default_completer(&completionCallback, self);
     c.ic_set_default_hinter(&hintsCallback, self);
     c.ic_set_mode_callback(&modeCallback, self);
+    c.ic_set_default_highlighter(&highlighterCallback, self);
 }
 
 fn modeCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
@@ -141,7 +142,6 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         c.ic_style_def(style_jsmode, "ansi-red bold");
         // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
         c.ic_set_prompt_mode("[" ++ style_jsmode ++ "]![/" ++ style_jsmode ++ "] ", '!');
-        c.ic_set_default_highlighter(&highlighterCallback, null);
         _ = c.ic_enable_highlight(true);
         if (history_path) |path| {
             c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
@@ -554,7 +554,10 @@ fn skipWhitespace(text: []const u8, start: usize) ?usize {
 
 /// Byte offsets to ic_highlight are not UTF-8 code points; safe because we
 /// only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
-fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*anyopaque) callconv(.c) void {
+fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?*anyopaque) callconv(.c) void {
+    const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
+    // JS mode: the buffer is raw JS, so slash/kv/url highlighting doesn't apply.
+    if (self.js_mode) return;
     const text = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input)), 0);
     const cmd_start = skipWhitespace(text, 0) orelse return;
     var i = cmd_start;
