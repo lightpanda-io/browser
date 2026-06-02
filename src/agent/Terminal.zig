@@ -142,6 +142,8 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         c.ic_style_def(style_jsmode, "ansi-red bold");
         // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
         c.ic_set_prompt_mode("[" ++ style_jsmode ++ "]![/" ++ style_jsmode ++ "] ", '!');
+        // Blank continuation marker so multiline input isn't prefixed with `>`.
+        c.ic_set_prompt_marker(null, "");
         _ = c.ic_enable_highlight(true);
         if (history_path) |path| {
             c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
