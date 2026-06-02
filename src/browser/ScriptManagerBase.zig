@@ -388,6 +388,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
 pub fn staticScriptsDone(self: *ScriptManagerBase) void {
     lp.assert(self.static_scripts_done == false, "ScriptManagerBase.staticScriptsDone", .{});
     self.static_scripts_done = true;
+
     self.evaluate();
 }
 

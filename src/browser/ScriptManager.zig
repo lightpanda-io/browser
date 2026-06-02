@@ -287,6 +287,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return;
     }
 
+    // This will flush any deferred scripts.
+    defer self.base.client.deferring_layer.flushFrame(self.base.owner.frameId());
+
     if (script.status < 200 or script.status > 299) {
         log.info(.http, "script load error", .{ .status = script.status });
         script.executeCallback(comptime .wrap("error"));

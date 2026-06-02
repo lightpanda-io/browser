@@ -32,12 +32,6 @@ const Network = @import("../network/Network.zig");
 
 const CDP = @import("../cdp/CDP.zig");
 const Inbox = @import("../Inbox.zig");
-const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
-
-pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
-pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
-pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
-pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -47,6 +41,13 @@ pub const Method = http.Method;
 pub const Headers = http.Headers;
 pub const ResponseHead = http.ResponseHead;
 pub const HeaderIterator = http.HeaderIterator;
+const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
+
+pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
+pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
+pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
+pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
+pub const DeferringLayer = @import("../network/layer/DeferringLayer.zig");
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -156,10 +157,13 @@ inbox: Inbox,
 
 max_response_size: usize,
 
+blocking_requests: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+
 cache_layer: CacheLayer,
 robots_layer: RobotsLayer,
 web_bot_auth_layer: WebBotAuthLayer,
 interception_layer: InterceptionLayer,
+deferring_layer: DeferringLayer,
 entry_layer: Layer,
 
 pub const Layer = struct {
@@ -214,6 +218,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .robots_layer = .{ .allocator = allocator, .network = network },
         .web_bot_auth_layer = .{},
         .interception_layer = .{},
+        .deferring_layer = .{ .allocator = allocator, .network = network },
         .entry_layer = undefined,
         .arena_pool = &network.app.arena_pool,
     };
@@ -236,6 +241,8 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         next = layerWith(&self.web_bot_auth_layer, next);
     }
 
+    next = layerWith(&self.deferring_layer, next);
+
     self.entry_layer = next;
 }
 
@@ -255,6 +262,8 @@ pub fn deinit(self: *Client) void {
     self.clearUserAgentOverride();
 
     self.robots_layer.deinit(self.allocator);
+    self.deferring_layer.deinit();
+    self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
     self.inbox.deinit(self.arena_pool);
 }
@@ -745,6 +754,11 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
 
     var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
     errdefer sync_ctx.body.deinit(allocator);
+
+    const expected_id = self.nextReqId();
+    const frame_id = req.frame_id;
+    try self.blocking_requests.putNoClobber(self.allocator, frame_id, expected_id);
+    defer _ = self.blocking_requests.remove(frame_id);
 
     var r = req;
     r.ctx = &sync_ctx;
@@ -1301,12 +1315,28 @@ pub const FulfilledResponse = struct {
     }
 };
 
+pub const StableResponse = struct {
+    ctx: *anyopaque,
+    status: u16,
+    url: [:0]const u8,
+    headers: []const http.Header,
+    body: ?[]const u8,
+
+    pub fn contentType(self: *const StableResponse) ?[]const u8 {
+        for (self.headers) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) return hdr.value;
+        }
+        return null;
+    }
+};
+
 pub const Response = struct {
     ctx: *anyopaque,
     inner: union(enum) {
         transfer: *Transfer,
         cached: *const CachedResponse,
         fulfilled: *const FulfilledResponse,
+        stable: *const StableResponse,
     },
 
     pub fn fromTransfer(transfer: *Transfer) Response {
@@ -1321,11 +1351,16 @@ pub const Response = struct {
         return .{ .ctx = ctx, .inner = .{ .fulfilled = fulfilled } };
     }
 
+    pub fn fromStable(stable: *const StableResponse) Response {
+        return .{ .ctx = stable.ctx, .inner = .{ .stable = stable } };
+    }
+
     pub fn status(self: Response) ?u16 {
         return switch (self.inner) {
             .transfer => |t| if (t.res.header) |rh| rh.status else null,
             .cached => |c| c.metadata.status,
             .fulfilled => |f| f.status,
+            .stable => |s| s.status,
         };
     }
 
@@ -1334,6 +1369,7 @@ pub const Response = struct {
             .transfer => |t| if (t.res.header) |*rh| rh.contentType() else null,
             .cached => |c| c.metadata.content_type,
             .fulfilled => |f| f.contentType(),
+            .stable => |s| s.contentType(),
         };
     }
 
@@ -1345,13 +1381,14 @@ pub const Response = struct {
                 .file => |f| @intCast(f.len),
             },
             .fulfilled => |f| if (f.body) |b| @intCast(b.len) else null,
+            .stable => |s| if (s.body) |b| @intCast(b.len) else null,
         };
     }
 
     pub fn redirectCount(self: Response) ?u32 {
         return switch (self.inner) {
             .transfer => |t| if (t.res.header) |rh| rh.redirect_count else null,
-            .cached, .fulfilled => 0,
+            .cached, .fulfilled, .stable => 0,
         };
     }
 
@@ -1360,6 +1397,7 @@ pub const Response = struct {
             .transfer => |t| t.req.url,
             .cached => |c| c.metadata.url,
             .fulfilled => |f| f.url,
+            .stable => |s| s.url,
         };
     }
 
@@ -1368,13 +1406,14 @@ pub const Response = struct {
             .transfer => |t| t.responseHeaderIterator(),
             .cached => |c| HeaderIterator{ .list = .{ .list = c.metadata.headers } },
             .fulfilled => |f| HeaderIterator{ .list = .{ .list = f.headers } },
+            .stable => |s| HeaderIterator{ .list = .{ .list = s.headers } },
         };
     }
 
     pub fn abort(self: Response, err: anyerror) void {
         switch (self.inner) {
             .transfer => |t| t.abort(err),
-            .cached, .fulfilled => {},
+            .cached, .fulfilled, .stable => {},
         }
     }
 
@@ -1383,6 +1422,28 @@ pub const Response = struct {
             .transfer => |t| try t.format(writer),
             .cached => |c| try c.format(writer),
             .fulfilled => |f| try writer.print("fulfilled {s}", .{f.url}),
+            .stable => |s| writer.print("stable {s}", .{s.url}),
+        };
+    }
+
+    pub fn toStable(self: Response, arena: std.mem.Allocator) !StableResponse {
+        const new_url = try arena.dupeZ(u8, self.url());
+
+        var headers: std.ArrayListUnmanaged(http.Header) = .{};
+        var it = self.headerIterator();
+        while (it.next()) |hdr| {
+            try headers.append(arena, .{
+                .name = try arena.dupe(u8, hdr.name),
+                .value = try arena.dupe(u8, hdr.value),
+            });
+        }
+
+        return .{
+            .ctx = self.ctx,
+            .status = self.status() orelse 0,
+            .url = new_url,
+            .headers = headers.items,
+            .body = null,
         };
     }
 };
