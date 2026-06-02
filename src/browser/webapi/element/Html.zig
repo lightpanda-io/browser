@@ -352,44 +352,6 @@ pub fn getTabIndex(self: *HtmlElement) i32 {
     return parseInteger(attr) orelse default;
 }
 
-// HTML integer parsing is lax
-pub fn parseInteger(input: []const u8) ?i32 {
-    var normalized = std.mem.trimStart(u8, input, "\t\n\r\x0c ");
-    if (normalized.len == 0) {
-        return null;
-    }
-
-    var negative = false;
-    if (normalized[0] == '-') {
-        negative = true;
-        normalized = normalized[1..];
-    } else if (normalized[0] == '+') {
-        normalized = normalized[1..];
-    }
-
-    if (normalized.len == 0 or std.ascii.isDigit(normalized[0]) == false) {
-        return null;
-    }
-
-    var i: usize = 0;
-    var value: i64 = 0;
-    while (i < normalized.len and std.ascii.isDigit(normalized[i])) : (i += 1) {
-        value = value * 10 + (normalized[i] - '0');
-        if (value > 2147483648) {
-            return null;
-        }
-    }
-
-    if (negative) {
-        value = -value;
-    }
-
-    if (value < -2147483648 or value > 2147483647) {
-        return null;
-    }
-    return @intCast(value);
-}
-
 pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
     var buf: [12]u8 = undefined;
     const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
@@ -397,15 +359,7 @@ pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
 }
 
 pub fn getDir(self: *HtmlElement) []const u8 {
-    // `dir` reflects as a "limited to only known values" enumerated
-    // attribute: the getter returns the canonical (lowercase) keyword only
-    // when the content attribute matches one ASCII-case-insensitively,
-    // otherwise the empty string.
-    const attr = self.asElement().getAttributeSafe(comptime .wrap("dir")) orelse return "";
-    inline for (.{ "ltr", "rtl", "auto" }) |keyword| {
-        if (std.ascii.eqlIgnoreCase(attr, keyword)) return keyword;
-    }
-    return "";
+    return reflectEnumerated(self.asElement().getAttributeSafe(comptime .wrap("dir")), &.{ "ltr", "rtl", "auto" }, "", "").?;
 }
 
 pub fn setDir(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
@@ -430,6 +384,14 @@ pub fn setAutofocus(self: *HtmlElement, autofocus: bool, frame: *Frame) !void {
     } else {
         try self.asElement().removeAttribute(comptime .wrap("autofocus"), frame);
     }
+}
+
+pub fn getNonce(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("nonce")) orelse "";
+}
+
+pub fn setNonce(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("nonce"), .wrap(value), frame);
 }
 
 pub fn getLang(self: *HtmlElement) []const u8 {
@@ -1289,6 +1251,57 @@ pub fn getOnWheel(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
     return self.getAttributeFunction(.onwheel, frame);
 }
 
+// HTML integer parsing is lax
+pub fn parseInteger(input: []const u8) ?i32 {
+    var normalized = std.mem.trimStart(u8, input, "\t\n\r\x0c ");
+    if (normalized.len == 0) {
+        return null;
+    }
+
+    var negative = false;
+    if (normalized[0] == '-') {
+        negative = true;
+        normalized = normalized[1..];
+    } else if (normalized[0] == '+') {
+        normalized = normalized[1..];
+    }
+
+    if (normalized.len == 0 or std.ascii.isDigit(normalized[0]) == false) {
+        return null;
+    }
+
+    var i: usize = 0;
+    var value: i64 = 0;
+    while (i < normalized.len and std.ascii.isDigit(normalized[i])) : (i += 1) {
+        value = value * 10 + (normalized[i] - '0');
+        if (value > 2147483648) {
+            return null;
+        }
+    }
+
+    if (negative) {
+        value = -value;
+    }
+
+    if (value < -2147483648 or value > 2147483647) {
+        return null;
+    }
+    return @intCast(value);
+}
+
+pub fn reflectEnumerated(
+    value: ?[]const u8,
+    keywords: []const []const u8,
+    missing: ?[]const u8,
+    invalid: ?[]const u8,
+) ?[]const u8 {
+    const v = value orelse return missing;
+    for (keywords) |keyword| {
+        if (std.ascii.eqlIgnoreCase(v, keyword)) return keyword;
+    }
+    return invalid;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HtmlElement);
 
@@ -1315,6 +1328,7 @@ pub const JsApi = struct {
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{ .ce_reactions = true });
+    pub const nonce = bridge.accessor(HtmlElement.getNonce, HtmlElement.setNonce, .{ .ce_reactions = true });
     pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{ .ce_reactions = true });
     pub const title = bridge.accessor(HtmlElement.getTitle, HtmlElement.setTitle, .{ .ce_reactions = true });
 
