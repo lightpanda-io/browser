@@ -158,7 +158,7 @@ pub fn create() !Snapshot {
         inline for (JsApis, 0..) |JsApi, i| {
             @setEvalBranchQuota(10_000);
             templates[i] = generateConstructor(JsApi, isolate);
-            attachClass(JsApi, isolate, templates[i]);
+            attachClass(JsApi, false, isolate, templates[i], null);
         }
 
         // Set up prototype chains BEFORE attaching properties
@@ -261,6 +261,24 @@ fn createSnapshotContext(
             .data = null,
             .flags = 0,
         });
+    }
+
+    // Re-run attachClass, but specifically targetting the global (Window or WGS)
+    // templates, so that all of these getters/functions which are already defined
+    // on their prototype will now be defined directly on the object.
+    inline for (comptime globalScopeChain(GlobalScopeApi)) |ScopeApi| {
+        // ScopeApi is going to be Window, EventTarget
+        // Or WorkerGlobalState, EventTarget
+        comptime {
+            //
+            if (hasGatedMember(ScopeApi)) {
+                @compileError("[Global] scope interface " ++ @typeName(ScopeApi) ++ " has [Exposed]-gated members. This is not supported");
+            }
+        }
+        const scope_index = comptime bridge.JsApiLookup.getId(ScopeApi);
+        // So we're attaching the Window/EventTarget members (which were already attached
+        // to it's prototype), directly on the global_template.
+        attachClass(ScopeApi, true, isolate, templates[scope_index], global_template);
     }
 
     const context = v8.v8__Context__New(isolate, global_template, null);
@@ -666,8 +684,13 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
     return template;
 }
 
-// Attach JsApi members to a template (public for reuse)
-fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.FunctionTemplate) void {
+// Attach JsApi members to a template (public for reuse). This is called on all
+// types. But, for globals (window, WGS) it's called twice. The first time, it's
+// called like any other interface. The 2nd time, it's called with flatten == true
+// and define_on != null. This is the "flattening" pass, and it defines all of
+// the functions/accessors on directly on the global instance. Thus, globals have
+// it defined on both their prototype (first pass) and their own instance (2nd pass).
+fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, define_on: ?*const v8.ObjectTemplate) void {
     const instance = v8.v8__FunctionTemplate__InstanceTemplate(template);
     const prototype = v8.v8__FunctionTemplate__PrototypeTemplate(template);
     const signature = v8.v8__Signature__New(isolate, template);
@@ -687,6 +710,14 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
         const name: [:0]const u8 = d.name;
         const value = @field(JsApi, name);
         const definition = @TypeOf(value);
+
+        if (comptime flatten) {
+            // [Global] flattening only mirrors non-static accessors/methods onto itself
+            switch (definition) {
+                bridge.Accessor, bridge.Function => if (value.static) continue,
+                else => continue,
+            }
+        }
 
         switch (definition) {
             bridge.Accessor => {
@@ -729,7 +760,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                     v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
                 } else {
                     const accessor_attr = if (own_properties) attribute else attribute | v8.DontEnum;
-                    v8.v8__ObjectTemplate__SetAccessorProperty__Config(prototype, &.{
+                    v8.v8__ObjectTemplate__SetAccessorProperty__Config(define_on orelse prototype, &.{
                         .key = js_name,
                         .getter = getter_callback,
                         .setter = setter_callback,
@@ -755,7 +786,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {
                     const fn_attr: v8.PropertyAttribute = if (own_properties) v8.None else v8.DontEnum;
-                    v8.v8__Template__Set(@ptrCast(member_template), js_name, @ptrCast(function_template), fn_attr);
+                    v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), fn_attr);
                 }
             },
             bridge.Indexed => {
@@ -816,6 +847,13 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
         }
     }
 
+    // The remaining per-class setup targets the class's own instance template;
+    // in [Global] flattening mode the global already has these (or doesn't need
+    // them), so skip it.
+    if (comptime flatten) {
+        return;
+    }
+
     if (@hasDecl(JsApi.Meta, "htmldda")) {
         v8.v8__ObjectTemplate__MarkAsUndetectable(instance);
         v8.v8__ObjectTemplate__SetCallAsFunctionHandler(instance, JsApi.Meta.callable.func);
@@ -842,5 +880,20 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
             };
             v8.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
         }
+    }
+}
+
+// The chain of interface types reachable from a [Global] interface via WebIDL
+// inheritance, e.g. Window -> [Window.JsApi, EventTarget.JsApi].
+fn globalScopeChain(comptime GlobalScopeApi: type) []const type {
+    comptime {
+        var chain: []const type = &[_]type{};
+        var JsApi = GlobalScopeApi;
+        while (true) {
+            chain = chain ++ &[_]type{JsApi};
+            const proto_index = protoIndexLookup(JsApi) orelse break;
+            JsApi = JsApis[proto_index];
+        }
+        return chain;
     }
 }

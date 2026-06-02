@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const HttpClient = @import("../../browser/HttpClient.zig");
 const http = @import("../../network/http.zig");
 const Notification = @import("../../Notification.zig");
 

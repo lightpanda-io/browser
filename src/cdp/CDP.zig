@@ -171,7 +171,7 @@ pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
 // Called by Network to try to force the Worker to shutdown. Protects against a
 // stuck worker.
 pub fn terminateFromNetwork(self: *CDP) void {
-    self.browser.env.terminate();
+    self.browser.env.requestTerminate();
 }
 
 // Called in the Worker to dispatch a single CDP message bubbled up by
@@ -182,6 +182,11 @@ pub fn terminateFromNetwork(self: *CDP) void {
 // frees right after we return), so `c.input`'s string slices stay
 // valid for the duration of dispatch.
 pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
+    // Once a terminate is pending, don't dispatch
+    if (self.browser.env.isExecutionTerminating()) {
+        return;
+    }
+
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
     return self.dispatchParsed(arena.allocator(), .{ .cdp = self }, c.raw, c.input);

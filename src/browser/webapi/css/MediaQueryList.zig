@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // zlint-disable unused-decls
-const std = @import("std");
 const js = @import("../../js/js.zig");
 const EventTarget = @import("../EventTarget.zig");
 const MediaQuery = @import("../../css/MediaQuery.zig");

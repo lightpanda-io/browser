@@ -25,13 +25,11 @@ const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
 const ModelContext = @import("../../browser/webapi/ModelContext.zig");
-const Frame = @import("../../browser/Frame.zig");
 const Notification = @import("../../Notification.zig");
 const js = @import("../../browser/js/js.zig");
 const ModelContextClient = ModelContext.ModelContextClient;
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 pub const Invocation = struct {
     id: u32,

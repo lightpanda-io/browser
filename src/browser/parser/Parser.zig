@@ -290,6 +290,17 @@ pub const Streaming = struct {
     parser: Parser,
     handle: ?*anyopaque,
 
+    // True while html5ever is inside a feed/finish call. A <script> popped by
+    // the tokenizer runs synchronously during the feed and can call
+    // document.write(), which re-enters read(). html5ever's streaming parser
+    // is NOT re-entrant — feeding it while it's still inside
+    // process_to_completion corrupts its tree-builder state and we get a panic.
+    feeding: bool = false,
+
+    // Bytes queued by document.write() calls that happened while `feeding`.
+    // Drained by the active read() loop. Lives on the parser arena.
+    pending_input: std.ArrayList(u8) = .empty,
+
     pub fn init(arena: Allocator, node: *Node, frame: *Frame, opts: Options) Streaming {
         return .{
             .handle = null,
@@ -329,6 +340,30 @@ pub const Streaming = struct {
     }
 
     pub fn read(self: *Streaming, data: []const u8) !void {
+        if (self.feeding) {
+            // Re-entrant document.write() from a script running inside the
+            // current feed. Append at the insertion point; the active feed
+            // loop below drains it rather than recursing into feed().
+            return self.pending_input.appendSlice(self.parser.arena, data);
+        }
+
+        self.feeding = true;
+        defer self.feeding = false;
+
+        var input = data;
+        while (true) {
+            try self.feed(input);
+            if (self.pending_input.items.len == 0) {
+                return;
+            }
+            // Scripts that ran during the feed queued more markup via
+            // re-entrant read(). This swaps the buffers, and ensures that
+            // any new writes to pending_input don't invalidate the input
+            input = try self.pending_input.toOwnedSlice(self.parser.arena);
+        }
+    }
+
+    fn feed(self: *Streaming, data: []const u8) !void {
         const result = h5e.html5ever_streaming_parser_feed(
             self.handle.?,
             data.ptr,
@@ -354,7 +389,15 @@ pub const Streaming = struct {
         // running it after finish is safe.
         const handle = self.handle.?;
         self.handle = null;
+
+        self.feeding = true;
+        defer self.feeding = false;
+
         h5e.html5ever_streaming_parser_finish(handle);
+        if (self.pending_input.items.len != 0) {
+            lp.log.warn(.dom, "write during finish dropped", .{ .len = self.pending_input.items.len });
+            self.pending_input.clearRetainingCapacity();
+        }
         try self.parser.flushPendingText();
     }
 };

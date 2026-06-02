@@ -24,7 +24,6 @@ const HttpClient = @import("HttpClient.zig");
 const http = @import("../network/http.zig");
 
 const js = @import("js/js.zig");
-const URL = @import("URL.zig");
 const Session = @import("Session.zig");
 const Frame = @import("Frame.zig");
 const ImportMap = @import("ImportMap.zig");
@@ -389,6 +388,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
 pub fn staticScriptsDone(self: *ScriptManagerBase) void {
     lp.assert(self.static_scripts_done == false, "ScriptManagerBase.staticScriptsDone", .{});
     self.static_scripts_done = true;
+
     self.evaluate();
 }
 

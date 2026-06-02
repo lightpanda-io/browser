@@ -26,7 +26,6 @@ const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
 
 const v8 = js.v8;
-const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn Builder(comptime T: type) type {

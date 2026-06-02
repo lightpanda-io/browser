@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
-const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 

@@ -336,7 +336,6 @@ fn roundHalfToPosInf(n: f64) f64 {
 // ---------------------------------------------------------------------
 
 const testing = std.testing;
-const Tokenizer = @import("Tokenizer.zig");
 const Parser = @import("Parser.zig");
 const Evaluator = @import("Evaluator.zig");
 
