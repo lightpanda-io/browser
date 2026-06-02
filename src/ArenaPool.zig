@@ -28,6 +28,9 @@ const ArenaPool = @This();
 
 const IS_DEBUG = builtin.mode == .Debug;
 
+// In Debug, disable pooling to better catch UAF.
+const SAFETY = IS_DEBUG == true and builtin.is_test == false;
+
 pub const BucketSize = enum { tiny, small, medium, large };
 
 const Bucket = struct {
@@ -187,7 +190,8 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
         }
     }
 
-    if (bucket.free_list_len >= bucket.free_list_max) {
+    if ((comptime SAFETY) or bucket.free_list_len >= bucket.free_list_max) {
+        // In Debug, we never pool. It can mask UAF bugs.
         arena.deinit();
         self.entry_pool.destroy(entry);
         return;
@@ -200,12 +204,14 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
 
 pub fn reset(_: *const ArenaPool, allocator: Allocator, retain: usize) void {
     const arena: *ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
-    _ = arena.reset(.{ .retain_with_limit = retain });
+    // In Debug, free_all, it's less likely to hide things
+    _ = arena.reset(if (comptime SAFETY) .free_all else .{ .retain_with_limit = retain });
 }
 
 pub fn resetRetain(_: *const ArenaPool, allocator: Allocator) void {
     const arena: *ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
-    _ = arena.reset(.retain_capacity);
+    // In Debug, free_all, it's less likely to hide things
+    _ = arena.reset(if (comptime SAFETY) .free_all else .retain_capacity);
 }
 
 const testing = std.testing;
