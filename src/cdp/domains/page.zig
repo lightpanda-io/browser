@@ -535,7 +535,7 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
     const in_commit = bc.session.pendingPage() != null;
 
     if (!in_commit) {
-        _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+        bc.cdp.browser.arena_pool.reset(bc.frame_arena, 1024 * 512);
     }
 
     for (bc.isolated_worlds.items) |isolated_world| {
