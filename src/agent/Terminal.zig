@@ -859,10 +859,15 @@ const RawTerminal = struct {
         raw.cc[@intFromEnum(std.c.V.MIN)] = 0;
         raw.cc[@intFromEnum(std.c.V.TIME)] = 1;
         try std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw);
+        // Under the REPL's kitty "disambiguate" flag, cursor keys arrive as
+        // CSI-u the byte reader can't parse; push flag 0 to force legacy arrow
+        // encoding. restore() pops back to the REPL's flag.
+        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[>0u") catch {};
         return .{ .original = original };
     }
 
     fn restore(self: *const RawTerminal) void {
+        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[<u") catch {};
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
     }
 };

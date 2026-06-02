@@ -95,6 +95,18 @@ pub fn recordComment(self: *Recorder, comment: []const u8) void {
     self.tryRecordComment(comment) catch |err| self.disable(err);
 }
 
+pub fn recordRaw(self: *Recorder, line: []const u8) void {
+    if (self.file == null) return;
+    self.tryRecordRaw(line) catch |err| self.disable(err);
+}
+
+fn tryRecordRaw(self: *Recorder, line: []const u8) !void {
+    self.buf.clearRetainingCapacity();
+    try self.buf.writer.writeAll(line);
+    try self.buf.writer.writeByte('\n');
+    try self.writeScrubbed();
+}
+
 fn tryRecordComment(self: *Recorder, comment: []const u8) !void {
     self.buf.clearRetainingCapacity();
     try writeCommentLines(&self.buf.writer, comment);
@@ -191,6 +203,13 @@ pub const Memory = struct {
         try self.appendScrubbed();
     }
 
+    pub fn recordRaw(self: *Memory, line: []const u8) !void {
+        self.buf.clearRetainingCapacity();
+        try self.buf.writer.writeAll(line);
+        try self.buf.writer.writeByte('\n');
+        try self.appendScrubbed();
+    }
+
     fn appendScrubbed(self: *Memory) !void {
         _ = self.arena.reset(.retain_capacity);
         const scrubbed = try lp.tools.reverseSubstituteEnvVars(self.arena.allocator(), self.buf.written());
@@ -246,6 +265,24 @@ test "record writes state-mutating commands" {
     // Read-only tools (tree, markdown) are gated out by isRecorded().
     try std.testing.expect(std.mem.indexOf(u8, content, "tree(") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "markdown(") == null);
+}
+
+test "recordRaw writes the JS line verbatim" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "raw.js");
+    defer recorder.deinit();
+
+    recorder.recordRaw("document.title");
+    recorder.recordRaw("window.scrollTo(0, 100)");
+
+    const file = tmp.dir.openFile("raw.js", .{}) catch unreachable;
+    defer file.close();
+    var buf: [256]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+
+    try std.testing.expectEqualStrings("document.title\nwindow.scrollTo(0, 100)\n", buf[0..n]);
 }
 
 test "record skips empty and comment lines" {

@@ -483,6 +483,8 @@ fn runRepl(self: *Agent) void {
                 self.terminal.printError("{s}", .{result.text});
             } else {
                 self.printData(result.text);
+                if (self.recorder) |*r| r.recordRaw(line);
+                self.recordSaveRaw(line);
             }
             continue :repl;
         }
@@ -530,8 +532,10 @@ fn runRepl(self: *Agent) void {
                 const result = self.runCommand(aa, cmd);
                 self.terminal.endTool();
                 self.printCommandResult(cmd, result);
-                if (self.recorder) |*r| r.record(cmd);
-                self.recordSaveCommand(cmd);
+                if (!result.is_error) {
+                    if (self.recorder) |*r| r.record(cmd);
+                    self.recordSaveCommand(cmd);
+                }
                 self.recordSlashToolCall(trimmed, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
                 };
@@ -780,6 +784,12 @@ fn recordSaveCommand(self: *Agent, cmd: Command) void {
 
 fn recordSaveComment(self: *Agent, comment: []const u8) void {
     self.save_buffer.recordComment(comment) catch |err| {
+        self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
+    };
+}
+
+fn recordSaveRaw(self: *Agent, line: []const u8) void {
+    self.save_buffer.recordRaw(line) catch |err| {
         self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
     };
 }
