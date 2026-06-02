@@ -18,7 +18,10 @@ pub fn asNode(self: *Marquee) *Node {
 }
 
 pub fn getBehavior(self: *Marquee) []const u8 {
-    return getEnumerated(self, "behavior", &.{ "scroll", "slide", "alternate" }, "scroll");
+    const valid_behavior = [_][]const u8{
+        "scroll", "slide", "alternate",
+    };
+    return HtmlElement.reflectEnumerated(self.asElement().getAttributeSafe(comptime .wrap("behavior")), &valid_behavior, "scroll", "scroll").?;
 }
 
 pub fn setBehavior(self: *Marquee, value: []const u8, frame: *Frame) !void {
@@ -26,7 +29,10 @@ pub fn setBehavior(self: *Marquee, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getDirection(self: *Marquee) []const u8 {
-    return getEnumerated(self, "direction", &.{ "up", "right", "down", "left" }, "left");
+    const valid_direction = [_][]const u8{
+        "up", "right", "down", "left",
+    };
+    return HtmlElement.reflectEnumerated(self.asElement().getAttributeSafe(comptime .wrap("direction")), &valid_direction, "left", "left").?;
 }
 
 pub fn setDirection(self: *Marquee, value: []const u8, frame: *Frame) !void {
@@ -99,14 +105,6 @@ pub fn setTrueSpeed(self: *Marquee, truespeed: bool, frame: *Frame) !void {
     } else {
         try self.asElement().removeAttribute(comptime .wrap("truespeed"), frame);
     }
-}
-
-fn getEnumerated(self: *Marquee, comptime attr: []const u8, keywords: []const []const u8, default: []const u8) []const u8 {
-    const value = self.asElement().getAttributeSafe(comptime .wrap(attr)) orelse return default;
-    for (keywords) |keyword| {
-        if (std.ascii.eqlIgnoreCase(value, keyword)) return keyword;
-    }
-    return default;
 }
 
 // Reflects an `unsigned long` content attribute: parses with the "rules for
