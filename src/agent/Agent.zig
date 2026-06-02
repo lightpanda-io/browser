@@ -88,6 +88,21 @@ const synthesis_prompt =
     \\No prefix, no markdown.
 ;
 
+const save_synthesis_prompt =
+    \\Write a single Lightpanda agent script (.js) that reproduces what the user
+    \\was trying to accomplish in this session. Read the whole conversation — the
+    \\natural-language requests, the commands, and the raw JS — and infer the
+    \\actual goal. Ignore dead ends: failed attempts, retries, exploratory reads
+    \\(tree/markdown/extract probes), and corrections. Keep only the steps that
+    \\belong in a clean, repeatable script.
+    \\Prefer the builtin functions listed below (goto, click, fill, extract, …)
+    \\over raw DOM JavaScript wherever they fit; fall back to eval(...) only for
+    \\logic the builtins can't express. End with an extract(...) for any data the
+    \\user wanted out.
+    \\Output ONLY JavaScript source — no markdown fences, no commentary, no prose
+    \\before or after.
+;
+
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 model_credentials: ?Credentials,
@@ -361,10 +376,16 @@ fn checkCancel(ctx: *anyopaque) bool {
 /// caller. Caller is responsible for any spinner cleanup that hasn't
 /// already happened on its path.
 fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
+    self.resetAfterCancel(baseline);
+    return error.UserCancelled;
+}
+
+/// The side effects of `drainCancellation` without surfacing the error, for
+/// void callers (e.g. `/save` synthesis) that just need to clean up.
+fn resetAfterCancel(self: *Agent, baseline: usize) void {
     self.rollbackMessages(baseline);
     self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
-    return error.UserCancelled;
 }
 
 /// One agent turn: the prompt sent to the model, plus optional context
@@ -652,9 +673,8 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
 const SaveMode = enum { replace, append };
 
 fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
-    const filename = parseSaveFilename(rest) catch |err| {
+    const parsed = parseSaveCommand(rest) catch |err| {
         const msg: []const u8 = switch (err) {
-            error.TooManyArguments => "usage: /save [filename.js]",
             error.UnterminatedQuote => "unterminated filename quote",
             error.EmptyFilename => "filename cannot be empty",
             error.InvalidFilename => "filename must be a local file name, not a path",
@@ -662,6 +682,18 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("{s}", .{msg});
         return;
     };
+
+    // With a client, synthesize an idiomatic script from the session intent;
+    // the trailing prompt is optional extra steering.
+    if (self.ai_client != null) {
+        self.synthesizeSave(arena, parsed.filename, parsed.prompt);
+        return;
+    }
+
+    if (parsed.prompt != null) {
+        self.terminal.printWarning("prompt ignored without an LLM; saving the recorded commands as-is", .{});
+    }
+    const filename = parsed.filename;
 
     const path: []const u8, const mode: SaveMode = if (self.save_path) |saved| blk: {
         if (filename) |name| {
@@ -713,26 +745,41 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, self.save_path.? });
 }
 
-fn parseSaveFilename(rest: []const u8) !?[]const u8 {
-    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
-    if (trimmed.len == 0) return null;
+const SaveCommand = struct { filename: ?[]const u8, prompt: ?[]const u8 };
 
-    const name = if (trimmed[0] == '\'' or trimmed[0] == '"') blk: {
+/// Split `/save` arguments into an optional filename and an optional trailing
+/// natural-language prompt. A quoted leading token is always a filename; an
+/// unquoted one is a filename only if it ends in `.js` (otherwise the whole
+/// argument is the prompt, and a name is chosen automatically).
+fn parseSaveCommand(rest: []const u8) !SaveCommand {
+    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
+    if (trimmed.len == 0) return .{ .filename = null, .prompt = null };
+
+    if (trimmed[0] == '\'' or trimmed[0] == '"') {
         const quote = trimmed[0];
         const end = std.mem.indexOfScalarPos(u8, trimmed, 1, quote) orelse return error.UnterminatedQuote;
-        if (std.mem.trim(u8, trimmed[end + 1 ..], &std.ascii.whitespace).len != 0) return error.TooManyArguments;
-        break :blk trimmed[1..end];
-    } else blk: {
-        if (std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) != null) return error.TooManyArguments;
-        break :blk trimmed;
-    };
+        const name = trimmed[1..end];
+        try validateSaveFilename(name);
+        const rest_prompt = std.mem.trim(u8, trimmed[end + 1 ..], &std.ascii.whitespace);
+        return .{ .filename = name, .prompt = if (rest_prompt.len == 0) null else rest_prompt };
+    }
 
+    const tok_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
+    const first = trimmed[0..tok_end];
+    if (std.mem.endsWith(u8, first, ".js")) {
+        try validateSaveFilename(first);
+        const rest_prompt = std.mem.trim(u8, trimmed[tok_end..], &std.ascii.whitespace);
+        return .{ .filename = first, .prompt = if (rest_prompt.len == 0) null else rest_prompt };
+    }
+    return .{ .filename = null, .prompt = trimmed };
+}
+
+fn validateSaveFilename(name: []const u8) !void {
     if (name.len == 0) return error.EmptyFilename;
     if (std.fs.path.isAbsolute(name)) return error.InvalidFilename;
     if (std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidFilename;
     if (std.mem.indexOfScalar(u8, name, '\\') != null) return error.InvalidFilename;
     if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.InvalidFilename;
-    return name;
 }
 
 fn randomSaveFilename(arena: std.mem.Allocator) ![]const u8 {
@@ -765,7 +812,10 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?SaveMode {
 }
 
 fn writeSaveFile(self: *Agent, path: []const u8, mode: SaveMode) !void {
-    const content = self.save_buffer.bytes();
+    return writeContentFile(path, self.save_buffer.bytes(), mode);
+}
+
+fn writeContentFile(path: []const u8, content: []const u8, mode: SaveMode) !void {
     const file = try std.fs.cwd().createFile(path, .{ .truncate = mode == .replace });
     defer file.close();
     if (mode == .append) {
@@ -774,6 +824,152 @@ fn writeSaveFile(self: *Agent, path: []const u8, mode: SaveMode) !void {
         if (pos > 0 and content.len > 0) try file.writeAll("\n");
     }
     try file.writeAll(content);
+    if (content.len > 0 and content[content.len - 1] != '\n') try file.writeAll("\n");
+}
+
+fn failSave(self: *Agent, reason: []const u8) void {
+    self.terminal.printError("save failed: {s}", .{reason});
+}
+
+/// LLM-synthesized `/save`: hand the model the builtin catalog, the full
+/// conversation, and the deterministic record of what ran, then write the
+/// idiomatic script it returns. Always replaces the target file.
+fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8) void {
+    const provider_client = self.ai_client.?;
+
+    const path: []const u8 = blk: {
+        if (filename) |f| break :blk f;
+        if (self.save_path) |p| break :blk p;
+        break :blk randomSaveFilename(arena) catch |err| {
+            self.terminal.printError("failed to choose save filename: {s}", .{@errorName(err)});
+            return;
+        };
+    };
+
+    self.ensureSystemPrompt() catch return self.failSave("out of memory");
+
+    const ma = self.message_arena.allocator();
+    const baseline = self.messages.items.len;
+
+    const user_msg = self.buildSaveSynthesisMessage(ma, prompt) catch return self.failSave("out of memory");
+    self.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
+
+    self.terminal.spinner.start();
+    var result = provider_client.runTools(
+        self.model,
+        &self.messages,
+        self.allocator,
+        ma,
+        .{ .context = @ptrCast(self), .callFn = handleToolCall },
+        .{
+            .tools = &.{},
+            .max_turns = 1,
+            .max_tokens = 8192,
+            .tool_choice = .none,
+            .thinking_level = .medium,
+            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+        },
+    ) catch |err| {
+        self.terminal.spinner.cancel();
+        if (self.cancel_requested.load(.acquire)) {
+            self.resetAfterCancel(baseline);
+            return;
+        }
+        log.err(.app, "AI save synthesis error", .{ .err = err });
+        self.rollbackMessages(baseline);
+        return self.failSave(@errorName(err));
+    };
+    self.terminal.spinner.stop();
+    defer result.deinit();
+    self.total_usage.add(result.usage);
+
+    if (result.cancelled) {
+        self.resetAfterCancel(baseline);
+        return;
+    }
+
+    const raw = result.text orelse {
+        self.rollbackMessages(baseline);
+        return self.failSave("the model returned no script");
+    };
+
+    // `result.text` lives in `message_arena`, which the rollback below frees;
+    // copy into the command arena first (scrubbing may return its input as-is).
+    const owned = arena.dupe(u8, stripCodeFence(raw)) catch {
+        self.rollbackMessages(baseline);
+        return self.failSave("out of memory");
+    };
+    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch {
+        self.rollbackMessages(baseline);
+        return self.failSave("out of memory");
+    };
+
+    // The save turn is a meta-action; keep it out of the ongoing conversation.
+    self.rollbackMessages(baseline);
+
+    writeContentFile(path, script, .replace) catch |err| {
+        self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
+        return;
+    };
+
+    self.rememberSavePath(path);
+    self.save_buffer.reset();
+    self.terminal.printInfo("Saved synthesized script to {s}", .{path});
+}
+
+/// Persist `path` as the destination reused by a subsequent bare `/save`.
+fn rememberSavePath(self: *Agent, path: []const u8) void {
+    if (self.save_path) |old| {
+        if (std.mem.eql(u8, old, path)) return;
+    }
+    const dup = self.allocator.dupe(u8, path) catch return;
+    if (self.save_path) |old| self.allocator.free(old);
+    self.save_path = dup;
+}
+
+fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]const u8) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const w = &out.writer;
+    try w.writeAll(save_synthesis_prompt);
+    try w.writeAll("\n\nBuiltin functions to prefer (call them as JS functions):\n");
+    try renderBuiltinCatalog(w);
+    const recorded = self.save_buffer.bytes();
+    if (recorded.len > 0) {
+        try w.writeAll("\nCommands and JS that actually ran this session:\n");
+        try w.writeAll(recorded);
+    }
+    if (prompt) |p| {
+        try w.writeAll("\nThe user's instruction for this script:\n");
+        try w.writeAll(p);
+    }
+    return out.written();
+}
+
+/// Document the recorded browser tools — the subset callable from a saved
+/// script — with their full descriptions, so the model gets each function's
+/// argument dialect (e.g. `extract`'s schema format) without being handed the
+/// tool schemas a no-tools synthesis turn omits.
+fn renderBuiltinCatalog(w: *std.Io.Writer) !void {
+    for (Schema.all()) |s| {
+        if (!s.tool.isRecorded()) continue;
+        try w.print("\n{s}(", .{s.tool_name});
+        for (s.required, 0..) |req, i| {
+            if (i != 0) try w.writeAll(", ");
+            try w.writeAll(req);
+        }
+        try w.print("):\n{s}\n", .{s.description});
+    }
+}
+
+/// Strip a surrounding ```` ```lang … ``` ```` markdown fence if the model
+/// wrapped its output in one despite being told not to.
+fn stripCodeFence(text: []const u8) []const u8 {
+    const t = std.mem.trim(u8, text, &std.ascii.whitespace);
+    if (!std.mem.startsWith(u8, t, "```")) return t;
+    const first_nl = std.mem.indexOfScalar(u8, t, '\n') orelse return t;
+    const body = t[first_nl + 1 ..];
+    const close = std.mem.lastIndexOf(u8, body, "```") orelse return std.mem.trim(u8, body, &std.ascii.whitespace);
+    return std.mem.trim(u8, body[0..close], &std.ascii.whitespace);
 }
 
 fn recordSaveCommand(self: *Agent, cmd: Command) void {
@@ -821,7 +1017,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{@tagName(self.terminal.verbosity)},
             ),
             .save => self.terminal.printInfo(
-                "/save [filename.js] — save recorded REPL actions to [filename.js]. Without a filename, creates a random session-*.js file in the current directory.",
+                "/save [filename.js] [prompt] — save the session to [filename.js] (a random session-*.js if omitted). With an LLM, synthesizes an idiomatic script from the session and the optional prompt; with --no-llm, dumps the recorded actions verbatim.",
                 .{},
             ),
             .model => self.terminal.printInfo(
@@ -1387,4 +1583,58 @@ test "capToolOutput: appends a marker when truncating" {
 
     try std.testing.expect(std.unicode.utf8ValidateSlice(out));
     try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
+}
+
+test "parseSaveCommand: filename only" {
+    const r = try parseSaveCommand("out.js");
+    try std.testing.expectEqualStrings("out.js", r.filename.?);
+    try std.testing.expect(r.prompt == null);
+}
+
+test "parseSaveCommand: filename and prompt" {
+    const r = try parseSaveCommand("out.js summarize the login flow");
+    try std.testing.expectEqualStrings("out.js", r.filename.?);
+    try std.testing.expectEqualStrings("summarize the login flow", r.prompt.?);
+}
+
+test "parseSaveCommand: quoted filename keeps trailing prompt" {
+    const r = try parseSaveCommand("\"my flow.js\"  do X");
+    try std.testing.expectEqualStrings("my flow.js", r.filename.?);
+    try std.testing.expectEqualStrings("do X", r.prompt.?);
+}
+
+test "parseSaveCommand: prompt only when first token is not a .js name" {
+    const r = try parseSaveCommand("make a login script");
+    try std.testing.expect(r.filename == null);
+    try std.testing.expectEqualStrings("make a login script", r.prompt.?);
+}
+
+test "parseSaveCommand: empty is all null" {
+    const r = try parseSaveCommand("   ");
+    try std.testing.expect(r.filename == null);
+    try std.testing.expect(r.prompt == null);
+}
+
+test "parseSaveCommand: rejects path-like filenames" {
+    try std.testing.expectError(error.InvalidFilename, parseSaveCommand("../evil.js"));
+    try std.testing.expectError(error.InvalidFilename, parseSaveCommand("/tmp/x.js"));
+    try std.testing.expectError(error.UnterminatedQuote, parseSaveCommand("\"unclosed.js"));
+}
+
+test "renderBuiltinCatalog: lists recorded tools, omits read-only ones" {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try renderBuiltinCatalog(&out.writer);
+    const text = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, text, "goto(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "extract(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "click(") != null);
+    // tree/markdown are read-only and not callable from a saved script.
+    try std.testing.expect(std.mem.indexOf(u8, text, "tree(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "markdown(") == null);
+}
+
+test "stripCodeFence: unwraps a fenced block and passes plain text through" {
+    try std.testing.expectEqualStrings("goto(\"x\");", stripCodeFence("```js\ngoto(\"x\");\n```"));
+    try std.testing.expectEqualStrings("goto(\"x\");", stripCodeFence("goto(\"x\");"));
 }
