@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="marquee_constructor">
+  {
+  testing.expectEqual("function", typeof HTMLMarqueeElement)
+
+  const m = document.createElement('marquee')
+  testing.expectEqual("[object HTMLMarqueeElement]", m.toString())
+  testing.expectEqual("MARQUEE", m.tagName)
+  testing.expectEqual(true, m instanceof HTMLMarqueeElement)
+  testing.expectEqual(true, m instanceof HTMLElement)
+  }
+</script>
+
+<script id="marquee_string_attributes">
+  {
+  const m = document.createElement('marquee')
+
+  // Plain string reflects.
+  testing.expectEqual("", m.bgColor)
+  m.bgColor = "red"
+  testing.expectEqual("red", m.bgColor)
+  testing.expectEqual("red", m.getAttribute("bgcolor"))
+
+  m.height = "100"
+  m.width = "200"
+  testing.expectEqual("100", m.height)
+  testing.expectEqual("200", m.width)
+  }
+</script>
+
+<script id="marquee_enumerated_attributes">
+  {
+  const m = document.createElement('marquee')
+
+  // Limited-to-known-values with a default (missing/invalid -> default).
+  testing.expectEqual("scroll", m.behavior)
+  testing.expectEqual("left", m.direction)
+
+  m.setAttribute("behavior", "ALTERNATE")
+  testing.expectEqual("alternate", m.behavior)
+  m.setAttribute("behavior", "nonsense")
+  testing.expectEqual("scroll", m.behavior)
+
+  m.setAttribute("direction", "Up")
+  testing.expectEqual("up", m.direction)
+  m.setAttribute("direction", "sideways")
+  testing.expectEqual("left", m.direction)
+  }
+</script>
+
+<script id="marquee_boolean_attribute">
+  {
+  const m = document.createElement('marquee')
+
+  testing.expectEqual(false, m.trueSpeed)
+  m.trueSpeed = true
+  testing.expectEqual(true, m.trueSpeed)
+  testing.expectEqual("", m.getAttribute("truespeed"))
+  m.trueSpeed = false
+  testing.expectEqual(false, m.trueSpeed)
+  testing.expectEqual(false, m.hasAttribute("truespeed"))
+  }
+</script>
+
+<script id="marquee_unsigned_long_attributes">
+  {
+  const m = document.createElement('marquee')
+
+  // Defaults when unset.
+  testing.expectEqual(0, m.hspace)
+  testing.expectEqual(0, m.vspace)
+  testing.expectEqual(6, m.scrollAmount)
+  testing.expectEqual(85, m.scrollDelay)
+
+  // Rules for parsing non-negative integers: ASCII whitespace prefix and
+  // trailing junk are allowed; VT (\v) is not whitespace; negatives and
+  // out-of-range values fall back to the default.
+  m.setAttribute("hspace", " \t7px")
+  testing.expectEqual(7, m.hspace)
+  m.setAttribute("hspace", "\v7")
+  testing.expectEqual(0, m.hspace)
+  m.setAttribute("hspace", "-1")
+  testing.expectEqual(0, m.hspace)
+  m.setAttribute("scrollAmount", "2147483648")
+  testing.expectEqual(6, m.scrollAmount)
+  m.setAttribute("scrollAmount", "2147483647")
+  testing.expectEqual(2147483647, m.scrollAmount)
+
+  // IDL setter: in-range values are written through, values above the
+  // signed-long max are coerced to the default.
+  m.hspace = 42
+  testing.expectEqual(42, m.hspace)
+  testing.expectEqual("42", m.getAttribute("hspace"))
+  m.scrollAmount = 4294967295
+  testing.expectEqual(6, m.scrollAmount)
+  testing.expectEqual("6", m.getAttribute("scrollamount"))
+  }
+</script>
