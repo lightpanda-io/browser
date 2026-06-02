@@ -136,6 +136,8 @@ synthetic_tool_call_id: u32 = 0,
 /// at the end of `--task` (one-shot) mode so wrappers can capture
 /// per-task cost.
 total_usage: zenai.provider.Usage = .{},
+/// Set when the last turn ended in a model refusal (safety stop).
+last_turn_refused: bool = false,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     if (opts.task != null and opts.script_file != null) {
@@ -449,7 +451,12 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
             return false;
         },
     };
-    if (text) |t| self.terminal.printAssistant(t) else self.terminal.printInfo("(no response from model)", .{});
+    if (text) |t|
+        self.terminal.printAssistant(t)
+    else if (self.last_turn_refused)
+        self.terminal.printInfo("(model declined to respond — safety refusal)", .{})
+    else
+        self.terminal.printInfo("(no response from model)", .{});
     self.pruneMessages();
     return true;
 }
@@ -1350,8 +1357,14 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     }
 
     // Dupe into `message_arena` — RunToolsResult arenas are deinited below.
+    self.last_turn_refused = result.finish_reason == .safety;
     const final_text: ?[]const u8 = blk: {
-        if (result.text) |text| break :blk try ma.dupe(u8, text);
+        if (result.text) |text| {
+            if (std.mem.trim(u8, text, " \t\r\n").len > 0) break :blk try ma.dupe(u8, text);
+        }
+
+        // A refusal is deterministic; re-prompting just refuses again.
+        if (self.last_turn_refused) break :blk null;
 
         // Without a synthesis turn forbidding tools+pretraining, models
         // confabulate when the page was blocked or empty.
