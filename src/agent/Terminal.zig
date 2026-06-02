@@ -146,10 +146,6 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         if (history_path) |path| {
             c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
         }
-        // Push kitty-keyboard-protocol "disambiguate" so Ctrl+Enter arrives as a
-        // distinct CSI-u sequence instead of a bare \r; unsupported terminals
-        // ignore it. Popped in deinit.
-        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[>1u") catch {};
     }
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
@@ -166,10 +162,6 @@ fn isRepl(self: *const Terminal) bool {
 }
 
 pub fn deinit(self: *Terminal) void {
-    // Pop the kitty-keyboard-protocol flag pushed in `init` (REPL only).
-    if (self.repl_arena != null) {
-        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[<u") catch {};
-    }
     self.spinner.deinit();
     if (self.repl_arena) |*a| a.deinit();
 }
@@ -715,6 +707,12 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
 }
 
 pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
+    // Kitty-keyboard "disambiguate" (Ctrl+Enter as a distinct CSI-u, not bare
+    // \r) only while isocline reads: while active, Ctrl-C arrives as a CSI-u
+    // escape, not a raw \x03, so the tty driver raises no SIGINT — leaving it on
+    // during thinking/tool runs would make Ctrl-C unable to interrupt them.
+    _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[>1u") catch {};
+    defer _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[<u") catch {};
     // Isocline auto-appends the line to its (optionally-persisted) history.
     const line = c.ic_readline(prompt) orelse return null;
     return std.mem.sliceTo(line, 0);
