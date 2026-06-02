@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="font_constructor">
+  {
+  testing.expectEqual("function", typeof HTMLFontElement)
+
+  const f = document.createElement('font')
+  testing.expectEqual("[object HTMLFontElement]", f.toString())
+  testing.expectEqual("FONT", f.tagName)
+  testing.expectEqual(true, f instanceof HTMLFontElement)
+  testing.expectEqual(true, f instanceof HTMLElement)
+  }
+</script>
+
+<script id="font_string_attributes">
+  {
+  const f = document.createElement('font')
+
+  testing.expectEqual("", f.color)
+  testing.expectEqual("", f.face)
+  testing.expectEqual("", f.size)
+
+  f.color = "red"
+  f.face = "serif"
+  f.size = "7"
+  testing.expectEqual("red", f.color)
+  testing.expectEqual("serif", f.face)
+  testing.expectEqual("7", f.size)
+  testing.expectEqual("red", f.getAttribute("color"))
+  }
+</script>
+
+<script id="font_color_legacy_null_to_empty_string">
+  {
+  // color is `[LegacyNullToEmptyString] DOMString`: null coerces to "", unlike
+  // face/size which stringify null to "null".
+  const f = document.createElement('font')
+
+  f.color = null
+  testing.expectEqual("", f.color)
+  testing.expectEqual("", f.getAttribute("color"))
+
+  f.face = null
+  testing.expectEqual("null", f.face)
+  }
+</script>

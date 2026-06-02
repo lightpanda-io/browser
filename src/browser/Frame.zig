@@ -2586,10 +2586,10 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         .{ ._proto = undefined },
                     ),
                     asUint("marquee") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Marquee,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = comptime .wrap("marquee"), ._tag = .marquee },
+                        .{ ._proto = undefined },
                     ),
                     asUint("address") => return self.createHtmlElementT(
                         Element.Html.Generic,
