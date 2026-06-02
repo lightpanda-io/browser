@@ -893,9 +893,13 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
         return self.failSave("the model returned no script");
     };
 
-    // Dupe out of `result.arena` (freed below) and `message_arena` (rebuilt by
-    // rollback) into the command arena before either is reclaimed.
-    const script = browser_tools.reverseSubstituteEnvVars(arena, stripCodeFence(raw)) catch {
+    // `result.text` lives in `message_arena`, which the rollback below frees;
+    // copy into the command arena first (scrubbing may return its input as-is).
+    const owned = arena.dupe(u8, stripCodeFence(raw)) catch {
+        self.rollbackMessages(baseline);
+        return self.failSave("out of memory");
+    };
+    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch {
         self.rollbackMessages(baseline);
         return self.failSave("out of memory");
     };
