@@ -130,7 +130,7 @@
     \\Examples:
     \\  {0s} agent                                (auto-detects API key from env)
     \\  {0s} agent --provider anthropic --model claude-sonnet-4-6
-    \\  {0s} agent --provider ollama --model gemma4
+    \\  {0s} agent --provider ollama --model qwen3.5:9b
     \\  {0s} agent --no-llm                       (basic slash-command-only REPL)
     \\  {0s} agent script.js                      (run a recorded script)
     \\  {0s} agent -i script.js                   (run then drop into REPL,
