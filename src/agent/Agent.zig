@@ -470,6 +470,10 @@ fn runRepl(self: *Agent) void {
                 }});
                 continue :repl;
             };
+            // Surface console output: slash commands (and thus /consoleLogs) are
+            // unreachable in JS mode, so a console must echo logs itself.
+            const logs = std.mem.trimRight(u8, self.session.drainConsoleMessages(), "\n");
+            if (logs.len > 0) self.printData(logs);
             if (result.is_error) {
                 self.terminal.printError("{s}", .{result.text});
             } else {
