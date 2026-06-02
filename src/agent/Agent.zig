@@ -434,6 +434,7 @@ fn runRepl(self: *Agent) void {
     self.terminal.printDimmed("Lightpanda Agent (type '/quit' to exit)", .{});
     self.terminal.printDimmed("Tab completes/cycles through commands; the dim grey ghost shows the first match.", .{});
     self.terminal.printDimmed("Shift-Tab (or Ctrl-J) inserts a newline — use it inside '''…''' or \"\"\"…\"\"\" blocks.", .{});
+    self.terminal.printDimmed("Type '!' on an empty prompt for JS mode (evaluates against the current page); Esc exits.", .{});
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
     if (self.ai_client) |ai_client| {
         self.terminal.printDimmed("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
@@ -458,6 +459,24 @@ fn runRepl(self: *Agent) void {
         var arena: std.heap.ArenaAllocator = .init(self.allocator);
         defer arena.deinit();
         const aa = arena.allocator();
+
+        // JS mode: evaluate the whole line against the page, bypassing command parsing.
+        if (self.terminal.jsMode()) {
+            const result = browser_tools.evalScript(aa, self.session, &self.node_registry, line) catch |err| {
+                self.terminal.printError("{s}", .{switch (err) {
+                    error.OutOfMemory => "out of memory",
+                    error.FrameNotLoaded => "no page loaded — run /goto <url> first (Esc exits JS mode)",
+                    else => std.fmt.allocPrint(aa, "eval failed: {s}", .{@errorName(err)}) catch "eval failed",
+                }});
+                continue :repl;
+            };
+            if (result.is_error) {
+                self.terminal.printError("{s}", .{result.text});
+            } else {
+                self.printData(result.text);
+            }
+            continue :repl;
+        }
 
         const slash_split: ?Schema.Split = Schema.parseSlashCommand(trimmed);
         if (slash_split) |split| {
