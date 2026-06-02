@@ -21,8 +21,6 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
-const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
 const Notification = @import("../../../Notification.zig");
 
 const Cookie = @import("Cookie.zig");

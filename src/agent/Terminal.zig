@@ -37,6 +37,7 @@ const style_url = "ps-url";
 const style_key = "ps-key";
 const style_num = "ps-num";
 const style_err = "ps-err";
+const style_jsmode = "ps-jsmode";
 
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
@@ -68,6 +69,8 @@ repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 spinner: Spinner,
 completion_source: ?CompletionSource = null,
+/// True while the REPL is in JS mode; set by isocline's mode callback.
+js_mode: bool = false,
 
 /// Lets the completer/hinter pull dynamic candidates from the `Agent` without
 /// `Terminal` depending on it (same idiom as `Session.cancel_hook`).
@@ -104,6 +107,16 @@ const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len
 pub fn attachCompleter(self: *Terminal) void {
     c.ic_set_default_completer(&completionCallback, self);
     c.ic_set_default_hinter(&hintsCallback, self);
+    c.ic_set_mode_callback(&modeCallback, self);
+}
+
+fn modeCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
+    const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
+    self.js_mode = active;
+}
+
+pub fn jsMode(self: *const Terminal) bool {
+    return self.js_mode;
 }
 
 pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Terminal {
@@ -125,11 +138,18 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         c.ic_style_def(style_key, "ansi-blue");
         c.ic_style_def(style_num, "ansi-magenta");
         c.ic_style_def(style_err, "ansi-red");
+        c.ic_style_def(style_jsmode, "ansi-red bold");
+        // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
+        c.ic_set_prompt_mode("[" ++ style_jsmode ++ "]![/" ++ style_jsmode ++ "] ", '!');
         c.ic_set_default_highlighter(&highlighterCallback, null);
         _ = c.ic_enable_highlight(true);
         if (history_path) |path| {
             c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
         }
+        // Push kitty-keyboard-protocol "disambiguate" so Ctrl+Enter arrives as a
+        // distinct CSI-u sequence instead of a bare \r; unsupported terminals
+        // ignore it. Popped in deinit.
+        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[>1u") catch {};
     }
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
@@ -146,6 +166,10 @@ fn isRepl(self: *const Terminal) bool {
 }
 
 pub fn deinit(self: *Terminal) void {
+    // Pop the kitty-keyboard-protocol flag pushed in `init` (REPL only).
+    if (self.repl_arena != null) {
+        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[<u") catch {};
+    }
     self.spinner.deinit();
     if (self.repl_arena) |*a| a.deinit();
 }
@@ -403,6 +427,10 @@ var hint_buf: [completion_buf_len:0]u8 = undefined;
 fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const u8 {
     const self: *Terminal = @ptrCast(@alignCast(arg orelse return null));
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input_c)), 0);
+
+    // JS mode: the buffer is raw JS, so slash/kv hints don't apply.
+    if (self.js_mode) return null;
+
     if (input.len == 0) return null;
 
     if (parseHelpArgPrefix(input)) |partial| return ghostFirstMatch(&all_slash_names, partial, "");

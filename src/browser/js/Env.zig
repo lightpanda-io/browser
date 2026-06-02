@@ -96,6 +96,10 @@ microtask_queues_are_running: bool,
 // IsExecutionTerminating check and PerformCheckpoint trips a V8 debug assert.
 terminate_mutex: std.Thread.Mutex = .{},
 
+// Set from network thread, saying termination should happen. Read from worker
+// thread making sure terminate hasn't been canceled.
+terminate_requested: std.atomic.Value(bool) = .init(false),
+
 pub const InitOpts = struct {
     with_inspector: bool = false,
 };
@@ -503,18 +507,38 @@ pub fn dumpMemoryStats(self: *Env) void {
     , .{ stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage });
 }
 
+pub fn isExecutionTerminating(self: *const Env) bool {
+    return v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle);
+}
+
 pub fn terminate(self: *Env) void {
     self.terminate_mutex.lock();
     defer self.terminate_mutex.unlock();
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
+// Called from the network thread, caused v8 to eventually call terminateInterrupt
+pub fn requestTerminate(self: *Env) void {
+    self.terminate_requested.store(true, .release);
+    v8.v8__Isolate__RequestInterrupt(self.isolate.handle, terminateInterrupt, self);
+}
+
+// Runs on the worker thread
+fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
+    const self: *Env = @ptrCast(@alignCast(data.?));
+    if (self.terminate_requested.load(.acquire)) {
+        v8.v8__Isolate__TerminateExecution(self.isolate.handle);
+    }
+}
+
 /// Clears a pending termination so V8 calls (e.g. those made during cleanup)
 /// don't keep tripping over the terminating-state asserts. Safe to call
-/// unconditionally; a no-op if termination wasn't pending.
+/// unconditionally; a no-op if termination wasn't pending. Also clears the
+/// requestTerminate gate so any still-pending interrupt becomes a no-op.
 pub fn cancelTerminate(self: *Env) void {
     self.terminate_mutex.lock();
     defer self.terminate_mutex.unlock();
+    self.terminate_requested.store(false, .release);
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
 

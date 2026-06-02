@@ -25,7 +25,6 @@ const HttpClient = @import("HttpClient.zig");
 const js = @import("js/js.zig");
 const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
-const ImportMap = @import("ImportMap.zig");
 const ScriptManagerBase = @import("ScriptManagerBase.zig");
 
 const Element = @import("webapi/Element.zig");
@@ -287,6 +286,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     if (run_immediately == false) {
         return;
     }
+
+    // This will flush any deferred scripts.
+    defer self.base.client.deferring_layer.flushFrame(self.base.owner.frameId());
 
     if (script.status < 200 or script.status > 299) {
         log.info(.http, "script load error", .{ .status = script.status });

@@ -27,7 +27,6 @@ const Execution = @import("Execution.zig");
 
 const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
-const Session = @import("../Session.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 

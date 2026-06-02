@@ -441,7 +441,8 @@ fn runRepl(self: *Agent) void {
         self.terminal.printDimmed("  To enable natural language, " ++ llm_setup_hint ++ ".", .{});
     }
     self.terminal.printDimmed("  /help to list slash commands\t\t\tTab completes/cycles through commands", .{});
-    self.terminal.printDimmed("  /quit to exit\t\t\t\t\tShift-Tab inserts a newline inside a block", .{});
+    self.terminal.printDimmed("  /quit to exit", .{});
+    self.terminal.printDimmed("  ! for JS mode (eval against the page)\t\tEsc exits JS mode", .{});
     // self.terminal.printInfo("", .{});
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
@@ -463,6 +464,28 @@ fn runRepl(self: *Agent) void {
         var arena: std.heap.ArenaAllocator = .init(self.allocator);
         defer arena.deinit();
         const aa = arena.allocator();
+
+        // JS mode: evaluate the whole line against the page, bypassing command parsing.
+        if (self.terminal.jsMode()) {
+            const result = browser_tools.evalScript(aa, self.session, &self.node_registry, line) catch |err| {
+                self.terminal.printError("{s}", .{switch (err) {
+                    error.OutOfMemory => "out of memory",
+                    error.FrameNotLoaded => "no page loaded — run /goto <url> first (Esc exits JS mode)",
+                    else => std.fmt.allocPrint(aa, "eval failed: {s}", .{@errorName(err)}) catch "eval failed",
+                }});
+                continue :repl;
+            };
+            // Surface console output: slash commands (and thus /consoleLogs) are
+            // unreachable in JS mode, so a console must echo logs itself.
+            const logs = std.mem.trimRight(u8, self.session.drainConsoleMessages(), "\n");
+            if (logs.len > 0) self.printData(logs);
+            if (result.is_error) {
+                self.terminal.printError("{s}", .{result.text});
+            } else {
+                self.printData(result.text);
+            }
+            continue :repl;
+        }
 
         const slash_split: ?Schema.Split = Schema.parseSlashCommand(trimmed);
         if (slash_split) |split| {

@@ -18,7 +18,6 @@
 
 const std = @import("std");
 
-const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const Notification = @import("../../Notification.zig");
 

@@ -16,17 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
-const lp = @import("lightpanda");
-
-const WebBotAuth = @import("../WebBotAuth.zig");
-
 const URL = @import("../../browser/URL.zig");
 const Layer = @import("../../browser/HttpClient.zig").Layer;
-const Client = @import("../../browser/HttpClient.zig").Client;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
-
-const log = lp.log;
 
 const WebBotAuthLayer = @This();
 

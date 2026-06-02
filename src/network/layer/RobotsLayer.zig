@@ -21,14 +21,11 @@ const lp = @import("lightpanda");
 
 const URL = @import("../../browser/URL.zig");
 const Layer = @import("../../browser/HttpClient.zig").Layer;
-const Client = @import("../../browser/HttpClient.zig").Client;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
 
 const Robots = @import("../Robots.zig");
 const Network = @import("../Network.zig");
-
-const Forward = @import("Forward.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -148,7 +145,7 @@ fn fetchRobotsThenRequest(
 }
 
 fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) void {
-    var queued = self.pending.fetchRemove(robots_url) orelse @panic("RobotsLayer.flushPending: missing queue");
+    var queued = self.pending.fetchRemove(robots_url) orelse return;
     defer queued.value.deinit(self.allocator);
 
     for (queued.value.items) |transfer| {
@@ -179,8 +176,7 @@ fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) voi
 // without owner teardown, this assumption breaks — see comment above
 // detachOrDeinit in HttpClient.zig.)
 fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8) void {
-    var pending = self.pending.fetchRemove(robots_url) orelse
-        @panic("RobotsLayer.flushPendingShutdown: missing queue");
+    var pending = self.pending.fetchRemove(robots_url) orelse return;
     pending.value.deinit(self.allocator);
 }
 

@@ -42,7 +42,6 @@ pub fn reset() void {
 const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
 const Config = @import("Config.zig");
-const HttpClient = @import("browser/HttpClient.zig");
 const Frame = @import("browser/Frame.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");

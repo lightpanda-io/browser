@@ -22,8 +22,6 @@
 //! `new XPathEvaluator()` instance can be used in place of the
 //! document.
 
-const std = @import("std");
-
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 
