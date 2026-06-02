@@ -46,6 +46,7 @@ pub const Function = @import("Function.zig");
 pub const Promise = @import("Promise.zig");
 pub const RegExp = @import("RegExp.zig");
 pub const Module = @import("Module.zig");
+pub const Script = @import("Script.zig");
 pub const BigInt = @import("BigInt.zig");
 pub const Number = @import("Number.zig");
 pub const Integer = @import("Integer.zig");
