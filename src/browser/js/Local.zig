@@ -34,6 +34,7 @@ const v8 = js.v8;
 const log = lp.log;
 const CallOpts = Caller.CallOpts;
 const FinalizerCallback = js.FinalizerCallback;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // Where js.Context has a lifetime tied to the frame, and holds the
 // v8::Global<v8::Context>, this has a much shorter lifetime and holds a
@@ -1271,15 +1272,35 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                     const finalizer_ptr_id = identity_finalizer.finalizer_ptr_id;
                     const fc = page.finalizer_callbacks.get(finalizer_ptr_id) orelse return;
 
-                    const identity_count = fc.identity_count;
-                    if (identity_count == 1) {
+                    {
+                        // Unlink this identity from the FC's intrusive list
+                        var prev: ?*FinalizerCallback.Identity = null;
+                        var node = fc.identities;
+                        while (node) |n| {
+                            if (n == identity_finalizer) {
+                                if (prev) |p| {
+                                    p.next = n.next;
+                                } else {
+                                    fc.identities = n.next;
+                                }
+                                fc.identity_count -= 1;
+                                break;
+                            }
+                            prev = n;
+                            node = n.next;
+                        } else {
+                            if (comptime IS_DEBUG) {
+                                std.debug.assert(false);
+                            }
+                        }
+                    }
+
+                    if (fc.identity_count == 0) {
                         // Last identity - clean up the FC.
                         // Remove from map before releaseRef to prevent address reuse issues.
                         _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
                         FT.releaseRef(@ptrFromInt(finalizer_ptr_id), page);
                         page.releaseArena(fc.arena);
-                    } else {
-                        fc.identity_count = identity_count - 1;
                     }
                 }
 
