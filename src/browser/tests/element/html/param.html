@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<param id="p1" name="n0" value="v0">
+
+<script id="name">
+  {
+    const p = document.getElementById('p1');
+    testing.expectEqual('n0', p.name);
+
+    p.name = 'n1';
+    testing.expectEqual('n1', p.getAttribute('name'));
+
+    p.setAttribute('name', 'n2');
+    testing.expectEqual('n2', p.name);
+
+    const p2 = document.createElement('param');
+    testing.expectEqual('', p2.name);
+  }
+</script>
+
+<script id="value">
+  {
+    const p = document.getElementById('p1');
+    testing.expectEqual('v0', p.value);
+
+    p.value = 'v1';
+    testing.expectEqual('v1', p.getAttribute('value'));
+
+    p.setAttribute('value', 'v2');
+    testing.expectEqual('v2', p.value);
+
+    const p2 = document.createElement('param');
+    testing.expectEqual('', p2.value);
+  }
+</script>
