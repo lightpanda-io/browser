@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<head>
+<script src="../testing.js"></script>
+</head>
+<body>
+<!-- Regression test for a SIGSEGV triggered by re-entrant document.close().
+
+     Sibling to reentrant_document_write.html: that test covers a written
+     <script> calling document.write() re-entrantly. This one covers the
+     document.close() path, which the streaming parser's `feeding` guard did
+     NOT protect.
+
+     A script run by the script-created parser executes synchronously inside
+     html5ever's feed() (we're popping that <script>). If that script calls
+     document.close(), the close ran html5ever_streaming_parser_finish() on the
+     handle still mid-feed on the stack. html5ever's streaming parser is not
+     re-entrant: finishing it there walked an empty open-elements stack and
+     panicked with "no current element", then segfaulted.
+
+     The fix defers the finish: a re-entrant close flags the document, and the
+     write() driving the feed loop completes the close once the loop unwinds and
+     any markup the same script queued has drained. A custom element in the
+     written markup ensures a reaction is queued in the pop scope that crashed. -->
+<script id="reentrant_close">
+window.nestedCloseRan = false;
+window.connectedRan = false;
+
+class ReentrantClose extends HTMLElement {
+    connectedCallback() {
+        window.connectedRan = true;
+    }
+}
+customElements.define('reentrant-close', ReentrantClose);
+
+// onload runs after the initial parse, so document.write() goes through the
+// script-created parser (the path that crashed).
+testing.onload(function () {
+    document.open();
+    document.write(
+        '<reentrant-close></reentrant-close>' +
+        '<scr' + 'ipt>' +
+        'window.nestedCloseRan = true;' +
+        'document.write("<p>nested</p>");' +
+        'document.close();' +
+        '</scr' + 'ipt>'
+    );
+
+    // Reaching here without crashing is the whole point of the test.
+    testing.expectTrue(window.nestedCloseRan);
+    testing.expectTrue(window.connectedRan);
+
+    // The re-entrant close deferred the parser finish until the feed loop
+    // unwound; by now the queued <p>nested</p> has been parsed.
+    testing.expectEqual('nested', document.querySelector('p').textContent);
+});
+</script>
+</body>
+</html>
