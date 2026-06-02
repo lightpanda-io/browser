@@ -42,6 +42,7 @@ pub const ansi = struct {
     pub const reset = "\x1b[0m";
     pub const bold = "\x1b[1m";
     pub const dim = "\x1b[2m";
+    pub const italic = "\x1b[3m";
     pub const cyan = "\x1b[36m";
     pub const green = "\x1b[32m";
     pub const yellow = "\x1b[33m";
@@ -1030,6 +1031,11 @@ pub fn printInfo(self: *Terminal, comptime fmt: []const u8, args: anytype) void 
 pub fn printDimmed(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (!self.isRepl() and !self.verbosity.atLeast(.medium)) return;
     std.debug.print(ansi.dim ++ fmt ++ ansi.reset ++ "\n", args);
+}
+
+pub fn printItalic(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
+    if (!self.isRepl() and !self.verbosity.atLeast(.medium)) return;
+    std.debug.print(ansi.italic ++ fmt ++ ansi.reset ++ "\n", args);
 }
 
 fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {

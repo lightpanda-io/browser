@@ -158,6 +158,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const remembered: ?settings.Remembered = if (resolve) settings.loadRemembered(allocator) else null;
     defer if (remembered) |r| std.zon.parse.free(allocator, r);
 
+    // Print the banner before provider resolution so it appears before any
+    // interactive "Select a provider" prompt.  On error paths (missing key /
+    // no key detected) resolveCredentials prints its own message and the
+    // banner is skipped.
+    if (will_repl and (!resolve or settings.wouldResolve(opts, remembered))) {
+        std.debug.print(Terminal.ansi.bold ++ "\n  Lightpanda Agent" ++ Terminal.ansi.reset ++ " " ++ Terminal.ansi.dim ++ "({s})" ++ Terminal.ansi.reset ++ "\n", .{lp.build_config.version});
+    }
+
     const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(opts, remembered, will_repl) else null;
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
 
@@ -179,24 +187,19 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         try allocator.dupe(u8, "");
     errdefer allocator.free(model);
 
-    if (resolved) |r| switch (r.source) {
-        .flag => {},
-        .remembered => std.debug.print(
-            "Resuming provider {s}, model {s} (remembered in ./.lp-agent.zon). Change with --provider/--model or /provider, /model.\n",
-            .{ @tagName(r.credentials.provider), model },
-        ),
-        .detected => std.debug.print(
-            "Auto-selected provider {s}, model {s}. Set --provider/--model or use /provider, /model to change.\n",
-            .{ @tagName(r.credentials.provider), model },
-        ),
-        .picked => {
+    if (resolved) |r| {
+        if (r.source == .picked) {
             settings.saveRemembered(r.credentials.provider, model);
-            std.debug.print(
-                "Selected provider {s}, model {s} (saved to ./.lp-agent.zon). Change with /provider, /model.\n",
-                .{ @tagName(r.credentials.provider), model },
-            );
-        },
-    };
+        }
+        std.debug.print(Terminal.ansi.dim ++ "  Provider: {s}, Model: {s} ", .{ @tagName(r.credentials.provider), model });
+        switch (r.source) {
+            .flag => {},
+            .remembered => std.debug.print("(from ./.lp-agent.zon) ", .{}),
+            .detected => std.debug.print("(auto-selected) ", .{}),
+            .picked => std.debug.print("(saved to /.lp-agent.zon) ", .{}),
+        }
+        std.debug.print("\n\n" ++ Terminal.ansi.reset, .{});
+    }
 
     const notification: *lp.Notification = try .init(allocator);
     errdefer notification.deinit();
@@ -431,20 +434,22 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
 }
 
 fn runRepl(self: *Agent) void {
-    self.terminal.printDimmed("Lightpanda Agent (type '/quit' to exit)", .{});
-    self.terminal.printDimmed("Tab completes/cycles through commands; the dim grey ghost shows the first match.", .{});
-    self.terminal.printDimmed("Shift-Tab (or Ctrl-J) inserts a newline — use it inside '''…''' or \"\"\"…\"\"\" blocks.", .{});
-    log.debug(.app, "tools loaded", .{ .count = globalTools().len });
-    if (self.ai_client) |ai_client| {
-        self.terminal.printDimmed("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
+    if (self.ai_client) |_| {
+        self.terminal.printItalic("  Use natural language or slash commands", .{});
     } else {
-        self.terminal.printDimmed("Basic REPL (--no-llm) — slash commands only.", .{});
-        self.terminal.printDimmed("To enable natural-language commands, " ++ llm_setup_hint ++ ".", .{});
+        self.terminal.printItalic("  Basic REPL (--no-llm) - slash commands only.", .{});
+        self.terminal.printDimmed("  To enable natural language, " ++ llm_setup_hint ++ ".", .{});
     }
+    self.terminal.printDimmed("  /help to list slash commands\t\t\tTab completes/cycles through commands", .{});
+    self.terminal.printDimmed("  /quit to exit\t\t\t\t\tShift-Tab inserts a newline inside a block", .{});
+    // self.terminal.printInfo("", .{});
+    log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
     repl: while (true) {
+        std.debug.print("\n", .{});
         const line = Terminal.readLine("") orelse break;
         defer Terminal.freeLine(line);
+        std.debug.print("\n", .{});
 
         // Slash commands and idle Ctrl-C set the cancel flag without
         // clearing V8's terminate state; drain both before the next turn.
