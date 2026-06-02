@@ -39,6 +39,15 @@ pub const ResolvedProvider = struct {
     source: enum { flag, remembered, detected, picked },
 };
 
+/// Returns true when resolveCredentials would succeed (no error, non-null).
+/// Used by callers that need to print a banner before calling resolveCredentials.
+pub fn wouldResolve(opts: Config.Agent, remembered: ?Remembered) bool {
+    if (opts.provider) |p| return zenai.provider.envApiKey(p) != null;
+    if (remembered) |r| if (zenai.provider.envApiKey(r.provider)) |_| return true;
+    var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
+    return zenai.provider.detectKeys(&buf, zenai.provider.default_candidates).len > 0;
+}
+
 /// Precedence: `--provider` > remembered (if its key is still set) > first
 /// detected. Null means no key at all (the reason is already printed).
 pub fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pick: bool) !?ResolvedProvider {
@@ -75,7 +84,8 @@ pub fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pic
 
     var names: [zenai.provider.default_candidates.len][]const u8 = undefined;
     for (found, 0..) |cred, i| names[i] = @tagName(cred.provider);
-    const idx = Terminal.promptNumberedChoice("Select a provider:", names[0..found.len], 0) catch {
+    std.debug.print("\n", .{});
+    const idx = Terminal.promptNumberedChoice("  Select a provider:", names[0..found.len], 0) catch {
         return .{ .credentials = found[0], .source = .detected };
     };
     return .{ .credentials = found[idx], .source = .picked };
