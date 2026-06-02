@@ -129,6 +129,10 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         if (history_path) |path| {
             c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
         }
+        // Push kitty-keyboard-protocol "disambiguate" so Ctrl+Enter arrives as a
+        // distinct CSI-u sequence instead of a bare \r; unsupported terminals
+        // ignore it. Popped in deinit.
+        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[>1u") catch {};
     }
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
@@ -145,6 +149,10 @@ fn isRepl(self: *const Terminal) bool {
 }
 
 pub fn deinit(self: *Terminal) void {
+    // Pop the kitty-keyboard-protocol flag pushed in `init` (REPL only).
+    if (self.repl_arena != null) {
+        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[<u") catch {};
+    }
     self.spinner.deinit();
     if (self.repl_arena) |*a| a.deinit();
 }

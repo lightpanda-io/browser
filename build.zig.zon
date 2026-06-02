@@ -39,8 +39,8 @@
             .hash = "zenai-0.0.0-iOY_VC7NAwCnmTysnca1dT2ht-85vzp5Ku72-NtVnY4h",
         },
         .isocline = .{
-            .url = "git+https://github.com/arrufat/isocline#c37c12b9d0b7b59c6226fd6cae193ddad92559cc",
-            .hash = "N-V-__8AAFU6EwBTjIK87kHbuVP7KtrHrObK3tmPziJUGI4M",
+            .url = "git+https://github.com/arrufat/isocline#3cac86230184506470b9ad68c0a3fb16dbeb6ac4",
+            .hash = "N-V-__8AAKY7EwC1ZfRYVVCylwXT-wQt1MO7TfQT9BMsifqO",
         },
     },
     .paths = .{""},
