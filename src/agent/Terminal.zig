@@ -344,7 +344,7 @@ fn addMetaValueCompletions(
     if (std.mem.indexOfAny(u8, body, &std.ascii.whitespace) != null) return;
     const prefix = input[0 .. input.len - body.len];
 
-    if (meta.tag == .load) {
+    if (meta.tag == .load or meta.tag == .save) {
         addPathCompletions(cenv, input, body, prefix, buf);
         return;
     }
@@ -367,7 +367,7 @@ fn addMetaValueCompletions(
     for (meta.values) |v| addPrefixedCompletion(cenv, buf, input, prefix, v, "", body);
 }
 
-/// Completes `/load`'s argument against the filesystem. The directory part of
+/// Completes a path argument against the filesystem. The directory part of
 /// the partial path is kept verbatim in each candidate; the trailing basename
 /// is matched against directory entries, and directories get a `/` suffix.
 fn addPathCompletions(
@@ -544,7 +544,7 @@ fn renderMetaHint(self: *Terminal, meta: *const SlashCommand.MetaCommand, body: 
         return writeHints(if (ends_ws) "" else " ", &frags);
     }
     if (ends_ws) return null;
-    if (meta.tag == .load) return ghostPathFirstMatch(body);
+    if (meta.tag == .load or meta.tag == .save) return ghostPathFirstMatch(body);
     return ghostFirstMatch(meta.values, body, "");
 }
 
