@@ -1831,6 +1831,7 @@ pub const Transfer = struct {
         return writer.print("{s} {s}", .{ @tagName(req.method), req.url });
     }
 
+    // `url` must have transfer-arena lifetime: it's stored as-is, not duped.
     pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
         self.req.url = url;
     }
@@ -1870,7 +1871,9 @@ pub const Transfer = struct {
             }
 
             const base_url = try conn.getEffectiveUrl();
-            const resolved = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
+            // base_url and location.value are owned by curl. The returned value
+            // will be stored in transfer.req.url, hence the always_dupe.
+            const resolved = try URL.resolve(arena, std.mem.span(base_url), location.value, .{ .always_dupe = true });
 
             // RFC 7231 §7.1.2: if the Location value has no fragment, the redirect
             // inherits the fragment from the URI used to generate the request.
