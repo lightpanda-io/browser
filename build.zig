@@ -38,6 +38,7 @@ const Build = blk: {
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const strip = optimize == .ReleaseFast or optimize == .ReleaseSmall;
 
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
@@ -69,6 +70,7 @@ pub fn build(b: *Build) !void {
             .link_libcpp = true,
             .sanitize_c = enable_csan,
             .sanitize_thread = enable_tsan,
+            .strip = strip,
         });
         mod.addImport("lightpanda", mod); // allow circular "lightpanda" import
         mod.addImport("build_config", opts.createModule());
@@ -118,6 +120,7 @@ pub fn build(b: *Build) !void {
                 .optimize = optimize,
                 .sanitize_c = enable_csan,
                 .sanitize_thread = enable_tsan,
+                .strip = strip,
                 .imports = &.{
                     .{ .name = "lightpanda", .module = lightpanda_module },
                 },
@@ -153,6 +156,7 @@ pub fn build(b: *Build) !void {
                 .root_source_file = b.path("src/main_snapshot_creator.zig"),
                 .target = target,
                 .optimize = optimize,
+                .strip = strip,
                 .imports = &.{
                     .{ .name = "lightpanda", .module = lightpanda_module },
                 },
