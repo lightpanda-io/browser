@@ -47,7 +47,7 @@ pub const MetaCommand = struct {
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
     /// a new meta command is a compile error until it's wired up there too.
-    const Tag = enum { help, quit, verbosity, save, model, provider };
+    const Tag = enum { help, quit, verbosity, save, load, model, provider };
 };
 
 pub const meta_commands = [_]MetaCommand{
@@ -55,6 +55,7 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
     .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set agent verbosity" },
     .{ .tag = .save, .name = "save", .hint = "[filename.js] [prompt]", .values = &.{}, .description = "Save this session to a file" },
+    .{ .tag = .load, .name = "load", .hint = "<path>", .values = &.{}, .description = "Load and run a script from disk" },
     .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model" },
     .{ .tag = .provider, .name = "provider", .hint = "[name]", .values = &.{}, .description = "Change the provider" },
 };

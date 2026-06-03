@@ -344,6 +344,11 @@ fn addMetaValueCompletions(
     if (std.mem.indexOfAny(u8, body, &std.ascii.whitespace) != null) return;
     const prefix = input[0 .. input.len - body.len];
 
+    if (meta.tag == .load) {
+        addPathCompletions(cenv, input, body, prefix, buf);
+        return;
+    }
+
     // `/provider` / `/model` candidates are resolved at runtime, not in `meta.values`.
     if (self.completion_source) |src| switch (meta.tag) {
         .provider, .model => {
@@ -360,6 +365,32 @@ fn addMetaValueCompletions(
     };
 
     for (meta.values) |v| addPrefixedCompletion(cenv, buf, input, prefix, v, "", body);
+}
+
+/// Completes `/load`'s argument against the filesystem. The directory part of
+/// the partial path is kept verbatim in each candidate; the trailing basename
+/// is matched against directory entries, and directories get a `/` suffix.
+fn addPathCompletions(
+    cenv: ?*c.ic_completion_env_t,
+    input: []const u8,
+    body: []const u8,
+    prefix: []const u8,
+    buf: *[completion_buf_len:0]u8,
+) void {
+    const slash = std.mem.lastIndexOfScalar(u8, body, '/');
+    const dir_part = if (slash) |i| body[0 .. i + 1] else "";
+    const open_path = if (dir_part.len == 0) "." else dir_part;
+
+    var dir = std.fs.cwd().openDir(open_path, .{ .iterate = true }) catch return;
+    defer dir.close();
+
+    var name_buf: [completion_buf_len]u8 = undefined;
+    var it = dir.iterate();
+    while (it.next() catch return) |entry| {
+        const suffix: []const u8 = if (entry.kind == .directory) "/" else "";
+        const full = std.fmt.bufPrint(&name_buf, "{s}{s}", .{ dir_part, entry.name }) catch continue;
+        addPrefixedCompletion(cenv, buf, input, prefix, full, suffix, body);
+    }
 }
 
 /// Completes `$LP_*` against the live process environment.
@@ -513,7 +544,29 @@ fn renderMetaHint(self: *Terminal, meta: *const SlashCommand.MetaCommand, body: 
         return writeHints(if (ends_ws) "" else " ", &frags);
     }
     if (ends_ws) return null;
+    if (meta.tag == .load) return ghostPathFirstMatch(body);
     return ghostFirstMatch(meta.values, body, "");
+}
+
+/// Ghosts the first filesystem entry that completes the partial path `body`,
+/// appending `/` when the match is a directory.
+fn ghostPathFirstMatch(body: []const u8) [*c]const u8 {
+    const slash = std.mem.lastIndexOfScalar(u8, body, '/');
+    const dir_part = if (slash) |i| body[0 .. i + 1] else "";
+    const base = body[dir_part.len..];
+    const open_path = if (dir_part.len == 0) "." else dir_part;
+
+    var dir = std.fs.cwd().openDir(open_path, .{ .iterate = true }) catch return null;
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (it.next() catch return null) |entry| {
+        if (!std.ascii.startsWithIgnoreCase(entry.name, base)) continue;
+        const suffix: []const u8 = if (entry.kind == .directory) "/" else "";
+        const text = std.fmt.bufPrintZ(&hint_buf, "{s}{s}", .{ entry.name[base.len..], suffix }) catch return null;
+        return text.ptr;
+    }
+    return null;
 }
 
 /// Ghosts `lead` + the suffix of the first `names` entry that prefix-matches
@@ -1088,6 +1141,21 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
     const ellipsis: []const u8 = if (text.len > max_result_display_len) "..." else "";
     const color: []const u8 = if (is_error) ansi.red else ansi.green;
     std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi.dim, color, name, ansi.reset, truncated, ellipsis });
+}
+
+/// Freeze the script spinner into a green bullet for a `/load` run that
+/// produced no output — mirrors a `/goto` outcome line, swapping the braille
+/// glyph for a `●`. Only fires when the spinner was shown (REPL + TTY);
+/// otherwise the run leaves just its own output.
+pub fn printScriptDone(self: *Terminal, name: []const u8, args: []const u8) void {
+    if (!self.spinner.isEnabled()) return;
+    var buf: [256]u8 = undefined;
+    const line = std.fmt.bufPrint(
+        &buf,
+        ansi.green ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s} {s}]" ++ ansi.reset ++ "\n",
+        .{ name, args },
+    ) catch return;
+    _ = std.posix.write(std.posix.STDERR_FILENO, line) catch {};
 }
 
 /// Re-indents `text` as two-space JSON, or null when it isn't a JSON object/array.
