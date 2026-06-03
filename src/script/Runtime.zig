@@ -402,7 +402,7 @@ fn buildArgs(
 
     return switch (tool) {
         .goto => try self.singleStringOrObject(arena, context, info, argc, "url"),
-        .eval => try self.singleStringOrObject(arena, context, info, argc, "script"),
+        .evaluate => try self.singleStringOrObject(arena, context, info, argc, "script"),
         .extract => try self.extractArgs(arena, context, info, argc),
         .waitForSelector => try self.singleStringOrObject(arena, context, info, argc, "selector"),
         .waitForScript => try self.singleStringOrObject(arena, context, info, argc, "script"),
@@ -633,7 +633,7 @@ fn terminateRuntimeSoon(runtime: *Runtime) void {
     runtime.terminate();
 }
 
-test "agent script runtime: goto and eval dispatch through browser tools" {
+test "agent script runtime: goto and evaluate dispatch through browser tools" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
@@ -646,8 +646,8 @@ test "agent script runtime: goto and eval dispatch through browser tools" {
     try runTestScript(runtime,
         \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\if (!nav.includes("Navigated")) throw new Error("unexpected goto result: " + nav);
-        \\const text = eval("document.getElementById('btn').textContent");
-        \\if (text !== "Click Me") throw new Error("eval ran in the wrong context: " + text);
+        \\const text = evaluate("document.getElementById('btn').textContent");
+        \\if (text !== "Click Me") throw new Error("evaluate ran in the wrong context: " + text);
     );
 
     const frame = testing.test_session.currentFrame().?;
@@ -722,8 +722,8 @@ test "agent script runtime: strict-mode scripts can call primitives" {
         \\"use strict";
         \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\if (!nav.includes("Navigated")) throw new Error("strict-mode goto failed: " + nav);
-        \\const text = eval("document.getElementById('btn').textContent");
-        \\if (text !== "Click Me") throw new Error("strict-mode eval failed: " + text);
+        \\const text = evaluate("document.getElementById('btn').textContent");
+        \\if (text !== "Click Me") throw new Error("strict-mode evaluate failed: " + text);
     );
 }
 
@@ -759,12 +759,12 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
 
     try runTestScript(runtime,
         \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\// toJSON re-enters eval mid-marshal; the outer extract must still see "#btn".
-        \\const data = extract({ button: { toJSON() { return eval("'#btn'"); } } });
+        \\// toJSON re-enters evaluate mid-marshal; the outer extract must still see "#btn".
+        \\const data = extract({ button: { toJSON() { return evaluate("'#btn'"); } } });
         \\if (data.button !== "Click Me") throw new Error("re-entrant extract corrupted: " + JSON.stringify(data));
         \\// toString re-enters a primitive mid-loop; the console buffer must survive.
         \\let probed = 0;
-        \\console.log("value", { toString() { probed += 1; return eval("'ok'"); } }, "tail");
+        \\console.log("value", { toString() { probed += 1; return evaluate("'ok'"); } }, "tail");
         \\if (probed !== 1) throw new Error("console toString re-entry not exercised");
     );
 }
@@ -812,7 +812,7 @@ test "agent script runtime: agent variables persist and page globals are isolate
     );
 }
 
-test "agent script runtime: page eval cannot see agent primitives or bindings" {
+test "agent script runtime: page evaluate cannot see agent primitives or bindings" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
@@ -825,9 +825,9 @@ test "agent script runtime: page eval cannot see agent primitives or bindings" {
     try runTestScript(runtime,
         \\const agentOnly = "secret";
         \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (eval("typeof goto") !== "undefined") throw new Error("agent primitive leaked to page eval");
-        \\if (eval("typeof agentOnly") !== "undefined") throw new Error("agent binding leaked to page eval");
-        \\if (eval("typeof document") !== "object") throw new Error("page eval did not run in the page context");
+        \\if (evaluate("typeof goto") !== "undefined") throw new Error("agent primitive leaked to page evaluate");
+        \\if (evaluate("typeof agentOnly") !== "undefined") throw new Error("agent binding leaked to page evaluate");
+        \\if (evaluate("typeof document") !== "object") throw new Error("page evaluate did not run in the page context");
     );
 }
 

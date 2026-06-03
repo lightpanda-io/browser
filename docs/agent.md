@@ -163,13 +163,13 @@ section 3 for a worked example against Hacker News.
 
 ### Cross-call state with `lp.*`
 
-`/extract` and `/eval` each return one value per call, but real scrapes
+`/extract` and `/evaluate` each return one value per call, but real scrapes
 often need to carry data forward — capture a list on one page, then walk
 it across navigations. Two primitives keep that simple.
 
-**`save=<name>`** on `/extract` or `/eval` stashes the result in a
+**`save=<name>`** on `/extract` or `/evaluate` stashes the result in a
 Session-scoped store keyed by `<name>` instead of dumping it to stdout.
-The stored value is then exposed to every subsequent `/eval` as
+The stored value is then exposed to every subsequent `/evaluate` as
 `globalThis.lp.<name>`:
 
 ```console
@@ -188,17 +188,17 @@ The stored value is then exposed to every subsequent `/eval` as
 }
 '''
 
-/eval '''
+/evaluate '''
 console.log(lp.front.stories[0].title);
 '''
 ```
 
 `save=`d commands print nothing on success so scripts pipe cleanly.
 
-**Auto-sync.** Any mutation of `lp.*` inside an `/eval` is persisted at
+**Auto-sync.** Any mutation of `lp.*` inside an `/evaluate` is persisted at
 the end of the call. Adding a key (`lp.x = …`), updating a nested value
 (`lp.front.stories[0].comments = […]`), or removing a key
-(`delete lp.x`) all propagate to the store. The next `/eval` sees the
+(`delete lp.x`) all propagate to the store. The next `/evaluate` sees the
 update — even after a navigation, because the store lives Session-side,
 not on the page.
 
@@ -235,18 +235,18 @@ front page plus the top comments of each story:
 against that page. The whole nested result prints to stdout as one JSON
 object.
 
-**Async eval.** When a scrape needs logic `follow` can't express, `/eval`
+**Async evaluate.** When a scrape needs logic `follow` can't express, `/evaluate`
 is the escape hatch: top-level `await` works directly — the body runs as
 an async function, so use `return` to produce a value. `runEval` pumps
 the event loop until it settles, then surfaces the resolved value (or the
 rejection as an error). A body with no explicit `return` resolves to
-`undefined`, which the eval treats as silent. Returned objects and arrays
+`undefined`, which evaluate treats as silent. Returned objects and arrays
 are serialized to JSON automatically, so no `JSON.stringify` is needed.
 
 The store is **script-run scoped**: it's bound to the Session that runs
 the script, and goes away when that Session does. There is no
 cross-session persistence; if you need that, use `localStorage` (which
-is now origin-scoped and persists across navigations within a session).
+is origin-scoped and persists across navigations within a session).
 
 ### Saving and loading
 
@@ -254,7 +254,7 @@ From the REPL, `/save [file.js]` writes the session back to a `.js` file
 and `/load <path>` runs a script from disk against the current session.
 
 State-mutating commands (`/goto`, `/click`, `/fill`, `/scroll`, `/hover`,
-`/selectOption`, `/setChecked`, `/waitForSelector`, `/press`, `/eval`,
+`/selectOption`, `/setChecked`, `/waitForSelector`, `/press`, `/evaluate`,
 `/extract`) are saved; read-only commands (`/tree`, `/markdown`,
 `/links`, `/findElement`, …) and the natural-language turns that produced
 them are not. Natural-language turns are saved as `// <prompt>` comments
@@ -270,14 +270,14 @@ are plain synchronous JavaScript plus the installed Lightpanda primitives:
 ```js
 goto("https://example.com");
 click({ selector: "a.login" });
-eval("document.title");
+evaluate("document.title");
 ```
 
 The script runs in an agent-only V8 context. It has no `window`, `document`, or
 DOM APIs. Browser interaction happens only through the installed primitives
-(`goto`, `click`, `fill`, `eval`, `extract`, and the other recorded browser
+(`goto`, `click`, `fill`, `evaluate`, `extract`, and the other recorded browser
 actions). It is not Node.js either: there is no `require`, `process`, `fs`, npm
-package loading, or Node standard library. The `eval(...)` primitive executes
+package loading, or Node standard library. The `evaluate(...)` primitive executes
 its string in the current page context; page scripts cannot see agent variables
 or agent primitives.
 
@@ -301,11 +301,11 @@ See [agent-script.md](agent-script.md) for the full script format reference.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit
-  > /eval {"script": "document.title"}
+  > /evaluate {"script": "document.title"}
   > /quit
   ```
 - **Stdout vs stderr**: the final assistant answer and data-producing slash
-  commands (`/extract`, `/eval`, `/markdown`, `/tree`, …) write to stdout.
+  commands (`/extract`, `/evaluate`, `/markdown`, `/tree`, …) write to stdout.
   Tool calls, progress, and errors go to stderr, so `lightpanda agent --task
   ... > out.txt` captures a clean answer.
 
@@ -342,10 +342,8 @@ browser. No `--provider` or API key is required on the Lightpanda side.
 }
 ```
 
-Tool names are camelCase and case-sensitive — there are no aliases.
-Earlier snake_case names (`navigate`, `evaluate`, `semantic_tree`, …)
-have been removed; MCP clients must call the canonical tags (`goto`,
-`eval`, `tree`, `save`, …).
+Tool names are camelCase and case-sensitive — there are no aliases. MCP
+clients must call the canonical tags (`goto`, `evaluate`, `tree`, `save`, …).
 
 For sub-task delegation in the other direction — calling Lightpanda's
 own LLM-driven agent in a one-shot fashion — use `--task` on stdin
@@ -380,7 +378,7 @@ Highlights:
   `detectForms`, `nodeDetails`, `findElement`
 - `click`, `fill`, `hover`, `press`, `scroll`, `selectOption`, `setChecked`,
   `waitForSelector`
-- `eval`, `consoleLogs`, `getUrl`, `getCookies`, `getEnv`
+- `evaluate`, `consoleLogs`, `getUrl`, `getCookies`, `getEnv`
 
 Selectors prefer CSS over `backendNodeId` for the click-family tools, since
 node IDs are invalidated by any DOM mutation. The system prompt enforces this

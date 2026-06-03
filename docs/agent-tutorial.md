@@ -398,8 +398,8 @@ const report = topStories.map((story) => ({
 console.log(JSON.stringify({ report }, null, 2));
 ```
 
-Use the `eval(...)` primitive only when you intentionally want to run a
-string in the current page's JavaScript context. Page eval cannot see
+Use the `evaluate(...)` primitive only when you intentionally want to run a
+string in the current page's JavaScript context. Page evaluate cannot see
 agent variables or call `goto`, `extract`, and the other agent
 primitives.
 

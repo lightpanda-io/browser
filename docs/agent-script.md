@@ -22,14 +22,13 @@ web page's JavaScript context.
 - It is not the browser page environment. There is no `window`, `document`,
   DOM, `localStorage`, `navigator`, or page global state in the agent script.
   Read page data with `extract(...)`, or explicitly run page JavaScript with
-  `eval(...)` when that is the right tool.
+  `evaluate(...)` when that is the right tool.
 - It is not Node.js. There is no `require`, `process`, `fs`, `path`, npm
   package loading, command-line argument API, or Node network/filesystem API.
 - Page scripts cannot see agent variables or Lightpanda primitives. Agent
   scripts cannot directly see page variables.
-- The global `eval(...)` name is the Lightpanda page-eval primitive in this
-  context. Do not rely on JavaScript's native local eval behavior in agent
-  scripts.
+- The global `evaluate(...)` primitive runs JavaScript in the page context,
+  distinct from the agent context's own native `eval`.
 - Agent variables persist for the lifetime of one script run, across
   navigations and primitive calls. A later `lightpanda agent script.js` run
   starts with a fresh agent context.
@@ -95,7 +94,7 @@ for (const story of stories) {
 }
 ```
 
-`eval(...)` still returns the page-eval tool result text. When page `eval(...)`
+`evaluate(...)` still returns the page evaluate tool result text. When page `evaluate(...)`
 returns an object or array, that text is JSON.
 
 Primitive arguments must be JSON-serializable. Strings, numbers, booleans,
@@ -110,7 +109,7 @@ Only recorded browser primitives are installed globally:
 |-----------|-----------|---------|
 | `goto` | `goto(url)` or `goto({ url, timeout, waitUntil })` | Browser session |
 | `extract` | `extract(schema)` or `extract({ schema })` | Browser page via extractor; returns a JS object or array |
-| `eval` | `eval(script)` or `eval({ script, url, timeout, waitUntil, save })` | Browser page JS context |
+| `evaluate` | `evaluate(script)` or `evaluate({ script, url, timeout, waitUntil, save })` | Browser page JS context |
 | `click` | `click({ selector })` or `click({ backendNodeId })` | Browser page |
 | `fill` | `fill({ selector, value })` or `fill({ backendNodeId, value })` | Browser page |
 | `scroll` | `scroll()` or `scroll({ x, y, backendNodeId })` | Browser page |
@@ -227,13 +226,13 @@ const page = extract({ title: "title" });
 
 ## Page JavaScript
 
-`eval(...)` is the explicit escape hatch into the current page's JavaScript
+`evaluate(...)` is the explicit escape hatch into the current page's JavaScript
 context. Its script string runs where `window` and `document` exist.
 
 ```js
 goto("https://example.com");
 
-const title = eval("document.title");
+const title = evaluate("document.title");
 console.log(title);
 ```
 
@@ -245,13 +244,13 @@ const selector = "h1";
 // Good: local agent logic builds an extract schema.
 const data = extract({ heading: selector });
 
-// Bad: page eval cannot see local agent variables.
-eval("document.querySelector(selector).textContent");
+// Bad: page evaluate cannot see local agent variables.
+evaluate("document.querySelector(selector).textContent");
 ```
 
-Page `eval(...)` cannot call `goto`, `extract`, or other agent primitives.
+Page `evaluate(...)` cannot call `goto`, `extract`, or other agent primitives.
 Agent scripts cannot access `document` directly. If you need page DOM data,
-prefer `extract(...)`; use `eval(...)` only for page behavior that extraction
+prefer `extract(...)`; use `evaluate(...)` only for page behavior that extraction
 cannot express.
 
 `waitForScript(...)` also evaluates in the page context, repeatedly, until the
@@ -308,7 +307,7 @@ click({ selector: "a.login" });
 Only replayable browser actions are recorded:
 
 - Recorded: `goto`, `click`, `fill`, `scroll`, `hover`, `press`,
-  `selectOption`, `setChecked`, `waitForSelector`, `waitForScript`, `eval`,
+  `selectOption`, `setChecked`, `waitForSelector`, `waitForScript`, `evaluate`,
   and `extract`.
 - Not recorded: read-only exploration tools such as `tree`, `markdown`,
   `links`, `findElement`, `consoleLogs`, `getUrl`, `getCookies`, and `getEnv`.
@@ -331,7 +330,7 @@ Common failures:
 
 | Error | Meaning |
 |-------|---------|
-| `ReferenceError: document is not defined` | You tried to use browser DOM APIs in the agent context. Use `extract(...)` or page `eval(...)`. |
+| `ReferenceError: document is not defined` | You tried to use browser DOM APIs in the agent context. Use `extract(...)` or page `evaluate(...)`. |
 | `ReferenceError: require is not defined` | Agent scripts are not Node.js scripts. |
 | `no page loaded - run goto(url) first` | A page-dependent primitive ran before navigation. |
 | `invalid arguments` | A primitive received the wrong number or shape of arguments, or a non-JSON-serializable value. |

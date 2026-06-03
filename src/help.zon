@@ -140,7 +140,7 @@
     \\                           (no LLM calls) and exits. With no script and no
     \\                           --task, the REPL starts; from there /load runs a
     \\                           script and /save exports the session to a file.
-    \\                           Caution: .js files can contain eval(...) calls
+    \\                           Caution: .js files can contain evaluate(...) calls
     \\                           that run arbitrary JavaScript in the page. Only run
     \\                           scripts you trust, the same way you would a shell
     \\                           script.

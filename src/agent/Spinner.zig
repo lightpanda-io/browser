@@ -172,7 +172,7 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     const name_prefix = truncateUtf8(name, tool.name_buf.len);
     tool.name_len = name_prefix.len;
     @memcpy(tool.name_buf[0..name_prefix.len], name_prefix);
-    // Strip control chars: a literal `\n` in args (e.g. /eval """…""" bodies)
+    // Strip control chars: a literal `\n` in args (e.g. /evaluate """…""" bodies)
     // breaks the spinner's `\r`-based redraw — the cursor only rewinds to the
     // start of the last line, leaving prior frames stuck on screen.
     const args_prefix = truncateUtf8(args, tool.args_buf.len);

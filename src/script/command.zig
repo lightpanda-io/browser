@@ -246,7 +246,7 @@ fn writeJsFieldValue(
         try writeExtractSchema(arena, writer, value.string);
         return;
     }
-    const prefer_template = (tool == .eval and std.mem.eql(u8, field, "script")) or
+    const prefer_template = (tool == .evaluate and std.mem.eql(u8, field, "script")) or
         (tool == .waitForScript and std.mem.eql(u8, field, "script"));
     try writeJsValue(arena, writer, value, .{ .prefer_template = prefer_template });
 }
@@ -427,24 +427,24 @@ test "formatJs: positional and object arguments" {
     }
 }
 
-test "formatJs: eval and extract strings" {
+test "formatJs: evaluate and extract strings" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
     {
-        const cmd = try Command.parse(aa, "/eval '''\nconst x = 1;\nreturn x;\n'''");
+        const cmd = try Command.parse(aa, "/evaluate '''\nconst x = 1;\nreturn x;\n'''");
         var aw: std.Io.Writer.Allocating = .init(testing.allocator);
         defer aw.deinit();
         try cmd.formatJs(aa, &aw.writer);
-        try testing.expectString("eval(`\nconst x = 1;\nreturn x;\n`);", aw.written());
+        try testing.expectString("evaluate(`\nconst x = 1;\nreturn x;\n`);", aw.written());
     }
     {
-        const cmd = try Command.parse(aa, "/eval 'return `tick` + ${x};'");
+        const cmd = try Command.parse(aa, "/evaluate 'return `tick` + ${x};'");
         var aw: std.Io.Writer.Allocating = .init(testing.allocator);
         defer aw.deinit();
         try cmd.formatJs(aa, &aw.writer);
-        try testing.expectString("eval(\"return `tick` + ${x};\");", aw.written());
+        try testing.expectString("evaluate(\"return `tick` + ${x};\");", aw.written());
     }
     {
         const cmd = try Command.parse(aa, "/extract '{\"title\":\"h1\",\"bad-key\":\".x\"}'");

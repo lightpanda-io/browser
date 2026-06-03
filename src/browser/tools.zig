@@ -124,7 +124,7 @@ pub const save_synthesis_prompt =
     \\(tree/markdown/extract probes), and corrections. Keep only the steps that
     \\belong in a clean, repeatable script.
     \\Prefer the builtin functions (goto, click, fill, extract, …) over raw DOM
-    \\JavaScript wherever they fit; fall back to eval(...) only for logic the
+    \\JavaScript wherever they fit; fall back to evaluate(...) only for logic the
     \\builtins can't express. End with an extract(...) for any data the user
     \\wanted out.
     \\Output ONLY JavaScript source — no markdown fences, no commentary, no prose
@@ -157,7 +157,7 @@ pub const Tool = enum {
     markdown,
     html,
     links,
-    eval,
+    evaluate,
     extract,
     tree,
     nodeDetails,
@@ -184,7 +184,7 @@ pub const Tool = enum {
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .eval, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => true,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => true,
             .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -195,15 +195,15 @@ pub const Tool = enum {
     pub fn needsLocator(self: Tool) bool {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => true,
-            .goto, .search, .markdown, .html, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
     /// Result is data the caller probably wants on stdout (extracted JSON,
-    /// markdown, eval return value) rather than a status line on stderr.
+    /// markdown, evaluate return value) rather than a status line on stderr.
     pub fn producesData(self: Tool) bool {
         return switch (self) {
-            .search, .markdown, .html, .links, .eval, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
             .goto, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => false,
         };
     }
@@ -291,8 +291,8 @@ pub const Tool = enum {
                 .summary = "List all links on the page",
                 .input_schema = url_params_schema,
             },
-            .eval => .{
-                .description = "Evaluate JavaScript in the current page context. A bare trailing expression yields its value; top-level `await` and `return` are supported (the body then runs as an async function, so use `return` to produce a value). Objects and arrays are returned as JSON, so no `JSON.stringify` is needed. If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of eval, surviving navigation; values previously set via `/extract save=` or `/eval save=` appear as `lp.<name>`.",
+            .evaluate => .{
+                .description = "Evaluate JavaScript in the current page context. A bare trailing expression yields its value; top-level `await` and `return` are supported (the body then runs as an async function, so use `return` to produce a value). Objects and arrays are returned as JSON, so no `JSON.stringify` is needed. If a url is provided, it navigates to that url first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of evaluate, surviving navigation; values previously set via `/extract save=` or `/evaluate save=` appear as `lp.<name>`.",
                 .summary = "Run JavaScript in the page",
                 .input_schema = minify(
                     \\{
@@ -302,7 +302,7 @@ pub const Tool = enum {
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
-                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The eval's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evals. Objects, arrays, and strings are serialized automatically — no JSON.stringify needed." }
+                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The evaluate's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evaluates. Objects, arrays, and strings are serialized automatically — no JSON.stringify needed." }
                     \\  },
                     \\  "required": ["script"]
                     \\}
@@ -334,7 +334,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." },
-                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The extracted JSON is stored under this name and exposed as `lp.<name>` in subsequent /eval calls." }
+                    \\    "save": { "type": "string", "description": "Optional bridge-store key. The extracted JSON is stored under this name and exposed as `lp.<name>` in subsequent /evaluate calls." }
                     \\  },
                     \\  "required": ["schema"]
                     \\}
@@ -641,8 +641,8 @@ pub const ToolError = error{
 /// Outcome of running a tool against the page. Operational failures (OOM,
 /// missing page, invalid params) come out as Zig errors on the enclosing
 /// `!ToolResult`; `is_error = true` is the in-band signal for a JS-level
-/// failure (V8 caught a throw inside `eval`/`extract`) — the LLM consumes
-/// `text` either way to self-correct. Non-eval tools always set `is_error =
+/// failure (V8 caught a throw inside `evaluate`/`extract`) — the LLM consumes
+/// `text` either way to self-correct. Non-evaluate tools always set `is_error =
 /// false` on success.
 pub const ToolResult = struct {
     text: []const u8,
@@ -730,7 +730,7 @@ fn dispatch(
         .selectOption => .{ .text = try execSelectOption(arena, session, registry, substituted) },
         .setChecked => .{ .text = try execSetChecked(arena, session, registry, substituted) },
         .findElement => .{ .text = try execFindElement(arena, session, registry, substituted) },
-        .eval => execEval(arena, session, registry, substituted),
+        .evaluate => execEvaluate(arena, session, registry, substituted),
         .extract => execExtract(arena, session, registry, substituted),
         .getEnv => .{ .text = try execGetEnv(arena, substituted) },
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
@@ -1066,7 +1066,7 @@ fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
     return renderJson(arena, forms_data);
 }
 
-fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
+fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
         script: [:0]const u8,
         url: ?[:0]const u8 = null,

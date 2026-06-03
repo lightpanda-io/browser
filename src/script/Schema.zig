@@ -730,8 +730,8 @@ test "parseSlashCommand: validates command and rejects whitespace after slash" {
 test "parseValue: double-quoted script with embedded single-quoted argument" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const eval = Schema.find(Schema.all(), "eval").?;
-    const v = (try eval.parseValue(arena.allocator(), "\"setTimeout(() => document.querySelector('a'), 1000)\"")).?;
+    const evaluate = Schema.find(Schema.all(), "evaluate").?;
+    const v = (try evaluate.parseValue(arena.allocator(), "\"setTimeout(() => document.querySelector('a'), 1000)\"")).?;
     try testing.expectString("setTimeout(() => document.querySelector('a'), 1000)", v.object.get("script").?.string);
 }
 
@@ -771,12 +771,12 @@ test "tokenize: even-count backslashes before close-quote are literal" {
 test "hasUnclosedTripleQuote" {
     try testing.expect(!hasUnclosedTripleQuote(""));
     try testing.expect(!hasUnclosedTripleQuote("/goto https://x"));
-    try testing.expect(!hasUnclosedTripleQuote("/eval '''const x = 1;'''"));
-    try testing.expect(hasUnclosedTripleQuote("/eval '''\nconst x = 1;"));
-    try testing.expect(hasUnclosedTripleQuote("/eval \"\"\"\nconst x = 1;"));
-    try testing.expect(!hasUnclosedTripleQuote("/eval \"\"\"\nconst x = 1;\n\"\"\""));
+    try testing.expect(!hasUnclosedTripleQuote("/evaluate '''const x = 1;'''"));
+    try testing.expect(hasUnclosedTripleQuote("/evaluate '''\nconst x = 1;"));
+    try testing.expect(hasUnclosedTripleQuote("/evaluate \"\"\"\nconst x = 1;"));
+    try testing.expect(!hasUnclosedTripleQuote("/evaluate \"\"\"\nconst x = 1;\n\"\"\""));
     // Mismatched closer — still open.
-    try testing.expect(hasUnclosedTripleQuote("/eval '''\nfoo\n\"\"\""));
+    try testing.expect(hasUnclosedTripleQuote("/evaluate '''\nfoo\n\"\"\""));
 }
 
 test "parseValue: rejects non-object JSON payloads" {

@@ -86,7 +86,7 @@ fn dispatchBrowserTool(
     };
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
-        // eval/extract surface failures in-band so the LLM can self-correct;
+        // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
             return sendToolResultText(server, id, @errorName(err), true);
@@ -105,7 +105,7 @@ fn dispatchBrowserTool(
 }
 
 fn surfacesErrorInBand(tool: BrowserTool) bool {
-    return tool == .eval or tool == .extract;
+    return tool == .evaluate or tool == .extract;
 }
 
 fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -157,20 +157,20 @@ fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void 
 const router = @import("router.zig");
 const testing = @import("../testing.zig");
 
-test "MCP - eval error reporting" {
+test "MCP - evaluate error reporting" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
-    // Call eval with a script that throws an error
+    // Call evaluate with a script that throws an error
     const msg =
         \\{
         \\  "jsonrpc": "2.0",
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": {
         \\      "script": "throw new Error('test error')"
         \\    }
@@ -186,7 +186,7 @@ test "MCP - eval error reporting" {
     } }, out.written());
 }
 
-test "MCP - eval: top-level return runs in an async wrapper" {
+test "MCP - evaluate: top-level return runs in an async wrapper" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -198,7 +198,7 @@ test "MCP - eval: top-level return runs in an async wrapper" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "const x = 41; return x + 1;" }
         \\  }
         \\}
@@ -210,7 +210,7 @@ test "MCP - eval: top-level return runs in an async wrapper" {
     } }, out.written());
 }
 
-test "MCP - eval: top-level await runs in an async wrapper" {
+test "MCP - evaluate: top-level await runs in an async wrapper" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -222,7 +222,7 @@ test "MCP - eval: top-level await runs in an async wrapper" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "const v = await Promise.resolve(41); return v + 1;" }
         \\  }
         \\}
@@ -234,7 +234,7 @@ test "MCP - eval: top-level await runs in an async wrapper" {
     } }, out.written());
 }
 
-test "MCP - eval: let declaration does not leak across calls" {
+test "MCP - evaluate: let declaration does not leak across calls" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -246,7 +246,7 @@ test "MCP - eval: let declaration does not leak across calls" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "let leaky = 1; leaky" }
         \\  }
         \\}
@@ -260,7 +260,7 @@ test "MCP - eval: let declaration does not leak across calls" {
         \\  "id": 2,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "let leaky = 2; leaky" }
         \\  }
         \\}
@@ -272,7 +272,7 @@ test "MCP - eval: let declaration does not leak across calls" {
     } }, out.written());
 }
 
-test "MCP - eval: bare expression still returns its value" {
+test "MCP - evaluate: bare expression still returns its value" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -284,7 +284,7 @@ test "MCP - eval: bare expression still returns its value" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "1 + 1" }
         \\  }
         \\}
@@ -296,7 +296,7 @@ test "MCP - eval: bare expression still returns its value" {
     } }, out.written());
 }
 
-test "MCP - eval: object return serializes as JSON" {
+test "MCP - evaluate: object return serializes as JSON" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -308,7 +308,7 @@ test "MCP - eval: object return serializes as JSON" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "return { n: 42, items: [1, 2] };" }
         \\  }
         \\}
@@ -320,7 +320,7 @@ test "MCP - eval: object return serializes as JSON" {
     } }, out.written());
 }
 
-test "MCP - eval: localStorage persists across navigations and is origin-scoped" {
+test "MCP - evaluate: localStorage persists across navigations and is origin-scoped" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
@@ -333,7 +333,7 @@ test "MCP - eval: localStorage persists across navigations and is origin-scoped"
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "localStorage.setItem('foo', 'bar'); localStorage.getItem('foo')" }
         \\  }
         \\}
@@ -366,7 +366,7 @@ test "MCP - eval: localStorage persists across navigations and is origin-scoped"
         \\  "id": 3,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "localStorage.getItem('foo')" }
         \\  }
         \\}
@@ -399,7 +399,7 @@ test "MCP - eval: localStorage persists across navigations and is origin-scoped"
         \\  "id": 5,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "localStorage.getItem('foo')" }
         \\  }
         \\}
@@ -410,7 +410,7 @@ test "MCP - eval: localStorage persists across navigations and is origin-scoped"
     } }, out.written());
 }
 
-test "MCP - eval: save= value is readable via lp.<name> in next eval" {
+test "MCP - evaluate: save= value is readable via lp.<name> in next evaluate" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -422,7 +422,7 @@ test "MCP - eval: save= value is readable via lp.<name> in next eval" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "JSON.stringify('hello')", "save": "greeting" }
         \\  }
         \\}
@@ -436,7 +436,7 @@ test "MCP - eval: save= value is readable via lp.<name> in next eval" {
         \\  "id": 2,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.greeting" }
         \\  }
         \\}
@@ -447,7 +447,7 @@ test "MCP - eval: save= value is readable via lp.<name> in next eval" {
     } }, out.written());
 }
 
-test "MCP - eval: save= a bare string round-trips without JSON.stringify" {
+test "MCP - evaluate: save= a bare string round-trips without JSON.stringify" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -459,7 +459,7 @@ test "MCP - eval: save= a bare string round-trips without JSON.stringify" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "return document.title || 'untitled';", "save": "title" }
         \\  }
         \\}
@@ -473,7 +473,7 @@ test "MCP - eval: save= a bare string round-trips without JSON.stringify" {
         \\  "id": 2,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.title" }
         \\  }
         \\}
@@ -484,7 +484,7 @@ test "MCP - eval: save= a bare string round-trips without JSON.stringify" {
     } }, out.written());
 }
 
-test "MCP - eval: lp.* mutations auto-sync between evals" {
+test "MCP - evaluate: lp.* mutations auto-sync between evaluates" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -496,7 +496,7 @@ test "MCP - eval: lp.* mutations auto-sync between evals" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.counter = 7; lp.counter" }
         \\  }
         \\}
@@ -510,7 +510,7 @@ test "MCP - eval: lp.* mutations auto-sync between evals" {
         \\  "id": 2,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.counter + 1" }
         \\  }
         \\}
@@ -521,7 +521,7 @@ test "MCP - eval: lp.* mutations auto-sync between evals" {
     } }, out.written());
 }
 
-test "MCP - eval: lp.* survives navigation" {
+test "MCP - evaluate: lp.* survives navigation" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
@@ -533,7 +533,7 @@ test "MCP - eval: lp.* survives navigation" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.token = 'abc'" }
         \\  }
         \\}
@@ -561,7 +561,7 @@ test "MCP - eval: lp.* survives navigation" {
         \\  "id": 3,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.token" }
         \\  }
         \\}
@@ -572,7 +572,7 @@ test "MCP - eval: lp.* survives navigation" {
     } }, out.written());
 }
 
-test "MCP - eval: delete lp.<key> removes from bridge store" {
+test "MCP - evaluate: delete lp.<key> removes from bridge store" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -584,7 +584,7 @@ test "MCP - eval: delete lp.<key> removes from bridge store" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.tmp = 1" }
         \\  }
         \\}
@@ -598,7 +598,7 @@ test "MCP - eval: delete lp.<key> removes from bridge store" {
         \\  "id": 2,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "delete lp.tmp; 0" }
         \\  }
         \\}
@@ -612,7 +612,7 @@ test "MCP - eval: delete lp.<key> removes from bridge store" {
         \\  "id": 3,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "typeof lp.tmp" }
         \\  }
         \\}
@@ -652,7 +652,7 @@ test "MCP - extract: save= exposes the result as lp.<name>" {
         \\  "id": 2,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.page.btn" }
         \\  }
         \\}
@@ -738,7 +738,7 @@ test "MCP - extract: follow to a missing page yields [] without failing the extr
     } }, out.written());
 }
 
-test "MCP - eval: Promise.resolve return value is awaited" {
+test "MCP - evaluate: Promise.resolve return value is awaited" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -750,7 +750,7 @@ test "MCP - eval: Promise.resolve return value is awaited" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "Promise.resolve(7)" }
         \\  }
         \\}
@@ -761,7 +761,7 @@ test "MCP - eval: Promise.resolve return value is awaited" {
     } }, out.written());
 }
 
-test "MCP - eval: async IIFE resolves to returned value" {
+test "MCP - evaluate: async IIFE resolves to returned value" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -773,7 +773,7 @@ test "MCP - eval: async IIFE resolves to returned value" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "(async () => { const xs = [1,2,3]; let s = 0; for (const x of xs) s += await Promise.resolve(x); return s; })()" }
         \\  }
         \\}
@@ -784,7 +784,7 @@ test "MCP - eval: async IIFE resolves to returned value" {
     } }, out.written());
 }
 
-test "MCP - eval: rejected Promise surfaces as is_error" {
+test "MCP - evaluate: rejected Promise surfaces as is_error" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -796,7 +796,7 @@ test "MCP - eval: rejected Promise surfaces as is_error" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "(async () => { throw new Error('nope'); })()" }
         \\  }
         \\}
@@ -806,7 +806,7 @@ test "MCP - eval: rejected Promise surfaces as is_error" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "nope") != null);
 }
 
-test "MCP - eval: async IIFE without explicit return resolves to empty text" {
+test "MCP - evaluate: async IIFE without explicit return resolves to empty text" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -818,7 +818,7 @@ test "MCP - eval: async IIFE without explicit return resolves to empty text" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "(async () => { lp.touched = true; })()" }
         \\  }
         \\}
@@ -829,7 +829,7 @@ test "MCP - eval: async IIFE without explicit return resolves to empty text" {
     } }, out.written());
 }
 
-test "MCP - eval: lp.* mutations inside async IIFE survive to the next eval" {
+test "MCP - evaluate: lp.* mutations inside async IIFE survive to the next evaluate" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
@@ -841,7 +841,7 @@ test "MCP - eval: lp.* mutations inside async IIFE survive to the next eval" {
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "(async () => { lp.total = 0; for (const n of [10, 20, 30]) lp.total += await Promise.resolve(n); })()" }
         \\  }
         \\}
@@ -855,7 +855,7 @@ test "MCP - eval: lp.* mutations inside async IIFE survive to the next eval" {
         \\  "id": 2,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "eval",
+        \\    "name": "evaluate",
         \\    "arguments": { "script": "lp.total" }
         \\  }
         \\}
@@ -1354,8 +1354,8 @@ test "MCP - press Enter on form input triggers submit (lowercase alias)" {
     try router.handleMessage(server, aa, press_msg);
     out.clearRetainingCapacity();
 
-    const eval_msg = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"eval\",\"arguments\":{\"script\":\"window.submitted === true && window.submittedValue === 'hello'\"}}}");
-    try router.handleMessage(server, aa, eval_msg);
+    const evaluate_msg = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"evaluate\",\"arguments\":{\"script\":\"window.submitted === true && window.submittedValue === 'hello'\"}}}");
+    try router.handleMessage(server, aa, evaluate_msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "true") != null);
 }
 

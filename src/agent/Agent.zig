@@ -1073,7 +1073,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
     };
 }
 
-/// Data output (/extract, /eval, /markdown, /tree, …) → plain stdout on
+/// Data output (/extract, /evaluate, /markdown, /tree, …) → plain stdout on
 /// success so a caller can pipe it. Everything else routes through
 /// `printToolOutcome`, which lays down the green ● / red ● dot shared
 /// with the LLM tool-call path. Callers only invoke this for `.tool_call`
