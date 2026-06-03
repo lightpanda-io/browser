@@ -271,6 +271,7 @@ const DeferredContext = struct {
 
                     if (!proceed) {
                         self.forward.forwardErr(error.Abort);
+                        return;
                     }
                 },
                 .data => |chunk| {
