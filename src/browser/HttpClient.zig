@@ -111,9 +111,14 @@ network: *Network,
 
 arena_pool: *ArenaPool,
 
-// The current proxy. CDP can change it, changeProxy(null) restores
-// from config.
+// The current proxy. Callers can change it, changeProxy(null) restores
+// from config. May point either at `http_proxy_owned` (a caller-supplied
+// dupe) or at the config string (which we must not free).
 http_proxy: ?[:0]const u8 = null,
+
+// When a caller (e.g. CDP) supplies a proxy, we have to dupe it to take ownership
+// which we'll be responsible for freeing.
+http_proxy_owned: ?[:0]const u8 = null,
 
 // track if the client use a proxy for connections.
 // We can't use http_proxy because we want also to track proxy configured via
@@ -260,6 +265,9 @@ pub fn deinit(self: *Client) void {
     self.handles.deinit();
 
     self.clearUserAgentOverride();
+    if (self.http_proxy_owned) |owned| {
+        self.allocator.free(owned);
+    }
 
     self.robots_layer.deinit(self.allocator);
     self.deferring_layer.deinit();
@@ -337,7 +345,22 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
 // can be changed at any point in the easy's lifecycle.
 pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
     try self.ensureNoActiveConnection();
-    self.http_proxy = proxy orelse self.network.config.httpProxy();
+
+    // Free any previously-duped proxy before we overwrite http_proxy.
+    if (self.http_proxy_owned) |owned| {
+        self.allocator.free(owned);
+        self.http_proxy_owned = null;
+    }
+
+    // Reset to the config default; if dupeZ below fails, http_proxy is
+    // left pointing at this rather than at the freed dup.
+    self.http_proxy = self.network.config.httpProxy();
+
+    if (proxy) |p| {
+        const owned = try self.allocator.dupeZ(u8, p);
+        self.http_proxy_owned = owned;
+        self.http_proxy = owned;
+    }
     self.use_proxy = self.http_proxy != null;
 }
 
@@ -1564,10 +1587,28 @@ pub const Transfer = struct {
     // post-perform would need to be improved),
     pub fn unpark(self: *Transfer) void {
         lp.assert(self.state == .parked, "Transfer.unpark", .{ .state = self.state });
+        self.leaveIntercept();
         self.state = .created;
     }
 
+    // Decrement the interception counter iff this transfer is currently
+    // parked for CDP interception.
+    fn leaveIntercept(self: *Transfer) void {
+        if (self.state != .parked) {
+            return;
+        }
+        switch (self.state.parked) {
+            .robots => {},
+            .intercept_request, .intercept_auth => {
+                const intercept_layer = &self.client.interception_layer;
+                lp.assert(intercept_layer.intercepted > 0, "Transfer.leaveIntercept", .{ .value = intercept_layer.intercepted });
+                intercept_layer.intercepted -= 1;
+            },
+        }
+    }
+
     pub fn deinit(self: *Transfer) void {
+        self.leaveIntercept();
         if (self._conn) |c| {
             self.client.removeConn(c);
             self._conn = null;
@@ -1790,6 +1831,7 @@ pub const Transfer = struct {
         return writer.print("{s} {s}", .{ @tagName(req.method), req.url });
     }
 
+    // `url` must have transfer-arena lifetime: it's stored as-is, not duped.
     pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
         self.req.url = url;
     }
@@ -1829,7 +1871,9 @@ pub const Transfer = struct {
             }
 
             const base_url = try conn.getEffectiveUrl();
-            const resolved = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
+            // base_url and location.value are owned by curl. The returned value
+            // will be stored in transfer.req.url, hence the always_dupe.
+            const resolved = try URL.resolve(arena, std.mem.span(base_url), location.value, .{ .always_dupe = true });
 
             // RFC 7231 §7.1.2: if the Location value has no fragment, the redirect
             // inherits the fragment from the URI used to generate the request.
@@ -1904,9 +1948,9 @@ pub const Transfer = struct {
             log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.interception_layer.intercepted });
         }
 
-        self.client.interception_layer.intercepted -= 1;
+        // The transfer is still .parked(.intercept_auth)
+        // abort -> deinit -> leaveIntercept decrements the counter.
         self.abort(error.AbortAuthChallenge);
-        return;
     }
 
     // headerDoneCallback is called once the headers have been read.
@@ -2067,13 +2111,16 @@ pub const Transfer = struct {
 
 pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     if (comptime IS_DEBUG) {
-        lp.assert(self.interception_layer.intercepted > 0, "HttpClient.continueTransfer", .{ .value = self.interception_layer.intercepted });
         log.debug(.http, "continue transfer", .{ .intercepted = self.interception_layer.intercepted });
     }
 
-    self.interception_layer.intercepted -= 1;
     transfer.unpark();
-    return self.process(transfer);
+    self.process(transfer) catch |err| {
+        if (transfer.state == .created) {
+            transfer.abort(err);
+        }
+        return err;
+    };
 }
 
 const Noop = struct {
