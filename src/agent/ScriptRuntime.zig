@@ -399,8 +399,12 @@ fn buildArgs(
         .press => try self.singleStringOrObject(arena, context, info, argc, "key"),
         .scroll => if (argc == 0) std.json.Value{ .object = .init(arena) } else try self.singleObject(arena, context, info, argc),
         .click, .fill, .hover, .selectOption, .setChecked => try self.singleObject(arena, context, info, argc),
-        // Read-only tools aren't recorded, so they're never installed as primitives.
-        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => unreachable,
+        // Only recorded tools are installed, so the rest are unreachable; the
+        // comptime guard makes a recorded tool left unmarshalled a compile error.
+        inline else => |t| {
+            if (comptime t.isRecorded()) @compileError("recorded tool ." ++ @tagName(t) ++ " has no marshalling in buildArgs");
+            unreachable;
+        },
     };
 }
 
