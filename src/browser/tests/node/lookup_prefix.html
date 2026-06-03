@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="host" xmlns:foo="http://example.com/foo" xmlns:bar="http://example.com/bar">
+  <span id="child"></span>
+</div>
+
+<script id="lookupPrefix">
+  {
+    const host = document.getElementById('host');
+
+    // Resolves a prefix declared via an xmlns: attribute on the element.
+    testing.expectEqual('foo', host.lookupPrefix('http://example.com/foo'));
+    testing.expectEqual('bar', host.lookupPrefix('http://example.com/bar'));
+
+    // A descendant inherits the declaration by walking up to the ancestor.
+    const child = document.getElementById('child');
+    testing.expectEqual('foo', child.lookupPrefix('http://example.com/foo'));
+
+    // Unknown namespace returns null.
+    testing.expectEqual(null, host.lookupPrefix('http://example.com/missing'));
+  }
+</script>
+
+<script id="lookupPrefix-null-empty">
+  {
+    const host = document.getElementById('host');
+
+    // null or empty namespace always returns null.
+    testing.expectEqual(null, host.lookupPrefix(null));
+    testing.expectEqual(null, host.lookupPrefix(''));
+  }
+</script>
+
+<script id="lookupPrefix-own-prefix">
+  {
+    // An element whose own prefix declares the namespace returns that prefix.
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg:rect');
+    testing.expectEqual('svg', svg.prefix);
+    testing.expectEqual('svg', svg.lookupPrefix('http://www.w3.org/2000/svg'));
+
+    // Detached element with no matching declaration returns null.
+    const div = document.createElement('div');
+    testing.expectEqual(null, div.lookupPrefix('http://example.com/foo'));
+  }
+</script>
