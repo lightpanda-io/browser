@@ -111,9 +111,14 @@ network: *Network,
 
 arena_pool: *ArenaPool,
 
-// The current proxy. CDP can change it, changeProxy(null) restores
-// from config.
+// The current proxy. Callers can change it, changeProxy(null) restores
+// from config. May point either at `http_proxy_owned` (a caller-supplied
+// dupe) or at the config string (which we must not free).
 http_proxy: ?[:0]const u8 = null,
+
+// When a caller (e.g. CDP) supplies a proxy, we have to dupe it to take ownership
+// which we'll be responsible for freeing.
+http_proxy_owned: ?[:0]const u8 = null,
 
 // track if the client use a proxy for connections.
 // We can't use http_proxy because we want also to track proxy configured via
@@ -260,6 +265,9 @@ pub fn deinit(self: *Client) void {
     self.handles.deinit();
 
     self.clearUserAgentOverride();
+    if (self.http_proxy_owned) |owned| {
+        self.allocator.free(owned);
+    }
 
     self.robots_layer.deinit(self.allocator);
     self.deferring_layer.deinit();
@@ -337,7 +345,22 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
 // can be changed at any point in the easy's lifecycle.
 pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
     try self.ensureNoActiveConnection();
-    self.http_proxy = proxy orelse self.network.config.httpProxy();
+
+    // Free any previously-duped proxy before we overwrite http_proxy.
+    if (self.http_proxy_owned) |owned| {
+        self.allocator.free(owned);
+        self.http_proxy_owned = null;
+    }
+
+    // Reset to the config default; if dupeZ below fails, http_proxy is
+    // left pointing at this rather than at the freed dup.
+    self.http_proxy = self.network.config.httpProxy();
+
+    if (proxy) |p| {
+        const owned = try self.allocator.dupeZ(u8, p);
+        self.http_proxy_owned = owned;
+        self.http_proxy = owned;
+    }
     self.use_proxy = self.http_proxy != null;
 }
 
