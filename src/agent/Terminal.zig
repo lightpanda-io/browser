@@ -387,16 +387,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     const inside_block = Schema.hasUnclosedTripleQuote(input);
 
     if (input[0] == '/') {
-        if (has_space) {
-            if (!inside_block) if (Schema.parseSlashCommand(input)) |parts| {
-                if (Schema.findByName(parts.name)) |schema| {
-                    addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
-                } else if (SlashCommand.findMeta(parts.name)) |meta| {
-                    self.addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
-                }
-            };
-            // Fall through so `value=$LP_` picks up env completions.
-        } else {
+        if (!has_space) {
             const partial = input[1..];
             // Trailing space on commands with params hands off to the hinter,
             // which renders the full ` <url> [timeout=…]` template uniformly
@@ -406,7 +397,17 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
                 addPrefixedCompletion(cenv, &buf, input, "/", name, suffix, partial);
             }
             return;
+        } else if (!inside_block) {
+            if (Schema.parseSlashCommand(input)) |parts| {
+                if (Schema.findByName(parts.name)) |schema| {
+                    addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
+                } else if (SlashCommand.findMeta(parts.name)) |meta| {
+                    self.addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
+                }
+            }
         }
+        // Fall through so `value=$LP_` picks up env completions, including
+        // inside an unclosed `'''` block.
     }
 
     addEnvVarCompletions(cenv, &buf, input);
