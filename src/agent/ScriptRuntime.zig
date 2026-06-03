@@ -35,33 +35,24 @@ env: lp.js.Env,
 context: v8.Global,
 has_context: bool,
 call_arena: std.heap.ArenaAllocator,
-primitive_data: [std.enums.values(Primitive).len]PrimitiveData,
+primitive_data: [recorded_tool_count]PrimitiveData,
 console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 
-const Primitive = enum {
-    goto,
-    eval,
-    extract,
-    click,
-    fill,
-    scroll,
-    waitForSelector,
-    waitForScript,
-    hover,
-    press,
-    selectOption,
-    setChecked,
-
-    /// Every `Primitive` tag shares its name with a `BrowserTool` tag; the
-    /// runtime installs exactly the recorded subset of tools as primitives.
-    fn tool(self: Primitive) BrowserTool {
-        return std.meta.stringToEnum(BrowserTool, @tagName(self)).?;
+/// The runtime installs exactly the recorded browser tools as script
+/// primitives — the same set the recorder writes — so every recorded call
+/// replays. `buildArgs` adapts each tool's JS calling convention to the JSON
+/// `browser_tools.call` expects.
+const recorded_tool_count = blk: {
+    var n: usize = 0;
+    for (std.enums.values(BrowserTool)) |t| {
+        if (t.isRecorded()) n += 1;
     }
+    break :blk n;
 };
 
 const PrimitiveData = struct {
     runtime: *ScriptRuntime,
-    primitive: Primitive,
+    tool: BrowserTool,
 };
 
 const ConsoleMethod = enum {
@@ -158,9 +149,12 @@ fn createContext(self: *ScriptRuntime) InitError!void {
     defer v8.v8__Context__Exit(context);
 
     const global = v8.v8__Context__Global(context) orelse return error.RuntimeInitFailed;
-    for (std.enums.values(Primitive), 0..) |primitive, i| {
-        self.primitive_data[i] = .{ .runtime = self, .primitive = primitive };
-        try self.installPrimitive(context, global, @tagName(primitive), &self.primitive_data[i]);
+    var i: usize = 0;
+    for (std.enums.values(BrowserTool)) |t| {
+        if (!t.isRecorded()) continue;
+        self.primitive_data[i] = .{ .runtime = self, .tool = t };
+        try self.installPrimitive(context, global, @tagName(t), &self.primitive_data[i]);
+        i += 1;
     }
     try self.installConsole(context, global);
 }
@@ -282,7 +276,7 @@ fn primitiveCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) 
     const info = info_handle orelse return;
     const raw_data = v8.v8__FunctionCallbackInfo__Data(info) orelse return;
     const data: *PrimitiveData = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(raw_data)) orelse return));
-    data.runtime.invoke(data.primitive, info);
+    data.runtime.invoke(data.tool, info);
 }
 
 fn consoleCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
@@ -292,7 +286,7 @@ fn consoleCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) vo
     data.runtime.invokeConsole(data.method, info);
 }
 
-fn invoke(self: *ScriptRuntime, primitive: Primitive, info: *const v8.FunctionCallbackInfo) void {
+fn invoke(self: *ScriptRuntime, tool: BrowserTool, info: *const v8.FunctionCallbackInfo) void {
     // Owned, not shared: marshalling runs JS (`toJSON`) that can re-enter a
     // primitive; a shared arena would let the nested call reset ours mid-flight.
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
@@ -304,18 +298,18 @@ fn invoke(self: *ScriptRuntime, primitive: Primitive, info: *const v8.FunctionCa
         return;
     };
 
-    const args = self.buildArgs(arena, context, primitive, info) catch |err| switch (err) {
+    const args = self.buildArgs(arena, context, tool, info) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
         error.JsException => return,
         error.InvalidArguments => return self.throwTypeError("invalid arguments"),
     };
 
-    const result = self.callTool(arena, primitive.tool(), args) catch |err| switch (err) {
+    const result = self.callTool(arena, tool, args) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
     };
 
     switch (result) {
-        .ok => |text| switch (primitive) {
+        .ok => |text| switch (tool) {
             .extract => {
                 const normalized = self.normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
                     error.OutOfMemory => return self.throwError("out of memory"),
@@ -391,12 +385,12 @@ fn buildArgs(
     self: *ScriptRuntime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
-    primitive: Primitive,
+    tool: BrowserTool,
     info: *const v8.FunctionCallbackInfo,
 ) BuildArgsError!?std.json.Value {
     const argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
 
-    return switch (primitive) {
+    return switch (tool) {
         .goto => try self.singleStringOrObject(arena, context, info, argc, "url"),
         .eval => try self.singleStringOrObject(arena, context, info, argc, "script"),
         .extract => try self.extractArgs(arena, context, info, argc),
@@ -405,6 +399,8 @@ fn buildArgs(
         .press => try self.singleStringOrObject(arena, context, info, argc, "key"),
         .scroll => if (argc == 0) std.json.Value{ .object = .init(arena) } else try self.singleObject(arena, context, info, argc),
         .click, .fill, .hover, .selectOption, .setChecked => try self.singleObject(arena, context, info, argc),
+        // Read-only tools aren't recorded, so they're never installed as primitives.
+        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => unreachable,
     };
 }
 
