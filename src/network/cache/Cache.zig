@@ -37,7 +37,7 @@ pub fn deinit(self: *Cache) void {
     };
 }
 
-pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) ?CachedResponse {
+pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
     return switch (self.kind) {
         inline else => |*c| c.get(arena, req),
     };
@@ -49,7 +49,7 @@ pub fn put(self: *Cache, metadata: CachedMetadata, body: []const u8) !void {
     };
 }
 
-pub fn evict(self: *Cache, url: []const u8) void {
+pub fn evict(self: *Cache, url: []const u8) !void {
     return switch (self.kind) {
         inline else => |*c| c.evict(url),
     };

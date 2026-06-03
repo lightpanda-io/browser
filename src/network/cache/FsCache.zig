@@ -136,7 +136,7 @@ pub fn deinit(self: *FsCache) void {
     self.dir.close();
 }
 
-pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?CachedResponse {
+pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
     const hashed_key = hashKey(req.url);
     const cache_p = cachePath(&hashed_key);
 
@@ -149,9 +149,7 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?CachedR
             std.fs.File.OpenError.FileNotFound => {
                 log.debug(.cache, "miss", .{ .url = req.url, .hash = &hashed_key, .reason = "missing" });
             },
-            else => |err| {
-                log.warn(.cache, "open file err", .{ .url = req.url, .err = err });
-            },
+            else => return e,
         }
         return null;
     };
@@ -284,7 +282,7 @@ pub fn clear(self: *FsCache) !void {
     }
 }
 
-pub fn evict(self: *FsCache, url: []const u8) void {
+pub fn evict(self: *FsCache, url: []const u8) !void {
     const hashed_key = hashKey(url);
     const cache_p = cachePath(&hashed_key);
 
@@ -294,7 +292,7 @@ pub fn evict(self: *FsCache, url: []const u8) void {
 
     self.dir.deleteFile(&cache_p) catch |e| switch (e) {
         error.FileNotFound => {},
-        else => log.warn(.cache, "evict failed", .{ .url = url, .err = e }),
+        else => return e,
     };
 }
 
@@ -391,7 +389,7 @@ test "FsCache: basic put and get" {
     const body = "hello world";
     try cache.put(meta, body);
 
-    const result = cache.get(
+    const result = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
@@ -441,7 +439,7 @@ test "FsCache: get expiration" {
     const body = "hello world";
     try cache.put(meta, body);
 
-    const result = cache.get(
+    const result = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
@@ -452,7 +450,7 @@ test "FsCache: get expiration" {
     result.data.file.file.close();
 
     // Expired: age = 200 + 900 = 1100 >= 1000
-    const stale = cache.get(
+    const stale = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
@@ -494,7 +492,7 @@ test "FsCache: put override" {
         const body = "hello world";
         try cache.put(meta, body);
 
-        const result = cache.get(
+        const result = try cache.get(
             arena.allocator(),
             .{
                 .url = "https://example.com",
@@ -534,7 +532,7 @@ test "FsCache: put override" {
         const body = "goodbye world";
         try cache.put(meta, body);
 
-        const result = cache.get(
+        const result = try cache.get(
             arena.allocator(),
             .{
                 .url = "https://example.com",
@@ -568,9 +566,11 @@ test "FsCache: garbage file" {
         setup.tmp.cleanup();
     }
 
+    const cache = &setup.cache;
+
     const hashed_key = hashKey("https://example.com");
     const cache_p = cachePath(&hashed_key);
-    const file = try setup.cache.kind.fs.dir.createFile(&cache_p, .{});
+    const file = try cache.kind.fs.dir.createFile(&cache_p, .{});
     try file.writeAll("this is not a valid cache file !@#$%");
     file.close();
 
@@ -579,7 +579,7 @@ test "FsCache: garbage file" {
 
     try testing.expectEqual(
         null,
-        setup.cache.get(arena.allocator(), .{
+        try cache.get(arena.allocator(), .{
             .url = "https://example.com",
             .timestamp = 5000,
             .request_headers = &.{},
@@ -615,7 +615,7 @@ test "FsCache: vary hit and miss" {
 
     try cache.put(meta, "hello world");
 
-    const result = cache.get(arena.allocator(), .{
+    const result = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
@@ -624,7 +624,7 @@ test "FsCache: vary hit and miss" {
     }) orelse return error.CacheMiss;
     result.data.file.file.close();
 
-    try testing.expectEqual(null, cache.get(arena.allocator(), .{
+    try testing.expectEqual(null, try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
@@ -632,13 +632,13 @@ test "FsCache: vary hit and miss" {
         },
     }));
 
-    try testing.expectEqual(null, cache.get(arena.allocator(), .{
+    try testing.expectEqual(null, try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{},
     }));
 
-    const result2 = cache.get(arena.allocator(), .{
+    const result2 = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
@@ -677,7 +677,7 @@ test "FsCache: vary multiple headers" {
 
     try cache.put(meta, "hello world");
 
-    const result = cache.get(arena.allocator(), .{
+    const result = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
@@ -687,7 +687,7 @@ test "FsCache: vary multiple headers" {
     }) orelse return error.CacheMiss;
     result.data.file.file.close();
 
-    try testing.expectEqual(null, cache.get(arena.allocator(), .{
+    try testing.expectEqual(null, try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
@@ -736,7 +736,7 @@ test "FsCache: clear removes all entries" {
     try cache.put(base_meta_b, "body b");
 
     // Sanity check: both are cached
-    const r1 = cache.get(
+    const r1 = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com/a",
@@ -747,7 +747,7 @@ test "FsCache: clear removes all entries" {
     try testing.expect(r1 != null);
     r1.?.data.file.file.close();
 
-    const r2 = cache.get(
+    const r2 = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com/b",
@@ -760,7 +760,7 @@ test "FsCache: clear removes all entries" {
 
     try cache.clear();
 
-    try testing.expectEqual(null, cache.get(
+    try testing.expectEqual(null, try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com/a",
@@ -768,7 +768,7 @@ test "FsCache: clear removes all entries" {
             .request_headers = &.{},
         },
     ));
-    try testing.expectEqual(null, cache.get(
+    try testing.expectEqual(null, try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com/b",
@@ -808,7 +808,7 @@ test "FsCache: put after clear works" {
     // Should be a miss after clear
     try testing.expectEqual(
         null,
-        cache.get(
+        try cache.get(
             arena.allocator(),
             .{
                 .url = "https://example.com",
@@ -820,7 +820,7 @@ test "FsCache: put after clear works" {
 
     // Put again after clear — should work normally
     try cache.put(meta, "after clear");
-    const result = cache.get(
+    const result = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
@@ -865,7 +865,7 @@ test "FsCache: evict removes entry" {
 
     try cache.put(meta, "hello world");
 
-    const result = cache.get(
+    const result = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
@@ -875,9 +875,9 @@ test "FsCache: evict removes entry" {
     ) orelse return error.CacheMiss;
     result.data.file.file.close();
 
-    cache.evict("https://example.com");
+    try cache.evict("https://example.com");
 
-    try testing.expectEqual(null, cache.get(
+    try testing.expectEqual(null, try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
@@ -920,7 +920,7 @@ test "FsCache: renew refreshes expiry" {
 
     // Without revalidation would expire at now+1000, but clock reset to now+500
     // so still fresh at now+1200
-    const r1 = cache.get(
+    const r1 = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
@@ -931,7 +931,7 @@ test "FsCache: renew refreshes expiry" {
     r1.data.file.file.close();
 
     // Expires at now+500+1000 = now+1500
-    const stale1 = cache.get(
+    const stale1 = try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
@@ -972,7 +972,7 @@ test "FsCache: renew preserves body" {
 
     try cache.renew(arena.allocator(), "https://example.com", now + 100);
 
-    const result = cache.get(arena.allocator(), .{
+    const result = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now + 100,
         .request_headers = &.{},

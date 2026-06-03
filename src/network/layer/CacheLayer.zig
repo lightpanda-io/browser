@@ -61,11 +61,14 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     var iter = req.headers.iterator();
     const req_header_list = try iter.collect(arena);
 
-    const cached = transfer.client.network.cache.?.get(arena, .{
-        .url = req.url,
-        .timestamp = std.time.timestamp(),
-        .request_headers = req_header_list.items,
-    }) orelse {
+    const cached = try transfer.client.network.cache.?.get(
+        arena,
+        .{
+            .url = req.url,
+            .timestamp = std.time.timestamp(),
+            .request_headers = req_header_list.items,
+        },
+    ) orelse {
         // Cache miss: install wrappers so we can inspect the response and decide
         // whether to write the body into the cache when it's done.
         try installCacheContext(arena, transfer, null);
@@ -114,7 +117,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         try installCacheContext(arena, transfer, cached);
     } else {
         // If it is expired w/o validators, evict from Cache.
-        transfer.client.network.cache.?.evict(req.url);
+        try transfer.client.network.cache.?.evict(req.url);
         try installCacheContext(arena, transfer, null);
     }
 
