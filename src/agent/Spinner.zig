@@ -227,7 +227,6 @@ fn workerLoop(self: *Spinner) void {
         while (!self.should_exit and self.state == .idle) self.cv.wait(&self.mu);
         if (self.should_exit) return;
 
-        // Honor minimum tool-display time before reverting to thinking.
         switch (self.state) {
             .tool => {
                 if (self.state.tool.dwell_pending) {

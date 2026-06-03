@@ -484,7 +484,6 @@ fn runRepl(self: *Agent) void {
     self.terminal.printDimmed("  /help to list slash commands\t\t\tTab completes/cycles through commands", .{});
     self.terminal.printDimmed("  /quit to exit", .{});
     self.terminal.printDimmed("  ! for JS mode (eval against the page)\t\tEsc exits JS mode", .{});
-    // self.terminal.printInfo("", .{});
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
     repl: while (true) {
@@ -1110,7 +1109,7 @@ fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResu
     self.terminal.printToolOutcome(tc.name(), result.text, result.is_error);
 }
 
-// Re-indent JSON for the terminal; MCP keeps renderJson's compact form.
+/// Re-indent JSON for the terminal; MCP keeps renderJson's compact form.
 fn printData(self: *Agent, text: []const u8) void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();

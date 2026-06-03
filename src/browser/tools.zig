@@ -866,9 +866,9 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
     return renderFrameMarkdown(arena, ddg_frame);
 }
 
-// Thin wrapper over `zenai.search.tavily.Client` that handles client
-// lifetime and renders the structured response as markdown for the agent.
-// `arena` owns the returned slice. `api_key` is the value of TAVILY_API_KEY.
+/// Thin wrapper over `zenai.search.tavily.Client` that handles client
+/// lifetime and renders the structured response as markdown for the agent.
+/// `arena` owns the returned slice. `api_key` is the value of TAVILY_API_KEY.
 fn tavilySearch(
     arena: std.mem.Allocator,
     api_key: []const u8,
