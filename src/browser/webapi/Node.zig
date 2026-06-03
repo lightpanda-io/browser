@@ -31,7 +31,6 @@ pub const CData = @import("CData.zig");
 pub const Element = @import("Element.zig");
 pub const Document = @import("Document.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
-pub const Children = @import("children.zig").Children;
 pub const DocumentFragment = @import("DocumentFragment.zig");
 pub const DocumentType = @import("DocumentType.zig");
 pub const ShadowRoot = @import("ShadowRoot.zig");
@@ -46,7 +45,9 @@ const Node = @This();
 _type: Type,
 _proto: *EventTarget,
 _parent: ?*Node = null,
-_children: ?*Children = null,
+// A node with no children leaves this null (no allocation). Otherwise it
+// points to a heap-allocated intrusive list of the node's `_child_link`s.
+_children: ?*LinkedList = null,
 _child_link: LinkedList.Node = .{},
 
 // Lookup for nodes that have a different owner document than frame.document
@@ -171,12 +172,12 @@ pub fn findAdjacentNodes(self: *Node, position: []const u8) !struct { *Node, ?*N
 
 pub fn firstChild(self: *const Node) ?*Node {
     const children = self._children orelse return null;
-    return children.first();
+    return linkToNodeOrNull(children.first);
 }
 
 pub fn lastChild(self: *const Node) ?*Node {
     const children = self._children orelse return null;
-    return children.last();
+    return linkToNodeOrNull(children.last);
 }
 
 pub fn nextSibling(self: *const Node) ?*Node {
@@ -692,7 +693,7 @@ pub fn childrenIterator(self: *Node) NodeIterator {
     };
 
     return .{
-        .node = children.first(),
+        .node = linkToNodeOrNull(children.first),
     };
 }
 

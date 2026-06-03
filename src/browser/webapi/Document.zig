@@ -806,7 +806,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     // Extract children from wrapper HTML element (html5ever wraps fragments)
     // https://github.com/servo/html5ever/issues/583
     const children = fragment_node._children orelse return;
-    const first = children.first();
+    const first = Node.linkToNode(children.first.?);
 
     // Collect all children to insert (to avoid iterator invalidation)
     var children_to_insert: std.ArrayList(*Node) = .empty;
