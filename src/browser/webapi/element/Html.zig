@@ -61,6 +61,7 @@ pub const Legend = @import("html/Legend.zig");
 pub const LI = @import("html/LI.zig");
 pub const Link = @import("html/Link.zig");
 pub const Map = @import("html/Map.zig");
+pub const Marquee = @import("html/Marquee.zig");
 pub const Media = @import("html/Media.zig");
 pub const Meta = @import("html/Meta.zig");
 pub const Meter = @import("html/Meter.zig");
@@ -151,6 +152,7 @@ pub const Type = union(enum) {
     li: *LI,
     link: *Link,
     map: *Map,
+    marquee: *Marquee,
     media: *Media,
     meta: *Meta,
     meter: *Meter,
@@ -342,14 +344,12 @@ pub fn setHidden(self: *HtmlElement, hidden: bool, frame: *Frame) !void {
 }
 
 pub fn getTabIndex(self: *HtmlElement) i32 {
-    const attr = self.asElement().getAttributeSafe(comptime .wrap("tabindex")) orelse {
-        // Per spec, interactive/focusable elements default to 0 when tabindex is absent
-        return switch (self._type) {
-            .anchor, .area, .button, .input, .select, .textarea, .iframe => 0,
-            else => -1,
-        };
+    const default: i32 = switch (self._type) {
+        .anchor, .area, .button, .input, .select, .textarea, .iframe => 0,
+        else => -1,
     };
-    return std.fmt.parseInt(i32, attr, 10) catch -1;
+    const attr = self.asElement().getAttributeSafe(comptime .wrap("tabindex")) orelse return default;
+    return parseInteger(attr) orelse default;
 }
 
 pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
@@ -359,11 +359,39 @@ pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
 }
 
 pub fn getDir(self: *HtmlElement) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("dir")) orelse "";
+    return reflectEnumerated(self.asElement().getAttributeSafe(comptime .wrap("dir")), &.{ "ltr", "rtl", "auto" }, "", "").?;
 }
 
 pub fn setDir(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
+}
+
+pub fn getAccessKey(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("accesskey")) orelse "";
+}
+
+pub fn setAccessKey(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("accesskey"), .wrap(value), frame);
+}
+
+pub fn getAutofocus(self: *HtmlElement) bool {
+    return self.asElement().getAttributeSafe(comptime .wrap("autofocus")) != null;
+}
+
+pub fn setAutofocus(self: *HtmlElement, autofocus: bool, frame: *Frame) !void {
+    if (autofocus) {
+        try self.asElement().setAttributeSafe(comptime .wrap("autofocus"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("autofocus"), frame);
+    }
+}
+
+pub fn getNonce(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("nonce")) orelse "";
+}
+
+pub fn setNonce(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("nonce"), .wrap(value), frame);
 }
 
 pub fn getLang(self: *HtmlElement) []const u8 {
@@ -1223,6 +1251,57 @@ pub fn getOnWheel(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
     return self.getAttributeFunction(.onwheel, frame);
 }
 
+// HTML integer parsing is lax
+pub fn parseInteger(input: []const u8) ?i32 {
+    var normalized = std.mem.trimStart(u8, input, "\t\n\r\x0c ");
+    if (normalized.len == 0) {
+        return null;
+    }
+
+    var negative = false;
+    if (normalized[0] == '-') {
+        negative = true;
+        normalized = normalized[1..];
+    } else if (normalized[0] == '+') {
+        normalized = normalized[1..];
+    }
+
+    if (normalized.len == 0 or std.ascii.isDigit(normalized[0]) == false) {
+        return null;
+    }
+
+    var i: usize = 0;
+    var value: i64 = 0;
+    while (i < normalized.len and std.ascii.isDigit(normalized[i])) : (i += 1) {
+        value = value * 10 + (normalized[i] - '0');
+        if (value > 2147483648) {
+            return null;
+        }
+    }
+
+    if (negative) {
+        value = -value;
+    }
+
+    if (value < -2147483648 or value > 2147483647) {
+        return null;
+    }
+    return @intCast(value);
+}
+
+pub fn reflectEnumerated(
+    value: ?[]const u8,
+    keywords: []const []const u8,
+    missing: ?[]const u8,
+    invalid: ?[]const u8,
+) ?[]const u8 {
+    const v = value orelse return missing;
+    for (keywords) |keyword| {
+        if (std.ascii.eqlIgnoreCase(v, keyword)) return keyword;
+    }
+    return invalid;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HtmlElement);
 
@@ -1243,10 +1322,13 @@ pub const JsApi = struct {
     pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
     pub const click = bridge.function(HtmlElement.click, .{});
 
+    pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
+    pub const autofocus = bridge.accessor(HtmlElement.getAutofocus, HtmlElement.setAutofocus, .{ .ce_reactions = true });
     pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{ .ce_reactions = true });
+    pub const nonce = bridge.accessor(HtmlElement.getNonce, HtmlElement.setNonce, .{ .ce_reactions = true });
     pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{ .ce_reactions = true });
     pub const title = bridge.accessor(HtmlElement.getTitle, HtmlElement.setTitle, .{ .ce_reactions = true });
 

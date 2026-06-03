@@ -57,7 +57,7 @@ pub fn setMedia(self: *Style, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getType(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "text/css";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
 }
 
 pub fn setType(self: *Style, value: []const u8, frame: *Frame) !void {

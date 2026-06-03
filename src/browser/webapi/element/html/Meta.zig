@@ -68,6 +68,14 @@ pub fn setMedia(self: *Meta, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
 }
 
+pub fn getScheme(self: *Meta) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("scheme")) orelse return "";
+}
+
+pub fn setScheme(self: *Meta, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("scheme"), .wrap(value), frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(MetaElement);
 
@@ -81,4 +89,5 @@ pub const JsApi = struct {
     pub const httpEquiv = bridge.accessor(MetaElement.getHttpEquiv, MetaElement.setHttpEquiv, .{ .ce_reactions = true });
     pub const content = bridge.accessor(MetaElement.getContent, MetaElement.setContent, .{ .ce_reactions = true });
     pub const media = bridge.accessor(MetaElement.getMedia, MetaElement.setMedia, .{ .ce_reactions = true });
+    pub const scheme = bridge.accessor(MetaElement.getScheme, MetaElement.setScheme, .{ .ce_reactions = true });
 };

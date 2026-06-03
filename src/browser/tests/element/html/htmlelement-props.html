@@ -52,5 +52,33 @@
 
     const textarea = document.createElement('textarea');
     testing.expectEqual(0, textarea.tabIndex);
+
+    // tabIndex follows the HTML "rules for parsing integers": skip leading
+    // ASCII whitespace, take an optional sign and the leading run of digits,
+    // ignoring any trailing junk.
+    d3.setAttribute('tabindex', ' 7');
+    testing.expectEqual(7, d3.tabIndex);
+
+    d3.setAttribute('tabindex', '\t\n\f\r9');
+    testing.expectEqual(9, d3.tabIndex);
+
+    d3.setAttribute('tabindex', '7%');
+    testing.expectEqual(7, d3.tabIndex);
+
+    d3.setAttribute('tabindex', '1.5');
+    testing.expectEqual(1, d3.tabIndex);
+
+    d3.setAttribute('tabindex', '-3');
+    testing.expectEqual(-3, d3.tabIndex);
+
+    d3.setAttribute('tabindex', '+4');
+    testing.expectEqual(4, d3.tabIndex);
+
+    // Non-numeric values fall back to the element's default (-1 here).
+    d3.setAttribute('tabindex', 'foo');
+    testing.expectEqual(-1, d3.tabIndex);
+
+    d3.setAttribute('tabindex', '');
+    testing.expectEqual(-1, d3.tabIndex);
   }
 </script>

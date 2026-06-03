@@ -70,11 +70,48 @@ pub fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getAs(self: *const Link) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("as")) orelse "";
+    const valid_as = [_][]const u8{
+        "fetch",
+        "audio",
+        "document",
+        "embed",
+        "font",
+        "image",
+        "manifest",
+        "object",
+        "report",
+        "script",
+        "sharedworker",
+        "style",
+        "track",
+        "video",
+        "worker",
+        "xslt",
+    };
+    return HtmlElement.reflectEnumerated(self.asConstElement().getAttributeSafe(comptime .wrap("as")), &valid_as, "", "").?;
 }
 
 pub fn setAs(self: *Link, value: []const u8, frame: *Frame) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("as"), .wrap(value), frame);
+}
+
+pub fn getReferrerPolicy(self: *const Link) []const u8 {
+    const valid_referrer_policy = [_][]const u8{
+        "",
+        "no-referrer",
+        "no-referrer-when-downgrade",
+        "same-origin",
+        "origin",
+        "strict-origin",
+        "origin-when-cross-origin",
+        "strict-origin-when-cross-origin",
+        "unsafe-url",
+    };
+    return HtmlElement.reflectEnumerated(self.asConstElement().getAttributeSafe(.wrap("referrerpolicy")), &valid_referrer_policy, "", "").?;
+}
+
+pub fn setReferrerPolicy(self: *Link, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(.wrap("referrerpolicy"), .wrap(value), frame);
 }
 
 pub fn getMedia(self: *Link) []const u8 {
@@ -86,15 +123,68 @@ pub fn setMedia(self: *Link, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getCrossOrigin(self: *const Link) ?[]const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin"));
+    const valid_cross_origin = [_][]const u8{
+        "anonymous", "use-credentials",
+    };
+    return HtmlElement.reflectEnumerated(self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin")), &valid_cross_origin, null, "anonymous");
 }
 
-pub fn setCrossOrigin(self: *Link, value: []const u8, frame: *Frame) !void {
-    var normalized: []const u8 = "anonymous";
-    if (std.ascii.eqlIgnoreCase(value, "use-credentials")) {
-        normalized = "use-credentials";
+pub fn setCrossOrigin(self: *Link, value: ?[]const u8, frame: *Frame) !void {
+    // Nullable reflection: a null (or undefined) value removes the attribute;
+    // otherwise the content attribute mirrors the value verbatim and the
+    // getter canonicalizes it.
+    if (value) |v| {
+        return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(v), frame);
     }
-    return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(normalized), frame);
+    return self.asElement().removeAttribute(comptime .wrap("crossorigin"), frame);
+}
+
+pub fn getCharset(self: *const Link) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("charset")) orelse "";
+}
+
+pub fn setCharset(self: *Link, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("charset"), .wrap(value), frame);
+}
+
+pub fn getHreflang(self: *const Link) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("hreflang")) orelse "";
+}
+
+pub fn setHreflang(self: *Link, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("hreflang"), .wrap(value), frame);
+}
+
+pub fn getIntegrity(self: *const Link) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("integrity")) orelse "";
+}
+
+pub fn setIntegrity(self: *Link, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("integrity"), .wrap(value), frame);
+}
+
+pub fn getType(self: *const Link) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
+}
+
+pub fn setType(self: *Link, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
+}
+
+pub fn getRev(self: *const Link) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("rev")) orelse "";
+}
+
+pub fn setRev(self: *Link, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("rev"), .wrap(value), frame);
+}
+
+pub fn getTarget(self: *const Link) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("target")) orelse "";
+}
+
+pub fn setTarget(self: *Link, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
 }
 
 pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
@@ -145,6 +235,13 @@ pub const JsApi = struct {
     pub const media = bridge.accessor(Link.getMedia, Link.setMedia, .{ .ce_reactions = true });
     pub const href = bridge.accessor(Link.getHref, Link.setHref, .{ .ce_reactions = true });
     pub const crossOrigin = bridge.accessor(Link.getCrossOrigin, Link.setCrossOrigin, .{ .ce_reactions = true });
+    pub const referrerPolicy = bridge.accessor(Link.getReferrerPolicy, Link.setReferrerPolicy, .{ .ce_reactions = true });
+    pub const charset = bridge.accessor(Link.getCharset, Link.setCharset, .{ .ce_reactions = true });
+    pub const hreflang = bridge.accessor(Link.getHreflang, Link.setHreflang, .{ .ce_reactions = true });
+    pub const integrity = bridge.accessor(Link.getIntegrity, Link.setIntegrity, .{ .ce_reactions = true });
+    pub const @"type" = bridge.accessor(Link.getType, Link.setType, .{ .ce_reactions = true });
+    pub const rev = bridge.accessor(Link.getRev, Link.setRev, .{ .ce_reactions = true });
+    pub const target = bridge.accessor(Link.getTarget, Link.setTarget, .{ .ce_reactions = true });
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
 
     fn _getRelList(self: *Link, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {

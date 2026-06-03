@@ -176,7 +176,7 @@ const ValueWriter = struct {
     stack: ?[]const u8 = null,
 
     pub fn format(self: ValueWriter, writer: *std.io.Writer) !void {
-        for (self.values, 1..) |value, i| {
+        for (self.valuesToLog(), 1..) |value, i| {
             try writer.print("\n  arg({d}): {f}", .{ i, value });
         }
         if (self.stack) |s| {
@@ -186,7 +186,7 @@ const ValueWriter = struct {
 
     pub fn logFmt(self: ValueWriter, _: []const u8, writer: anytype) !void {
         var buf: [32]u8 = undefined;
-        for (self.values, 0..) |value, i| {
+        for (self.valuesToLog(), 0..) |value, i| {
             const name = try std.fmt.bufPrint(&buf, "param.{d}", .{i});
             try writer.write(name, value);
         }
@@ -194,10 +194,19 @@ const ValueWriter = struct {
 
     pub fn jsonStringify(self: ValueWriter, writer: *std.json.Stringify) !void {
         try writer.beginArray();
-        for (self.values) |value| {
+        for (self.valuesToLog()) |value| {
             try writer.write(value);
         }
         return writer.endArray();
+    }
+
+    fn valuesToLog(self: ValueWriter) []js.Value {
+        if (lp.build_config.wpt_extensions) {
+            // A few WPT tests print HUGE arrays, it's at best, annoying when
+            // running it locally
+            return self.values[0..@min(self.values.len, 100)];
+        }
+        return self.values;
     }
 };
 

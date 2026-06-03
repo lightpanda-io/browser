@@ -38,6 +38,8 @@ const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
+const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
+
 fn initClassIds() void {
     inline for (JsApis, 0..) |JsApi, i| {
         JsApi.Meta.class_id = i;
@@ -63,8 +65,7 @@ platform: *const Platform,
 // the global isolate
 isolate: js.Isolate,
 
-contexts: [64]*Context,
-context_count: usize,
+contexts: std.ArrayList(*Context),
 
 // just kept around because we need to free it on deinit
 isolate_params: *v8.CreateParams,
@@ -184,8 +185,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .app = app,
         .context_id = 0,
         .allocator = allocator,
-        .contexts = undefined,
-        .context_count = 0,
+        .contexts = .empty,
         .isolate = isolate,
         .platform = &app.platform,
         .templates = templates,
@@ -199,11 +199,12 @@ pub fn init(app: *App, opts: InitOpts) !Env {
 
 pub fn deinit(self: *Env) void {
     if (comptime IS_DEBUG) {
-        std.debug.assert(self.context_count == 0);
+        std.debug.assert(self.contexts.items.len == 0);
     }
-    for (self.contexts[0..self.context_count]) |ctx| {
+    for (self.contexts.items) |ctx| {
         ctx.deinit();
     }
+    self.contexts.deinit(self.allocator);
 
     const app = self.app;
     const allocator = app.allocator;
@@ -338,22 +339,18 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     // a v8 context, we can get our context out
     v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, 1, @ptrCast(context));
 
-    const count = self.context_count;
-    if (count >= self.contexts.len) {
+    if (self.contexts.items.len >= MAX_CONTEXTS) {
         return error.TooManyContexts;
     }
-    self.contexts[count] = context;
-    self.context_count = count + 1;
+    try self.contexts.append(self.allocator, context);
 
     return context;
 }
 
 pub fn destroyContext(self: *Env, context: *Context) void {
-    for (self.contexts[0..self.context_count], 0..) |ctx, i| {
+    for (self.contexts.items, 0..) |ctx, i| {
         if (ctx == context) {
-            // Swap with last element and decrement count
-            self.context_count -= 1;
-            self.contexts[i] = self.contexts[self.context_count];
+            _ = self.contexts.swapRemove(i);
             break;
         }
     } else {
@@ -387,9 +384,11 @@ pub fn runMicrotasks(self: *Env) void {
         self.microtask_queues_are_running = true;
         defer self.microtask_queues_are_running = false;
 
+        // Re-read len/items each iteration: a checkpoint can run JS that creates
+        // a new context (e.g. an iframe), appending to (and reallocating) the list.
         var i: usize = 0;
-        while (i < self.context_count) : (i += 1) {
-            const ctx = self.contexts[i];
+        while (i < self.contexts.items.len) : (i += 1) {
+            const ctx = self.contexts.items[i];
             v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
         }
     }
@@ -400,7 +399,11 @@ pub fn runMacrotasks(self: *Env) !void {
         return;
     }
 
-    for (self.contexts[0..self.context_count]) |ctx| {
+    // Re-read len/items each iteration: scheduler.run() can create a new context
+    // (e.g. an iframe), appending to (and reallocating) the list.
+    var i: usize = 0;
+    while (i < self.contexts.items.len) : (i += 1) {
+        const ctx = self.contexts.items[i];
         if (comptime builtin.is_test == false) {
             // I hate this comptime check as much as you do. But we have tests
             // which rely on short execution before shutdown. In real world, it's
@@ -420,7 +423,7 @@ pub fn runMacrotasks(self: *Env) !void {
 
 pub fn msToNextMacrotask(self: *Env) ?u64 {
     var next_task: u64 = std.math.maxInt(u64);
-    for (self.contexts[0..self.context_count]) |ctx| {
+    for (self.contexts.items) |ctx| {
         const candidate = ctx.scheduler.msToNextHigh() orelse continue;
         next_task = @min(candidate, next_task);
     }
