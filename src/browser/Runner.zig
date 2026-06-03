@@ -93,6 +93,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
         const tick_result = self._tick(is_cdp, tick_opts) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
+                error.ClientDisconnected => {}, // CDP layer already logged this
                 else => log.err(.browser, "session wait", .{
                     .err = err,
                     .url = self.frame.url,
