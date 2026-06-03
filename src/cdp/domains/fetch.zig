@@ -198,6 +198,7 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
 
     const transfer = intercept.transfer;
     try bc.intercept_state.put(transfer.id);
+    errdefer _ = bc.intercept_state.remove(transfer.id);
 
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = &id.toInterceptId(transfer.id),
@@ -332,23 +333,21 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
         return cmd.sendResult(null, .{});
     }
 
-    // TODO: double-decrement of interception_layer.intercepted if
-    // continueTransfer fails: continueTransfer decrements unconditionally,
-    // and the errdefer below decrements again via abortAuthChallenge.
-    // Worse: if continueTransfer's failure path destroys the transfer
-    // (start_callback fail in makeRequest), this errdefer hits a freed
-    // transfer. Pre-existing; needs makeRequest failure-semantics cleanup.
-    errdefer transfer.abortAuthChallenge();
-
-    transfer.updateCredentials(try std.fmt.allocPrintSentinel(
-        transfer.arena,
-        "{s}:{s}",
-        .{
-            params.authChallengeResponse.username,
-            params.authChallengeResponse.password,
-        },
-        0,
-    ));
+    {
+        // The transfer is still parked here; if building the credentials
+        // fails, release it. Scoped so the errdefer does NOT cover
+        // continueTransfer (which owns its failures).
+        errdefer transfer.abortAuthChallenge();
+        transfer.updateCredentials(try std.fmt.allocPrintSentinel(
+            transfer.arena,
+            "{s}:{s}",
+            .{
+                params.authChallengeResponse.username,
+                params.authChallengeResponse.password,
+            },
+            0,
+        ));
+    }
 
     try client.continueTransfer(transfer);
     return cmd.sendResult(null, .{});
@@ -440,6 +439,7 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
 
     const transfer = intercept.transfer;
     try bc.intercept_state.put(transfer.id);
+    errdefer _ = bc.intercept_state.remove(transfer.id);
     const request = &transfer.req;
 
     const challenge = transfer._auth_challenge orelse return error.NullAuthChallenge;

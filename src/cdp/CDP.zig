@@ -618,18 +618,9 @@ pub const BrowserContext = struct {
 
         // abort all intercepted requests before closing the session/page
         // since some of these might callback into the page/scriptmanager.
-        // intercept_state stores ids — look each one up; if it's already
-        // gone (out-of-band destroy), there's nothing to abort, but the
-        // intercepted counter still needs decrementing because we
-        // incremented it on pause.
+        // intercept_state stores ids.
         const http_client = &browser.http_client;
         for (self.intercept_state.pendingIntercepts()) |transfer_id| {
-            lp.assert(
-                http_client.interception_layer.intercepted > 0,
-                "BrowserContext.deinit.intercepted",
-                .{ .value = http_client.interception_layer.intercepted },
-            );
-            http_client.interception_layer.intercepted -= 1;
             if (http_client.findTransfer(transfer_id)) |transfer| {
                 transfer.abort(error.ClientDisconnect);
             }
