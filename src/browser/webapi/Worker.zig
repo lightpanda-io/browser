@@ -36,6 +36,12 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Worker = @This();
 
+pub const WorkerType = enum {
+    classic,
+    module,
+    pub const js_enum_from_string = true;
+};
+
 // used by HttpClient when generating notification
 // Ultimately used by CDP to generate request/loader ids.
 _frame_id: u32,
@@ -47,6 +53,7 @@ _arena: Allocator,
 _worker_scope: *WorkerGlobalScope,
 
 _url: [:0]const u8,
+_type: WorkerType = .classic,
 _script_loaded: bool = false,
 _script_buffer: std.ArrayList(u8) = .empty,
 _http_response: ?HttpClient.Response = null,
@@ -56,7 +63,11 @@ _on_error: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_messageerror: ?js.Function.Global = null,
 
-pub fn init(url: []const u8, frame: *Frame) !*Worker {
+const WorkerOptions = struct {
+    type: WorkerType = .classic,
+};
+
+pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     const session = frame._session;
 
     const arena = try session.getArena(.large, "Worker");
@@ -68,6 +79,7 @@ pub fn init(url: []const u8, frame: *Frame) !*Worker {
         ._proto = undefined,
         ._frame = frame,
         ._url = resolved_url,
+        ._type = if (options) |o| o.type else .classic,
         ._worker_scope = undefined,
         ._frame_id = session.nextFrameId(),
         ._loader_id = session.nextLoaderId(),
@@ -195,12 +207,24 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    _ = ls.local.eval(script, self._url) catch |err| {
-        const caught = try_catch.caughtOrError(self._arena, err);
-        log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
-        self.fireErrorEvent(caught.exception orelse @errorName(err), null);
-        return;
-    };
+    // Classic workers evaluate the entry script as a classic script; module
+    // workers (`new Worker(url, { type: "module" })`) instantiate it as a
+    // module so top-level `import`/`export` work. Static imports load
+    // synchronously through ScriptManagerBase (client.tick sync_wait).
+    switch (self._type) {
+        .classic => _ = ls.local.eval(script, self._url) catch |err| {
+            const caught = try_catch.caughtOrError(self._arena, err);
+            log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
+            self.fireErrorEvent(caught.exception orelse @errorName(err), null);
+            return;
+        },
+        .module => self._worker_scope.js.module(false, &ls.local, script, self._url, true) catch |err| {
+            const caught = try_catch.caughtOrError(self._arena, err);
+            log.err(.browser, "worker module error", .{ .url = self._url, .caught = caught });
+            self.fireErrorEvent(caught.exception orelse @errorName(err), null);
+            return;
+        },
+    }
 
     ls.local.runMacrotasks();
 }

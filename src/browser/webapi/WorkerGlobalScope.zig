@@ -430,6 +430,12 @@ pub fn close(self: *WorkerGlobalScope) void {
 }
 
 pub fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
+    if (self._worker._type == .module) {
+        // not allowed to be called when the worker type is module (scripts should
+        // use actual imports).
+        return error.TypeError;
+    }
+
     const session = self._session;
     const arena = try session.getArena(.large, "importScript");
     defer session.releaseArena(arena);
