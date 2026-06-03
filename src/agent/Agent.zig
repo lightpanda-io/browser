@@ -28,13 +28,13 @@ const Config = lp.Config;
 const Command = lp.Command;
 const Schema = lp.Schema;
 const Recorder = lp.Recorder;
+const ScriptRuntime = lp.Runtime;
 const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
-const ScriptRuntime = @import("ScriptRuntime.zig");
 const settings = @import("settings.zig");
 const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
@@ -101,8 +101,7 @@ browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
 terminal: Terminal,
-recorder: ?Recorder,
-save_buffer: Recorder.Memory,
+save_buffer: Recorder,
 save_path: ?[]u8,
 script_runtime_mutex: std.Thread.Mutex = .{},
 active_script_runtime: ?*ScriptRuntime = null,
@@ -111,7 +110,6 @@ message_arena: std.heap.ArenaAllocator,
 model: []u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
-interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
 cancel_requested: std.atomic.Value(bool) = .init(false),
@@ -154,12 +152,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         });
         return error.ConflictingFlags;
     }
-    if (opts.task != null and opts.interactive) {
-        log.fatal(.app, "conflicting flags", .{
-            .hint = "--task is one-shot and exits; drop --interactive or drop --task",
-        });
-        return error.ConflictingFlags;
-    }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
     }
@@ -168,7 +160,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     }
 
     const is_one_shot = opts.task != null;
-    const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
+    const will_repl = !is_one_shot and opts.script_file == null;
 
     // Basic-mode REPL (no LLM) must be opted into via --no-llm. Without it,
     // the REPL accepts natural language and an absent API key would only
@@ -220,10 +212,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
 
-    // `-i <file>` means "run then grow this file"; a script path alone is
-    // a pure script run and must not be mutated.
-    const recorder_path: ?[]const u8 = if (opts.interactive) opts.script_file else null;
-
     self.* = .{
         .allocator = allocator,
         .ai_client = null,
@@ -236,7 +224,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .session = undefined,
         .node_registry = .init(allocator),
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
-        .recorder = null,
         .save_buffer = .init(allocator),
         .save_path = null,
         .messages = .empty,
@@ -244,7 +231,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .model = model,
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
-        .interactive = opts.interactive,
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
         .available_providers = available_providers,
@@ -276,21 +262,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         if (self.model_credentials != null) _ = completionModels(self, allocator);
     }
 
-    if (recorder_path) |p| {
-        if (Recorder.init(allocator, std.fs.cwd(), p)) |r| {
-            self.recorder = r;
-            self.terminal.printInfo("recording to {s}", .{r.path});
-        } else |err| {
-            self.terminal.printError("recording disabled: {s}", .{@errorName(err)});
-        }
-    }
-
     return self;
 }
 
 pub fn deinit(self: *Agent) void {
     self.terminal.uninstallLogSink();
-    if (self.recorder) |*r| r.deinit();
     self.save_buffer.deinit();
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
@@ -404,8 +380,7 @@ pub fn run(self: *Agent) bool {
         return ok;
     }
     if (self.script_file) |path| {
-        const script_ok = self.runScript(path);
-        if (!self.interactive) return script_ok;
+        return self.runScript(path);
     }
     self.runRepl();
     return true;
@@ -509,7 +484,6 @@ fn runRepl(self: *Agent) void {
                 self.terminal.printError("{s}", .{result.text});
             } else {
                 self.printData(result.text);
-                if (self.recorder) |*r| r.recordRaw(line);
                 self.recordSaveRaw(line);
             }
             continue :repl;
@@ -559,7 +533,6 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(cmd, result);
                 if (!result.is_error) {
-                    if (self.recorder) |*r| r.record(cmd);
                     self.recordSaveCommand(cmd);
                 }
                 self.recordSlashToolCall(trimmed, tc.name(), tc.args, result) catch |err| {
@@ -581,6 +554,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .help => self.printSlashHelp(arena, rest),
         .verbosity => self.handleVerbosity(rest),
         .save => self.handleSave(arena, rest),
+        .load => self.handleLoad(rest),
         .model => self.handleModel(arena, rest),
         .provider => self.handleProvider(arena, rest),
     }
@@ -598,6 +572,15 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     };
     self.terminal.verbosity = level;
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
+}
+
+fn handleLoad(self: *Agent, rest: []const u8) void {
+    const path = std.mem.trim(u8, rest, &std.ascii.whitespace);
+    if (path.len == 0) {
+        self.terminal.printError("usage: /load <path>", .{});
+        return;
+    }
+    _ = self.runScript(path);
 }
 
 const api_keys_hint = settings.api_keys_hint;
@@ -1050,6 +1033,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 "/save [filename.js] [prompt] — save the session to [filename.js] (a random session-*.js if omitted). With an LLM, synthesizes an idiomatic script from the session and the optional prompt; with --no-llm, dumps the recorded actions verbatim.",
                 .{},
             ),
+            .load => self.terminal.printInfo(
+                "/load <path> — read a script from disk and run it against the current session; Tab completes file paths",
+                .{},
+            ),
             .model => self.terminal.printInfo(
                 "/model [name] — change the model; Tab completes the provider's models, bare /model shows the current one",
                 .{},
@@ -1117,9 +1104,25 @@ fn printData(self: *Agent, text: []const u8) void {
     self.terminal.printAssistant(Terminal.reindentJson(arena.allocator(), text) orelse text);
 }
 
-fn runScript(self: *Agent, path: []const u8) bool {
-    self.terminal.printInfo("Running script: {s}", .{path});
+/// Tracks whether a `/load`-run script has emitted any `console.*` output,
+/// which decides how `runScript` ends: a script that printed nothing freezes
+/// the spinner into a `/goto`-style bullet; one that printed leaves its
+/// output as the result.
+const ScriptOutput = struct {
+    terminal: *Terminal,
+    emitted: bool = false,
 
+    /// `Runtime.ConsoleObserver` callback: on the first line, clear the live
+    /// spinner so output starts clean instead of colliding with the indicator.
+    fn observe(context: *anyopaque) void {
+        const self: *ScriptOutput = @ptrCast(@alignCast(context));
+        if (self.emitted) return;
+        self.emitted = true;
+        self.terminal.endTool();
+    }
+};
+
+fn runScript(self: *Agent, path: []const u8) bool {
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
 
@@ -1145,7 +1148,13 @@ fn runScript(self: *Agent, path: []const u8) bool {
         self.cancel_requested.store(false, .release);
     }
 
-    if (runtime.runSource(content, path) catch |err| {
+    var output: ScriptOutput = .{ .terminal = &self.terminal };
+    runtime.console_observer = .{ .context = @ptrCast(&output), .notify = ScriptOutput.observe };
+    self.terminal.beginTool("script", path);
+    const result = runtime.runSource(content, path);
+    self.terminal.endTool();
+
+    if (result catch |err| {
         self.terminal.printError("Script failed: {s}", .{@errorName(err)});
         return false;
     }) |message| {
@@ -1153,7 +1162,10 @@ fn runScript(self: *Agent, path: []const u8) bool {
         return false;
     }
 
-    self.terminal.printInfo("Script completed.", .{});
+    // A script that printed nothing leaves no trace, so freeze the spinner
+    // into a green bullet (like /goto); one that printed already showed its
+    // result.
+    if (!output.emitted) self.terminal.printScriptDone("script", path);
     return true;
 }
 
@@ -1345,14 +1357,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
 
     if (result.cancelled) return self.drainCancellation(msg_baseline);
 
-    const file_recorder: ?*Recorder = blk: {
-        if (self.recorder) |*r| {
-            if (r.isActive()) break :blk r;
-        }
-        break :blk null;
-    };
-    const record_to_memory = input.capture_for_save;
-    if (file_recorder != null or record_to_memory) {
+    if (input.capture_for_save) {
         // When the LLM tries multiple `extract` schemas in one turn, only the
         // last successful one is the answer — earlier probes are noise.
         var last_extract_idx: ?usize = null;
@@ -1372,19 +1377,10 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             const cmd = Command.fromToolCall(tool, args);
             if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
-                if (input.record_comment) |c| {
-                    if (file_recorder) |r| r.recordComment(c);
-                    if (record_to_memory) self.recordSaveComment(c);
-                }
+                if (input.record_comment) |c| self.recordSaveComment(c);
                 recorded_any = true;
             }
-            if (file_recorder) |r| r.record(cmd);
-            if (record_to_memory) self.recordSaveCommand(cmd);
-        }
-        if (file_recorder) |r| {
-            if (!r.isActive()) {
-                self.terminal.printError("recording disabled (write failed); see logs", .{});
-            }
+            self.recordSaveCommand(cmd);
         }
     }
 
@@ -1545,7 +1541,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    if (opts.task != null or opts.interactive or opts.script_file != null) {
+    if (opts.task != null or opts.script_file != null) {
         log.fatal(.app, "list-models is exclusive", .{
             .hint = "--list-models only takes --provider/--model/--base-url",
         });

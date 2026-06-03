@@ -25,7 +25,7 @@ const CDPNode = @import("../cdp/Node.zig");
 
 const v8 = lp.js.v8;
 
-const ScriptRuntime = @This();
+const Runtime = @This();
 
 allocator: std.mem.Allocator,
 app: *lp.App,
@@ -37,6 +37,10 @@ has_context: bool,
 call_arena: std.heap.ArenaAllocator,
 primitive_data: [recorded_tool_count]PrimitiveData,
 console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
+/// Notified before each `console.*` line is written. The REPL uses it to
+/// clear the live spinner so script output starts on a clean line instead
+/// of colliding with the indicator; the line still goes to stdout/stderr.
+console_observer: ?ConsoleObserver = null,
 
 /// The runtime installs exactly the recorded browser tools as script
 /// primitives — the same set the recorder writes — so every recorded call
@@ -51,7 +55,7 @@ const recorded_tool_count = blk: {
 };
 
 const PrimitiveData = struct {
-    runtime: *ScriptRuntime,
+    runtime: *Runtime,
     tool: BrowserTool,
 };
 
@@ -71,8 +75,13 @@ const ConsoleMethod = enum {
 };
 
 const ConsoleData = struct {
-    runtime: *ScriptRuntime,
+    runtime: *Runtime,
     method: ConsoleMethod,
+};
+
+pub const ConsoleObserver = struct {
+    context: *anyopaque,
+    notify: *const fn (context: *anyopaque) void,
 };
 
 pub const InitError = error{
@@ -90,8 +99,8 @@ pub fn init(
     app: *lp.App,
     session: *lp.Session,
     registry: *CDPNode.Registry,
-) InitError!*ScriptRuntime {
-    const self = try allocator.create(ScriptRuntime);
+) InitError!*Runtime {
+    const self = try allocator.create(Runtime);
     errdefer allocator.destroy(self);
 
     self.* = .{
@@ -119,7 +128,7 @@ pub fn init(
     return self;
 }
 
-pub fn deinit(self: *ScriptRuntime) void {
+pub fn deinit(self: *Runtime) void {
     self.resetContext();
     self.env.deinit();
     self.call_arena.deinit();
@@ -127,15 +136,15 @@ pub fn deinit(self: *ScriptRuntime) void {
     allocator.destroy(self);
 }
 
-pub fn terminate(self: *ScriptRuntime) void {
+pub fn terminate(self: *Runtime) void {
     self.env.terminate();
 }
 
-pub fn cancelTerminate(self: *ScriptRuntime) void {
+pub fn cancelTerminate(self: *Runtime) void {
     self.env.cancelTerminate();
 }
 
-fn createContext(self: *ScriptRuntime) InitError!void {
+fn createContext(self: *Runtime) InitError!void {
     var hs: lp.js.HandleScope = undefined;
     hs.init(self.env.isolate);
     defer hs.deinit();
@@ -159,7 +168,7 @@ fn createContext(self: *ScriptRuntime) InitError!void {
     try self.installConsole(context, global);
 }
 
-fn resetContext(self: *ScriptRuntime) void {
+fn resetContext(self: *Runtime) void {
     if (!self.has_context) return;
     v8.v8__Global__Reset(&self.context);
     self.env.isolate.notifyContextDisposed();
@@ -167,7 +176,7 @@ fn resetContext(self: *ScriptRuntime) void {
 }
 
 fn installPrimitive(
-    self: *ScriptRuntime,
+    self: *Runtime,
     context: *const v8.Context,
     global: *const v8.Object,
     name: []const u8,
@@ -188,7 +197,7 @@ fn installPrimitive(
 }
 
 fn installConsole(
-    self: *ScriptRuntime,
+    self: *Runtime,
     context: *const v8.Context,
     global: *const v8.Object,
 ) InitError!void {
@@ -207,7 +216,7 @@ fn installConsole(
 }
 
 fn setObjectProperty(
-    self: *ScriptRuntime,
+    self: *Runtime,
     context: *const v8.Context,
     object: *const v8.Object,
     name: []const u8,
@@ -227,7 +236,7 @@ fn setObjectProperty(
 /// Run script source in the agent context. Returns null on success; on a JS
 /// compile/runtime exception returns a formatted error allocated in this
 /// runtime's call arena and valid until deinit or the next run.
-pub fn runSource(self: *ScriptRuntime, source: []const u8, name: []const u8) RunError!?[]const u8 {
+pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
     _ = self.call_arena.reset(.retain_capacity);
 
     var hs: lp.js.HandleScope = undefined;
@@ -286,7 +295,7 @@ fn consoleCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) vo
     data.runtime.invokeConsole(data.method, info);
 }
 
-fn invoke(self: *ScriptRuntime, tool: BrowserTool, info: *const v8.FunctionCallbackInfo) void {
+fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInfo) void {
     // Owned, not shared: marshalling runs JS (`toJSON`) that can re-enter a
     // primitive; a shared arena would let the nested call reset ours mid-flight.
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
@@ -322,7 +331,7 @@ fn invoke(self: *ScriptRuntime, tool: BrowserTool, info: *const v8.FunctionCallb
     }
 }
 
-fn invokeConsole(self: *ScriptRuntime, method: ConsoleMethod, info: *const v8.FunctionCallbackInfo) void {
+fn invokeConsole(self: *Runtime, method: ConsoleMethod, info: *const v8.FunctionCallbackInfo) void {
     // Owned arena (see `invoke`): an argument's `toString` can re-enter a
     // primitive mid-loop and must not reset the buffer we're accumulating.
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
@@ -343,7 +352,8 @@ fn invokeConsole(self: *ScriptRuntime, method: ConsoleMethod, info: *const v8.Fu
     self.writeConsoleLine(method, aw.written());
 }
 
-fn writeConsoleLine(_: *ScriptRuntime, method: ConsoleMethod, line: []const u8) void {
+fn writeConsoleLine(self: *Runtime, method: ConsoleMethod, line: []const u8) void {
+    if (self.console_observer) |obs| obs.notify(obs.context);
     var buf: [4096]u8 = undefined;
     var file = if (method.writesStderr()) std.fs.File.stderr() else std.fs.File.stdout();
     var writer = file.writer(&buf);
@@ -357,7 +367,7 @@ const PrimitiveResult = union(enum) {
 };
 
 fn callTool(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     tool: BrowserTool,
     args: ?std.json.Value,
@@ -382,7 +392,7 @@ const BuildArgsError = error{
 };
 
 fn buildArgs(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
     tool: BrowserTool,
@@ -409,7 +419,7 @@ fn buildArgs(
 }
 
 fn singleStringOrObject(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
     info: *const v8.FunctionCallbackInfo,
@@ -426,7 +436,7 @@ fn singleStringOrObject(
 }
 
 fn singleObject(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
     info: *const v8.FunctionCallbackInfo,
@@ -439,7 +449,7 @@ fn singleObject(
 }
 
 fn extractArgs(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
     info: *const v8.FunctionCallbackInfo,
@@ -476,7 +486,7 @@ fn normalizeExtractSchemaString(arena: std.mem.Allocator, schema: []const u8) er
 }
 
 fn argJson(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
     info: *const v8.FunctionCallbackInfo,
@@ -487,7 +497,7 @@ fn argJson(
 }
 
 fn valueToJson(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
     value: *const v8.Value,
@@ -504,7 +514,7 @@ fn objectWith(arena: std.mem.Allocator, key: []const u8, value: std.json.Value) 
     return .{ .object = obj };
 }
 
-fn normalizeExtractReturnJson(_: *ScriptRuntime, arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}![]const u8 {
+fn normalizeExtractReturnJson(_: *Runtime, arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}![]const u8 {
     if (value.len == 0) return value;
 
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, value, .{}) catch |err| switch (err) {
@@ -519,11 +529,11 @@ fn normalizeExtractReturnJson(_: *ScriptRuntime, arena: std.mem.Allocator, value
     return try std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{});
 }
 
-fn setReturnString(self: *ScriptRuntime, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
+fn setReturnString(self: *Runtime, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
     self.setReturnValue(info, @ptrCast(self.env.isolate.initStringHandle(value)));
 }
 
-fn setReturnJson(self: *ScriptRuntime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
+fn setReturnJson(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
     if (value.len == 0) {
         self.setReturnValue(info, self.env.isolate.initUndefined());
         return;
@@ -536,22 +546,22 @@ fn setReturnJson(self: *ScriptRuntime, context: *const v8.Context, info: *const 
     self.setReturnValue(info, parsed);
 }
 
-fn setReturnValue(_: *ScriptRuntime, info: *const v8.FunctionCallbackInfo, value: *const v8.Value) void {
+fn setReturnValue(_: *Runtime, info: *const v8.FunctionCallbackInfo, value: *const v8.Value) void {
     var rv: v8.ReturnValue = undefined;
     v8.v8__FunctionCallbackInfo__GetReturnValue(info, &rv);
     v8.v8__ReturnValue__Set(rv, value);
 }
 
-fn throwError(self: *ScriptRuntime, message: []const u8) void {
+fn throwError(self: *Runtime, message: []const u8) void {
     _ = v8.v8__Isolate__ThrowException(self.env.isolate.handle, self.env.isolate.createError(message));
 }
 
-fn throwTypeError(self: *ScriptRuntime, message: []const u8) void {
+fn throwTypeError(self: *Runtime, message: []const u8) void {
     _ = v8.v8__Isolate__ThrowException(self.env.isolate.handle, self.env.isolate.createTypeError(message));
 }
 
 fn formatCaught(
-    self: *ScriptRuntime,
+    self: *Runtime,
     context: *const v8.Context,
     try_catch: *const v8.TryCatch,
     fallback: []const u8,
@@ -579,7 +589,7 @@ fn formatCaught(
 }
 
 fn valueToString(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
     value: *const v8.Value,
@@ -589,7 +599,7 @@ fn valueToString(
 }
 
 fn stringToOwned(
-    self: *ScriptRuntime,
+    self: *Runtime,
     arena: std.mem.Allocator,
     string: *const v8.String,
 ) error{OutOfMemory}![]const u8 {
@@ -605,20 +615,20 @@ fn stringToOwned(
     return buf[0..written];
 }
 
-fn dupeError(self: *ScriptRuntime, message: []const u8) RunError![]const u8 {
+fn dupeError(self: *Runtime, message: []const u8) RunError![]const u8 {
     return self.call_arena.allocator().dupe(u8, message) catch error.OutOfMemory;
 }
 
 const testing = @import("../testing.zig");
 
-fn runTestScript(runtime: *ScriptRuntime, source: []const u8) !void {
+fn runTestScript(runtime: *Runtime, source: []const u8) !void {
     if (try runtime.runSource(source, "agent-runtime-test.js")) |message| {
         std.debug.print("agent script failed:\n{s}\n", .{message});
         return error.AgentScriptFailed;
     }
 }
 
-fn terminateRuntimeSoon(runtime: *ScriptRuntime) void {
+fn terminateRuntimeSoon(runtime: *Runtime) void {
     std.Thread.sleep(10 * std.time.ns_per_ms);
     runtime.terminate();
 }
@@ -630,7 +640,7 @@ test "agent script runtime: goto and eval dispatch through browser tools" {
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -651,7 +661,7 @@ test "agent script runtime: extract returns a JavaScript object" {
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -705,7 +715,7 @@ test "agent script runtime: strict-mode scripts can call primitives" {
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -723,7 +733,7 @@ test "agent script runtime: promise microtasks run to completion" {
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -744,7 +754,7 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -766,7 +776,7 @@ test "agent script runtime: terminate interrupts local JavaScript" {
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     const thread = try std.Thread.spawn(.{}, terminateRuntimeSoon, .{runtime});
@@ -784,7 +794,7 @@ test "agent script runtime: agent variables persist and page globals are isolate
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -809,7 +819,7 @@ test "agent script runtime: page eval cannot see agent primitives or bindings" {
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -827,7 +837,7 @@ test "agent script runtime: console is available in agent context" {
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -844,7 +854,7 @@ test "agent script runtime: tool errors throw and stop execution" {
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime = try ScriptRuntime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     const message = (try runtime.runSource(

@@ -15,7 +15,7 @@ One session against Hacker News:
 
 1. Log in with your account.
 2. Confirm the login by reading the username out of the header.
-3. Record the whole flow to a `.js` file.
+3. Save the whole flow to a `.js` file.
 4. Run it offline, with no LLM.
 5. Add local JavaScript logic around `extract(...)` results.
 6. Save the same flow as a script from an external agent over MCP.
@@ -280,18 +280,20 @@ The schema is parsed in Zig before the page-side walker runs, so a
 typo like a stray comma surfaces here as `Error: invalid /extract
 schema JSON` instead of a confusing V8 stack trace.
 
-## 4. Recording the session
+## 4. Saving the session
 
-The same flow, but recorded to a file. Quit the REPL, then:
+The same flow, but exported to a file. In the same REPL, retype the
+sequence — login (`/goto`, two `/fill`s, `/click`, `/waitForSelector`),
+then the front-page hop and structured pull (`/goto`, multi-line
+`/extract`) — then save it:
 
-```console
-./lightpanda agent -i hn_login.js
+```
+> /save hn_login.js
 ```
 
-`-i <path>` opens an interactive REPL that appends state-mutating
-commands to `<path>`. Retype the same sequence — login (`/goto`, two
-`/fill`s, `/click`, `/waitForSelector`), then the front-page hop and
-structured pull (`/goto`, multi-line `/extract`) — then `/quit`.
+In the basic REPL (`--no-llm`) `/save` transcribes the session
+deterministically; with an LLM it synthesizes an equivalent idiomatic
+script. Either way `/quit` when you're done.
 
 Inspect the result:
 
@@ -300,7 +302,7 @@ cat hn_login.js
 ```
 
 You should see the seven mutating commands and nothing else — no
-`/tree`, no `/markdown`, no read-only lookups. The recorder filters on a
+`/tree`, no `/markdown`, no read-only lookups. `/save` filters on a
 per-tool flag (`ToolDef.recorded`) so read-only inspection never
 pollutes the script; `/extract` *is* recorded (it changes what the
 script can read on replay even though it doesn't mutate the page).
@@ -326,9 +328,10 @@ prompt is kept as a `//` comment above those actions.
 ./lightpanda agent hn_login.js
 ```
 
-No `--provider`, no LLM, no token spend. The recorded script runs top
+No `--provider`, no LLM, no token spend. The saved script runs top
 to bottom against a fresh browser. This is the form you want for
-regression tests and CI.
+regression tests and CI. From inside the REPL, `/load hn_login.js`
+runs the same script against the current session.
 
 A JavaScript script does not print its final expression automatically.
 The recorded `extract(...)` call returns a local JavaScript value, so
@@ -355,11 +358,10 @@ Run it again and stdout is clean JSON:
 ./lightpanda agent hn_login.js > stories.json
 ```
 
-`/login` and `/acceptCookies` are REPL-only LLM triggers. A pure
-recording from `-i` never contains them; the recorder captures the
-resulting browser tool calls instead. Lines that are neither slash
-commands nor comments are also REPL-only conveniences, not script
-syntax.
+`/login` and `/acceptCookies` are REPL-only LLM triggers. A script
+saved with `/save` never contains them; `/save` captures the resulting
+browser tool calls instead. Lines that are neither slash commands nor
+comments are also REPL-only conveniences, not script syntax.
 
 ## 6. Local JavaScript logic
 
@@ -441,7 +443,7 @@ The `save` tool's description carries the same guidance the REPL's
 `/save` gives its LLM (prefer builtins, drop dead-ends, keep `$LP_*`
 placeholders), and any literal `LP_*` value is scrubbed back to its
 placeholder before the file is written. The output uses the same
-JavaScript format as `-i hn_login.js` from section 4 and runs
+JavaScript format as `/save hn_login.js` from section 4 and runs
 unmodified:
 
 ```console

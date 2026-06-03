@@ -35,11 +35,8 @@ etc.) without giving Lightpanda its own API key.
 # Basic REPL (no LLM, slash commands only)
 ./lightpanda agent --no-llm
 
-# Run a recorded script
+# Run a saved script, then exit
 ./lightpanda agent session.js
-
-# Replay then continue interactively, appending new commands to the file
-./lightpanda agent -i session.js
 
 # One-shot: ask a question, capture the answer on stdout
 ./lightpanda agent --task "what is on the front page of hn?"
@@ -251,20 +248,19 @@ the script, and goes away when that Session does. There is no
 cross-session persistence; if you need that, use `localStorage` (which
 is now origin-scoped and persists across navigations within a session).
 
-### Recording
+### Saving and loading
 
-Interactive sessions can write back to a `.js` file:
-
-```console
-./lightpanda agent -i session.js
-```
+From the REPL, `/save [file.js]` writes the session back to a `.js` file
+and `/load <path>` runs a script from disk against the current session.
 
 State-mutating commands (`/goto`, `/click`, `/fill`, `/scroll`, `/hover`,
 `/selectOption`, `/setChecked`, `/waitForSelector`, `/press`, `/eval`,
-`/extract`) are appended; read-only commands (`/tree`, `/markdown`,
+`/extract`) are saved; read-only commands (`/tree`, `/markdown`,
 `/links`, `/findElement`, …) and the natural-language turns that produced
-them are not. Natural-language turns are recorded as `// <prompt>` comments
-above the resulting JavaScript calls so the script stays readable.
+them are not. Natural-language turns are saved as `// <prompt>` comments
+above the resulting JavaScript calls so the script stays readable. In the
+basic REPL (`--no-llm`) `/save` transcribes the session deterministically;
+with an LLM it synthesizes an equivalent idiomatic script.
 
 ### JavaScript Script Running
 
@@ -298,8 +294,10 @@ See [agent-script.md](agent-script.md) for the full script format reference.
   JSON schema), `/provider [name]` and `/model [name]` change the active
   provider/model — Tab after the space completes from detected providers and
   the provider's fetched model list, and bare `/provider`/`/model` print the
-  current selection — `/quit` exits the REPL, `/verbosity <low|medium|high>`
-  tunes the log level. These are REPL-only and never recorded.
+  current selection — `/save [file.js]` writes the session to a script and
+  `/load <path>` runs one from disk (Tab completes file paths), `/quit` exits
+  the REPL, `/verbosity <low|medium|high>` tunes the log level. These are
+  REPL-only and never recorded.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit
