@@ -77,7 +77,8 @@
     \\          Wait until the specified event. Checked before other --wait-* options.
     \\          Defaults to 'done'. If --wait-selector, --wait-script or
     \\          --wait-script-file specified, defaults to none.
-    \\          Allowed values: "load", "domcontentloaded", "networkidle", "done".
+    \\          Allowed values: "load", "domcontentloaded", "networkalmostidle",
+    \\          "networkidle", "done".
     \\  --wait-selector <QUERY>
     \\          Wait for an element matching the CSS selector to appear. Checked after
     \\          --wait-until condition is met.

@@ -460,6 +460,7 @@ pub const DumpFormat = enum {
 pub const WaitUntil = enum {
     load,
     domcontentloaded,
+    networkalmostidle,
     networkidle,
     done,
 };

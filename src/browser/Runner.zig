@@ -204,6 +204,9 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
                 .networkidle => if (frame._notified_network_idle == .done) {
                     return .done;
                 },
+                .networkalmostidle => if (frame._notified_network_almost_idle == .done) {
+                    return .done;
+                },
             }
 
             if (http_active == 0 and http_next_tick == 0 and http_client.ws_active == 0 and http_client.queue.first == null and http_client.ready_queue.first == null and (comptime is_cdp) == false) {
