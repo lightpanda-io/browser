@@ -231,8 +231,8 @@ fn getCookies(cmd: *CDP.Command) !void {
     var urls = try std.ArrayList(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
     for (param_urls) |url| {
         urls.appendAssumeCapacity(.{
-            .host = try Cookie.parseDomain(cmd.arena, url, null),
-            .path = try Cookie.parsePath(cmd.arena, url, null),
+            .host = URL.getHostname(url),
+            .path = URL.getPathname(url),
             .secure = URL.isSecure(url),
         });
     }
