@@ -88,21 +88,6 @@ const synthesis_prompt =
     \\No prefix, no markdown.
 ;
 
-const save_synthesis_prompt =
-    \\Write a single Lightpanda agent script (.js) that reproduces what the user
-    \\was trying to accomplish in this session. Read the whole conversation — the
-    \\natural-language requests, the commands, and the raw JS — and infer the
-    \\actual goal. Ignore dead ends: failed attempts, retries, exploratory reads
-    \\(tree/markdown/extract probes), and corrections. Keep only the steps that
-    \\belong in a clean, repeatable script.
-    \\Prefer the builtin functions listed below (goto, click, fill, extract, …)
-    \\over raw DOM JavaScript wherever they fit; fall back to eval(...) only for
-    \\logic the builtins can't express. End with an extract(...) for any data the
-    \\user wanted out.
-    \\Output ONLY JavaScript source — no markdown fences, no commentary, no prose
-    \\before or after.
-;
-
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 model_credentials: ?Credentials,
@@ -961,7 +946,7 @@ fn rememberSavePath(self: *Agent, path: []const u8) void {
 fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]const u8) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
-    try w.writeAll(save_synthesis_prompt);
+    try w.writeAll(browser_tools.save_synthesis_prompt);
     try w.writeAll("\n\nBuiltin functions to prefer (call them as JS functions):\n");
     try renderBuiltinCatalog(w);
     const recorded = self.save_buffer.bytes();

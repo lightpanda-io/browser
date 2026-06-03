@@ -77,7 +77,7 @@ Ollama is never auto-detected (no env var to look at) — pass `--provider
 ollama`, or select it once with `/provider ollama` and it'll be remembered.
 
 `--no-llm` is the explicit bypass: it forces the basic REPL even when an
-API key is present or `--provider` is set. Use it to test PandaScript
+API key is present or `--provider` is set. Use it to test slash commands
 without burning tokens, or to disable the LLM in a saved command without
 editing the existing flags. `--no-llm` wins over `--provider`.
 
@@ -85,8 +85,7 @@ editing the existing flags. `--no-llm` wins over `--provider`.
 
 The REPL uses a tiny slash-command language for browser actions. Each command is
 `/<tool> [args]`, a `#` comment, or blank. There is no other syntax in basic
-REPL mode or MCP `scriptStep`: anything that doesn't match those three forms is
-a parse error.
+REPL mode: anything that doesn't match those three forms is a parse error.
 
 Slash commands accept any of:
 
@@ -117,13 +116,12 @@ the agent translates into actual tool calls:
 Both require an LLM. `--no-llm` rejects them.
 
 In the REPL (and only the REPL), a line that isn't a slash command and
-doesn't start with `#` is sent to the LLM as a natural-language prompt. In
-MCP `scriptStep`, the same input is a parse error. To leave the REPL, use the
-`/quit` meta command.
+doesn't start with `#` is sent to the LLM as a natural-language prompt. To
+leave the REPL, use the `/quit` meta command.
 
 ### Example script
 
-```pandascript
+```console
 # Log into the demo and grab the dashboard title and visible cards.
 # Site-scoped vars (LP_<SITE>_<FIELD>) avoid collisions when you have
 # credentials for several sites; the unprefixed form is the fallback.
@@ -177,7 +175,7 @@ Session-scoped store keyed by `<name>` instead of dumping it to stdout.
 The stored value is then exposed to every subsequent `/eval` as
 `globalThis.lp.<name>`:
 
-```pandascript
+```console
 /goto 'https://news.ycombinator.com/'
 
 /extract save=front '''
@@ -212,7 +210,7 @@ visits each row for more data. `/extract`'s `follow` does that in one
 declarative call — no `lp.*` round-trip, no hand-written loop. The HN
 front page plus the top comments of each story:
 
-```pandascript
+```console
 /goto 'https://news.ycombinator.com/'
 
 /extract '''
@@ -287,9 +285,7 @@ package loading, or Node standard library. The `eval(...)` primitive executes
 its string in the current page context; page scripts cannot see agent variables
 or agent primitives.
 
-Tool errors throw JavaScript exceptions and stop execution. `--self-heal` is not
-available for JavaScript agent scripts; MCP `scriptStep`/`scriptHeal` remains
-available for external agents that still want a PandaScript line-healing loop.
+Tool errors throw JavaScript exceptions and stop execution.
 See [agent-script.md](agent-script.md) for the full script format reference.
 
 ## REPL features
@@ -349,54 +345,32 @@ browser. No `--provider` or API key is required on the Lightpanda side.
 ```
 
 Tool names are camelCase and case-sensitive — there are no aliases.
-Earlier names (`navigate`, `evaluate`, `semantic_tree`, `semanticTree`,
-`record_start`, `record_stop`, `record_comment`, `script_step`,
-`script_heal`) have been removed; existing MCP clients and saved
-prompts must call the canonical tags (`goto`, `eval`, `tree`,
-`recordStart`, `recordStop`, `recordComment`, `scriptStep`,
-`scriptHeal`).
+Earlier snake_case names (`navigate`, `evaluate`, `semantic_tree`, …)
+have been removed; MCP clients must call the canonical tags (`goto`,
+`eval`, `tree`, `save`, …).
 
 For sub-task delegation in the other direction — calling Lightpanda's
 own LLM-driven agent in a one-shot fashion — use `--task` on stdin
 instead.
 
-### Recording JavaScript over MCP
+### Saving a script over MCP
 
-`lightpanda mcp` exposes three recording tools so an external agent can
-capture a session as a `.js` script for later deterministic replay:
+`lightpanda mcp` exposes a `save` tool so an external agent can persist
+the session as a `.js` script for later deterministic replay. Unlike the
+standalone agent's `/save`, the MCP server has no LLM of its own — the
+calling client holds the conversation, so it synthesizes the script and
+passes it in:
 
-| Tool            | Args                  | Effect                                                                                         |
-|-----------------|-----------------------|------------------------------------------------------------------------------------------------|
-| `recordStart`   | `{ path: string }`    | Begin appending state-mutating tool calls to `path` (relative, no `..`). Errors if already on. |
-| `recordStop`    | `{}`                  | Close the recording and return `{path, line_count}`. Errors if no recording is active.         |
-| `recordComment` | `{ text: string }`    | Write `// <text>` to the active recording — useful as a breadcrumb above LLM-driven steps.     |
+| Tool   | Args                               | Effect                                                                                                              |
+|--------|------------------------------------|-------------------------------------------------------------------------------------------------------------------|
+| `save` | `{ path: string, script: string }` | Write `script` to `path` (relative, no `..`; created or overwritten) and return the absolute location and line count. |
 
-While recording is active, every `goto` / `click` / `fill` / `scroll` /
-`hover` / `selectOption` / `setChecked` / `waitForSelector` / `eval`
-that succeeds is appended as JavaScript. Query-only tools (`tree`,
-`markdown`, `findElement`, `consoleLogs`, …) are not recorded. The
-resulting file runs without an LLM via `./lightpanda agent session.js`.
-
-### Replay + self-heal over MCP
-
-Self-heal is a two-tool roundtrip: lightpanda runs steps and reports
-structured failures, the calling agent synthesizes a replacement, and
-lightpanda atomically rewrites the script.
-
-| Tool         | Args                                                     | Effect                                                                                                                                              |
-|--------------|----------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `scriptStep` | `{ line: string }`                                       | Parse one PandaScript line and run it on the current session. Comments and blank lines are no-ops. Returns `isError: true` with a structured message on failure. |
-| `scriptHeal` | `{ path: string, replacements: [{original_line, replacement_lines}] }` | Atomically rewrite the script in place. A `<path>.bak` of the original is written first; each `original_line` must match verbatim. The first replacement gets a `# [Auto-healed] Original: …` header. |
-
-Typical loop on the caller side: read the script, walk lines, call
-`scriptStep` per line, on failure ask the caller's LLM for a
-replacement, call `scriptHeal` with the patch, then continue. Lines
-executed via `scriptStep` are intentionally NOT auto-recorded — replay
-shouldn't double-record.
-
-`/login`, `/acceptCookies`, and anything that isn't a slash command are
-rejected by `scriptStep`: those require an LLM and belong to the calling
-agent.
+The tool's description carries the same synthesis guidance the agent's
+`/save` gives its LLM: prefer the builtins you called as tools (`goto`,
+`click`, `fill`, `extract`, …) as JavaScript calls, drop dead-ends, and
+keep `$LP_*` placeholders. Any literal `LP_*` value is scrubbed back to
+its placeholder before the file is written. The result runs without an
+LLM via `./lightpanda agent session.js`.
 
 ## Browser tools
 
@@ -437,8 +411,7 @@ for the LLM.
   — including natural-language context that accompanies a `/login` —
   lands in that file. Delete it or move out of sensitive directories if
   you don't want it retained.
-- `recordStart` and `scriptHeal` reject empty, absolute, and `..`
-  paths, but do **not** follow-up on symlinks. On a shared filesystem,
-  a pre-existing symlink at the recording target would be written
-  through to whatever it points at. Prefer a fresh directory you own
-  when recording in untrusted environments.
+- `save` rejects empty, absolute, and `..` paths, but does **not**
+  follow up on symlinks. On a shared filesystem, a pre-existing symlink
+  at the target would be written through to whatever it points at.
+  Prefer a fresh directory you own when saving in untrusted environments.

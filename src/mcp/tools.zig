@@ -4,8 +4,6 @@ const lp = @import("lightpanda");
 const js = lp.js;
 const browser_tools = lp.tools;
 const BrowserTool = browser_tools.Tool;
-const Command = lp.Command;
-const Recorder = lp.Recorder;
 
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
@@ -27,48 +25,22 @@ const browser_tool_list = blk: {
     break :blk tools;
 };
 
-const record_start_schema = browser_tools.minify(
+const save_schema = browser_tools.minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) where JavaScript agent calls will be appended. The file is created if missing. Only one recording can be active at a time." }
+    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) to write the script to. Created or overwritten. The response reports the absolute location." },
+    \\    "script": { "type": "string", "description": "The JavaScript agent script to write. Synthesize it per this tool's description." }
     \\  },
-    \\  "required": ["path"]
-    \\}
-);
-
-const record_stop_schema = browser_tools.minify(
-    \\{
-    \\  "type": "object",
-    \\  "properties": {}
-    \\}
-);
-
-const record_comment_schema = browser_tools.minify(
-    \\{
-    \\  "type": "object",
-    \\  "properties": {
-    \\    "text": { "type": "string", "description": "Comment text. Written as `// <text>` to the active recording. Errors if no recording is active." }
-    \\  },
-    \\  "required": ["text"]
+    \\  "required": ["path", "script"]
     \\}
 );
 
 const extra_tools = [_]McpTool{
     .{
-        .name = "recordStart",
-        .description = "Start recording state-mutating browser tool calls into a JavaScript agent script. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, `eval`, and `extract` get appended as JavaScript calls. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
-        .inputSchema = record_start_schema,
-    },
-    .{
-        .name = "recordStop",
-        .description = "Stop the active recording and return the path and number of lines written. Errors if no recording is active.",
-        .inputSchema = record_stop_schema,
-    },
-    .{
-        .name = "recordComment",
-        .description = "Append a `// <text>` comment line to the active recording. Useful as a breadcrumb above LLM-driven steps.",
-        .inputSchema = record_comment_schema,
+        .name = "save",
+        .description = "Save the session as a reusable Lightpanda agent script. You hold the conversation, so synthesize the `script` yourself — call the builtins you used as tools (goto, click, fill, extract, …) as JavaScript functions with the same object arguments. Keep `$LP_*` placeholders; never inline a resolved secret.\n\n" ++ browser_tools.save_synthesis_prompt,
+        .inputSchema = save_schema,
     },
 };
 
@@ -76,9 +48,7 @@ const all_tools = browser_tool_list ++ extra_tools;
 
 /// Tools that bypass the browser-tool dispatch and have their own handlers.
 const ExtraTool = enum {
-    recordStart,
-    recordStop,
-    recordComment,
+    save,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -97,9 +67,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
     if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
         return switch (tool) {
-            .recordStart => handleRecordStart(server, arena, id, call_params.arguments),
-            .recordStop => handleRecordStop(server, arena, id),
-            .recordComment => handleRecordComment(server, arena, id, call_params.arguments),
+            .save => handleSave(server, arena, id, call_params.arguments),
         };
     }
 
@@ -133,8 +101,6 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, @errorName(err));
     };
 
-    if (!result.is_error) recordIfActive(arena, server, tool, arguments);
-
     try sendToolResultText(server, id, result.text, result.is_error);
 }
 
@@ -142,68 +108,41 @@ fn surfacesErrorInBand(tool: BrowserTool) bool {
     return tool == .eval or tool == .extract;
 }
 
-fn recordIfActive(arena: std.mem.Allocator, server: *Server, tool: BrowserTool, arguments: ?std.json.Value) void {
-    if (server.recorder == null) return;
-    const normalized = browser_tools.normalizeArgKeys(arena, tool, arguments) catch arguments;
-    const cmd = Command.fromToolCall(tool, normalized);
-    // `record` no-ops on non-recorded tools — see `Command.isRecorded`.
-    server.recorder.?.record(cmd);
-}
-
-fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    if (server.recorder != null) {
-        return sendErrorContent(server, id, "a recording is already active; call recordStop first");
-    }
-    const Args = struct { path: []const u8 };
+fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Args = struct { path: []const u8, script: []const u8 };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.sendError(id, .InvalidParams, "expected { path: string }");
+        return server.sendError(id, .InvalidParams, "expected { path: string, script: string }");
     };
 
     if (!browser_tools.isPathSafe(args.path)) {
         return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
     }
 
-    var recorder = Recorder.init(server.allocator, std.fs.cwd(), args.path) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "could not open recording file: {s}", .{@errorName(err)}) catch
-            return sendErrorContent(server, id, "could not open recording file");
+    // The client never sees resolved secrets, but scrub any literal LP_* value
+    // back to its `$LP_*` placeholder as a safety net before persisting.
+    const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
+        return sendErrorContent(server, id, "out of memory");
+
+    writeScript(args.path, script) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
+            return sendErrorContent(server, id, "could not write script file");
         return sendErrorContent(server, id, msg);
     };
-    const msg = std.fmt.allocPrint(arena, "recording started: {s}", .{recorder.path}) catch {
-        recorder.deinit();
+
+    // Absolute path: the cwd is the client-launched server's, not one the user picked.
+    const where = std.fs.cwd().realpathAlloc(arena, args.path) catch args.path;
+    const lines = std.mem.count(u8, script, "\n") + 1;
+    const msg = std.fmt.allocPrint(arena, "saved {d} line(s) to {s}", .{ lines, where }) catch
         return sendErrorContent(server, id, "out of memory");
-    };
-    server.recorder = recorder;
 
     try sendToolResultText(server, id, msg, false);
 }
 
-fn handleRecordStop(server: *Server, arena: std.mem.Allocator, id: std.json.Value) !void {
-    if (server.recorder == null) {
-        return sendErrorContent(server, id, "no recording is active");
-    }
-    var r = server.recorder.?;
-    // Build the response before deinit so we can quote the path/lines.
-    const msg = std.fmt.allocPrint(arena, "recording stopped: {s} ({d} line(s) written)", .{ r.path, r.lines }) catch
-        return sendErrorContent(server, id, "out of memory");
-
-    r.deinit();
-    server.recorder = null;
-
-    try sendToolResultText(server, id, msg, false);
-}
-
-fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    if (server.recorder == null) {
-        return sendErrorContent(server, id, "no recording is active");
-    }
-    const Args = struct { text: []const u8 };
-    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.sendError(id, .InvalidParams, "expected { text: string }");
-    };
-
-    server.recorder.?.recordComment(args.text);
-
-    try sendToolResultText(server, id, "ok", false);
+fn writeScript(path: []const u8, content: []const u8) !void {
+    const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(content);
+    if (content.len > 0 and content[content.len - 1] != '\n') try file.writeAll("\n");
 }
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
@@ -927,30 +866,37 @@ test "MCP - eval: lp.* mutations inside async IIFE survive to the next eval" {
     } }, out.written());
 }
 
-test "MCP - recordStart rejects unsafe path" {
+test "MCP - save rejects unsafe path" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recordStart","arguments":{"path":"../escape.lp"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"../escape.js","script":"goto(\"x\");"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "must be relative") != null);
 }
 
-test "MCP - recordStop without active recording errors" {
+test "MCP - save writes the script to disk" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
+    const path = "mcp-save-test-script.js";
+    std.fs.cwd().deleteFile(path) catch {};
+    defer std.fs.cwd().deleteFile(path) catch {};
+
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recordStop","arguments":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"mcp-save-test-script.js","script":"goto(\"https://example.com\");"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "no recording is active") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "saved 1 line") != null);
+
+    const written = try std.fs.cwd().readFileAlloc(testing.arena_allocator, path, 4096);
+    try std.testing.expectEqualStrings("goto(\"https://example.com\");\n", written);
 }
 
 test "MCP - tree rejects stale backendNodeId instead of dumping whole document" {

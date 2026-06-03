@@ -10,7 +10,6 @@ const router = @import("router.zig");
 const tools = @import("tools.zig");
 const Transport = @import("Transport.zig");
 const CDPNode = @import("../cdp/Node.zig");
-const Recorder = lp.Recorder;
 
 const Self = @This();
 
@@ -23,11 +22,6 @@ session: *lp.Session,
 node_registry: CDPNode.Registry,
 
 transport: Transport,
-
-/// Optional recorder. Activated by the `recordStart` tool; cleared by
-/// `recordStop`. State-mutating browser tool calls are serialized into
-/// the active recorder as JavaScript via `Command.fromToolCall`.
-recorder: ?Recorder = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
     const notification = try lp.Notification.init(allocator);
@@ -62,8 +56,6 @@ pub fn deinit(self: *Self) void {
     if (self.app.config.cookieJarFile()) |cookie_jar_path| {
         lp.cookies.saveToFile(&self.session.cookie_jar, cookie_jar_path);
     }
-
-    if (self.recorder) |*r| r.deinit();
 
     self.node_registry.deinit();
     self.transport.deinit();

@@ -18,7 +18,7 @@ One session against Hacker News:
 3. Record the whole flow to a `.js` file.
 4. Run it offline, with no LLM.
 5. Add local JavaScript logic around `extract(...)` results.
-6. Record the same browser actions from an external agent over MCP.
+6. Save the same flow as a script from an external agent over MCP.
 
 ## Prerequisites
 
@@ -422,59 +422,31 @@ Register the server with your MCP client:
 }
 ```
 
-### Record a session over MCP
+### Save a script over MCP
 
-From the external agent, call:
+The MCP server has no LLM of its own — your external agent is the brain.
+Drive the browser with the usual tools, then hand back a script with the
+`save` tool:
 
-1. `recordStart { "path": "hn_login.js" }` — begins appending
-   state-mutating tool calls as JavaScript to `hn_login.js`. The path
-   must be relative and free of `..`.
-2. The same browser tools you'd call anyway: `goto`, `fill`, `click`,
-   `waitForSelector`. Each one that succeeds is appended as a
-   JavaScript primitive call;
-   query-only tools (`tree`, `markdown`, `findElement`, `consoleLogs`)
-   are never recorded.
-3. `recordComment { "text": "logged in" }` — drop a `//` breadcrumb above
-   the next recorded line. Useful for marking the boundary between
-   LLM-driven phases.
-4. `recordStop {}` — closes the recording and returns
-   `{path, line_count}`.
+1. Run the browser tools you'd call anyway: `goto`, `fill`, `click`,
+   `waitForSelector`. The server resolves `$LP_*` placeholders inside the
+   subprocess, so credentials never reach your agent's context.
+2. When the task is done, synthesize a `.js` script from the steps that
+   mattered — call the builtins as JavaScript functions with the same
+   object arguments — and call `save { "path": "hn_login.js", "script":
+   "goto(\"...\");\n..." }`. The path must be relative and free of `..`;
+   the response reports the absolute location and line count.
 
-The output file uses the same JavaScript format as `-i hn_login.js`
-from section 4. It runs via the agent CLI without modification:
+The `save` tool's description carries the same guidance the REPL's
+`/save` gives its LLM (prefer builtins, drop dead-ends, keep `$LP_*`
+placeholders), and any literal `LP_*` value is scrubbed back to its
+placeholder before the file is written. The output uses the same
+JavaScript format as `-i hn_login.js` from section 4 and runs
+unmodified:
 
 ```console
 ./lightpanda agent hn_login.js
 ```
-
-### About `scriptStep` and `scriptHeal`
-
-`recordStart` now records JavaScript agent scripts. The MCP
-`scriptStep` and `scriptHeal` tools are still available for external
-agents that want to run and repair one slash-command line at a time,
-but that is a separate PandaScript line-healing workflow:
-
-1. Read the PandaScript file you are healing. For each non-blank,
-   non-comment line, call
-   `scriptStep { "line": "<line>" }`. Comments and blanks are no-ops
-   on the Lightpanda side.
-2. On `isError: true`, the structured error message tells you what
-   failed. Hand the current page state and the failing line to your
-   own LLM; have it return a replacement PandaScript line (or
-   several).
-3. Call `scriptHeal { "path": "...", "replacements":
-   [{ "original_line": "...", "replacement_lines": ["..."] }] }`.
-   Each `original_line` must match verbatim. Lightpanda writes
-   `<path>.bak` first, then atomically rewrites the file with the
-   `# [Auto-healed] Original: …` header prepended to the first
-   replacement.
-4. Continue from the next line.
-
-`scriptStep` deliberately does *not* auto-record: the script is
-already the source of truth during replay, so double-recording would
-diverge the file from itself. `/login`, `/acceptCookies`, and any line
-that isn't a slash command are rejected — those need an LLM, which is
-the caller's responsibility.
 
 ## Where to go next
 

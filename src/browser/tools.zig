@@ -113,6 +113,24 @@ pub const driver_guidance =
     \\
 ;
 
+/// Guidance for synthesizing a clean, replayable agent script from a session.
+/// Shared: the agent's `/save` feeds it to its own LLM; the MCP `save` tool
+/// hands it to the driving client as the tool description.
+pub const save_synthesis_prompt =
+    \\Write a single Lightpanda agent script (.js) that reproduces what the user
+    \\was trying to accomplish in this session. Read the whole conversation — the
+    \\natural-language requests, the commands, and the raw JS — and infer the
+    \\actual goal. Ignore dead ends: failed attempts, retries, exploratory reads
+    \\(tree/markdown/extract probes), and corrections. Keep only the steps that
+    \\belong in a clean, repeatable script.
+    \\Prefer the builtin functions (goto, click, fill, extract, …) over raw DOM
+    \\JavaScript wherever they fit; fall back to eval(...) only for logic the
+    \\builtins can't express. End with an extract(...) for any data the user
+    \\wanted out.
+    \\Output ONLY JavaScript source — no markdown fences, no commentary, no prose
+    \\before or after.
+;
+
 /// Reject paths that an untrusted MCP client could use to escape the
 /// working directory: empty paths, absolute paths, and any path with a
 /// `..` segment. Operator-controlled symlinks already inside CWD are out
