@@ -194,7 +194,6 @@ pub fn continueRequest(self: *InterceptionLayer, transfer: *Transfer) anyerror!v
         lp.assert(self.intercepted > 0, "InterceptionLayer.continueRequest", .{ .value = self.intercepted });
         log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
     }
-    self.intercepted -= 1;
 
     // Resume the layer chain. Ownership is re-handed to whichever subsequent
     // layer commits the transfer (queue, multi, or another park). If the
@@ -214,7 +213,6 @@ pub fn abortRequest(self: *InterceptionLayer, transfer: *Transfer) void {
         lp.assert(self.intercepted > 0, "InterceptionLayer.abortRequest", .{ .value = self.intercepted });
         log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
     }
-    self.intercepted -= 1;
     transfer.abort(error.Abort);
 }
 
@@ -229,7 +227,6 @@ pub fn fulfillRequest(
         lp.assert(self.intercepted > 0, "InterceptionLayer.fulfillRequest", .{ .value = self.intercepted });
         log.debug(.http, "fulfill transfer", .{ .intercepted = self.intercepted });
     }
-    self.intercepted -= 1;
 
     // `done` flips true once we've called the user's done_callback. If
     // done_callback itself throws, the user already saw their end-of-flow

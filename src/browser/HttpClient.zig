@@ -1564,10 +1564,28 @@ pub const Transfer = struct {
     // post-perform would need to be improved),
     pub fn unpark(self: *Transfer) void {
         lp.assert(self.state == .parked, "Transfer.unpark", .{ .state = self.state });
+        self.leaveIntercept();
         self.state = .created;
     }
 
+    // Decrement the interception counter iff this transfer is currently
+    // parked for CDP interception.
+    fn leaveIntercept(self: *Transfer) void {
+        if (self.state != .parked) {
+            return;
+        }
+        switch (self.state.parked) {
+            .robots => {},
+            .intercept_request, .intercept_auth => {
+                const intercept_layer = &self.client.interception_layer;
+                lp.assert(intercept_layer.intercepted > 0, "Transfer.leaveIntercept", .{ .value = intercept_layer.intercepted });
+                intercept_layer.intercepted -= 1;
+            },
+        }
+    }
+
     pub fn deinit(self: *Transfer) void {
+        self.leaveIntercept();
         if (self._conn) |c| {
             self.client.removeConn(c);
             self._conn = null;
@@ -1904,9 +1922,9 @@ pub const Transfer = struct {
             log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.interception_layer.intercepted });
         }
 
-        self.client.interception_layer.intercepted -= 1;
+        // The transfer is still .parked(.intercept_auth)
+        // abort -> deinit -> leaveIntercept decrements the counter.
         self.abort(error.AbortAuthChallenge);
-        return;
     }
 
     // headerDoneCallback is called once the headers have been read.
@@ -2067,13 +2085,16 @@ pub const Transfer = struct {
 
 pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     if (comptime IS_DEBUG) {
-        lp.assert(self.interception_layer.intercepted > 0, "HttpClient.continueTransfer", .{ .value = self.interception_layer.intercepted });
         log.debug(.http, "continue transfer", .{ .intercepted = self.interception_layer.intercepted });
     }
 
-    self.interception_layer.intercepted -= 1;
     transfer.unpark();
-    return self.process(transfer);
+    self.process(transfer) catch |err| {
+        if (transfer.state == .created) {
+            transfer.abort(err);
+        }
+        return err;
+    };
 }
 
 const Noop = struct {
