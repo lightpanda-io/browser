@@ -318,7 +318,6 @@ pub const Tool = enum {
                 \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
                 \\  [{"selector":"<sel>","fields":{…}}]    → array of objects, fields resolved relative to each match
                 \\  add `"limit": N` inside any array's object spec to cap matches at N (works for text, attr, and fields shapes)
-                \\  add `"follow": <url>` to a spec to fetch a per-row sub-page and resolve `selector`/`limit`/`fields` against it instead of the current element. `<url>` is either a string template — `{name}` placeholders fill from sibling fields on the same row, e.g. "/item?id={id}" — or an element-spec `{"selector":"<sel>","attr":"href"}` read off the row. Fetches run sequentially; a failed fetch yields null/[] for that field.
                 \\
                 \\Examples (schema → result):
                 \\  {"karma": "#karma"} → {"karma":"42"}
@@ -326,7 +325,6 @@ pub const Tool = enum {
                 \\  {"top3": [{"selector":".story .title","limit":3}]} → {"top3":["A","B","C"]}
                 \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
                 \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
-                \\  {"stories": [{"selector":"tr.athing","limit":5,"fields":{"id":{"attr":"id"},"comments":[{"follow":"/item?id={id}","selector":".comment","limit":3,"fields":{"author":".hnuser","text":".commtext"}}]}}]} → {"stories":[{"id":"1","comments":[{"author":"foo","text":"hi"}]}]}
                 ,
                 .summary = "Extract structured data via a JSON schema",
                 .input_schema = minify(
@@ -778,37 +776,19 @@ pub fn extract(
 }
 
 // The schema literal is spliced between prefix and suffix verbatim — a format
-// string here would collide with the `{`/`}` throughout the walker body. The
-// walker is async (and returns a Promise<string> that `runEval` pumps) because a
-// spec's `follow` key fetches a per-row sub-page; the `await` chain resolves
-// synchronously when no spec follows, so non-follow schemas pay no I/O.
+// string here would collide with the `{`/`}` throughout the walker body.
 const schema_walker_prefix =
-    \\(async function(schema){
-    \\  function fill(t, ctx){ return t.replace(/\{(\w+)\}/g, function(_, n){ return (ctx && ctx[n] != null) ? ctx[n] : ''; }); }
-    \\  function hasFollow(v){ const s = Array.isArray(v) ? v[0] : v; return s && typeof s === 'object' && s.follow !== undefined; }
-    \\  async function followRoot(el, follow, ctx){
-    \\    const url = (typeof follow === 'string') ? fill(follow, ctx) : await ext(el, follow);
-    \\    if (!url) return null;
-    \\    try {
-    \\      const html = await fetch(url).then(function(r){ return r.text(); });
-    \\      return new DOMParser().parseFromString(html, 'text/html');
-    \\    } catch (e) { return null; }
-    \\  }
-    \\  async function rootFor(el, spec, ctx){ return spec.follow !== undefined ? await followRoot(el, spec.follow, ctx) : el; }
-    \\  async function valueOf(m, inner){
+    \\(function(schema){
+    \\  function valueOf(m, inner){
     \\    if (inner.fields) {
     \\      const r = {};
-    \\      const deferred = [];
-    \\      for (const k in inner.fields) {
-    \\        if (hasFollow(inner.fields[k])) deferred.push(k); else r[k] = await ext(m, inner.fields[k]);
-    \\      }
-    \\      for (const k of deferred) r[k] = await ext(m, inner.fields[k], r);
+    \\      for (const k in inner.fields) r[k] = ext(m, inner.fields[k]);
     \\      return r;
     \\    }
     \\    if (inner.attr) return m.getAttribute(inner.attr);
     \\    return m.textContent.trim();
     \\  }
-    \\  async function ext(el, v, ctx){
+    \\  function ext(el, v){
     \\    if (typeof v === 'string') {
     \\      if (v === '') return el.textContent.trim();
     \\      const m = el.querySelector(v);
@@ -816,24 +796,18 @@ const schema_walker_prefix =
     \\    }
     \\    if (Array.isArray(v)) {
     \\      const inner = typeof v[0] === 'string' ? { selector: v[0] } : v[0];
-    \\      const root = await rootFor(el, inner, ctx);
-    \\      if (!root) return [];
-    \\      let matches = Array.from(root.querySelectorAll(inner.selector));
+    \\      let matches = Array.from(el.querySelectorAll(inner.selector));
     \\      if (typeof inner.limit === 'number') matches = matches.slice(0, inner.limit);
-    \\      const acc = [];
-    \\      for (const m of matches) acc.push(await valueOf(m, inner));
-    \\      return acc;
+    \\      return matches.map(function(m){ return valueOf(m, inner); });
     \\    }
-    \\    const root = await rootFor(el, v, ctx);
-    \\    if (!root) return null;
-    \\    const t = v.selector ? root.querySelector(v.selector) : root;
+    \\    const t = v.selector ? el.querySelector(v.selector) : el;
     \\    if (!t) return null;
-    \\    return await valueOf(t, v);
+    \\    return valueOf(t, v);
     \\  }
     \\  const out = {};
     \\  let any = false;
     \\  for (const k in schema) {
-    \\    out[k] = await ext(document, schema[k]);
+    \\    out[k] = ext(document, schema[k]);
     \\    const v = out[k];
     \\    if (v !== null && !(Array.isArray(v) && v.length === 0)) any = true;
     \\  }
