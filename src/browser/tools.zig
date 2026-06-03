@@ -127,11 +127,15 @@ pub const save_synthesis_prompt =
     \\JavaScript wherever they fit; fall back to evaluate(...) only for logic the
     \\builtins can't express. End with an extract(...) for any data the user
     \\wanted out.
+    \\The output MUST be valid JavaScript that runs as-is — it is executed as a
+    \\classic script (not a module), so top-level `await` is a syntax error;
+    \\`await` is only legal inside an `async` function.
     \\The builtins are synchronous and blocking: each returns its result
-    \\directly. Do NOT use async/await, .then, or Promises around them — write a
-    \\plain top-level script (e.g. `const data = extract(...)`, not
-    \\`await extract(...)`). evaluate(...) may run async JS inside the page, but
-    \\the evaluate(...) call itself still returns synchronously.
+    \\directly, so you never need `await` at all. Do NOT use async/await, .then,
+    \\or Promises around them — write a plain top-level script
+    \\(e.g. `const data = extract(...)`, not `await extract(...)`). evaluate(...)
+    \\may run async JS inside the page, but the evaluate(...) call itself still
+    \\returns synchronously.
     \\Output ONLY JavaScript source — no markdown fences, no commentary, no prose
     \\before or after.
 ;
