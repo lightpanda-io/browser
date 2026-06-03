@@ -624,10 +624,18 @@ fn setModel(self: *Agent, model: []const u8) !void {
 
 fn updateStatusBar(self: *Agent) void {
     if (self.ai_client == null) {
-        self.terminal.setStatus("basic REPL — slash commands only", "/help");
+        self.terminal.setStatus(&.{
+            .{ .text = "basic REPL — slash commands only", .side = .left, .rank = 1 },
+            .{ .text = "/help", .side = .right, .rank = 2 },
+        });
         return;
     }
-    self.terminal.setStatus(self.model, "! JS · Tab completes · /help");
+    self.terminal.setStatus(&.{
+        .{ .text = self.model, .side = .left, .rank = 3 },
+        .{ .text = "! JS", .side = .right, .rank = 2 },
+        .{ .text = "Tab completes", .side = .right, .rank = 1 },
+        .{ .text = "/help", .side = .right, .rank = 4 },
+    });
 }
 
 fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
