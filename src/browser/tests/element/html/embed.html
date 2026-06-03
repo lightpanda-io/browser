@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<embed id="em1" src="/plugin.swf" type="application/x-shockwave-flash" width="640" height="480">
+<embed id="em2">
+
+<script id="embed-from-html">
+  {
+    const em1 = document.getElementById('em1');
+    testing.expectEqual('HTMLEmbedElement', em1.constructor.name);
+    testing.expectEqual(testing.ORIGIN + '/plugin.swf', em1.src);
+    testing.expectEqual('application/x-shockwave-flash', em1.type);
+    testing.expectEqual('640', em1.width);
+    testing.expectEqual('480', em1.height);
+
+    const em2 = document.getElementById('em2');
+    testing.expectEqual('', em2.src);
+    testing.expectEqual('', em2.type);
+    testing.expectEqual('', em2.width);
+    testing.expectEqual('', em2.height);
+  }
+</script>
+
+<script id="embed-reflection">
+  {
+    const em = document.createElement('embed');
+
+    em.type = 'video/mp4';
+    testing.expectEqual('video/mp4', em.getAttribute('type'));
+    em.setAttribute('type', 'image/svg+xml');
+    testing.expectEqual('image/svg+xml', em.type);
+
+    em.width = '320';
+    testing.expectEqual('320', em.getAttribute('width'));
+    em.setAttribute('width', '160');
+    testing.expectEqual('160', em.width);
+
+    em.height = '240';
+    testing.expectEqual('240', em.getAttribute('height'));
+    em.setAttribute('height', '120');
+    testing.expectEqual('120', em.height);
+  }
+</script>
+
+<script id="embed-src-url">
+  {
+    const em = document.createElement('embed');
+    testing.expectEqual('', em.src);
+
+    em.src = 'https://lightpanda.io/plugin.swf';
+    testing.expectEqual('https://lightpanda.io/plugin.swf', em.src);
+
+    em.src = '/relative.swf';
+    testing.expectEqual(testing.ORIGIN + '/relative.swf', em.src);
+  }
+</script>
