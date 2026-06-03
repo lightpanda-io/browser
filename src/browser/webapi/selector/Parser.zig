@@ -812,11 +812,20 @@ fn parseIdentifier(self: *Parser, arena: Allocator, err: ParseError) ParseError!
     }
 
     // Slow path: has escapes or nulls
+    return self.consumeEscapedIdentTail(arena, i, err);
+}
+
+// Decode the tail of an <ident-token> that contains escape sequences or null.
+// The caller is expecteed to have already done a "fast path" scan, and
+// `prefix_len` is the part of `self.input` that needs to this "slow path" for
+// decoding
+fn consumeEscapedIdentTail(self: *Parser, arena: Allocator, prefix_len: usize, err: ParseError) ![]const u8 {
+    const input = self.input;
+
     var result = try std.ArrayList(u8).initCapacity(arena, input.len);
+    result.appendSliceAssumeCapacity(input[0..prefix_len]);
 
-    try result.appendSlice(arena, input[0..i]);
-
-    var j = i;
+    var j = prefix_len;
     while (j < input.len) {
         const b = input[j];
 
@@ -834,14 +843,10 @@ fn parseIdentifier(self: *Parser, arena: Allocator, err: ParseError) ParseError!
             continue;
         }
 
-        const is_ident_char = switch (b) {
-            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => true,
-            0x80...0xFF => true,
-            else => false,
-        };
-
-        if (!is_ident_char) {
-            break;
+        switch (b) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
+            0x80...0xFF => {},
+            else => break,
         }
         try result.append(arena, b);
         j += 1;
@@ -906,7 +911,7 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     self.input = self.input[1..];
     _ = self.skipSpaces();
 
-    const attr_name = try self.attributeName();
+    const attr_name = try self.attributeName(arena);
 
     // Normalize the name to lowercase for fast matching (consistent with Attribute.normalizeNameForLookup)
     const name = try Attribute.normalizeNameForLookupAlloc(arena, .wrap(attr_name));
@@ -954,29 +959,39 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     return .{ .name = name, .matcher = matcher, .case_insensitive = case_insensitive };
 }
 
-fn attributeName(self: *Parser) ![]const u8 {
+fn attributeName(self: *Parser, arena: Allocator) ![]const u8 {
     const input = self.input;
     if (input.len == 0) {
         return error.InvalidAttributeSelector;
     }
 
     const first = input[0];
-    if (!std.ascii.isAlphabetic(first) and first != '_' and first < 0x80) {
+    if (first != '\\' and first != 0 and !std.ascii.isAlphabetic(first) and first != '_' and first < 0x80) {
         return error.InvalidAttributeSelector;
     }
 
-    var i: usize = 1;
-    for (input[1..]) |b| {
-        switch (b) {
+    // Fast scan until we hit a character that needs special handling
+    var i: usize = if (first == '\\' or first == 0) 0 else 1;
+    while (i < input.len) : (i += 1) {
+        switch (input[i]) {
             'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
             0x80...0xFF => {},
             else => break,
         }
-        i += 1;
     }
 
-    self.input = input[i..];
-    return input[0..i];
+    if (i == input.len or (input[i] != '\\' and input[i] != 0)) {
+        // Fast path fully completed (no escapes/nulls in the name)
+        if (i == 0) {
+            @branchHint(.cold);
+            return error.InvalidAttributeSelector;
+        }
+        self.input = input[i..];
+        return input[0..i];
+    }
+
+    // Slow path: decode escape sequences (and null -> U+FFFD).
+    return self.consumeEscapedIdentTail(arena, i, error.InvalidAttributeSelector);
 }
 
 fn attributeMatcher(self: *Parser) !std.meta.FieldEnum(Selector.AttributeMatcher) {
@@ -1667,5 +1682,60 @@ test "Selector: Parser.attributeValue" {
     {
         var parser = Parser{ .input = "\"abc\\" };
         try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+}
+
+test "Selector: Parser.attributeName" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    // Plain name (fast path).
+    {
+        var parser = Parser{ .input = "ng-app]" };
+        try testing.expectEqual("ng-app", try parser.attributeName(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escaped colon in the name: [ng\:jq] -> attribute literally named "ng:jq".
+    // AngularJS probes for these during bootstrap; rejecting them aborts the
+    // whole framework. (see workingnomads.com regression)
+    {
+        var parser = Parser{ .input = "ng\\:jq]" };
+        try testing.expectEqual("ng:jq", try parser.attributeName(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escape as the very first character.
+    {
+        var parser = Parser{ .input = "\\:foo]" };
+        try testing.expectEqual(":foo", try parser.attributeName(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Hex escape: [\41 bc] -> "Abc" (space terminates the hex escape).
+    {
+        var parser = Parser{ .input = "\\41 bc]" };
+        try testing.expectEqual("Abc", try parser.attributeName(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Name followed by a matcher stops at the matcher (fast path, no escape).
+    {
+        var parser = Parser{ .input = "data-ng-csp=foo]" };
+        try testing.expectEqual("data-ng-csp", try parser.attributeName(arena));
+        try testing.expectEqual("=foo]", parser.input);
+    }
+
+    // Escaped name followed by a matcher.
+    {
+        var parser = Parser{ .input = "ng\\:csp~=foo]" };
+        try testing.expectEqual("ng:csp", try parser.attributeName(arena));
+        try testing.expectEqual("~=foo]", parser.input);
+    }
+
+    // Invalid first character.
+    {
+        var parser = Parser{ .input = "=foo]" };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attributeName(arena));
     }
 }
