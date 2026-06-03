@@ -472,7 +472,7 @@ fn runRepl(self: *Agent) void {
                 self.terminal.printError("{s}", .{switch (err) {
                     error.OutOfMemory => "out of memory",
                     error.FrameNotLoaded => "no page loaded — run /goto <url> first (Esc exits JS mode)",
-                    else => std.fmt.allocPrint(aa, "eval failed: {s}", .{@errorName(err)}) catch "eval failed",
+                    else => std.fmt.allocPrint(aa, "evaluate failed: {s}", .{@errorName(err)}) catch "evaluate failed",
                 }});
                 continue :repl;
             };
