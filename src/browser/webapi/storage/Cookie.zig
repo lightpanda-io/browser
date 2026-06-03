@@ -574,11 +574,7 @@ pub const Jar = struct {
         origin_url: ?[:0]const u8 = null,
     };
     pub fn forRequest(self: *Jar, target_url: [:0]const u8, writer: anytype, opts: LookupOpts) !void {
-        const target = PreparedUri{
-            .host = URL.getHostname(target_url),
-            .path = URL.getPathname(target_url),
-            .secure = URL.isSecure(target_url),
-        };
+        const target = PreparedUri.init(target_url);
         const same_site = try areSameSite(opts.origin_url, target.host);
 
         removeExpired(self, opts.request_time);
@@ -668,6 +664,15 @@ pub const PreparedUri = struct {
     host: []const u8, // Percent encoded, lower case
     path: []const u8, // Percent encoded
     secure: bool, // True if scheme is https
+
+    // init assumes url lifetime exceeds preparedUri one.
+    pub fn init(url: [:0]const u8) PreparedUri {
+        return .{
+            .host = URL.getHostname(url),
+            .path = URL.getPathname(url),
+            .secure = URL.isSecure(url),
+        };
+    }
 };
 
 fn trim(str: []const u8) []const u8 {
