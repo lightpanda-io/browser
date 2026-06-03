@@ -240,10 +240,14 @@ evaluate("document.title");
 The script runs in an agent-only V8 context. It has no `window`, `document`, or
 DOM APIs. Browser interaction happens only through the installed primitives
 (`goto`, `click`, `fill`, `evaluate`, `extract`, and the other recorded browser
-actions). It is not Node.js either: there is no `require`, `process`, `fs`, npm
-package loading, or Node standard library. The `evaluate(...)` primitive executes
-its string in the current page context; page scripts cannot see agent variables
-or agent primitives.
+actions). The primitives are **synchronous and blocking** — each returns its
+result directly, so write `const data = extract(…)`, not `await extract(…)`.
+There is no `async`/`await`/Promise contract around them. (`evaluate(...)` can
+run async JS *inside* the page, but the `evaluate(...)` call itself still returns
+synchronously.) It is not Node.js either: there is no `require`, `process`, `fs`,
+npm package loading, or Node standard library. The `evaluate(...)` primitive
+executes its string in the current page context; page scripts cannot see agent
+variables or agent primitives.
 
 Tool errors throw JavaScript exceptions and stop execution.
 See [agent-script.md](agent-script.md) for the full script format reference.
