@@ -1131,7 +1131,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     self.removeConn(msg.conn);
     transfer._conn = null;
 
-    try transfer.req.done_callback(transfer.req.ctx);
+    try transfer.requestComplete();
 
     return true;
 }
@@ -1510,6 +1510,12 @@ pub const Transfer = struct {
 
     _notified_fail: bool = false,
 
+    // Latches on the first terminal callback (done or error) and, unlike
+    // _notified_fail, is never reset across retries. Ensures a ctx that frees
+    // itself in that callback (e.g. a Script releasing its pooled arena) gets
+    // exactly one terminal callback over the transfer's lifetime, never two.
+    _terminated: bool = false,
+
     // Set when conn is temporarily detached from transfer during redirect
     // reconfiguration. Used by processMessages to release the orphaned conn
     // if reconfiguration fails. Transient inside the redirect path only.
@@ -1737,11 +1743,23 @@ pub const Transfer = struct {
         if (self._notified_fail) return;
         self._notified_fail = true;
 
+        // See _terminated.
+        if (self._terminated) return;
+        self._terminated = true;
+
         if (execute_callback) {
             self.req.error_callback(self.req.ctx, err);
         } else if (self.req.shutdown_callback) |cb| {
             cb(self.req.ctx);
         }
+    }
+
+    // Success counterpart to requestFailed: fire done_callback at most once,
+    // sharing the _terminated latch so done and error can't both reach the ctx.
+    fn requestComplete(self: *Transfer) !void {
+        if (self._terminated) return;
+        self._terminated = true;
+        try self.req.done_callback(self.req.ctx);
     }
 
     fn configureConn(self: *Transfer, conn: *http.Connection) anyerror!void {
