@@ -380,6 +380,29 @@
   }
 </script>
 
+<script id="worker_module_type" type=module>
+  // A module-type worker: its entry script uses top-level static import (only
+  // valid in module workers), and importScripts() throws a TypeError.
+  {
+    const state = await testing.async();
+    const worker = new Worker('./module-worker.js', { type: 'module' });
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    worker.postMessage({ greeting: 'to-module' });
+
+    await state.done((response) => {
+      testing.expectEqual('to-module', response.echo.greeting);
+      testing.expectEqual('module-worker', response.from);
+      testing.expectEqual('from-base', response.baseValue);
+      testing.expectEqual('from-base', response.importedValue);
+      testing.expectEqual('local', response.localValue);
+      testing.expectEqual('TypeError', response.importScriptsError);
+    });
+  }
+</script>
+
 <script id="worker_from_blob_url" type=module>
   // A blob: worker resolves its initial script through the HTTP client's
   // synthetic-scheme path against the frame's blob registry, like any URL.
