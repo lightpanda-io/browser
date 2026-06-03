@@ -244,7 +244,10 @@ pub fn scheduleNavigation(self: *Page, frame: *Frame) !void {
 }
 
 pub fn findFrameByFrameId(self: *Page, frame_id: u32) ?*Frame {
-    return findFrameBy(&self.frame, "_frame_id", frame_id);
+    if (findFrameBy(&self.frame, "_frame_id", frame_id)) |found| {
+        return found;
+    }
+    return self.findPopupBy("_frame_id", frame_id);
 }
 
 // Returns the popup Frame registered under `name`, or null.
@@ -258,13 +261,27 @@ pub fn findPopupByName(self: *Page, name: []const u8) ?*Frame {
 }
 
 pub fn findFrameByLoaderId(self: *Page, loader_id: u32) ?*Frame {
-    return findFrameBy(&self.frame, "_loader_id", loader_id);
+    if (findFrameBy(&self.frame, "_loader_id", loader_id)) |found| {
+        return found;
+    }
+    return self.findPopupBy("_loader_id", loader_id);
 }
 
 fn findFrameBy(frame: *Frame, comptime field: []const u8, id: u32) ?*Frame {
-    if (@field(frame, field) == id) return frame;
+    if (@field(frame, field) == id) {
+        return frame;
+    }
     for (frame.child_frames.items) |f| {
         if (findFrameBy(f, field, id)) |found| {
+            return found;
+        }
+    }
+    return null;
+}
+
+fn findPopupBy(self: *Page, comptime field: []const u8, id: u32) ?*Frame {
+    for (self.popups.items) |frame| {
+        if (findFrameBy(frame, field, id)) |found| {
             return found;
         }
     }
