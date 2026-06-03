@@ -551,9 +551,12 @@ fn skipWhitespace(text: []const u8, start: usize) ?usize {
 /// only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
 fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?*anyopaque) callconv(.c) void {
     const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
-    // JS mode: the buffer is raw JS, so slash/kv/url highlighting doesn't apply.
-    if (self.js_mode) return;
     const text = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input)), 0);
+    // JS mode: no slash/kv/url highlighting, only `$LP_*` refs.
+    if (self.js_mode) {
+        highlightDollarVars(henv, text, 0);
+        return;
+    }
     const cmd_start = skipWhitespace(text, 0) orelse return;
     var i = cmd_start;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
@@ -576,7 +579,9 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?
         highlightSlashArgs(henv, text, i);
     } else {
         // No leading `/`: a natural-language prompt, so no command validation.
-        highlightDollarVars(henv, text, i);
+        // Start at `cmd_start`, not `i` — a `$LP_*` as the first token must
+        // highlight too.
+        highlightDollarVars(henv, text, cmd_start);
     }
 }
 
@@ -662,8 +667,7 @@ fn scanQuoted(text: []const u8, start: usize) usize {
     return close + 1;
 }
 
-/// Highlight `$LP_*` tokens embedded in natural-language input. Used for the
-/// non-slash REPL line path where the rest is freeform prose to the LLM.
+/// Highlight `$LP_*` tokens appearing from `start` onward.
 fn highlightDollarVars(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
     var i = start;
     while (i < text.len) {

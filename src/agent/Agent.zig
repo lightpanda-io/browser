@@ -516,7 +516,10 @@ fn runRepl(self: *Agent) void {
 
         // JS mode: evaluate the whole line against the page, bypassing command parsing.
         if (self.terminal.jsMode()) {
-            const result = browser_tools.evalScript(aa, self.session, &self.node_registry, line) catch |err| {
+            // `line` keeps the `$LP_*` placeholder so the secret never reaches
+            // the recorder; only the evaluated copy is expanded.
+            const script = browser_tools.substituteEnvVars(aa, line) catch line;
+            const result = browser_tools.evalScript(aa, self.session, &self.node_registry, script) catch |err| {
                 self.terminal.printError("{s}", .{switch (err) {
                     error.OutOfMemory => "out of memory",
                     error.FrameNotLoaded => "no page loaded — run /goto <url> first (Esc exits JS mode)",
