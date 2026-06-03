@@ -905,7 +905,7 @@ pub fn interactiveTty() bool {
 /// Numbered TTY picker. `default` (if set) marks that row "(default)" and
 /// makes Enter start on that index. Up/Down moves the active row; Enter
 /// selects it. Numbered input still works for users who prefer typing.
-pub fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
+pub fn promptNumberedChoice(header: []const u8, items: []const [:0]const u8, default: ?usize) !usize {
     if (items.len == 0) return error.NoChoice;
     const valid_default: ?usize = if (default) |d| if (d < items.len) d else null else null;
     if (interactiveTty()) {
@@ -918,7 +918,7 @@ pub fn promptNumberedChoice(header: []const u8, items: []const []const u8, defau
 }
 
 /// Line-oriented fallback. Errors with NoChoice after 3 invalid attempts.
-fn promptNumberedChoiceLine(header: []const u8, items: []const []const u8, default: ?usize) !usize {
+fn promptNumberedChoiceLine(header: []const u8, items: []const [:0]const u8, default: ?usize) !usize {
     var stdin_buf: [128]u8 = undefined;
     var stdin = std.fs.File.stdin().reader(&stdin_buf);
 
@@ -1005,7 +1005,7 @@ const RawTerminal = struct {
     }
 };
 
-fn promptInteractiveChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
+fn promptInteractiveChoice(header: []const u8, items: []const [:0]const u8, default: ?usize) !usize {
     var raw = try RawTerminal.enable();
     defer raw.restore();
 
@@ -1046,7 +1046,7 @@ fn moveChoiceRenderStart(line_count: usize) void {
     }
 }
 
-fn renderChoice(header: []const u8, items: []const []const u8, default: ?usize, selected: usize, first_render: bool) void {
+fn renderChoice(header: []const u8, items: []const [:0]const u8, default: ?usize, selected: usize, first_render: bool) void {
     if (!first_render) moveChoiceRenderStart(items.len + 2);
     std.debug.print(ansi.clear_line ++ "{s}\r\n", .{header});
     for (items, 0..) |item, idx| {

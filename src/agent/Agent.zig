@@ -677,7 +677,7 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
     _ = completionModels(self, self.allocator);
 }
 
-const SaveMode = enum { replace, append };
+const SaveMode = enum { append, replace };
 
 const PathAndMode = struct { path: []const u8, mode: SaveMode };
 
@@ -818,12 +818,11 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?SaveMode {
     var header_buf: [256]u8 = undefined;
     const header = std.fmt.bufPrint(&header_buf, "{s} already exists. Pick save mode:", .{path}) catch
         "File already exists. Pick save mode:";
-    const labels: []const []const u8 = &.{ "replace", "append" };
-    const idx = Terminal.promptNumberedChoice(header, labels, null) catch {
+    const idx = Terminal.promptNumberedChoice(header, std.meta.fieldNames(SaveMode), 0) catch {
         self.terminal.printInfo("Save cancelled.", .{});
         return null;
     };
-    return if (idx == 0) .replace else .append;
+    return @enumFromInt(idx);
 }
 
 fn writeSaveFile(self: *Agent, path: []const u8, mode: SaveMode) !void {
@@ -848,18 +847,12 @@ fn failSave(self: *Agent, reason: []const u8) void {
 
 /// LLM-synthesized `/save`: hand the model the builtin catalog, the full
 /// conversation, and the deterministic record of what ran, then write the
-/// idiomatic script it returns. Always replaces the target file.
+/// idiomatic script it returns.
 fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8) void {
     const provider_client = self.ai_client.?;
 
-    const path: []const u8 = blk: {
-        if (filename) |f| break :blk f;
-        if (self.save_path) |p| break :blk p;
-        break :blk randomSaveFilename(arena) catch |err| {
-            self.terminal.printError("failed to choose save filename: {s}", .{@errorName(err)});
-            return;
-        };
-    };
+    const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
+    const path = resolved.path;
 
     self.ensureSystemPrompt() catch return self.failSave("out of memory");
 
@@ -922,7 +915,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.rollbackMessages(baseline);
 
-    writeContentFile(path, script, .replace) catch |err| {
+    writeContentFile(path, script, resolved.mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };

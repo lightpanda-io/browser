@@ -82,7 +82,7 @@ pub fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pic
         return .{ .credentials = found[0], .source = .detected };
     }
 
-    var names: [zenai.provider.default_candidates.len][]const u8 = undefined;
+    var names: [zenai.provider.default_candidates.len][:0]const u8 = undefined;
     for (found, 0..) |cred, i| names[i] = @tagName(cred.provider);
     std.debug.print("\n", .{});
     const idx = Terminal.promptNumberedChoice("  Select a provider:", names[0..found.len], 0) catch {
