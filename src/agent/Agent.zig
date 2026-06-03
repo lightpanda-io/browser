@@ -206,16 +206,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(r.credentials.provider, model);
+            settings.saveRemembered(r.credentials.provider, model) catch {};
         }
-        std.debug.print(Terminal.ansi.dim ++ "  Provider: {s}, Model: {s} ", .{ @tagName(r.credentials.provider), model });
-        switch (r.source) {
-            .flag => {},
-            .remembered => std.debug.print("(from ./.lp-agent.zon) ", .{}),
-            .detected => std.debug.print("(auto-selected) ", .{}),
-            .picked => std.debug.print("(saved to /.lp-agent.zon) ", .{}),
-        }
-        std.debug.print("\n\n" ++ Terminal.ansi.reset, .{});
+        // provider/model now live in the status bar; just space before the help
+        std.debug.print("\n", .{});
     }
 
     const notification: *lp.Notification = try .init(allocator);
@@ -461,21 +455,21 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
 
 fn runRepl(self: *Agent) void {
     if (self.ai_client) |_| {
-        self.terminal.printItalic("  Use natural language or slash commands", .{});
+        self.terminal.printItalic("  Use natural language or commands", .{});
     } else {
-        self.terminal.printItalic("  Basic REPL (--no-llm) - slash commands only.", .{});
+        self.terminal.printItalic("  Basic REPL (--no-llm) - commands only.", .{});
         self.terminal.printDimmed("  To enable natural language, " ++ llm_setup_hint ++ ".", .{});
     }
-    self.terminal.printDimmed("  /help to list slash commands\t\t\tTab completes/cycles through commands", .{});
+    self.terminal.printDimmed("  /help to list commands", .{});
     self.terminal.printDimmed("  /quit to exit", .{});
-    self.terminal.printDimmed("  ! for JS mode (eval against the page)\t\tEsc exits JS mode", .{});
+    self.terminal.printDimmed("  ! for JS mode", .{});
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
     repl: while (true) {
         std.debug.print("\n", .{});
+        self.updateStatusBar();
         const line = Terminal.readLine("") orelse break;
         defer Terminal.freeLine(line);
-        std.debug.print("\n", .{});
 
         // Slash commands and idle Ctrl-C set the cancel flag without
         // clearing V8's terminate state; drain both before the next turn.
@@ -484,7 +478,11 @@ fn runRepl(self: *Agent) void {
         }
 
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-        if (trimmed.len == 0) continue;
+        if (trimmed.len == 0) {
+            self.terminal.clearPromptFrame();
+            continue;
+        }
+        std.debug.print("\n", .{});
 
         var arena: std.heap.ArenaAllocator = .init(self.allocator);
         defer arena.deinit();
@@ -630,8 +628,23 @@ fn setModel(self: *Agent, model: []const u8) !void {
     const new_model = try self.allocator.dupe(u8, model);
     self.allocator.free(self.model);
     self.model = new_model;
-    if (self.model_credentials) |c| settings.saveRemembered(c.provider, self.model);
-    self.terminal.printInfo("model: {s}", .{self.model});
+    const c = self.model_credentials orelse {
+        self.terminal.printInfo("model: {s}", .{self.model});
+        return;
+    };
+    if (settings.saveRemembered(c.provider, self.model)) {
+        self.terminal.printInfo("model: {s} (saved to {s})", .{ self.model, settings.remembered_path });
+    } else |_| {
+        self.terminal.printInfo("model: {s}", .{self.model});
+    }
+}
+
+fn updateStatusBar(self: *Agent) void {
+    if (self.ai_client == null) {
+        self.terminal.setStatus("basic REPL — slash commands only", "/help");
+        return;
+    }
+    self.terminal.setStatus(self.model, "! JS · Tab completes · /help");
 }
 
 fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
@@ -672,9 +685,12 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
     self.model_completions = null;
     self.allocator.free(self.model);
     self.model = new_model;
-    settings.saveRemembered(credentials.provider, self.model);
     self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
-    self.terminal.printInfo("model: {s}", .{self.model});
+    if (settings.saveRemembered(credentials.provider, self.model)) {
+        self.terminal.printInfo("model: {s} (saved to {s})", .{ self.model, settings.remembered_path });
+    } else |_| {
+        self.terminal.printInfo("model: {s}", .{self.model});
+    }
     _ = completionModels(self, self.allocator);
 }
 

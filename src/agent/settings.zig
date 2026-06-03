@@ -91,7 +91,7 @@ pub fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pic
     return .{ .credentials = found[idx], .source = .picked };
 }
 
-const remembered_path = ".lp-agent.zon";
+pub const remembered_path = ".lp-agent.zon";
 
 /// Last user-selected provider/model, persisted per-directory in `.lp-agent.zon`.
 /// `model` is owned by the caller.
@@ -112,11 +112,11 @@ pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
 }
 
 /// Best-effort persist of the current selection; failures are ignored.
-pub fn saveRemembered(provider: Config.AiProvider, model: []const u8) void {
+pub fn saveRemembered(provider: Config.AiProvider, model: []const u8) !void {
     var buf: [512]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    std.zon.stringify.serialize(Remembered{ .provider = provider, .model = model }, .{}, &w) catch return;
-    std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = w.buffered() }) catch {};
+    try std.zon.stringify.serialize(Remembered{ .provider = provider, .model = model }, .{}, &w);
+    try std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = w.buffered() });
 }
 
 pub fn availableProviders(buf: []Credentials) []Credentials {

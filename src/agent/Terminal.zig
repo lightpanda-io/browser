@@ -71,6 +71,10 @@ spinner: Spinner,
 completion_source: ?CompletionSource = null,
 /// True while the REPL is in JS mode; set by isocline's mode callback.
 js_mode: bool = false,
+/// Base (REPL-mode) status text, owned; `renderStatus` overrides it with a
+/// JS-mode label when active. Recomposed per turn so the bar tracks resizes.
+status_left: std.ArrayList(u8) = .empty,
+status_right: std.ArrayList(u8) = .empty,
 
 /// Lets the completer/hinter pull dynamic candidates from the `Agent` without
 /// `Terminal` depending on it (same idiom as `Session.cancel_hook`).
@@ -108,12 +112,19 @@ pub fn attachCompleter(self: *Terminal) void {
     c.ic_set_default_completer(&completionCallback, self);
     c.ic_set_default_hinter(&hintsCallback, self);
     c.ic_set_mode_callback(&modeCallback, self);
+    c.ic_set_resize_callback(&resizeCallback, self);
     c.ic_set_default_highlighter(&highlighterCallback, self);
 }
 
 fn modeCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
     const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
     self.js_mode = active;
+    self.renderStatus();
+}
+
+fn resizeCallback(arg: ?*anyopaque) callconv(.c) void {
+    const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
+    self.renderStatus();
 }
 
 pub fn jsMode(self: *const Terminal) bool {
@@ -143,7 +154,7 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
         c.ic_set_prompt_mode("[" ++ style_jsmode ++ "]![/" ++ style_jsmode ++ "] ", '!');
         // Blank continuation marker so multiline input isn't prefixed with `>`.
-        c.ic_set_prompt_marker(null, "");
+        c.ic_set_prompt_marker("❯ ", "");
         _ = c.ic_enable_highlight(true);
         if (history_path) |path| {
             c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
@@ -165,6 +176,8 @@ fn isRepl(self: *const Terminal) bool {
 
 pub fn deinit(self: *Terminal) void {
     self.spinner.deinit();
+    self.status_left.deinit(self.allocator);
+    self.status_right.deinit(self.allocator);
     if (self.repl_arena) |*a| a.deinit();
 }
 
@@ -768,6 +781,68 @@ pub fn columns() ?u16 {
     const rc = std.c.ioctl(std.posix.STDERR_FILENO, req, &ws);
     if (rc != 0 or ws.col == 0) return null;
     return ws.col;
+}
+
+/// Erase the frame after an empty submit. The bars collapse on submit, leaving
+/// the spacing and prompt lines with the cursor one line below; move up two and
+/// clear to end of screen.
+pub fn clearPromptFrame(self: *Terminal) void {
+    if (!self.isRepl()) return;
+    std.debug.print("\x1b[2A\r\x1b[J", .{});
+}
+
+/// Set the REPL-mode status text (provider/model on the left, hints on the
+/// right) and render the bar. JS mode overrides this text live via `renderStatus`.
+pub fn setStatus(self: *Terminal, left: []const u8, right: []const u8) void {
+    if (!self.isRepl()) return;
+    self.status_left.clearRetainingCapacity();
+    self.status_right.clearRetainingCapacity();
+    self.status_left.appendSlice(self.allocator, left) catch return;
+    self.status_right.appendSlice(self.allocator, right) catch return;
+    self.renderStatus();
+}
+
+fn renderStatus(self: *Terminal) void {
+    if (!self.isRepl()) return;
+    if (self.js_mode) {
+        self.writeStatusBar("JS mode", "Esc exits JS mode");
+    } else {
+        self.writeStatusBar(self.status_left.items, self.status_right.items);
+    }
+}
+
+/// Status bar below the input: a rule, then dimmed `left` flush-left and `right`
+/// flush-right. isocline copies the string, so the temporary buffer is freed here.
+fn writeStatusBar(self: *Terminal, left: []const u8, right: []const u8) void {
+    const a = self.allocator;
+    // stay one short of the last column: not all terminals render it reliably
+    const w: usize = (columns() orelse 80) -| 1;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+
+    // a dim full-width rule, shared by both bars
+    buf.appendSlice(a, "[faint]") catch return;
+    for (0..w) |_| buf.appendSlice(a, "─") catch return;
+    buf.appendSlice(a, "[/]") catch return;
+
+    // top bar: just the rule
+    buf.append(a, 0) catch return;
+    c.ic_set_top_bar(buf.items.ptr);
+    _ = buf.pop(); // drop the terminator, keep the rule
+
+    // bottom bar: the rule, then dimmed `left` flush-left and `right` flush-right
+    buf.appendSlice(a, "\n[faint]  ") catch return;
+    buf.appendSlice(a, left) catch return;
+    const used = 2 + displayWidth(left) + displayWidth(right);
+    buf.appendNTimes(a, ' ', if (used < w) w - used else 1) catch return;
+    buf.appendSlice(a, right) catch return;
+    buf.appendSlice(a, "[/]") catch return;
+    buf.append(a, 0) catch return;
+    c.ic_set_bottom_bar(buf.items.ptr);
+}
+
+fn displayWidth(s: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(s) catch s.len;
 }
 
 pub fn interactiveTty() bool {
