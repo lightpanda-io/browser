@@ -20,15 +20,11 @@ const std = @import("std");
 
 const Mime = @This();
 content_type: ContentType,
-params: []const u8 = "",
 // IANA defines max. charset value length as 40.
 // We keep 41 for null-termination since HTML parser expects in this format.
 charset: [41]u8 = default_charset,
 charset_len: usize = default_charset_len,
 is_default_charset: bool = true,
-
-type_buf: [127]u8 = @splat(0),
-sub_type_buf: [127]u8 = @splat(0),
 
 /// String "UTF-8" continued by null characters.
 const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
@@ -64,10 +60,9 @@ pub const ContentType = union(ContentTypeEnum) {
     image_webp: void,
     application_json: void,
     unknown: void,
-    other: struct {
-        type: []const u8,
-        sub_type: []const u8,
-    },
+    // A valid but unrecognized type/subtype. Keeping it would require some
+    // memory management of the input. Nothing needs it right now, so why bother.
+    other: void,
 };
 
 pub fn contentTypeString(mime: *const Mime) []const u8 {
@@ -125,11 +120,10 @@ pub fn parse(input: []const u8) !Mime {
 
     var buf: [255]u8 = undefined;
     const normalized = std.ascii.lowerString(&buf, std.mem.trim(u8, input, &std.ascii.whitespace));
-    _ = std.ascii.lowerString(normalized, normalized);
 
     var mime = Mime{ .content_type = undefined };
 
-    const content_type, const type_len = try parseContentType(normalized, &mime.type_buf, &mime.sub_type_buf);
+    const content_type, const type_len = try parseContentType(normalized);
     if (type_len >= normalized.len) {
         return .{ .content_type = content_type };
     }
@@ -170,7 +164,6 @@ pub fn parse(input: []const u8) !Mime {
         }
     }
 
-    mime.params = params;
     mime.charset = charset;
     mime.charset_len = charset_len;
     mime.content_type = content_type;
@@ -401,7 +394,7 @@ pub fn isText(mime: *const Mime) bool {
 }
 
 // we expect value to be lowercase
-fn parseContentType(value: []const u8, type_buf: []u8, sub_type_buf: []u8) !struct { ContentType, usize } {
+fn parseContentType(value: []const u8) !struct { ContentType, usize } {
     const end = std.mem.indexOfScalarPos(u8, value, 0, ';') orelse value.len;
     const type_name = trimRight(value[0..end]);
     const attribute_start = end + 1;
@@ -450,18 +443,7 @@ fn parseContentType(value: []const u8, type_buf: []u8, sub_type_buf: []u8) !stru
         return error.Invalid;
     }
 
-    @memcpy(type_buf[0..main_type.len], main_type);
-    @memcpy(sub_type_buf[0..sub_type.len], sub_type);
-
-    return .{
-        .{
-            .other = .{
-                .type = type_buf[0..main_type.len],
-                .sub_type = sub_type_buf[0..sub_type.len],
-            },
-        },
-        attribute_start,
-    };
+    return .{ .{ .other = {} }, attribute_start };
 }
 
 const VALID_CODEPOINTS = blk: {
@@ -474,13 +456,6 @@ const VALID_CODEPOINTS = blk: {
     }
     break :blk v;
 };
-
-pub fn typeString(self: *const Mime) []const u8 {
-    return switch (self.content_type) {
-        .other => |o| o.type[0..o.type_len],
-        else => "",
-    };
-}
 
 fn validType(value: []const u8) bool {
     for (value) |b| {
@@ -581,17 +556,14 @@ test "Mime: parse uncommon" {
     defer testing.reset();
 
     const text_csv = Expectation{
-        .content_type = .{ .other = .{ .type = "text", .sub_type = "csv" } },
+        .content_type = .{ .other = {} },
     };
     try expect(text_csv, "text/csv");
     try expect(text_csv, "text/csv;");
     try expect(text_csv, "  text/csv\t  ");
     try expect(text_csv, "  text/csv\t  ;");
 
-    try expect(
-        .{ .content_type = .{ .other = .{ .type = "text", .sub_type = "csv" } } },
-        "Text/CSV",
-    );
+    try expect(.{ .content_type = .{ .other = {} } }, "Text/CSV");
 }
 
 test "Mime: parse charset" {
@@ -600,37 +572,31 @@ test "Mime: parse charset" {
     try expect(.{
         .content_type = .{ .text_xml = {} },
         .charset = "utf-8",
-        .params = "charset=utf-8",
     }, "text/xml; charset=utf-8");
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
         .charset = "utf-8",
-        .params = "charset=\"utf-8\"",
     }, "text/xml;charset=\"UTF-8\"");
 
     try expect(.{
         .content_type = .{ .text_html = {} },
         .charset = "iso-8859-1",
-        .params = "charset=\"iso-8859-1\"",
     }, "text/html; charset=\"iso-8859-1\"");
 
     try expect(.{
         .content_type = .{ .text_html = {} },
         .charset = "iso-8859-1",
-        .params = "charset=\"iso-8859-1\"",
     }, "text/html; charset=\"ISO-8859-1\"");
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
         .charset = "custom-non-standard-charset-value",
-        .params = "charset=\"custom-non-standard-charset-value\"",
     }, "text/xml;charset=\"custom-non-standard-charset-value\"");
 
     try expect(.{
         .content_type = .{ .text_html = {} },
         .charset = "UTF-8",
-        .params = "x=\"",
     }, "text/html;x=\"");
 }
 
@@ -737,7 +703,6 @@ test "Mime: sniff" {
 
 const Expectation = struct {
     content_type: Mime.ContentType,
-    params: []const u8 = "",
     charset: ?[]const u8 = null,
 };
 
@@ -749,17 +714,6 @@ fn expect(expected: Expectation, input: []const u8) !void {
         std.meta.activeTag(expected.content_type),
         std.meta.activeTag(actual.content_type),
     );
-
-    switch (expected.content_type) {
-        .other => |e| {
-            const a = actual.content_type.other;
-            try testing.expectEqual(e.type, a.type);
-            try testing.expectEqual(e.sub_type, a.sub_type);
-        },
-        else => {}, // already asserted above
-    }
-
-    try testing.expectEqual(expected.params, actual.params);
 
     if (expected.charset) |ec| {
         // We remove the null characters for testing purposes here.
