@@ -269,6 +269,15 @@ pub fn deinit(self: *const Config, allocator: Allocator) void {
     }
 }
 
+pub fn interactive(self: *const Config) bool {
+    return switch (self.mode) {
+        .fetch => false,
+        .serve, .mcp => true,
+        .agent => |opts| opts.script_file == null,
+        else => unreachable,
+    };
+}
+
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
