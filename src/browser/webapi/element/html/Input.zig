@@ -31,6 +31,8 @@ const Event = @import("../../Event.zig");
 const InputEvent = @import("../../event/InputEvent.zig");
 const ValidityState = @import("ValidityState.zig");
 const popover = @import("../popover.zig");
+const File = @import("../../File.zig");
+const FileList = @import("../../FileList.zig");
 
 const String = lp.String;
 
@@ -87,6 +89,7 @@ _indeterminate: bool = false,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
 _popover_target: ?*Element = null,
+_files: ?*FileList = null,
 
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
@@ -226,6 +229,54 @@ pub fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
     return v;
 }
 
+/// Lazily allocates this input's FileList and registers it with the frame so
+/// the refcounted File objects it holds are released at frame teardown.
+fn ensureFileList(self: *Input, frame: *Frame) !*FileList {
+    if (self._files) |fl| return fl;
+    const fl = try frame._factory.create(FileList{ ._files = &.{} });
+    try frame.trackFileList(fl);
+    self._files = fl;
+    return fl;
+}
+
+/// Returns the FileList for a `type="file"` input (lazily allocated, identity preserved).
+/// Non-file inputs return null per HTMLInputElement IDL.
+pub fn getFiles(self: *Input, frame: *Frame) !?*FileList {
+    if (self._input_type != .file) return null;
+    return try self.ensureFileList(frame);
+}
+
+/// Replaces the selected file list and fires `input` + `change` events.
+/// Used by CDP `DOM.setFileInputFiles` and any future DataTransfer-style setter.
+///
+/// The FileList holds a reference on each File (whose backing arena is reference
+/// counted via its Blob proto), so we acquire on the incoming files and release
+/// the outgoing ones; the frame releases whatever remains at teardown.
+pub fn setFiles(self: *Input, files: []const *File, frame: *Frame) !void {
+    if (self._input_type != .file) return error.InvalidStateError;
+    const fl = try self.ensureFileList(frame);
+
+    const dupe = try frame._factory._slab.allocator().dupe(*File, files);
+    for (dupe) |file| file._proto.acquireRef();
+    for (fl._files) |old| old._proto.releaseRef(frame._page);
+    fl._files = dupe;
+
+    try self.dispatchInputEvent(null, "insertReplacementText", frame);
+    const change_evt = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._page);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), change_evt);
+}
+
+/// JS-binding wrapper for the `value` getter: for type=file, return the spec
+/// "C:\\fakepath\\<name>" string; otherwise delegate to plain getValue().
+pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
+    if (self._input_type == .file) {
+        const fl = self._files orelse return "";
+        if (fl._files.len == 0) return "";
+        return try std.fmt.allocPrint(frame.arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
+    }
+    return self.getValue();
+}
+
 pub fn getValidationMessage(self: *const Input, frame: *Frame) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
@@ -276,8 +327,7 @@ pub fn suffersValueMissing(self: *const Input, frame: *Frame) bool {
     return switch (self._input_type) {
         .checkbox => !self._checked,
         .radio => !self.radioGroupHasChecked(frame),
-        // TODO: file inputs aren't supported yet (#2175); treat as always-empty when required.
-        .file => true,
+        .file => if (self._files) |fl| fl._files.len == 0 else true,
         .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week, .color => blk: {
             const v = self._value orelse self._default_value orelse "";
             break :blk v.len == 0;
@@ -1326,7 +1376,8 @@ pub const JsApi = struct {
 
     pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{ .ce_reactions = true });
-    pub const value = bridge.accessor(Input.getValue, setValueFromJS, .{ .dom_exception = true });
+    pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .dom_exception = true, .ce_reactions = true });
+    pub const files = bridge.accessor(Input.getFiles, null, .{});
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{ .ce_reactions = true });
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
     pub const defaultChecked = bridge.accessor(Input.getDefaultChecked, Input.setDefaultChecked, .{ .ce_reactions = true });
@@ -1469,6 +1520,7 @@ test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input_radio.html", .{});
     try testing.htmlRunner("element/html/input-attrs.html", .{});
     try testing.htmlRunner("element/html/input-validity.html", .{});
+    try testing.htmlRunner("element/html/input_file.html", .{});
 }
 
 test "isValidFloatingPoint" {
