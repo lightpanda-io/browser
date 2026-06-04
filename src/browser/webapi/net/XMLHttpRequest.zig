@@ -59,6 +59,8 @@ _response_status: u16 = 0,
 _response_len: ?usize = 0,
 _response_url: [:0]const u8 = "",
 _response_mime: ?Mime = null,
+_override_mime: ?Mime = null,
+_response_xml: ?*Node.Document = null,
 _response_headers: std.ArrayList([]const u8) = .empty,
 _response_type: ResponseType = .text,
 
@@ -200,8 +202,10 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
         self._http_response = null;
     }
 
-    // Reset internal state
+    // Reset internal state. _override_mime intentionally survives open()
+    // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
     self._response = null;
+    self._response_xml = null;
     self._response_data.clearRetainingCapacity();
     self._response_status = 0;
     self._response_len = 0;
@@ -221,6 +225,15 @@ pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const 
         return error.InvalidStateError;
     }
     return self._request_headers.append(name, value, exec);
+}
+
+// https://xhr.spec.whatwg.org/#the-overridemimetype()-method
+pub fn overrideMimeType(self: *XMLHttpRequest, mime: []const u8) !void {
+    if (self._ready_state == .loading or self._ready_state == .done) {
+        return error.InvalidStateError;
+    }
+    self._override_mime = Mime.parse(mime) catch
+        Mime.parse("application/octet-stream") catch unreachable;
 }
 
 pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !void {
@@ -338,6 +351,10 @@ pub fn setResponseType(self: *XMLHttpRequest, value: []const u8) void {
 }
 
 pub fn getResponseText(self: *const XMLHttpRequest) []const u8 {
+    // TODO: per WHATWG XHR "get a text response", the bytes must be decoded
+    // using the final encoding derived from the final MIME type
+    // (_override_mime ?? _response_mime). Currently the raw bytes are
+    // returned and V8 treats them as UTF-8.
     return self._response_data.items;
 }
 
@@ -373,6 +390,12 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
         .document => blk: {
             // responseType=document is only meaningful in a Frame; workers
             // have no DOM. Drastically different impls -> switch on global.
+            //
+            // TODO: per WHATWG XHR "set a document response", the final MIME
+            // type (_override_mime ?? _response_mime) should select an XML
+            // parser when it is an XML MIME type, and the HTML parser
+            // otherwise. We only have an HTML parser today, so the body is
+            // always parsed as HTML regardless of the override.
             switch (exec.js.global) {
                 .frame => |frame| {
                     const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
@@ -390,11 +413,41 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
 }
 
 pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Document {
-    const res = (try self.getResponse(exec)) orelse return null;
-    return switch (res) {
-        .document => |doc| doc,
-        else => null,
-    };
+    if (self._ready_state != .done) {
+        return null;
+    }
+
+    // responseType="document": getResponse already parses + caches it.
+    if (self._response_type == .document) {
+        const res = (try self.getResponse(exec)) orelse return null;
+        return switch (res) {
+            .document => |doc| doc,
+            else => null,
+        };
+    }
+
+    // responseType="" (we map "" to .text — see setResponseType): lazily
+    // produce a Document when the final MIME type is XML, per WHATWG XHR
+    // "set a document response". For an HTML final MIME the spec returns
+    // null in this branch, so we only act on text/xml.
+    if (self._response_type != .text) return null;
+
+    if (self._response_xml) |document| {
+        return document;
+    }
+
+    const final = self._override_mime orelse self._response_mime orelse return null;
+    if (final.content_type != .text_xml) return null;
+
+    switch (exec.js.global) {
+        .frame => |frame| {
+            const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
+            try frame.parseHtmlAsChildren(document.asNode(), self._response_data.items);
+            self._response_xml = document;
+            return document;
+        },
+        .worker => return error.NotSupportedInWorker,
+    }
 }
 
 fn httpStartCallback(response: HttpClient.Response) !void {
@@ -624,6 +677,7 @@ pub const JsApi = struct {
     pub const responseXML = bridge.accessor(XMLHttpRequest.getResponseXML, null, .{});
     pub const responseURL = bridge.accessor(XMLHttpRequest.getResponseURL, null, .{});
     pub const setRequestHeader = bridge.function(XMLHttpRequest.setRequestHeader, .{ .dom_exception = true });
+    pub const overrideMimeType = bridge.function(XMLHttpRequest.overrideMimeType, .{ .dom_exception = true });
     pub const getResponseHeader = bridge.function(XMLHttpRequest.getResponseHeader, .{});
     pub const getAllResponseHeaders = bridge.function(XMLHttpRequest.getAllResponseHeaders, .{});
     pub const abort = bridge.function(XMLHttpRequest.abort, .{});
