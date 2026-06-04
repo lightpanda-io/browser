@@ -61,6 +61,7 @@ const popover = @import("webapi/element/popover.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
+const WheelEvent = @import("webapi/event/WheelEvent.zig");
 
 const HttpClient = @import("HttpClient.zig");
 
@@ -3960,6 +3961,55 @@ pub fn triggerMouseRelease(self: *Frame, x: f64, y: f64) !void {
         .clientY = y,
     }, self);
     try self._event_manager.dispatch(target.asEventTarget(), up_event.asEvent());
+}
+
+pub fn triggerMouseWheel(self: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.frame, "frame mouse wheel", .{
+            .url = self.url,
+            .node = target,
+            .x = x,
+            .y = y,
+            .delta_x = delta_x,
+            .delta_y = delta_y,
+            .type = self._type,
+        });
+    }
+
+    const wheel_event: *WheelEvent = try .initTrusted("wheel", .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+        .deltaX = delta_x,
+        .deltaY = delta_y,
+    }, self);
+
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    wheel_event.asEvent().acquireRef();
+    defer _ = wheel_event.asEvent().releaseRef(self._page);
+    try self._event_manager.dispatch(target.asEventTarget(), wheel_event.asEvent());
+
+    if (wheel_event.asEvent()._prevent_default) {
+        return;
+    }
+
+    // Apply the scroll and fire a trusted scroll event, mirroring WebDriver wheel.
+    // CDP deltas are untrusted, so guard NaN and saturate the addition.
+    const new_left: i32 = @as(i32, @intCast(target.getScrollLeft(self))) +| deltaToScroll(delta_x);
+    const new_top: i32 = @as(i32, @intCast(target.getScrollTop(self))) +| deltaToScroll(delta_y);
+    try target.setScrollLeft(new_left, self);
+    try target.setScrollTop(new_top, self);
+
+    const scroll_event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, self._page);
+    try self._event_manager.dispatch(target.asEventTarget(), scroll_event);
+}
+
+fn deltaToScroll(d: f64) i32 {
+    if (std.math.isNan(d)) return 0;
+    return @intFromFloat(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
 // callback when the "click" event reaches the frame.
