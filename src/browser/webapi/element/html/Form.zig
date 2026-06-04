@@ -142,6 +142,18 @@ pub fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(.wrap("accept-charset"), .wrap(value), frame);
 }
 
+pub fn getNoValidate(self: *const Form) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("novalidate")) != null;
+}
+
+pub fn setNoValidate(self: *Form, value: bool, frame: *Frame) !void {
+    if (value) {
+        try self.asElement().setAttributeSafe(comptime .wrap("novalidate"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("novalidate"), frame);
+    }
+}
+
 pub fn getEnctype(self: *const Form) []const u8 {
     return normalizeEnctype(self.asConstElement().getAttributeSafe(comptime .wrap("enctype")), "application/x-www-form-urlencoded");
 }
@@ -241,6 +253,7 @@ pub const JsApi = struct {
     pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{ .ce_reactions = true });
     pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{ .ce_reactions = true });
     pub const enctype = bridge.accessor(Form.getEnctype, Form.setEnctype, .{ .ce_reactions = true });
+    pub const noValidate = bridge.accessor(Form.getNoValidate, Form.setNoValidate, .{ .ce_reactions = true });
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});

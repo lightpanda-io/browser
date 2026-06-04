@@ -4093,6 +4093,21 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         form._firing_submission_events = true;
         defer form._firing_submission_events = false;
 
+        // Per the HTML "submit a form element" algorithm: unless the form (or the
+        // submitter, via formnovalidate) is in the no-validate state, interactively
+        // validate the form's constraints and abort submission if it fails.
+        // checkValidity() fires the `invalid` events on the offending controls.
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+        const skip_validation = form.getNoValidate() or blk: {
+            const s = submit_button orelse break :blk false;
+            if (s.is(Element.Html.Form.Input)) |input| break :blk input.getFormNoValidate();
+            if (s.is(Element.Html.Form.Button)) |button| break :blk button.getFormNoValidate();
+            break :blk false;
+        };
+        if (!skip_validation and !try form.checkValidity(self)) {
+            return;
+        }
+
         // Per HTML spec "submit a form element" algorithm: SubmitEvent.submitter
         // must be null when the submitter is the form itself, which is what
         // Form.requestSubmit() passes when called with no submitter argument.

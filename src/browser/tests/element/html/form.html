@@ -490,6 +490,44 @@
 }
 </script>
 
+<!-- Test: interactive submission validates constraints unless no-validate is set -->
+<form id="test_form_validate" action="/should-not-navigate-v" method="get">
+  <input type="text" name="q" required>
+  <button id="v_submit" type="submit">Go</button>
+  <button id="v_submit_novalidate" type="submit" formnovalidate>Go</button>
+</form>
+
+<script id="requestSubmit_validates_constraints">
+{
+  const form = $('#test_form_validate');
+  const field = form.querySelector('input[name=q]');
+  let submitFired = 0;
+  let invalidFired = 0;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitFired++; });
+  field.addEventListener('invalid', () => { invalidFired++; });
+
+  // Required field is empty: submission is blocked and `invalid` fires.
+  form.requestSubmit($('#v_submit'));
+  testing.expectEqual(0, submitFired);
+  testing.expectEqual(1, invalidFired);
+
+  // A submitter with formnovalidate bypasses validation.
+  form.requestSubmit($('#v_submit_novalidate'));
+  testing.expectEqual(1, submitFired);
+
+  // form.noValidate also bypasses validation.
+  form.noValidate = true;
+  form.requestSubmit($('#v_submit'));
+  testing.expectEqual(2, submitFired);
+
+  // Once valid, validation passes and submission proceeds.
+  form.noValidate = false;
+  field.value = 'ok';
+  form.requestSubmit($('#v_submit'));
+  testing.expectEqual(3, submitFired);
+}
+</script>
+
 <!-- Test: requestSubmit() with submitter not owned by form throws NotFoundError -->
 <form id="test_form_rs2" action="/should-not-navigate5" method="get">
   <input type="text" name="q" value="test">
