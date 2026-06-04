@@ -269,7 +269,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
         v8.kNoCacheNoReason,
     ) orelse return try self.formatCaught(context, &try_catch, "compile failed");
 
-    _ = v8.v8__Script__Run(script, context) orelse
+    const completion = v8.v8__Script__Run(script, context) orelse
         return try self.formatCaught(context, &try_catch, "script failed");
 
     // Explicit microtask policy: promise continuations only run once drained.
@@ -278,7 +278,20 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
         return try self.formatCaught(context, &try_catch, "script failed");
     }
 
+    self.printCompletion(context, completion);
     return null;
+}
+
+/// Echo a script's completion value (its last-evaluated expression) so a script
+/// ending in `extract(...)` or a bare `results;` prints without `console.log`.
+/// `undefined` — declarations, assignments, control flow — stays silent.
+fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) void {
+    if (v8.v8__Value__IsUndefined(value)) return;
+
+    var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena_state.deinit();
+    const text = self.displayString(arena_state.allocator(), context, value) catch return;
+    self.writeConsoleLine(.log, text);
 }
 
 fn primitiveCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
@@ -598,6 +611,29 @@ fn valueToString(
 ) error{ OutOfMemory, JsException }![]const u8 {
     const string = v8.v8__Value__ToString(value, context) orelse return error.JsException;
     return self.stringToOwned(arena, string);
+}
+
+/// Display form for the script's completion value: objects and arrays as JSON
+/// (plain coercion gives a useless `[object Object]`), every other value via that
+/// coercion. Falls back to coercion when JSON.stringify yields no string — a
+/// thrown circular reference, or a value (e.g. a function) that stringifies to
+/// `undefined`; the nested TryCatch keeps such a throw from leaking into the
+/// caller's scope.
+fn displayString(
+    self: *Runtime,
+    arena: std.mem.Allocator,
+    context: *const v8.Context,
+    value: *const v8.Value,
+) error{ OutOfMemory, JsException }![]const u8 {
+    if (v8.v8__Value__IsObject(value)) {
+        var try_catch: v8.TryCatch = undefined;
+        v8.v8__TryCatch__CONSTRUCT(&try_catch, self.env.isolate.handle);
+        defer v8.v8__TryCatch__DESTRUCT(&try_catch);
+        if (v8.v8__JSON__Stringify(context, value, null)) |json| {
+            return self.stringToOwned(arena, json);
+        }
+    }
+    return self.valueToString(arena, context, value);
 }
 
 fn stringToOwned(

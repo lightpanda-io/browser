@@ -36,8 +36,11 @@ web page's JavaScript context.
   `async`/`await` automation contract around them.
 - Tool failures throw JavaScript `Error` exceptions and stop execution unless
   you catch them.
-- A final expression is not printed automatically. Use `console.log(...)` for
-  script output.
+- The script's completion value — its last top-level expression — is printed
+  automatically (objects and arrays as JSON; other values coerced). End a
+  script with the bare expression you want as output, e.g. a final
+  `extract({ ... });` or `results;`. `console.log(...)` is for extra or debug
+  output and does not JSON-format objects.
 
 The agent context includes a small `console` object:
 
@@ -53,8 +56,9 @@ console.error("printed to stderr");
 
 Most primitives return the browser tool's result text as a JavaScript string.
 `extract(...)` is the exception: it returns extracted data as a normal
-JavaScript value, so local script logic can use it directly. A schema with
-multiple top-level fields returns an object:
+JavaScript value, so local script logic can use it directly. The result mirrors
+your schema — an object schema returns an object keyed by your fields (even with
+a single field), and a bare array schema returns an array:
 
 ```js
 goto("https://news.ycombinator.com/");
@@ -71,14 +75,13 @@ const data = extract({
   }]
 });
 
-console.log(JSON.stringify(data, null, 2));
+data; // printed automatically as JSON
 ```
 
-When the schema has exactly one top-level array field, `extract(...)` unwraps
-that field and returns the array directly:
+Destructure when a single field is all you need:
 
 ```js
-const stories = extract({
+const { stories } = extract({
   stories: [{
     selector: "tr.athing",
     limit: 5,
@@ -180,10 +183,10 @@ Return shape follows the top-level schema:
 - `extract({ title: "h1" })` returns `{ title: "..." }`.
 - `extract({ title: "h1", links: [{ selector: "a" }] })` returns an object
   with both fields.
-- `extract({ links: [{ selector: "a" }] })` returns the `links` array
-  directly, because it is the only top-level field and its value is an array.
+- `extract({ links: [{ selector: "a" }] })` returns `{ links: [...] }` — an
+  object schema always returns an object, even with a single field.
 - `extract([{ selector: "a" }])` is shorthand for a single anonymous array
-  extraction and returns an array.
+  extraction and returns the array directly.
 
 `follow` is useful for list-to-detail scraping:
 
@@ -346,7 +349,7 @@ const HN = "https://news.ycombinator.com";
 
 goto(HN);
 
-const stories = extract({
+const { stories } = extract({
   stories: [{
     selector: "tr.athing",
     limit: 5,
@@ -363,7 +366,7 @@ for (const story of stories) {
   if (!story.id) continue;
 
   goto(`${HN}/item?id=${story.id}`);
-  story.comments = extract({
+  const { comments } = extract({
     comments: [{
       selector: "tr.athing.comtr:has(.commtext)",
       limit: 3,
@@ -373,7 +376,8 @@ for (const story of stories) {
       }
     }]
   });
+  story.comments = comments;
 }
 
-console.log(JSON.stringify({ stories }, null, 2));
+stories; // printed automatically as JSON
 ```
