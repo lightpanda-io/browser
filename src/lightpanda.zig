@@ -288,10 +288,24 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
     @import("crash_handler.zig").crash(ctx, args, @returnAddress());
 }
 
+// Written into every RC at construction (rc_canary) and overwritten with
+// rc_poison on the final release. We only get crash reports (not logs) from
+// prod, so reading _canary in the "release overflow" assert tells us which kind
+// of bug it is:
+//   - rc_canary ("RCNT"): the struct still looks live -> a real refcount
+//     accounting bug, OR the memory was reused by a freshly-built RC (which
+//     re-stamps the canary, so this case can't be fully ruled out).
+//   - rc_poison ("DEADC0DE"): a stale finalizer fired again on an object we
+//     already released, before its memory was reused -> UAF.
+//   - anything else: the memory was freed and reused by non-RC data -> UAF.
+const rc_canary: u32 = 0x52434E54;
+const rc_poison: u32 = 0xDEADC0DE;
+
 // Reference counting helper
 pub fn RC(comptime T: type) type {
     return struct {
         _refs: std.atomic.Value(T) = .init(0),
+        _canary: u32 = rc_canary,
 
         pub fn init(refs: T) @This() {
             return .{ ._refs = .init(refs) };
@@ -303,8 +317,17 @@ pub fn RC(comptime T: type) type {
 
         pub fn release(self: *@This(), value: anytype, page: *Page) void {
             const prev = self._refs.fetchSub(1, .acq_rel);
-            assert(prev > 0, "release overflow", .{ .type = @typeName(@TypeOf(value)) });
+            assert(prev > 0, "release overflow", .{
+                .type = @typeName(@TypeOf(value)),
+                .canary = self._canary, // rc_canary=live/accounting, rc_poison=double-release, else=reuse
+                .refs = prev,
+                .ptr = @intFromPtr(value),
+            });
             if (prev == 1) {
+                // Mark dead before deinit frees this memory, so a stale
+                // weak-callback re-fire reads rc_poison instead of a
+                // misleadingly-intact canary.
+                self._canary = rc_poison;
                 value.deinit(page);
             }
         }
