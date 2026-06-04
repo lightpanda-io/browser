@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const BrowserTool = browser_tools.Tool;
 const CDPNode = @import("../cdp/Node.zig");
+const Schema = @import("Schema.zig");
 
 const v8 = lp.js.v8;
 
@@ -412,53 +413,54 @@ fn buildArgs(
     info: *const v8.FunctionCallbackInfo,
 ) BuildArgsError!?std.json.Value {
     const argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
-
     return switch (tool) {
-        .goto => try self.singleStringOrObject(arena, context, info, argc, "url"),
-        .evaluate => try self.singleStringOrObject(arena, context, info, argc, "script"),
         .extract => try self.extractArgs(arena, context, info, argc),
-        .waitForSelector => try self.singleStringOrObject(arena, context, info, argc, "selector"),
-        .waitForScript => try self.singleStringOrObject(arena, context, info, argc, "script"),
-        .press => try self.singleStringOrObject(arena, context, info, argc, "key"),
-        .scroll => if (argc == 0) std.json.Value{ .object = .init(arena) } else try self.singleObject(arena, context, info, argc),
-        .click, .fill, .hover, .selectOption, .setChecked => try self.singleObject(arena, context, info, argc),
-        // Only recorded tools are installed, so the rest are unreachable; the
-        // comptime guard makes a recorded tool left unmarshalled a compile error.
-        inline else => |t| {
-            if (comptime t.isRecorded()) @compileError("recorded tool ." ++ @tagName(t) ++ " has no marshalling in buildArgs");
-            unreachable;
-        },
+        else => try self.marshalArgs(arena, context, info, argc, Schema.positionalFor(tool)),
     };
 }
 
-fn singleStringOrObject(
+/// Marshals `tool(positionals…, options?)` into the args object `browser_tools.call`
+/// expects: leading primitives bind to `positional` by index (a `null` omits its
+/// field), a trailing object merges as options (conflict on a repeated field), and a
+/// lone object passes through. Positionals stay opaque; the tool's parser types them.
+fn marshalArgs(
     self: *Runtime,
     arena: std.mem.Allocator,
     context: *const v8.Context,
     info: *const v8.FunctionCallbackInfo,
     argc: usize,
-    field: []const u8,
+    positional: []const []const u8,
 ) BuildArgsError!std.json.Value {
-    if (argc != 1) return error.InvalidArguments;
-    const value = try self.argJson(arena, context, info, 0);
-    return switch (value) {
-        .string => try objectWith(arena, field, value),
-        .object => value,
-        else => error.InvalidArguments,
-    };
-}
+    const values = try arena.alloc(std.json.Value, argc);
+    for (values, 0..) |*v, i| v.* = try self.argJson(arena, context, info, @intCast(i));
 
-fn singleObject(
-    self: *Runtime,
-    arena: std.mem.Allocator,
-    context: *const v8.Context,
-    info: *const v8.FunctionCallbackInfo,
-    argc: usize,
-) BuildArgsError!std.json.Value {
-    if (argc != 1) return error.InvalidArguments;
-    const value = try self.argJson(arena, context, info, 0);
-    if (value != .object) return error.InvalidArguments;
-    return value;
+    if (argc == 1 and values[0] == .object) return values[0];
+
+    // A trailing object is the options bag; everything before it is positional.
+    var positional_count = argc;
+    var options: ?std.json.ObjectMap = null;
+    if (argc > 0 and values[argc - 1] == .object) {
+        options = values[argc - 1].object;
+        positional_count = argc - 1;
+    }
+    if (positional_count > positional.len) return error.InvalidArguments;
+
+    var obj: std.json.ObjectMap = .init(arena);
+    for (values[0..positional_count], positional[0..positional_count]) |v, field| {
+        switch (v) {
+            .null => {}, // omit the field — e.g. page/focused-level selector
+            .object, .array => return error.InvalidArguments,
+            else => try obj.put(field, v),
+        }
+    }
+    if (options) |opts| {
+        var it = opts.iterator();
+        while (it.next()) |entry| {
+            if (obj.contains(entry.key_ptr.*)) return error.InvalidArguments;
+            try obj.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+    return .{ .object = obj };
 }
 
 fn extractArgs(
@@ -937,4 +939,56 @@ test "agent script runtime: tool errors throw and stop execution" {
     try runTestScript(runtime,
         \\if (marker !== "before") throw new Error("script continued after tool failure");
     );
+}
+
+test "agent script runtime: builtin argument marshalling (positional + options)" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\// The reported bug: Playwright-style goto(url, options) must merge, not throw.
+        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000, waitUntil: "load" });
+        \\if (!nav.includes("Navigated")) throw new Error("two-arg goto failed: " + nav);
+        \\// Object form still works.
+        \\goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
+        \\// Single selector positional.
+        \\click("#btn");
+        \\if (evaluate("String(window.clicked)") !== "true") throw new Error("click positional failed");
+        \\// Two positionals: selector, value.
+        \\fill("#inp", "hello");
+        \\if (evaluate("window.inputVal") !== "hello") throw new Error("fill two-positional failed");
+        \\selectOption("#sel", "opt2");
+        \\if (evaluate("window.selChanged") !== "opt2") throw new Error("selectOption two-positional failed");
+        \\// Bool positional, and the default-true shorthand when omitted. Assert via the
+        \\// tool's own report (the synthetic click toggles the DOM state, so .checked is
+        \\// not a reliable observation of the `checked` argument).
+        \\if (!setChecked("#chk").includes("to checked")) throw new Error("setChecked default-true failed");
+        \\if (!setChecked("#chk", false).includes("to unchecked")) throw new Error("setChecked bool positional failed");
+        \\// Selector-first press, and a null selector for a page/focused key press.
+        \\press("#keyTarget", "Enter");
+        \\if (evaluate("window.keyPressed") !== "Enter") throw new Error("selector-first press failed");
+        \\press(null, "a");
+    );
+
+    // A field set by both a positional and the options object is a conflict.
+    {
+        const message = (try runtime.runSource(
+            \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
+        , "agent-runtime-conflict.js")).?;
+        try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
+    }
+
+    // More positionals than the tool has fields throws.
+    {
+        const message = (try runtime.runSource(
+            \\click("#btn", "#extra");
+        , "agent-runtime-arity.js")).?;
+        try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
+    }
 }

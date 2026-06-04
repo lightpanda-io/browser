@@ -116,8 +116,7 @@ pub const Command = union(enum) {
             const has_selector = args.object.contains("selector");
             if (!has_selector and (self.tool.needsLocator() or args.object.contains("backendNodeId"))) return false;
 
-            const visible = s.visibleArgCount(args.object);
-            const positional = s.required.len == 1 and visible == 1 and s.isSinglePositional(args.object);
+            const positional = s.isBarePositional(args.object);
 
             var it = args.object.iterator();
             while (it.next()) |entry| {
@@ -200,8 +199,7 @@ fn formatJsToolCall(tc: Command.ToolCall, arena: std.mem.Allocator, writer: *std
     try writer.print("{s}(", .{s.tool_name});
     if (args_val == .object) {
         const args = args_val.object;
-        const visible = s.visibleArgCount(args);
-        const positional = s.required.len == 1 and visible == 1 and s.isSinglePositional(args);
+        const positional = s.isBarePositional(args);
         if (positional) {
             try writeJsFieldValue(arena, writer, tc.tool, s.required[0], args.get(s.required[0]).?);
         } else {
@@ -417,6 +415,8 @@ test "formatJs: positional and object arguments" {
         .{ .input = "/click selector='Login'", .expected = "click({ selector: \"Login\" });" },
         .{ .input = "/scroll y=200", .expected = "scroll({ y: 200 });" },
         .{ .input = "/setChecked selector='#x' checked=false", .expected = "setChecked({ selector: \"#x\", checked: false });" },
+        // press records as object form, not bare `press("Enter")` (which would parse as a selector).
+        .{ .input = "/press Enter", .expected = "press({ key: \"Enter\" });" },
     };
     for (cases) |case| {
         const cmd = try Command.parse(aa, case.input);

@@ -32,6 +32,9 @@ tool_name: []const u8,
 description: []const u8,
 summary: []const u8,
 required: []const []const u8,
+/// Selector-first positional fields, shared by the marshaller and recorder so the
+/// two can't drift. Empty for tools with no positional argument.
+positional: []const []const u8,
 fields: []const FieldEntry,
 hints: []const HintSlot,
 parameters: std.json.Value,
@@ -90,6 +93,22 @@ pub const Diag = struct {
     bad_value: []const u8 = "",
 };
 
+/// Selector-first positional order for a tool's script builtin — the source of
+/// truth `marshalArgs` and the recorder both read.
+pub fn positionalFor(tool: BrowserTool) []const []const u8 {
+    return switch (tool) {
+        .goto => &.{"url"},
+        .evaluate, .waitForScript => &.{"script"},
+        .waitForSelector, .click, .hover => &.{"selector"},
+        .fill, .selectOption => &.{ "selector", "value" },
+        .setChecked => &.{ "selector", "checked" },
+        .press => &.{ "selector", "key" },
+        // Only the recorder reads this; the runtime marshals extract separately.
+        .extract => &.{"schema"},
+        else => &.{},
+    };
+}
+
 pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
     for (self.fields) |f| {
         if (std.ascii.eqlIgnoreCase(f.name, key)) return f;
@@ -146,8 +165,14 @@ pub fn visibleArgCount(self: Schema, args: std.json.ObjectMap) usize {
     return n;
 }
 
-pub fn isSinglePositional(self: Schema, args: std.json.ObjectMap) bool {
-    if (self.required.len != 1) return false;
+/// True when a recorded call renders as bare `tool(value)` rather than the object
+/// form: the lone required field is the tool's leading positional, the only visible
+/// arg, and a string. False for press/fill/selectOption — their required field sits
+/// behind `selector`, so they round-trip via the object form.
+pub fn isBarePositional(self: Schema, args: std.json.ObjectMap) bool {
+    if (self.required.len != 1 or self.positional.len == 0) return false;
+    if (!std.mem.eql(u8, self.required[0], self.positional[0])) return false;
+    if (self.visibleArgCount(args) != 1) return false;
     const v = args.get(self.required[0]) orelse return false;
     return v == .string;
 }
@@ -336,6 +361,7 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
         .description = td.description,
         .summary = td.summary,
         .required = &.{},
+        .positional = positionalFor(tool),
         .fields = &.{},
         .hints = &.{},
         .parameters = parsed,
