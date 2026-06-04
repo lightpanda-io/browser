@@ -116,9 +116,8 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
 
     self._proto.releaseListeners();
     if (self._upload) |upload| {
-        upload.deinit(page);
+        upload._proto.releaseListeners();
     }
-
     page.releaseArena(self._arena);
 }
 
