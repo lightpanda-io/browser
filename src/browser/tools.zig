@@ -127,6 +127,17 @@ pub const save_synthesis_prompt =
     \\JavaScript wherever they fit; fall back to evaluate(...) only for logic the
     \\builtins can't express. End with an extract(...) for any data the user
     \\wanted out.
+    \\Stay faithful to the recorded tool calls: reproduce each call with the same
+    \\options it actually used. Do NOT add `timeout` or `waitUntil` to goto (or any
+    \\tool) unless that option was used in the session — default calls stay default.
+    \\Use evaluate(...) only when no builtin can express the logic. Never stash a
+    \\result into `lp.*` and read it back, and never append no-op extract(...) probes
+    \\or trailing `evaluate("return lp....")` lines — the script's output is whatever
+    \\the final extract(...) (plus any plain-JS aggregation) produces.
+    \\Write modern, readable JavaScript: `for (const x of xs)` rather than
+    \\`for (var i = 0; i < xs.length; i++)`, `const`/`let` over `var`, template
+    \\literals, destructuring. Indent consistently with 2 spaces, including
+    \\multi-line extract({...}) schema literals.
     \\The output MUST be valid JavaScript that runs as-is — it is executed as a
     \\classic script (not a module), so top-level `await` is a syntax error;
     \\`await` is only legal inside an `async` function.

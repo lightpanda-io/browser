@@ -514,6 +514,8 @@ fn objectWith(arena: std.mem.Allocator, key: []const u8, value: std.json.Value) 
     return .{ .object = obj };
 }
 
+/// Unwraps only the `__root` sentinel that `normalizeExtractSchemaString` injects
+/// for array schemas; a real single-field object schema keeps its shape.
 fn normalizeExtractReturnJson(_: *Runtime, arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}![]const u8 {
     if (value.len == 0) return value;
 
@@ -525,7 +527,7 @@ fn normalizeExtractReturnJson(_: *Runtime, arena: std.mem.Allocator, value: []co
 
     var it = parsed.object.iterator();
     const entry = it.next() orelse return value;
-    if (entry.value_ptr.* != .array) return value;
+    if (!std.mem.eql(u8, entry.key_ptr.*, "__root")) return value;
     return try std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{});
 }
 
@@ -691,8 +693,8 @@ test "agent script runtime: extract returns a JavaScript object" {
         \\    }
         \\  }]
         \\});
-        \\if (!Array.isArray(options)) throw new Error("single array field should return an array");
-        \\if (options[0].text !== "Option 1") throw new Error("unexpected unwrapped option text: " + options[0].text);
+        \\if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("single object field should stay an object");
+        \\if (options.options[0].text !== "Option 1") throw new Error("unexpected option text: " + options.options[0].text);
         \\const direct = extract([{ selector: "#sel option", limit: 1 }]);
         \\if (!Array.isArray(direct)) throw new Error("array schema should return an array");
         \\if (direct[0] !== "Option 1") throw new Error("unexpected direct array extract: " + direct[0]);
