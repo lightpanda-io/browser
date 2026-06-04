@@ -172,6 +172,28 @@ pub fn compileFunction(
 }
 
 pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js.Value {
+    const script = try self.compile(src, name);
+    return script.run();
+}
+
+// Compile `src` into a context-bound Script
+pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8) !js.Script {
+    const result = try self.compileWithCache(src, name, null);
+    return result.script;
+}
+
+pub const CompileResult = struct {
+    script: js.Script,
+    // True only when `cached_data` was supplied AND V8 rejected it (source,
+    // V8 version, or flag mismatch) and recompiled from source. Always false
+    // when no cached_data was passed. Callers should drop/refresh a rejected
+    // cache entry.
+    cache_rejected: bool,
+};
+
+// Like compile, but takes an optional cached_data which is a previously
+// compiled and serialized script (see Script.Unbound.createCodeCache)
+pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, cached_data: ?[]const u8) !CompileResult {
     const script_name = self.isolate.initStringHandle(name orelse "anonymous");
     const script_source = self.isolate.initStringHandle(src);
 
@@ -179,22 +201,32 @@ pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js
     var origin: v8.ScriptOrigin = undefined;
     v8.v8__ScriptOrigin__CONSTRUCT(&origin, @ptrCast(script_name));
 
+    // The Source takes ownership of the CachedData pointer (it holds it in a
+    // unique_ptr), so we must not delete it ourselves — Source__DESTRUCT does.
+    const cached: ?*v8.ScriptCompilerCachedData = if (cached_data) |bytes|
+        v8.v8__ScriptCompiler__CachedData__NEW(bytes.ptr, @intCast(bytes.len))
+    else
+        null;
+
     // Create ScriptCompilerSource
     var script_comp_source: v8.ScriptCompilerSource = undefined;
-    v8.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, null, &script_comp_source);
+    v8.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, cached, &script_comp_source);
     defer v8.v8__ScriptCompiler__Source__DESTRUCT(&script_comp_source);
+
+    const options: v8.CompileOptions = if (cached != null) v8.kConsumeCodeCache else v8.kNoCompileOptions;
 
     // Compile the script
     const v8_script = v8.v8__ScriptCompiler__Compile(
         self.handle,
         &script_comp_source,
-        v8.kNoCompileOptions,
+        options,
         v8.kNoCacheNoReason,
     ) orelse return error.CompilationError;
 
-    // Run the script
-    const result = v8.v8__Script__Run(v8_script, self.handle) orelse return error.JsException;
-    return .{ .local = self, .handle = result };
+    return .{
+        .script = .{ .local = self, .handle = v8_script },
+        .cache_rejected = if (cached) |c| c.*.rejected else false,
+    };
 }
 
 // == Zig -> JS ==
