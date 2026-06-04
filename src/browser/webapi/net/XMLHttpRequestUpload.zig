@@ -18,7 +18,10 @@
 
 const js = @import("../../js/js.zig");
 
+const Page = @import("../../Page.zig");
+
 const EventTarget = @import("../EventTarget.zig");
+const XMLHttpRequest = @import("XMLHttpRequest.zig");
 const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 
 // https://xhr.spec.whatwg.org/#xmlhttprequestupload
@@ -30,9 +33,22 @@ const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 const XMLHttpRequestUpload = @This();
 
 _proto: *XMLHttpRequestEventTarget,
+_xhr: *XMLHttpRequest,
+
+pub fn deinit(self: *XMLHttpRequestUpload, _: *Page) void {
+    self._proto.releaseListeners();
+}
 
 pub fn asEventTarget(self: *XMLHttpRequestUpload) *EventTarget {
     return self._proto.asEventTarget();
+}
+
+pub fn releaseRef(self: *XMLHttpRequestUpload, page: *Page) void {
+    self._xhr._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *XMLHttpRequestUpload) void {
+    self._xhr._rc.acquire();
 }
 
 pub const JsApi = struct {

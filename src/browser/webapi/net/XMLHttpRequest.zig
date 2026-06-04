@@ -116,7 +116,7 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
 
     self._proto.releaseListeners();
     if (self._upload) |upload| {
-        upload._proto.releaseListeners();
+        upload.deinit(page);
     }
 
     page.releaseArena(self._arena);
@@ -278,7 +278,10 @@ pub fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
     if (self._upload) |upload| {
         return upload;
     }
-    const upload = try self._exec._factory.xhrEventTarget(self._arena, XMLHttpRequestUpload{ ._proto = undefined });
+    const upload = try self._exec._factory.xhrEventTarget(
+        self._arena,
+        XMLHttpRequestUpload{ ._proto = undefined, ._xhr = self },
+    );
     self._upload = upload;
     return upload;
 }
