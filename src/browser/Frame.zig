@@ -3929,6 +3929,44 @@ pub fn triggerMouseClick(self: *Frame, x: f64, y: f64) !void {
     try self._event_manager.dispatch(target.asEventTarget(), mouse_event.asEvent());
 }
 
+pub fn triggerMouseMove(self: *Frame, x: f64, y: f64) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.frame, "frame mouse move", .{
+            .url = self.url,
+            .node = target,
+            .x = x,
+            .y = y,
+            .type = self._type,
+        });
+    }
+
+    const move_event: *MouseEvent = try .initTrusted(comptime .wrap("mousemove"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), move_event.asEvent());
+
+    const over_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseover"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), over_event.asEvent());
+
+    const enter_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseenter"), .{
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), enter_event.asEvent());
+}
+
 // callback when the "click" event reaches the frame.
 pub fn handleClick(self: *Frame, target: *Node) !void {
     // TODO: Also support <area> elements when implement
