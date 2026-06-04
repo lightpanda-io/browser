@@ -113,6 +113,9 @@ script_file: ?[]const u8,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
 cancel_requested: std.atomic.Value(bool) = .init(false),
+/// Shuts down the in-flight LLM socket on Ctrl-C so an agent turn aborts
+/// mid-request instead of blocking until the model's full response arrives.
+http_interrupt: zenai.http.Interrupt = .{},
 synthetic_tool_call_id: u32 = 0,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call
 /// this Agent has made. Printed as a structured `$usage ...` line on stderr
@@ -249,6 +252,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
+    if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
     if (will_repl) {
         self.terminal.attachCompleter();
@@ -305,6 +309,7 @@ fn globalTools() []const ProviderTool {
 /// touches from this context.
 pub fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
+    self.http_interrupt.fire();
     {
         self.script_runtime_mutex.lock();
         defer self.script_runtime_mutex.unlock();
@@ -671,6 +676,7 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
 
     const new_model = try self.allocator.dupe(u8, zenai.provider.defaultModel(credentials.provider));
     if (self.ai_client) |client| client.deinit(self.allocator);
+    new_client.setInterrupt(&self.http_interrupt);
     self.ai_client = new_client;
     self.model_credentials = credentials;
     self.model_completions = null;
