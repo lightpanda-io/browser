@@ -422,6 +422,34 @@ pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, frame: 
     return parent.lookupNamespaceURIForElement(prefix, frame);
 }
 
+// Locate a namespace prefix: the inverse of lookupNamespaceURIForElement.
+// Given a namespace URI, find the prefix that declares it.
+pub fn lookupPrefixForElement(self: *Element, namespace: []const u8, frame: *Frame) ?[]const u8 {
+    // Step 1: element's own namespace/prefix
+    if (self.getNamespaceUri(frame)) |ns_uri| {
+        if (self._prefix()) |el_prefix| {
+            if (std.mem.eql(u8, ns_uri, namespace)) {
+                return el_prefix;
+            }
+        }
+    }
+
+    // Step 2: search xmlns: attribute declarations for one whose value is the namespace
+    if (self._attributes) |attrs| {
+        var iter = attrs.iterator();
+        while (iter.next()) |entry| {
+            const name = entry._name.str();
+            if (std.mem.startsWith(u8, name, "xmlns:") and std.mem.eql(u8, entry._value.str(), namespace)) {
+                return name["xmlns:".len..];
+            }
+        }
+    }
+
+    // Step 3: recurse to parent element
+    const parent = self.asNode().parentElement() orelse return null;
+    return parent.lookupPrefixForElement(namespace, frame);
+}
+
 fn _prefix(self: *const Element) ?[]const u8 {
     const name = self.getTagNameLower();
     if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
