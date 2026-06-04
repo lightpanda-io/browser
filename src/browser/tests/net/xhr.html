@@ -306,6 +306,98 @@
   }
 </script>
 
+<script id=xhr_override_mime type=module>
+  {
+    // overrideMimeType is callable in state UNSENT (no open() yet)
+    const req = new XMLHttpRequest();
+    testing.expectEqual(0, req.readyState);
+    req.overrideMimeType('text/xml');
+  }
+
+  {
+    // overrideMimeType is callable in state OPENED
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    testing.expectEqual(1, req.readyState);
+    req.overrideMimeType('text/xml; charset=utf-8');
+  }
+
+  {
+    // Invalid mime values must NOT throw; they fall back to
+    // application/octet-stream per spec.
+    const req = new XMLHttpRequest();
+    req.overrideMimeType('!!!');
+    req.overrideMimeType('');
+    req.overrideMimeType('not a mime');
+  }
+
+  {
+    // After send() reaches DONE, overrideMimeType throws InvalidStateError.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => state.resolve();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(4, req.readyState);
+      testing.withError((err) => {
+        testing.expectEqual('InvalidStateError', err.name);
+      }, () => {
+        req.overrideMimeType('text/xml');
+      });
+    });
+  }
+
+  {
+    // Override survives open() (spec: open() resets state but keeps the
+    // override MIME type). Re-opening then sending must not throw on the
+    // prior override.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.overrideMimeType('text/xml');
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+    });
+  }
+
+  {
+    // End-to-end: server returns text/html, but overrideMimeType("text/xml")
+    // makes responseXML lazily parse the body as a Document, while
+    // responseText is unaffected (responseType is still the default "").
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.overrideMimeType('text/xml');
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual(100, req.responseText.length);
+      testing.expectEqual(true, req.responseXML instanceof Document);
+      // Cached across calls.
+      testing.expectEqual(req.responseXML, req.responseXML);
+    });
+  }
+
+  {
+    // Without overrideMimeType, a text/html response still yields
+    // responseXML === null when responseType is the default.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual(null, req.responseXML);
+    });
+  }
+</script>
+
 <script id=xhr_timeout type=module>
   {
     // timeout property: default is 0
