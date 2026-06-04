@@ -139,6 +139,35 @@ fn resolveModelName(opts: Config.Agent, resolved: ?settings.ResolvedProvider, re
     return "";
 }
 
+/// Ollama's local catalog is authoritative and cheap to query, unlike the
+/// cloud providers whose `/models` listings can lag actual availability — so
+/// only for Ollama do we confirm the model is installed up front instead of
+/// letting the first request fail mid-turn (its default model may not be
+/// pulled either). Returns false when a one-shot run should abort; a REPL
+/// session only warns, since `/model` can still fix it interactively.
+fn verifyOllamaModelInstalled(
+    allocator: std.mem.Allocator,
+    llm: Credentials,
+    model: []const u8,
+    base_url: ?[:0]const u8,
+    is_one_shot: bool,
+) bool {
+    if (llm.provider != .ollama or model.len == 0) return true;
+
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    // Server unreachable or empty catalog: don't block on what we can't confirm.
+    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), .ollama, llm.key, base_url) catch return true;
+    if (ids.len == 0 or containsString(ids, model)) return true;
+
+    const installed = std.mem.join(arena.allocator(), ", ", ids) catch return true;
+    std.debug.print(
+        "Model '{s}' is not installed in Ollama.\nInstalled: {s}\nRun `ollama pull {s}` to install it, or choose one of the above.\n",
+        .{ model, installed, model },
+    );
+    return !is_one_shot;
+}
+
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
     const found_providers = settings.availableProviders(&providers_buf);
@@ -200,6 +229,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const model = try allocator.dupe(u8, resolveModelName(opts, resolved, remembered));
     errdefer allocator.free(model);
+
+    if (llm) |l| {
+        if (!verifyOllamaModelInstalled(allocator, l, model, opts.base_url, is_one_shot)) {
+            return error.ModelNotInstalled;
+        }
+    }
 
     if (resolved) |r| {
         if (r.source == .picked) {
