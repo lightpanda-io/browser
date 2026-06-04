@@ -129,8 +129,10 @@ available_providers: []const []const u8,
 fn resolveModelName(opts: Config.Agent, resolved: ?settings.ResolvedProvider, remembered: ?settings.Remembered) []const u8 {
     if (opts.model) |m| return m;
     if (resolved) |r| {
-        if (r.source == .remembered) {
-            if (remembered) |rem| return rem.model;
+        // Use the remembered model whenever it matches the chosen provider,
+        // not only when the provider itself came from the remembered file.
+        if (remembered) |rem| {
+            if (rem.provider == r.credentials.provider) return rem.model;
         }
         return zenai.provider.defaultModel(r.credentials.provider);
     }
