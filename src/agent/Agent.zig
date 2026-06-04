@@ -139,33 +139,41 @@ fn resolveModelName(opts: Config.Agent, resolved: ?settings.ResolvedProvider, re
     return "";
 }
 
-/// Ollama's local catalog is authoritative and cheap to query, unlike the
-/// cloud providers whose `/models` listings can lag actual availability — so
-/// only for Ollama do we confirm the model is installed up front instead of
-/// letting the first request fail mid-turn (its default model may not be
-/// pulled either). Returns false when a one-shot run should abort; a REPL
-/// session only warns, since `/model` can still fix it interactively.
-fn verifyOllamaModelInstalled(
+const OllamaModel = union(enum) {
+    /// Owned by the allocator passed to reconcileOllamaModel.
+    use: []u8,
+    abort,
+};
+
+/// Only Ollama: its local catalog is authoritative and cheap, unlike cloud
+/// `/models` listings that can lag real availability. A non-explicit (default)
+/// model that isn't installed is swapped for an installed one; an explicit one
+/// warns, and aborts a one-shot run.
+fn reconcileOllamaModel(
     allocator: std.mem.Allocator,
     llm: Credentials,
-    model: []const u8,
+    desired: []const u8,
     base_url: ?[:0]const u8,
+    explicit: bool,
     is_one_shot: bool,
-) bool {
-    if (llm.provider != .ollama or model.len == 0) return true;
-
+) !OllamaModel {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    // Server unreachable or empty catalog: don't block on what we can't confirm.
-    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), .ollama, llm.key, base_url) catch return true;
-    if (ids.len == 0 or containsString(ids, model)) return true;
-
-    const installed = std.mem.join(arena.allocator(), ", ", ids) catch return true;
-    std.debug.print(
-        "Model '{s}' is not installed in Ollama.\nInstalled: {s}\nRun `ollama pull {s}` to install it, or choose one of the above.\n",
-        .{ model, installed, model },
-    );
-    return !is_one_shot;
+    // Unreachable server → empty list → fall through and use `desired` unchecked.
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, arena.allocator(), .ollama, llm.key, base_url) catch &.{};
+    if (ids.len != 0 and !containsString(ids, desired)) {
+        if (!explicit) {
+            std.debug.print("Default Ollama model '{s}' is not installed; using '{s}'.\n", .{ desired, ids[0] });
+            return .{ .use = try allocator.dupe(u8, ids[0]) };
+        }
+        const installed = std.mem.join(arena.allocator(), ", ", ids) catch "";
+        std.debug.print(
+            "Model '{s}' is not installed in Ollama.\nInstalled: {s}\nRun `ollama pull {s}` to install it, or choose one of the above.\n",
+            .{ desired, installed, desired },
+        );
+        if (is_one_shot) return .abort;
+    }
+    return .{ .use = try allocator.dupe(u8, desired) };
 }
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
@@ -213,11 +221,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // interactive "Select a provider" prompt.  On error paths (missing key /
     // no key detected) resolveCredentials prints its own message and the
     // banner is skipped.
-    if (will_repl and (!resolve or settings.wouldResolve(opts, remembered))) {
+    if (will_repl and (!resolve or settings.wouldResolve(allocator, opts, remembered))) {
         std.debug.print(Terminal.ansi.bold ++ "\n  Lightpanda Agent" ++ Terminal.ansi.reset ++ " " ++ Terminal.ansi.dim ++ "({s})" ++ Terminal.ansi.reset ++ "\n", .{lp.build_config.version});
     }
 
-    const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(opts, remembered, will_repl) else null;
+    const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
 
     if (llm == null and requires_llm) {
@@ -227,14 +235,20 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         return error.MissingProvider;
     }
 
-    const model = try allocator.dupe(u8, resolveModelName(opts, resolved, remembered));
+    var model = try allocator.dupe(u8, resolveModelName(opts, resolved, remembered));
     errdefer allocator.free(model);
 
-    if (llm) |l| {
-        if (!verifyOllamaModelInstalled(allocator, l, model, opts.base_url, is_one_shot)) {
-            return error.ModelNotInstalled;
+    if (llm) |l| if (l.provider == .ollama) {
+        const explicit = opts.model != null or
+            (remembered != null and remembered.?.provider == .ollama);
+        switch (try reconcileOllamaModel(allocator, l, model, opts.base_url, explicit, is_one_shot)) {
+            .use => |m| {
+                allocator.free(model);
+                model = m;
+            },
+            .abort => return error.ModelNotInstalled,
         }
-    }
+    };
 
     if (resolved) |r| {
         if (r.source == .picked) {
@@ -645,8 +659,7 @@ fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         return;
     }
     const ids = completionModels(self, self.allocator);
-    // Empty means the fetch failed (or a local provider with unlisted models);
-    // skip the check rather than block a model we just can't confirm.
+    // Empty list = fetch failed or unlisted local models; can't confirm, so allow.
     if (ids.len != 0 and !containsString(ids, trimmed)) {
         self.terminal.printError("unknown model: {s} (Tab to list)", .{trimmed});
         return;
@@ -1605,7 +1618,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    const resolved = (try settings.resolveCredentials(opts, null, false)) orelse return error.MissingProvider;
+    const resolved = (try settings.resolveCredentials(allocator, opts, null, false)) orelse return error.MissingProvider;
     const llm = resolved.credentials;
 
     var arena: std.heap.ArenaAllocator = .init(allocator);

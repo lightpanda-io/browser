@@ -39,18 +39,30 @@ pub const ResolvedProvider = struct {
     source: enum { flag, remembered, detected, picked },
 };
 
+/// Ollama needs no API key, so it's excluded from env detection
+/// (`default_candidates`) and only probed here as a last resort.
+fn detectOllama(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credentials {
+    const key = zenai.provider.envApiKey(.ollama) orelse return null;
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), .ollama, key, base_url) catch return null;
+    if (ids.len == 0) return null;
+    return .{ .provider = .ollama, .key = key };
+}
+
 /// Returns true when resolveCredentials would succeed (no error, non-null).
 /// Used by callers that need to print a banner before calling resolveCredentials.
-pub fn wouldResolve(opts: Config.Agent, remembered: ?Remembered) bool {
+pub fn wouldResolve(allocator: std.mem.Allocator, opts: Config.Agent, remembered: ?Remembered) bool {
     if (opts.provider) |p| return zenai.provider.envApiKey(p) != null;
     if (remembered) |r| if (zenai.provider.envApiKey(r.provider)) |_| return true;
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
-    return zenai.provider.detectKeys(&buf, zenai.provider.default_candidates).len > 0;
+    if (zenai.provider.detectKeys(&buf, zenai.provider.default_candidates).len > 0) return true;
+    return detectOllama(allocator, opts.base_url) != null;
 }
 
 /// Precedence: `--provider` > remembered (if its key is still set) > first
 /// detected. Null means no key at all (the reason is already printed).
-pub fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pick: bool) !?ResolvedProvider {
+pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, remembered: ?Remembered, allow_pick: bool) !?ResolvedProvider {
     if (opts.provider) |p| {
         const key = zenai.provider.envApiKey(p) orelse {
             std.debug.print(
@@ -69,9 +81,12 @@ pub fn resolveCredentials(opts: Config.Agent, remembered: ?Remembered, allow_pic
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
     const found = zenai.provider.detectKeys(&buf, zenai.provider.default_candidates);
     if (found.len == 0) {
+        if (detectOllama(allocator, opts.base_url)) |creds| {
+            return .{ .credentials = creds, .source = .detected };
+        }
         std.debug.print(
-            \\No API key detected. Set {s}.
-            \\If you want to use the REPL in basic mode (without LLM integration) you can pass the --no-llm option.
+            \\No API key detected. Set {s}, or run a local Ollama server with a pulled model.
+            \\To use the basic REPL (without LLM integration), pass the --no-llm option.
             \\
         , .{api_keys_hint});
         return null;
