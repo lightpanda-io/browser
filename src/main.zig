@@ -196,7 +196,15 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             var failed: bool = false;
             var cancelled: bool = false;
             {
-                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts, &failed, &cancelled, &sig_bridge });
+                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{
+                    allocator,
+                    main_arena,
+                    app,
+                    opts,
+                    &failed,
+                    &cancelled,
+                    &sig_bridge,
+                });
                 defer worker_thread.join();
 
                 app.network.run();
@@ -209,7 +217,15 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     }
 }
 
-fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, failed: *bool, cancelled: *bool, sig_bridge: *lp.Agent.SigBridge) void {
+fn agentThread(
+    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    app: *App,
+    opts: Config.Agent,
+    failed: *bool,
+    cancelled: *bool,
+    sig_bridge: *lp.Agent.SigBridge,
+) void {
     defer app.network.stop();
 
     var agent_instance = lp.Agent.init(allocator, app, opts) catch |err| {
@@ -225,6 +241,18 @@ fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, fail
     sig_bridge.attach(agent_instance);
     defer agent_instance.deinit();
     defer sig_bridge.detach();
+
+    if (agent_instance.ai_client) |cli| {
+        app.telemetry.record(.{ .llm = .{
+            .provider = @tagName(cli),
+            .model = arena.dupe(u8, agent_instance.model) catch null,
+        } });
+    } else {
+        app.telemetry.record(.{ .llm = .{
+            .provider = "nollm",
+            .model = null,
+        } });
+    }
 
     if (!agent_instance.run()) {
         failed.* = true;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const zenai = @import("zenai");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
@@ -103,6 +104,7 @@ pub const Event = union(enum) {
     run: void,
     navigate: Navigate,
     buffer_overflow: BufferOverflow,
+    llm: LLM,
 
     const Navigate = struct {
         tls: bool,
@@ -112,6 +114,11 @@ pub const Event = union(enum) {
 
     const BufferOverflow = struct {
         dropped: u32,
+    };
+
+    const LLM = struct {
+        provider: [:0]const u8,
+        model: ?[]const u8,
     };
 };
 
