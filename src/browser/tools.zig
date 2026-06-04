@@ -43,8 +43,8 @@ pub const driver_guidance =
     \\  node). Default starting point for any unfamiliar page. Use
     \\  `maxDepth` and pass a `backendNodeId` to scope. Input/select
     \\  values are already in the tree — don't re-fetch via `nodeDetails`.
-    \\- `nodeDetails(backendNodeId)` → id/class/attrs for one node. Use to
-    \\  synthesize a CSS selector after `tree`.
+    \\- `nodeDetails(backendNodeId)` → a ready-to-use CSS `selector` that
+    \\  resolves to one node, plus its id/class/attrs.
     \\- `findElement(role, name)` → locate a candidate by role/name without
     \\  parsing the whole tree.
     \\- `markdown(selector | backendNodeId)` → readable text for one
@@ -85,8 +85,7 @@ pub const driver_guidance =
     \\  Always use a CSS selector. This is load-bearing: backendNodeId calls
     \\  cannot be recorded as reusable JavaScript calls, so any session that
     \\  uses them is not replayable. Use `findElement` to locate candidates by role/name,
-    \\  then synthesize a CSS selector from the id/class/tag_name it returns
-    \\  (it does NOT hand back a selector string).
+    \\  then `nodeDetails` and use the `selector` it returns.
     \\- Make selectors uniquely identifying — include value/name/position to
     \\  disambiguate. Example: `input[type="submit"][value="login"]`, not
     \\  just `input[type="submit"]`.
@@ -375,7 +374,7 @@ pub const Tool = enum {
                 ),
             },
             .nodeDetails => .{
-                .description = "Details for a node by backendNodeId: tag, role, name, interactivity, disabled, value, input type, placeholder, href, id, class, checked, select options. Canonical way to turn a tree backendNodeId into a CSS selector.",
+                .description = "Details for a node by backendNodeId: a ready-to-use CSS `selector` that resolves to the node (the first match, as click/fill resolve it), plus tag, role, name, interactivity, disabled, value, input type, placeholder, href, id, class, checked, select options. The canonical way to turn a tree backendNodeId into a CSS selector.",
                 .summary = "Inspect a node by backendNodeId",
                 .input_schema = minify(
                     \\{
