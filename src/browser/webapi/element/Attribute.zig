@@ -296,11 +296,14 @@ pub const List = struct {
             frame.removeElementId(element, entry._value.str());
         }
 
-        frame.domChanged();
-        frame.attributeRemove(element, result.normalized, old_value);
+        // remove this BEFORE triggering anything, incase that re-enters delete
+        // or some other callback.
         _ = frame._attribute_lookup.remove(@intFromPtr(entry));
         self._list.remove(&entry._node);
         self._len -= 1;
+
+        frame.domChanged();
+        frame.attributeRemove(element, result.normalized, old_value);
         frame._factory.destroy(entry);
     }
 

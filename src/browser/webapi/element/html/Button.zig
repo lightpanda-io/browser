@@ -28,11 +28,14 @@ const Form = @import("Form.zig");
 const Event = @import("../../Event.zig");
 const ValidityState = @import("ValidityState.zig");
 
+const popover = @import("../popover.zig");
+
 const Button = @This();
 
 _proto: *HtmlElement,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
+_popover_target: ?*Element = null,
 
 pub fn asElement(self: *Button) *Element {
     return self._proto._proto;
@@ -228,6 +231,27 @@ pub fn hasCustomValidity(self: *const Button) bool {
     return self._custom_validity != null;
 }
 
+pub fn getPopoverTargetElement(self: *Button, frame: *Frame) ?*Element {
+    return popover.invokerTarget(self.asNode(), self._popover_target, frame);
+}
+
+pub fn setPopoverTargetElement(self: *Button, value: ?*Element, frame: *Frame) !void {
+    self._popover_target = value;
+    if (value == null) {
+        try self.asElement().removeAttribute(.wrap("popovertarget"), frame);
+    } else {
+        try self.asElement().setAttribute(.wrap("popovertarget"), .wrap(""), frame);
+    }
+}
+
+pub fn getPopoverTargetAction(self: *Button) []const u8 {
+    return @tagName(popover.getInvokerAction(self.asElement()));
+}
+
+pub fn setPopoverTargetAction(self: *Button, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttribute(.wrap("popovertargetaction"), .wrap(value), frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Button);
 
@@ -249,6 +273,8 @@ pub const JsApi = struct {
     pub const value = bridge.accessor(Button.getValue, Button.setValue, .{ .ce_reactions = true });
     pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{ .ce_reactions = true });
     pub const labels = bridge.accessor(Button.getLabels, null, .{});
+    pub const popoverTargetElement = bridge.accessor(Button.getPopoverTargetElement, Button.setPopoverTargetElement, .{ .ce_reactions = true });
+    pub const popoverTargetAction = bridge.accessor(Button.getPopoverTargetAction, Button.setPopoverTargetAction, .{ .ce_reactions = true });
     pub const willValidate = bridge.accessor(Button.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Button.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Button.getValidationMessage, null, .{});

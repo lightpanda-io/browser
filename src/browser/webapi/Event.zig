@@ -81,6 +81,7 @@ pub const Type = union(enum) {
     form_data_event: *@import("event/FormDataEvent.zig"),
     close_event: *@import("event/CloseEvent.zig"),
     cookie_change_event: *@import("event/CookieChangeEvent.zig"),
+    toggle_event: *@import("event/ToggleEvent.zig"),
 };
 
 pub const Options = struct {
@@ -172,6 +173,7 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .form_data_event => |e| return if (T == @import("event/FormDataEvent.zig")) e else null,
         .close_event => |e| return if (T == @import("event/CloseEvent.zig")) e else null,
         .cookie_change_event => |e| return if (T == @import("event/CookieChangeEvent.zig")) e else null,
+        .toggle_event => |e| return if (T == @import("event/ToggleEvent.zig")) e else null,
         .ui_event => |e| {
             if (T == @import("event/UIEvent.zig")) {
                 return e;
