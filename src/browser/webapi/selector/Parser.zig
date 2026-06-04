@@ -611,6 +611,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
             if (fastEql(name, "last-of-type")) return .last_of_type;
             if (fastEql(name, "focus-within")) return .focus_within;
             if (fastEql(name, "out-of-range")) return .out_of_range;
+            if (fastEql(name, "popover-open")) return .popover_open;
         },
         13 => {
             if (fastEql(name, "first-of-type")) return .first_of_type;

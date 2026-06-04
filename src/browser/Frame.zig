@@ -57,6 +57,7 @@ const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
+const popover = @import("webapi/element/popover.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
@@ -3121,6 +3122,8 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
         Element.Html.Custom.enqueueDisconnectedCallbackOnElement(el, self);
 
+        popover.removeFromOpen(el, self);
+
         // If a <style> element is being removed, remove its sheet from the list
         if (el.is(Element.Html.Style)) |style| {
             if (style._sheet) |sheet| {
@@ -3377,6 +3380,9 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
         if (element.is(Element.Html.Slot)) |slot| {
             self.signalSlotChange(slot);
         }
+    } else if (name.eql(comptime .wrap("popover"))) {
+        const old = if (old_value) |o| o.str() else null;
+        popover.attributeChanged(element, old, value.str(), self);
     }
 }
 
@@ -3403,6 +3409,8 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
         if (element.is(Element.Html.Slot)) |slot| {
             self.signalSlotChange(slot);
         }
+    } else if (name.eql(comptime .wrap("popover"))) {
+        popover.attributeChanged(element, old_value.str(), null, self);
     }
 }
 

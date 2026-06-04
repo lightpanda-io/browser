@@ -30,6 +30,7 @@ const Selection = @import("../../Selection.zig");
 const Event = @import("../../Event.zig");
 const InputEvent = @import("../../event/InputEvent.zig");
 const ValidityState = @import("ValidityState.zig");
+const popover = @import("../popover.zig");
 
 const String = lp.String;
 
@@ -85,6 +86,7 @@ _input_type: Type = .text,
 _indeterminate: bool = false,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
+_popover_target: ?*Element = null,
 
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
@@ -1284,6 +1286,27 @@ fn uncheckRadioGroup(self: *Input, frame: *Frame) void {
     }
 }
 
+pub fn getPopoverTargetElement(self: *Input, frame: *Frame) ?*Element {
+    return popover.invokerTarget(self.asNode(), self._popover_target, frame);
+}
+
+pub fn setPopoverTargetElement(self: *Input, value: ?*Element, frame: *Frame) !void {
+    self._popover_target = value;
+    if (value == null) {
+        try self.asElement().removeAttribute(.wrap("popovertarget"), frame);
+    } else {
+        try self.asElement().setAttribute(.wrap("popovertarget"), .wrap(""), frame);
+    }
+}
+
+pub fn getPopoverTargetAction(self: *Input) []const u8 {
+    return @tagName(popover.getInvokerAction(self.asElement()));
+}
+
+pub fn setPopoverTargetAction(self: *Input, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttribute(.wrap("popovertargetaction"), .wrap(value), frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Input);
 
@@ -1324,6 +1347,8 @@ pub const JsApi = struct {
     pub const formNoValidate = bridge.accessor(Input.getFormNoValidate, Input.setFormNoValidate, .{});
     pub const formTarget = bridge.accessor(Input.getFormTarget, Input.setFormTarget, .{});
     pub const labels = bridge.accessor(Input.getLabels, null, .{});
+    pub const popoverTargetElement = bridge.accessor(Input.getPopoverTargetElement, Input.setPopoverTargetElement, .{ .ce_reactions = true });
+    pub const popoverTargetAction = bridge.accessor(Input.getPopoverTargetAction, Input.setPopoverTargetAction, .{ .ce_reactions = true });
     pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
     pub const placeholder = bridge.accessor(Input.getPlaceholder, Input.setPlaceholder, .{ .ce_reactions = true });
     pub const pattern = bridge.accessor(Input.getPattern, Input.setPattern, .{ .ce_reactions = true });
