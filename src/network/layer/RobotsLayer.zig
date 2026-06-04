@@ -133,7 +133,7 @@ fn fetchRobotsThenRequest(
         new_req.method = .GET;
         new_req.url = robots_url;
         new_req.skip_robots = true;
-        new_req.resource_type = .fetch;
+        new_req.resource_type = .document;
         new_req.body = null;
         new_req.ctx = robots_ctx;
         new_req.start_callback = null;
