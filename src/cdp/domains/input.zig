@@ -96,13 +96,17 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 
     // quickly ignore types we know we don't handle
     switch (params.type) {
-        .mouseMoved, .mouseWheel, .mouseReleased => return,
+        .mouseWheel, .mouseReleased => return,
         else => {},
     }
 
     const bc = cmd.browser_context orelse return;
     const frame = bc.session.currentFrame() orelse return;
-    try frame.triggerMouseClick(params.x, params.y);
+    switch (params.type) {
+        .mousePressed => try frame.triggerMouseClick(params.x, params.y),
+        .mouseMoved => try frame.triggerMouseMove(params.x, params.y),
+        .mouseWheel, .mouseReleased => unreachable,
+    }
     // result already sent
 }
 
@@ -118,4 +122,47 @@ fn insertText(cmd: *CDP.Command) !void {
     try frame.insertText(params.text);
 
     try cmd.sendResult(null, .{});
+}
+
+const lp = @import("lightpanda");
+const testing = @import("../testing.zig");
+
+test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const frame = try bc.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    var runner = try bc.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    // Register listeners for the full enter sequence on #hoverTarget, then read
+    // its (faux-layout) position so we can target it precisely.
+    _ = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('mousemove', () => { window.moved = true; });
+        \\t.addEventListener('mouseenter', () => { window.entered = true; });
+    , null);
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseMoved", .x = rect_x, .y = rect_y },
+    });
+
+    const result = try ls.local.compileAndRun("window.hovered === true && window.entered === true && window.moved === true", null);
+    try testing.expect(result.isTrue());
 }
