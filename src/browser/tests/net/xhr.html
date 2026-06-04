@@ -329,3 +329,22 @@
     });
   }
 </script>
+
+<script id=xhr_upload type=module>
+  {
+    // upload is an XMLHttpRequestUpload (an XMLHttpRequestEventTarget) and
+    // exposes addEventListener; htmx relies on this not throwing.
+    const req = new XMLHttpRequest();
+    testing.expectEqual('XMLHttpRequestUpload', req.upload.constructor.name);
+    testing.expectEqual(true, req.upload instanceof XMLHttpRequestEventTarget);
+    testing.expectEqual(true, req.upload instanceof EventTarget);
+    testing.expectEqual('function', typeof req.upload.addEventListener);
+
+    // The same instance is returned on every access so listeners stick.
+    testing.expectEqual(req.upload, req.upload);
+
+    let registered = false;
+    req.upload.addEventListener('progress', () => { registered = true; });
+    testing.expectEqual(false, registered);
+  }
+</script>

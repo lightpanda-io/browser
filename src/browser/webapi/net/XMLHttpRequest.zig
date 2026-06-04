@@ -34,6 +34,7 @@ const EventTarget = @import("../EventTarget.zig");
 const Headers = @import("Headers.zig");
 const BodyInit = @import("body_init.zig").BodyInit;
 const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
+const XMLHttpRequestUpload = @import("XMLHttpRequestUpload.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -44,6 +45,7 @@ const XMLHttpRequest = @This();
 _rc: lp.RC(u8) = .{},
 _exec: *const Execution,
 _proto: *XMLHttpRequestEventTarget,
+_upload: ?*XMLHttpRequestUpload = null,
 _arena: Allocator,
 _http_response: ?HttpClient.Response = null,
 _active_request: bool = false,
@@ -112,29 +114,9 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
         func.release();
     }
 
-    {
-        const proto = self._proto;
-        if (proto._on_abort) |func| {
-            func.release();
-        }
-        if (proto._on_error) |func| {
-            func.release();
-        }
-        if (proto._on_load) |func| {
-            func.release();
-        }
-        if (proto._on_load_end) |func| {
-            func.release();
-        }
-        if (proto._on_load_start) |func| {
-            func.release();
-        }
-        if (proto._on_progress) |func| {
-            func.release();
-        }
-        if (proto._on_timeout) |func| {
-            func.release();
-        }
+    self._proto.releaseListeners();
+    if (self._upload) |upload| {
+        upload._proto.releaseListeners();
     }
 
     page.releaseArena(self._arena);
@@ -287,6 +269,18 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         self.releaseSelfRef();
         return err;
     };
+}
+
+// https://xhr.spec.whatwg.org/#the-upload-attribute
+// The XMLHttpRequestUpload object is created lazily and cached: scripts expect
+// the same instance on every access so their event listeners stick.
+pub fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
+    if (self._upload) |upload| {
+        return upload;
+    }
+    const upload = try self._exec._factory.xhrEventTarget(self._arena, XMLHttpRequestUpload{ ._proto = undefined });
+    self._upload = upload;
+    return upload;
 }
 
 pub fn getReadyState(self: *const XMLHttpRequest) u32 {
@@ -611,6 +605,7 @@ pub const JsApi = struct {
     pub const DONE = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.done), .{ .template = true });
 
     pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
+    pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});
     pub const timeout = bridge.accessor(XMLHttpRequest.getTimeout, XMLHttpRequest.setTimeout, .{});
     pub const withCredentials = bridge.accessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{ .dom_exception = true });
     pub const open = bridge.function(XMLHttpRequest.open, .{});
