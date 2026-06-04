@@ -67,11 +67,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
     // current document — same filter as `match` (HttpOnly hidden,
     // same-site treated as first-party against the document URL).
     const doc_url = exec.url.*;
-    const target = Cookie.PreparedUri{
-        .host = URL.getHostname(doc_url),
-        .path = URL.getPathname(doc_url),
-        .secure = URL.isSecure(doc_url),
-    };
+    const target = Cookie.PreparedUri.init(doc_url);
     if (target.host.len == 0) return;
 
     const probe = Cookie{

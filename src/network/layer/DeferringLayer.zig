@@ -53,11 +53,14 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const arena = try self.network.app.arena_pool.acquire(.small, "DeferringContext");
     errdefer self.network.app.arena_pool.release(arena);
 
+    // this might outlive the transfer, we need to dupe eveyrthing we'll need to use
     const ctx = try arena.create(DeferredContext);
     ctx.* = .{
         .arena = arena,
         .layer = self,
         .transfer = transfer,
+        .frame_id = transfer.req.frame_id,
+        .url = try arena.dupeZ(u8, transfer.req.url),
         .forward = Forward.capture(&transfer.req),
     };
 
@@ -76,22 +79,37 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 }
 
 pub fn flushFrame(self: *DeferringLayer, frame_id: u32) void {
+    // DeferredContext.fire() can re-enter flushFrame, so we'll capture
+    // ready items in this list, so that a reentrant flushFrame doesn't mutate
+    // self.active while we're iterating.
+    var ready: std.DoublyLinkedList = .{};
+
     var node = self.active.first;
     while (node) |n| {
         node = n.next;
         const ctx: *DeferredContext = @fieldParentPtr("node", n);
-        if (!ctx.deferring) continue;
+        if (!ctx.deferring) {
+            continue;
+        }
 
-        const deferred_req = ctx.transfer.req;
-        if (deferred_req.frame_id != frame_id) continue;
+        // captured frame_id, not ctx.transfer: the transfer may be freed.
+        if (ctx.frame_id != frame_id) {
+            continue;
+        }
 
         if (ctx.terminal) {
             self.active.remove(n);
-            ctx.fire();
+            ready.append(n);
         } else {
             ctx.firePartial();
             ctx.deferring = false;
         }
+    }
+
+    // ready is local, ctx.fire() re-entering flushFrame can't invalidate it.
+    while (ready.popFirst()) |n| {
+        const ctx: *DeferredContext = @fieldParentPtr("node", n);
+        ctx.fire();
     }
 }
 
@@ -106,6 +124,8 @@ const DeferredContext = struct {
     arena: std.mem.Allocator,
     layer: *DeferringLayer,
     transfer: *Transfer,
+    frame_id: u32,
+    url: [:0]const u8,
     forward: Forward,
     node: std.DoublyLinkedList.Node = .{},
 
@@ -141,13 +161,12 @@ const DeferredContext = struct {
 
     fn startCallback(response: Response) anyerror!void {
         const self: *DeferredContext = @ptrCast(@alignCast(response.ctx));
-        const req = self.transfer.req;
 
         if (!self.deferring and !self.shouldDefer()) {
             return self.forward.forwardStart(response);
         }
 
-        log.debug(.http, "deferring start callback", .{ .url = req.url });
+        log.debug(.http, "deferring start callback", .{ .url = self.url });
         try self.setStableResponse(response);
         self.deferring = true;
         try self.buffered.append(self.arena, .start);
@@ -155,13 +174,12 @@ const DeferredContext = struct {
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *DeferredContext = @ptrCast(@alignCast(response.ctx));
-        const req = self.transfer.req;
 
         if (!self.deferring and !self.shouldDefer()) {
             return self.forward.forwardHeader(response);
         }
 
-        log.debug(.http, "deferring header callback", .{ .url = req.url });
+        log.debug(.http, "deferring header callback", .{ .url = self.url });
         try self.setStableResponse(response);
         self.deferring = true;
         try self.buffered.append(self.arena, .header);
@@ -170,13 +188,12 @@ const DeferredContext = struct {
 
     fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
         const self: *DeferredContext = @ptrCast(@alignCast(response.ctx));
-        const req = self.transfer.req;
 
         if (!self.deferring and !self.shouldDefer()) {
             return self.forward.forwardData(response, chunk);
         }
 
-        log.debug(.http, "deferring data callback", .{ .url = req.url });
+        log.debug(.http, "deferring data callback", .{ .url = self.url });
         try self.setStableResponse(response);
         self.deferring = true;
         try self.buffered.append(self.arena, .{ .data = try self.arena.dupe(u8, chunk) });
@@ -184,7 +201,6 @@ const DeferredContext = struct {
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *DeferredContext = @ptrCast(@alignCast(ctx));
-        const req = self.transfer.req;
 
         if (!self.deferring and !self.shouldDefer()) {
             defer self.deinit();
@@ -193,7 +209,7 @@ const DeferredContext = struct {
             return self.forward.forwardDone();
         }
 
-        log.debug(.http, "deferring done callback", .{ .url = req.url });
+        log.debug(.http, "deferring done callback", .{ .url = self.url });
         self.deferring = true;
         self.terminal = true;
         try self.buffered.append(self.arena, .done);
@@ -201,7 +217,6 @@ const DeferredContext = struct {
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *DeferredContext = @ptrCast(@alignCast(ctx));
-        const req = self.transfer.req;
 
         if (!self.deferring and !self.shouldDefer()) {
             defer self.deinit();
@@ -211,7 +226,7 @@ const DeferredContext = struct {
             return;
         }
 
-        log.debug(.http, "deferring error callback", .{ .url = req.url, .err = err });
+        log.debug(.http, "deferring error callback", .{ .url = self.url, .err = err });
         self.deferring = true;
         self.terminal = true;
         self.buffered.append(self.arena, .{ .err = err }) catch {};
@@ -229,11 +244,8 @@ const DeferredContext = struct {
         self.forward.forwardShutdown();
     }
 
-    // Replay all buffered events in order, then clean up.
     fn fire(self: *DeferredContext) void {
         defer self.deinit();
-
-        const req = self.transfer.req;
 
         for (self.buffered.items) |event| {
             switch (event) {
@@ -242,7 +254,7 @@ const DeferredContext = struct {
                     const response = Response.fromStable(&stable_response);
 
                     self.forward.forwardStart(response) catch |err| {
-                        log.err(.http, "deferred start callback", .{ .err = err, .url = req.url });
+                        log.err(.http, "deferred start callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                         return;
                     };
@@ -252,13 +264,14 @@ const DeferredContext = struct {
                     const response = Response.fromStable(&stable_response);
 
                     const proceed = self.forward.forwardHeader(response) catch |err| {
-                        log.err(.http, "deferred header callback", .{ .err = err, .url = req.url });
+                        log.err(.http, "deferred header callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                         return;
                     };
 
                     if (!proceed) {
                         self.forward.forwardErr(error.Abort);
+                        return;
                     }
                 },
                 .data => |chunk| {
@@ -266,14 +279,14 @@ const DeferredContext = struct {
                     const response = Response.fromStable(&stable_response);
 
                     self.forward.forwardData(response, chunk) catch |err| {
-                        log.err(.http, "deferred data callback", .{ .err = err, .url = req.url });
+                        log.err(.http, "deferred data callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                         return;
                     };
                 },
                 .done => {
                     self.forward.forwardDone() catch |err| {
-                        log.err(.http, "deferred done callback", .{ .err = err, .url = req.url });
+                        log.err(.http, "deferred done callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                     };
 
@@ -288,7 +301,6 @@ const DeferredContext = struct {
     }
 
     fn firePartial(self: *DeferredContext) void {
-        const req = self.transfer.req;
         const stable_response = self.stable_resp orelse @panic("stable_resp must be set for any of the partial fire events");
         const response = Response.fromStable(&stable_response);
 
@@ -296,14 +308,14 @@ const DeferredContext = struct {
             switch (event) {
                 .start => {
                     self.forward.forwardStart(response) catch |err| {
-                        log.err(.http, "defer part start callback", .{ .err = err, .url = req.url });
+                        log.err(.http, "defer part start callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                         return;
                     };
                 },
                 .header => {
                     const proceed = self.forward.forwardHeader(response) catch |err| {
-                        log.err(.http, "defer part header callback", .{ .err = err, .url = req.url });
+                        log.err(.http, "defer part header callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                         return;
                     };
@@ -314,7 +326,7 @@ const DeferredContext = struct {
                 },
                 .data => |chunk| {
                     self.forward.forwardData(response, chunk) catch |err| {
-                        log.err(.http, "defer part data callback", .{ .err = err, .url = req.url });
+                        log.err(.http, "defer part data callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                         return;
                     };

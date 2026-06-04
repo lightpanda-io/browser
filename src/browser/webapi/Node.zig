@@ -379,6 +379,28 @@ pub fn lookupNamespaceURI(self: *Node, prefix_arg: ?[]const u8, frame: *Frame) ?
     }
 }
 
+pub fn lookupPrefix(self: *Node, namespace_arg: ?[]const u8, frame: *Frame) ?[]const u8 {
+    const namespace = namespace_arg orelse return null;
+    if (namespace.len == 0) return null;
+
+    switch (self._type) {
+        .element => |el| return el.lookupPrefixForElement(namespace, frame),
+        .document => |doc| {
+            const de = doc.getDocumentElement() orelse return null;
+            return de.lookupPrefixForElement(namespace, frame);
+        },
+        .document_type, .document_fragment => return null,
+        .attribute => |attr| {
+            const owner = attr.getOwnerElement() orelse return null;
+            return owner.lookupPrefixForElement(namespace, frame);
+        },
+        .cdata => {
+            const parent = self.parentElement() orelse return null;
+            return parent.lookupPrefixForElement(namespace, frame);
+        },
+    }
+}
+
 pub fn isDefaultNamespace(self: *Node, namespace_arg: ?[]const u8, frame: *Frame) bool {
     const namespace: ?[]const u8 = if (namespace_arg) |ns| (if (ns.len == 0) null else ns) else null;
     const default_ns = self.lookupNamespaceURI(null, frame);
@@ -1197,6 +1219,7 @@ pub const JsApi = struct {
     pub const getRootNode = bridge.function(Node.getRootNode, .{});
     pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
     pub const lookupNamespaceURI = bridge.function(Node.lookupNamespaceURI, .{});
+    pub const lookupPrefix = bridge.function(Node.lookupPrefix, .{});
     pub const isDefaultNamespace = bridge.function(Node.isDefaultNamespace, .{});
 
     fn _baseURI(_: *Node, frame: *const Frame) []const u8 {

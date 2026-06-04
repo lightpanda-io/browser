@@ -310,14 +310,36 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
     }
 }
 
-pub fn waitForScript(runner: *Runner, script: [:0]const u8, timeout_ms: u32) !void {
+pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void {
     var timer = try std.time.Timer.start();
+
+    // Compile the script once and re-use the compiled form. A tick can create a
+    // new context (an internal navigation), so we keep an unbound script (one
+    // not bound to a particular context) and bind it to the current context on
+    // each tick. Compilation is context-independent, so we can do it up front
+    // in whatever context the frame currently has.
+    var compiled: js.Script.Unbound.Global = blk: {
+        var ls: js.Local.Scope = undefined;
+        runner.frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
+        const s = ls.local.compile(src, "wait_script") catch |err| {
+            const caught = try_catch.caughtOrError(runner.frame.call_arena, err);
+            log.err(.app, "wait script error", .{ .err = caught });
+            return error.ScriptError;
+        };
+        break :blk s.getUnboundScript().persist(ls.local.isolate);
+    };
+    defer compiled.deinit();
 
     while (true) {
         if (runner.session.isCancelled()) return error.Cancelled;
         const frame = runner.frame;
 
-        // Execute the script and check if it returns truthy
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
         defer ls.deinit();
@@ -326,7 +348,8 @@ pub fn waitForScript(runner: *Runner, script: [:0]const u8, timeout_ms: u32) !vo
         try_catch.init(&ls.local);
         defer try_catch.deinit();
 
-        const value = ls.local.exec(script, "wait_script") catch |err| {
+        const script = compiled.get(ls.local.isolate).bindToCurrentContext(&ls.local);
+        const value = script.run() catch |err| {
             const caught = try_catch.caughtOrError(frame.call_arena, err);
             log.err(.app, "wait script error", .{ .err = caught });
             return error.ScriptError;
