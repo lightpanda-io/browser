@@ -82,6 +82,8 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
         x: f64,
         y: f64,
         type: Type,
+        deltaX: f64 = 0,
+        deltaY: f64 = 0,
         // Many optional parameters are not implemented yet, see documentation url.
 
         const Type = enum {
@@ -94,19 +96,13 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 
     try cmd.sendResult(null, .{});
 
-    // quickly ignore types we know we don't handle
-    switch (params.type) {
-        .mouseWheel => return,
-        else => {},
-    }
-
     const bc = cmd.browser_context orelse return;
     const frame = bc.session.currentFrame() orelse return;
     switch (params.type) {
         .mousePressed => try frame.triggerMouseClick(params.x, params.y),
         .mouseReleased => try frame.triggerMouseRelease(params.x, params.y),
         .mouseMoved => try frame.triggerMouseMove(params.x, params.y),
-        .mouseWheel => unreachable,
+        .mouseWheel => try frame.triggerMouseWheel(params.x, params.y, params.deltaX, params.deltaY),
     }
     // result already sent
 }
@@ -202,5 +198,42 @@ test "cdp.input: dispatchMouseEvent mouseReleased fires mouseup" {
     });
 
     const result = try ls.local.compileAndRun("window.released === true", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchMouseEvent mouseWheel fires wheel event" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const frame = try bc.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    var runner = try bc.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.getElementById('scrollbox')
+        \\  .addEventListener('wheel', (e) => { window.wheelDeltaY = e.deltaY; });
+    , null);
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('scrollbox').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('scrollbox').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
+    });
+
+    const result = try ls.local.compileAndRun("window.wheelDeltaY === 40", null);
     try testing.expect(result.isTrue());
 }
