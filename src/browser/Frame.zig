@@ -3038,24 +3038,11 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         null;
 
     const children = parent._children.?;
-    switch (children.*) {
-        .one => |n| {
-            lp.assert(n == child, "Frame.removeNode.one", .{});
-            parent._children = null;
-            self._factory.destroy(children);
-        },
-        .list => |list| {
-            list.remove(&child._child_link);
-
-            // Should not be possible to get a child list with a single node.
-            // While it doesn't cause any problems, it indicates an bug in the
-            // code as these should always be represented as .{.one = node}
-            const first = list.first.?;
-            if (first.next == null) {
-                children.* = .{ .one = Node.linkToNode(first) };
-                self._factory.destroy(list);
-            }
-        },
+    children.remove(&child._child_link);
+    if (children.first == null) {
+        // last child removed; drop the list so a childless node holds no allocation
+        parent._children = null;
+        self._factory.destroy(children);
     }
     // grab this before we null the parent
     const was_connected = child.isConnected();
@@ -3198,44 +3185,23 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
 
     lp.assert(child._parent == null, "Frame.insertNodeRelative parent", .{});
 
-    const children = blk: {
-        // expand parent._children so that it can take another child
-        if (parent._children) |c| {
-            switch (c.*) {
-                .list => {},
-                .one => |node| {
-                    const list = try self._factory.create(std.DoublyLinkedList{});
-                    list.append(&node._child_link);
-                    c.* = .{ .list = list };
-                },
-            }
-            break :blk c;
-        } else {
-            const Children = @import("webapi/children.zig").Children;
-            const c = try self._factory.create(Children{ .one = child });
-            parent._children = c;
-            break :blk c;
-        }
+    const children = parent._children orelse blk: {
+        const list = try self._factory.create(std.DoublyLinkedList{});
+        parent._children = list;
+        break :blk list;
     };
 
     switch (relative) {
-        .append => switch (children.*) {
-            .one => {}, // already set in the expansion above
-            .list => |list| list.append(&child._child_link),
-        },
+        .append => children.append(&child._child_link),
         .after => |ref_node| {
             // caller should have made sure this was the case
             lp.assert(ref_node._parent.? == parent, "Frame.insertNodeRelative after", .{ .url = self.url });
-            // if ref_node is in parent, and expanded _children above to
-            // accommodate another child, then `children` must be a list
-            children.list.insertAfter(&ref_node._child_link, &child._child_link);
+            children.insertAfter(&ref_node._child_link, &child._child_link);
         },
         .before => |ref_node| {
             // caller should have made sure this was the case
             lp.assert(ref_node._parent.? == parent, "Frame.insertNodeRelative before", .{ .url = self.url });
-            // if ref_node is in parent, and expanded _children above to
-            // accommodate another child, then `children` must be a list
-            children.list.insertBefore(&ref_node._child_link, &child._child_link);
+            children.insertBefore(&ref_node._child_link, &child._child_link);
         },
     }
     child._parent = parent;
@@ -3603,7 +3569,7 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, allow_d
     // we expect, and nodes might be altogether removed. We deal with this in a
     // few different places, but always the same way: leave it as-is.
     const children = node._children orelse return;
-    const first = children.first();
+    const first = Node.linkToNode(children.first.?);
     if (first.is(Element.Html.Html) == null) {
         return;
     }

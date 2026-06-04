@@ -69,7 +69,7 @@ pub fn length(self: *ChildNodes, frame: *const Frame) !u32 {
     const children = self._node._children orelse return 0;
 
     // O(N)
-    const len = children.len();
+    const len: u32 = @intCast(children.len());
     self._last_length = len;
     return len;
 }
@@ -100,7 +100,7 @@ pub fn getAtIndex(self: *ChildNodes, index: usize, frame: *const Frame) !?*Node 
 }
 
 pub fn first(self: *const ChildNodes) ?*std.DoublyLinkedList.Node {
-    return &(self._node._children orelse return null).first()._child_link;
+    return (self._node._children orelse return null).first;
 }
 
 pub fn keys(self: *ChildNodes, frame: *Frame) !*KeyIterator {
