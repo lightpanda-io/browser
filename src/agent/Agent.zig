@@ -47,6 +47,7 @@ pub const UserError = error{
     MissingApiKey,
     MissingProvider,
     ConflictingFlags,
+    ModelNotAvailable,
 };
 
 pub fn isUserError(err: anyerror) bool {
@@ -139,41 +140,48 @@ fn resolveModelName(opts: Config.Agent, resolved: ?settings.ResolvedProvider, re
     return "";
 }
 
-const OllamaModel = union(enum) {
-    /// Owned by the allocator passed to reconcileOllamaModel.
+const ReconciledModel = union(enum) {
+    /// Owned by the allocator passed to reconcileModel.
     use: []u8,
     abort,
 };
 
-/// Only Ollama: its local catalog is authoritative and cheap, unlike cloud
-/// `/models` listings that can lag real availability. A non-explicit (default)
-/// model that isn't installed is swapped for an installed one; an explicit one
-/// warns, and aborts a one-shot run.
-fn reconcileOllamaModel(
+/// Validate `desired` against the provider's catalog, mirroring the interactive
+/// `/model` command. An unreachable server (empty list) leaves it unchecked.
+/// An explicit model that isn't listed is fatal. Ollama's local catalog is
+/// authoritative, so its default is substituted when not pulled; cloud defaults
+/// are hardcoded real models and trusted as-is.
+fn reconcileModel(
     allocator: std.mem.Allocator,
     llm: Credentials,
     desired: []const u8,
     base_url: ?[:0]const u8,
     explicit: bool,
-    is_one_shot: bool,
-) !OllamaModel {
+) !ReconciledModel {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    // Unreachable server → empty list → fall through and use `desired` unchecked.
-    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, arena.allocator(), .ollama, llm.key, base_url) catch &.{};
-    if (ids.len != 0 and !containsString(ids, desired)) {
-        if (!explicit) {
-            std.debug.print("Default Ollama model '{s}' is not installed; using '{s}'.\n", .{ desired, ids[0] });
-            return .{ .use = try allocator.dupe(u8, ids[0]) };
-        }
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, base_url) catch &.{};
+    if (ids.len == 0 or containsString(ids, desired)) return .{ .use = try allocator.dupe(u8, desired) };
+
+    if (!explicit) {
+        if (llm.provider != .ollama) return .{ .use = try allocator.dupe(u8, desired) };
+        std.debug.print("Default Ollama model '{s}' is not installed; using '{s}'.\n", .{ desired, ids[0] });
+        return .{ .use = try allocator.dupe(u8, ids[0]) };
+    }
+
+    if (llm.provider == .ollama) {
         const installed = std.mem.join(arena.allocator(), ", ", ids) catch "";
         std.debug.print(
             "Model '{s}' is not installed in Ollama.\nInstalled: {s}\nRun `ollama pull {s}` to install it, or choose one of the above.\n",
             .{ desired, installed, desired },
         );
-        if (is_one_shot) return .abort;
+    } else {
+        std.debug.print(
+            "Model '{s}' is not available for {s}.\nRun with --list-models to see options.\n",
+            .{ desired, @tagName(llm.provider) },
+        );
     }
-    return .{ .use = try allocator.dupe(u8, desired) };
+    return .abort;
 }
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
@@ -238,17 +246,17 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     var model = try allocator.dupe(u8, resolveModelName(opts, resolved, remembered));
     errdefer allocator.free(model);
 
-    if (llm) |l| if (l.provider == .ollama) {
+    if (llm) |l| {
         const explicit = opts.model != null or
-            (remembered != null and remembered.?.provider == .ollama);
-        switch (try reconcileOllamaModel(allocator, l, model, opts.base_url, explicit, is_one_shot)) {
+            (remembered != null and remembered.?.provider == l.provider);
+        switch (try reconcileModel(allocator, l, model, opts.base_url, explicit)) {
             .use => |m| {
                 allocator.free(model);
                 model = m;
             },
-            .abort => return error.ModelNotInstalled,
+            .abort => return error.ModelNotAvailable,
         }
-    };
+    }
 
     if (resolved) |r| {
         if (r.source == .picked) {
