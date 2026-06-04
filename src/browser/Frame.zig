@@ -3941,6 +3941,27 @@ pub fn triggerMouseMove(self: *Frame, x: f64, y: f64) !void {
     try self._event_manager.dispatch(target.asEventTarget(), enter_event.asEvent());
 }
 
+pub fn triggerMouseRelease(self: *Frame, x: f64, y: f64) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.frame, "frame mouse release", .{
+            .url = self.url,
+            .node = target,
+            .x = x,
+            .y = y,
+            .type = self._type,
+        });
+    }
+    const up_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseup"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), up_event.asEvent());
+}
+
 // callback when the "click" event reaches the frame.
 pub fn handleClick(self: *Frame, target: *Node) !void {
     // TODO: Also support <area> elements when implement
