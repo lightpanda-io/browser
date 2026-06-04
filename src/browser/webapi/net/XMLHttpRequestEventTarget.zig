@@ -37,11 +37,22 @@ _on_timeout: ?js.Function.Temp = null,
 
 pub const Type = union(enum) {
     request: *@import("XMLHttpRequest.zig"),
-    // TODO: xml_http_request_upload
+    upload: *@import("XMLHttpRequestUpload.zig"),
 };
 
 pub fn asEventTarget(self: *XMLHttpRequestEventTarget) *EventTarget {
     return self._proto;
+}
+
+pub fn releaseListeners(self: *XMLHttpRequestEventTarget) void {
+    inline for (.{
+        "_on_abort",      "_on_error",    "_on_load",    "_on_load_end",
+        "_on_load_start", "_on_progress", "_on_timeout",
+    }) |field| {
+        if (@field(self, field)) |func| {
+            func.release();
+        }
+    }
 }
 
 pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchType, progress_: ?Progress, exec: *const Execution) !void {
