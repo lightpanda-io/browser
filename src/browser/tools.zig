@@ -829,7 +829,9 @@ const schema_walker_prefix =
     \\  for (const k in schema) {
     \\    out[k] = ext(document, schema[k]);
     \\    const v = out[k];
-    \\    if (v !== null && !(Array.isArray(v) && v.length === 0)) any = true;
+    \\    // A resolved array — even empty — is a real result (e.g. a page with
+    \\    // zero comments); only an all-null schema means every selector missed.
+    \\    if (v !== null) any = true;
     \\  }
     \\  if (!any) throw new Error("extract: no schema selector matched any element — inspect the page with tree/markdown and retry with corrected selectors");
     \\  return JSON.stringify(out);

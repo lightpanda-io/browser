@@ -746,6 +746,34 @@ test "agent script runtime: extract returns a JavaScript object" {
     );
 }
 
+test "agent script runtime: extract tolerates list selectors that match nothing" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const empty = extract({ comments: [{ selector: ".no-such-element", fields: { text: "" } }] });
+        \\if (!Array.isArray(empty.comments) || empty.comments.length !== 0) throw new Error("empty list selector should yield an empty array, not throw");
+        \\const bare = extract([".no-such-element"]);
+        \\if (!Array.isArray(bare) || bare.length !== 0) throw new Error("bare empty array schema should yield an empty array");
+        \\const mixed = extract({ button: "#btn", comments: [".no-such-element"] });
+        \\if (mixed.button !== "Click Me" || mixed.comments.length !== 0) throw new Error("a matched scalar beside an empty list should still resolve");
+        \\let threwOnAllNull = false;
+        \\try {
+        \\  extract({ missing: "#does-not-exist" });
+        \\} catch (err) {
+        \\  threwOnAllNull = true;
+        \\}
+        \\if (!threwOnAllNull) throw new Error("an all-null scalar schema should still throw");
+    );
+}
+
 test "agent script runtime: strict-mode scripts can call primitives" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
