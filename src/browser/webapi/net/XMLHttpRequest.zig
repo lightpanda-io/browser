@@ -60,6 +60,7 @@ _response_len: ?usize = 0,
 _response_url: [:0]const u8 = "",
 _response_mime: ?Mime = null,
 _override_mime: ?Mime = null,
+_response_xml: ?*Node.Document = null,
 _response_headers: std.ArrayList([]const u8) = .empty,
 _response_type: ResponseType = .text,
 
@@ -204,6 +205,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
     // Reset internal state. _override_mime intentionally survives open()
     // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
     self._response = null;
+    self._response_xml = null;
     self._response_data.clearRetainingCapacity();
     self._response_status = 0;
     self._response_len = 0;
@@ -430,6 +432,10 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
     // null in this branch, so we only act on text/xml.
     if (self._response_type != .text) return null;
 
+    if (self._response_xml) |document| {
+        return document;
+    }
+
     const final = self._override_mime orelse self._response_mime orelse return null;
     if (final.content_type != .text_xml) return null;
 
@@ -437,6 +443,7 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
         .frame => |frame| {
             const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
             try frame.parseHtmlAsChildren(document.asNode(), self._response_data.items);
+            self._response_xml = document;
             return document;
         },
         .worker => return error.NotSupportedInWorker,

@@ -331,6 +331,9 @@
     req.overrideMimeType('not a mime');
   }
 
+</script>
+
+<script id=xhr_override_mime_done type=module>
   {
     // After send() reaches DONE, overrideMimeType throws InvalidStateError.
     const state = await testing.async();
@@ -347,7 +350,9 @@
       });
     });
   }
+</script>
 
+<script id=xhr_override_mime_survives_open type=module>
   {
     // Override survives open() (spec: open() resets state but keeps the
     // override MIME type). Re-opening then sending must not throw on the
@@ -363,7 +368,9 @@
       testing.expectEqual(200, req.status);
     });
   }
+</script>
 
+<script id=xhr_override_mime_responsexml type=module>
   {
     // End-to-end: server returns text/html, but overrideMimeType("text/xml")
     // makes responseXML lazily parse the body as a Document, while
@@ -382,7 +389,9 @@
       testing.expectEqual(req.responseXML, req.responseXML);
     });
   }
+</script>
 
+<script id=xhr_override_mime_no_override type=module>
   {
     // Without overrideMimeType, a text/html response still yields
     // responseXML === null when responseType is the default.
