@@ -609,9 +609,23 @@ fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printInfo("Current model: {s} (Tab to list)", .{self.model});
         return;
     }
+    const ids = completionModels(self, self.allocator);
+    // Empty means the fetch failed (or a local provider with unlisted models);
+    // skip the check rather than block a model we just can't confirm.
+    if (ids.len != 0 and !containsString(ids, trimmed)) {
+        self.terminal.printError("unknown model: {s} (Tab to list)", .{trimmed});
+        return;
+    }
     self.setModel(trimmed) catch |err| {
         self.terminal.printError("failed to set model: {s}", .{@errorName(err)});
     };
+}
+
+fn containsString(haystack: []const []const u8, needle: []const u8) bool {
+    for (haystack) |s| {
+        if (std.mem.eql(u8, s, needle)) return true;
+    }
+    return false;
 }
 
 fn setModel(self: *Agent, model: []const u8) !void {
