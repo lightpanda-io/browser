@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<head>
+  <title>DOMMatrix Test</title>
+  <script src="testing.js"></script>
+</head>
+
+<body>
+</body>
+
+<script id=identity_no_args>
+  {
+    const m = new DOMMatrix();
+    testing.expectEqual(1, m.a);
+    testing.expectEqual(0, m.b);
+    testing.expectEqual(0, m.c);
+    testing.expectEqual(1, m.d);
+    testing.expectEqual(0, m.e);
+    testing.expectEqual(0, m.f);
+    testing.expectTrue(m.is2D);
+    testing.expectTrue(m.isIdentity);
+    testing.expectEqual(1, m.m11);
+    testing.expectEqual(1, m.m22);
+    testing.expectEqual(1, m.m33);
+    testing.expectEqual(1, m.m44);
+  }
+</script>
+
+<script id=from_6_element_array>
+  {
+    const m = new DOMMatrix([1, 2, 3, 4, 5, 6]);
+    testing.expectEqual(1, m.a);
+    testing.expectEqual(2, m.b);
+    testing.expectEqual(3, m.c);
+    testing.expectEqual(4, m.d);
+    testing.expectEqual(5, m.e);
+    testing.expectEqual(6, m.f);
+    testing.expectTrue(m.is2D);
+    testing.expectFalse(m.isIdentity);
+  }
+</script>
+
+<script id=from_16_element_array>
+  {
+    const m = new DOMMatrix([
+      1, 2, 3, 4,
+      5, 6, 7, 8,
+      9, 10, 11, 12,
+      13, 14, 15, 16,
+    ]);
+    testing.expectEqual(1, m.m11);
+    testing.expectEqual(6, m.m22);
+    testing.expectEqual(11, m.m33);
+    testing.expectEqual(16, m.m44);
+    testing.expectEqual(13, m.m41);
+    testing.expectFalse(m.is2D);
+  }
+</script>
+
+<script id=from_matrix_string>
+  {
+    const m = new DOMMatrix('matrix(1, 0, 0, 1, 10, 20)');
+    testing.expectEqual(1, m.a);
+    testing.expectEqual(0, m.b);
+    testing.expectEqual(10, m.e);
+    testing.expectEqual(20, m.f);
+    testing.expectTrue(m.is2D);
+  }
+</script>
+
+<script id=from_none_and_empty>
+  {
+    const none = new DOMMatrix('none');
+    testing.expectTrue(none.isIdentity);
+    const empty = new DOMMatrix('');
+    testing.expectTrue(empty.isIdentity);
+  }
+</script>
+
+<script id=from_translate_string>
+  {
+    const m = new DOMMatrix('translate(40px, 50px)');
+    testing.expectEqual(40, m.e);
+    testing.expectEqual(50, m.f);
+    testing.expectTrue(m.is2D);
+  }
+</script>
+
+<script id=from_scale_string>
+  {
+    const m = new DOMMatrix('scale(2)');
+    testing.expectEqual(2, m.a);
+    testing.expectEqual(2, m.d);
+  }
+</script>
+
+<script id=from_matrix3d_string>
+  {
+    const m = new DOMMatrix('matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 5,6,7,1)');
+    testing.expectEqual(5, m.m41);
+    testing.expectEqual(6, m.m42);
+    testing.expectEqual(7, m.m43);
+    testing.expectFalse(m.is2D);
+  }
+</script>
+
+<script id=rotate_90>
+  {
+    const m = new DOMMatrix('rotate(90deg)');
+    // cos(90)=0, sin(90)=1
+    testing.expectTrue(Math.abs(m.a - 0) < 1e-9);
+    testing.expectTrue(Math.abs(m.b - 1) < 1e-9);
+    testing.expectTrue(Math.abs(m.c - -1) < 1e-9);
+    testing.expectTrue(Math.abs(m.d - 0) < 1e-9);
+  }
+</script>
+
+<script id=constructor_copies_matrix_via_string>
+  {
+    // Per WebIDL the init arg is (string or sequence); a matrix is not a
+    // sequence, so it is stringified and re-parsed — round-tripping a copy.
+    const src = new DOMMatrix([
+      2, 1, 0, 0,
+      1, 2, 0, 0,
+      0, 0, 1, 0,
+      10, 10, 0, 1,
+    ]);
+    const m = new DOMMatrix(src);
+    testing.expectEqual(2, m.m11);
+    testing.expectEqual(1, m.m21);
+    testing.expectEqual(10, m.m41);
+    testing.expectFalse(m.is2D);
+  }
+</script>
+
+<script id=constructor_invalid_string_throws_syntaxerror>
+  {
+    let name = null;
+    try { new DOMMatrix('not a transform'); } catch (e) { name = e.name; }
+    testing.expectEqual('SyntaxError', name);
+  }
+</script>
+
+<script id=from_matrix_dict>
+  {
+    const m = DOMMatrix.fromMatrix({ a: 2, d: 3, e: 10, f: 20 });
+    testing.expectEqual(2, m.a);
+    testing.expectEqual(3, m.d);
+    testing.expectEqual(10, m.e);
+    testing.expectEqual(20, m.f);
+    testing.expectTrue(m.is2D);
+
+    const ro = DOMMatrixReadOnly.fromMatrix({ m11: 1, m22: 1, m33: 1, m44: 1, is2D: false });
+    testing.expectTrue(ro instanceof DOMMatrixReadOnly);
+    testing.expectFalse(ro.is2D);
+  }
+</script>
+
+<script id=from_matrix_alias_conflict_throws>
+  {
+    // a and m11 both present but unequal -> TypeError
+    let threw = false;
+    try { DOMMatrix.fromMatrix({ a: 1, m11: 2 }); } catch (e) { threw = (e instanceof TypeError); }
+    testing.expectTrue(threw);
+  }
+</script>
+
+<script id=from_float_arrays>
+  {
+    const m6 = DOMMatrix.fromFloat64Array(new Float64Array([1, 0, 0, 1, 7, 8]));
+    testing.expectEqual(7, m6.e);
+    testing.expectEqual(8, m6.f);
+    testing.expectTrue(m6.is2D);
+
+    const m16 = DOMMatrix.fromFloat32Array(new Float32Array([
+      1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+    ]));
+    testing.expectFalse(m16.is2D);
+    testing.expectTrue(m16.isIdentity);
+  }
+</script>
+
+<script id=multiply_translate>
+  {
+    const a = new DOMMatrix().translate(10, 0);
+    const b = new DOMMatrix().translate(0, 20);
+    const m = a.multiply(b);
+    testing.expectEqual(10, m.e);
+    testing.expectEqual(20, m.f);
+  }
+</script>
+
+<script id=scale_self>
+  {
+    const m = new DOMMatrix();
+    const r = m.scaleSelf(3);
+    testing.expectEqual(3, m.a);
+    testing.expectEqual(3, m.d);
+    // self methods return the same object
+    testing.expectTrue(r === m);
+  }
+</script>
+
+<script id=inverse_translate>
+  {
+    const m = new DOMMatrix().translate(10, 20);
+    const inv = m.inverse();
+    testing.expectEqual(-10, inv.e);
+    testing.expectEqual(-20, inv.f);
+  }
+</script>
+
+<script id=set_a_mutates>
+  {
+    const m = new DOMMatrix();
+    m.a = 5;
+    testing.expectEqual(5, m.m11);
+  }
+</script>
+
+<script id=to_string_throws_on_non_finite>
+  {
+    for (const num of [NaN, Infinity, -Infinity]) {
+      let name = null;
+      const m = new DOMMatrix([1, 0, 0, 1, 0, num]);
+      try { String(m); } catch (e) { name = e.name; }
+      testing.expectEqual('InvalidStateError', name);
+    }
+    // finite matrix stringifies fine
+    testing.expectEqual('matrix(1, 0, 0, 1, 0, 0)', String(new DOMMatrix()));
+  }
+</script>
+
+<script id=to_string_2d>
+  {
+    const m = new DOMMatrix([1, 0, 0, 1, 10, 20]);
+    testing.expectEqual('matrix(1, 0, 0, 1, 10, 20)', m.toString());
+  }
+</script>
+
+<script id=to_float32_array>
+  {
+    const m = new DOMMatrix();
+    const arr = m.toFloat32Array();
+    testing.expectTrue(arr instanceof Float32Array);
+    testing.expectEqual(16, arr.length);
+    testing.expectEqual(1, arr[0]);
+    testing.expectEqual(1, arr[15]);
+  }
+</script>
+
+<script id=set_3d_element_zero_preserves_is2d>
+  {
+    // Setting a z/w element to 0 (or -0) must preserve is2D; only a non-zero
+    // value clears it.
+    for (const attr of ['m13', 'm14', 'm23', 'm24', 'm31', 'm32', 'm34', 'm43']) {
+      const m = new DOMMatrix();
+      m[attr] = 0;
+      testing.expectTrue(m.is2D);
+      m[attr] = -0;
+      testing.expectTrue(m.is2D);
+      m[attr] = 42;
+      testing.expectFalse(m.is2D);
+    }
+    // m33/m44 identity is 1: setting to 1 preserves, anything else clears.
+    const a = new DOMMatrix();
+    a.m33 = 1;
+    testing.expectTrue(a.is2D);
+    a.m33 = 2;
+    testing.expectFalse(a.is2D);
+  }
+</script>
+
+<script id=multiply_no_args_is_copy>
+  {
+    const m = new DOMMatrix([1, 2, 3, 4, 5, 6]);
+    const r = m.multiply();
+    testing.expectEqual(1, r.a);
+    testing.expectEqual(6, r.f);
+    testing.expectTrue(r !== m);
+  }
+</script>
+
+<script id=new_object_methods>
+  {
+    const m = new DOMMatrix();
+    for (const method of ['scale3d', 'rotateAxisAngle', 'rotateFromVector', 'skewX', 'skewY', 'flipX', 'flipY', 'multiply']) {
+      const r = m[method]();
+      testing.expectTrue(r instanceof DOMMatrix);
+      testing.expectTrue(r !== m);
+    }
+  }
+</script>
+
+<script id=skew_keeps_2d>
+  {
+    const m = new DOMMatrix().skewX(30);
+    testing.expectTrue(m.is2D);
+    // tan(30deg) ~= 0.5774 lands in c (m21)
+    testing.expectTrue(Math.abs(m.c - Math.tan(30 * Math.PI / 180)) < 1e-9);
+  }
+</script>
+
+<script id=readonly_exists_and_inheritance>
+  {
+    const ro = new DOMMatrixReadOnly([1, 0, 0, 1, 10, 20]);
+    testing.expectEqual(10, ro.e);
+    testing.expectEqual(20, ro.f);
+    testing.expectTrue(ro instanceof DOMMatrixReadOnly);
+    // DOMMatrix extends DOMMatrixReadOnly
+    const m = new DOMMatrix();
+    testing.expectTrue(m instanceof DOMMatrix);
+    testing.expectTrue(m instanceof DOMMatrixReadOnly);
+    testing.expectFalse(ro instanceof DOMMatrix);
+  }
+</script>
+
+<script id=readonly_is_immutable>
+  {
+    const ro = new DOMMatrixReadOnly([1, 0, 0, 1, 10, 20]);
+    // Setting a component on a read-only matrix must not change it (the
+    // accessor has no setter).
+    try { ro.a = 5; } catch (e) {}
+    testing.expectEqual(1, ro.a);
+  }
+</script>
+
+<script id=readonly_methods_return_mutable>
+  {
+    const ro = new DOMMatrixReadOnly();
+    const t = ro.translate(10, 20);
+    // DOMMatrixReadOnly methods return a (new, mutable) DOMMatrix
+    testing.expectTrue(t instanceof DOMMatrix);
+    testing.expectEqual(10, t.e);
+    testing.expectEqual(20, t.f);
+    // original is untouched
+    testing.expectEqual(0, ro.e);
+  }
+</script>
+
+<script id=mutable_self_methods_chain>
+  {
+    const m = new DOMMatrix();
+    const r = m.translateSelf(5, 6).scaleSelf(2);
+    testing.expectTrue(r === m);
+    testing.expectEqual(2, m.a);
+    testing.expectEqual(5, m.e);
+    testing.expectEqual(6, m.f);
+  }
+</script>
+
+<script id=multiply_accepts_dict>
+  {
+    const m = new DOMMatrix();
+    const r = m.multiply({ m11: 1, m12: 2, m21: 0, m22: 1, m41: 0, m42: 0 });
+    testing.expectEqual(2, r.b);
+    // original not mutated
+    testing.expectEqual(0, m.b);
+  }
+</script>
+
+<script id=multiply_accepts_matrix_instance>
+  {
+    const a = new DOMMatrix().translate(10, 0);
+    const b = new DOMMatrix().translate(0, 20);
+    const m = a.multiply(b);
+    testing.expectEqual(10, m.e);
+    testing.expectEqual(20, m.f);
+  }
+</script>
+
+<script id=invert_self_identity_and_singular>
+  {
+    // returns self
+    const m = new DOMMatrix().translate(10, -20.5);
+    const ret = m.invertSelf();
+    testing.expectTrue(ret === m);
+    testing.expectEqual(-10, m.e);
+    testing.expectEqual(20.5, m.f);
+
+    // singular matrix inverts to all-NaN, is2D false
+    const s = new DOMMatrix([0, 0, 0, 0, 0, 0]);
+    s.invertSelf();
+    testing.expectTrue(Number.isNaN(s.m11));
+    testing.expectTrue(Number.isNaN(s.m44));
+    testing.expectFalse(s.is2D);
+  }
+</script>
+
+<script id=read_all_m_components>
+  {
+    // framer-motion reads m11..m44 off a matrix built from a transform string
+    const m = new DOMMatrix('matrix(1, 0, 0, 1, 0, 0)');
+    let sum = 0;
+    for (let r = 1; r < 5; r++) {
+      for (let c = 1; c < 5; c++) {
+        sum += m[`m${r}${c}`];
+      }
+    }
+    testing.expectEqual(4, sum); // identity has four 1s on the diagonal
+  }
+</script>
