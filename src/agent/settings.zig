@@ -54,7 +54,7 @@ fn detectOllama(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credenti
 /// Used by callers that need to print a banner before calling resolveCredentials.
 pub fn wouldResolve(allocator: std.mem.Allocator, opts: Config.Agent, remembered: ?Remembered) bool {
     if (opts.provider) |p| return zenai.provider.envApiKey(p) != null;
-    if (remembered) |r| if (zenai.provider.envApiKey(r.provider)) |_| return true;
+    if (remembered) |r| if (r.provider) |p| if (zenai.provider.envApiKey(p)) |_| return true;
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
     if (zenai.provider.detectKeys(&buf, zenai.provider.default_candidates).len > 0) return true;
     return detectOllama(allocator, opts.base_url) != null;
@@ -74,8 +74,8 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
         return .{ .credentials = .{ .provider = p, .key = key }, .source = .flag };
     }
 
-    if (remembered) |r| if (zenai.provider.envApiKey(r.provider)) |key| {
-        return .{ .credentials = .{ .provider = r.provider, .key = key }, .source = .remembered };
+    if (remembered) |r| if (r.provider) |p| if (zenai.provider.envApiKey(p)) |key| {
+        return .{ .credentials = .{ .provider = p, .key = key }, .source = .remembered };
     };
 
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
@@ -109,11 +109,13 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
 pub const remembered_path = ".lp-agent.zon";
 
 /// Last user-selected provider/model/effort/verbosity, persisted per-directory
-/// in `.lp-agent.zon`. `model` is owned by the caller. `effort` and `verbosity`
-/// are optional so files written before they existed still parse; null means
-/// "use the mode default" (see `Agent.resolveEffort` / `Agent.resolveVerbosity`).
+/// in `.lp-agent.zon`. `model` is owned by the caller. A null `provider` means
+/// the user disabled the LLM (`/provider null`), so the REPL starts in basic
+/// mode without re-prompting. `effort` and `verbosity` are optional so files
+/// written before they existed still parse; null means "use the mode default"
+/// (see `Agent.resolveEffort` / `Agent.resolveVerbosity`).
 pub const Remembered = struct {
-    provider: Config.AiProvider,
+    provider: ?Config.AiProvider = null,
     model: []const u8,
     effort: ?Config.Effort = null,
     verbosity: ?Config.AgentVerbosity = null,
@@ -123,7 +125,9 @@ pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
     const data = std.fs.cwd().readFileAllocOptions(allocator, remembered_path, 1024, null, .of(u8), 0) catch return null;
     defer allocator.free(data);
     const remembered = std.zon.parse.fromSlice(Remembered, allocator, data, null, .{}) catch return null;
-    if (remembered.model.len == 0) {
+    // An empty model is corrupt only when a provider is set; a null provider
+    // (LLM disabled) legitimately has no model to remember.
+    if (remembered.provider != null and remembered.model.len == 0) {
         std.zon.parse.free(allocator, remembered);
         return null;
     }

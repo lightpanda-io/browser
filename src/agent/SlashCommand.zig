@@ -61,7 +61,7 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .save, .name = "save", .hint = "[filename.js] [prompt]", .values = &.{}, .description = "Save this session to a file" },
     .{ .tag = .load, .name = "load", .hint = "<path>", .values = &.{}, .description = "Load and run a script from disk" },
     .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model" },
-    .{ .tag = .provider, .name = "provider", .hint = "[name]", .values = &.{}, .description = "Change the provider" },
+    .{ .tag = .provider, .name = "provider", .hint = "[name|null]", .values = &.{}, .description = "Change the provider, or 'null' to disable the LLM" },
 };
 
 /// Derived from `Command.LlmCommand` — name and description both come from

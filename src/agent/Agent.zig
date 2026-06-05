@@ -92,6 +92,11 @@ const synthesis_prompt =
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 model_credentials: ?Credentials,
+/// True when the no-LLM state is a persisted preference (a remembered null
+/// provider or a runtime `/provider null`), so `reportSaved` writes
+/// `provider = null`. A transient `--no-llm` run leaves this false so saving
+/// other settings doesn't clobber the remembered provider.
+no_llm_persisted: bool,
 model_base_url: ?[:0]const u8,
 /// Cached chat-model ids for the current provider, backed by
 /// `model_completion_arena` and invalidated on `/provider` switch.
@@ -135,7 +140,7 @@ fn resolveModelName(opts: Config.Agent, resolved: ?settings.ResolvedProvider, re
         // Use the remembered model whenever it matches the chosen provider,
         // not only when the provider itself came from the remembered file.
         if (remembered) |rem| {
-            if (rem.provider == r.credentials.provider) return rem.model;
+            if (rem.provider) |p| if (p == r.credentials.provider) return rem.model;
         }
         return zenai.provider.defaultModel(r.credentials.provider);
     }
@@ -232,18 +237,26 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const is_one_shot = opts.task != null;
     const will_repl = !is_one_shot and opts.script_file == null;
 
-    // Basic-mode REPL (no LLM) must be opted into via --no-llm. Without it,
-    // the REPL accepts natural language and an absent API key would only
-    // surface at the first non-slash-command line — too late to be useful.
-    // Pure JavaScript script runs stay allowed: no REPL, no LLM needed.
-    const requires_llm = is_one_shot or (will_repl and !opts.no_llm);
-
-    // Skip resolve when --no-llm forces no client, or no mode could use one
-    // (pure script run) — otherwise resolve prints "No API key detected" for a
-    // run that does not need one.
-    const resolve = !opts.no_llm and requires_llm;
-    const remembered: ?settings.Remembered = if (resolve) settings.loadRemembered(allocator) else null;
+    // Load the remembered selection up front so a saved null provider can flip
+    // the REPL into basic mode before resolution. Pure script runs need nothing.
+    const remembered: ?settings.Remembered = if (will_repl or is_one_shot) settings.loadRemembered(allocator) else null;
     defer if (remembered) |r| std.zon.parse.free(allocator, r);
+
+    // A remembered null provider means the user disabled the LLM via
+    // `/provider null`; honor it for the interactive REPL only (one-shot --task
+    // and script runs always need a model). An explicit --provider overrides it.
+    const remembered_no_llm = will_repl and opts.provider == null and
+        remembered != null and remembered.?.provider == null;
+
+    // Basic-mode REPL (no LLM) must be opted into via --no-llm or a remembered
+    // null provider. Without it, the REPL accepts natural language and an absent
+    // API key would only surface at the first non-slash-command line — too late
+    // to be useful. Pure JavaScript script runs stay allowed: no REPL, no LLM.
+    const requires_llm = is_one_shot or (will_repl and !opts.no_llm and !remembered_no_llm);
+
+    // Skip resolve when no client is wanted — otherwise resolveCredentials
+    // prints "No API key detected" for a run that does not need one.
+    const resolve = !opts.no_llm and requires_llm;
 
     // Print the banner before provider resolution so it appears before any
     // interactive "Select a provider" prompt.  On error paths (missing key /
@@ -267,8 +280,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     errdefer allocator.free(model);
 
     if (llm) |l| {
-        const explicit = opts.model != null or
-            (remembered != null and remembered.?.provider == l.provider);
+        const remembered_matches = remembered != null and remembered.?.provider == l.provider;
+        const explicit = opts.model != null or remembered_matches;
         switch (try reconcileModel(allocator, l, model, opts.base_url, explicit)) {
             .use => |m| {
                 allocator.free(model);
@@ -301,6 +314,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .allocator = allocator,
         .ai_client = null,
         .model_credentials = llm,
+        .no_llm_persisted = remembered_no_llm,
         .model_base_url = opts.base_url,
         .model_completions = null,
         .model_completion_arena = .init(allocator),
@@ -595,7 +609,7 @@ fn runRepl(self: *Agent) void {
         const cmd = Command.parseDiag(aa, line, &diag) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
-                    self.terminal.printError("Basic REPL (--no-llm) accepts only commands. Try /help, or " ++ llm_setup_hint ++ " to enable natural-language prompts.", .{});
+                    self.terminal.printError("Basic REPL (LLM disabled) accepts only commands. Try /help, or " ++ llm_setup_hint ++ " to enable natural-language prompts.", .{});
                     continue :repl;
                 }
                 _ = self.runTurn(.{ .prompt = line, .record_comment = line, .capture_for_save = true });
@@ -745,7 +759,11 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
 }
 
 const api_keys_hint = settings.api_keys_hint;
-const llm_setup_hint = "drop --no-llm and set an API key (" ++ api_keys_hint ++ ")";
+const llm_setup_hint = "set an API key (" ++ api_keys_hint ++ ") and run /provider <name>";
+
+/// `/provider <keyword>` disables the LLM and persists it; shared by the command
+/// parser, autocomplete, and the save report so they can't drift apart.
+const provider_off_keyword = "null";
 
 fn requireLlm(self: *Agent, name: []const u8) bool {
     if (self.model_credentials == null) {
@@ -782,14 +800,18 @@ fn containsString(haystack: []const []const u8, needle: []const u8) bool {
 }
 
 /// Persist the current provider/model/effort/verbosity to `.lp-agent.zon` and report it
-/// as "<label>: <value>", appending "(saved to …)" when the write succeeds.
-/// Reports without saving when there are no model credentials (basic REPL).
+/// as "<label>: <value>", appending "(saved to …)" when the write succeeds. With no
+/// model credentials it persists `provider = null` only when that's an intentional
+/// preference (`no_llm_persisted`); a transient --no-llm run reports without saving.
 fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
-    const c = self.model_credentials orelse {
+    const provider: ?Config.AiProvider = if (self.model_credentials) |c| c.provider else null;
+    // A transient --no-llm run has no provider and no intent to persist one;
+    // report without saving so we don't clobber the remembered selection.
+    if (provider == null and !self.no_llm_persisted) {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
-    };
-    if (settings.saveRemembered(.{ .provider = c.provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity })) {
+    }
+    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
@@ -822,23 +844,30 @@ fn updateStatusBar(self: *Agent) void {
 }
 
 fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
-    if (!self.requireLlm("/provider")) return;
-    const current = self.model_credentials.?;
-
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
+
     if (trimmed.len == 0) {
-        self.terminal.printInfo("Current provider: {s} (Tab to list)", .{@tagName(current.provider)});
+        if (self.model_credentials) |c| {
+            self.terminal.printInfo("Current provider: {s} (Tab to list, /provider null to disable)", .{@tagName(c.provider)});
+        } else {
+            self.terminal.printInfo("Current provider: none — LLM disabled (/provider <name> to enable)", .{});
+        }
+        return;
+    }
+
+    if (std.mem.eql(u8, trimmed, provider_off_keyword)) {
+        self.disableProvider();
         return;
     }
 
     const provider = std.meta.stringToEnum(Config.AiProvider, trimmed) orelse {
-        self.terminal.printError("unknown provider: {s}", .{trimmed});
+        self.terminal.printError("unknown provider: {s} (or 'null' to disable the LLM)", .{trimmed});
         return;
     };
-    if (provider == current.provider) {
+    if (self.model_credentials) |current| if (provider == current.provider) {
         self.terminal.printInfo("provider: {s}", .{@tagName(provider)});
         return;
-    }
+    };
     const key = zenai.provider.envApiKey(provider) orelse {
         self.terminal.printError("no API key for {s}; set {s}", .{ @tagName(provider), zenai.provider.envVarName(provider) });
         return;
@@ -846,6 +875,18 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     self.setProvider(.{ .provider = provider, .key = key }) catch |err| {
         self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
     };
+}
+
+/// Tear down the LLM client and persist a null provider so the next REPL launch
+/// starts in basic mode without re-prompting. Inverse of `setProvider`.
+fn disableProvider(self: *Agent) void {
+    if (self.ai_client) |client| client.deinit(self.allocator);
+    self.ai_client = null;
+    self.model_credentials = null;
+    self.model_completions = null;
+    self.no_llm_persisted = true;
+    self.updateStatusBar();
+    self.reportSaved("provider", provider_off_keyword);
 }
 
 fn setProvider(self: *Agent, credentials: Credentials) !void {
@@ -857,6 +898,7 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
     new_client.setInterrupt(&self.http_interrupt);
     self.ai_client = new_client;
     self.model_credentials = credentials;
+    self.no_llm_persisted = false;
     self.model_completions = null;
     self.allocator.free(self.model);
     self.model = new_model;
@@ -1239,7 +1281,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .provider => self.terminal.printInfo(
-                "/provider [name] — change the provider; Tab completes detected providers, bare /provider shows the current one",
+                "/provider [name|null] — change the provider, or 'null' to disable the LLM (persisted, so the next launch starts in basic mode); Tab completes detected providers, bare /provider shows the current one",
                 .{},
             ),
         }
@@ -1769,10 +1811,11 @@ const ModelCompletions = struct {
 /// reading environment variables on every autocomplete keypress.
 fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []const u8 {
     const self: *Agent = @ptrCast(@alignCast(context));
-    const names = arena.alloc([]const u8, self.available_providers.len) catch return &.{};
+    const names = arena.alloc([]const u8, self.available_providers.len + 1) catch return &.{};
     for (self.available_providers, 0..) |p, i| {
         names[i] = arena.dupe(u8, p) catch return &.{};
     }
+    names[self.available_providers.len] = provider_off_keyword;
     return names;
 }
 
