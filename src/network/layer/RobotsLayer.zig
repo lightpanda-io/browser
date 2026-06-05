@@ -70,8 +70,21 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
                 const path = URL.getPathname(url);
 
                 if (!robots.isAllowed(path)) {
-                    log.warn(.http, "blocked by robots", .{ .url = url });
-                    return error.RobotsBlocked;
+                    try transfer.client.runNextTick(
+                        transfer,
+                        null,
+                        .{
+                            .run = struct {
+                                fn run(t: *Transfer, _: ?*anyopaque) void {
+                                    defer t.deinit();
+
+                                    log.warn(.http, "blocked by robots", .{ .url = t.req.url });
+                                    t.req.error_callback(t.req.ctx, error.RobotsBlocked);
+                                }
+                            }.run,
+                        },
+                    );
+                    return;
                 }
             },
             .absent => {},
