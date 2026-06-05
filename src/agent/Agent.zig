@@ -321,8 +321,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
 
-    self.session = try self.browser.newSession(notification);
-    self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
+    try self.startSession();
 
     self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
@@ -359,6 +358,13 @@ pub fn deinit(self: *Agent) void {
     for (self.available_providers) |p| self.allocator.free(p);
     self.allocator.free(self.available_providers);
     self.allocator.destroy(self);
+}
+
+/// Create a fresh browser session and wire its cancel hook back to this agent
+/// so Ctrl-C aborts in-flight page work. Used at startup and by `/reset`.
+fn startSession(self: *Agent) !void {
+    self.session = try self.browser.newSession(self.notification);
+    self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
 }
 
 // Tool definitions are compile-time constant; project them once per process.
@@ -634,6 +640,8 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .verbosity => self.handleVerbosity(rest),
         .effort => self.handleEffort(rest),
         .usage => self.handleUsage(),
+        .clear => self.handleClear(),
+        .reset => self.handleReset(),
         .save => self.handleSave(arena, rest),
         .load => self.handleLoad(rest),
         .model => self.handleModel(arena, rest),
@@ -688,6 +696,34 @@ fn handleUsage(self: *Agent) void {
     if (input > 0) {
         self.terminal.printInfo("cache: {d}% of input served from cache", .{u.cacheHitPercent()});
     }
+}
+
+/// Drop everything tied to the conversation: history (the system prompt
+/// re-seeds lazily on the next turn), cumulative usage, the recorded action
+/// buffer, and DOM node IDs. Shared by `/clear` and `/reset`.
+fn clearConversation(self: *Agent) void {
+    self.rollbackMessages(0);
+    self.save_buffer.reset();
+    self.total_usage = .{};
+    self.node_registry.reset();
+}
+
+/// Forget the conversation while leaving the browser session live — the loaded
+/// page stays put and cookies/logins are preserved.
+fn handleClear(self: *Agent) void {
+    self.clearConversation();
+    self.terminal.printInfo("Cleared conversation, usage, and node IDs. Page and cookies kept.", .{});
+}
+
+/// Full clean slate: everything `/clear` drops, plus a fresh browser session,
+/// so the loaded page, cookies, storage, and history are gone too.
+fn handleReset(self: *Agent) void {
+    self.startSession() catch |err| {
+        self.terminal.printError("reset failed: {s}", .{@errorName(err)});
+        return;
+    };
+    self.clearConversation();
+    self.terminal.printInfo("Reset conversation and browser session. Page, cookies, and storage cleared.", .{});
 }
 
 fn handleLoad(self: *Agent, rest: []const u8) void {
@@ -1171,6 +1207,14 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
             ),
             .usage => self.terminal.printInfo(
                 "/usage — show cumulative token usage and cache hit rate for this session",
+                .{},
+            ),
+            .clear => self.terminal.printInfo(
+                "/clear — forget the conversation (history, usage, recorded actions, node IDs); keeps the loaded page and cookies",
+                .{},
+            ),
+            .reset => self.terminal.printInfo(
+                "/reset — full reset: everything /clear does plus a new browser session, dropping the page, cookies, storage, and history",
                 .{},
             ),
             .save => self.terminal.printInfo(

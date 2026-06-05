@@ -47,7 +47,7 @@ pub const MetaCommand = struct {
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
     /// a new meta command is a compile error until it's wired up there too.
-    const Tag = enum { help, quit, verbosity, effort, usage, save, load, model, provider };
+    const Tag = enum { help, quit, verbosity, effort, usage, clear, reset, save, load, model, provider };
 };
 
 pub const meta_commands = [_]MetaCommand{
@@ -56,6 +56,8 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set agent verbosity" },
     .{ .tag = .effort, .name = "effort", .hint = "<none|minimal|low|medium|high|xhigh>", .values = &.{ "none", "minimal", "low", "medium", "high", "xhigh" }, .description = "Set per-turn reasoning effort" },
     .{ .tag = .usage, .name = "usage", .hint = "", .values = &.{}, .description = "Show token usage and cache stats for this session" },
+    .{ .tag = .clear, .name = "clear", .hint = "", .values = &.{}, .description = "Clear conversation history and usage (keeps page/cookies)" },
+    .{ .tag = .reset, .name = "reset", .hint = "", .values = &.{}, .description = "Reset conversation and browser session (drops page/cookies)" },
     .{ .tag = .save, .name = "save", .hint = "[filename.js] [prompt]", .values = &.{}, .description = "Save this session to a file" },
     .{ .tag = .load, .name = "load", .hint = "<path>", .values = &.{}, .description = "Load and run a script from disk" },
     .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model" },

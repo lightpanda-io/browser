@@ -307,7 +307,10 @@ See [agent-script.md](agent-script.md) for the full script format reference.
   the REPL, `/verbosity <low|medium|high>` tunes the log level,
   `/effort <none|minimal|low|medium|high|xhigh>` sets the per-turn reasoning
   budget (saved to `.lp-agent.zon`), and `/usage` prints cumulative token usage
-  and the cache hit rate for the session. These are REPL-only and never recorded.
+  and the cache hit rate for the session — `/clear` forgets the conversation
+  (history, usage, recorded actions, node IDs) while keeping the loaded page and
+  cookies, and `/reset` goes further by also starting a fresh browser session,
+  dropping the page, cookies, storage, and history. These are REPL-only and never recorded.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit
