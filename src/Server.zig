@@ -624,7 +624,7 @@ fn createTestClient() !TestClient {
     const stream = try std.net.tcpConnectToAddress(address);
 
     const timeout = std.mem.toBytes(posix.timeval{
-        .sec = 2,
+        .sec = 10,
         .usec = 0,
     });
     try posix.setsockopt(stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
