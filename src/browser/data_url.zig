@@ -67,7 +67,7 @@ pub fn parse(arena: Allocator, url: []const u8) !Parsed {
 fn base64Decode(arena: Allocator, input: []const u8) ![]const u8 {
     // Forgiving-base64 decode — https://infra.spec.whatwg.org/#forgiving-base64-decode.
     // Shared with atob via the encoding helper; remap to this module's error name.
-    return base64.decode(arena, .{.raw = input}) catch return error.InvalidBase64;
+    return base64.decode(arena, .{ .raw = input }) catch return error.InvalidBase64;
 }
 
 const testing = @import("../testing.zig");
