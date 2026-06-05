@@ -119,7 +119,7 @@ Only recorded browser primitives are installed globally:
 | `waitForSelector` | `waitForSelector(selector)` or `waitForSelector({ selector, timeout })` | Browser page |
 | `waitForScript` | `waitForScript(script)` or `waitForScript({ script, timeout })` | Browser page JS context |
 | `hover` | `hover({ selector })` or `hover({ backendNodeId })` | Browser page |
-| `press` | `press(key)` or `press({ key, selector, backendNodeId })` | Browser page |
+| `press` | `press({ key })` or `press({ key, selector, backendNodeId })` | Browser page |
 | `selectOption` | `selectOption({ selector, value })` or `selectOption({ backendNodeId, value })` | Browser page |
 | `setChecked` | `setChecked({ selector, checked })` or `setChecked({ backendNodeId, checked })` | Browser page |
 
@@ -253,7 +253,7 @@ fields match the browser tool schema:
 click({ selector: "a.login" });
 fill({ selector: "input[name='acct']", value: "$LP_HN_USERNAME" });
 fill({ selector: "input[name='pw']", value: "$LP_HN_PASSWORD" });
-press("Enter");
+press({ key: "Enter" });
 
 waitForSelector("#logout");
 
@@ -266,7 +266,11 @@ scroll({ y: 600 });
 scroll();
 ```
 
-`setChecked` defaults `checked` to `true` when the field is omitted.
+`setChecked` defaults `checked` to `true` when the field is omitted. Pass
+`press` an object (`press({ key: "Enter" })`): a bare `press("Enter")` binds the
+string to the optional `selector`, not `key`, and fails. To target an element,
+add the selector — `press({ key: "Enter", selector: "#search" })`.
+
 `$LP_*` placeholders in string arguments are resolved inside the Lightpanda
 process. This keeps credentials out of recorded scripts and LLM prompts. In
 recordings, resolved `LP_*` values are scrubbed back to placeholders.

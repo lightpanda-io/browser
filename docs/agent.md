@@ -60,7 +60,8 @@ completes the candidates). `--base-url` overrides the API endpoint (Ollama
 defaults to `http://localhost:11434/v1`). Run `--list-models` to see exactly
 what the resolved provider offers, `--system-prompt` to swap in your own
 system prompt, and `--verbosity <low|medium|high>` to tune how much progress
-detail goes to stderr (`--task` defaults to `low`).
+detail goes to stderr (`--task` defaults to `low`, or `high` when stderr is
+piped/redirected so harnesses capture the full `[tool/result]` trace).
 
 `--model` is validated against the provider's catalog up front: an unknown name
 fails fast with a pointer to `--list-models` rather than erroring mid-task. For
@@ -70,8 +71,9 @@ missing, the agent falls back to the first installed model (an explicit
 
 ### Provider auto-detection
 
-When `--provider` is omitted, lightpanda picks one in this order, printing a
-one-line notice (on stderr) of what it chose:
+When `--provider` is omitted, lightpanda picks one in this order. The REPL shows
+the resolved provider and model in its status bar; the multi-key picker and any
+fallback notices (e.g. an Ollama default that isn't installed) print to stderr:
 
 1. **Remembered** → the provider/model you last selected with `/provider` or
    `/model`, persisted per-directory in `.lp-agent.zon`, as long as its key is
@@ -163,8 +165,8 @@ as a single JSON object. Supported value forms:
   `[{"selector": ".story .title", "limit": 5}]` for top 5 titles).
 
 Use `/extract '''…'''` (or `"""…"""`) to spread a schema across multiple
-lines. The schema is parsed in Zig before the page-side walker runs,
-so a malformed schema fails with `Error: invalid /extract schema JSON`
+lines. The schema is parsed in Zig before the page-side walker runs, so a
+malformed schema is rejected up front with a plain `Error: InvalidParams`
 rather than a V8 stack trace. See [agent-tutorial.md](agent-tutorial.md)
 section 3 for a worked example against Hacker News.
 
@@ -270,6 +272,16 @@ See [agent-script.md](agent-script.md) for the full script format reference.
 
 ## REPL features
 
+- **Status bar**: a line under the prompt shows the active model and quick
+  hints (`! JS`, `Tab completes`, `/help`); in `--no-llm` it reads `basic REPL —
+  slash commands only`. It drops the least-important segments first when the
+  terminal is narrow.
+- **JS mode** (`!`): type `!` on an empty prompt to toggle a scratchpad where the
+  whole line runs as page-side JavaScript — the same context as `evaluate`, so
+  `document` and `window` are in scope. Handy for poking at a page without
+  wrapping every line in `/evaluate`. `$LP_*` refs are still resolved at
+  execution, console output is echoed back, and `Esc` exits. JS-mode lines are
+  not recorded.
 - **Tab completion** (case-insensitive): cycles through `/<tool>` and meta
   slash commands. The dim grey suffix shown after the cursor is the first
   match.
@@ -362,7 +374,8 @@ Highlights:
   `detectForms`, `nodeDetails`, `findElement`
 - `click`, `fill`, `hover`, `press`, `scroll`, `selectOption`, `setChecked`,
   `waitForSelector`, `waitForScript`
-- `evaluate`, `consoleLogs`, `getUrl`, `getCookies`, `getEnv`
+- `extract` (the schema-driven data tool), `evaluate`, `consoleLogs`, `getUrl`,
+  `getCookies`, `getEnv`
 
 Selectors prefer CSS over `backendNodeId` for the click-family tools, since
 node IDs are invalidated by any DOM mutation. The system prompt enforces this

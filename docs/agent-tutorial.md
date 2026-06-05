@@ -77,11 +77,12 @@ verbatim.
 ./lightpanda agent
 ```
 
-On startup the agent prints a one-line notice telling you which mode it
-landed in — which provider it chose (a detected cloud key, or a local
-Ollama server if that's all it finds), or "basic REPL (no LLM)" when no
-provider is available. The REPL writes its history to `.lp-history` in
-the working directory, so up-arrow works across runs.
+On startup the agent prints a `Lightpanda Agent (version)` banner. The
+status bar under the prompt then shows the model it resolved (a detected
+cloud key, or a local Ollama server if that's all it finds), and the help
+line tells you whether natural language is available or you're in the
+basic `--no-llm` REPL. The REPL writes its history to `.lp-history` in the
+working directory, so up-arrow works across runs.
 
 Try the meta commands:
 
@@ -278,8 +279,8 @@ The result is a single JSON object printed to stdout:
 `{"topStories":[{"rank":"1","title":"…","url":"…"}, …]}`.
 
 The schema is parsed in Zig before the page-side walker runs, so a
-typo like a stray comma surfaces here as `Error: invalid /extract
-schema JSON` instead of a confusing V8 stack trace.
+typo like a stray comma surfaces here as a plain `Error: InvalidParams`
+instead of a confusing V8 stack trace.
 
 ## 4. Saving the session
 
