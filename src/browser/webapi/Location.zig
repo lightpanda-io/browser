@@ -116,7 +116,7 @@ pub fn reload(_: *const Location, frame: *Frame) !void {
 }
 
 pub fn toString(self: *const Location, exec: *const js.Execution) ![:0]const u8 {
-    return self._url.toString(exec);
+    return self._url.toString1(exec);
 }
 
 pub const JsApi = struct {
