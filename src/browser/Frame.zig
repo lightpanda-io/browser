@@ -36,6 +36,7 @@ const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
+const FileList = @import("webapi/FileList.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -146,6 +147,10 @@ _event_target_attr_listeners: GlobalEventHandlersLookup = .empty,
 
 // Blob URL registry for URL.createObjectURL/revokeObjectURL
 _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
+
+// FileLists owned by `<input type=file>` elements. Each holds refs on its
+// File objects (reference counted via their Blob proto); released at teardown.
+_file_lists: std.ArrayList(*FileList) = .{},
 
 /// `load` events that'll be fired before window's `load` event.
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
@@ -398,6 +403,12 @@ pub fn deinit(self: *Frame) void {
             var it = self._blob_urls.valueIterator();
             while (it.next()) |blob| {
                 blob.*.releaseRef(page);
+            }
+        }
+
+        for (self._file_lists.items) |file_list| {
+            for (file_list._files) |file| {
+                file._proto.releaseRef(page);
             }
         }
 
@@ -1640,6 +1651,11 @@ pub fn unregisterMutationObserver(self: *Frame, observer: *MutationObserver) voi
 pub fn registerIntersectionObserver(self: *Frame, observer: *IntersectionObserver) !void {
     observer.acquireRef();
     try self._intersection_observers.append(self.arena, observer);
+}
+
+// Tracks a file input's FileList so its File refs are released at teardown.
+pub fn trackFileList(self: *Frame, file_list: *FileList) !void {
+    try self._file_lists.append(self.arena, file_list);
 }
 
 pub fn unregisterIntersectionObserver(self: *Frame, observer: *IntersectionObserver) void {

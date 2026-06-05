@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<input id="f1" type="file">
+<input id="f2" type="file" multiple>
+<input id="t1" type="text">
+
+<script id="files_initial">
+  {
+    const f1 = document.getElementById('f1');
+    testing.expectEqual(true, f1.files instanceof FileList);
+    testing.expectEqual(0, f1.files.length);
+    testing.expectEqual(null, f1.files.item(0));
+    testing.expectEqual('', f1.value);
+
+    // Identity preserved across reads.
+    testing.expectEqual(true, f1.files === f1.files);
+  }
+</script>
+
+<script id="files_iteration_empty">
+  {
+    // The list can't be populated from JS (no DataTransfer), but the indexed
+    // getter and iterator protocol must still be wired up correctly on an
+    // empty list. Populated indexing/iteration is covered by the CDP test
+    // "setFileInputFiles exposes files to JS".
+    const f1 = document.getElementById('f1');
+
+    // Indexed getter: out-of-range is undefined (not null, unlike item()).
+    testing.expectEqual(undefined, f1.files[0]);
+
+    // Iterable: spread, Array.from and for-of all work and yield nothing.
+    testing.expectEqual('function', typeof f1.files[Symbol.iterator]);
+    testing.expectEqual(0, [...f1.files].length);
+    testing.expectEqual(0, Array.from(f1.files).length);
+    let count = 0;
+    for (const _ of f1.files) count++;
+    testing.expectEqual(0, count);
+  }
+</script>
+
+<script id="files_non_file_input_is_null">
+  {
+    const t1 = document.getElementById('t1');
+    testing.expectEqual(null, t1.files);
+  }
+</script>
+
+<script id="value_setter">
+  {
+    const f1 = document.getElementById('f1');
+    // Per spec: setting value to "" is a no-op; anything else throws.
+    f1.value = '';
+    testing.expectEqual('', f1.value);
+
+    let threw = false;
+    try { f1.value = 'foo'; } catch (e) { threw = true; }
+    testing.expectEqual(true, threw);
+  }
+</script>
