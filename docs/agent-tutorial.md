@@ -321,11 +321,11 @@ cat hn_login.js
 ```
 
 You should see the seven mutating commands and nothing else — no
-`/tree`, no `/markdown`, no read-only lookups. `/save` filters on a
-per-tool flag (`ToolDef.recorded`) so read-only inspection never
-pollutes the script; `/extract` *is* recorded (it changes what the
-script can read on replay even though it doesn't mutate the page).
-The saved file is JavaScript:
+`/tree`, no `/markdown`, no read-only lookups. The `--no-llm` recorder
+keeps only state-mutating tools (each tool's `isRecorded` flag), so
+read-only inspection never pollutes the script; `/extract` *is* recorded
+(it changes what the script can read on replay even though it doesn't
+mutate the page). The saved file is JavaScript:
 
 ```js
 goto("https://news.ycombinator.com/login");
@@ -383,9 +383,9 @@ const topStories = extract({
 topStories; // printed automatically as JSON
 ```
 
-`/login` and `/acceptCookies` are REPL-only LLM triggers. A script
-saved with `/save` never contains them; `/save` captures the resulting
-browser tool calls instead. Lines that are neither slash commands nor
+`/login`, `/logout`, and `/acceptCookies` are REPL-only LLM triggers. A
+script saved with `/save` never contains them; `/save` captures the
+resulting browser tool calls instead. Lines that are neither slash commands nor
 comments are also REPL-only conveniences, not script syntax.
 
 ## 6. Local JavaScript logic
