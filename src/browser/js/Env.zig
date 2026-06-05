@@ -514,6 +514,14 @@ pub fn isExecutionTerminating(self: *const Env) bool {
     return v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle);
 }
 
+// Whether a forcible terminate has been requested (and not yet cleared by
+// cancelTerminate). Unlike isExecutionTerminating, this is our own sticky
+// flag, so it stays true after V8 consumes the terminate on the JSEntry
+// unwind. Callers about to enter a fresh eval use it to refuse to run.
+pub fn terminatePending(self: *const Env) bool {
+    return self.terminate_requested.load(.acquire);
+}
+
 pub fn terminate(self: *Env) void {
     self.terminate_mutex.lock();
     defer self.terminate_mutex.unlock();

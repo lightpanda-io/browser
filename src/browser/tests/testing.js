@@ -4,6 +4,11 @@
   let eventuallies = [];
   let async_capture = null;
   let current_script_id = null;
+
+  // can only have 1 async test per <script>, this tracks it
+  let async_seen = new Set();
+
+  // runner will wait until this is empty (or timeout)
   let async_pending = new Set();
 
   function expectTrue(actual) {
@@ -74,10 +79,14 @@
     const script_id = (IS_TEST_RUNNER) ? document.currentScript.id : 'cannot track module id in FF/Chrome';
 
     if (cb == undefined) {
+      if (async_seen.has(script_id)) {
+        throw new Error(`testing.async() called more than once for script '${script_id}'. A script may only register one async block (the runner can declare success in the gap between two of them); split the test into separate <script> tags.`);
+      }
+      async_seen.add(script_id);
+
       let resolve = null
       const promise = new Promise((r) => { resolve = r});
       async_pending.add(script_id);
-
 
       return {
         promise: promise,
@@ -140,7 +149,7 @@
   }
 
   function printTimeoutState() {
-  	console.warn('Pending count:', Array.from(async_pending));
+  	console.warn('Pending count:', Array.from(async_pending.keys()));
   }
 
   const IS_TEST_RUNNER = window.navigator.userAgent.startsWith("Lightpanda/");

@@ -27,6 +27,7 @@ const GlobalEventHandler = global_event_handlers.Handler;
 const Frame = @import("../../Frame.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
+const popover = @import("popover.zig");
 
 pub const Anchor = @import("html/Anchor.zig");
 pub const Area = @import("html/Area.zig");
@@ -326,7 +327,23 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
         .clientX = 0,
         .clientY = 0,
     }, frame)).asEvent();
+
+    // Keep the event alive past dispatch (which runs handlers/microtasks) so we
+    // can read _prevent_default afterwards.
+    event.acquireRef();
+    defer _ = event.releaseRef(frame._page);
+
     try frame._event_manager.dispatch(self.asEventTarget(), event);
+
+    if (event._prevent_default == false) {
+        // toggle the popover_target
+        const explicit: ?*Element = switch (self._type) {
+            .button => |b| b._popover_target,
+            .input => |i| i._popover_target,
+            else => null,
+        };
+        try popover.runInvokerActivation(self, explicit, frame);
+    }
 }
 
 // TODO: Per spec, hidden is a tristate: true | false | "until-found".
@@ -341,6 +358,32 @@ pub fn setHidden(self: *HtmlElement, hidden: bool, frame: *Frame) !void {
     } else {
         try self.asElement().removeAttribute(comptime .wrap("hidden"), frame);
     }
+}
+
+pub fn getPopover(self: *HtmlElement) ?[]const u8 {
+    const s = popover.getState(self.asElement()) orelse return null;
+    return @tagName(s);
+}
+
+pub fn setPopover(self: *HtmlElement, value_: ?[]const u8, frame: *Frame) !void {
+    if (value_) |value| {
+        // does not validate the value, stores it as-is
+        try self.asElement().setAttribute(comptime .wrap("popover"), .wrap(value), frame);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("popover"), frame);
+    }
+}
+
+pub fn showPopover(self: *HtmlElement, frame: *Frame) !void {
+    return popover.show(self.asElement(), frame);
+}
+
+pub fn hidePopover(self: *HtmlElement, frame: *Frame) !void {
+    return popover.hide(self.asElement(), frame);
+}
+
+pub fn togglePopover(self: *HtmlElement, force: ?bool, frame: *Frame) !bool {
+    return popover.toggle(self.asElement(), force, frame);
 }
 
 pub fn getTabIndex(self: *HtmlElement) i32 {
@@ -1326,6 +1369,10 @@ pub const JsApi = struct {
     pub const autofocus = bridge.accessor(HtmlElement.getAutofocus, HtmlElement.setAutofocus, .{ .ce_reactions = true });
     pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
+    pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
+    pub const showPopover = bridge.function(HtmlElement.showPopover, .{ .dom_exception = true });
+    pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{ .dom_exception = true });
+    pub const togglePopover = bridge.function(HtmlElement.togglePopover, .{ .dom_exception = true });
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{ .ce_reactions = true });
     pub const nonce = bridge.accessor(HtmlElement.getNonce, HtmlElement.setNonce, .{ .ce_reactions = true });

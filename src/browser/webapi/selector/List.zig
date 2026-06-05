@@ -530,6 +530,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
     switch (pseudo) {
         // State pseudo-classes
         .modal => return false,
+        .popover_open => return @import("../element/popover.zig").isOpen(el, frame),
         .checked => {
             const input = el.is(Node.Element.Html.Input) orelse return false;
             return input.getChecked();

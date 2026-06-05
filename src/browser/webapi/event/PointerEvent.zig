@@ -86,6 +86,14 @@ const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*PointerEvent {
+    return initWithTrusted(typ, _opts, false, frame);
+}
+
+pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*PointerEvent {
+    return initWithTrusted(typ, _opts, true, frame);
+}
+
+fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, frame: *Frame) !*PointerEvent {
     const arena = try frame.getArena(.tiny, "PointerEvent");
     errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
@@ -126,7 +134,7 @@ pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*PointerEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts, false);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 

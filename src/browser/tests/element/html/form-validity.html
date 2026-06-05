@@ -13,6 +13,8 @@
 
 <form id="empty-form"></form>
 
+<form id="novalidate-form" novalidate></form>
+
 <script id="surface">
 {
   const f = $('#valid-form');
@@ -43,6 +45,22 @@
   }
   form.checkValidity();
   testing.expectEqual(2, fired); // both inputs fail
+}
+</script>
+
+<script id="no_validate_reflects_attribute">
+{
+  // novalidate content attribute reflects to the noValidate IDL boolean
+  testing.expectEqual(true, $('#novalidate-form').noValidate);
+  testing.expectEqual(false, $('#valid-form').noValidate);
+
+  const f = $('#empty-form');
+  f.noValidate = true;
+  testing.expectEqual(true, f.noValidate);
+  testing.expectEqual('', f.getAttribute('novalidate'));
+  f.noValidate = false;
+  testing.expectEqual(false, f.noValidate);
+  testing.expectEqual(null, f.getAttribute('novalidate'));
 }
 </script>
 

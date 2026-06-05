@@ -158,6 +158,7 @@ pub const AttributeMatcher = union(enum) {
 pub const PseudoClass = union(enum) {
     // State pseudo-classes
     modal,
+    popover_open,
     checked,
     disabled,
     enabled,

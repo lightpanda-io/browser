@@ -306,6 +306,107 @@
   }
 </script>
 
+<script id=xhr_override_mime type=module>
+  {
+    // overrideMimeType is callable in state UNSENT (no open() yet)
+    const req = new XMLHttpRequest();
+    testing.expectEqual(0, req.readyState);
+    req.overrideMimeType('text/xml');
+  }
+
+  {
+    // overrideMimeType is callable in state OPENED
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    testing.expectEqual(1, req.readyState);
+    req.overrideMimeType('text/xml; charset=utf-8');
+  }
+
+  {
+    // Invalid mime values must NOT throw; they fall back to
+    // application/octet-stream per spec.
+    const req = new XMLHttpRequest();
+    req.overrideMimeType('!!!');
+    req.overrideMimeType('');
+    req.overrideMimeType('not a mime');
+  }
+
+</script>
+
+<script id=xhr_override_mime_done type=module>
+  {
+    // After send() reaches DONE, overrideMimeType throws InvalidStateError.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => state.resolve();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(4, req.readyState);
+      testing.withError((err) => {
+        testing.expectEqual('InvalidStateError', err.name);
+      }, () => {
+        req.overrideMimeType('text/xml');
+      });
+    });
+  }
+</script>
+
+<script id=xhr_override_mime_survives_open type=module>
+  {
+    // Override survives open() (spec: open() resets state but keeps the
+    // override MIME type). Re-opening then sending must not throw on the
+    // prior override.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.overrideMimeType('text/xml');
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+    });
+  }
+</script>
+
+<script id=xhr_override_mime_responsexml type=module>
+  {
+    // End-to-end: server returns text/html, but overrideMimeType("text/xml")
+    // makes responseXML lazily parse the body as a Document, while
+    // responseText is unaffected (responseType is still the default "").
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.overrideMimeType('text/xml');
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual(100, req.responseText.length);
+      testing.expectEqual(true, req.responseXML instanceof Document);
+      // Cached across calls.
+      testing.expectEqual(req.responseXML, req.responseXML);
+    });
+  }
+</script>
+
+<script id=xhr_override_mime_no_override type=module>
+  {
+    // Without overrideMimeType, a text/html response still yields
+    // responseXML === null when responseType is the default.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual(null, req.responseXML);
+    });
+  }
+</script>
+
 <script id=xhr_timeout type=module>
   {
     // timeout property: default is 0
@@ -327,5 +428,24 @@
       testing.expectEqual(200, req.status);
       testing.expectEqual(5000, req.timeout);
     });
+  }
+</script>
+
+<script id=xhr_upload type=module>
+  {
+    // upload is an XMLHttpRequestUpload (an XMLHttpRequestEventTarget) and
+    // exposes addEventListener; htmx relies on this not throwing.
+    const req = new XMLHttpRequest();
+    testing.expectEqual('XMLHttpRequestUpload', req.upload.constructor.name);
+    testing.expectEqual(true, req.upload instanceof XMLHttpRequestEventTarget);
+    testing.expectEqual(true, req.upload instanceof EventTarget);
+    testing.expectEqual('function', typeof req.upload.addEventListener);
+
+    // The same instance is returned on every access so listeners stick.
+    testing.expectEqual(req.upload, req.upload);
+
+    let registered = false;
+    req.upload.addEventListener('progress', () => { registered = true; });
+    testing.expectEqual(false, registered);
   }
 </script>

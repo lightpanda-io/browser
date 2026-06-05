@@ -52,6 +52,14 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*WheelEvent {
+    return initWithTrusted(typ, _opts, false, frame);
+}
+
+pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*WheelEvent {
+    return initWithTrusted(typ, _opts, true, frame);
+}
+
+fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, frame: *Frame) !*WheelEvent {
     const arena = try frame.getArena(.medium, "WheelEvent");
     errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
@@ -85,7 +93,7 @@ pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*WheelEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts, false);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 

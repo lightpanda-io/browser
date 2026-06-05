@@ -66,6 +66,8 @@ _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
+// Ordered stack of currently-showing popovers
+_open_popovers: std.ArrayList(*Element) = .empty,
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#throw-on-dynamic-markup-insertion-counter
 // Incremented during custom element reactions when parsing. When > 0,
@@ -806,7 +808,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     // Extract children from wrapper HTML element (html5ever wraps fragments)
     // https://github.com/servo/html5ever/issues/583
     const children = fragment_node._children orelse return;
-    const first = children.first();
+    const first = Node.linkToNode(children.first.?);
 
     // Collect all children to insert (to avoid iterator invalidation)
     var children_to_insert: std.ArrayList(*Node) = .empty;
@@ -883,6 +885,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     // reset the document
     self._elements_by_id.clearAndFree(frame.arena);
     self._active_element = null;
+    self._open_popovers = .empty;
     self._style_sheets = null;
     self._implementation = null;
     self._ready_state = .loading;

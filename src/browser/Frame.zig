@@ -36,6 +36,7 @@ const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
+const FileList = @import("webapi/FileList.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -57,9 +58,11 @@ const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
+const popover = @import("webapi/element/popover.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
+const WheelEvent = @import("webapi/event/WheelEvent.zig");
 
 const HttpClient = @import("HttpClient.zig");
 
@@ -144,6 +147,10 @@ _event_target_attr_listeners: GlobalEventHandlersLookup = .empty,
 
 // Blob URL registry for URL.createObjectURL/revokeObjectURL
 _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
+
+// FileLists owned by `<input type=file>` elements. Each holds refs on its
+// File objects (reference counted via their Blob proto); released at teardown.
+_file_lists: std.ArrayList(*FileList) = .{},
 
 /// `load` events that'll be fired before window's `load` event.
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
@@ -400,6 +407,12 @@ pub fn deinit(self: *Frame) void {
             var it = self._blob_urls.valueIterator();
             while (it.next()) |blob| {
                 blob.*.releaseRef(page);
+            }
+        }
+
+        for (self._file_lists.items) |file_list| {
+            for (file_list._files) |file| {
+                file._proto.releaseRef(page);
             }
         }
 
@@ -887,7 +900,10 @@ pub fn abortTransfers(self: *Frame) void {
     for (self.child_frames.items) |child| {
         child.abortTransfers();
     }
-    self._session.browser.http_client.abortOwner(&self._http_owner);
+    const http_client = &self._session.browser.http_client;
+    http_client.abortOwner(&self._http_owner);
+    // abortOwner misses deferred contexts whose transfer already completed.
+    http_client.deferring_layer.cancelFrame(self._frame_id);
 }
 
 pub fn documentIsLoaded(self: *Frame) void {
@@ -1644,6 +1660,11 @@ pub fn unregisterMutationObserver(self: *Frame, observer: *MutationObserver) voi
 pub fn registerIntersectionObserver(self: *Frame, observer: *IntersectionObserver) !void {
     observer.acquireRef();
     try self._intersection_observers.append(self.arena, observer);
+}
+
+// Tracks a file input's FileList so its File refs are released at teardown.
+pub fn trackFileList(self: *Frame, file_list: *FileList) !void {
+    try self._file_lists.append(self.arena, file_list);
 }
 
 pub fn unregisterIntersectionObserver(self: *Frame, observer: *IntersectionObserver) void {
@@ -3044,24 +3065,11 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         null;
 
     const children = parent._children.?;
-    switch (children.*) {
-        .one => |n| {
-            lp.assert(n == child, "Frame.removeNode.one", .{});
-            parent._children = null;
-            self._factory.destroy(children);
-        },
-        .list => |list| {
-            list.remove(&child._child_link);
-
-            // Should not be possible to get a child list with a single node.
-            // While it doesn't cause any problems, it indicates an bug in the
-            // code as these should always be represented as .{.one = node}
-            const first = list.first.?;
-            if (first.next == null) {
-                children.* = .{ .one = Node.linkToNode(first) };
-                self._factory.destroy(list);
-            }
-        },
+    children.remove(&child._child_link);
+    if (children.first == null) {
+        // last child removed; drop the list so a childless node holds no allocation
+        parent._children = null;
+        self._factory.destroy(children);
     }
     // grab this before we null the parent
     const was_connected = child.isConnected();
@@ -3126,6 +3134,8 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         }
 
         Element.Html.Custom.enqueueDisconnectedCallbackOnElement(el, self);
+
+        popover.removeFromOpen(el, self);
 
         // If a <style> element is being removed, remove its sheet from the list
         if (el.is(Element.Html.Style)) |style| {
@@ -3204,44 +3214,23 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
 
     lp.assert(child._parent == null, "Frame.insertNodeRelative parent", .{});
 
-    const children = blk: {
-        // expand parent._children so that it can take another child
-        if (parent._children) |c| {
-            switch (c.*) {
-                .list => {},
-                .one => |node| {
-                    const list = try self._factory.create(std.DoublyLinkedList{});
-                    list.append(&node._child_link);
-                    c.* = .{ .list = list };
-                },
-            }
-            break :blk c;
-        } else {
-            const Children = @import("webapi/children.zig").Children;
-            const c = try self._factory.create(Children{ .one = child });
-            parent._children = c;
-            break :blk c;
-        }
+    const children = parent._children orelse blk: {
+        const list = try self._factory.create(std.DoublyLinkedList{});
+        parent._children = list;
+        break :blk list;
     };
 
     switch (relative) {
-        .append => switch (children.*) {
-            .one => {}, // already set in the expansion above
-            .list => |list| list.append(&child._child_link),
-        },
+        .append => children.append(&child._child_link),
         .after => |ref_node| {
             // caller should have made sure this was the case
             lp.assert(ref_node._parent.? == parent, "Frame.insertNodeRelative after", .{ .url = self.url });
-            // if ref_node is in parent, and expanded _children above to
-            // accommodate another child, then `children` must be a list
-            children.list.insertAfter(&ref_node._child_link, &child._child_link);
+            children.insertAfter(&ref_node._child_link, &child._child_link);
         },
         .before => |ref_node| {
             // caller should have made sure this was the case
             lp.assert(ref_node._parent.? == parent, "Frame.insertNodeRelative before", .{ .url = self.url });
-            // if ref_node is in parent, and expanded _children above to
-            // accommodate another child, then `children` must be a list
-            children.list.insertBefore(&ref_node._child_link, &child._child_link);
+            children.insertBefore(&ref_node._child_link, &child._child_link);
         },
     }
     child._parent = parent;
@@ -3383,6 +3372,9 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
         if (element.is(Element.Html.Slot)) |slot| {
             self.signalSlotChange(slot);
         }
+    } else if (name.eql(comptime .wrap("popover"))) {
+        const old = if (old_value) |o| o.str() else null;
+        popover.attributeChanged(element, old, value.str(), self);
     }
 }
 
@@ -3409,6 +3401,8 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
         if (element.is(Element.Html.Slot)) |slot| {
             self.signalSlotChange(slot);
         }
+    } else if (name.eql(comptime .wrap("popover"))) {
+        popover.attributeChanged(element, old_value.str(), null, self);
     }
 }
 
@@ -3609,7 +3603,7 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, allow_d
     // we expect, and nodes might be altogether removed. We deal with this in a
     // few different places, but always the same way: leave it as-is.
     const children = node._children orelse return;
-    const first = children.first();
+    const first = Node.linkToNode(children.first.?);
     if (first.is(Element.Html.Html) == null) {
         return;
     }
@@ -3935,6 +3929,114 @@ pub fn triggerMouseClick(self: *Frame, x: f64, y: f64) !void {
     try self._event_manager.dispatch(target.asEventTarget(), mouse_event.asEvent());
 }
 
+pub fn triggerMouseMove(self: *Frame, x: f64, y: f64) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.frame, "frame mouse move", .{
+            .url = self.url,
+            .node = target,
+            .x = x,
+            .y = y,
+            .type = self._type,
+        });
+    }
+
+    const move_event: *MouseEvent = try .initTrusted(comptime .wrap("mousemove"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), move_event.asEvent());
+
+    const over_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseover"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), over_event.asEvent());
+
+    const enter_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseenter"), .{
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), enter_event.asEvent());
+}
+
+pub fn triggerMouseRelease(self: *Frame, x: f64, y: f64) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.frame, "frame mouse release", .{
+            .url = self.url,
+            .node = target,
+            .x = x,
+            .y = y,
+            .type = self._type,
+        });
+    }
+    const up_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseup"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), up_event.asEvent());
+}
+
+pub fn triggerMouseWheel(self: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.frame, "frame mouse wheel", .{
+            .url = self.url,
+            .node = target,
+            .x = x,
+            .y = y,
+            .delta_x = delta_x,
+            .delta_y = delta_y,
+            .type = self._type,
+        });
+    }
+
+    const wheel_event: *WheelEvent = try .initTrusted("wheel", .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+        .deltaX = delta_x,
+        .deltaY = delta_y,
+    }, self);
+
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    wheel_event.asEvent().acquireRef();
+    defer _ = wheel_event.asEvent().releaseRef(self._page);
+    try self._event_manager.dispatch(target.asEventTarget(), wheel_event.asEvent());
+
+    if (wheel_event.asEvent()._prevent_default) {
+        return;
+    }
+
+    // Apply the scroll and fire a trusted scroll event, mirroring WebDriver wheel.
+    // CDP deltas are untrusted, so guard NaN and saturate the addition.
+    const new_left: i32 = @as(i32, @intCast(target.getScrollLeft(self))) +| deltaToScroll(delta_x);
+    const new_top: i32 = @as(i32, @intCast(target.getScrollTop(self))) +| deltaToScroll(delta_y);
+    try target.setScrollLeft(new_left, self);
+    try target.setScrollTop(new_top, self);
+
+    const scroll_event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, self._page);
+    try self._event_manager.dispatch(target.asEventTarget(), scroll_event);
+}
+
+fn deltaToScroll(d: f64) i32 {
+    if (std.math.isNan(d)) return 0;
+    return @intFromFloat(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
+}
+
 // callback when the "click" event reaches the frame.
 pub fn handleClick(self: *Frame, target: *Node) !void {
     // TODO: Also support <area> elements when implement
@@ -4132,6 +4234,21 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         }
         form._firing_submission_events = true;
         defer form._firing_submission_events = false;
+
+        // Per the HTML "submit a form element" algorithm: unless the form (or the
+        // submitter, via formnovalidate) is in the no-validate state, interactively
+        // validate the form's constraints and abort submission if it fails.
+        // checkValidity() fires the `invalid` events on the offending controls.
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+        const skip_validation = form.getNoValidate() or blk: {
+            const s = submit_button orelse break :blk false;
+            if (s.is(Element.Html.Form.Input)) |input| break :blk input.getFormNoValidate();
+            if (s.is(Element.Html.Form.Button)) |button| break :blk button.getFormNoValidate();
+            break :blk false;
+        };
+        if (!skip_validation and !try form.checkValidity(self)) {
+            return;
+        }
 
         // Per HTML spec "submit a form element" algorithm: SubmitEvent.submitter
         // must be null when the submitter is the form itself, which is what

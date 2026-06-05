@@ -113,6 +113,25 @@ pub fn flushFrame(self: *DeferringLayer, frame_id: u32) void {
     }
 }
 
+/// Drop orphaned deferred contexts for a frame that's going away. A `terminal`
+/// context's transfer already completed while deferred, so it's been deinited
+/// and unlinked from the owner — abortOwner can't reach it, yet it lingers in
+/// `active` pointing at a forward target (the Fetch) whose arena page teardown
+/// is about to free, and a later flushFrame would fire into it. Non-terminal
+/// contexts still have a live transfer that cleans them up itself.
+pub fn cancelFrame(self: *DeferringLayer, frame_id: u32) void {
+    var node = self.active.first;
+    while (node) |n| {
+        node = n.next;
+        const ctx: *DeferredContext = @fieldParentPtr("node", n);
+        if (ctx.frame_id != frame_id or !ctx.terminal) {
+            continue;
+        }
+        self.active.remove(n);
+        ctx.deinit();
+    }
+}
+
 pub fn drainAll(self: *DeferringLayer) void {
     while (self.active.popFirst()) |node| {
         const ctx: *DeferredContext = @fieldParentPtr("node", node);

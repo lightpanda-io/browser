@@ -28,6 +28,10 @@ const js = @import("../../browser/js/js.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 const Selector = @import("../../browser/webapi/selector/Selector.zig");
 const xpath = @import("../../browser/xpath/Evaluator.zig");
+const Input = @import("../../browser/webapi/element/html/Input.zig");
+const File = @import("../../browser/webapi/File.zig");
+const Blob = @import("../../browser/webapi/Blob.zig");
+const Page = @import("../../browser/Page.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -50,6 +54,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         getFrameOwner,
         getOuterHTML,
         requestNode,
+        setFileInputFiles,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -69,6 +74,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .getFrameOwner => return getFrameOwner(cmd),
         .getOuterHTML => return getOuterHTML(cmd),
         .requestNode => return requestNode(cmd),
+        .setFileInputFiles => return setFileInputFiles(cmd),
     }
 }
 
@@ -607,6 +613,100 @@ fn requestNode(cmd: *CDP.Command) !void {
     return cmd.sendResult(.{ .nodeId = node.id }, .{});
 }
 
+// Cap matches Chrome's effective per-file limit; large enough for realistic
+// uploads, small enough to avoid runaway reads from a misbehaving driver.
+const MAX_FILE_BYTES: usize = 100 * 1024 * 1024;
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-setFileInputFiles
+fn setFileInputFiles(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        files: []const []const u8,
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
+    const input = element.is(Input) orelse return error.NotAnInputElement;
+    if (input._input_type != .file) return error.NotAFileInput;
+
+    var files = try cmd.arena.alloc(*File, params.files.len);
+    {
+        // Files are created at refcount 0; setFiles takes ownership. If a later
+        // path fails to load, release the arenas of the ones already created.
+        var created: usize = 0;
+        errdefer for (files[0..created]) |f| f._proto.deinit(frame._page);
+        for (params.files, 0..) |path, i| {
+            files[i] = try fileFromDiskPath(path, frame._page);
+            created = i + 1;
+        }
+    }
+    try input.setFiles(files, frame);
+
+    return cmd.sendResult(null, .{});
+}
+
+fn fileFromDiskPath(path: []const u8, page: *Page) !*File {
+    // Mirror File.init: a Blob and File sharing one reference-counted arena,
+    // but read the bytes straight off disk into it (single copy, no JS parts).
+    const arena = try page.getArena(.large, "File");
+    errdefer page.releaseArena(arena);
+
+    const data = try std.fs.cwd().readFileAlloc(arena, path, MAX_FILE_BYTES);
+    const stat = try std.fs.cwd().statFile(path);
+    const basename = std.fs.path.basename(path);
+
+    const blob = try arena.create(Blob);
+    const file = try arena.create(File);
+    blob.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._type = .{ .file = file },
+        ._slice = data,
+        ._mime = mimeFromExtension(basename),
+    };
+    file.* = .{
+        ._proto = blob,
+        ._name = try arena.dupe(u8, basename),
+        ._last_modified = @intCast(@divTrunc(stat.mtime, std.time.ns_per_ms)),
+    };
+    return file;
+}
+
+fn mimeFromExtension(name: []const u8) []const u8 {
+    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return "application/octet-stream";
+    if (dot + 1 >= name.len) return "application/octet-stream";
+    var buf: [16]u8 = undefined;
+    const ext_raw = name[dot + 1 ..];
+    if (ext_raw.len > buf.len) return "application/octet-stream";
+    const ext = std.ascii.lowerString(buf[0..ext_raw.len], ext_raw);
+
+    const Map = std.StaticStringMap([]const u8);
+    const map = Map.initComptime(.{
+        .{ "txt", "text/plain" },
+        .{ "html", "text/html" },
+        .{ "htm", "text/html" },
+        .{ "css", "text/css" },
+        .{ "js", "text/javascript" },
+        .{ "json", "application/json" },
+        .{ "xml", "application/xml" },
+        .{ "pdf", "application/pdf" },
+        .{ "png", "image/png" },
+        .{ "jpg", "image/jpeg" },
+        .{ "jpeg", "image/jpeg" },
+        .{ "gif", "image/gif" },
+        .{ "webp", "image/webp" },
+        .{ "svg", "image/svg+xml" },
+        .{ "csv", "text/csv" },
+        .{ "zip", "application/zip" },
+    });
+    return map.get(ext) orelse "application/octet-stream";
+}
+
 const testing = @import("../testing.zig");
 test "cdp.dom: getSearchResults unknown search id" {
     var ctx = try testing.context();
@@ -715,6 +815,203 @@ test "cdp.dom: performSearch with XPath" {
         .params = .{ .query = "div p" },
     });
     try ctx.expectSentResult(.{ .searchId = "4", .resultCount = 2 }, .{ .id = 24 });
+}
+
+test "cdp.dom: setFileInputFiles on file input" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    // Find the file input via performSearch → getSearchResults.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "input" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    // Drop a temp file we can upload.
+    var tmp_dir = try std.fs.cwd().makeOpenPath(".zig-cache/tmp", .{});
+    defer tmp_dir.close();
+    {
+        const f = try tmp_dir.createFile("upload.txt", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("hello upload");
+    }
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+}
+
+test "cdp.dom: setFileInputFiles exposes files to JS" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "input" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    // Two files, so we can assert ordering as well as identity and iteration.
+    var tmp_dir = try std.fs.cwd().makeOpenPath(".zig-cache/tmp", .{});
+    defer tmp_dir.close();
+    {
+        const a = try tmp_dir.createFile("a.txt", .{ .truncate = true });
+        defer a.close();
+        try a.writeAll("aaa");
+        const b = try tmp_dir.createFile("b.txt", .{ .truncate = true });
+        defer b.close();
+        try b.writeAll("bbbb");
+    }
+
+    const frame = bc.session.currentFrame().?;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Listen on `document` so reaching the handler also proves the events
+    // bubbled up from the input. Record interface + bubbles + order + target.
+    _ = try ls.local.compileAndRun(
+        \\window.__evts = [];
+        \\const rec = (e) => window.__evts.push(
+        \\  [e.type, e instanceof InputEvent, e.bubbles, e.target.id].join(':'));
+        \\document.addEventListener('input', rec);
+        \\document.addEventListener('change', rec);
+    , null);
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{ ".zig-cache/tmp/a.txt", ".zig-cache/tmp/b.txt" },
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    // The only way to observe a populated FileList from JS: set it via CDP,
+    // then read it back. Covers length, item(), the indexed getter and the
+    // iterator (spread / Array.from), which can't be exercised on an empty list.
+    // Also asserts the fired events: `input` then `change`, both plain bubbling
+    // Events (not InputEvents) targeting the input.
+    const result = try ls.local.compileAndRun(
+        \\const f = document.getElementById('upload');
+        \\f.files.length === 2 &&
+        \\f.files.item(0).name === 'a.txt' &&
+        \\f.files[0] instanceof File && f.files[0].name === 'a.txt' &&
+        \\f.files[1].name === 'b.txt' &&
+        \\f.files[2] === undefined &&
+        \\[...f.files].map((x) => x.name).join(',') === 'a.txt,b.txt' &&
+        \\Array.from(f.files, (x) => x.name).join(',') === 'a.txt,b.txt' &&
+        \\Object.keys(f.files).join(',') === '0,1' &&
+        \\window.__evts.join(',') === 'input:false:true:upload,change:false:true:upload'
+    , null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.dom: setFileInputFiles rejects non-input node" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
+
+    // dom1.html has <p> elements — pick one by search.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 2 }, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+        },
+    });
+    try ctx.expectSentError(-31998, "NotAnInputElement", .{ .id = 3 });
+}
+
+test "cdp.dom: setFileInputFiles requires a node identifier" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+        },
+    });
+    try ctx.expectSentError(-31998, "MissingParams", .{ .id = 1 });
+}
+
+test "cdp.dom: setFileInputFiles errors (and leaks nothing) when a path is missing" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "input" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    // First path exists, second does not: the first File is created then must be
+    // freed when the second read fails (the test runner panics on a leak).
+    var tmp_dir = try std.fs.cwd().makeOpenPath(".zig-cache/tmp", .{});
+    defer tmp_dir.close();
+    {
+        const f = try tmp_dir.createFile("upload.txt", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("hello upload");
+    }
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{ ".zig-cache/tmp/upload.txt", ".zig-cache/tmp/does-not-exist.txt" },
+        },
+    });
+    try ctx.expectSentError(-31998, "FileNotFound", .{ .id = 3 });
 }
 
 test "cdp.dom: isXPathQuery heuristic" {
