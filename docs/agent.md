@@ -304,9 +304,10 @@ See [agent-script.md](agent-script.md) for the full script format reference.
   the provider's fetched model list, and bare `/provider`/`/model` print the
   current selection — `/save [file.js]` writes the session to a script and
   `/load <path>` runs one from disk (Tab completes file paths), `/quit` exits
-  the REPL, `/verbosity <low|medium|high>` tunes the log level, and
+  the REPL, `/verbosity <low|medium|high>` tunes the log level,
   `/effort <none|minimal|low|medium|high|xhigh>` sets the per-turn reasoning
-  budget (saved to `.lp-agent.zon`). These are REPL-only and never recorded.
+  budget (saved to `.lp-agent.zon`), and `/usage` prints cumulative token usage
+  and the cache hit rate for the session. These are REPL-only and never recorded.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit

@@ -633,6 +633,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .help => self.printSlashHelp(arena, rest),
         .verbosity => self.handleVerbosity(rest),
         .effort => self.handleEffort(rest),
+        .usage => self.handleUsage(),
         .save => self.handleSave(arena, rest),
         .load => self.handleLoad(rest),
         .model => self.handleModel(arena, rest),
@@ -666,6 +667,27 @@ fn handleEffort(self: *Agent, rest: []const u8) void {
     self.effort = level;
     self.updateStatusBar();
     self.reportSaved("effort", @tagName(level));
+}
+
+/// Print cumulative token usage for the session, broken down so the cache's
+/// effect is visible — the REPL otherwise never surfaces the `$usage` line that
+/// `--task` prints. Reads `total_usage`, accumulated across every turn by
+/// `processUserMessage`; the fresh/cache split semantics live on `Usage`.
+fn handleUsage(self: *Agent) void {
+    const u = self.total_usage;
+    const input = u.inputTokens();
+    const output = u.completion_tokens orelse 0;
+    if (input == 0 and output == 0) {
+        self.terminal.printInfo("usage: no model turns yet this session", .{});
+        return;
+    }
+    self.terminal.printInfo(
+        "usage: input={d} (fresh={d} · cache read={d} · cache write={d}), output={d}",
+        .{ input, u.prompt_tokens orelse 0, u.cached_tokens orelse 0, u.cache_creation_tokens orelse 0, output },
+    );
+    if (input > 0) {
+        self.terminal.printInfo("cache: {d}% of input served from cache", .{u.cacheHitPercent()});
+    }
 }
 
 fn handleLoad(self: *Agent, rest: []const u8) void {
@@ -1146,6 +1168,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
             .effort => self.terminal.printInfo(
                 "/effort <none|minimal|low|medium|high|xhigh> — set per-turn reasoning effort (currently: {s}); saved to {s}. Bare /effort prints the level.",
                 .{ @tagName(self.effort), settings.remembered_path },
+            ),
+            .usage => self.terminal.printInfo(
+                "/usage — show cumulative token usage and cache hit rate for this session",
+                .{},
             ),
             .save => self.terminal.printInfo(
                 "/save [filename.js] [prompt] — save the session to [filename.js] (a random session-*.js if omitted). With an LLM, synthesizes an idiomatic script from the session and the optional prompt; with --no-llm, dumps the recorded actions verbatim.",
