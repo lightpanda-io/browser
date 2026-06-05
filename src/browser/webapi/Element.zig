@@ -1473,16 +1473,22 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     return node;
 }
 
-pub fn scrollIntoViewIfNeeded(_: *const Element, center_if_needed: ?bool) void {
+pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *Frame) void {
     _ = center_if_needed;
+    self.scrollIntoView(null, frame);
 }
 
 const ScrollIntoViewOpts = union {
     align_to_top: bool,
     obj: js.Object,
 };
-pub fn scrollIntoView(_: *const Element, opts: ?ScrollIntoViewOpts) void {
+pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) void {
     _ = opts;
+    // Scroll the window so the element's top is brought into the viewport.
+    // Positions come from the faux-layout document position (top = preorder
+    // depth-scaled y), the same source getBoundingClientRect uses.
+    const y = calculateDocumentPosition(self.asNode());
+    frame.window.scrollTo(.{ .x = 0 }, @intFromFloat(@max(0, y)), frame) catch {};
 }
 
 pub fn format(self: *Element, writer: *std.Io.Writer) !void {
