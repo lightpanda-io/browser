@@ -273,6 +273,15 @@ pub unsafe extern "C" fn url_set_port(url: *mut Url, port: u16) -> i32 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn url_set_port_to_null(url: *mut Url) -> i32 {
+    let url = unsafe { &mut *url };
+    match url.set_port(None) {
+        Ok(()) => 0,
+        Err(()) => -1,
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn url_get_port(url: *const Url) -> i32 {
     let url = unsafe { &*url };
     match url.port() {
@@ -281,8 +290,9 @@ pub unsafe extern "C" fn url_get_port(url: *const Url) -> i32 {
     }
 }
 
+/// WHATWG `hostname` setter: sets the host without touching the port.
 #[no_mangle]
-pub unsafe extern "C" fn url_set_host(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+pub unsafe extern "C" fn url_set_hostname(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
     let url = unsafe { &mut *url };
 
     let slice = match str_from(ptr, len) {
@@ -296,8 +306,10 @@ pub unsafe extern "C" fn url_set_host(url: *mut Url, ptr: *const c_uchar, len: u
     }
 }
 
+/// WHATWG `hostname` getter: the host without the port. Borrows into the Url's
+/// buffer; returns -1 (and writes an empty slice) when there is no host.
 #[no_mangle]
-pub unsafe extern "C" fn url_get_host(
+pub unsafe extern "C" fn url_get_hostname(
     url: *const Url,
     out_ptr: *mut *const c_uchar,
     out_len: *mut usize,
@@ -315,6 +327,76 @@ pub unsafe extern "C" fn url_get_host(
             -1
         },
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_host(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) -> i32 {
+    let url = unsafe { &*url };
+    if url.host_str().is_none() {
+        unsafe {
+            *out_len = 0;
+        }
+        return -1;
+    }
+
+    let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
+    unsafe {
+        *out_ptr = host.as_ptr();
+        *out_len = host.len();
+    }
+    0
+}
+
+/// rust-url's `set_host` discards any trailing `:port`, so we split it off
+/// ourselves (respecting IPv6 `[...]` literals) and apply the port separately.
+#[no_mangle]
+pub unsafe extern "C" fn url_set_host(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+    let input = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    // Find the port separator ':', but only outside an IPv6 [...] literal.
+    let colon = if input.starts_with('[') {
+        input
+            .find(']')
+            .and_then(|b| input[b..].find(':').map(|i| b + i))
+    } else {
+        input.find(':')
+    };
+
+    let Some(i) = colon else {
+        // No port given: set the host only, leaving any existing port untouched.
+        return if url.set_host(Some(input)).is_ok() {
+            0
+        } else {
+            -1
+        };
+    };
+
+    let (host, port_str) = (&input[..i], &input[i + 1..]);
+
+    // Validate the port up-front so we never apply the host and then fail.
+    let new_port: Option<u16> = if port_str.is_empty() {
+        None // "host:" clears the port
+    } else {
+        match port_str.parse::<u16>() {
+            Ok(p) => Some(p),
+            Err(_) => return -1,
+        }
+    };
+
+    if url.set_host(Some(host)).is_err() {
+        return -1;
+    }
+    // set_port only errors on cannot-be-a-base, already ruled out by set_host.
+    let _ = url.set_port(new_port);
+    0
 }
 
 #[no_mangle]
@@ -406,6 +488,12 @@ pub unsafe extern "C" fn url_set_fragment(url: *mut Url, ptr: *const c_uchar, le
 
     url.set_fragment(Some(slice));
     0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_fragment_to_null(url: *mut Url) {
+    let url = unsafe { &mut *url };
+    url.set_fragment(None);
 }
 
 #[no_mangle]

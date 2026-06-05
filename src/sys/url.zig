@@ -56,12 +56,27 @@ pub extern "c" fn url_free(url: *Url) void;
 pub extern "c" fn url_can_parse(ptr: [*]const u8, len: usize) bool;
 pub extern "c" fn url_can_parse_with_base(base_ptr: [*]const u8, base_len: usize, ptr: [*]const u8, len: usize) bool;
 pub extern "c" fn url_to_string(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) void;
+pub extern "c" fn url_set_hostname(url: *Url, ptr: [*]const u8, len: usize) i32;
+pub extern "c" fn url_get_hostname(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) i32;
 pub extern "c" fn url_set_host(url: *Url, ptr: [*]const u8, len: usize) i32;
-pub extern "c" fn url_get_host(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) void;
+pub extern "c" fn url_get_host(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) i32;
 /// This function allocates on Rust-side.
 pub extern "c" fn url_get_origin(url: *const Url) OwnedString;
 pub extern "c" fn free_owned_string(owned: OwnedString) void;
 pub extern "c" fn url_set_port(url: *Url, port: u16) i32;
+/// Sets the port to null.
+pub extern "c" fn url_set_port_to_null(url: *Url) i32;
+pub extern "c" fn url_set_username(url: *Url, ptr: [*]const u8, len: usize) i32;
+pub extern "c" fn url_get_username(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) void;
+pub extern "c" fn url_set_password(url: *Url, ptr: [*]const u8, len: usize) i32;
+pub extern "c" fn url_get_password(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) i32;
+pub extern "c" fn url_set_path(url: *Url, ptr: [*]const u8, len: usize) i32;
+pub extern "c" fn url_get_path(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) void;
+pub extern "c" fn url_set_scheme(url: *Url, ptr: [*]const u8, len: usize) i32;
+pub extern "c" fn url_get_scheme(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) void;
+pub extern "c" fn url_set_fragment(url: *Url, ptr: [*]const u8, len: usize) i32;
+pub extern "c" fn url_set_fragment_to_null(url: *Url) void;
+pub extern "c" fn url_get_fragment(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) i32;
 
 extern "c" fn url_get_port(url: *const Url) i32;
 pub inline fn urlGetPort(url: *const Url) ?u16 {
