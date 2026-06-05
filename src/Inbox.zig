@@ -73,6 +73,21 @@ pub fn pop(self: *Inbox) ?*Message {
     return @fieldParentPtr("node", node);
 }
 
+// Peek for a message matching `predicate` without removing it. Used by
+// syncRequest to notice a queued teardown command (which sync_wait can't
+// safely dispatch mid-parse) so it can abort the blocking fetch instead
+// of stalling for the full per-request timeout.
+pub fn contains(self: *Inbox, predicate: *const fn (*Message) bool) bool {
+    self.mutex.lock();
+    defer self.mutex.unlock();
+    var it = self.queue.first;
+    while (it) |node| : (it = node.next) {
+        const msg: *Message = @fieldParentPtr("node", node);
+        if (predicate(msg)) return true;
+    }
+    return false;
+}
+
 // Cherry-pick the first message for which `predicate(msg)` returns
 // true, removing it from the queue. Walks the queue in FIFO order;
 // non-matching messages stay in place. Used to dispatch only the
