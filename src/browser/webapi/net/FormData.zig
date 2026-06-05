@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 const Form = @import("../element/html/Form.zig");
 const Element = @import("../Element.zig");
@@ -32,6 +33,8 @@ const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 const FormData = @This();
+
+_rc: lp.RC(u32),
 
 _arena: Allocator,
 _entries: std.ArrayList(Entry),
@@ -71,6 +74,7 @@ pub const Entry = struct {
 pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormData {
     const form = form_ orelse {
         return try exec._factory.create(FormData{
+            ._rc = .{},
             ._arena = exec.arena,
             ._entries = .empty,
         });
@@ -90,6 +94,7 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
     defer form._constructing_entry_list = false;
 
     const form_data = try exec._factory.create(FormData{
+        ._rc = .{},
         ._arena = exec.arena,
         ._entries = try collectForm(frame.arena, form, submitter, frame),
     });
@@ -102,6 +107,30 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
     try frame._event_manager.dispatch(form.asNode().asEventTarget(), form_data_event.asEvent());
 
     return form_data;
+}
+
+pub fn deinit(_: *FormData, _: *Page) void {}
+
+pub fn releaseRef(self: *FormData, page: *Page) void {
+    self._rc.release(self, page);
+
+    for (self._entries.items) |entry| {
+        switch (entry.value) {
+            .file => |file| file.releaseRef(page),
+            else => {},
+        }
+    }
+}
+
+pub fn acquireRef(self: *FormData) void {
+    self._rc.acquire();
+
+    for (self._entries.items) |entry| {
+        switch (entry.value) {
+            .file => |file| file.acquireRef(),
+            else => {},
+        }
+    }
 }
 
 pub fn get(self: *const FormData, name: String) ?[]const u8 {
@@ -487,6 +516,7 @@ test "FormData: multipart write" {
     const allocator = testing.arena_allocator;
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -515,6 +545,7 @@ test "FormData: multipart escapes name CR/LF/quote" {
     const allocator = testing.arena_allocator;
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -539,6 +570,7 @@ test "FormData: multipart empty body" {
     const allocator = testing.arena_allocator;
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -575,6 +607,7 @@ test "FormData: multipart with file" {
     defer file._proto.releaseRef(frame._page);
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -612,6 +645,7 @@ test "FormData: multipart with empty file defaults to octet-stream" {
     defer file._proto.releaseRef(frame._page);
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -645,6 +679,7 @@ test "FormData: multipart escapes file name and filename" {
     defer file._proto.releaseRef(frame._page);
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -678,6 +713,7 @@ test "FormData: file entry collapses to filename in urlencode" {
     defer file._proto.releaseRef(frame._page);
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -695,6 +731,7 @@ test "FormData: multipart no_file (unselected file input)" {
     const allocator = testing.arena_allocator;
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -723,6 +760,7 @@ test "FormData: no_file entry collapses to empty in urlencode" {
     const allocator = testing.arena_allocator;
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -740,6 +778,7 @@ test "FormData: plaintext write" {
     const allocator = testing.arena_allocator;
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
@@ -765,6 +804,7 @@ test "FormData: plaintext empty body" {
     const allocator = testing.arena_allocator;
 
     var fd = FormData{
+        ._rc = .{},
         ._arena = allocator,
         ._entries = .empty,
     };
