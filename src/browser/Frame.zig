@@ -4365,7 +4365,7 @@ fn asUint(comptime string: anytype) std.meta.Int(
 }
 
 const testing = @import("../testing.zig");
-test "WebApi:Frame" {
+test "WebApi: Frame" {
     const filter: testing.LogFilter = .init(&.{.http});
     defer filter.deinit();
     try testing.htmlRunner("page", .{});
