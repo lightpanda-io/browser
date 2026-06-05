@@ -682,7 +682,7 @@ pub const Script = struct {
         }
 
         switch (self.extra) {
-            .import_async => |ia| ia.callback(ia.data, error.FailedToLoad),
+            .import_async => |ia| ia.callback(ia.data, err),
             .import => {
                 const entry = manager.imported_modules.getPtr(self.url).?;
                 entry.state = .err;
