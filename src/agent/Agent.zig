@@ -538,14 +538,15 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
 
 fn runRepl(self: *Agent) void {
     if (self.ai_client) |_| {
-        self.terminal.printItalic("  Use natural language or commands", .{});
+        self.terminal.printItalic("  Control the Lightpanda browser with natural language and commands", .{});
     } else {
-        self.terminal.printItalic("  Basic REPL (--no-llm) - commands only.", .{});
+        self.terminal.printItalic("\n  Basic REPL (--no-llm) — commands only", .{});
         self.terminal.printDimmed("  To enable natural language, " ++ llm_setup_hint ++ ".", .{});
     }
-    self.terminal.printDimmed("  /help to list commands", .{});
-    self.terminal.printDimmed("  /quit to exit", .{});
-    self.terminal.printDimmed("  ! for JS mode", .{});
+    self.terminal.printDimmed("  /goto <url> to navigate", .{});
+    self.terminal.printDimmed("  /save to generate a reproducible script", .{});
+    self.terminal.printDimmed("  /help to list commands\t/quit to exit", .{});
+    self.terminal.printDimmed("  ! to evaluate JavaScript (on the current page's context)", .{});
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
     repl: while (true) {
