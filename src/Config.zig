@@ -123,6 +123,12 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
 
 pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 
+/// Per-turn reasoning budget for `agent` mode, mirroring Claude's effort
+/// levels. Maps to each provider's native thinking/reasoning knob. Resolved
+/// in `Agent.init` (explicit flag > remembered > mode default), so there is
+/// no Config-level accessor like `agentVerbosity`.
+pub const Effort = zenai.provider.Effort;
+
 /// Controls how chatty `agent` mode is on stderr.
 pub const AgentVerbosity = enum {
     /// REPL: spinner + per-turn summary. Non-REPL: final answer + errors only.
@@ -231,6 +237,7 @@ const Commands = cli.Builder(.{
             .{ .name = "task", .type = ?[]const u8 },
             .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },
+            .{ .name = "effort", .type = ?Effort },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
         },

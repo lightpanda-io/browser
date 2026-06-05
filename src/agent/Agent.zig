@@ -109,6 +109,8 @@ active_script_runtime: ?*ScriptRuntime = null,
 messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
 model: []u8,
+/// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
+effort: Config.Effort,
 system_prompt: []const u8,
 script_file: ?[]const u8,
 one_shot_task: ?[]const u8,
@@ -138,6 +140,16 @@ fn resolveModelName(opts: Config.Agent, resolved: ?settings.ResolvedProvider, re
         return zenai.provider.defaultModel(r.credentials.provider);
     }
     return "";
+}
+
+/// Precedence: explicit `--effort` flag > remembered `.lp-agent.zon` value >
+/// mode default. The interactive REPL defaults to `.low` so turns stay snappy;
+/// one-shot `--task` and script runs default to `.medium`, where answer
+/// quality matters more than per-turn latency.
+fn resolveEffort(opts: Config.Agent, remembered: ?settings.Remembered, will_repl: bool) Config.Effort {
+    if (opts.effort) |e| return e;
+    if (remembered) |r| if (r.effort) |e| return e;
+    return if (will_repl) .low else .medium;
 }
 
 const ReconciledModel = union(enum) {
@@ -258,9 +270,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         }
     }
 
+    const effort = resolveEffort(opts, remembered, will_repl);
+
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(r.credentials.provider, model) catch {};
+            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -291,6 +305,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .messages = .empty,
         .message_arena = .init(allocator),
         .model = model,
+        .effort = effort,
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .one_shot_task = opts.task,
@@ -617,6 +632,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .quit => return true,
         .help => self.printSlashHelp(arena, rest),
         .verbosity => self.handleVerbosity(rest),
+        .effort => self.handleEffort(rest),
         .save => self.handleSave(arena, rest),
         .load => self.handleLoad(rest),
         .model => self.handleModel(arena, rest),
@@ -636,6 +652,20 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
     };
     self.terminal.verbosity = level;
     self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
+}
+
+fn handleEffort(self: *Agent, rest: []const u8) void {
+    if (rest.len == 0) {
+        self.terminal.printInfo("effort: {s}", .{@tagName(self.effort)});
+        return;
+    }
+    const level = std.meta.stringToEnum(Config.Effort, rest) orelse {
+        self.terminal.printError("usage: /effort <none|minimal|low|medium|high|xhigh> (got {s})", .{rest});
+        return;
+    };
+    self.effort = level;
+    self.updateStatusBar();
+    self.reportSaved("effort", @tagName(level));
 }
 
 fn handleLoad(self: *Agent, rest: []const u8) void {
@@ -684,19 +714,26 @@ fn containsString(haystack: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
+/// Persist the current provider/model/effort to `.lp-agent.zon` and report it
+/// as "<label>: <value>", appending "(saved to …)" when the write succeeds.
+/// Reports without saving when there are no model credentials (basic REPL).
+fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
+    const c = self.model_credentials orelse {
+        self.terminal.printInfo("{s}: {s}", .{ label, value });
+        return;
+    };
+    if (settings.saveRemembered(.{ .provider = c.provider, .model = self.model, .effort = self.effort })) {
+        self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
+    } else |_| {
+        self.terminal.printInfo("{s}: {s}", .{ label, value });
+    }
+}
+
 fn setModel(self: *Agent, model: []const u8) !void {
     const new_model = try self.allocator.dupe(u8, model);
     self.allocator.free(self.model);
     self.model = new_model;
-    const c = self.model_credentials orelse {
-        self.terminal.printInfo("model: {s}", .{self.model});
-        return;
-    };
-    if (settings.saveRemembered(c.provider, self.model)) {
-        self.terminal.printInfo("model: {s} (saved to {s})", .{ self.model, settings.remembered_path });
-    } else |_| {
-        self.terminal.printInfo("model: {s}", .{self.model});
-    }
+    self.reportSaved("model", self.model);
 }
 
 fn updateStatusBar(self: *Agent) void {
@@ -707,8 +744,10 @@ fn updateStatusBar(self: *Agent) void {
         });
         return;
     }
+    var status_buf: [256]u8 = undefined;
+    const left_text = std.fmt.bufPrint(&status_buf, "{s} · {s}", .{ self.model, @tagName(self.effort) }) catch self.model;
     self.terminal.setStatus(&.{
-        .{ .text = self.model, .side = .left, .rank = 3 },
+        .{ .text = left_text, .side = .left, .rank = 3 },
         .{ .text = "! JS", .side = .right, .rank = 2 },
         .{ .text = "Tab completes", .side = .right, .rank = 1 },
         .{ .text = "/help", .side = .right, .rank = 4 },
@@ -755,11 +794,7 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
     self.allocator.free(self.model);
     self.model = new_model;
     self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
-    if (settings.saveRemembered(credentials.provider, self.model)) {
-        self.terminal.printInfo("model: {s} (saved to {s})", .{ self.model, settings.remembered_path });
-    } else |_| {
-        self.terminal.printInfo("model: {s}", .{self.model});
-    }
+    self.reportSaved("model", self.model);
     _ = completionModels(self, self.allocator);
 }
 
@@ -960,7 +995,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
             .max_turns = 1,
             .max_tokens = 8192,
             .tool_choice = .none,
-            .thinking_level = .medium,
+            .effort = .medium,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
     ) catch |err| {
@@ -1107,6 +1142,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
             .verbosity => self.terminal.printInfo(
                 "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
                 .{@tagName(self.terminal.verbosity)},
+            ),
+            .effort => self.terminal.printInfo(
+                "/effort <none|minimal|low|medium|high|xhigh> — set per-turn reasoning effort (currently: {s}); saved to {s}. Bare /effort prints the level.",
+                .{ @tagName(self.effort), settings.remembered_path },
             ),
             .save => self.terminal.printInfo(
                 "/save [filename.js] [prompt] — save the session to [filename.js] (a random session-*.js if omitted). With an LLM, synthesizes an idiomatic script from the session and the optional prompt; with --no-llm, dumps the recorded actions verbatim.",
@@ -1415,9 +1454,10 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             .max_tool_calls = 200,
             .max_tokens = 4096,
             .tool_choice = .auto,
-            // Cap per-turn reasoning so thinking models don't burn
-            // minutes per turn. Ignored by non-thinking models.
-            .thinking_level = .medium,
+            // Per-turn reasoning budget; resolved from --effort / .lp-agent.zon
+            // / mode default and adjustable at runtime via /effort. Ignored by
+            // non-thinking models.
+            .effort = self.effort,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
     ) catch |err| {
@@ -1495,7 +1535,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 .tool_choice = .none,
                 // .low (≈512 tokens) so reasoning models still pick an answer
                 // but can't burn the whole turn on thinking and emit nothing.
-                .thinking_level = .low,
+                .effort = .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             },
         ) catch |err| {

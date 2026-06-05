@@ -16,8 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! REPL-only meta slash commands (`/help`, `/quit`, `/verbosity`, `/model`,
-//! `/provider`). Meta commands aren't tool slash commands — they're handled
+//! REPL-only meta slash commands (`/help`, `/quit`, `/verbosity`, `/effort`,
+//! `/model`, `/provider`). Meta commands aren't tool slash commands — they're handled
 //! by `Agent.handleMeta` and never reach the recorder. Tool slash-command
 //! schema primitives live in `lp.Schema`; consumers should import that
 //! directly.
@@ -47,13 +47,14 @@ pub const MetaCommand = struct {
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
     /// a new meta command is a compile error until it's wired up there too.
-    const Tag = enum { help, quit, verbosity, save, load, model, provider };
+    const Tag = enum { help, quit, verbosity, effort, save, load, model, provider };
 };
 
 pub const meta_commands = [_]MetaCommand{
     .{ .tag = .help, .name = "help", .hint = "[command]", .values = &.{}, .description = "List commands, or show help for one" },
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
     .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set agent verbosity" },
+    .{ .tag = .effort, .name = "effort", .hint = "<none|minimal|low|medium|high|xhigh>", .values = &.{ "none", "minimal", "low", "medium", "high", "xhigh" }, .description = "Set per-turn reasoning effort" },
     .{ .tag = .save, .name = "save", .hint = "[filename.js] [prompt]", .values = &.{}, .description = "Save this session to a file" },
     .{ .tag = .load, .name = "load", .hint = "<path>", .values = &.{}, .description = "Load and run a script from disk" },
     .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model" },

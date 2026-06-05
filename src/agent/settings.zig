@@ -108,11 +108,14 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
 
 pub const remembered_path = ".lp-agent.zon";
 
-/// Last user-selected provider/model, persisted per-directory in `.lp-agent.zon`.
-/// `model` is owned by the caller.
+/// Last user-selected provider/model/effort, persisted per-directory in
+/// `.lp-agent.zon`. `model` is owned by the caller. `effort` is optional so
+/// files written before it existed still parse; null means "use the mode
+/// default" (see `Agent.resolveEffort`).
 pub const Remembered = struct {
     provider: Config.AiProvider,
     model: []const u8,
+    effort: ?Config.Effort = null,
 };
 
 pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
@@ -127,10 +130,10 @@ pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
 }
 
 /// Best-effort persist of the current selection; failures are ignored.
-pub fn saveRemembered(provider: Config.AiProvider, model: []const u8) !void {
+pub fn saveRemembered(remembered: Remembered) !void {
     var buf: [512]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    try std.zon.stringify.serialize(Remembered{ .provider = provider, .model = model }, .{}, &w);
+    try std.zon.stringify.serialize(remembered, .{}, &w);
     try std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = w.buffered() });
 }
 

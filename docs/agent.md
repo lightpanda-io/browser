@@ -63,6 +63,15 @@ system prompt, and `--verbosity <low|medium|high>` to tune how much progress
 detail goes to stderr (`--task` defaults to `low`, or `high` when stderr is
 piped/redirected so harnesses capture the full `[tool/result]` trace).
 
+`--effort <none|minimal|low|medium|high|xhigh>` sets the per-turn reasoning
+budget for thinking models (it maps to each provider's native thinking /
+reasoning-effort knob and is ignored by non-thinking models). The interactive
+REPL defaults to `low` so turns stay snappy; `--task` and script runs default
+to `medium`, where answer quality matters more than per-turn latency. Higher
+effort can reduce the number of tool calls by planning better, so it's a real
+tradeoff rather than a pure slowdown. Change it live with `/effort`; the
+selection is remembered in `.lp-agent.zon`.
+
 `--model` is validated against the provider's catalog up front: an unknown name
 fails fast with a pointer to `--list-models` rather than erroring mid-task. For
 Ollama, the default model is checked against what's actually pulled — if it's
@@ -72,12 +81,12 @@ missing, the agent falls back to the first installed model (an explicit
 ### Provider auto-detection
 
 When `--provider` is omitted, lightpanda picks one in this order. The REPL shows
-the resolved provider and model in its status bar; the multi-key picker and any
+the resolved model and effort level in its status bar; the multi-key picker and any
 fallback notices (e.g. an Ollama default that isn't installed) print to stderr:
 
 1. **Remembered** → the provider/model you last selected with `/provider` or
-   `/model`, persisted per-directory in `.lp-agent.zon`, as long as its key is
-   still set.
+   `/model` (plus the `/effort` level), persisted per-directory in
+   `.lp-agent.zon`, as long as its key is still set.
 2. **Auto-detected** → otherwise the first key found in priority order
    (`ANTHROPIC_API_KEY` → `GOOGLE_API_KEY`/`GEMINI_API_KEY` → `OPENAI_API_KEY`).
    If several keys are set and you're in an interactive REPL, the agent prompts
@@ -295,8 +304,9 @@ See [agent-script.md](agent-script.md) for the full script format reference.
   the provider's fetched model list, and bare `/provider`/`/model` print the
   current selection — `/save [file.js]` writes the session to a script and
   `/load <path>` runs one from disk (Tab completes file paths), `/quit` exits
-  the REPL, `/verbosity <low|medium|high>` tunes the log level. These are
-  REPL-only and never recorded.
+  the REPL, `/verbosity <low|medium|high>` tunes the log level, and
+  `/effort <none|minimal|low|medium|high|xhigh>` sets the per-turn reasoning
+  budget (saved to `.lp-agent.zon`). These are REPL-only and never recorded.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit
