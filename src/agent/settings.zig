@@ -108,14 +108,15 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
 
 pub const remembered_path = ".lp-agent.zon";
 
-/// Last user-selected provider/model/effort, persisted per-directory in
-/// `.lp-agent.zon`. `model` is owned by the caller. `effort` is optional so
-/// files written before it existed still parse; null means "use the mode
-/// default" (see `Agent.resolveEffort`).
+/// Last user-selected provider/model/effort/verbosity, persisted per-directory
+/// in `.lp-agent.zon`. `model` is owned by the caller. `effort` and `verbosity`
+/// are optional so files written before they existed still parse; null means
+/// "use the mode default" (see `Agent.resolveEffort` / `Agent.resolveVerbosity`).
 pub const Remembered = struct {
     provider: Config.AiProvider,
     model: []const u8,
     effort: ?Config.Effort = null,
+    verbosity: ?Config.AgentVerbosity = null,
 };
 
 pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {

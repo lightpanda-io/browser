@@ -152,6 +152,14 @@ fn resolveEffort(opts: Config.Agent, remembered: ?settings.Remembered, will_repl
     return if (will_repl) .low else .medium;
 }
 
+/// Precedence: explicit `--verbosity` flag > remembered `.lp-agent.zon` value >
+/// mode default (see `Config.agentVerbosity`).
+fn resolveVerbosity(opts: Config.Agent, remembered: ?settings.Remembered) Config.AgentVerbosity {
+    if (opts.verbosity) |v| return v;
+    if (remembered) |r| if (r.verbosity) |v| return v;
+    return Config.agentVerbosity(opts);
+}
+
 const ReconciledModel = union(enum) {
     /// Owned by the allocator passed to reconcileModel.
     use: []u8,
@@ -271,10 +279,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     }
 
     const effort = resolveEffort(opts, remembered, will_repl);
+    const verbosity = resolveVerbosity(opts, remembered);
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort }) catch {};
+            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -299,7 +308,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .browser = undefined,
         .session = undefined,
         .node_registry = .init(allocator),
-        .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
+        .terminal = .init(allocator, history_path, verbosity, will_repl),
         .save_buffer = .init(allocator),
         .save_path = null,
         .messages = .empty,
@@ -660,7 +669,7 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
         return;
     };
     self.terminal.verbosity = level;
-    self.terminal.printInfo("verbosity: {s}", .{@tagName(level)});
+    self.reportSaved("verbosity", @tagName(level));
 }
 
 fn handleEffort(self: *Agent, rest: []const u8) void {
@@ -772,7 +781,7 @@ fn containsString(haystack: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
-/// Persist the current provider/model/effort to `.lp-agent.zon` and report it
+/// Persist the current provider/model/effort/verbosity to `.lp-agent.zon` and report it
 /// as "<label>: <value>", appending "(saved to …)" when the write succeeds.
 /// Reports without saving when there are no model credentials (basic REPL).
 fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
@@ -780,7 +789,7 @@ fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
     };
-    if (settings.saveRemembered(.{ .provider = c.provider, .model = self.model, .effort = self.effort })) {
+    if (settings.saveRemembered(.{ .provider = c.provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
