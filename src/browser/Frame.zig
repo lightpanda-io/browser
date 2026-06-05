@@ -895,7 +895,10 @@ pub fn abortTransfers(self: *Frame) void {
     for (self.child_frames.items) |child| {
         child.abortTransfers();
     }
-    self._session.browser.http_client.abortOwner(&self._http_owner);
+    const http_client = &self._session.browser.http_client;
+    http_client.abortOwner(&self._http_owner);
+    // abortOwner misses deferred contexts whose transfer already completed.
+    http_client.deferring_layer.cancelFrame(self._frame_id);
 }
 
 pub fn documentIsLoaded(self: *Frame) void {
