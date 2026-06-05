@@ -1,5 +1,4 @@
 const std = @import("std");
-const zenai = @import("zenai");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
