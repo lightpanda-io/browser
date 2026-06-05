@@ -60,6 +60,10 @@ fn TelemetryT(comptime P: type) type {
                 log.warn(.telemetry, "record error", .{ .err = err, .type = @tagName(std.meta.activeTag(event)) });
             };
         }
+
+        pub fn llm_init(_: *Self, provider: [:0]const u8, model: ?[]const u8) Event.LLM {
+            return Event.LLM.init(provider, model);
+        }
     };
 }
 
@@ -117,7 +121,36 @@ pub const Event = union(enum) {
 
     const LLM = struct {
         provider: [:0]const u8,
-        model: ?[]const u8,
+        model: ?Model,
+
+        const Model = struct {
+            len: u8,
+            buffer: [32]u8,
+
+            pub fn wrap(_s: ?[]const u8) ?Model {
+                if (_s == null) return null;
+
+                const l = @min(_s.?.len, 32);
+                var m: Model = .{
+                    .len = l,
+                    .buffer = undefined,
+                };
+                @memcpy(m.buffer[0..l], _s.?[0..l]);
+
+                return m;
+            }
+
+            pub fn jsonStringify(self: *const Model, writer: anytype) !void {
+                try writer.write(self.buffer[0..self.len]);
+            }
+        };
+
+        pub fn init(provider: [:0]const u8, _model: ?[]const u8) LLM {
+            return .{
+                .provider = provider,
+                .model = Model.wrap(_model),
+            };
+        }
     };
 };
 

@@ -198,7 +198,6 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             {
                 var worker_thread = try std.Thread.spawn(.{}, agentThread, .{
                     allocator,
-                    main_arena,
                     app,
                     opts,
                     &failed,
@@ -219,7 +218,6 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
 fn agentThread(
     allocator: std.mem.Allocator,
-    arena: std.mem.Allocator,
     app: *App,
     opts: Config.Agent,
     failed: *bool,
@@ -243,15 +241,13 @@ fn agentThread(
     defer sig_bridge.detach();
 
     if (agent_instance.ai_client) |cli| {
-        app.telemetry.record(.{ .llm = .{
-            .provider = @tagName(cli),
-            .model = arena.dupe(u8, agent_instance.model) catch null,
-        } });
+        app.telemetry.record(.{
+            .llm = app.telemetry.llm_init(@tagName(cli), agent_instance.model),
+        });
     } else {
-        app.telemetry.record(.{ .llm = .{
-            .provider = "nollm",
-            .model = null,
-        } });
+        app.telemetry.record(.{
+            .llm = app.telemetry.llm_init("nollm", null),
+        });
     }
 
     if (!agent_instance.run()) {
