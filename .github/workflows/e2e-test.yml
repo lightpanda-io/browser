@@ -103,9 +103,6 @@ jobs:
       - if: matrix.wba == true
         run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
 
-      # Always activate cache
-      - run: mkdir -p /tmp/lp-cache
-
       - id: args
         name: build LP args
         run: |
@@ -161,9 +158,6 @@ jobs:
 
       - if: matrix.wba == true
         run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
-
-      # Always activate cache
-      - run: mkdir -p /tmp/lp-cache
 
       - id: args
         name: build LP args
