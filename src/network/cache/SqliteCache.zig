@@ -56,7 +56,7 @@ const HEADER_TABLE =
     \\ )
 ;
 
-const HEADER_CACHE_URL_INDEX = "create index header_cache_url on header(cache_url)";
+const HEADER_CACHE_URL_INDEX = "create index if not exists header_cache_url on header(cache_url)";
 
 pub fn init(allocator: std.mem.Allocator, path: [:0]const u8) !SqliteCache {
     var pool = try Pool.init(allocator, path);
@@ -319,14 +319,22 @@ test "SqliteCache: get expiration" {
     // age = 50 + 900 = 950 < 1000: fresh
     const fresh = try cache.get(
         arena.allocator(),
-        .{ .url = "https://example.com", .timestamp = now + 50, .request_headers = &.{} },
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 50,
+            .request_headers = &.{},
+        },
     ) orelse return error.CacheMiss;
     try testing.expectEqual(false, fresh.expired);
 
     // age = 200 + 900 = 1100 >= 1000: stale
     const stale = try cache.get(
         arena.allocator(),
-        .{ .url = "https://example.com", .timestamp = now + 200, .request_headers = &.{} },
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 200,
+            .request_headers = &.{},
+        },
     ) orelse return error.CacheMiss;
     try testing.expectEqual(true, stale.expired);
 }
@@ -353,7 +361,11 @@ test "SqliteCache: put override" {
 
         const result = try cache.get(
             arena.allocator(),
-            .{ .url = "https://example.com", .timestamp = 5000, .request_headers = &.{} },
+            .{
+                .url = "https://example.com",
+                .timestamp = 5000,
+                .request_headers = &.{},
+            },
         ) orelse return error.CacheMiss;
         try testing.expectEqualStrings("hello world", result.data.buffer);
     }
@@ -373,38 +385,15 @@ test "SqliteCache: put override" {
 
         const result = try cache.get(
             arena.allocator(),
-            .{ .url = "https://example.com", .timestamp = 10000, .request_headers = &.{} },
+            .{
+                .url = "https://example.com",
+                .timestamp = 10000,
+                .request_headers = &.{},
+            },
         ) orelse return error.CacheMiss;
         try testing.expectEqualStrings("goodbye world", result.data.buffer);
     }
 }
-
-// test "SqliteCache: malformed row" {
-//     var cache = try setupCache(testing.allocator);
-//     defer cache.deinit();
-
-//     // Insert a row with a negative max_age that will be rejected on read,
-//     // simulating a corrupt or schema-mismatched entry.
-//     const conn = try cache.kind.sqlite.pool.acquire();
-//     try conn.exec(
-//         \\ insert into cache (url, status, stored_at, age_at_store, max_age, must_revalidate, body)
-//         \\ values ('https://example.com', 200, 0, 0, -1, 0, 'garbage')
-//     , .{});
-//     cache.kind.sqlite.pool.release(conn);
-
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-
-//     // Should come back as a stale hit (max_age cast to u64 wraps, isStale returns true),
-//     // or null — either way it must not crash or return a usable fresh entry.
-//     const result = try cache.get(
-//         arena.allocator(),
-//         .{ .url = "https://example.com", .timestamp = 5000, .request_headers = &.{} },
-//     );
-//     if (result) |r| {
-//         try testing.expectEqual(true, r.expired);
-//     }
-// }
 
 test "SqliteCache: vary hit and miss" {
     var cache = try setupCache(testing.allocator);
@@ -667,14 +656,22 @@ test "SqliteCache: renew refreshes expiry" {
     // Clock reset to now+500, so still fresh at now+1200
     const fresh = try cache.get(
         arena.allocator(),
-        .{ .url = "https://example.com", .timestamp = now + 1200, .request_headers = &.{} },
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 1200,
+            .request_headers = &.{},
+        },
     ) orelse return error.CacheMiss;
     try testing.expectEqual(false, fresh.expired);
 
     // Expires at now+500+1000 = now+1500
     const stale = try cache.get(
         arena.allocator(),
-        .{ .url = "https://example.com", .timestamp = now + 1500, .request_headers = &.{} },
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 1500,
+            .request_headers = &.{},
+        },
     ) orelse return error.CacheMiss;
     try testing.expectEqual(true, stale.expired);
 }
