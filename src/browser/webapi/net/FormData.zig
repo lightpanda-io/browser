@@ -47,14 +47,17 @@ pub const Entry = struct {
         fn asString(self: *const Value) []const u8 {
             return switch (self.*) {
                 .string => |*s| s.str(),
-                .file => unreachable, // nothing currently creates this type of value
+                // Per WHATWG, file entries serialized in a non-multipart encoding
+                // (application/x-www-form-urlencoded, text/plain) collapse to the
+                // file's name only — body is dropped.
+                .file => |f| f.getName(),
             };
         }
 
         pub fn format(self: Value, writer: *std.Io.Writer) !void {
             return switch (self) {
                 .string => |s| s.format(writer),
-                .file => unreachable, // nothing currently creates this type of value
+                .file => |f| writer.writeAll(f.getName()),
             };
         }
     };
@@ -244,8 +247,24 @@ fn multipartEncodeEntry(entry: *const Entry, boundary: []const u8, writer: *std.
             try writer.writeAll(s.str());
             try writer.writeAll("\r\n");
         },
-        // File entries need a real payload (filename + bytes + Content-Type) — not yet wired.
-        .file => log.warn(.not_implemented, "FormData.multipart.file", .{}),
+        // Per RFC 7578 + WHATWG FormData: file parts carry a filename in
+        // Content-Disposition, a Content-Type (defaulting to
+        // application/octet-stream when the Blob has no MIME), and the raw bytes.
+        .file => |file| {
+            try writer.writeAll("Content-Disposition: form-data; name=\"");
+            try writeMultipartName(writer, entry.name.str());
+            try writer.writeAll("\"; filename=\"");
+            try writeMultipartName(writer, file.getName());
+            try writer.writeAll("\"\r\n");
+
+            const mime = file._proto._mime;
+            try writer.writeAll("Content-Type: ");
+            try writer.writeAll(if (mime.len == 0) "application/octet-stream" else mime);
+            try writer.writeAll("\r\n\r\n");
+
+            try writer.writeAll(file._proto._slice);
+            try writer.writeAll("\r\n");
+        },
     }
 }
 
@@ -351,6 +370,21 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, frame: *F
                         continue;
                     }
                 }
+                if (input_type == .file) {
+                    // WHATWG: a file input with zero selected files contributes a
+                    // single entry whose value is an empty File of MIME
+                    // application/octet-stream; otherwise, one entry per file.
+                    const files = if (input._files) |fl| fl._files else &.{};
+                    if (files.len == 0) {
+                        const empty = try File.init(null, "", .{ .type = "application/octet-stream" }, frame._page);
+                        try appendFile(&list, arena, name, empty);
+                    } else {
+                        for (files) |file| {
+                            try appendFile(&list, arena, name, file);
+                        }
+                    }
+                    continue;
+                }
                 break :blk input.getValue();
             }
 
@@ -393,6 +427,13 @@ fn appendString(list: *std.ArrayList(Entry), arena: Allocator, name: []const u8,
     try list.append(arena, .{
         .name = try String.init(arena, name, .{}),
         .value = .{ .string = try String.init(arena, value, .{}) },
+    });
+}
+
+fn appendFile(list: *std.ArrayList(Entry), arena: Allocator, name: []const u8, file: *File) !void {
+    try list.append(arena, .{
+        .name = try String.init(arena, name, .{}),
+        .value = .{ .file = file },
     });
 }
 
@@ -491,6 +532,145 @@ test "FormData: multipart empty body" {
     }, &buf.writer);
 
     try testing.expectString("--B--\r\n", buf.written());
+}
+
+const Blob = @import("../Blob.zig");
+
+fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
+    const blob = try Blob.initFromBytes(body, mime, false, page);
+    blob.acquireRef();
+    const file = try arena.create(File);
+    file.* = .{
+        ._proto = blob,
+        ._name = try arena.dupe(u8, name),
+        ._last_modified = 0,
+    };
+    return file;
+}
+
+test "FormData: multipart with file" {
+    const allocator = testing.arena_allocator;
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+
+    const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
+    defer file._proto.releaseRef(frame._page);
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.append("field", "value");
+    try fd._entries.append(allocator, .{
+        .name = try String.init(allocator, "upload", .{}),
+        .value = .{ .file = file },
+    });
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{
+        .encoding = .{ .formdata = "BOUNDARY" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    try testing.expectString(
+        "--BOUNDARY\r\n" ++
+            "Content-Disposition: form-data; name=\"field\"\r\n\r\n" ++
+            "value\r\n" ++
+            "--BOUNDARY\r\n" ++
+            "Content-Disposition: form-data; name=\"upload\"; filename=\"hello.txt\"\r\n" ++
+            "Content-Type: text/plain\r\n\r\n" ++
+            "hello\r\n" ++
+            "--BOUNDARY--\r\n",
+        buf.written(),
+    );
+}
+
+test "FormData: multipart with empty file defaults to octet-stream" {
+    const allocator = testing.arena_allocator;
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+
+    const file = try buildTestFile(allocator, frame._page, "", "", "");
+    defer file._proto.releaseRef(frame._page);
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd._entries.append(allocator, .{
+        .name = try String.init(allocator, "upload", .{}),
+        .value = .{ .file = file },
+    });
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{
+        .encoding = .{ .formdata = "B" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    try testing.expectString(
+        "--B\r\n" ++
+            "Content-Disposition: form-data; name=\"upload\"; filename=\"\"\r\n" ++
+            "Content-Type: application/octet-stream\r\n\r\n" ++
+            "\r\n" ++
+            "--B--\r\n",
+        buf.written(),
+    );
+}
+
+test "FormData: multipart escapes file name and filename" {
+    const allocator = testing.arena_allocator;
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+
+    const file = try buildTestFile(allocator, frame._page, "a\"b\r\nc.txt", "text/plain", "x");
+    defer file._proto.releaseRef(frame._page);
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd._entries.append(allocator, .{
+        .name = try String.init(allocator, "up\"load", .{}),
+        .value = .{ .file = file },
+    });
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{
+        .encoding = .{ .formdata = "B" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    try testing.expectString(
+        "--B\r\n" ++
+            "Content-Disposition: form-data; name=\"up%22load\"; filename=\"a%22b%0D%0Ac.txt\"\r\n" ++
+            "Content-Type: text/plain\r\n\r\n" ++
+            "x\r\n" ++
+            "--B--\r\n",
+        buf.written(),
+    );
+}
+
+test "FormData: file entry collapses to filename in urlencode" {
+    const allocator = testing.arena_allocator;
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+
+    const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
+    defer file._proto.releaseRef(frame._page);
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd._entries.append(allocator, .{
+        .name = try String.init(allocator, "upload", .{}),
+        .value = .{ .file = file },
+    });
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{ .encoding = .urlencode, .allocator = allocator }, &buf.writer);
+    try testing.expectString("upload=hello.txt", buf.written());
 }
 
 test "FormData: plaintext write" {
