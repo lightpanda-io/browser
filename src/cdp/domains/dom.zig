@@ -858,6 +858,78 @@ test "cdp.dom: setFileInputFiles on file input" {
     try ctx.expectSentResult(null, .{ .id = 3 });
 }
 
+test "cdp.dom: setFileInputFiles exposes files to JS" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "input" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    // Two files, so we can assert ordering as well as identity and iteration.
+    var tmp_dir = try std.fs.cwd().makeOpenPath(".zig-cache/tmp", .{});
+    defer tmp_dir.close();
+    {
+        const a = try tmp_dir.createFile("a.txt", .{ .truncate = true });
+        defer a.close();
+        try a.writeAll("aaa");
+        const b = try tmp_dir.createFile("b.txt", .{ .truncate = true });
+        defer b.close();
+        try b.writeAll("bbbb");
+    }
+
+    const frame = bc.session.currentFrame().?;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Listen on `document` so reaching the handler also proves the events
+    // bubbled up from the input. Record interface + bubbles + order + target.
+    _ = try ls.local.compileAndRun(
+        \\window.__evts = [];
+        \\const rec = (e) => window.__evts.push(
+        \\  [e.type, e instanceof InputEvent, e.bubbles, e.target.id].join(':'));
+        \\document.addEventListener('input', rec);
+        \\document.addEventListener('change', rec);
+    , null);
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{ ".zig-cache/tmp/a.txt", ".zig-cache/tmp/b.txt" },
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    // The only way to observe a populated FileList from JS: set it via CDP,
+    // then read it back. Covers length, item(), the indexed getter and the
+    // iterator (spread / Array.from), which can't be exercised on an empty list.
+    // Also asserts the fired events: `input` then `change`, both plain bubbling
+    // Events (not InputEvents) targeting the input.
+    const result = try ls.local.compileAndRun(
+        \\const f = document.getElementById('upload');
+        \\f.files.length === 2 &&
+        \\f.files.item(0).name === 'a.txt' &&
+        \\f.files[0] instanceof File && f.files[0].name === 'a.txt' &&
+        \\f.files[1].name === 'b.txt' &&
+        \\f.files[2] === undefined &&
+        \\[...f.files].map((x) => x.name).join(',') === 'a.txt,b.txt' &&
+        \\Array.from(f.files, (x) => x.name).join(',') === 'a.txt,b.txt' &&
+        \\Object.keys(f.files).join(',') === '0,1' &&
+        \\window.__evts.join(',') === 'input:false:true:upload,change:false:true:upload'
+    , null);
+    try testing.expect(result.isTrue());
+}
+
 test "cdp.dom: setFileInputFiles rejects non-input node" {
     var ctx = try testing.context();
     defer ctx.deinit();

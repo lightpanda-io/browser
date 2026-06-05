@@ -232,8 +232,11 @@ pub fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
 /// Lazily allocates this input's FileList and registers it with the frame so
 /// the refcounted File objects it holds are released at frame teardown.
 fn ensureFileList(self: *Input, frame: *Frame) !*FileList {
-    if (self._files) |fl| return fl;
-    const fl = try frame._factory.create(FileList{ ._files = &.{} });
+    if (self._files) |fl| {
+        return fl;
+    }
+
+    const fl = try frame._factory.create(FileList{});
     try frame.trackFileList(fl);
     self._files = fl;
     return fl;
@@ -242,7 +245,9 @@ fn ensureFileList(self: *Input, frame: *Frame) !*FileList {
 /// Returns the FileList for a `type="file"` input (lazily allocated, identity preserved).
 /// Non-file inputs return null per HTMLInputElement IDL.
 pub fn getFiles(self: *Input, frame: *Frame) !?*FileList {
-    if (self._input_type != .file) return null;
+    if (self._input_type != .file) {
+        return null;
+    }
     return try self.ensureFileList(frame);
 }
 
@@ -253,15 +258,27 @@ pub fn getFiles(self: *Input, frame: *Frame) !?*FileList {
 /// counted via its Blob proto), so we acquire on the incoming files and release
 /// the outgoing ones; the frame releases whatever remains at teardown.
 pub fn setFiles(self: *Input, files: []const *File, frame: *Frame) !void {
-    if (self._input_type != .file) return error.InvalidStateError;
-    const fl = try self.ensureFileList(frame);
+    if (self._input_type != .file) {
+        return error.InvalidStateError;
+    }
 
-    const dupe = try frame._factory._slab.allocator().dupe(*File, files);
-    for (dupe) |file| file._proto.acquireRef();
-    for (fl._files) |old| old._proto.releaseRef(frame._page);
+    const fl = try self.ensureFileList(frame);
+    const dupe = try frame.arena.dupe(*File, files);
+
+    for (dupe) |file| {
+        file._proto.acquireRef();
+    }
+
+    for (fl._files) |old| {
+        old._proto.releaseRef(frame._page);
+    }
+
     fl._files = dupe;
 
-    try self.dispatchInputEvent(null, "insertReplacementText", frame);
+    // A file input fires `input` then `change`, both as plain bubbling Events
+    // (not InputEvents — `inputType`/`data` only apply to editable text inputs).
+    const input_evt = try Event.initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._page);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), input_evt);
     const change_evt = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), change_evt);
 }
@@ -269,12 +286,15 @@ pub fn setFiles(self: *Input, files: []const *File, frame: *Frame) !void {
 /// JS-binding wrapper for the `value` getter: for type=file, return the spec
 /// "C:\\fakepath\\<name>" string; otherwise delegate to plain getValue().
 pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
-    if (self._input_type == .file) {
-        const fl = self._files orelse return "";
-        if (fl._files.len == 0) return "";
-        return try std.fmt.allocPrint(frame.arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
+    if (self._input_type != .file) {
+        return self.getValue();
     }
-    return self.getValue();
+
+    const fl = self._files orelse return "";
+    if (fl._files.len == 0) {
+        return "";
+    }
+    return try std.fmt.allocPrint(frame.call_arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
 }
 
 pub fn getValidationMessage(self: *const Input, frame: *Frame) []const u8 {
