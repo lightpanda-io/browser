@@ -38,7 +38,7 @@
     try {
       await import('./modules/nonexistent.js');
     } catch (e) {
-      import_404_threw = e.toString().includes('FailedToLoad');
+      import_404_threw = e.toString().includes('Abort');
     }
     results.import_404_threw = import_404_threw;
 
