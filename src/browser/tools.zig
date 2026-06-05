@@ -56,6 +56,11 @@ pub const driver_guidance =
     \\  scope, returns the full document (doctype + document element) —
     \\  the canonical way to capture a fixture. Verbose; use only when
     \\  you need attributes markdown discards.
+    \\- `markdown`, `tree` and `html` also accept a `url`: they navigate to it
+    \\  AND read it in a single call. Prefer `markdown {url}` over a separate
+    \\  `goto` then `markdown` — a standalone `goto` is an extra page load and
+    \\  an extra round-trip for no added information. (`extract` reads the
+    \\  current page only, so navigate with one of the above first.)
     \\
     \\Workflow:
     \\- Inspect before interacting (tree / interactiveElements /
@@ -79,6 +84,16 @@ pub const driver_guidance =
     \\- After a navigation, treat the user's follow-up questions as being
     \\  about the currently-loaded page unless they explicitly point
     \\  elsewhere.
+    \\
+    \\Browsing efficiently (multi-page / research tasks):
+    \\- Each navigation is a full page load — the slowest thing you do, costing
+    \\  seconds even on light sites (ads and trackers delay it). Minimize them.
+    \\- Triage from `search` snippets before opening links; open only the few
+    \\  most promising. Don't re-run a search you already ran, and skip
+    \\  near-duplicate sources that repeat the same announcement verbatim.
+    \\- Stop once the gathered material answers the question. For opinion or
+    \\  discussion questions, a couple of high-signal threads (e.g. Hacker
+    \\  News, Reddit) usually beat scraping a dozen news sites.
     \\
     \\Selector rules:
     \\- NEVER pass backendNodeId to click/fill/hover/selectOption/setChecked.
