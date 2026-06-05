@@ -476,6 +476,8 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         return error.NetworkError;
     }
 
+    defer http_client.deferring_layer.flushFrame(self._frame_id);
+
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
