@@ -1,16 +1,16 @@
 # Agent mode
 
-> Looking for a step-by-step walkthrough instead of a reference?
-> See [agent-tutorial.md](agent-tutorial.md) — it builds one end-to-end
-> Hacker News scenario covering the REPL, recording, replay, and the MCP
-> roundtrip.
->
-> Looking for the JavaScript script format?
-> See [agent-script.md](agent-script.md) for the runtime contract and
-> primitive API.
+`lightpanda agent` turns Lightpanda's headless engine into a browsing agent you
+can talk to in plain English, script deterministically, or drive from your own
+LLM. There's no rendering and no images — it reasons over pages as text, which
+makes browsing fast and cheap to automate.
 
-`lightpanda agent` runs a browsing agent backed by Lightpanda's headless engine.
-It can act as:
+**New here?** The [tutorial](agent-tutorial.md) walks you from a fresh build to a
+recorded, replayable Hacker News scraper in a few minutes. This page is the
+reference: every flag, slash command, and browser tool. For the JavaScript
+script format, see [agent-script.md](agent-script.md).
+
+`lightpanda agent` can act as:
 
 - an **LLM agent** that drives the browser with tool calls (`--provider`),
 - a **scripted runner** that runs a recorded `.js` script deterministically,
@@ -40,6 +40,9 @@ etc.) without giving Lightpanda its own API key.
 
 # One-shot: ask a question, capture the answer on stdout
 ./lightpanda agent --task "what is on the front page of hn?"
+
+# See which models the resolved provider offers
+./lightpanda agent --list-models
 ```
 
 ## Providers and API keys
@@ -54,7 +57,16 @@ etc.) without giving Lightpanda its own API key.
 Defaults: `--model` falls back to a sensible per-provider default; in the REPL,
 `/provider <name>` and `/model <name>` change the current selection (Tab
 completes the candidates). `--base-url` overrides the API endpoint (Ollama
-defaults to `http://localhost:11434/v1`).
+defaults to `http://localhost:11434/v1`). Run `--list-models` to see exactly
+what the resolved provider offers, `--system-prompt` to swap in your own
+system prompt, and `--verbosity <low|medium|high>` to tune how much progress
+detail goes to stderr (`--task` defaults to `low`).
+
+`--model` is validated against the provider's catalog up front: an unknown name
+fails fast with a pointer to `--list-models` rather than erroring mid-task. For
+Ollama, the default model is checked against what's actually pulled — if it's
+missing, the agent falls back to the first installed model (an explicit
+`--model` that isn't installed errors instead, with an `ollama pull` hint).
 
 ### Provider auto-detection
 
@@ -66,12 +78,15 @@ one-line notice (on stderr) of what it chose:
    still set.
 2. **Auto-detected** → otherwise the first key found in priority order
    (`ANTHROPIC_API_KEY` → `GOOGLE_API_KEY`/`GEMINI_API_KEY` → `OPENAI_API_KEY`).
-   Switch any time with `/provider` in the REPL, or override with `--provider`.
-3. **No keys set** → falls back to the basic REPL (slash commands only).
-   Natural language, `/login`, and `/acceptCookies` will reject.
-
-Ollama is never auto-detected (no env var to look at) — pass `--provider
-ollama`, or select it once with `/provider ollama` and it'll be remembered.
+   If several keys are set and you're in an interactive REPL, the agent prompts
+   you to choose; non-interactive runs (`--task`, pipes, `--list-models`) take
+   the first. Switch any time with `/provider`, or override with `--provider`.
+3. **Local Ollama** → if no cloud key is set, the agent probes a local Ollama
+   server (`http://localhost:11434/v1`, or `--base-url`) and uses it when it
+   answers with at least one pulled model.
+4. **No provider at all** → falls back to the basic REPL (slash commands only).
+   Natural language and the LLM-driven commands (`/login`, `/logout`,
+   `/acceptCookies`) will reject.
 
 `--no-llm` is the explicit bypass: it forces the basic REPL even when an
 API key is present or `--provider` is set. Use it to test slash commands
@@ -108,9 +123,10 @@ the agent translates into actual tool calls:
 | Command          | Notes                                                |
 |------------------|------------------------------------------------------|
 | `/login`         | LLM-driven: fills credentials from `$LP_*` env vars. |
+| `/logout`        | LLM-driven: find the logout control and sign out.    |
 | `/acceptCookies` | LLM-driven: dismiss the consent banner.              |
 
-Both require an LLM. `--no-llm` rejects them.
+All three require an LLM. `--no-llm` rejects them.
 
 In the REPL (and only the REPL), a line that isn't a slash command and
 doesn't start with `#` is sent to the LLM as a natural-language prompt. To
@@ -341,11 +357,11 @@ LLM via `./lightpanda agent session.js`.
 The agent and MCP server share the tool set defined in `src/browser/tools.zig`.
 Highlights:
 
-- `goto`, `search` (Google with DuckDuckGo fallback on captcha)
-- `tree`, `markdown`, `links`, `interactiveElements`, `structuredData`,
+- `goto`, `search` (Tavily when `TAVILY_API_KEY` is set, DuckDuckGo otherwise)
+- `tree`, `markdown`, `html`, `links`, `interactiveElements`, `structuredData`,
   `detectForms`, `nodeDetails`, `findElement`
 - `click`, `fill`, `hover`, `press`, `scroll`, `selectOption`, `setChecked`,
-  `waitForSelector`
+  `waitForSelector`, `waitForScript`
 - `evaluate`, `consoleLogs`, `getUrl`, `getCookies`, `getEnv`
 
 Selectors prefer CSS over `backendNodeId` for the click-family tools, since

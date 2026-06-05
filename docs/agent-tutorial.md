@@ -78,9 +78,10 @@ verbatim.
 ```
 
 On startup the agent prints a one-line notice telling you which mode it
-landed in — which provider (and which env var won), or "basic REPL
-(no LLM)" if no key is set. The REPL writes its history to
-`.lp-history` in the working directory, so up-arrow works across runs.
+landed in — which provider it chose (a detected cloud key, or a local
+Ollama server if that's all it finds), or "basic REPL (no LLM)" when no
+provider is available. The REPL writes its history to `.lp-history` in
+the working directory, so up-arrow works across runs.
 
 Try the meta commands:
 
@@ -333,9 +334,17 @@ to bottom against a fresh browser. This is the form you want for
 regression tests and CI. From inside the REPL, `/load hn_login.js`
 runs the same script against the current session.
 
-A JavaScript script does not print its final expression automatically.
-The recorded `extract(...)` call returns a local JavaScript value, so
-edit the final line when you want replay output:
+The script's completion value — its last top-level expression — is
+printed automatically (objects and arrays as JSON). Because the saved
+script ends with the `extract(...)` call, you already get clean JSON on
+stdout with nothing to edit:
+
+```console
+./lightpanda agent hn_login.js > stories.json
+```
+
+If you want to reshape the output first, assign the result and end with
+a bare expression — that final value is what prints:
 
 ```js
 const topStories = extract({
@@ -349,13 +358,7 @@ const topStories = extract({
   }]
 });
 
-console.log(JSON.stringify({ topStories }, null, 2));
-```
-
-Run it again and stdout is clean JSON:
-
-```console
-./lightpanda agent hn_login.js > stories.json
+topStories; // printed automatically as JSON
 ```
 
 `/login` and `/acceptCookies` are REPL-only LLM triggers. A script
@@ -395,7 +398,7 @@ const report = topStories.map((story) => ({
   url: story.url
 }));
 
-console.log(JSON.stringify({ report }, null, 2));
+report; // printed automatically as JSON
 ```
 
 Use the `evaluate(...)` primitive only when you intentionally want to run a

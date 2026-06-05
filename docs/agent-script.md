@@ -176,7 +176,6 @@ The schema forms are:
 | `[{ selector: "<selector>", attr: "<name>" }]` | Attribute from all matches |
 | `[{ selector: "<selector>", fields: { ... } }]` | Array of records, with fields resolved relative to each matched element |
 | `limit: N` | Cap array extraction to `N` matches |
-| `follow: <url-or-spec>` | Fetch a detail page for each matched row and extract from that document |
 
 Return shape follows the top-level schema:
 
@@ -188,29 +187,11 @@ Return shape follows the top-level schema:
 - `extract([{ selector: "a" }])` is shorthand for a single anonymous array
   extraction and returns the array directly.
 
-`follow` is useful for list-to-detail scraping:
-
-```js
-const stories = extract({
-  stories: [{
-    selector: "tr.athing",
-    limit: 5,
-    fields: {
-      id: { attr: "id" },
-      title: ".titleline > a",
-      comments: [{
-        follow: "/item?id={id}",
-        selector: "tr.athing.comtr:has(.commtext)",
-        limit: 3,
-        fields: {
-          author: ".hnuser",
-          text: ".commtext"
-        }
-      }]
-    }
-  }]
-});
-```
+`extract(...)` reads only the current page. For list-to-detail scraping —
+capture a list, then visit each row for more — capture the list, then loop in
+the script: `goto` each row's URL and `extract` the detail. The local agent
+context keeps the data across navigations, so the assembly happens in plain
+JavaScript. See the [complete example](#complete-example) below.
 
 When passing an object directly to `extract(...)`, the runtime serializes it as
 the extractor schema. These forms are equivalent:
@@ -312,7 +293,7 @@ Only replayable browser actions are recorded:
 - Recorded: `goto`, `click`, `fill`, `scroll`, `hover`, `press`,
   `selectOption`, `setChecked`, `waitForSelector`, `waitForScript`, `evaluate`,
   and `extract`.
-- Not recorded: read-only exploration tools such as `tree`, `markdown`,
+- Not recorded: read-only exploration tools such as `tree`, `markdown`, `html`,
   `links`, `findElement`, `consoleLogs`, `getUrl`, `getCookies`, and `getEnv`.
 - Natural-language prompts and recording comments are written as `//` comments.
 
