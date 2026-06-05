@@ -48,7 +48,10 @@ _proto: *XMLHttpRequestEventTarget,
 _upload: ?*XMLHttpRequestUpload = null,
 _arena: Allocator,
 _http_response: ?HttpClient.Response = null,
-_active_request: bool = false,
+
+// number of inflight requests, we can have multiple, e.g. xhr calling its own
+// send from the onload callback
+_active_requests: u8 = 0,
 
 _url: [:0]const u8 = "",
 _method: http.Method = .GET,
@@ -124,10 +127,10 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
 }
 
 fn releaseSelfRef(self: *XMLHttpRequest) void {
-    if (self._active_request == false) {
+    if (self._active_requests == 0) {
         return;
     }
-    self._active_request = false;
+    self._active_requests -= 1;
     self.releaseRef(self._exec.page);
 }
 
@@ -255,7 +258,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
 
     self.acquireRef();
-    self._active_request = true;
+    self._active_requests += 1;
 
     exec.makeRequest(.{
         .ctx = self,

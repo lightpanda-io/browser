@@ -357,6 +357,24 @@
   }
 </script>
 
+<script id="fetch_deferred_behind_importScripts" type=module>
+  // A worker fetch() whose response arrives during a blocking importScripts()
+  // is deferred by the DeferringLayer; the worker must flush it (it has no
+  // ScriptManager). Without the flush the fetch never resolves and its
+  // Response arena leaks (caught by the runner's ArenaPool leak check).
+  {
+    const state = await testing.async();
+    const worker = new Worker('fetch-defer-worker.js');
+    worker.onmessage = (event) => state.resolve(event.data);
+    worker.postMessage(null);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker fetch failed: ' + data.err);
+      testing.expectEqual(200, data.status);
+    });
+  }
+</script>
+
 <script id="worker_post_before_load" type=module>
   // Per spec, messages posted before the worker has finished loading must
   // be buffered and delivered once onmessage is registered. Without the
