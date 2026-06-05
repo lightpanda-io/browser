@@ -182,6 +182,12 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 }
 
 fn loadInitialScript(self: *Worker, script: []const u8) !void {
+    const js_context = self._worker_scope.js;
+
+    if (js_context.env.terminatePending()) {
+        return;
+    }
+
     // Keep buffering throughout the entire outer eval (including any
     // runMacrotasks pumped by importScripts via the synchronous CDP path,
     // see WorkerGlobalScope.importScripts). The flip-and-drain happens
@@ -200,7 +206,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     }
 
     var ls: js.Local.Scope = undefined;
-    self._worker_scope.js.localScope(&ls);
+    js_context.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: js.TryCatch = undefined;
@@ -213,12 +219,20 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     // synchronously through ScriptManagerBase (client.tick sync_wait).
     switch (self._type) {
         .classic => _ = ls.local.eval(script, self._url) catch |err| {
+            if (js_context.env.terminatePending()) {
+                return;
+            }
+
             const caught = try_catch.caughtOrError(self._arena, err);
             log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
-        .module => self._worker_scope.js.module(false, &ls.local, script, self._url, true) catch |err| {
+        .module => js_context.module(false, &ls.local, script, self._url, true) catch |err| {
+            if (js_context.env.terminatePending()) {
+                return;
+            }
+
             const caught = try_catch.caughtOrError(self._arena, err);
             log.err(.browser, "worker module error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
