@@ -194,6 +194,23 @@ replayable. Always
 synthesize a CSS selector from the attributes (`id`, `class`,
 `name`, `action`, `tag_name`) and use that.
 
+You don't have to hand-roll the selector. Every node in the `/tree`
+output carries a `backendNodeId` (the leading number on each line), and
+`/nodeDetails` turns one into a durable selector for you:
+
+```
+> /nodeDetails backendNodeId=15
+```
+
+It returns a ready-to-use CSS `selector` that resolves to that node
+(plus its tag, id, class, name, and attributes) — the canonical way to
+go from a `/tree` (or `/findElement`) hit to a selector you can paste
+into `/click` or `/fill`. We reached for `/detectForms` above because
+the two login/signup forms share field names, so a form-scoped selector
+(keyed on `action`) is cleaner here — but `/nodeDetails` is the quickest
+path whenever you have a single `backendNodeId` and just want its
+selector without guessing.
+
 Now fill the form:
 
 ```
@@ -320,9 +337,13 @@ goto("https://news.ycombinator.com");
 extract({ topStories: [{ selector: ".athing", fields: { rank: ".rank", title: ".titleline > a", url: { selector: ".titleline > a", attr: "href" } } }] });
 ```
 
-Natural-language REPL turns are not saved as executable JavaScript.
-When a natural-language turn produces recorded browser actions, the
-prompt is kept as a `//` comment above those actions.
+Natural-language REPL turns are never saved as executable JavaScript.
+In the deterministic `--no-llm` transcription, the prompt that produced
+a set of recorded actions is kept as a `//` comment above them, so the
+script stays readable. The LLM `/save` path is different: it rewrites
+the whole session into an idiomatic script and is told to emit
+JavaScript only, so it generally drops those comments rather than
+preserving them verbatim.
 
 ## 5. Running deterministically
 

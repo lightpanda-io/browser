@@ -110,24 +110,36 @@ Only recorded browser primitives are installed globally:
 
 | Primitive | Arguments | Runs in |
 |-----------|-----------|---------|
-| `goto` | `goto(url)` or `goto({ url, timeout, waitUntil })` | Browser session |
+| `goto` | `goto(url[, { timeout, waitUntil }])` | Browser session |
 | `extract` | `extract(schema)` or `extract({ schema })` | Browser page via extractor; returns a JS object or array |
-| `evaluate` | `evaluate(script)` or `evaluate({ script, url, timeout, waitUntil, save })` | Browser page JS context |
-| `click` | `click({ selector })` or `click({ backendNodeId })` | Browser page |
-| `fill` | `fill({ selector, value })` or `fill({ backendNodeId, value })` | Browser page |
-| `scroll` | `scroll()` or `scroll({ x, y, backendNodeId })` | Browser page |
-| `waitForSelector` | `waitForSelector(selector)` or `waitForSelector({ selector, timeout })` | Browser page |
-| `waitForScript` | `waitForScript(script)` or `waitForScript({ script, timeout })` | Browser page JS context |
-| `hover` | `hover({ selector })` or `hover({ backendNodeId })` | Browser page |
-| `press` | `press({ key })` or `press({ key, selector, backendNodeId })` | Browser page |
-| `selectOption` | `selectOption({ selector, value })` or `selectOption({ backendNodeId, value })` | Browser page |
-| `setChecked` | `setChecked({ selector, checked })` or `setChecked({ backendNodeId, checked })` | Browser page |
+| `evaluate` | `evaluate(script[, { url, timeout, waitUntil, save }])` | Browser page JS context |
+| `click` | `click({ selector })` | Browser page |
+| `fill` | `fill({ selector, value })` | Browser page |
+| `scroll` | `scroll()` or `scroll({ x, y })` | Browser page |
+| `waitForSelector` | `waitForSelector(selector[, { timeout }])` | Browser page |
+| `waitForScript` | `waitForScript(script[, { timeout }])` | Browser page JS context |
+| `hover` | `hover({ selector })` | Browser page |
+| `press` | `press({ key })` or `press({ key, selector })` | Browser page |
+| `selectOption` | `selectOption({ selector, value })` | Browser page |
+| `setChecked` | `setChecked({ selector, checked })` | Browser page |
 
 `waitUntil` accepts `"load"`, `"domcontentloaded"`, `"networkidle"`, or
 `"done"`.
 
-Prefer CSS selectors in saved scripts. `backendNodeId` values are tied to the
-current DOM snapshot and are not stable after navigation or DOM mutation.
+The `[, { … }]` is an optional trailing options object: leading arguments are
+positional (`waitForSelector("#row", { timeout: 2000 })`), and the options ride
+in a final object. Passing a single object with everything
+(`waitForSelector({ selector: "#row", timeout: 2000 })`) is equivalent — that's
+the shape `/save` records into saved scripts. An option can't be a bare
+positional, though: `waitForSelector("#row", 2000)` is an error.
+
+Script primitives address elements by CSS selector only. The tools that hand
+out `backendNodeId`s (`tree`, `findElement`, `nodeDetails`) aren't installed in
+the script context, and a raw node ID wouldn't survive replay anyway. When
+you're exploring in the REPL and have a `backendNodeId` — e.g. the leading
+number on a `/tree` line, or a `/findElement` hit — run `/nodeDetails
+backendNodeId=<id>` to get a durable CSS `selector`, then paste that into your
+script.
 
 ## Navigation
 
@@ -299,7 +311,12 @@ Only replayable browser actions are recorded:
   and `extract`.
 - Not recorded: read-only exploration tools such as `tree`, `markdown`, `html`,
   `links`, `findElement`, `consoleLogs`, `getUrl`, `getCookies`, and `getEnv`.
-- Natural-language prompts and recording comments are written as `//` comments.
+- Natural-language prompts are written as `//` comments above the actions they
+  produced.
+
+This is the deterministic `--no-llm` transcription. When `/save` runs with an
+LLM it instead synthesizes an idiomatic script from the session and is asked to
+emit JavaScript only, so those `//` comments generally won't appear.
 
 ## Error Handling
 

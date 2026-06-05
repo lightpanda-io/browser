@@ -235,14 +235,17 @@ is origin-scoped and persists across navigations within a session).
 From the REPL, `/save [file.js]` writes the session back to a `.js` file
 and `/load <path>` runs a script from disk against the current session.
 
-State-mutating commands (`/goto`, `/click`, `/fill`, `/scroll`, `/hover`,
-`/selectOption`, `/setChecked`, `/waitForSelector`, `/press`, `/evaluate`,
-`/extract`) are saved; read-only commands (`/tree`, `/markdown`,
-`/links`, `/findElement`, …) and the natural-language turns that produced
-them are not. Natural-language turns are saved as `// <prompt>` comments
-above the resulting JavaScript calls so the script stays readable. In the
-basic REPL (`--no-llm`) `/save` transcribes the session deterministically;
-with an LLM it synthesizes an equivalent idiomatic script.
+`/save` works one of two ways. **With `--no-llm`** it transcribes the session
+deterministically: state-mutating commands (`/goto`, `/click`, `/fill`,
+`/scroll`, `/hover`, `/selectOption`, `/setChecked`, `/waitForSelector`,
+`/waitForScript`, `/press`, `/evaluate`, `/extract`) become JavaScript calls,
+read-only commands (`/tree`, `/markdown`, `/links`, `/findElement`, …) are
+dropped, and each natural-language prompt that produced recorded actions is
+written as a `// <prompt>` comment above those calls so the script stays
+readable. **With an LLM** it instead synthesizes an idiomatic script from the
+whole session — the synthesis prompt asks for JavaScript only ("no
+commentary"), so the result generally has no such comments: the model folds
+intent into the code and drops dead-ends.
 
 ### JavaScript Script Running
 
