@@ -25,6 +25,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const Command = lp.Command;
+const Config = lp.Config;
 
 /// Shared row format for the `/help` listing — `name` is the command name
 /// (no `/`), `description` is a terse one-liner.
@@ -50,11 +51,30 @@ pub const MetaCommand = struct {
     const Tag = enum { help, quit, verbosity, effort, usage, clear, reset, save, load, model, provider };
 };
 
+/// Tag names of a Zig enum, so a command's allowed values can't drift from the
+/// enum it sets.
+fn tagNames(comptime E: type) []const []const u8 {
+    const fields = @typeInfo(E).@"enum".fields;
+    var names: [fields.len][]const u8 = undefined;
+    for (fields, &names) |f, *n| n.* = f.name;
+    const frozen = names;
+    return &frozen;
+}
+
+/// `<a|b|c>` ghost-text hint built from the same enum's tag names.
+fn tagHint(comptime E: type) []const u8 {
+    var s: []const u8 = "<";
+    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
+        s = s ++ (if (i == 0) f.name else "|" ++ f.name);
+    }
+    return s ++ ">";
+}
+
 pub const meta_commands = [_]MetaCommand{
     .{ .tag = .help, .name = "help", .hint = "[command]", .values = &.{}, .description = "List commands, or show help for one" },
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
-    .{ .tag = .verbosity, .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" }, .description = "Set agent verbosity" },
-    .{ .tag = .effort, .name = "effort", .hint = "<none|minimal|low|medium|high|xhigh>", .values = &.{ "none", "minimal", "low", "medium", "high", "xhigh" }, .description = "Set per-turn reasoning effort" },
+    .{ .tag = .verbosity, .name = "verbosity", .hint = tagHint(Config.AgentVerbosity), .values = tagNames(Config.AgentVerbosity), .description = "Set agent verbosity" },
+    .{ .tag = .effort, .name = "effort", .hint = tagHint(Config.Effort), .values = tagNames(Config.Effort), .description = "Set per-turn reasoning effort" },
     .{ .tag = .usage, .name = "usage", .hint = "", .values = &.{}, .description = "Show token usage and cache stats for this session" },
     .{ .tag = .clear, .name = "clear", .hint = "", .values = &.{}, .description = "Clear conversation history and usage (keeps page/cookies)" },
     .{ .tag = .reset, .name = "reset", .hint = "", .values = &.{}, .description = "Reset conversation and browser session (drops page/cookies)" },

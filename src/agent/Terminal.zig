@@ -360,8 +360,7 @@ fn valueAt(schema: *const Schema, body: []const u8, ends_ws: bool) ?ValueAt {
     return null;
 }
 
-/// Adds enum-value completions when the cursor is on an enum field's value.
-/// Returns true when it owns the completion (caller should not also offer keys).
+/// Returns true when it owns the completion, so the caller skips key hints.
 fn addValueCompletions(
     cenv: ?*c.ic_completion_env_t,
     input: []const u8,
