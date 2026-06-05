@@ -1341,18 +1341,18 @@ test "MCP - getCookies without a loaded page refuses instead of dumping the jar"
     try testing.expect(std.mem.indexOf(u8, written, "No current page") != null);
 }
 
-test "MCP - goto with bad waitUntil surfaces rich error" {
+test "MCP - waitForState with bad state surfaces rich error" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"about:blank","waitUntil":"x"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForState","arguments":{"state":"x"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "invalid waitUntil 'x'") != null);
+    try testing.expect(std.mem.indexOf(u8, written, "invalid state 'x'") != null);
     try testing.expect(std.mem.indexOf(u8, written, "load") != null);
     try testing.expect(std.mem.indexOf(u8, written, "isError\":true") != null);
 }

@@ -85,9 +85,19 @@ pub const driver_guidance =
     \\  about the currently-loaded page unless they explicitly point
     \\  elsewhere.
     \\
+    \\Page loading: `goto` and url-reads return at the `load` event — a fast
+    \\snapshot. Content rendered by post-load JavaScript (feeds, search results,
+    \\comment threads) may not be there yet. If a read looks incomplete — an
+    \\empty list, a spinner, a skeleton, or a near-empty page on a site you know
+    \\is dynamic — call `waitForState {state: networkidle}` and read again. Use
+    \\`waitForSelector`/`waitForScript` to wait for a specific element or JS
+    \\condition. Most static pages are already complete at `load`, so don't wait
+    \\blindly.
+    \\
     \\Browsing efficiently (multi-page / research tasks):
-    \\- Each navigation is a full page load — the slowest thing you do, costing
-    \\  seconds even on light sites (ads and trackers delay it). Minimize them.
+    \\- Page loads are cheap (`goto` returns at `load`), but every tool call is a
+    \\  round-trip and each `waitForState` escalation adds turns — be deliberate
+    \\  rather than spraying navigations and waits.
     \\- Triage from `search` snippets before opening links; open only the few
     \\  most promising. Don't re-run a search you already ran, and skip
     \\  near-duplicate sources that repeat the same announcement verbatim.
@@ -147,7 +157,7 @@ pub const save_synthesis_prompt =
     \\  an escape hatch, not a default, and cannot see the script's variables —
     \\  interpolate any value into its string.
     \\Stay faithful to the recorded calls: same options each one actually used.
-    \\Do NOT add `timeout`/`waitUntil` to goto (or any tool) unless the session
+    \\Do NOT add a `timeout` to goto (or any tool) unless the session
     \\did. Never round-trip a result through `lp.*`, and never append no-op
     \\extract(...) probes or `evaluate("return lp....")` tails to surface output.
     \\The completion value — the last top-level expression — prints automatically
@@ -203,6 +213,7 @@ pub const Tool = enum {
     scroll,
     waitForSelector,
     waitForScript,
+    waitForState,
     hover,
     press,
     selectOption,
@@ -218,7 +229,7 @@ pub const Tool = enum {
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => true,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => true,
             .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -229,7 +240,7 @@ pub const Tool = enum {
     pub fn needsLocator(self: Tool) bool {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => true,
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -238,7 +249,7 @@ pub const Tool = enum {
     pub fn producesData(self: Tool) bool {
         return switch (self) {
             .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
-            .goto, .click, .fill, .scroll, .waitForSelector, .waitForScript, .hover, .press, .selectOption, .setChecked => false,
+            .goto, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
         };
     }
 
@@ -265,8 +276,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  },
                     \\  "required": ["url"]
                     \\}
@@ -280,8 +290,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "query": { "type": "string", "description": "The search query." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  },
                     \\  "required": ["query"]
                     \\}
@@ -298,8 +307,7 @@ pub const Tool = enum {
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
                 ),
@@ -314,8 +322,7 @@ pub const Tool = enum {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, dump only that element's outerHTML." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML." },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
                 ),
@@ -335,7 +342,6 @@ pub const Tool = enum {
                     \\    "script": { "type": "string" },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The evaluate's return value is stored under this name and re-exposed as `lp.<name>` to subsequent evaluates. Objects, arrays, and strings are serialized automatically — no JSON.stringify needed." }
                     \\  },
                     \\  "required": ["script"]
@@ -381,7 +387,6 @@ pub const Tool = enum {
                     \\  "properties": {
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
                     \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
                     \\  }
@@ -483,6 +488,20 @@ pub const Tool = enum {
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
                     \\  },
                     \\  "required": ["script"]
+                    \\}
+                ),
+            },
+            .waitForState => .{
+                .description = "Wait for the CURRENT page to reach a load state (no navigation). After a `goto`, the page is returned at the fast `load` snapshot, so content rendered by post-load JS (XHR-loaded lists, feeds, search results) may still be missing. When a read looks incomplete — empty lists, spinners, skeletons — call this with 'networkidle' and re-read. Prefer 'networkidle'; 'done' can be slow on sites with constant background activity (ads, polling).",
+                .summary = "Wait for the page to reach a load state",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "state": { "type": "string", "enum": ["load", "domcontentloaded", "networkalmostidle", "networkidle", "done"], "description": "Load state to wait for. 'networkidle' = network settled (the usual choice to finish a dynamic page)." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+                    \\  },
+                    \\  "required": ["state"]
                     \\}
                 ),
             },
@@ -634,8 +653,7 @@ const url_params_schema = minify(
     \\  "type": "object",
     \\  "properties": {
     \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
-    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
     \\  }
     \\}
 );
@@ -684,13 +702,11 @@ pub const ToolResult = struct {
 pub const GotoParams = struct {
     url: [:0]const u8,
     timeout: ?u32 = null,
-    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 pub const UrlParams = struct {
     url: ?[:0]const u8 = null,
     timeout: ?u32 = null,
-    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 const ActionTarget = union(enum) {
@@ -757,6 +773,7 @@ fn dispatch(
         .scroll => .{ .text = try execScroll(arena, session, registry, substituted) },
         .waitForSelector => .{ .text = try execWaitForSelector(arena, session, registry, substituted) },
         .waitForScript => .{ .text = try execWaitForScript(arena, session, substituted) },
+        .waitForState => .{ .text = try execWaitForState(arena, session, substituted) },
         .hover => .{ .text = try execHover(arena, session, registry, substituted) },
         .press => .{ .text = try execPress(arena, session, registry, substituted) },
         .selectOption => .{ .text = try execSelectOption(arena, session, registry, substituted) },
@@ -786,7 +803,7 @@ pub fn evalScript(
     script: []const u8,
 ) ToolError!ToolResult {
     const z = try arena.dupeZ(u8, script);
-    const page = try ensurePage(session, registry, null, null, null);
+    const page = try ensurePage(session, registry, null, null);
     return runEval(arena, page, z, null);
 }
 
@@ -805,7 +822,7 @@ pub fn extract(
     if (!valid) return error.InvalidParams;
 
     const script = try std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0);
-    const page = try ensurePage(session, registry, null, null, null);
+    const page = try ensurePage(session, registry, null, null);
     return runEval(arena, page, script, null);
 }
 
@@ -855,7 +872,7 @@ const schema_walker_suffix = ")";
 
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
-    return switch (try performGoto(session, registry, args.url, args.timeout, args.waitUntil)) {
+    return switch (try performGoto(session, registry, args.url, args.timeout)) {
         .completed => "Navigated successfully.",
         .timeout => "Navigation started but the page did not finish loading before the timeout.",
     };
@@ -864,7 +881,6 @@ fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
 pub const SearchParams = struct {
     query: []const u8,
     timeout: ?u32 = null,
-    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -889,7 +905,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
         .{encoded},
         0,
     ) catch return ToolError.OutOfMemory;
-    _ = try performGoto(session, registry, ddg_url, args.timeout, args.waitUntil);
+    _ = try performGoto(session, registry, ddg_url, args.timeout);
     const ddg_frame = try requireFrame(session);
     return renderFrameMarkdown(arena, ddg_frame);
 }
@@ -950,10 +966,9 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
         maxBytes: ?u32 = null,
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
-        waitUntil: ?lp.Config.WaitUntil = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
-    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const opts: lp.markdown.Opts = .{ .max_bytes = args.maxBytes };
 
@@ -976,10 +991,9 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         backendNodeId: ?CDPNode.Id = null,
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
-        waitUntil: ?lp.Config.WaitUntil = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
-    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     if (args.selector) |sel| {
@@ -996,7 +1010,7 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
 
 fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
         return ToolError.InternalError;
@@ -1011,10 +1025,9 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         backendNodeId: ?u32 = null,
         maxDepth: ?u32 = null,
         timeout: ?u32 = null,
-        waitUntil: ?lp.Config.WaitUntil = null,
     };
     const args = try parseArgsOrDefault(TreeParams, arena, arguments);
-    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const root_node = (try resolveOptionalNode(registry, args.backendNodeId)) orelse page.document.asNode();
 
@@ -1047,7 +1060,7 @@ fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
 
 fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch
         return ToolError.InternalError;
@@ -1058,7 +1071,7 @@ fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, regis
 
 fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch
         return ToolError.InternalError;
@@ -1067,7 +1080,7 @@ fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: 
 
 fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch
         return ToolError.InternalError;
@@ -1081,11 +1094,10 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
         script: [:0]const u8,
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
-        waitUntil: ?lp.Config.WaitUntil = null,
         save: ?[]const u8 = null,
     };
     const args = try parseArgs(Params, arena, arguments);
-    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
     const before = session.currentFrame();
     const app_allocator = session.browser.app.allocator;
 
@@ -1440,6 +1452,10 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
     }) catch return ToolError.InternalError;
 }
 
+/// Default timeout for the `waitFor*` tools — short, since they wait on an
+/// already-loaded page rather than a full navigation (which uses 10000).
+const default_wait_timeout_ms: u32 = 5000;
+
 fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         selector: [:0]const u8,
@@ -1449,7 +1465,7 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
 
     _ = try requireFrame(session);
 
-    const timeout_ms = args.timeout orelse 5000;
+    const timeout_ms = args.timeout orelse default_wait_timeout_ms;
 
     const node = lp.actions.waitForSelector(args.selector, timeout_ms, session) catch |err| switch (err) {
         error.InvalidSelector => return ToolError.InvalidParams,
@@ -1476,7 +1492,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
 
     _ = try requireFrame(session);
 
-    const timeout_ms = args.timeout orelse 5000;
+    const timeout_ms = args.timeout orelse default_wait_timeout_ms;
 
     lp.actions.waitForScript(args.script, timeout_ms, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
@@ -1493,6 +1509,29 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
     try awaitQueuedNavigation(session);
 
     return "Script returned truthy.";
+}
+
+fn execWaitForState(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {
+    const Params = struct {
+        state: lp.Config.WaitUntil,
+        timeout: ?u32 = null,
+    };
+    const args = try parseArgs(Params, arena, arguments);
+
+    _ = try requireFrame(session);
+
+    const timeout_ms = args.timeout orelse default_wait_timeout_ms;
+
+    lp.actions.waitForState(args.state, timeout_ms, session) catch |err| switch (err) {
+        error.Cancelled => return ToolError.Cancelled,
+        error.Timeout => return ToolError.Timeout,
+        else => {
+            log.debug(.browser, "waitForState error", .{ .err = @errorName(err) });
+            return ToolError.InternalError;
+        },
+    };
+
+    return std.fmt.allocPrint(arena, "Page reached {s}.", .{@tagName(args.state)}) catch return ToolError.InternalError;
 }
 
 fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1713,17 +1752,24 @@ fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
     return aw.written();
 }
 
-fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!*lp.Frame {
+fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const u8, timeout: ?u32) ToolError!*lp.Frame {
     if (url) |u| {
         if (session.currentFrame()) |frame| {
             if (std.mem.eql(u8, frame.url, u)) return frame;
         }
-        _ = try performGoto(session, registry, u, timeout, waitUntil);
+        _ = try performGoto(session, registry, u, timeout);
     }
     return session.currentFrame() orelse ToolError.FrameNotLoaded;
 }
 
-fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!lp.Session.Runner.WaitResult {
+/// Navigations wait only for `load` — the fast snapshot. Content rendered by
+/// post-load JS (XHR feeds, search results) may still be missing; the model
+/// escalates with the `waitForState` tool when a read looks incomplete. `.done`
+/// is deliberately avoided as a default: on real sites trackers/timers keep the
+/// network from ever fully idling, so it just rides the timeout.
+const default_nav_wait: lp.Config.WaitUntil = .load;
+
+fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
     if (session.hasPage()) {
         registry.reset();
         session.removePage();
@@ -1737,7 +1783,7 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
     var runner = session.runner(.{}) catch return ToolError.NavigationFailed;
     const result = runner.waitResult(.{
         .ms = timeout orelse 10000,
-        .until = waitUntil orelse .done,
+        .until = default_nav_wait,
     }) catch |err| return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 
     const frame = session.currentFrame() orelse return ToolError.NavigationFailed;
@@ -1769,10 +1815,10 @@ fn diagnoseArgs(arena: std.mem.Allocator, arguments: ?std.json.Value) ?[]const u
     const args = arguments orelse return null;
     if (args != .object) return null;
 
-    if (args.object.get("waitUntil")) |v| switch (v) {
+    if (args.object.get("state")) |v| switch (v) {
         .string => |s| if (std.meta.stringToEnum(lp.Config.WaitUntil, s) == null)
-            return formatEnumError(arena, "waitUntil", s, lp.Config.WaitUntil),
-        else => return std.fmt.allocPrint(arena, "waitUntil must be a string", .{}) catch null,
+            return formatEnumError(arena, "state", s, lp.Config.WaitUntil),
+        else => return std.fmt.allocPrint(arena, "state must be a string", .{}) catch null,
     };
 
     return null;

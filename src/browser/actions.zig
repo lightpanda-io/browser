@@ -288,3 +288,8 @@ pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, session: *Session) !
 
     return runner.waitForScript(script, remainingMs(timeout_ms, &timer));
 }
+
+pub fn waitForState(state: lp.Config.WaitUntil, timeout_ms: u32, session: *Session) !void {
+    var runner = try session.runner(.{});
+    try runner.wait(.{ .ms = timeout_ms, .until = state });
+}

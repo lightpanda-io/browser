@@ -953,8 +953,10 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
 
     try runTestScript(runtime,
         \\// The reported bug: Playwright-style goto(url, options) must merge, not throw.
-        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000, waitUntil: "load" });
+        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000 });
         \\if (!nav.includes("Navigated")) throw new Error("two-arg goto failed: " + nav);
+        \\// waitForState: single required param, positional like waitForSelector.
+        \\if (!waitForState("load").includes("reached")) throw new Error("waitForState positional failed");
         \\// Object form still works.
         \\goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
         \\// Single selector positional.

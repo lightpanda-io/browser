@@ -100,6 +100,7 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
         .goto => &.{"url"},
         .evaluate, .waitForScript => &.{"script"},
         .waitForSelector, .click, .hover => &.{"selector"},
+        .waitForState => &.{"state"},
         .fill, .selectOption => &.{ "selector", "value" },
         .setChecked => &.{ "selector", "checked" },
         .press => &.{ "selector", "key" },

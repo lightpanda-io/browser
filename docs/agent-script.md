@@ -110,21 +110,24 @@ Only recorded browser primitives are installed globally:
 
 | Primitive | Arguments | Runs in |
 |-----------|-----------|---------|
-| `goto` | `goto(url[, { timeout, waitUntil }])` | Browser session |
+| `goto` | `goto(url[, { timeout }])` | Browser session |
 | `extract` | `extract(schema)` or `extract({ schema })` | Browser page via extractor; returns a JS object or array |
-| `evaluate` | `evaluate(script[, { url, timeout, waitUntil, save }])` | Browser page JS context |
+| `evaluate` | `evaluate(script[, { url, timeout, save }])` | Browser page JS context |
 | `click` | `click({ selector })` | Browser page |
 | `fill` | `fill({ selector, value })` | Browser page |
 | `scroll` | `scroll()` or `scroll({ x, y })` | Browser page |
 | `waitForSelector` | `waitForSelector(selector[, { timeout }])` | Browser page |
 | `waitForScript` | `waitForScript(script[, { timeout }])` | Browser page JS context |
+| `waitForState` | `waitForState(state[, { timeout }])` | Browser page |
 | `hover` | `hover({ selector })` | Browser page |
 | `press` | `press({ key })` or `press({ key, selector })` | Browser page |
 | `selectOption` | `selectOption({ selector, value })` | Browser page |
 | `setChecked` | `setChecked({ selector, checked })` | Browser page |
 
-`waitUntil` accepts `"load"`, `"domcontentloaded"`, `"networkidle"`, or
-`"done"`.
+`goto` returns at the `load` event (a fast snapshot). When a page's content is
+still loading (rendered by post-load JS), call `waitForState("networkidle")`
+before reading. `waitForState`'s `state` accepts `"load"`,
+`"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`, or `"done"`.
 
 The `[, { … }]` is an optional trailing options object: leading arguments are
 positional (`waitForSelector("#row", { timeout: 2000 })`), and the options ride
@@ -150,8 +153,7 @@ goto("https://example.com");
 
 goto({
   url: "https://example.com/app",
-  timeout: 15000,
-  waitUntil: "domcontentloaded"
+  timeout: 15000
 });
 ```
 

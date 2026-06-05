@@ -247,7 +247,7 @@ and `/load <path>` runs a script from disk against the current session.
 `/save` works one of two ways. **With `--no-llm`** it transcribes the session
 deterministically: state-mutating commands (`/goto`, `/click`, `/fill`,
 `/scroll`, `/hover`, `/selectOption`, `/setChecked`, `/waitForSelector`,
-`/waitForScript`, `/press`, `/evaluate`, `/extract`) become JavaScript calls,
+`/waitForScript`, `/waitForState`, `/press`, `/evaluate`, `/extract`) become JavaScript calls,
 read-only commands (`/tree`, `/markdown`, `/links`, `/findElement`, …) are
 dropped, and each natural-language prompt that produced recorded actions is
 written as a `// <prompt>` comment above those calls so the script stays
@@ -390,7 +390,7 @@ Highlights:
 - `tree`, `markdown`, `html`, `links`, `interactiveElements`, `structuredData`,
   `detectForms`, `nodeDetails`, `findElement`
 - `click`, `fill`, `hover`, `press`, `scroll`, `selectOption`, `setChecked`,
-  `waitForSelector`, `waitForScript`
+  `waitForSelector`, `waitForScript`, `waitForState`
 - `extract` (the schema-driven data tool), `evaluate`, `consoleLogs`, `getUrl`,
   `getCookies`, `getEnv`
 
