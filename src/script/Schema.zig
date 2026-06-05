@@ -46,6 +46,9 @@ pub const FieldEntry = struct {
     field_type: FieldType,
     /// Used by `Command.format` to omit `checked=true` when emitting `/setChecked`.
     default_true: bool = false,
+    /// Allowed values when the schema constrains the field with `enum`; empty
+    /// otherwise. The REPL completer/hinter offers these as value suggestions.
+    enum_values: []const []const u8 = &.{},
 
     /// `backendNodeId` is ephemeral, never replayable. Boolean fields
     /// matching the schema default are cosmetic noise.
@@ -371,15 +374,7 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
     if (parsed != .object) return info;
 
     if (parsed.object.get("required")) |req| {
-        if (req == .array) {
-            var reqs: std.ArrayList([]const u8) = .empty;
-            try reqs.ensureTotalCapacity(arena, req.array.items.len);
-            for (req.array.items) |item| {
-                if (item != .string) continue;
-                reqs.appendAssumeCapacity(item.string);
-            }
-            info.required = try reqs.toOwnedSlice(arena);
-        }
+        info.required = try jsonStringArray(arena, req);
     }
 
     if (parsed.object.get("properties")) |props| {
@@ -393,6 +388,7 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
                     .name = entry.key_ptr.*,
                     .field_type = fieldTypeOf(entry.value_ptr.*),
                     .default_true = booleanDefaultTrue(entry.value_ptr.*),
+                    .enum_values = try enumValuesOf(arena, entry.value_ptr.*),
                 };
             }
             info.fields = fields;
@@ -450,6 +446,24 @@ fn booleanDefaultTrue(value: std.json.Value) bool {
     if (value != .object) return false;
     const d = value.object.get("default") orelse return false;
     return d == .bool and d.bool;
+}
+
+fn enumValuesOf(arena: std.mem.Allocator, value: std.json.Value) ![]const []const u8 {
+    if (value != .object) return &.{};
+    return jsonStringArray(arena, value.object.get("enum") orelse return &.{});
+}
+
+/// Collect a JSON array's string items into an arena-owned slice. Non-string
+/// items are skipped; a non-array yields an empty slice.
+fn jsonStringArray(arena: std.mem.Allocator, value: std.json.Value) ![]const []const u8 {
+    if (value != .array) return &.{};
+    var out: std.ArrayList([]const u8) = .empty;
+    try out.ensureTotalCapacity(arena, value.array.items.len);
+    for (value.array.items) |item| {
+        if (item != .string) continue;
+        out.appendAssumeCapacity(item.string);
+    }
+    return out.toOwnedSlice(arena);
 }
 
 /// Tokenize on whitespace. `"…"` and `'…'` (single or triple) are kept

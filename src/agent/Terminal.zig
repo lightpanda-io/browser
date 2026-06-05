@@ -321,6 +321,62 @@ fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
     return arg;
 }
 
+/// A field whose value the cursor is positioned to complete, plus the partial
+/// value typed so far. Covers both the leading positional (`/waitForState net`)
+/// and an explicit `key=` pair (`/waitForState state=net`).
+const ValueAt = struct {
+    field: Schema.FieldEntry,
+    partial: []const u8,
+    /// `key=value` form rather than the bare leading positional.
+    kv: bool,
+};
+
+/// Classifies the token under the cursor as a value position for some schema
+/// field. Null when the cursor isn't on a completable value (a key prefix, a
+/// non-leading positional, or an unknown field).
+fn valueAt(schema: *const Schema, body: []const u8, ends_ws: bool) ?ValueAt {
+    var last: []const u8 = "";
+    var n: usize = 0;
+    var it = std.mem.tokenizeAny(u8, body, &std.ascii.whitespace);
+    while (it.next()) |tok| {
+        last = tok;
+        n += 1;
+    }
+
+    // An empty body or a trailing space puts the cursor on a fresh token after
+    // the `n` committed ones; otherwise it sits on the last token.
+    const active: []const u8 = if (ends_ws or n == 0) "" else last;
+    const active_index: usize = if (ends_ws or n == 0) n else n - 1;
+
+    if (std.mem.indexOfScalar(u8, active, '=')) |eq| {
+        const field = schema.findField(active[0..eq]) orelse return null;
+        return .{ .field = field, .partial = active[eq + 1 ..], .kv = true };
+    }
+    // The leading bare token binds to a single-required schema's lone field.
+    if (active_index == 0 and schema.required.len == 1) {
+        const field = schema.findField(schema.required[0]) orelse return null;
+        return .{ .field = field, .partial = active, .kv = false };
+    }
+    return null;
+}
+
+/// Adds enum-value completions when the cursor is on an enum field's value.
+/// Returns true when it owns the completion (caller should not also offer keys).
+fn addValueCompletions(
+    cenv: ?*c.ic_completion_env_t,
+    input: []const u8,
+    body: []const u8,
+    schema: *const Schema,
+    buf: *[completion_buf_len:0]u8,
+) bool {
+    const ends_ws = input[input.len - 1] == ' ';
+    const v = valueAt(schema, body, ends_ws) orelse return false;
+    if (v.field.enum_values.len == 0) return false;
+    const prefix = input[0 .. input.len - v.partial.len];
+    for (v.field.enum_values) |val| addPrefixedCompletion(cenv, buf, input, prefix, val, "", v.partial);
+    return true;
+}
+
 fn addPartialKeyCompletions(
     cenv: ?*c.ic_completion_env_t,
     input: []const u8,
@@ -455,7 +511,9 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
         } else if (!inside_block) {
             if (Schema.parseSlashCommand(input)) |parts| {
                 if (Schema.findByName(parts.name)) |schema| {
-                    addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
+                    if (!addValueCompletions(cenv, input, parts.rest, schema, &buf)) {
+                        addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
+                    }
                 } else if (SlashCommand.findMeta(parts.name)) |meta| {
                     self.addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
                 }
@@ -594,6 +652,15 @@ fn ghostFirstMatch(names: []const []const u8, body: []const u8, lead: []const u8
 /// Renders `<required>` and `[optional=…]` for each unused field, or
 /// `<keyname>=…` when the user is typing a key prefix.
 fn renderSchemaHint(schema: *const Schema, body: []const u8, ends_ws: bool) [*c]const u8 {
+    // Ghost a matching enum value once the user is typing one. A bare leading
+    // positional with nothing typed yet keeps the `<state> …` template below,
+    // which is more informative than ghosting one arbitrary value.
+    if (valueAt(schema, body, ends_ws)) |v| {
+        if (v.field.enum_values.len > 0 and (v.kv or v.partial.len > 0)) {
+            return ghostFirstMatch(v.field.enum_values, v.partial, "");
+        }
+    }
+
     const a = analyzeBody(schema, body, ends_ws);
 
     if (a.partial_key) |pk| {
@@ -1178,6 +1245,61 @@ test "ChoiceState: starts on default and enter returns it" {
     var state = ChoiceState.init(2);
     try std.testing.expectEqual(@as(usize, 2), state.selected);
     try std.testing.expectEqual(@as(?usize, 2), state.apply(.enter, 3));
+}
+
+test "valueAt: enum field via positional and kv, partial and empty" {
+    const schema = Schema.findByName("waitForState").?;
+
+    // Leading positional, nothing typed: empty partial, not kv.
+    {
+        const v = valueAt(schema, "", true).?;
+        try std.testing.expect(v.field.enum_values.len > 0);
+        try std.testing.expectEqualStrings("", v.partial);
+        try std.testing.expect(!v.kv);
+    }
+    // Leading positional, partial value.
+    {
+        const v = valueAt(schema, "net", false).?;
+        try std.testing.expectEqualStrings("net", v.partial);
+        try std.testing.expect(!v.kv);
+    }
+    // Explicit `state=` with empty value.
+    {
+        const v = valueAt(schema, "state=", false).?;
+        try std.testing.expectEqualStrings("", v.partial);
+        try std.testing.expect(v.kv);
+    }
+    // Explicit `state=net`.
+    {
+        const v = valueAt(schema, "state=net", false).?;
+        try std.testing.expectEqualStrings("net", v.partial);
+        try std.testing.expect(v.kv);
+    }
+    // Past the only required field — timeout is not an enum, so no value match.
+    {
+        const v = valueAt(schema, "networkidle timeout=", false).?;
+        try std.testing.expectEqual(@as(usize, 0), v.field.enum_values.len);
+    }
+}
+
+test "renderSchemaHint: ghosts enum value once typing, keeps template when empty" {
+    const schema = Schema.findByName("waitForState").?;
+
+    const hintStr = struct {
+        fn f(p: [*c]const u8) ?[]const u8 {
+            if (p == null) return null;
+            return std.mem.sliceTo(@as([*:0]const u8, @ptrCast(p)), 0);
+        }
+    }.f;
+
+    // Nothing typed yet: the `<state> …` template, not an arbitrary value.
+    try std.testing.expectEqualStrings(" <state> [timeout=…]", hintStr(renderSchemaHint(schema, "", false)).?);
+
+    // Partial positional ghosts the suffix of the first matching value.
+    try std.testing.expectEqualStrings("workalmostidle", hintStr(renderSchemaHint(schema, "net", false)).?);
+
+    // `state=` ghosts the first value.
+    try std.testing.expectEqualStrings("load", hintStr(renderSchemaHint(schema, "state=", false)).?);
 }
 
 pub fn printAssistant(_: *Terminal, text: []const u8) void {
