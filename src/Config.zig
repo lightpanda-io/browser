@@ -675,3 +675,31 @@ pub fn validateUserAgent(ua: []const u8) !void {
         return error.Reserved;
     }
 }
+
+/// Tag names of a Zig enum, so a command's allowed values can't drift from the
+/// enum it sets.
+pub fn tagNames(comptime E: type) []const []const u8 {
+    const fields = @typeInfo(E).@"enum".fields;
+    var names: [fields.len][]const u8 = undefined;
+    for (fields, &names) |f, *n| n.* = f.name;
+    const frozen = names;
+    return &frozen;
+}
+
+/// `<a|b|c>` ghost-text hint built from the same enum's tag names.
+pub fn tagHint(comptime E: type) []const u8 {
+    var s: []const u8 = "<";
+    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
+        s = s ++ (if (i == 0) f.name else "|" ++ f.name);
+    }
+    return s ++ ">";
+}
+
+/// JSON array `["a","b","c"]` representation of the enum tag names.
+pub fn tagJsonArray(comptime E: type) []const u8 {
+    var s: []const u8 = "[";
+    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
+        s = s ++ (if (i == 0) "\"" else ",\"") ++ f.name ++ "\"";
+    }
+    return s ++ "]";
+}

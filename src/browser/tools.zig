@@ -498,7 +498,9 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "state": { "type": "string", "enum": ["load", "domcontentloaded", "networkalmostidle", "networkidle", "done"], "description": "Load state to wait for. 'networkidle' = network settled (the usual choice to finish a dynamic page)." },
+                    \\    "state": { "type": "string", "enum": 
+                ++ lp.Config.tagJsonArray(lp.Config.WaitUntil) ++
+                    \\, "description": "Load state to wait for. 'networkidle' = network settled (the usual choice to finish a dynamic page)." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
                     \\  },
                     \\  "required": ["state"]
