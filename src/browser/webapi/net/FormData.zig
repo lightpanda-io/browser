@@ -41,6 +41,7 @@ pub const Entry = struct {
     value: Value,
 
     const Value = union(enum) {
+        no_file: void,
         file: *File,
         string: String,
 
@@ -51,6 +52,9 @@ pub const Entry = struct {
                 // (application/x-www-form-urlencoded, text/plain) collapse to the
                 // file's name only — body is dropped.
                 .file => |f| f.getName(),
+                // An unselected file input contributes a File with an empty name,
+                // so it collapses to the empty string.
+                .no_file => "",
             };
         }
 
@@ -58,6 +62,7 @@ pub const Entry = struct {
             return switch (self) {
                 .string => |s| s.format(writer),
                 .file => |f| writer.writeAll(f.getName()),
+                .no_file => {},
             };
         }
     };
@@ -265,6 +270,17 @@ fn multipartEncodeEntry(entry: *const Entry, boundary: []const u8, writer: *std.
             try writer.writeAll(file._proto._slice);
             try writer.writeAll("\r\n");
         },
+        // An unselected file input still contributes a part: an empty filename,
+        // the default application/octet-stream Content-Type, and an empty body.
+        // This matches the empty File (no name, no type, no body) the WHATWG
+        // algorithm creates, and Chrome's wire output.
+        .no_file => {
+            try writer.writeAll("Content-Disposition: form-data; name=\"");
+            try writeMultipartName(writer, entry.name.str());
+            try writer.writeAll("\"; filename=\"\"\r\n");
+            try writer.writeAll("Content-Type: application/octet-stream\r\n\r\n");
+            try writer.writeAll("\r\n");
+        },
     }
 }
 
@@ -376,8 +392,10 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, frame: *F
                     // application/octet-stream; otherwise, one entry per file.
                     const files = if (input._files) |fl| fl._files else &.{};
                     if (files.len == 0) {
-                        const empty = try File.init(null, "", .{ .type = "application/octet-stream" }, frame._page);
-                        try appendFile(&list, arena, name, empty);
+                        try list.append(arena, .{
+                            .name = try String.init(arena, name, .{}),
+                            .value = .no_file,
+                        });
                     } else {
                         for (files) |file| {
                             try appendFile(&list, arena, name, file);
@@ -671,6 +689,51 @@ test "FormData: file entry collapses to filename in urlencode" {
     var buf = std.Io.Writer.Allocating.init(allocator);
     try fd.write(.{ .encoding = .urlencode, .allocator = allocator }, &buf.writer);
     try testing.expectString("upload=hello.txt", buf.written());
+}
+
+test "FormData: multipart no_file (unselected file input)" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd._entries.append(allocator, .{
+        .name = try String.init(allocator, "upload", .{}),
+        .value = .no_file,
+    });
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{
+        .encoding = .{ .formdata = "B" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    try testing.expectString(
+        "--B\r\n" ++
+            "Content-Disposition: form-data; name=\"upload\"; filename=\"\"\r\n" ++
+            "Content-Type: application/octet-stream\r\n\r\n" ++
+            "\r\n" ++
+            "--B--\r\n",
+        buf.written(),
+    );
+}
+
+test "FormData: no_file entry collapses to empty in urlencode" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd._entries.append(allocator, .{
+        .name = try String.init(allocator, "upload", .{}),
+        .value = .no_file,
+    });
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{ .encoding = .urlencode, .allocator = allocator }, &buf.writer);
+    try testing.expectString("upload=", buf.written());
 }
 
 test "FormData: plaintext write" {
