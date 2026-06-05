@@ -279,7 +279,9 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     var model = try allocator.dupe(u8, resolveModelName(opts, resolved, remembered));
     errdefer allocator.free(model);
 
-    if (llm) |l| {
+    // The REPL skips this network round trip to keep startup snappy; an invalid
+    // model surfaces on the first turn instead.
+    if (llm) |l| if (!will_repl) {
         const remembered_matches = remembered != null and remembered.?.provider == l.provider;
         const explicit = opts.model != null or remembered_matches;
         switch (try reconcileModel(allocator, l, model, opts.base_url, explicit)) {
@@ -289,7 +291,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             },
             .abort => return error.ModelNotAvailable,
         }
-    }
+    };
 
     const effort = resolveEffort(opts, remembered, will_repl);
     const verbosity = resolveVerbosity(opts, remembered);
@@ -357,9 +359,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             .providers = completionProviders,
             .models = completionModels,
         };
-        // Warm the model-list cache so the first autocomplete keystroke doesn't
-        // block on the network.
-        if (self.model_credentials != null) _ = completionModels(self, allocator);
+        // The model-list cache fills lazily on the first `/model` completion so
+        // startup never blocks on the network.
     }
 
     return self;
