@@ -628,7 +628,7 @@ fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
     if (Synthetic.isSynthetic(req.url)) {
         // The 2nd transfer is the callback context. We don't actually use it,
         // we're just sticking transfer in there to have something.
-        self.runNextTick(transfer, transfer, .{ .run = Synthetic.run }) catch |err| {
+        self.runNextTick(transfer, null, .{ .run = Synthetic.run }) catch |err| {
             if (transfer.state == .created) {
                 transfer.abort(err);
             }
