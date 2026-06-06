@@ -886,7 +886,6 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
     var i: usize = 0;
     while (i < text.len) {
         const ch = text[i];
-        // Comments: `//` to end of line, `/* */` until close (or end).
         if (ch == '/' and i + 1 < text.len and (text[i + 1] == '/' or text[i + 1] == '*')) {
             const start = i;
             if (text[i + 1] == '/') {
@@ -898,16 +897,14 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
             c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_comment.ptr);
             continue;
         }
-        // Strings and template literals. `$LP_*` refs inside repaint yellow
-        // over the green (isocline merges per-cell, so the later call wins).
         if (ch == '\'' or ch == '"' or ch == '`') {
             const start = i;
             i = scanQuoted(text, i);
             c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_string.ptr);
+            // `$LP_*` repaints yellow over green: isocline merges per cell, so the later call wins.
             highlightDollarVarsIn(henv, text, start, i);
             continue;
         }
-        // `$LP_*` refs: `$` followed by an identifier run (bare `$` is ignored).
         if (ch == '$') {
             const start = i;
             i += 1;
@@ -917,7 +914,6 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
             }
             continue;
         }
-        // Numbers: a leading digit, or `.` immediately followed by a digit.
         if (std.ascii.isDigit(ch) or (ch == '.' and i + 1 < text.len and std.ascii.isDigit(text[i + 1]))) {
             const start = i;
             i += 1;
@@ -925,7 +921,6 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
             c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_num.ptr);
             continue;
         }
-        // Identifiers: highlight only when the whole token is a keyword.
         if (std.ascii.isAlphabetic(ch) or ch == '_') {
             const start = i;
             i += 1;
@@ -935,7 +930,6 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
             }
             continue;
         }
-        // Operators, punctuation, whitespace, non-ASCII: advance one byte.
         i += 1;
     }
 }
