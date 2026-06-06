@@ -71,6 +71,8 @@ spinner: Spinner,
 completion_source: ?CompletionSource = null,
 /// True while the REPL is in JS mode; set by isocline's mode callback.
 js_mode: bool = false,
+/// True while a first Esc has armed "press Esc again to clear"; set by isocline.
+esc_clear_pending: bool = false,
 /// Base (REPL-mode) status segments, text owned; `renderStatus` overrides them
 /// with a JS-mode label when active. Re-rendered on resize so the bar refits.
 status: std.ArrayList(StatusSegment) = .empty,
@@ -123,6 +125,7 @@ pub fn attachCompleter(self: *Terminal) void {
     c.ic_set_default_completer(&completionCallback, self);
     c.ic_set_default_hinter(&hintsCallback, self);
     c.ic_set_mode_callback(&modeCallback, self);
+    c.ic_set_esc_clear_callback(&escClearCallback, self);
     c.ic_set_resize_callback(&resizeCallback, self);
     c.ic_set_default_highlighter(&highlighterCallback, self);
 }
@@ -130,6 +133,12 @@ pub fn attachCompleter(self: *Terminal) void {
 fn modeCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
     const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
     self.js_mode = active;
+    self.renderStatus();
+}
+
+fn escClearCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
+    const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
+    self.esc_clear_pending = active;
     self.renderStatus();
 }
 
@@ -940,14 +949,33 @@ fn clearStatus(self: *Terminal) void {
 
 fn renderStatus(self: *Terminal) void {
     if (!self.isRepl()) return;
+
+    var buf: [max_segments]StatusSegment = undefined;
+    var n: usize = 0;
+
     if (self.js_mode) {
-        self.writeStatusBar(&.{
-            .{ .text = "JS mode", .side = .left, .rank = 1 },
-            .{ .text = "Esc/Backspace exits JS mode", .side = .right, .rank = 2 },
-        });
-    } else {
-        self.writeStatusBar(self.status.items);
+        buf[n] = .{ .text = "JS mode", .side = .left, .rank = 1 };
+        n += 1;
+    } else for (self.status.items) |seg| {
+        if (seg.side != .left or n == max_segments - 1) continue;
+        buf[n] = seg;
+        n += 1;
     }
+
+    // the clear confirmation takes over the whole right side
+    if (self.esc_clear_pending) {
+        buf[n] = .{ .text = "Press Esc again to clear", .side = .right, .rank = 255 };
+        n += 1;
+    } else if (self.js_mode) {
+        buf[n] = .{ .text = "Esc exits JS mode", .side = .right, .rank = 2 };
+        n += 1;
+    } else for (self.status.items) |seg| {
+        if (seg.side != .right or n == max_segments) continue;
+        buf[n] = seg;
+        n += 1;
+    }
+
+    self.writeStatusBar(buf[0..n]);
 }
 
 const left_sep = " ";
