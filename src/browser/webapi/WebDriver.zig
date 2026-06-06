@@ -67,7 +67,6 @@ pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !vo
     const persisted = try sources.temp();
     errdefer persisted.release();
 
-
     const action_sequence = try arena.create(ActionSequence);
     action_sequence.* = .{
         .frame = frame,
