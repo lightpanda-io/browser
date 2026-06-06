@@ -943,7 +943,7 @@ fn renderStatus(self: *Terminal) void {
     if (self.js_mode) {
         self.writeStatusBar(&.{
             .{ .text = "JS mode", .side = .left, .rank = 1 },
-            .{ .text = "Esc exits JS mode", .side = .right, .rank = 2 },
+            .{ .text = "Esc/Backspace exits JS mode", .side = .right, .rank = 2 },
         });
     } else {
         self.writeStatusBar(self.status.items);
