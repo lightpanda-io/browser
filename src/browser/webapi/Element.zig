@@ -883,6 +883,11 @@ fn getStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
     return frame._element_styles.get(self);
 }
 
+pub fn setStyle(self: *Element, value: []const u8, frame: *Frame) !void {
+    const style = try self.getOrCreateStyle(frame);
+    try style.asCSSStyleDeclaration().setCssText(value, frame);
+}
+
 pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     const gop = try frame._element_class_lists.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
@@ -1832,7 +1837,7 @@ pub const JsApi = struct {
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
-    pub const style = bridge.accessor(Element.getOrCreateStyle, null, .{});
+    pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
     pub const hasAttributes = bridge.function(Element.hasAttributes, .{});
