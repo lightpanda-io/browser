@@ -111,14 +111,21 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return;
     const frame = bc.session.currentFrame() orelse return;
 
-    // Map the CDP button name to the DOM MouseEvent.button numbering
-    // (left/main = 0, middle/auxiliary = 1, right/secondary = 2, ...).
+    // Map the CDP button name to the DOM MouseEvent.button value.
+    // https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button
+    const dom_button = struct {
+        const main: i32 = 0;
+        const auxiliary: i32 = 1;
+        const secondary: i32 = 2;
+        const fourth: i32 = 3;
+        const fifth: i32 = 4;
+    };
     const button: i32 = switch (params.button) {
-        .none, .left => 0,
-        .middle => 1,
-        .right => 2,
-        .back => 3,
-        .forward => 4,
+        .none, .left => dom_button.main,
+        .middle => dom_button.auxiliary,
+        .right => dom_button.secondary,
+        .back => dom_button.fourth,
+        .forward => dom_button.fifth,
     };
 
     switch (params.type) {

@@ -3902,6 +3902,14 @@ fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
     return null;
 }
 
+// DOM MouseEvent.button values.
+// https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button
+const mouse_button = struct {
+    const main: i32 = 0; // left
+    const auxiliary: i32 = 1; // middle
+    const secondary: i32 = 2; // right
+};
+
 // Dispatch a single trusted mouse event of the given type on `target`, carrying
 // the pressed button and pointer position. `detail` is the click count (used for
 // click/dblclick); 0 for events where it does not apply.
@@ -3988,20 +3996,17 @@ pub fn triggerMouseRelease(self: *Frame, x: f64, y: f64, button: i32, click_coun
 
     try self.dispatchMouseEventOn(target, "mouseup", x, y, button, detail);
 
-    // After mouseup, the activation event depends on the button:
-    //   main (0)      -> click
-    //   auxiliary (1) -> auxclick
-    //   secondary (2) -> contextmenu
+    // After mouseup, the activation event depends on the button.
     switch (button) {
-        0 => {
+        mouse_button.main => {
             try self.dispatchMouseEventOn(target, "click", x, y, button, detail);
             // A second click in quick succession also fires dblclick.
             if (click_count == 2) {
                 try self.dispatchMouseEventOn(target, "dblclick", x, y, button, detail);
             }
         },
-        1 => try self.dispatchMouseEventOn(target, "auxclick", x, y, button, detail),
-        2 => try self.dispatchMouseEventOn(target, "contextmenu", x, y, button, detail),
+        mouse_button.auxiliary => try self.dispatchMouseEventOn(target, "auxclick", x, y, button, detail),
+        mouse_button.secondary => try self.dispatchMouseEventOn(target, "contextmenu", x, y, button, detail),
         else => {},
     }
 }
