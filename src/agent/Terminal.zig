@@ -38,6 +38,8 @@ const style_key = "ps-key";
 const style_num = "ps-num";
 const style_err = "ps-err";
 const style_jsmode = "ps-jsmode";
+const style_keyword = "ps-keyword";
+const style_comment = "ps-comment";
 
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
@@ -180,6 +182,8 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         c.ic_style_def(style_num, "ansi-magenta");
         c.ic_style_def(style_err, "ansi-red");
         c.ic_style_def(style_jsmode, "ansi-red bold");
+        c.ic_style_def(style_keyword, "ansi-blue bold");
+        c.ic_style_def(style_comment, "ansi-darkgray italic");
         // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
         c.ic_set_prompt_mode("[" ++ style_jsmode ++ "]![/" ++ style_jsmode ++ "] ", '!');
         // Blank continuation marker so multiline input isn't prefixed with `>`.
@@ -713,9 +717,9 @@ fn skipWhitespace(text: []const u8, start: usize) ?usize {
 fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?*anyopaque) callconv(.c) void {
     const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
     const text = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input)), 0);
-    // JS mode: no slash/kv/url highlighting, only `$LP_*` refs.
+    // JS mode: the buffer is raw JS, so highlight it as such (plus `$LP_*` refs).
     if (self.js_mode) {
-        highlightDollarVars(henv, text, 0);
+        highlightJavaScript(henv, text);
         return;
     }
     const cmd_start = skipWhitespace(text, 0) orelse return;
@@ -845,6 +849,86 @@ fn highlightDollarVars(henv: ?*c.ic_highlight_env_t, text: []const u8, start: us
         // Don't post-step — the inner loop already landed on the char
         // after the identifier (or end-of-text). Auto-advancing would
         // skip an adjacent `$LP_*`.
+    }
+}
+
+const js_keywords = [_][]const u8{
+    "function", "async",  "await", "yield",   "return",    "if",     "else",
+    "for",      "while",  "do",    "switch",  "case",      "break",  "continue",
+    "var",      "let",    "const", "new",     "delete",    "typeof", "instanceof",
+    "in",       "of",     "void",  "this",    "super",     "class",  "extends",
+    "import",   "export", "from",  "default", "try",       "catch",  "finally",
+    "throw",    "true",   "false", "null",    "undefined", "NaN",    "Infinity",
+};
+
+fn isJsKeyword(tok: []const u8) bool {
+    for (js_keywords) |kw| {
+        if (std.mem.eql(u8, kw, tok)) return true;
+    }
+    return false;
+}
+
+fn isIdChar(ch: u8) bool {
+    return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '$' or ch >= 0x80;
+}
+
+/// Highlight the buffer as JavaScript: keywords, strings (incl. template
+/// literals), numbers, comments, and `$LP_*` env-var refs. Byte offsets are
+/// safe (see `highlighterCallback`): every token boundary is an ASCII byte and
+/// non-ASCII bytes advance singly without being highlighted.
+fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
+    var i: usize = 0;
+    while (i < text.len) {
+        const ch = text[i];
+        // Comments: `//` to end of line, `/* */` until close (or end).
+        if (ch == '/' and i + 1 < text.len and (text[i + 1] == '/' or text[i + 1] == '*')) {
+            const start = i;
+            if (text[i + 1] == '/') {
+                i = std.mem.indexOfScalarPos(u8, text, i + 2, '\n') orelse text.len;
+            } else {
+                const close = std.mem.indexOfPos(u8, text, i + 2, "*/");
+                i = if (close) |p| p + 2 else text.len;
+            }
+            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_comment.ptr);
+            continue;
+        }
+        // Strings and template literals.
+        if (ch == '\'' or ch == '"' or ch == '`') {
+            const start = i;
+            i = scanQuoted(text, i);
+            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_string.ptr);
+            continue;
+        }
+        // `$LP_*` refs: `$` followed by an identifier run (bare `$` is ignored).
+        if (ch == '$') {
+            const start = i;
+            i += 1;
+            while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+            if (i > start + 1) {
+                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_var.ptr);
+            }
+            continue;
+        }
+        // Numbers: a leading digit, or `.` immediately followed by a digit.
+        if (std.ascii.isDigit(ch) or (ch == '.' and i + 1 < text.len and std.ascii.isDigit(text[i + 1]))) {
+            const start = i;
+            i += 1;
+            while (i < text.len and (std.ascii.isHex(text[i]) or text[i] == '.' or text[i] == '_' or text[i] == 'x' or text[i] == 'X')) i += 1;
+            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_num.ptr);
+            continue;
+        }
+        // Identifiers: highlight only when the whole token is a keyword.
+        if (std.ascii.isAlphabetic(ch) or ch == '_') {
+            const start = i;
+            i += 1;
+            while (i < text.len and isIdChar(text[i])) i += 1;
+            if (isJsKeyword(text[start..i])) {
+                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_keyword.ptr);
+            }
+            continue;
+        }
+        // Operators, punctuation, whitespace, non-ASCII: advance one byte.
+        i += 1;
     }
 }
 
