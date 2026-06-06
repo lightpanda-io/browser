@@ -890,7 +890,11 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
     const local = &ls.local;
 
     var ms = module_source_ catch |err| {
-        _ = local.toLocal(state.resolver).reject("dynamic module source", local.newString(@errorName(err)));
+        const resolver = local.toLocal(state.resolver);
+        switch (err) {
+            error.UrlMalformat, error.Abort => resolver.rejectError("dynamic module source", .{ .type_error = @errorName(err) }),
+            else => _ = resolver.reject("dynamic module source", local.newString(@errorName(err))),
+        }
         return;
     };
 

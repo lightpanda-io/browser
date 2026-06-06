@@ -652,13 +652,14 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
     });
 }
 
-pub fn btoa(_: *const Window, input: js.String.OneByte, frame: *Frame) ![]const u8 {
-    return @import("encoding/base64.zig").encode(frame.call_arena, input.bytes);
+const base64 = @import("encoding/base64.zig");
+pub fn btoa(_: *const Window, input: base64.BinInput, frame: *Frame) ![]const u8 {
+    return base64.encode(frame.call_arena, input);
 }
 
-pub fn atob(_: *const Window, input: js.String.OneByte, frame: *Frame) !js.String.OneByte {
-    const bytes = try @import("encoding/base64.zig").decode(frame.call_arena, input.bytes);
-    return .{ .bytes = bytes };
+pub fn atob(_: *const Window, input: base64.BinInput, frame: *Frame) !js.String.OneByte {
+    const decoded = try base64.decode(frame.call_arena, input);
+    return .{ .bytes = decoded };
 }
 
 pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {

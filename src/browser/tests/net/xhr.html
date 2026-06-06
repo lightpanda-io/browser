@@ -431,6 +431,38 @@
   }
 </script>
 
+<script id=xhr_reuse type=module>
+  {
+    // Reusing the same XHR object from its own onload handler (open()+send()
+    // again) must not leak: send() acquires a self-ref and each request's
+    // terminal callback releases one. The second send() starts while the
+    // first request's release is still pending (it runs after this load
+    // dispatch), so both refs are briefly live. A regression here is caught
+    // by the test runner's ArenaPool leak check at teardown.
+    const state = await testing.async();
+
+    const req = new XMLHttpRequest();
+    let loads = 0;
+    req.onload = () => {
+      loads += 1;
+      if (loads === 1) {
+        // reuse the same object for a second request
+        req.open('GET', 'http://127.0.0.1:9582/xhr');
+        req.send();
+      } else {
+        state.resolve();
+      }
+    };
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(2, loads);
+      testing.expectEqual(200, req.status);
+    });
+  }
+</script>
+
 <script id=xhr_upload type=module>
   {
     // upload is an XMLHttpRequestUpload (an XMLHttpRequestEventTarget) and

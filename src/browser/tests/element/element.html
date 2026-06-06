@@ -167,6 +167,18 @@
 }
 </script>
 
+<script id=style>
+{
+  const el = document.createElement('div');
+  el.style = 'color:red';
+  const s1 = el.style;
+  testing.expectEqual('red', el.style.color);
+  el.style = 'color:blue';
+  testing.expectEqual('blue', el.style.color);
+  testing.expectEqual(true, s1 === el.style);
+}
+</script>
+
 <script id=click>
 {
   let clicked = 0;

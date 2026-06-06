@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const URL = @import("URL.zig");
+const base64 = @import("webapi/encoding/base64.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -63,81 +64,10 @@ pub fn parse(arena: Allocator, url: []const u8) !Parsed {
     return .{ .content_type = content_type, .body = body };
 }
 
-fn base64Decode(arena: Allocator, input: []const u8) ![]u8 {
+fn base64Decode(arena: Allocator, input: []const u8) ![]const u8 {
     // Forgiving-base64 decode — https://infra.spec.whatwg.org/#forgiving-base64-decode.
-    // std's decoders reject non-canonical trailing bits (e.g. "ab"), which
-    // forgiving-base64 tolerates, so decode by hand after validating padding.
-    const buf = try arena.alloc(u8, input.len);
-    var n: usize = 0;
-    for (input) |c| switch (c) {
-        ' ', '\t', '\n', '\r', std.ascii.control_code.ff => {},
-        else => {
-            buf[n] = c;
-            n += 1;
-        },
-    };
-    var src = buf[0..n];
-
-    // Only a multiple-of-4 length may carry (and shed) up to two "=" of padding.
-    if (src.len % 4 == 0) {
-        if (std.mem.endsWith(u8, src, "==")) {
-            src = src[0 .. src.len - 2];
-        } else if (std.mem.endsWith(u8, src, "=")) {
-            src = src[0 .. src.len - 1];
-        }
-    }
-    if (src.len % 4 == 1) return error.InvalidBase64;
-    // Any "=" still present is misplaced padding.
-    if (std.mem.indexOfScalar(u8, src, '=') != null) return error.InvalidBase64;
-
-    const out_len = src.len / 4 * 3 + switch (src.len % 4) {
-        0 => @as(usize, 0),
-        2 => 1,
-        3 => 2,
-        else => unreachable,
-    };
-    const out = try arena.alloc(u8, out_len);
-
-    var oi: usize = 0;
-    var i: usize = 0;
-    while (i + 4 <= src.len) : (i += 4) {
-        const a = try b64Val(src[i]);
-        const b = try b64Val(src[i + 1]);
-        const c = try b64Val(src[i + 2]);
-        const d = try b64Val(src[i + 3]);
-        out[oi] = (a << 2) | (b >> 4);
-        out[oi + 1] = (b << 4) | (c >> 2);
-        out[oi + 2] = (c << 6) | d;
-        oi += 3;
-    }
-    switch (src.len - i) {
-        0 => {},
-        2 => {
-            const a = try b64Val(src[i]);
-            const b = try b64Val(src[i + 1]);
-            out[oi] = (a << 2) | (b >> 4);
-        },
-        3 => {
-            const a = try b64Val(src[i]);
-            const b = try b64Val(src[i + 1]);
-            const c = try b64Val(src[i + 2]);
-            out[oi] = (a << 2) | (b >> 4);
-            out[oi + 1] = (b << 4) | (c >> 2);
-        },
-        else => unreachable,
-    }
-    return out;
-}
-
-fn b64Val(c: u8) !u8 {
-    return switch (c) {
-        'A'...'Z' => c - 'A',
-        'a'...'z' => c - 'a' + 26,
-        '0'...'9' => c - '0' + 52,
-        '+' => 62,
-        '/' => 63,
-        else => error.InvalidBase64,
-    };
+    // Shared with atob via the encoding helper; remap to this module's error name.
+    return base64.decode(arena, .{ .raw = input }) catch return error.InvalidBase64;
 }
 
 const testing = @import("../testing.zig");

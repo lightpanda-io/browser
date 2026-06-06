@@ -384,12 +384,13 @@ pub fn drainPendingMessages(self: *WorkerGlobalScope) void {
     self._pending_messages.clearRetainingCapacity();
 }
 
-pub fn btoa(_: *const WorkerGlobalScope, input: JS.String.OneByte, exec: *JS.Execution) ![]const u8 {
-    return @import("encoding/base64.zig").encode(exec.call_arena, input.bytes);
+const base64 = @import("encoding/base64.zig");
+pub fn btoa(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) ![]const u8 {
+    return base64.encode(exec.call_arena, input);
 }
 
-pub fn atob(_: *const WorkerGlobalScope, input: JS.String.OneByte, exec: *JS.Execution) !JS.String.OneByte {
-    const bytes = try @import("encoding/base64.zig").decode(exec.call_arena, input.bytes);
+pub fn atob(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) !JS.String.OneByte {
+    const bytes = try base64.decode(exec.call_arena, input);
     return .{ .bytes = bytes };
 }
 
@@ -475,6 +476,8 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         log.warn(.http, "importScript", .{ .url = resolved_url, .status = response.status });
         return error.NetworkError;
     }
+
+    defer http_client.deferring_layer.flushFrame(self._frame_id);
 
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);

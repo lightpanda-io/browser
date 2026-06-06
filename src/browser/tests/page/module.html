@@ -69,7 +69,7 @@
     await import("./modules/nonexistent.js");
     testing.expectFail("error expected");
   } catch(e) {
-    testing.expectEqual(true, e.toString().includes("FailedToLoad"), {script_id: 'import-404'});
+    testing.expectEqual(true, e.toString().includes("Abort"), {script_id: 'import-404'});
   }
 </script>
 
