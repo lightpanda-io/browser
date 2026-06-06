@@ -223,7 +223,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
         .cache_layer = .{},
         .robots_layer = .{ .allocator = allocator, .network = network },
-        .cors_layer = .{ .network = network },
+        .cors_layer = .{},
         .web_bot_auth_layer = .{},
         .interception_layer = .{},
         .deferring_layer = .{ .allocator = allocator, .network = network },
@@ -276,7 +276,6 @@ pub fn deinit(self: *Client) void {
 
     self.robots_layer.deinit(self.allocator);
     self.deferring_layer.deinit();
-    self.cors_layer.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
     self.inbox.deinit(self.arena_pool);

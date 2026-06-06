@@ -11,16 +11,14 @@ const Request = HttpClient.Request;
 const Response = HttpClient.Response;
 const URL = @import("../../browser/URL.zig");
 const Fetch = @import("../../browser/webapi/net/Fetch.zig");
-const Network = @import("../Network.zig");
+const Cors = @import("../Cors.zig");
+const CorsMode = Cors.CorsMode;
 const DeferringContext = @import("DeferringLayer.zig").DeferredContext;
 const Forward = @import("Forward.zig");
 
 const CorsLayer = @This();
-const Cors = @import("../Cors.zig");
-const CorsMode = Cors.CorsMode;
 
 next: Layer = undefined,
-network: *Network,
 
 pub fn layer(self: *CorsLayer) Layer {
     return .{
@@ -62,15 +60,25 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         else => .none,
     };
 
-    const sfs_header, const origin_header = switch (mode) {
+    const sfs_header: [:0]const u8, const origin_header: [:0]const u8 = switch (mode) {
         .none => .{ "Sec-Fetch-Site: none", "" },
-        .same_origin => .{ "Sec-Fetch-Site: same-origin", try std.mem.concatWithSentinel(arena, u8, &.{ "Origin: ", from_origin }, 0) },
-        .cross_site => .{ "Sec-Fetch-Site: cross-site", try std.mem.concatWithSentinel(arena, u8, &.{ "Origin: ", from_origin }, 0) },
+        .same_origin => .{
+            "Sec-Fetch-Site: same-origin",
+            try std.mem.concatWithSentinel(arena, u8, &.{ "Origin: ", from_origin }, 0),
+        },
+        .cross_site => .{
+            "Sec-Fetch-Site: cross-site",
+            try std.mem.concatWithSentinel(arena, u8, &.{ "Origin: ", from_origin }, 0),
+        },
     };
 
     try req.headers.add(sfs_header.ptr);
     if (origin_header.len != 0) try req.headers.add(origin_header.ptr);
-    log.debug(.http, "CORS checked", .{ .from_url = from_url, .to_url = req.url, .sfs_header = sfs_header });
+    log.debug(.http, "CORS checked", .{
+        .from_url = from_url,
+        .to_url = req.url,
+        .sfs_header = sfs_header,
+    });
 
     // for none or same-site, we don't care
     // it's calld cors not s/nors
@@ -85,7 +93,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     corstext.* = .{
         .forward = Forward.capture(&transfer.req),
         .arena = arena,
-        .url = transfer.req.url, // don't think this gets re-allocated ever?
+        .url = req.url, // don't think this gets re-allocated ever?
         .from_origin = from_origin,
         .method = @tagName(req.method),
         .credentials = req.cookie_jar != null,
@@ -106,43 +114,45 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     }
 
     // preflight required:
-    // create a new request and
-    // await response.
-
     // new request will be responsible for this one
     // put thyself to sleep
     transfer.park(.cors);
     corstext.held = transfer;
 
-    // TODO: don't copy make a new one?
-    // don't need all the extra stuff
-    var new_req = transfer.req;
-    new_req.headers = try transfer.client.newHeaders();
-    errdefer new_req.headers.deinit();
-    new_req.method = .OPTIONS;
+    var new_req: Request = req.*;
+    // mayhaps it shouldn't skip?
     new_req.skip_robots = true;
+    new_req.headers = try transfer.client.newHeaders();
+    new_req.method = .OPTIONS;
     new_req.resource_type = .preflight;
-    new_req.body = null;
-    new_req.ctx = corstext;
     new_req.start_callback = null;
-    new_req.header_callback = CorsContext.headerCallback;
-    new_req.data_callback = CorsContext.dataCallback;
-    new_req.done_callback = CorsContext.doneCallback;
-    new_req.error_callback = CorsContext.errorCallback;
-    new_req.shutdown_callback = CorsContext.shutdownCallback;
+    new_req.shutdown_callback = null;
+    {
+        // once request is sent, client owns the headers,
+        // so scope it.
+        errdefer new_req.headers.deinit();
 
-    // !!!!!!!!!!
+        // preflight headers
+        const acr_method: [:0]const u8 = switch (req.method) {
+            inline else => |m| "Access-Control-Request-Method: " ++ @tagName(m),
+        };
 
-    // FIX: add preflight headers
+        const acr_headers: [:0]const u8 = blk: {
+            const headers_csv = try std.mem.join(arena, ",", corstext.extra_headers.items);
+            break :blk try std.mem.joinZ(arena, "", &.{ "Access-Control-Request-Headers: ", headers_csv });
+        };
 
-    // !!!!!!!!!!
+        try new_req.headers.add(origin_header.ptr);
+        try new_req.headers.add(acr_method.ptr);
+        try new_req.headers.add(acr_headers.ptr);
 
-    log.info(.browser, "CORS Preflight sent", .{});
+        log.info(.browser, "CORS Preflight sent", .{
+            .origin_header = origin_header,
+            .acr_method = acr_method,
+            .acr_headers = acr_headers,
+        });
+    }
     return transfer.client.request(new_req, transfer.owner);
-}
-
-pub fn deinit(self: *CorsLayer) void {
-    _ = self;
 }
 
 pub const CorsContext = struct {
@@ -172,16 +182,16 @@ pub const CorsContext = struct {
         const headers = try header_it.collect(arena);
 
         for (headers.items) |h| {
-            if (std.ascii.eqlIgnoreCase(h.name, "ACCESS-CONTROL-ALLOW-ORIGIN")) {
+            if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-origin")) {
                 store.res_origin = h.value;
-            } else if (std.ascii.eqlIgnoreCase(h.name, "ACCESS-CONTROL-ALLOW-CREDENTIALS")) {
+            } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-credentials")) {
                 store.credentials = std.ascii.eqlIgnoreCase(h.value, "true");
-            } else if (std.ascii.eqlIgnoreCase(h.name, "ACCESS-CONTROL-ALLOW-METHODS")) {
+            } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-methods")) {
                 var iter = std.mem.tokenizeAny(u8, h.value, ", ");
                 while (iter.next()) |val| {
                     try store.res_methods.append(arena, val);
                 }
-            } else if (std.ascii.eqlIgnoreCase(h.name, "ACCESS-CONTROL-ALLOW-HEADERS")) {
+            } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-headers")) {
                 var iter = std.mem.tokenizeAny(u8, h.value, ", ");
                 while (iter.next()) |val| {
                     try store.res_headers.append(arena, val);
@@ -287,13 +297,13 @@ pub const CorsContext = struct {
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         var corstext: *CorsContext = @ptrCast(@alignCast(ctx));
         if (corstext.held) |held| {
+            corstext.held = null;
             if (held.state == .parked) {
                 held.unpark();
             }
             corstext.layer.next.request(held) catch |e| {
                 held.abort(e);
             };
-            corstext.held = null;
         }
         return corstext.forward.forwardDone();
     }
@@ -306,8 +316,8 @@ pub const CorsContext = struct {
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const corstext: *CorsContext = @ptrCast(@alignCast(ctx));
         if (corstext.held) |held| {
-            held.abort(err);
             corstext.held = null;
+            held.abort(err);
         }
         return corstext.forward.forwardErr(err);
     }

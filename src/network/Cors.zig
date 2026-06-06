@@ -16,8 +16,8 @@ pub fn determineSimpleRequest(ctx: *CorsContext, req: *const HttpClient.Request)
     var header_iter = req.headers.iterator();
     outer: while (header_iter.next()) |h| {
         // safe headers are case-insensitive
-        if (std.ascii.startsWithIgnoreCase(h.name, "SEC-") or
-            std.ascii.startsWithIgnoreCase(h.name, "PROXY-"))
+        if (std.ascii.startsWithIgnoreCase(h.name, "sec-") or
+            std.ascii.startsWithIgnoreCase(h.name, "proxy-"))
         {
             continue;
         }
@@ -40,38 +40,38 @@ pub fn determineSimpleRequest(ctx: *CorsContext, req: *const HttpClient.Request)
 }
 
 const safe_headers = [_][]const u8{
-    "ACCEPT-CHARSET",
-    "ACCESS-CONTROL-REQUEST-HEADERS",
-    "ACCESS-CONTROL-REQUEST-METHOD",
-    "ACCEPT-ENCODING",
-    "CONNECTION",
-    "CONTENT-LENGTH",
-    "COOKIE",
-    "DATE",
-    "DNT",
-    "EXPECT",
-    "HOST",
-    "KEEP-ALIVE",
-    "ORIGIN",
-    "REFERER",
-    "SET-COOKIE",
-    "TE",
-    "TRAILER",
-    "TRANSFER-ENCODING",
-    "UPGRADE",
-    "USER-AGENT",
-    "VIA",
+    "accept-charset",
+    "access-control-request-headers",
+    "access-control-request-method",
+    "accept-encoding",
+    "connection",
+    "content-length",
+    "cookie",
+    "date",
+    "dnt",
+    "expect",
+    "host",
+    "keep-alive",
+    "origin",
+    "referer",
+    "set-cookie",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "user-agent",
+    "via",
     // TODO: separate for further checks:
     // - https://developer.mozilla.org/en-US/docs/Glossary/CORS-safelisted_request_header#additional_restrictions
     // - https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_request_header
-    "ACCEPT",
-    "ACCEPT-LANGUAGE",
-    "CONTENT-LANGUAGE",
-    "CONTENT-TYPE",
-    "RANGE",
-    "X-HTTP-METHOD",
-    "X-HTTP-METHOD-OVERRIDE",
-    "X-METHOD-OVERRIDE",
+    "accept",
+    "accept-language",
+    "content-language",
+    "content-type",
+    "range",
+    "x-http-method",
+    "x-http-method-override",
+    "x-method-override",
 };
 
 pub const CorsMode = enum {
