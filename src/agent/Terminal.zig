@@ -834,15 +834,21 @@ fn scanQuoted(text: []const u8, start: usize) usize {
 
 /// Highlight `$LP_*` tokens appearing from `start` onward.
 fn highlightDollarVars(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
+    highlightDollarVarsIn(henv, text, start, text.len);
+}
+
+/// Highlight `$LP_*` tokens within `text[start..end]` — used both for whole
+/// prompts and for repainting refs that fall inside a string literal.
+fn highlightDollarVarsIn(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize, end: usize) void {
     var i = start;
-    while (i < text.len) {
+    while (i < end) {
         if (text[i] != '$') {
             i += 1;
             continue;
         }
         const tok_start = i;
         i += 1;
-        while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+        while (i < end and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
         if (i > tok_start + 1) {
             c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_var.ptr);
         }
@@ -892,11 +898,13 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
             c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_comment.ptr);
             continue;
         }
-        // Strings and template literals.
+        // Strings and template literals. `$LP_*` refs inside repaint yellow
+        // over the green (isocline merges per-cell, so the later call wins).
         if (ch == '\'' or ch == '"' or ch == '`') {
             const start = i;
             i = scanQuoted(text, i);
             c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_string.ptr);
+            highlightDollarVarsIn(henv, text, start, i);
             continue;
         }
         // `$LP_*` refs: `$` followed by an identifier run (bare `$` is ignored).
