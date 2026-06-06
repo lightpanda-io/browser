@@ -47,14 +47,16 @@ pub const Entry = struct {
         fn asString(self: *const Value) []const u8 {
             return switch (self.*) {
                 .string => |*s| s.str(),
-                .file => unreachable, // nothing currently creates this type of value
+                // A file's string form (urlencoded / text-plain submission, and
+                // FormData.get) is its filename, per the form-submission spec.
+                .file => |f| f.getName(),
             };
         }
 
         pub fn format(self: Value, writer: *std.Io.Writer) !void {
             return switch (self) {
                 .string => |s| s.format(writer),
-                .file => unreachable, // nothing currently creates this type of value
+                .file => |f| writer.writeAll(f.getName()),
             };
         }
     };
@@ -244,8 +246,20 @@ fn multipartEncodeEntry(entry: *const Entry, boundary: []const u8, writer: *std.
             try writer.writeAll(s.str());
             try writer.writeAll("\r\n");
         },
-        // File entries need a real payload (filename + bytes + Content-Type) — not yet wired.
-        .file => log.warn(.not_implemented, "FormData.multipart.file", .{}),
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#multipart/form-data-encoding-algorithm
+        // RFC 7578 §4.2 / §4.4: file parts carry a `filename` parameter on the
+        // Content-Disposition header, an explicit Content-Type, then the raw bytes.
+        .file => |file| {
+            try writer.writeAll("Content-Disposition: form-data; name=\"");
+            try writeMultipartName(writer, entry.name.str());
+            try writer.writeAll("\"; filename=\"");
+            try writeMultipartName(writer, file.getName());
+            try writer.writeAll("\"\r\n");
+            const mime = file._proto.getType();
+            try writer.print("Content-Type: {s}\r\n\r\n", .{if (mime.len == 0) "application/octet-stream" else mime});
+            try writer.writeAll(file._proto._slice);
+            try writer.writeAll("\r\n");
+        },
     }
 }
 
@@ -340,6 +354,22 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, frame: *F
         const value = blk: {
             if (element.is(Form.Input)) |input| {
                 const input_type = input._input_type;
+                if (input_type == .file) {
+                    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#constructing-the-form-data-set
+                    // Append one entry per selected file. If none are selected,
+                    // append a single entry with an empty File (empty name and
+                    // body, type application/octet-stream).
+                    const fl = (try input.getFiles(frame)).?;
+                    if (fl._files.len == 0) {
+                        const empty = try File.init(null, "", .{ .type = "application/octet-stream" }, frame._page);
+                        try appendFile(&list, arena, name, empty);
+                    } else {
+                        for (fl._files) |file| {
+                            try appendFile(&list, arena, name, file);
+                        }
+                    }
+                    continue;
+                }
                 if (input_type == .checkbox or input_type == .radio) {
                     if (!input.getChecked()) {
                         continue;
@@ -393,6 +423,13 @@ fn appendString(list: *std.ArrayList(Entry), arena: Allocator, name: []const u8,
     try list.append(arena, .{
         .name = try String.init(arena, name, .{}),
         .value = .{ .string = try String.init(arena, value, .{}) },
+    });
+}
+
+fn appendFile(list: *std.ArrayList(Entry), arena: Allocator, name: []const u8, file: *File) !void {
+    try list.append(arena, .{
+        .name = try String.init(arena, name, .{}),
+        .value = .{ .file = file },
     });
 }
 
@@ -471,6 +508,54 @@ test "FormData: multipart escapes name CR/LF/quote" {
         "--B\r\n" ++
             "Content-Disposition: form-data; name=\"a%22b%0D%0Ac\"\r\n\r\n" ++
             "v\r\n" ++
+            "--B--\r\n",
+        buf.written(),
+    );
+}
+
+test "FormData: multipart file entry writes filename, content-type, and bytes" {
+    const allocator = testing.arena_allocator;
+    const Blob = @import("../Blob.zig");
+
+    // Mirror the shape produced by DOM.setFileInputFiles: a Blob holding the
+    // raw bytes + MIME, and a File naming it. No Page needed for encoding.
+    var blob = Blob{
+        ._rc = .{},
+        ._arena = allocator,
+        ._type = .generic,
+        ._slice = "the file body\nwith two lines",
+        ._mime = "text/plain",
+    };
+    var file = File{
+        ._proto = &blob,
+        ._name = "report.txt",
+        ._last_modified = 0,
+    };
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.append("field", "value");
+    try fd._entries.append(allocator, .{
+        .name = try String.init(allocator, "document", .{}),
+        .value = .{ .file = &file },
+    });
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{
+        .encoding = .{ .formdata = "B" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    try testing.expectString(
+        "--B\r\n" ++
+            "Content-Disposition: form-data; name=\"field\"\r\n\r\n" ++
+            "value\r\n" ++
+            "--B\r\n" ++
+            "Content-Disposition: form-data; name=\"document\"; filename=\"report.txt\"\r\n" ++
+            "Content-Type: text/plain\r\n\r\n" ++
+            "the file body\nwith two lines\r\n" ++
             "--B--\r\n",
         buf.written(),
     );
