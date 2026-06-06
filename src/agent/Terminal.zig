@@ -73,6 +73,9 @@ spinner: Spinner,
 completion_source: ?CompletionSource = null,
 /// True while the REPL is in JS mode; set by isocline's mode callback.
 js_mode: bool = false,
+/// Per-mode history files (null outside REPL mode). `modeCallback` swaps the
+/// active one so JS and normal recall stay separate.
+history_paths: ?HistoryPaths = null,
 /// True while a first Esc has armed "press Esc again to clear"; set by isocline.
 esc_clear_pending: bool = false,
 /// True while a first Ctrl-D has armed "press Ctrl-D again to exit"; set by isocline.
@@ -138,6 +141,9 @@ pub fn attachCompleter(self: *Terminal) void {
 fn modeCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
     const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
     self.js_mode = active;
+    if (self.history_paths) |hp| {
+        c.ic_set_history((if (active) hp.js else hp.normal).ptr, -1);
+    }
     self.renderStatus();
 }
 
@@ -162,7 +168,15 @@ pub fn jsMode(self: *const Terminal) bool {
     return self.js_mode;
 }
 
-pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Terminal {
+/// Separate history files for normal and JS prompt modes. isocline holds one
+/// history list at a time, so we swap files on mode toggle rather than tag a
+/// shared file.
+pub const HistoryPaths = struct {
+    normal: [:0]const u8,
+    js: [:0]const u8,
+};
+
+pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosity: Verbosity, is_repl: bool) Terminal {
     // Isocline probes the terminal on init (writes ESC[6n cursor-report on
     // stdout), so skip the whole setup in script-only mode — `ic_readline` is
     // never reached there anyway.
@@ -189,8 +203,10 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         // Blank continuation marker so multiline input isn't prefixed with `>`.
         c.ic_set_prompt_marker("❯ ", "");
         _ = c.ic_enable_highlight(true);
-        if (history_path) |path| {
-            c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
+        if (history_paths) |hp| {
+            // Mode is inactive at launch, so load the normal file; modeCallback
+            // swaps to the JS file when JS mode is entered.
+            c.ic_set_history(hp.normal.ptr, -1); // -1 → 200-entry default cap
         }
     }
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
@@ -200,6 +216,7 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
         .stderr_is_tty = stderr_is_tty,
         .spinner = .init(is_repl, stderr_is_tty),
+        .history_paths = history_paths,
     };
 }
 

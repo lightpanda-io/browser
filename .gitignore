@@ -1,6 +1,7 @@
 /.zig-cache/
 /.lp-cache/
 /.lp-history
+/.lp-history.js
 /.lp-agent.zon
 /zig-pkg/
 zig-out

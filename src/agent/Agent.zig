@@ -310,7 +310,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const self = try allocator.create(Agent);
     errdefer allocator.destroy(self);
 
-    const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
+    const history_paths: ?Terminal.HistoryPaths = if (will_repl)
+        .{ .normal = ".lp-history", .js = ".lp-history.js" }
+    else
+        null;
 
     self.* = .{
         .allocator = allocator,
@@ -324,7 +327,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .browser = undefined,
         .session = undefined,
         .node_registry = .init(allocator),
-        .terminal = .init(allocator, history_path, verbosity, will_repl),
+        .terminal = .init(allocator, history_paths, verbosity, will_repl),
         .save_buffer = .init(allocator),
         .save_path = null,
         .messages = .empty,
