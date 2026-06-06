@@ -73,6 +73,8 @@ completion_source: ?CompletionSource = null,
 js_mode: bool = false,
 /// True while a first Esc has armed "press Esc again to clear"; set by isocline.
 esc_clear_pending: bool = false,
+/// True while a first Ctrl-D has armed "press Ctrl-D again to exit"; set by isocline.
+ctrl_d_exit_pending: bool = false,
 /// Base (REPL-mode) status segments, text owned; `renderStatus` overrides them
 /// with a JS-mode label when active. Re-rendered on resize so the bar refits.
 status: std.ArrayList(StatusSegment) = .empty,
@@ -126,6 +128,7 @@ pub fn attachCompleter(self: *Terminal) void {
     c.ic_set_default_hinter(&hintsCallback, self);
     c.ic_set_mode_callback(&modeCallback, self);
     c.ic_set_esc_clear_callback(&escClearCallback, self);
+    c.ic_set_ctrl_d_callback(&ctrlDCallback, self);
     c.ic_set_resize_callback(&resizeCallback, self);
     c.ic_set_default_highlighter(&highlighterCallback, self);
 }
@@ -139,6 +142,12 @@ fn modeCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
 fn escClearCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
     const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
     self.esc_clear_pending = active;
+    self.renderStatus();
+}
+
+fn ctrlDCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
+    const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
+    self.ctrl_d_exit_pending = active;
     self.renderStatus();
 }
 
@@ -953,7 +962,10 @@ fn renderStatus(self: *Terminal) void {
     var buf: [max_segments]StatusSegment = undefined;
     var n: usize = 0;
 
-    if (self.js_mode) {
+    if (self.ctrl_d_exit_pending) {
+        buf[n] = .{ .text = "Press Ctrl-D again to exit", .side = .left, .rank = 255 };
+        n += 1;
+    } else if (self.js_mode) {
         buf[n] = .{ .text = "JS mode", .side = .left, .rank = 1 };
         n += 1;
     } else for (self.status.items) |seg| {
@@ -962,7 +974,6 @@ fn renderStatus(self: *Terminal) void {
         n += 1;
     }
 
-    // the clear confirmation takes over the whole right side
     if (self.esc_clear_pending) {
         buf[n] = .{ .text = "Press Esc again to clear", .side = .right, .rank = 255 };
         n += 1;
