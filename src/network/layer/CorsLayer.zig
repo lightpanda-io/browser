@@ -5,9 +5,10 @@ const lp = @import("lightpanda");
 const log = lp.log;
 
 const HttpClient = @import("../../browser/HttpClient.zig");
-const Layer = @import("../../browser/HttpClient.zig").Layer;
-const Transfer = @import("../../browser/HttpClient.zig").Transfer;
-const Response = @import("../../browser/HttpClient.zig").Response;
+const Layer = HttpClient.Layer;
+const Transfer = HttpClient.Transfer;
+const Request = HttpClient.Request;
+const Response = HttpClient.Response;
 const URL = @import("../../browser/URL.zig");
 const Fetch = @import("../../browser/webapi/net/Fetch.zig");
 const Network = @import("../Network.zig");
@@ -15,15 +16,11 @@ const DeferringContext = @import("DeferringLayer.zig").DeferredContext;
 const Forward = @import("Forward.zig");
 
 const CorsLayer = @This();
+const Cors = @import("../Cors.zig");
+const CorsMode = Cors.CorsMode;
 
 next: Layer = undefined,
 network: *Network,
-
-const CorsMode = enum {
-    same_origin,
-    cross_site,
-    none,
-};
 
 pub fn layer(self: *CorsLayer) Layer {
     return .{
@@ -37,84 +34,65 @@ pub fn layer(self: *CorsLayer) Layer {
 fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const cors_layer: *CorsLayer = @ptrCast(@alignCast(ptr));
     const req = &transfer.req;
+    const def_ctx: *DeferringContext = @ptrCast(@alignCast(req.ctx));
+    const fetch_ctx: *Fetch = @ptrCast(@alignCast(def_ctx.forward.ctx));
 
     const arena = transfer.arena;
 
-    const mode: CorsMode, const from: ?[]const u8, const to: ?[]const u8 =
-        switch (req.resource_type) {
-            .fetch => blk: {
-                const def_ctx: *DeferringContext = @ptrCast(@alignCast(req.ctx));
-                const fetch_ctx: *Fetch = @ptrCast(@alignCast(def_ctx.forward.ctx));
+    var from_url: [:0]const u8 = "";
+    var from_origin: []const u8 = "";
+    var to_origin: []const u8 = "";
 
-                const requesting_origin = URL.getOrigin(
-                    arena,
-                    fetch_ctx._exec.url.*,
-                ) catch null;
+    const mode: CorsMode = switch (req.resource_type) {
+        .fetch => blk: {
+            from_url = fetch_ctx._exec.url.*;
+            from_origin = try URL.getOrigin(
+                arena,
+                from_url,
+            ) orelse break :blk .none;
 
-                const to_origin = URL.getOrigin(
-                    arena,
-                    req.url,
-                ) catch null;
+            to_origin = try URL.getOrigin(
+                arena,
+                req.url,
+            ) orelse break :blk .none; // not http or https
 
-                if (requesting_origin) |from| {
-                    try req.headers.add(
-                        (try std.fmt.allocPrint(
-                            arena,
-                            "Origin: {s}",
-                            .{from},
-                        )).ptr,
-                    );
-
-                    if (to_origin) |to| {
-                        break :blk .{
-                            if (std.mem.eql(u8, from, to)) .same_origin else .cross_site,
-                            from,
-                            to,
-                        };
-                    }
-                }
-
-                break :blk .{
-                    .none,
-                    null,
-                    null,
-                };
-            },
-            // TODO: xhr
-            else => .{
-                .none,
-                null,
-                null,
-            },
-        };
-
-    const sts = switch (mode) {
-        .none => "Sec-Fetch-Site: none",
-        .same_origin => "Sec-Fetch-Site: same-origin",
-        .cross_site => "Sec-Fetch-Site: cross-site",
+            break :blk if (std.mem.eql(u8, from_origin, to_origin)) .same_origin else .cross_site;
+        },
+        // TODO: xhr
+        else => .none,
     };
 
-    try req.headers.add(sts);
-    log.debug(.http, "CORS checked", .{ .from = from, .to = to, .sts = sts });
+    const sfs_header, const origin_header = switch (mode) {
+        .none => .{ "Sec-Fetch-Site: none", "" },
+        .same_origin => .{ "Sec-Fetch-Site: same-origin", try std.mem.concatWithSentinel(arena, u8, &.{ "Origin: ", from_origin }, 0) },
+        .cross_site => .{ "Sec-Fetch-Site: cross-site", try std.mem.concatWithSentinel(arena, u8, &.{ "Origin: ", from_origin }, 0) },
+    };
 
+    try req.headers.add(sfs_header.ptr);
+    if (origin_header.len != 0) try req.headers.add(origin_header.ptr);
+    log.debug(.http, "CORS checked", .{ .from_url = from_url, .to_url = req.url, .sfs_header = sfs_header });
+
+    // for none or same-site, we don't care
+    // it's calld cors not s/nors
+    // yeah cause i'm snoring at this request
     if (mode != .cross_site) {
         return cors_layer.next.request(transfer);
     }
 
     // cross-site request;
     // yay.
-
     const corstext = try arena.create(CorsContext);
     corstext.* = .{
-        .arena = arena,
-        .url = try arena.dupeZ(u8, transfer.req.url),
         .forward = Forward.capture(&transfer.req),
-        .from_origin = from.?,
+        .arena = arena,
+        .url = transfer.req.url, // don't think this gets re-allocated ever?
+        .from_origin = from_origin,
         .method = @tagName(req.method),
         .credentials = req.cookie_jar != null,
         .layer = cors_layer,
     };
 
+    // set callbacks so we can check if we pass on the return trip
     transfer.req.ctx = corstext;
     transfer.req.start_callback = if (corstext.forward.start != null) CorsContext.startCallback else null;
     transfer.req.header_callback = CorsContext.headerCallback;
@@ -123,38 +101,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     transfer.req.error_callback = CorsContext.errorCallback;
     transfer.req.shutdown_callback = if (corstext.forward.shutdown != null) CorsContext.shutdownCallback else null;
 
-    // check if it's a 'simple request'.
-    // if not, then will need to do a preflight
-    // and assess the CORS situation.
-    // https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS#simple_requests
-    const is_simple_request = blk: {
-        switch (req.method) {
-            .GET, .HEAD, .POST => {},
-            else => break :blk false,
-        }
-
-        var header_iter = req.headers.iterator();
-        outer: while (header_iter.next()) |h| {
-            const upper = try std.ascii.allocUpperString(arena, h.name);
-            if (std.mem.startsWith(u8, upper, "SEC-") or
-                std.mem.startsWith(u8, upper, "PROXY-"))
-            {
-                continue;
-            }
-
-            for (allowed_headers) |a_h| {
-                if (std.mem.eql(u8, upper, a_h)) {
-                    continue :outer;
-                }
-            }
-
-            try corstext.extra_headers.append(arena, upper);
-        }
-
-        break :blk corstext.extra_headers.items.len == 0;
-    };
-
-    if (is_simple_request) {
+    if (try Cors.determineSimpleRequest(corstext, req)) {
         return cors_layer.next.request(transfer);
     }
 
@@ -162,23 +109,17 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     // create a new request and
     // await response.
 
-    // take responsibility for the held
-    // request.
+    // new request will be responsible for this one
+    // put thyself to sleep
     transfer.park(.cors);
     corstext.held = transfer;
 
-    // from RobotsLayer.zig:
-    // CRITICAL: build a fresh Headers for the inner robots fetch.
-    // We value-copy req from the parent, but Headers is a struct wrapping
-    // a *curl_slist — value copy shares the pointer. Letting Client.request
-    // take ownership of a shared headers list means both transfers will
-    // free it at deinit time -> double-free. The robots.txt fetch is a
-    // system-level GET anyway, no need to inherit the parent's user headers.
+    // TODO: don't copy make a new one?
+    // don't need all the extra stuff
     var new_req = transfer.req;
     new_req.headers = try transfer.client.newHeaders();
     errdefer new_req.headers.deinit();
-    new_req.method = .GET;
-    new_req.url = corstext.url;
+    new_req.method = .OPTIONS;
     new_req.skip_robots = true;
     new_req.resource_type = .preflight;
     new_req.body = null;
@@ -204,11 +145,11 @@ pub fn deinit(self: *CorsLayer) void {
     _ = self;
 }
 
-const CorsContext = struct {
+pub const CorsContext = struct {
+    forward: Forward,
     arena: std.mem.Allocator,
     url: [:0]const u8,
     from_origin: []const u8,
-    forward: Forward,
     layer: *CorsLayer,
     credentials: bool = false,
     extra_headers: std.ArrayList([]const u8) = .empty,
@@ -231,19 +172,16 @@ const CorsContext = struct {
         const headers = try header_it.collect(arena);
 
         for (headers.items) |h| {
-            const upper = try std.ascii.allocUpperString(arena, h.name);
-
-            if (std.mem.eql(u8, upper, "ACCESS-CONTROL-ALLOW-ORIGIN")) {
+            if (std.ascii.eqlIgnoreCase(h.name, "ACCESS-CONTROL-ALLOW-ORIGIN")) {
                 store.res_origin = h.value;
-            } else if (std.mem.eql(u8, upper, "ACCESS-CONTROL-ALLOW-CREDENTIALS")) {
-                const upper_bool = try std.ascii.allocUpperString(arena, h.value);
-                store.credentials = std.mem.eql(u8, upper_bool, "TRUE");
-            } else if (std.mem.eql(u8, upper, "ACCESS-CONTROL-ALLOW-METHODS")) {
+            } else if (std.ascii.eqlIgnoreCase(h.name, "ACCESS-CONTROL-ALLOW-CREDENTIALS")) {
+                store.credentials = std.ascii.eqlIgnoreCase(h.value, "true");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "ACCESS-CONTROL-ALLOW-METHODS")) {
                 var iter = std.mem.tokenizeAny(u8, h.value, ", ");
                 while (iter.next()) |val| {
                     try store.res_methods.append(arena, val);
                 }
-            } else if (std.mem.eql(u8, upper, "ACCESS-CONTROL-ALLOW-HEADERS")) {
+            } else if (std.ascii.eqlIgnoreCase(h.name, "ACCESS-CONTROL-ALLOW-HEADERS")) {
                 var iter = std.mem.tokenizeAny(u8, h.value, ", ");
                 while (iter.next()) |val| {
                     try store.res_headers.append(arena, val);
@@ -260,49 +198,53 @@ const CorsContext = struct {
             }
 
             const origin_wildcard: bool = std.mem.eql(u8, store.res_origin.?, "*");
-            const origin_found = std.mem.eql(u8, store.res_origin.?, corstext.from_origin);
+            const origin_match = std.mem.eql(u8, store.res_origin.?, corstext.from_origin);
 
-            if (!origin_wildcard and !origin_found) {
+            if (!origin_wildcard and !origin_match) {
                 break :blk false;
             }
 
             var method_wildcard = false;
-            var method_found = false;
+            var method_match = false;
 
             var headers_wildcard = false;
-            var headers_found = false;
+            var headers_match = false;
 
             if (corstext.held) |_| {
                 // this is a preflight request;
-                // mandatory: methods & headers.
-                // NOTE: optional: max-age, credentials
+                // mandatory: methods & headers, ~credentials.
+                // optional: max-age
                 method_wildcard = for (store.res_methods.items) |h| {
-                    if (std.mem.containsAtLeastScalar(u8, h, 1, '*')) {
+                    if (std.mem.eql(u8, h, "*")) {
                         break true;
                     }
                 } else false;
 
-                headers_wildcard = for (store.res_headers.items) |h| {
-                    if (std.mem.containsAtLeastScalar(u8, h, 1, '*')) {
+                method_match = for (store.res_methods.items) |h| {
+                    if (std.mem.eql(u8, h, corstext.method)) {
                         break true;
                     }
                 } else false;
 
-                method_found = for (store.res_methods.items) |h| {
-                    if (std.mem.containsAtLeast(u8, h, 1, corstext.method)) {
-                        break true;
-                    }
-                } else false;
+                if (corstext.extra_headers.items.len == 0) {
+                    headers_match = true;
+                } else {
+                    headers_wildcard = for (store.res_headers.items) |h| {
+                        if (std.mem.eql(u8, h, "*")) {
+                            break true;
+                        }
+                    } else false;
 
-                headers_found = found: {
-                    for (corstext.extra_headers.items) |req_header| {
-                        for (store.res_headers.items) |h| {
-                            if (std.mem.eql(u8, req_header, h)) {
-                                break;
-                            }
-                        } else break :found false;
-                    } else break :found true;
-                };
+                    headers_match = found: {
+                        for (corstext.extra_headers.items) |req_header| {
+                            for (store.res_headers.items) |h| {
+                                if (std.mem.eql(u8, req_header, h)) {
+                                    break;
+                                }
+                            } else break :found false;
+                        } else break :found true;
+                    };
+                }
 
                 if (corstext.credentials) {
                     if (!store.credentials) {
@@ -311,13 +253,13 @@ const CorsContext = struct {
                     if (origin_wildcard or method_wildcard or headers_wildcard) {
                         break :blk false;
                     }
-                    if (!(origin_found and method_found and headers_found)) {
+                    if (!(origin_match and method_match and headers_match)) {
                         break :blk false;
                     }
                 } else {
-                    if (!(origin_wildcard or origin_found) or
-                        !(method_wildcard or method_found) or
-                        !(headers_wildcard or headers_found))
+                    if (!(origin_wildcard or origin_match) or
+                        !(method_wildcard or method_match) or
+                        !(headers_wildcard or headers_match))
                     {
                         break :blk false;
                     }
@@ -379,39 +321,4 @@ const CorsContext = struct {
         const cors_ctx: *CorsContext = @ptrCast(@alignCast(response.ctx));
         return cors_ctx.forward.forwardData(response, chunk);
     }
-};
-
-const allowed_headers = [_][]const u8{
-    "ACCEPT-CHARSET",
-    "ACCESS-CONTROL-REQUEST-HEADERS",
-    "ACCESS-CONTROL-REQUEST-METHOD",
-    "ACCEPT-ENCODING",
-    "CONNECTION",
-    "CONTENT-LENGTH",
-    "COOKIE",
-    "DATE",
-    "DNT",
-    "EXPECT",
-    "HOST",
-    "KEEP-ALIVE",
-    "ORIGIN",
-    "REFERER",
-    "SET-COOKIE",
-    "TE",
-    "TRAILER",
-    "TRANSFER-ENCODING",
-    "UPGRADE",
-    "USER-AGENT",
-    "VIA",
-    // TODO: separate for further checks:
-    // - https://developer.mozilla.org/en-US/docs/Glossary/CORS-safelisted_request_header#additional_restrictions
-    // - https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_request_header
-    "ACCEPT",
-    "ACCEPT-LANGUAGE",
-    "CONTENT-LANGUAGE",
-    "CONTENT-TYPE",
-    "RANGE",
-    "X-HTTP-METHOD",
-    "X-HTTP-METHOD-OVERRIDE",
-    "X-METHOD-OVERRIDE",
 };
