@@ -93,9 +93,9 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     corstext.* = .{
         .forward = Forward.capture(&transfer.req),
         .arena = arena,
-        .url = req.url, // don't think this gets re-allocated ever?
+        .req_url = req.url, // don't think this gets re-allocated ever?
         .from_origin = from_origin,
-        .method = @tagName(req.method),
+        .original_method = @tagName(req.method),
         .credentials = req.cookie_jar != null,
         .layer = cors_layer,
     };
@@ -158,136 +158,18 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 pub const CorsContext = struct {
     forward: Forward,
     arena: std.mem.Allocator,
-    url: [:0]const u8,
+    req_url: [:0]const u8,
     from_origin: []const u8,
-    layer: *CorsLayer,
+    original_method: [:0]const u8,
     credentials: bool = false,
     extra_headers: std.ArrayList([]const u8) = .empty,
-    method: [:0]const u8,
+    layer: *CorsLayer,
     held: ?*Transfer = null,
 
     fn headerCallback(response: Response) anyerror!bool {
         const corstext: *CorsContext = @ptrCast(@alignCast(response.ctx));
-        const arena = corstext.arena;
 
-        const HeaderStore = struct {
-            credentials: bool = false,
-            res_origin: ?[]const u8 = null,
-            res_methods: std.ArrayList([]const u8) = .empty,
-            res_headers: std.ArrayList([]const u8) = .empty,
-        };
-        var store: HeaderStore = .{};
-
-        var header_it = response.headerIterator();
-        const headers = try header_it.collect(arena);
-
-        for (headers.items) |h| {
-            if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-origin")) {
-                store.res_origin = h.value;
-            } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-credentials")) {
-                store.credentials = std.ascii.eqlIgnoreCase(h.value, "true");
-            } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-methods")) {
-                var iter = std.mem.tokenizeAny(u8, h.value, ", ");
-                while (iter.next()) |val| {
-                    try store.res_methods.append(arena, val);
-                }
-            } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-headers")) {
-                var iter = std.mem.tokenizeAny(u8, h.value, ", ");
-                while (iter.next()) |val| {
-                    try store.res_headers.append(arena, val);
-                }
-            }
-        }
-
-        // possibly the ugliest code ever written
-        const allowed = blk: {
-            // origin is mandatory,
-            // check it first for early exit.
-            if (store.res_origin == null) {
-                break :blk false;
-            }
-
-            const origin_wildcard: bool = std.mem.eql(u8, store.res_origin.?, "*");
-            const origin_match = std.mem.eql(u8, store.res_origin.?, corstext.from_origin);
-
-            if (!origin_wildcard and !origin_match) {
-                break :blk false;
-            }
-
-            var method_wildcard = false;
-            var method_match = false;
-
-            var headers_wildcard = false;
-            var headers_match = false;
-
-            if (corstext.held) |_| {
-                // this is a preflight request;
-                // mandatory: methods & headers, ~credentials.
-                // optional: max-age
-                method_wildcard = for (store.res_methods.items) |h| {
-                    if (std.mem.eql(u8, h, "*")) {
-                        break true;
-                    }
-                } else false;
-
-                method_match = for (store.res_methods.items) |h| {
-                    if (std.mem.eql(u8, h, corstext.method)) {
-                        break true;
-                    }
-                } else false;
-
-                if (corstext.extra_headers.items.len == 0) {
-                    headers_match = true;
-                } else {
-                    headers_wildcard = for (store.res_headers.items) |h| {
-                        if (std.mem.eql(u8, h, "*")) {
-                            break true;
-                        }
-                    } else false;
-
-                    headers_match = found: {
-                        for (corstext.extra_headers.items) |req_header| {
-                            for (store.res_headers.items) |h| {
-                                if (std.mem.eql(u8, req_header, h)) {
-                                    break;
-                                }
-                            } else break :found false;
-                        } else break :found true;
-                    };
-                }
-
-                if (corstext.credentials) {
-                    if (!store.credentials) {
-                        break :blk false;
-                    }
-                    if (origin_wildcard or method_wildcard or headers_wildcard) {
-                        break :blk false;
-                    }
-                    if (!(origin_match and method_match and headers_match)) {
-                        break :blk false;
-                    }
-                } else {
-                    if (!(origin_wildcard or origin_match) or
-                        !(method_wildcard or method_match) or
-                        !(headers_wildcard or headers_match))
-                    {
-                        break :blk false;
-                    }
-                }
-            } else {
-                // non-preflight;
-                // just check credentials
-                if (corstext.credentials) {
-                    if (!store.credentials or origin_wildcard) {
-                        break :blk false;
-                    }
-                }
-            }
-
-            break :blk true;
-        };
-
-        if (allowed) {
+        if (try Cors.responsePassesCors(corstext, response)) {
             return corstext.forward.forwardHeader(response);
         } else {
             return error.CorsDeinied;
@@ -308,11 +190,6 @@ pub const CorsContext = struct {
         return corstext.forward.forwardDone();
     }
 
-    fn shutdownCallback(ctx: *anyopaque) void {
-        const cors_ctx: *CorsContext = @ptrCast(@alignCast(ctx));
-        return cors_ctx.forward.forwardShutdown();
-    }
-
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const corstext: *CorsContext = @ptrCast(@alignCast(ctx));
         if (corstext.held) |held| {
@@ -320,6 +197,11 @@ pub const CorsContext = struct {
             held.abort(err);
         }
         return corstext.forward.forwardErr(err);
+    }
+
+    fn shutdownCallback(ctx: *anyopaque) void {
+        const cors_ctx: *CorsContext = @ptrCast(@alignCast(ctx));
+        return cors_ctx.forward.forwardShutdown();
     }
 
     fn startCallback(response: Response) anyerror!void {
