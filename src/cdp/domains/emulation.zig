@@ -63,8 +63,21 @@ fn setFocusEmulationEnabled(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// TODO: noop method
+// https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setDeviceMetricsOverride
 fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        width: u32,
+        height: u32,
+        deviceScaleFactor: f64 = 0,
+        mobile: bool = false,
+        // Other params (scale, screenWidth/Height, positionX/Y, viewport, ...)
+        // are not yet emulated.
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.session.currentFrame() orelse return cmd.sendResult(null, .{});
+    frame.window.setViewport(params.width, params.height);
+
     return cmd.sendResult(null, .{});
 }
 
@@ -215,4 +228,36 @@ test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
     });
 
     try ctx.expectSentResult(null, .{ .id = 7 });
+}
+
+test "cdp.Emulation: setDeviceMetricsOverride updates window.innerWidth/innerHeight" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const frame = try bc.session.createPage();
+    try frame.navigate("about:blank", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    var runner = try bc.session.runner(.{});
+    try runner.wait(.{ .ms = 500 });
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    // Defaults before any override.
+    const before = try ls.local.compileAndRun("window.innerWidth === 1920 && window.innerHeight === 1080", null);
+    try testing.expect(before.isTrue());
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 375, .height = 812, .deviceScaleFactor = 0, .mobile = true },
+    });
+
+    const after = try ls.local.compileAndRun("window.innerWidth === 375 && window.innerHeight === 812", null);
+    try testing.expect(after.isTrue());
 }
