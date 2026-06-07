@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
@@ -31,6 +32,7 @@ const KeyboardEvent = @import("event/KeyboardEvent.zig");
 const WheelEvent = @import("event/WheelEvent.zig");
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 // This type is only included when the binary is built with the -Dwpt_extensions flag
 const WebDriver = @This();
@@ -54,19 +56,76 @@ pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) !
 //   { type: "pointer", actions: [{type: "pointerMove", x, y, origin}, ...] }
 //   { type: "key",     actions: [{type: "keyDown", value}, ...] }
 //   { type: "wheel",   actions: [{type: "scroll", deltaX, deltaY, origin}, ...] }
-pub fn actionSequence(_: *const WebDriver, sources: []js.Object, frame: *Frame) !void {
-    for (sources) |source| {
-        const source_type = (try source.get("type")).toSSO(false) catch continue;
-        if (source_type.eql(comptime .wrap("pointer"))) {
-            try performPointerSource(source, frame);
-        } else if (source_type.eql(comptime .wrap("key"))) {
-            try performKeySource(source, frame);
-        } else if (source_type.eql(comptime .wrap("wheel"))) {
-            try performWheelSource(source, frame);
-        }
-        // "none" sources only carry pauses, which have no observable effect here.
+pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !void {
+    if (sources.isArray() == false) {
+        return error.InvalidArgument;
     }
+
+    const arena = try frame.getArena(.tiny, "WebDriver.actionSequence");
+    errdefer frame.releaseArena(arena);
+
+    const persisted = try sources.temp();
+    errdefer persisted.release();
+
+    const action_sequence = try arena.create(ActionSequence);
+    action_sequence.* = .{
+        .frame = frame,
+        .arena = arena,
+        .sources = persisted,
+    };
+    errdefer action_sequence.sources.release();
+
+    // cannot be run synchronously, has to be run on the next tick
+    try frame.js.scheduler.add(action_sequence, ActionSequence.run, 0, .{
+        .name = "WebDriver.actionSequence",
+        .finalizer = ActionSequence.finalize,
+    });
 }
+
+const ActionSequence = struct {
+    frame: *Frame,
+    arena: Allocator,
+    sources: js.Value.Temp,
+
+    fn run(ptr: *anyopaque) !?u32 {
+        const self: *ActionSequence = @ptrCast(@alignCast(ptr));
+        const frame = self.frame;
+        defer self.deinit();
+
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        const sources = self.sources.local(&ls.local).toArray();
+        for (0..sources.len()) |i| {
+            const source_val = try sources.get(@intCast(i));
+            if (!source_val.isObject()) {
+                continue;
+            }
+            const source = source_val.toObject();
+            const source_type = (try source.get("type")).toSSO(false) catch continue;
+            if (source_type.eql(comptime .wrap("pointer"))) {
+                try performPointerSource(source, frame);
+            } else if (source_type.eql(comptime .wrap("key"))) {
+                try performKeySource(source, frame);
+            } else if (source_type.eql(comptime .wrap("wheel"))) {
+                try performWheelSource(source, frame);
+            }
+            // "none" sources only carry pauses, which have no observable effect here.
+        }
+        return null;
+    }
+
+    fn finalize(ptr: *anyopaque) void {
+        const self: *ActionSequence = @ptrCast(@alignCast(ptr));
+        self.deinit();
+    }
+
+    fn deinit(self: *ActionSequence) void {
+        self.sources.release();
+        self.frame.releaseArena(self.arena);
+    }
+};
 
 fn performPointerSource(source: js.Object, frame: *Frame) !void {
     const actions_val = try source.get("actions");
