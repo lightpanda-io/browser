@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<!-- Chrome don't scroll if the body isn't big enough. -->
+<body style=height:4000px;width:4000px></body>
+
+<script id=scroll_dedup type=module>
+  {
+    const state = await testing.async();
+
+    let scrollevt = 0;
+    document.addEventListener("scroll", () => {
+      scrollevt++;
+    });
+
+    // First move to a fresh position dispatches a scroll event (async).
+    window.scrollTo(100, 200);
+    // Scrolling to the same position must NOT dispatch a second scroll event.
+    window.scrollTo(100, 200);
+
+    window.setTimeout(() => {
+      state.resolve();
+    }, 100);
+
+    await state.done(() => {
+      testing.expectEqual(1, scrollevt);
+    });
+  }
+</script>

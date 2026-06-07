@@ -54,6 +54,10 @@ const Notification = @import("../../Notification.zig");
 const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
+// Faux-layout viewport height. Exposed as window.innerHeight and used to decide
+// whether an element is already within view (e.g. scrollIntoViewIfNeeded).
+const DEFAULT_INNER_HEIGHT: u32 = 1080;
+
 const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
 
@@ -701,6 +705,10 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
+pub fn getInnerHeight(_: *const Window) u32 {
+    return DEFAULT_INNER_HEIGHT;
+}
+
 const ScrollToOpts = union(enum) {
     x: i32,
     opts: Opts,
@@ -712,17 +720,17 @@ const ScrollToOpts = union(enum) {
     };
 };
 pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    switch (opts) {
-        .x => |x| {
-            self._scroll_pos.x = @intCast(@max(x, 0));
-            self._scroll_pos.y = @intCast(@max(0, y orelse 0));
-        },
-        .opts => |o| {
-            self._scroll_pos.x = @intCast(@max(0, o.left));
-            self._scroll_pos.y = @intCast(@max(0, o.top));
-        },
+    const new_x: u32, const new_y: u32 = switch (opts) {
+        .x => |x| .{ @intCast(@max(x, 0)), @intCast(@max(0, y orelse 0)) },
+        .opts => |o| .{ @intCast(@max(0, o.left)), @intCast(@max(0, o.top)) },
+    };
+
+    if (new_x == self._scroll_pos.x and new_y == self._scroll_pos.y) {
+        return;
     }
 
+    self._scroll_pos.x = new_x;
+    self._scroll_pos.y = new_y;
     self._scroll_pos.state = .scroll;
 
     // We dispatch scroll event asynchronously after 10ms. So we can throttle
@@ -1003,7 +1011,7 @@ pub const JsApi = struct {
 
     // [Replaceable] (CSSOM-View): writable so assignment overwrites rather than throws.
     pub const innerWidth = bridge.property(1920, .{ .template = false, .readonly = false });
-    pub const innerHeight = bridge.property(1080, .{ .template = false, .readonly = false });
+    pub const innerHeight = bridge.property(DEFAULT_INNER_HEIGHT, .{ .template = false, .readonly = false });
     pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
 
     pub const opener = bridge.accessor(Window.getOpener, null, .{});

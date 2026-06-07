@@ -114,3 +114,33 @@
   testing.expectEqual(rect.height, test1.offsetHeight);
 }
 </script>
+
+<script id="scrollIntoView">
+{
+  // Add an element deep in the document so its position is non-zero.
+  const deep = document.createElement('div');
+  deep.id = 'deep';
+  document.body.appendChild(deep);
+
+  const targetY = deep.getBoundingClientRect().y;
+  testing.expectTrue(targetY > 0);
+
+  // scrollIntoView() always brings the element's top to the scroll offset.
+  window.scrollTo(0, 999999);
+  deep.scrollIntoView();
+  testing.expectEqual(targetY, window.scrollY);
+
+  // scrollIntoViewIfNeeded() is a no-op when the element is already within the
+  // viewport band [scrollY, scrollY + innerHeight]. Sit just below the
+  // element's top so a stray scroll would visibly move scrollY.
+  const inView = Math.max(0, targetY - 1);
+  window.scrollTo(0, inView);
+  deep.scrollIntoViewIfNeeded();
+  testing.expectEqual(inView, window.scrollY);
+
+  // ...but it does scroll when the element is outside the band.
+  window.scrollTo(0, targetY + window.innerHeight + 100);
+  deep.scrollIntoViewIfNeeded();
+  testing.expectEqual(targetY, window.scrollY);
+}
+</script>
