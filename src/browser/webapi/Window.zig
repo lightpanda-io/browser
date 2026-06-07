@@ -720,8 +720,8 @@ const ScrollToOpts = union(enum) {
 };
 pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const new_x: u32, const new_y: u32 = switch (opts) {
-        .x => |x| .{@intCast(@max(x, 0)), @intCast(@max(0, y orelse 0))},
-        .opts => |o| .{@intCast(@max(0, o.left)), @intCast(@max(0, o.top))},
+        .x => |x| .{ @intCast(@max(x, 0)), @intCast(@max(0, y orelse 0)) },
+        .opts => |o| .{ @intCast(@max(0, o.left)), @intCast(@max(0, o.top)) },
     };
 
     if (new_x == self._scroll_pos.x and new_y == self._scroll_pos.y) {
