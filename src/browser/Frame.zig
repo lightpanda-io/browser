@@ -3904,10 +3904,12 @@ fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
 
 // DOM MouseEvent.button values.
 // https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button
-const mouse_button = struct {
-    const main: i32 = 0; // left
-    const auxiliary: i32 = 1; // middle
-    const secondary: i32 = 2; // right
+pub const mouse_button = struct {
+    pub const main: i32 = 0; // left
+    pub const auxiliary: i32 = 1; // middle
+    pub const secondary: i32 = 2; // right
+    pub const fourth: i32 = 3; // back
+    pub const fifth: i32 = 4; // forward
 };
 
 // Dispatch a single trusted mouse event of the given type on `target`, carrying

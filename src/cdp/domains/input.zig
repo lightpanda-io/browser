@@ -19,6 +19,8 @@
 const std = @import("std");
 const CDP = @import("../CDP.zig");
 
+const dom_button = @import("../../browser/Frame.zig").mouse_button;
+
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         dispatchKeyEvent,
@@ -113,13 +115,6 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 
     // Map the CDP button name to the DOM MouseEvent.button value.
     // https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button
-    const dom_button = struct {
-        const main: i32 = 0;
-        const auxiliary: i32 = 1;
-        const secondary: i32 = 2;
-        const fourth: i32 = 3;
-        const fifth: i32 = 4;
-    };
     const button: i32 = switch (params.button) {
         .none, .left => dom_button.main,
         .middle => dom_button.auxiliary,
