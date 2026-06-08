@@ -265,7 +265,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // no key detected) resolveCredentials prints its own message and the
     // banner is skipped.
     if (will_repl and (!resolve or settings.wouldResolve(allocator, opts, remembered))) {
-        std.debug.print(Terminal.ansi.bold ++ "\n  Lightpanda Agent" ++ Terminal.ansi.reset ++ " " ++ Terminal.ansi.dim ++ "({s})" ++ Terminal.ansi.reset ++ "\n", .{lp.build_config.version});
+        printWelcome(resolve);
     }
 
     const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
@@ -543,16 +543,6 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
 }
 
 fn runRepl(self: *Agent) void {
-    if (self.ai_client) |_| {
-        self.terminal.printItalic("  Control the Lightpanda browser with natural language and commands", .{});
-    } else {
-        self.terminal.printItalic("\n  Basic REPL (--no-llm) — commands only", .{});
-        self.terminal.printDimmed("  To enable natural language, " ++ llm_setup_hint ++ ".", .{});
-    }
-    self.terminal.printDimmed("  /goto <url> to navigate", .{});
-    self.terminal.printDimmed("  /save to generate a reproducible script", .{});
-    self.terminal.printDimmed("  /help to list commands\t/quit to exit", .{});
-    self.terminal.printDimmed("  ! to evaluate JavaScript (on the current page's context)", .{});
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
     repl: while (true) {
@@ -767,6 +757,91 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
 
 const api_keys_hint = settings.api_keys_hint;
 const llm_setup_hint = "set an API key (" ++ api_keys_hint ++ ") and run /provider <name>";
+
+const logo =
+    \\  ⠀⠀⠀⠀⠀⠀⠀⣀⣴⣶⣾⣿⣿⣿⣿⣷⣶⣤⣀⠀⠀⠀⠀⠀
+    \\  ⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣆⠀⠀⠀
+    \\  ⠀⠀⠀⢠⣾⣿⣿⣿⣿⠉⠀⣉⣭⣭⣥⣤⡀⣿⣿⣿⣿⣷⡀⠀
+    \\  ⠀⠀⢀⣿⠿⠟⠛⠛⠋⢠⣾⣿⠟⠛⢿⣿⠛⢎⢿⣿⣿⣿⣷⠀
+    \\  ⠀⠀⢸⣀⠀⠀⠀⠀⠀⣿⣿⣿⠀⠠⣼⡿⠾⣸⢸⣿⣿⣿⣿⡇
+    \\  ⠀⠀⢸⣿⣿⣷⣶⣤⡀⠹⣿⣿⣿⣿⣟⣗⣐⠟⠸⣿⣿⣿⣿⡇
+    \\  ⠀⠀⠸⣿⣿⣿⣿⡿⠓⠀⠈⠛⠻⠿⠟⠛⠁⠀⠀⠘⣿⣿⣿⠃
+    \\  ⠀⠀⠀⠻⠛⠉⠉⠀⠀⠘⠲⠇⠀⠀⠀⠀⠀⢀⠀⠀⠘⣿⠏⠀
+    \\  ⠀⣀⣤⣶⣶⣶⣶⣶⣶⣤⣀⠀⠀⠀⠀⠀⠀⠀⠑⢤⣤⠏⠀⠀
+    \\  ⠊⠉⠀⠀⠀⠀⠀⠀⠀⠉⠙⠻⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+;
+
+const logo_cols = 26; // "  " + 24 braille cells
+const logo_rows = std.mem.count(u8, logo, "\n") + 1;
+const welcome_gap = "   ";
+
+/// `plain` is measured for width; `styled` is printed. They differ for the
+/// title, which mixes bold and dim.
+const WelcomeText = struct { plain: []const u8, styled: []const u8 };
+
+/// Prints the welcome banner: a logo cell and a message (title + command hints)
+/// per row. When both don't fit the terminal width, the logo is shed and the
+/// message printed flush-left. `llm_active` picks the basic-REPL tagline.
+fn printWelcome(llm_active: bool) void {
+    const a = Terminal.ansi;
+
+    var title_buf: [128]u8 = undefined;
+    const title_plain = std.fmt.bufPrint(&title_buf, "Lightpanda Agent ({s})", .{lp.build_config.version}) catch "Lightpanda Agent";
+    var styled_buf: [192]u8 = undefined;
+    const title_styled = std.fmt.bufPrint(&styled_buf, a.bold ++ "Lightpanda Agent" ++ a.reset ++ " " ++ a.dim ++ "({s})" ++ a.reset, .{lp.build_config.version}) catch title_plain;
+
+    var lines: [8]WelcomeText = undefined;
+    var n: usize = 0;
+    lines[n] = .{ .plain = title_plain, .styled = title_styled };
+    n += 1;
+    lines[n] = .{ .plain = "", .styled = "" };
+    n += 1;
+    if (llm_active) {
+        const t = "Control the Lightpanda browser with natural language and commands";
+        lines[n] = .{ .plain = t, .styled = a.italic ++ t ++ a.reset };
+        n += 1;
+    } else {
+        const t = "Basic REPL (--no-llm) — commands only";
+        lines[n] = .{ .plain = t, .styled = a.italic ++ t ++ a.reset };
+        n += 1;
+        const t2 = "To enable natural language, " ++ llm_setup_hint ++ ".";
+        lines[n] = .{ .plain = t2, .styled = a.dim ++ t2 ++ a.reset };
+        n += 1;
+    }
+    inline for (.{
+        "/goto <url> to navigate",
+        "/save to generate a reproducible script",
+        "/help to list commands   /quit to exit",
+        "! to evaluate JavaScript (on the current page's context)",
+    }) |t| {
+        lines[n] = .{ .plain = t, .styled = a.dim ++ t ++ a.reset };
+        n += 1;
+    }
+    const text = lines[0..n];
+
+    var logo_lines: [logo_rows][]const u8 = undefined;
+    var it = std.mem.splitScalar(u8, logo, '\n');
+    var i: usize = 0;
+    while (it.next()) |logo_line| : (i += 1) logo_lines[i] = logo_line;
+
+    var text_cols: usize = 0;
+    for (text) |line| text_cols = @max(text_cols, Terminal.displayWidth(line.plain));
+
+    const cols = Terminal.columns() orelse 80;
+    const show_logo = cols >= logo_cols + welcome_gap.len + text_cols;
+    const out_rows = if (show_logo) logo_rows else text.len;
+    const start = if (show_logo) (logo_rows - text.len) / 2 else 0;
+
+    std.debug.print("\n", .{});
+    for (0..out_rows) |row| {
+        if (show_logo) std.debug.print("{s}", .{logo_lines[row]});
+        if (row >= start and row - start < text.len) {
+            const line = text[row - start];
+            if (line.plain.len != 0) std.debug.print("{s}{s}", .{ if (show_logo) welcome_gap else "  ", line.styled });
+        }
+        std.debug.print("\n", .{});
+    }
+}
 
 /// `/provider <keyword>` disables the LLM and persists it; shared by the command
 /// parser, autocomplete, and the save report so they can't drift apart.
