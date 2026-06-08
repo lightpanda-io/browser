@@ -803,8 +803,11 @@ const banner_hints = [_][]const u8{
 };
 
 comptime {
+    // Excludes the version line: it's build-environment-controlled (nightly tags
+    // add a commit count + hash), so asserting it would break the build over an
+    // input this file doesn't own.
     const fixed = [_][]const u8{
-        "Lightpanda Agent (" ++ lp.build_config.version ++ ")",
+        "Lightpanda Agent",
         banner_tagline_llm,
         banner_tagline_basic,
         banner_setup,
@@ -819,12 +822,14 @@ comptime {
 fn printWelcome(llm_active: bool) void {
     const a = Terminal.ansi;
 
-    var title_buf: [192]u8 = undefined;
-    const title: []const u8 = std.fmt.bufPrint(&title_buf, a.bold ++ "Lightpanda Agent" ++ a.reset ++ " " ++ a.dim ++ "({s})" ++ a.reset, .{lp.build_config.version}) catch a.bold ++ "Lightpanda Agent" ++ a.reset;
+    var version_buf: [192]u8 = undefined;
+    const version: []const u8 = std.fmt.bufPrint(&version_buf, a.dim ++ "{s}" ++ a.reset, .{lp.build_config.version}) catch "";
 
-    var lines: [8][]const u8 = undefined;
+    var lines: [9][]const u8 = undefined;
     var n: usize = 0;
-    lines[n] = title;
+    lines[n] = a.bold ++ "Lightpanda Agent" ++ a.reset;
+    n += 1;
+    lines[n] = version;
     n += 1;
     lines[n] = "";
     n += 1;
