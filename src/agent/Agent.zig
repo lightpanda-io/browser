@@ -650,8 +650,6 @@ fn runRepl(self: *Agent) void {
             },
         }
     }
-
-    self.terminal.printInfo("Goodbye!", .{});
 }
 
 /// Handle a REPL-only meta slash command. These aren't tool slash commands

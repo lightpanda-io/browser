@@ -113,8 +113,9 @@ pub fn attachCompleter(self: *Terminal) void {
     c.ic_set_default_completer(&completionCallback, self);
     c.ic_set_default_hinter(&hintsCallback, self);
     c.ic_set_mode_callback(&modeCallback, self);
-    c.ic_set_ctrl_d_hint("press Ctrl-D again to exit");
+    c.ic_set_ctrl_d_hint("  press Ctrl-D again to exit");
     c.ic_set_esc_clear_hint("  esc again to clear");
+    c.ic_set_mode_hint("  JS mode - esc to exit");
     c.ic_set_default_highlighter(&highlighterCallback, self);
 }
 
@@ -160,6 +161,8 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         c.ic_style_def(style_jsmode, "ansi-red bold");
         c.ic_style_def(style_keyword, "ansi-blue bold");
         c.ic_style_def(style_comment, "ansi-darkgray italic");
+        // lighten the ghost/inline-hint color from isocline's default ansi-darkgray
+        c.ic_style_def("ic-hint", "ansi-color=244");
         // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
         c.ic_set_prompt_mode("[" ++ style_jsmode ++ "]![/" ++ style_jsmode ++ "] ", '!');
         // Blank continuation marker so multiline input isn't prefixed with `>`.
