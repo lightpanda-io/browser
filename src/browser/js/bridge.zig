@@ -980,6 +980,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/File.zig"),
     @import("../webapi/FileList.zig"),
     @import("../webapi/FileReader.zig"),
+    @import("../webapi/DataTransfer.zig"),
     @import("../webapi/Screen.zig"),
     @import("../webapi/VisualViewport.zig"),
     @import("../webapi/PerformanceObserver.zig"),

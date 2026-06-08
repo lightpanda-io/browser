@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<head>
+  <title>Test DataTransfer Web API</title>
+  <script src="./testing.js"></script>
+</head>
+
+<script id=construction>
+{
+  const dt = new DataTransfer();
+  testing.expectEqual(true, dt instanceof DataTransfer);
+  testing.expectEqual(0, dt.items.length);
+  testing.expectEqual(0, dt.files.length);
+  testing.expectEqual("none", dt.dropEffect);
+  testing.expectEqual("uninitialized", dt.effectAllowed);
+  testing.expectEqual(true, dt.items instanceof DataTransferItemList);
+  testing.expectEqual(true, dt.files instanceof FileList);
+}
+</script>
+
+<script id=effects>
+{
+  const dt = new DataTransfer();
+  dt.dropEffect = "copy";
+  testing.expectEqual("copy", dt.dropEffect);
+  dt.dropEffect = "bogus"; // invalid ignored
+  testing.expectEqual("copy", dt.dropEffect);
+  dt.effectAllowed = "copyMove";
+  testing.expectEqual("copyMove", dt.effectAllowed);
+  dt.effectAllowed = "nope"; // invalid ignored
+  testing.expectEqual("copyMove", dt.effectAllowed);
+}
+</script>
+
+<script id=string_data>
+{
+  const dt = new DataTransfer();
+  dt.setData("text/plain", "hello");
+  testing.expectEqual("hello", dt.getData("text/plain"));
+  // "text" normalizes to "text/plain"
+  testing.expectEqual("hello", dt.getData("text"));
+  // setData via the "text" alias overwrites the same item
+  dt.setData("text", "world");
+  testing.expectEqual("world", dt.getData("text/plain"));
+  testing.expectEqual(1, dt.items.length);
+  // "url" normalizes to "text/uri-list"
+  dt.setData("url", "https://example.com");
+  testing.expectEqual("https://example.com", dt.getData("text/uri-list"));
+  testing.expectEqual(true, dt.types.indexOf("text/plain") !== -1);
+  testing.expectEqual(true, dt.types.indexOf("text/uri-list") !== -1);
+  // getData miss returns ""
+  testing.expectEqual("", dt.getData("application/json"));
+}
+</script>
+
+<script id=items_add_file>
+{
+  const dt = new DataTransfer();
+  const f = new File(["abc"], "a.txt", { type: "text/plain" });
+  const item = dt.items.add(f);
+  testing.expectEqual("file", item.kind);
+  testing.expectEqual("text/plain", item.type);
+  // file is reflected in .files immediately
+  testing.expectEqual(1, dt.files.length);
+  testing.expectEqual("a.txt", dt.files[0].name);
+  testing.expectEqual(true, dt.files[0] instanceof File);
+  // "Files" appears in types when a file item exists
+  testing.expectEqual(true, dt.types.indexOf("Files") !== -1);
+  testing.expectEqual(f, item.getAsFile());
+}
+</script>
+
+<script id=items_add_string>
+{
+  const dt = new DataTransfer();
+  const item = dt.items.add("payload", "text/custom");
+  testing.expectEqual("string", item.kind);
+  testing.expectEqual("text/custom", item.type);
+  testing.expectEqual("payload", dt.getData("text/custom"));
+  testing.expectEqual(null, item.getAsFile());
+}
+</script>
+
+<script id=get_as_string>
+{
+  const dt = new DataTransfer();
+  dt.setData("text/plain", "world");
+  let got = null;
+  dt.items[0].getAsString(function (s) { got = s; });
+  testing.expectEqual("world", got);
+}
+</script>
+
+<script id=remove_and_clear>
+{
+  const dt = new DataTransfer();
+  dt.setData("text/plain", "s");
+  dt.items.add(new File(["x"], "f.txt", { type: "text/plain" }));
+  testing.expectEqual(2, dt.items.length);
+  testing.expectEqual(1, dt.files.length);
+  // remove the string item (index 0)
+  dt.items.remove(0);
+  testing.expectEqual(1, dt.items.length);
+  testing.expectEqual("", dt.getData("text/plain"));
+  testing.expectEqual(1, dt.files.length);
+  // clearData() drops string items, keeps files
+  dt.setData("text/plain", "again");
+  dt.clearData();
+  testing.expectEqual("", dt.getData("text/plain"));
+  testing.expectEqual(1, dt.files.length);
+  // items.clear() drops everything
+  dt.items.clear();
+  testing.expectEqual(0, dt.items.length);
+  testing.expectEqual(0, dt.files.length);
+}
+</script>
+
+<script id=iterate_items>
+{
+  const dt = new DataTransfer();
+  dt.items.add("a", "text/a");
+  dt.items.add("b", "text/b");
+  const kinds = [];
+  for (const it of dt.items) {
+    kinds.push(it.type);
+  }
+  testing.expectEqual("text/a,text/b", kinds.join(","));
+}
+</script>
