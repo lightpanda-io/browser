@@ -93,20 +93,24 @@ pub fn init(
 
     const private = try exec._factory.create(CryptoKey{
         ._type = .x25519,
+        ._kind = .private,
         ._extractable = extractable,
         ._usages = mask,
         ._key = private_key,
+        ._algorithm = .{ .name = "X25519" },
         ._vary = .{ .pkey = private_pkey },
     });
     errdefer exec._factory.destroy(private);
 
     const public = try exec._factory.create(CryptoKey{
         ._type = .x25519,
+        ._kind = .public,
         // Public keys are always extractable.
         ._extractable = true,
         // Always empty for public key.
         ._usages = 0,
         ._key = public_value,
+        ._algorithm = .{ .name = "X25519" },
         ._vary = .{ .pkey = public_pkey },
     });
 
