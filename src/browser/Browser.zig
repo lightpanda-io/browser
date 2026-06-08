@@ -109,6 +109,7 @@ pub fn deinit(self: *Browser) void {
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {
     self.closeSession();
     self.session = @as(Session, undefined);
+    errdefer self.session = null;
     const session = &self.session.?;
     try Session.init(session, self, notification);
     return session;
