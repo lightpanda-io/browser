@@ -759,21 +759,34 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
 const api_keys_hint = settings.api_keys_hint;
 const llm_setup_hint = "set an API key (" ++ api_keys_hint ++ ") and run /provider <name>";
 
+// A pre-colored (truecolor braille) panda. Each line carries its own ANSI and
+// resets at the end, so it prints as-is; non-empty lines are the visible rows.
 const logo =
-    \\ ⠀⠀⠀⠀⠀⠀⠀⣀⣴⣶⣾⣿⣿⣿⣿⣷⣶⣤⣀⠀⠀⠀⠀⠀
-    \\ ⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣆⠀⠀⠀
-    \\ ⠀⠀⠀⢠⣾⣿⣿⣿⣿⠉⠀⣉⣭⣭⣥⣤⡀⣿⣿⣿⣿⣷⡀⠀
-    \\ ⠀⠀⢀⣿⠿⠟⠛⠛⠋⢠⣾⣿⠟⠛⢿⣿⠛⢎⢿⣿⣿⣿⣷⠀
-    \\ ⠀⠀⢸⣀⠀⠀⠀⠀⠀⣿⣿⣿⠀⠠⣼⡿⠾⣸⢸⣿⣿⣿⣿⡇
-    \\ ⠀⠀⢸⣿⣿⣷⣶⣤⡀⠹⣿⣿⣿⣿⣟⣗⣐⠟⠸⣿⣿⣿⣿⡇
-    \\ ⠀⠀⠸⣿⣿⣿⣿⡿⠓⠀⠈⠛⠻⠿⠟⠛⠁⠀⠀⠘⣿⣿⣿⠃
-    \\ ⠀⠀⠀⠻⠛⠉⠉⠀⠀⠘⠲⠇⠀⠀⠀⠀⠀⢀⠀⠀⠘⣿⠏⠀
-    \\ ⠀⣀⣤⣶⣶⣶⣶⣶⣶⣤⣀⠀⠀⠀⠀⠀⠀⠀⠑⢤⣤⠏⠀⠀
-    \\ ⠊⠉⠀⠀⠀⠀⠀⠀⠀⠉⠙⠻⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-;
-
-const logo_cols = 25; // " " + 24 braille cells
-const logo_rows = std.mem.count(u8, logo, "\n") + 1;
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n" ++
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⢀⣠⣤⣶⣶⣶⣶⣶⣶⣶⣤⣄⡀⠀⠀⠀⠀⠀⠀⠀\x1b[0m\n" ++
+    "⠀⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⢀⣤⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀\x1b[0m\n" ++
+    "⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⣴⣿⣿⣿⣿⣿⡿⠿⢿⣿⡿⠿⠟⠛⠛⣿⣿⣿⣿⣷⣄⠀⠀⠀\x1b[0m\n" ++
+    "⠀⠀⠀⠀\x1b[38;2;247;247;239m⣼⣿⣿⣿⣿⣿⡇⠀⢀⣤⣶⣾⣿⣿⣶⣄⢸⣿⣿⣿⣿⣿⣆⠀⠀\x1b[0m\n" ++
+    "⠀⠀⠀\x1b[38;2;247;247;239m⣼⠿⠟⠛⠋⠉⠉⠁⣼⣿⣿⡟⠛⠛⣿⣿⠋⢳⢹⣿⣿⣿⣿⣿⡆⠀\x1b[0m\n" ++
+    "⠀⠀⠀\x1b[38;2;247;247;239m⣇⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⠀⠀⢤⣿⣿⣿⡃⡇⣿⣿⣿⣿⣿⣷⠀\x1b[0m\n" ++
+    "⠀⠀⠀\x1b[38;2;247;247;239m⣿⣿⣿⣶⣦⣤⡀⠀⢿⣿⣿⣷⣶⣟⠿⡷⠠⣾⠃⣿⣿⣿⣿⣿⣿⠀\x1b[0m\n" ++
+    "⠀⠀⠀\x1b[38;2;247;247;239m⣿⣿⣿⣿⣿⣿⣿⡄⠈⠻⢿⣿⣿⣿⣿⡿⠟⠁⠀⠈⢿⣿⣿⣿⡿⠀\x1b[0m\n" ++
+    "⠀⠀⠀\x1b[38;2;247;247;239m⢹⣿⣿⣿⣿⣏\x1b[38;2;9;126;179m⣁⠀\x1b[38;2;247;247;239m⣤⢀⡤⠀\x1b[38;2;100;112;112m⠈⠁⠀⠀⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⢻⣿⣿⠇⠀\x1b[0m\n" ++
+    "⠀⠀\x1b[38;2;9;126;179m⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⣄⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⠐⢄⠀⠀⠈⣿⠏⠀⠀\x1b[0m\n" ++
+    "\x1b[38;2;106;197;230m⢀⣰⣿⠿⠿⠿⠿⠿⠿⣿⣿⣿\x1b[38;2;9;126;179m⣿⣿⣿⣿⣶⣤⣄⣀⠀⠀\x1b[38;2;247;247;239m⠑⢶⣶\x1b[38;2;106;197;230m⣃\x1b[38;2;9;126;179m⣀⣤⠄\x1b[0m\n" ++
+    "\x1b[38;2;106;197;230m⠋⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠙⠻⠿⣝\x1b[38;2;9;126;179m⠛⠿⣿⣿⣿⣿⣿⣿⠿⠛⠉⠀⠀\x1b[0m\n" ++
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n" ++
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀";
+const logo_cols = 29; // braille cells per row
+const logo_rows = blk: {
+    @setEvalBranchQuota(20000);
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, logo, '\n');
+    while (it.next()) |line| {
+        if (line.len != 0) n += 1;
+    }
+    break :blk n;
+};
 const welcome_gap = "   ";
 
 /// Banner text. Kept narrow enough that the logo + gap + the widest line fits in
@@ -830,21 +843,20 @@ fn printWelcome(llm_active: bool) void {
     }
     const text = lines[0..n];
 
-    var logo_lines: [logo_rows][]const u8 = undefined;
-    var it = std.mem.splitScalar(u8, logo, '\n');
-    var i: usize = 0;
-    while (it.next()) |logo_line| : (i += 1) logo_lines[i] = logo_line;
-
     // center the text block against the taller logo (line counts only, no widths)
     const start = (logo_rows - text.len) / 2;
     std.debug.print("\n", .{});
-    for (0..logo_rows) |row| {
-        std.debug.print("{s}", .{logo_lines[row]});
+    var row: usize = 0;
+    var it = std.mem.splitScalar(u8, logo, '\n');
+    while (it.next()) |logo_line| {
+        if (logo_line.len == 0) continue;
+        std.debug.print("{s}", .{logo_line});
         if (row >= start and row - start < text.len) {
             const line = text[row - start];
             if (line.len != 0) std.debug.print("{s}{s}", .{ welcome_gap, line });
         }
         std.debug.print("\n", .{});
+        row += 1;
     }
 }
 
