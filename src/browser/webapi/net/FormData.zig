@@ -99,6 +99,13 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
         ._entries = try collectForm(frame.arena, form, submitter, frame),
     });
 
+    for (form_data._entries.items) |entry| {
+        switch (entry.value) {
+            .file => |file| file.acquireRef(),
+            else => {},
+        }
+    }
+
     const form_data_event = try (@import("../event/FormDataEvent.zig")).initTrusted(
         comptime .wrap("formdata"),
         .{ .bubbles = true, .cancelable = false, .formData = form_data },
@@ -109,28 +116,21 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
     return form_data;
 }
 
-pub fn deinit(_: *FormData, _: *Page) void {}
-
-pub fn releaseRef(self: *FormData, page: *Page) void {
+pub fn deinit(self: *FormData, page: *Page) void {
     for (self._entries.items) |entry| {
         switch (entry.value) {
             .file => |file| file.releaseRef(page),
             else => {},
         }
     }
+}
 
+pub fn releaseRef(self: *FormData, page: *Page) void {
     self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *FormData) void {
     self._rc.acquire();
-
-    for (self._entries.items) |entry| {
-        switch (entry.value) {
-            .file => |file| file.acquireRef(),
-            else => {},
-        }
-    }
 }
 
 pub fn get(self: *const FormData, name: String) ?[]const u8 {
@@ -161,8 +161,8 @@ pub fn has(self: *const FormData, name: String) bool {
     return false;
 }
 
-pub fn set(self: *FormData, name: String, value: []const u8) !void {
-    self.deleteByName(name);
+pub fn set(self: *FormData, name: String, value: []const u8, exec: *Execution) !void {
+    self.deleteByName(name, exec);
     return self.append(name.str(), value);
 }
 
@@ -173,15 +173,21 @@ pub fn append(self: *FormData, name: []const u8, value: []const u8) !void {
     });
 }
 
-pub fn delete(self: *FormData, name: String) void {
-    self.deleteByName(name);
+pub fn delete(self: *FormData, name: String, exec: *Execution) void {
+    self.deleteByName(name, exec);
 }
 
-fn deleteByName(self: *FormData, name: String) void {
+fn deleteByName(self: *FormData, name: String, exec: *Execution) void {
     var i: usize = 0;
     while (i < self._entries.items.len) {
         if (self._entries.items[i].name.eql(name)) {
-            _ = self._entries.swapRemove(i);
+            const entry = self._entries.swapRemove(i);
+
+            switch (entry.value) {
+                .file => |file| file.releaseRef(exec.page),
+                else => {},
+            }
+
             continue;
         }
         i += 1;
