@@ -146,6 +146,49 @@ fn installCacheContext(
     if (ctx.forward.shutdown != null) req.shutdown_callback = CacheContext.shutdownCallback;
 }
 
+fn forwardFromCache(
+    transfer: *Transfer,
+    forward: *Forward,
+    cached: *const CachedResponse,
+) !void {
+    transfer.req.notification.dispatch(
+        .http_request_served_from_cache,
+        &.{ .transfer = transfer },
+    );
+
+    const req = &transfer.req;
+    const response = Response.fromCached(req.ctx, cached);
+    defer cached.data.deinit();
+
+    try forward.forwardStart(response);
+    const proceed = try forward.forwardHeader(response);
+    if (!proceed) return error.Abort;
+
+    switch (cached.data) {
+        .buffer => |data| {
+            if (data.len > 0) try forward.forwardData(response, data);
+        },
+        .file => |f| {
+            const file = f.file;
+            var buf: [1024]u8 = undefined;
+            var file_reader = file.reader(&buf);
+            try file_reader.seekTo(f.offset);
+            const reader = &file_reader.interface;
+            var read_buf: [1024]u8 = undefined;
+            var remaining = f.len;
+            while (remaining > 0) {
+                const read_len = @min(read_buf.len, remaining);
+                const n = try reader.readSliceShort(read_buf[0..read_len]);
+                if (n == 0) break;
+                remaining -= n;
+                try forward.forwardData(response, read_buf[0..n]);
+            }
+        },
+    }
+
+    try forward.forwardDone();
+}
+
 fn serveFromCache(transfer: *Transfer, cached: *const CachedResponse) !void {
     transfer.req.notification.dispatch(
         .http_request_served_from_cache,
@@ -238,11 +281,9 @@ const CacheContext = struct {
                 log.warn(.cache, "renew failed", .{ .err = err });
             };
 
-            serveFromCache(transfer, &stale) catch |err| {
-                self.forward.forwardErr(err);
-            };
-
-            return false;
+            try forwardFromCache(transfer, &self.forward, &stale);
+            self.forward = Forward.noop();
+            return true;
         }
 
         if (self.stale_entry) |stale| {

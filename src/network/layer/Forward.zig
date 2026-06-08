@@ -73,3 +73,25 @@ pub fn forwardErr(self: Forward, e: anyerror) void {
 pub fn forwardShutdown(self: Forward) void {
     if (self.shutdown) |cb| cb(self.ctx);
 }
+
+pub fn noop() Forward {
+    return .{
+        .ctx = @ptrFromInt(0x1),
+        .start = null,
+        .header = struct {
+            fn header(_: Response) anyerror!bool {
+                return true;
+            }
+        }.header,
+        .data = struct {
+            fn data(_: Response, _: []const u8) anyerror!void {}
+        }.data,
+        .done = struct {
+            fn done(_: *anyopaque) anyerror!void {}
+        }.done,
+        .err = struct {
+            fn err(_: *anyopaque, _: anyerror) void {}
+        }.err,
+        .shutdown = null,
+    };
+}
