@@ -1097,8 +1097,8 @@ const right_sep = " · ";
 
 /// Status bar below the input: a rule, then dimmed segments laid out flush-left
 /// and flush-right. The content must never exceed the rule width or it wraps
-/// onto a second row, which corrupts isocline's resize redraw and leaves stacked
-/// rules behind — so segments are dropped lowest-rank first until it fits.
+/// onto a second row, which reflows on resize and leaves a stray row behind — so
+/// segments are dropped lowest-rank first until it fits.
 /// isocline copies the string, so the temporary buffer is freed here.
 fn writeStatusBar(self: *Terminal, segments: []const StatusSegment) void {
     const a = self.allocator;
@@ -1107,15 +1107,10 @@ fn writeStatusBar(self: *Terminal, segments: []const StatusSegment) void {
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(a);
 
-    // a dim full-width rule, shared by both bars
+    // a dim full-width rule above the status segments
     buf.appendSlice(a, "[faint]") catch return;
     for (0..w) |_| buf.appendSlice(a, "─") catch return;
     buf.appendSlice(a, "[/]") catch return;
-
-    // top bar: just the rule
-    buf.append(a, 0) catch return;
-    c.ic_set_top_bar(buf.items.ptr);
-    _ = buf.pop(); // drop the terminator, keep the rule
 
     // drop the lowest-rank segment until the content fits "  " + left + right
     std.debug.assert(segments.len <= max_segments);
