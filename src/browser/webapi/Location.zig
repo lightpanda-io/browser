@@ -27,7 +27,7 @@ const Location = @This();
 
 _url: *URL,
 
-pub fn init(raw_url: [:0]const u8, frame: *Frame) !*Location {
+pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
     const url = try URL.init(raw_url, null, &frame.js.execution);
     return frame._factory.create(Location{
         ._url = url,
@@ -115,8 +115,8 @@ pub fn reload(_: *const Location, frame: *Frame) !void {
     return frame.scheduleNavigation(frame.url, .{ .reason = .script, .kind = .reload }, .{ .script = frame });
 }
 
-pub fn toString(self: *const Location, exec: *const js.Execution) ![:0]const u8 {
-    return self._url.toString1(exec);
+pub fn toString(self: *const Location, exec: *const js.Execution) ![]const u8 {
+    return self._url.toString(exec);
 }
 
 pub const JsApi = struct {
