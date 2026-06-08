@@ -69,7 +69,6 @@ const HttpClient = @import("HttpClient.zig");
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
-const WebApiURL = @import("webapi/URL.zig");
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
 const log = lp.log;
@@ -77,9 +76,6 @@ const String = lp.String;
 const IFrame = Element.Html.IFrame;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
-
-var default_url = WebApiURL{ ._raw = "about:blank" };
-pub var default_location: Location = Location{ ._url = &default_url };
 
 pub const BUF_SIZE = 1024;
 
@@ -331,7 +327,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._frame = self,
         ._proto = undefined,
         ._document = self.document,
-        ._location = &default_location,
+        ._location = undefined,
         ._performance = .init(),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
@@ -352,6 +348,8 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         .call_arena = self.call_arena,
     });
     errdefer browser.env.destroyContext(self.js);
+
+    self.window._location = try Location.init("about:blank", self);
 
     document._frame = self;
 
@@ -557,7 +555,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     if (is_about_blank or is_blob) {
         self.url = if (is_about_blank) "about:blank" else try self.arena.dupeZ(u8, request_url);
 
-        // even though this might be the same _data_ as `default_location`, we
+        // even though about:blank navigations may share the same _data_, we
         // have to do this to make sure window.location is at a unique _address_.
         // If we don't do this, multiple window._location will have the same
         // address and thus be mapped to the same v8::Object in the identity map.
