@@ -843,8 +843,7 @@ fn printWelcome(llm_active: bool) void {
     }
     const text = lines[0..n];
 
-    // center the text block against the taller logo (line counts only, no widths)
-    const start = (logo_rows - text.len) / 2;
+    const start = (logo_rows - text.len) / 2 -| 1;
     std.debug.print("\n", .{});
     var row: usize = 0;
     var it = std.mem.splitScalar(u8, logo, '\n');
