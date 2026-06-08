@@ -1348,6 +1348,14 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         }
         return;
     }
+    if (self.ai_client != null) {
+        for (SlashCommand.llm_commands) |row| {
+            if (std.ascii.eqlIgnoreCase(row.name, target)) {
+                self.terminal.printInfo("/{s} — {s}", .{ row.name, row.description });
+                return;
+            }
+        }
+    }
     const tool_schema = Schema.findByName(target) orelse {
         if (Terminal.closestCommand(target)) |near| {
             self.terminal.printError("unknown command: {s}. Did you mean " ++ Terminal.highlightCmd("/help {s}") ++ "?", .{ target, near });
