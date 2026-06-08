@@ -185,7 +185,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
 }
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
-    self.cleanup();
+    self.teardownConn();
 
     if (self._on_open) |func| {
         func.release();
@@ -255,14 +255,21 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
 }
 
 fn cleanup(self: *WebSocket) void {
-    if (self._conn) |conn| {
-        self._exec.httpOwner().removeWS(self);
-        self._http_client.removeConn(conn);
-        self._req_headers.deinit();
-        self._conn = null;
-        self.releaseRef(self._exec.page);
-        self._send_queue.clearRetainingCapacity();
+    if (self._conn == null) {
+        return;
     }
+    self.teardownConn();
+    self.releaseRef(self._exec.page);
+}
+
+// Unlink the connection from the http client + owner and free the request headers.
+fn teardownConn(self: *WebSocket) void {
+    const conn = self._conn orelse return;
+    self._exec.httpOwner().removeWS(self);
+    self._http_client.removeConn(conn);
+    self._req_headers.deinit();
+    self._conn = null;
+    self._send_queue.clearRetainingCapacity();
 }
 
 fn queueMessage(self: *WebSocket, msg: Message) !void {
