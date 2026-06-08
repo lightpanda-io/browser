@@ -77,6 +77,9 @@ pub extern "c" fn url_get_scheme(url: *const Url, out_ptr: *[*]const u8, out_len
 pub extern "c" fn url_set_fragment(url: *Url, ptr: [*]const u8, len: usize) i32;
 pub extern "c" fn url_set_fragment_to_null(url: *Url) void;
 pub extern "c" fn url_get_fragment(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) i32;
+pub extern "c" fn url_set_query(url: *Url, ptr: [*]const u8, len: usize) i32;
+pub extern "c" fn url_set_query_to_null(url: *Url) void;
+pub extern "c" fn url_get_query(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) i32;
 
 extern "c" fn url_get_port(url: *const Url) i32;
 pub inline fn urlGetPort(url: *const Url) ?u16 {

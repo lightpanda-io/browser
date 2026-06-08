@@ -19,21 +19,16 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const U = @import("../URL.zig");
 const U_ = @import("../../sys/url.zig");
 const URLSearchParams = @import("net/URLSearchParams.zig");
 const Blob = @import("Blob.zig");
 const Execution = js.Execution;
 
-const Allocator = std.mem.Allocator;
-
 const URL = @This();
 
-_raw: [:0]const u8 = undefined,
 _url: *U_.Url = undefined,
 /// Largest port possible is 65535; which require 5 bytes.
 _port: [5]u8 = undefined,
-_arena: ?Allocator = null,
 _search_params: ?*URLSearchParams = null,
 
 // convenience
@@ -180,29 +175,54 @@ pub fn setPort(self: *URL, maybe_value: ?[]const u8) void {
 }
 
 pub fn getSearch(self: *const URL, exec: *const Execution) ![]const u8 {
-    // If searchParams has been accessed, generate search from it
-    if (self._search_params) |sp| {
-        if (sp.getSize() == 0) {
+    if (self._search_params) |search_params| {
+        if (search_params.getSize() == 0) {
             return "";
         }
+
         var buf = std.Io.Writer.Allocating.init(exec.call_arena);
         try buf.writer.writeByte('?');
-        try sp.toString(&buf.writer);
+        try search_params.toString(&buf.writer);
         return buf.written();
     }
-    return U.getSearch(self._raw);
+
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const res = U_.url_get_query(self._url, &out, &len);
+    if (res != 0 or len == 0) {
+        return "";
+    }
+
+    // rust-url's query() omits the '?', which always precedes the query.
+    return (out - 1)[0 .. len + 1];
 }
 
 pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setSearch(self._raw, value, allocator);
+    // Empty value clears the query entirely.
+    if (value.len == 0) {
+        // Reset searchParams.
+        if (self._search_params) |search_params| {
+            search_params._params = .empty;
+        }
 
-    // Update existing searchParams if it exists
-    if (self._search_params) |sp| {
-        const search = U.getSearch(self._raw);
-        const search_value = if (search.len > 0) search[1..] else "";
-        try sp.updateFromString(search_value, exec);
+        U_.url_set_query_to_null(self._url);
+        return;
     }
+
+    // Strip a single leading '?', then set the query.
+    const query = if (value[0] == '?') value[1..] else value;
+
+    const res = U_.url_set_query(self._url, query.ptr, query.len);
+    if (res != 0) {
+        return error.SetSearch;
+    }
+
+    // If searchParams exists, update it too.
+    const search_params = self._search_params orelse return;
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const search_value = if (U_.url_get_query(self._url, &out, &len) == 0) out[0..len] else "";
+    try search_params.updateFromString(search_value, exec);
 }
 
 pub fn getHash(self: *const URL) []const u8 {
@@ -237,9 +257,10 @@ pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
         return sp;
     }
 
-    // Get current search string (without the '?')
-    const search = try self.getSearch(exec);
-    const search_value = if (search.len > 0) search[1..] else "";
+    // Get current search string (omitting '?').
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const search_value = if (U_.url_get_query(self._url, &out, &len) == 0) out[0..len] else "";
 
     const params = try URLSearchParams.init(.{ .query_string = search_value }, exec);
     self._search_params = params;
@@ -254,66 +275,42 @@ pub fn getOrigin(self: *const URL, exec: *const Execution) ![]const u8 {
 }
 
 pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
-    // This behaves the same as initializing a URL.
+    // Parse first: a failed href setter must leave the URL unchanged (and we
+    // must not free self._url before we know we have a replacement, or any
+    // later access would be a use-after-free).
     var err: i32 = 0;
     const url = U_.url_parse(value.ptr, value.len, &err) orelse return error.TypeError;
-    errdefer U_.url_free(url);
 
-    // Free the current URL.
     U_.url_free(self._url);
     self._url = url;
 
-    // Update existing searchParams if it exists.
-    if (self._search_params) |sp| {
-        const search = U.getSearch(self.toString());
-        const search_value = if (search.len > 0) search[1..] else "";
-        try sp.updateFromString(search_value, exec);
-    }
-}
-
-pub fn toString(self: *const URL) []const u8 {
-    var ptr: [*]const u8 = undefined;
+    // Update existing searchParams if exists.
+    const search_params = self._search_params orelse return;
+    var out: [*]const u8 = undefined;
     var len: usize = 0;
-    U_.url_to_string(self._url, &ptr, &len);
-    return ptr[0..len];
+    const search_value = if (U_.url_get_query(url, &out, &len) == 0) out[0..len] else "";
+    try search_params.updateFromString(search_value, exec);
 }
 
-pub fn toString1(self: *const URL, exec: *const Execution) ![:0]const u8 {
-    const sp = self._search_params orelse {
-        return self._raw;
-    };
-
-    // Rebuild URL from searchParams
-    const raw = self._raw;
-
-    // Find the base (everything before ? or #)
-    const base_end = std.mem.indexOfAnyPos(u8, raw, 0, "?#") orelse raw.len;
-    const base = raw[0..base_end];
-
-    // Get the hash if it exists
-    const hash = self.getHash();
-
-    // Build the new URL string
-    var buf = std.Io.Writer.Allocating.init(exec.call_arena);
-    try buf.writer.writeAll(base);
-
-    // Add / if missing (e.g., "https://example.com" -> "https://example.com/")
-    // Only add if pathname is just "/" and not already in the base
-    const pathname = U.getPathname(raw);
-    if (std.mem.eql(u8, pathname, "/") and !std.mem.endsWith(u8, base, "/")) {
-        try buf.writer.writeByte('/');
+pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
+    if (self._search_params) |search_params| {
+        if (search_params.getSize() == 0) {
+            U_.url_set_query_to_null(self._url);
+        } else {
+            var buf = std.Io.Writer.Allocating.init(exec.call_arena);
+            defer buf.deinit();
+            try search_params.toString(&buf.writer);
+            const query = buf.written();
+            if (U_.url_set_query(self._url, query.ptr, query.len) != 0) {
+                return error.ToString;
+            }
+        }
     }
 
-    // Only add ? if there are params
-    if (sp.getSize() > 0) {
-        try buf.writer.writeByte('?');
-        try sp.toString(&buf.writer);
-    }
-
-    try buf.writer.writeAll(hash);
-    try buf.writer.writeByte(0);
-
-    return buf.written()[0 .. buf.written().len - 1 :0];
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    U_.url_to_string(self._url, &out, &len);
+    return out[0..len];
 }
 
 pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {

@@ -462,6 +462,12 @@ pub unsafe extern "C" fn url_set_query(url: *mut Url, ptr: *const c_uchar, len: 
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn url_set_query_to_null(url: *mut Url) {
+    let url = unsafe { &mut *url };
+    url.set_query(None);
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn url_get_query(
     url: *const Url,
     out_ptr: *mut *const c_uchar,
