@@ -23,6 +23,10 @@ pub fn processRequests(server: anytype, reader: *std.io.Reader) !void {
             error.StreamTooLong => {
                 log.err(.mcp, "Message too long", .{});
                 try server.sendError(.null, .InvalidRequest, "Message too long");
+                _ = reader.discardDelimiterInclusive('\n') catch |e| switch (e) {
+                    error.EndOfStream => break,
+                    else => return e,
+                };
                 continue;
             },
             else => return err,

@@ -213,12 +213,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
     const found_providers = settings.availableProviders(&providers_buf);
     const available_providers = try allocator.alloc([]const u8, found_providers.len);
+    var provider_count: usize = 0;
     errdefer {
-        for (available_providers) |p| allocator.free(p);
+        for (available_providers[0..provider_count]) |p| allocator.free(p);
         allocator.free(available_providers);
     }
     for (found_providers, 0..) |f, i| {
         available_providers[i] = try allocator.dupe(u8, @tagName(f.provider));
+        provider_count = i + 1;
     }
 
     if (opts.task != null and opts.script_file != null) {
