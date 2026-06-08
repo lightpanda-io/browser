@@ -545,9 +545,13 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
 fn runRepl(self: *Agent) void {
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
+    if (self.ai_client != null) {
+        const a = Terminal.ansi;
+        std.debug.print("  model: {s}{s}  {s}effort: {s}{s}{s}\n", .{ a.dim, self.model, a.reset, a.dim, @tagName(self.effort), a.reset });
+    }
+
     repl: while (true) {
         std.debug.print("\n", .{});
-        self.updateStatusBar();
         const line = Terminal.readLine("") orelse break;
         defer Terminal.freeLine(line);
 
@@ -693,7 +697,6 @@ fn handleEffort(self: *Agent, rest: []const u8) void {
         return;
     };
     self.effort = level;
-    self.updateStatusBar();
     self.reportSaved("effort", @tagName(level));
 }
 
@@ -900,24 +903,6 @@ fn setModel(self: *Agent, model: []const u8) !void {
     self.reportSaved("model", self.model);
 }
 
-fn updateStatusBar(self: *Agent) void {
-    if (self.ai_client == null) {
-        self.terminal.setStatus(&.{
-            .{ .text = "basic REPL — slash commands only", .side = .left, .rank = 1 },
-            .{ .text = "/help", .side = .right, .rank = 2 },
-        });
-        return;
-    }
-    var status_buf: [256]u8 = undefined;
-    const left_text = std.fmt.bufPrint(&status_buf, "{s} · {s}", .{ self.model, @tagName(self.effort) }) catch self.model;
-    self.terminal.setStatus(&.{
-        .{ .text = left_text, .side = .left, .rank = 3 },
-        .{ .text = "! JS", .side = .right, .rank = 2 },
-        .{ .text = "Tab completes", .side = .right, .rank = 1 },
-        .{ .text = "/help", .side = .right, .rank = 4 },
-    });
-}
-
 fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
 
@@ -960,7 +945,6 @@ fn disableProvider(self: *Agent) void {
     self.model_credentials = null;
     self.model_completions = null;
     self.no_llm_persisted = true;
-    self.updateStatusBar();
     self.reportSaved("provider", provider_off_keyword);
 }
 

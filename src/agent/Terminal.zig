@@ -76,25 +76,6 @@ js_mode: bool = false,
 /// Per-mode history files (null outside REPL mode). `modeCallback` swaps the
 /// active one so JS and normal recall stay separate.
 history_paths: ?HistoryPaths = null,
-/// True while a first Esc has armed "press Esc again to clear"; set by isocline.
-esc_clear_pending: bool = false,
-/// True while a first Ctrl-D has armed "press Ctrl-D again to exit"; set by isocline.
-ctrl_d_exit_pending: bool = false,
-/// Base (REPL-mode) status segments, text owned; `renderStatus` overrides them
-/// with a JS-mode label when active. Re-rendered on resize so the bar refits.
-status: std.ArrayList(StatusSegment) = .empty,
-
-/// One status-bar segment. When the bar is too narrow to show everything,
-/// segments are dropped lowest `rank` first; `side` places the survivors
-/// flush-left or flush-right.
-pub const StatusSegment = struct {
-    text: []const u8,
-    side: Side,
-    /// Drop order under width pressure: the lowest rank is dropped first.
-    rank: u8,
-
-    pub const Side = enum { left, right };
-};
 
 /// Lets the completer/hinter pull dynamic candidates from the `Agent` without
 /// `Terminal` depending on it (same idiom as `Session.cancel_hook`).
@@ -132,9 +113,8 @@ pub fn attachCompleter(self: *Terminal) void {
     c.ic_set_default_completer(&completionCallback, self);
     c.ic_set_default_hinter(&hintsCallback, self);
     c.ic_set_mode_callback(&modeCallback, self);
-    c.ic_set_esc_clear_callback(&escClearCallback, self);
-    c.ic_set_ctrl_d_callback(&ctrlDCallback, self);
-    c.ic_set_resize_callback(&resizeCallback, self);
+    c.ic_set_ctrl_d_hint("press Ctrl-D again to exit");
+    c.ic_set_esc_clear_hint("  esc again to clear");
     c.ic_set_default_highlighter(&highlighterCallback, self);
 }
 
@@ -144,24 +124,6 @@ fn modeCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
     if (self.history_paths) |hp| {
         c.ic_set_history((if (active) hp.js else hp.normal).ptr, -1);
     }
-    self.renderStatus();
-}
-
-fn escClearCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
-    const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
-    self.esc_clear_pending = active;
-    self.renderStatus();
-}
-
-fn ctrlDCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
-    const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
-    self.ctrl_d_exit_pending = active;
-    self.renderStatus();
-}
-
-fn resizeCallback(arg: ?*anyopaque) callconv(.c) void {
-    const self: *Terminal = @ptrCast(@alignCast(arg orelse return));
-    self.renderStatus();
 }
 
 pub fn jsMode(self: *const Terminal) bool {
@@ -226,8 +188,6 @@ fn isRepl(self: *const Terminal) bool {
 
 pub fn deinit(self: *Terminal) void {
     self.spinner.deinit();
-    self.clearStatus();
-    self.status.deinit(self.allocator);
     if (self.repl_arena) |*a| a.deinit();
 }
 
@@ -1040,130 +1000,6 @@ pub fn columns() ?u16 {
 pub fn clearPromptFrame(self: *Terminal) void {
     if (!self.isRepl()) return;
     std.debug.print("\x1b[2A\r\x1b[J", .{});
-}
-
-/// Set the REPL-mode status segments and render the bar. Text is copied, so
-/// callers may pass transient slices. JS mode overrides these via `renderStatus`.
-pub fn setStatus(self: *Terminal, segments: []const StatusSegment) void {
-    if (!self.isRepl()) return;
-    self.clearStatus();
-    for (segments) |seg| {
-        const text = self.allocator.dupe(u8, seg.text) catch return;
-        self.status.append(self.allocator, .{ .text = text, .side = seg.side, .rank = seg.rank }) catch return;
-    }
-    self.renderStatus();
-}
-
-fn clearStatus(self: *Terminal) void {
-    for (self.status.items) |seg| self.allocator.free(seg.text);
-    self.status.clearRetainingCapacity();
-}
-
-fn renderStatus(self: *Terminal) void {
-    if (!self.isRepl()) return;
-
-    var buf: [max_segments]StatusSegment = undefined;
-    var n: usize = 0;
-
-    if (self.ctrl_d_exit_pending) {
-        buf[n] = .{ .text = "Press Ctrl-D again to exit", .side = .left, .rank = 255 };
-        n += 1;
-    } else if (self.js_mode) {
-        buf[n] = .{ .text = "JS mode", .side = .left, .rank = 1 };
-        n += 1;
-    } else for (self.status.items) |seg| {
-        if (seg.side != .left or n == max_segments - 1) continue;
-        buf[n] = seg;
-        n += 1;
-    }
-
-    if (self.esc_clear_pending) {
-        buf[n] = .{ .text = "Press Esc again to clear", .side = .right, .rank = 255 };
-        n += 1;
-    } else if (self.js_mode) {
-        buf[n] = .{ .text = "Esc exits JS mode", .side = .right, .rank = 2 };
-        n += 1;
-    } else for (self.status.items) |seg| {
-        if (seg.side != .right or n == max_segments) continue;
-        buf[n] = seg;
-        n += 1;
-    }
-
-    self.writeStatusBar(buf[0..n]);
-}
-
-const left_sep = " ";
-const right_sep = " · ";
-
-/// Status bar below the input: a rule, then dimmed segments laid out flush-left
-/// and flush-right. The content must never exceed the rule width or it wraps
-/// onto a second row, which reflows on resize and leaves a stray row behind — so
-/// segments are dropped lowest-rank first until it fits.
-/// isocline copies the string, so the temporary buffer is freed here.
-fn writeStatusBar(self: *Terminal, segments: []const StatusSegment) void {
-    const a = self.allocator;
-    // stay one short of the last column: not all terminals render it reliably
-    const w: usize = (columns() orelse 80) -| 1;
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(a);
-
-    // a dim full-width rule above the status segments
-    buf.appendSlice(a, "[faint]") catch return;
-    for (0..w) |_| buf.appendSlice(a, "─") catch return;
-    buf.appendSlice(a, "[/]") catch return;
-
-    // drop the lowest-rank segment until the content fits "  " + left + right
-    std.debug.assert(segments.len <= max_segments);
-    var keep = [_]bool{true} ** max_segments;
-    const kept = keep[0..segments.len];
-    while (2 + joinedWidth(segments, kept, .left) + joinedWidth(segments, kept, .right) > w) {
-        var victim: ?usize = null;
-        for (kept, 0..) |present, i| {
-            if (!present) continue;
-            if (victim == null or segments[i].rank < segments[victim.?].rank) victim = i;
-        }
-        if (victim) |v| kept[v] = false else break;
-    }
-
-    buf.appendSlice(a, "\n[faint]  ") catch return;
-    const lw = joinedWidth(segments, kept, .left);
-    const rw = joinedWidth(segments, kept, .right);
-    appendJoined(&buf, a, segments, kept, .left);
-    if (rw > 0) {
-        buf.appendNTimes(a, ' ', w -| (2 + lw + rw)) catch return;
-        appendJoined(&buf, a, segments, kept, .right);
-    }
-    buf.appendSlice(a, "[/]") catch return;
-    buf.append(a, 0) catch return;
-    c.ic_set_bottom_bar(buf.items.ptr);
-}
-
-const max_segments = 8;
-
-fn sepFor(side: StatusSegment.Side) []const u8 {
-    return if (side == .left) left_sep else right_sep;
-}
-
-fn joinedWidth(segments: []const StatusSegment, kept: []const bool, side: StatusSegment.Side) usize {
-    var total: usize = 0;
-    var first = true;
-    for (segments, kept) |seg, present| {
-        if (!present or seg.side != side) continue;
-        if (!first) total += displayWidth(sepFor(side));
-        total += displayWidth(seg.text);
-        first = false;
-    }
-    return total;
-}
-
-fn appendJoined(buf: *std.ArrayList(u8), a: std.mem.Allocator, segments: []const StatusSegment, kept: []const bool, side: StatusSegment.Side) void {
-    var first = true;
-    for (segments, kept) |seg, present| {
-        if (!present or seg.side != side) continue;
-        if (!first) buf.appendSlice(a, sepFor(side)) catch return;
-        buf.appendSlice(a, seg.text) catch return;
-        first = false;
-    }
 }
 
 pub fn displayWidth(s: []const u8) usize {
