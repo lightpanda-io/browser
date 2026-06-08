@@ -112,14 +112,14 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
 pub fn deinit(_: *FormData, _: *Page) void {}
 
 pub fn releaseRef(self: *FormData, page: *Page) void {
-    self._rc.release(self, page);
-
     for (self._entries.items) |entry| {
         switch (entry.value) {
             .file => |file| file.releaseRef(page),
             else => {},
         }
     }
+
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *FormData) void {
