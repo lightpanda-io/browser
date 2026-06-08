@@ -228,8 +228,7 @@ pub fn deriveBits(
     const ctx = crypto.EVP_PKEY_CTX_new(private.getKeyObject(), null) orelse return error.OperationError;
     defer crypto.EVP_PKEY_CTX_free(ctx);
 
-    if (crypto.EVP_PKEY_derive_init(ctx) != 1 or crypto.EVP_PKEY_derive_set_peer(ctx, public.getKeyObject()) != 1)
-    {
+    if (crypto.EVP_PKEY_derive_init(ctx) != 1 or crypto.EVP_PKEY_derive_set_peer(ctx, public.getKeyObject()) != 1) {
         return error.OperationError;
     }
 
