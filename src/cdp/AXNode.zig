@@ -803,7 +803,7 @@ pub const AXRole = enum(u8) {
                 .input => {
                     const input = el.as(DOMNode.Element.Html.Input);
                     return switch (input._input_type) {
-                        .tel, .url, .email, .text => .textbox,
+                        .tel, .url, .email, .text, .password => .textbox,
                         .image, .reset, .button, .submit => .button,
                         .radio => .radio,
                         .range => .slider,
@@ -815,9 +815,7 @@ pub const AXRole = enum(u8) {
                         .file => .file,
                         .month => .month,
                         .@"datetime-local", .week, .time => .combobox,
-                        // zig fmt: off
-                        .password, .hidden => .none,
-                        // zig fmt: on
+                        .hidden => .none,
                     };
                 },
                 .textarea => .textbox,
@@ -1772,6 +1770,81 @@ test "AXNode: Writer query filters by role" {
 
     const name_val = nodes[0].object.get("name").?.object.get("value").?.string;
     try testing.expectEqual("Visible", name_val);
+}
+
+test "AXNode: writer maps password input to textbox" {
+    var registry = Node.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer frame._session.removePage();
+    var doc = frame.window._document;
+
+    const body = (try doc.querySelector(comptime .wrap("body"), frame)).?;
+
+    const password_label = try doc.createElement("label", null, frame);
+    try password_label.setAttributeSafe(comptime .wrap("for"), comptime .wrap("pw"), frame);
+    try password_label.setInnerText("Password", frame);
+
+    const password_input = try doc.createElement("input", null, frame);
+    try password_input.setAttributeSafe(comptime .wrap("id"), comptime .wrap("pw"), frame);
+    try password_input.setAttributeSafe(comptime .wrap("type"), comptime .wrap("password"), frame);
+    try password_input.setAttributeSafe(comptime .wrap("required"), comptime .wrap(""), frame);
+
+    const hidden_input = try doc.createElement("input", null, frame);
+    try hidden_input.setAttributeSafe(comptime .wrap("type"), comptime .wrap("hidden"), frame);
+
+    _ = try body.asNode().appendChild(password_label.asNode(), frame);
+    _ = try body.asNode().appendChild(password_input.asNode(), frame);
+    _ = try body.asNode().appendChild(hidden_input.asNode(), frame);
+
+    const password_role = try AXNode.fromNode(password_input.asNode()).getRole();
+    try testing.expectEqual("textbox", password_role);
+
+    const hidden_role = try AXNode.fromNode(hidden_input.asNode()).getRole();
+    try testing.expectEqual("none", hidden_role);
+
+    const node = try registry.register(doc.asNode());
+    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .visibility_cache = &visibility_cache,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    for (parsed.value.array.items) |node_val| {
+        const obj = node_val.object;
+        const role_obj = obj.get("role") orelse continue;
+        const role_val = role_obj.object.get("value") orelse continue;
+        if (!std.mem.eql(u8, role_val.string, "textbox")) continue;
+
+        const name_obj = obj.get("name") orelse continue;
+        const name_value = name_obj.object.get("value") orelse continue;
+        if (name_value != .string or !std.mem.eql(u8, name_value.string, "Password")) continue;
+
+        try testing.expectEqual(false, obj.get("ignored").?.bool);
+
+        const props = obj.get("properties").?.array.items;
+        for (props) |prop| {
+            const prop_obj = prop.object;
+            if (!std.mem.eql(u8, prop_obj.get("name").?.string, "required")) continue;
+            const required = prop_obj.get("value").?.object.get("value").?.bool;
+            try testing.expectEqual(true, required);
+            return;
+        }
+        return error.PasswordRequiredPropertyNotFound;
+    }
+    return error.PasswordTextboxNodeNotFound;
 }
 
 test "AXNode: Writer query filters by accessible name" {
