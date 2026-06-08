@@ -129,12 +129,12 @@ fn httpStartCallback(response: HttpClient.Response) !void {
     self._response._http_response = response;
 }
 
-fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
+fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
     const self: *Fetch = @ptrCast(@alignCast(response.ctx));
 
     if (self._signal) |signal| {
         if (signal._aborted) {
-            return false;
+            return .abort;
         }
     }
 
@@ -182,7 +182,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
         try res._headers.append(hdr.name, hdr.value, exec);
     }
 
-    return true;
+    return .proceed;
 }
 
 fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {

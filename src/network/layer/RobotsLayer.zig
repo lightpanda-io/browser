@@ -23,6 +23,7 @@ const URL = @import("../../browser/URL.zig");
 const Layer = @import("../../browser/HttpClient.zig").Layer;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
+const HeaderResult = @import("../../browser/HttpClient.zig").HeaderResult;
 
 const Robots = @import("../Robots.zig");
 const Network = @import("../Network.zig");
@@ -205,7 +206,7 @@ const RobotsContext = struct {
         self.layer.allocator.destroy(self);
     }
 
-    fn headerCallback(response: Response) anyerror!bool {
+    fn headerCallback(response: Response) anyerror!HeaderResult {
         const self: *RobotsContext = @ptrCast(@alignCast(response.ctx));
         switch (response.inner) {
             .transfer => |t| {
@@ -219,7 +220,8 @@ const RobotsContext = struct {
             },
             else => {},
         }
-        return true;
+
+        return .proceed;
     }
 
     fn dataCallback(response: Response, data: []const u8) anyerror!void {

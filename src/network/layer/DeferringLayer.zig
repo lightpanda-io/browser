@@ -28,6 +28,7 @@ const Response = @import("../../browser/HttpClient.zig").Response;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
 const StableResponse = @import("../../browser/HttpClient.zig").StableResponse;
 const Forward = @import("Forward.zig");
+const HeaderResult = @import("../../browser/HttpClient.zig").HeaderResult;
 
 const DeferringLayer = @This();
 
@@ -191,7 +192,7 @@ const DeferredContext = struct {
         try self.buffered.append(self.arena, .start);
     }
 
-    fn headerCallback(response: Response) anyerror!bool {
+    fn headerCallback(response: Response) anyerror!HeaderResult {
         const self: *DeferredContext = @ptrCast(@alignCast(response.ctx));
 
         if (!self.deferring and !self.shouldDefer()) {
@@ -202,7 +203,7 @@ const DeferredContext = struct {
         try self.setStableResponse(response);
         self.deferring = true;
         try self.buffered.append(self.arena, .header);
-        return true;
+        return .proceed;
     }
 
     fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
@@ -282,13 +283,12 @@ const DeferredContext = struct {
                     const stable_response = self.stable_resp orelse @panic("stable_resp must be set for header events");
                     const response = Response.fromStable(&stable_response);
 
-                    const proceed = self.forward.forwardHeader(response) catch |err| {
+                    const result = self.forward.forwardHeader(response) catch |err| {
                         log.err(.http, "deferred header callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                         return;
                     };
-
-                    if (!proceed) {
+                    if (result == .abort) {
                         self.forward.forwardErr(error.Abort);
                         return;
                     }
@@ -333,12 +333,12 @@ const DeferredContext = struct {
                     };
                 },
                 .header => {
-                    const proceed = self.forward.forwardHeader(response) catch |err| {
+                    const result = self.forward.forwardHeader(response) catch |err| {
                         log.err(.http, "defer part header callback", .{ .err = err, .url = self.url });
                         self.forward.forwardErr(err);
                         return;
                     };
-                    if (!proceed) {
+                    if (result == .abort) {
                         self.forward.forwardErr(error.Abort);
                         return;
                     }
