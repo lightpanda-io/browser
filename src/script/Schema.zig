@@ -24,6 +24,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const BrowserTool = browser_tools.Tool;
+const string = @import("../string.zig");
 
 const Schema = @This();
 
@@ -405,7 +406,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
     if (fields.len == 0 and required.len == 0) return &.{};
     var optional_count: usize = 0;
     for (fields) |f| {
-        if (!containsName(required, f.name)) optional_count += 1;
+        if (!string.isOneOf(f.name, required)) optional_count += 1;
     }
     const out = try arena.alloc(HintSlot, required.len + optional_count);
     var idx: usize = 0;
@@ -419,7 +420,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         idx += 1;
     }
     for (fields) |f| {
-        if (containsName(required, f.name)) continue;
+        if (string.isOneOf(f.name, required)) continue;
         out[idx] = .{
             .name = f.name,
             .required = false,
@@ -428,11 +429,6 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         idx += 1;
     }
     return out;
-}
-
-fn containsName(names: []const []const u8, target: []const u8) bool {
-    for (names) |n| if (std.mem.eql(u8, n, target)) return true;
-    return false;
 }
 
 fn fieldTypeOf(value: std.json.Value) FieldType {

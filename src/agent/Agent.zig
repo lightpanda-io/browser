@@ -36,7 +36,7 @@ const CDPNode = @import("../cdp/Node.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
-const truncateUtf8 = @import("../string.zig").truncateUtf8;
+const string = @import("../string.zig");
 
 const Agent = @This();
 
@@ -186,7 +186,7 @@ fn reconcileModel(
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, base_url) catch &.{};
-    if (ids.len == 0 or containsString(ids, desired)) return .{ .use = try allocator.dupe(u8, desired) };
+    if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
 
     if (!explicit) {
         if (llm.provider != .ollama) return .{ .use = try allocator.dupe(u8, desired) };
@@ -684,7 +684,7 @@ fn handleVerbosity(self: *Agent, rest: []const u8) void {
         return;
     }
     const level = std.meta.stringToEnum(Config.AgentVerbosity, rest) orelse {
-        self.terminal.printError("usage: /verbosity <low|medium|high> (got {s})", .{rest});
+        self.terminal.printError("usage: /verbosity " ++ Config.tagHint(Config.AgentVerbosity) ++ " (got {s})", .{rest});
         return;
     };
     self.terminal.verbosity = level;
@@ -697,7 +697,7 @@ fn handleEffort(self: *Agent, rest: []const u8) void {
         return;
     }
     const level = std.meta.stringToEnum(Config.Effort, rest) orelse {
-        self.terminal.printError("usage: /effort <none|minimal|low|medium|high|xhigh> (got {s})", .{rest});
+        self.terminal.printError("usage: /effort " ++ Config.tagHint(Config.Effort) ++ " (got {s})", .{rest});
         return;
     };
     self.effort = level;
@@ -788,20 +788,13 @@ fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     }
     const ids = completionModels(self, self.allocator);
     // Empty list = fetch failed or unlisted local models; can't confirm, so allow.
-    if (ids.len != 0 and !containsString(ids, trimmed)) {
+    if (ids.len != 0 and !string.isOneOf(trimmed, ids)) {
         self.terminal.printError("unknown model: {s} (Tab to list)", .{trimmed});
         return;
     }
     self.setModel(trimmed) catch |err| {
         self.terminal.printError("failed to set model: {s}", .{@errorName(err)});
     };
-}
-
-fn containsString(haystack: []const []const u8, needle: []const u8) bool {
-    for (haystack) |s| {
-        if (std.mem.eql(u8, s, needle)) return true;
-    }
-    return false;
 }
 
 /// Persist the current provider/model/effort/verbosity to `.lp-agent.zon` and report it
@@ -1254,11 +1247,11 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
             .help => self.terminal.printInfo("/help [name] — show help for a command, or list all when [name] is omitted", .{}),
             .quit => self.terminal.printInfo("/quit — exit the REPL", .{}),
             .verbosity => self.terminal.printInfo(
-                "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
+                "/verbosity " ++ Config.tagHint(Config.AgentVerbosity) ++ " — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
                 .{@tagName(self.terminal.verbosity)},
             ),
             .effort => self.terminal.printInfo(
-                "/effort <none|minimal|low|medium|high|xhigh> — set per-turn reasoning effort (currently: {s}); saved to {s}. Bare /effort prints the level.",
+                "/effort " ++ Config.tagHint(Config.Effort) ++ " — set per-turn reasoning effort (currently: {s}); saved to {s}. Bare /effort prints the level.",
                 .{ @tagName(self.effort), settings.remembered_path },
             ),
             .usage => self.terminal.printInfo(
@@ -1744,7 +1737,7 @@ const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
     if (output.len <= tool_output_max_bytes) return output;
-    const prefix = truncateUtf8(output, tool_output_max_bytes);
+    const prefix = string.truncateUtf8(output, tool_output_max_bytes);
     var suffix_buf: [64]u8 = undefined;
     const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;

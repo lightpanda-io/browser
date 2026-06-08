@@ -311,6 +311,13 @@ pub fn isAllWhitespace(text: []const u8) bool {
     } else true;
 }
 
+/// True when `needle` is byte-equal to one of the strings in `haystack`.
+pub fn isOneOf(needle: []const u8, haystack: []const []const u8) bool {
+    return for (haystack) |s| {
+        if (std.mem.eql(u8, s, needle)) break true;
+    } else false;
+}
+
 /// Largest prefix of `bytes` whose length is at most `max_bytes` and
 /// ends on a UTF-8 codepoint boundary. Invalid sequences count as one
 /// byte each so the function never loops.
