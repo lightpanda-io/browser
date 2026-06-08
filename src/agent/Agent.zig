@@ -1365,10 +1365,6 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         return;
     };
     self.terminal.printInfo("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(tool_schema.parameters, .{ .whitespace = .indent_2 }, &aw.writer) catch return;
-    self.terminal.printInfo("schema:\n{s}", .{aw.written()});
 }
 
 /// Caller contract: `cmd` must be `.tool_call` — `.comment` and `.llm` are
