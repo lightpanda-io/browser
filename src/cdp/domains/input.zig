@@ -19,6 +19,8 @@
 const std = @import("std");
 const CDP = @import("../CDP.zig");
 
+const dom_button = @import("../../browser/Frame.zig").mouse_button;
+
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         dispatchKeyEvent,
@@ -82,6 +84,8 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
         x: f64,
         y: f64,
         type: Type,
+        button: Button = .none,
+        clickCount: i32 = 0,
         deltaX: f64 = 0,
         deltaY: f64 = 0,
         // Many optional parameters are not implemented yet, see documentation url.
@@ -92,15 +96,36 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
             mouseMoved,
             mouseWheel,
         };
+
+        // https://chromedevtools.github.io/devtools-protocol/tot/Input/#type-MouseButton
+        const Button = enum {
+            none,
+            left,
+            middle,
+            right,
+            back,
+            forward,
+        };
     })) orelse return error.InvalidParams;
 
     try cmd.sendResult(null, .{});
 
     const bc = cmd.browser_context orelse return;
     const frame = bc.session.currentFrame() orelse return;
+
+    // Map the CDP button name to the DOM MouseEvent.button value.
+    // https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button
+    const button: i32 = switch (params.button) {
+        .none, .left => dom_button.main,
+        .middle => dom_button.auxiliary,
+        .right => dom_button.secondary,
+        .back => dom_button.fourth,
+        .forward => dom_button.fifth,
+    };
+
     switch (params.type) {
-        .mousePressed => try frame.triggerMouseClick(params.x, params.y),
-        .mouseReleased => try frame.triggerMouseRelease(params.x, params.y),
+        .mousePressed => try frame.triggerMousePress(params.x, params.y, button),
+        .mouseReleased => try frame.triggerMouseRelease(params.x, params.y, button, params.clickCount),
         .mouseMoved => try frame.triggerMouseMove(params.x, params.y),
         .mouseWheel => try frame.triggerMouseWheel(params.x, params.y, params.deltaX, params.deltaY),
     }
@@ -235,5 +260,57 @@ test "cdp.input: dispatchMouseEvent mouseWheel fires wheel event" {
     });
 
     const result = try ls.local.compileAndRun("window.wheelDeltaY === 40", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click fires dblclick" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const frame = try bc.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    var runner = try bc.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('mousedown', (e) => { window.downButton = e.button; });
+        \\t.addEventListener('contextmenu', (e) => { window.ctxButton = e.button; });
+        \\t.addEventListener('dblclick', () => { window.dbl = true; });
+    , null);
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+
+    // Right button: press carries button=2, release fires contextmenu (not click).
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "right" },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "right" },
+    });
+
+    // Left button with clickCount 2 fires dblclick.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 2 },
+    });
+
+    const result = try ls.local.compileAndRun("window.downButton === 2 && window.ctxButton === 2 && window.dbl === true", null);
     try testing.expect(result.isTrue());
 }
