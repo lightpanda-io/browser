@@ -213,12 +213,6 @@ const CacheContext = struct {
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
-        defer {
-            if (self.stale_entry) |stale| {
-                stale.data.deinit();
-            }
-            self.stale_entry = null;
-        }
 
         // For non-transfer responses (fulfilled by interception, or future
         // cached-while-cached cases), there's nothing to inspect for caching
@@ -249,6 +243,11 @@ const CacheContext = struct {
             };
 
             return false;
+        }
+
+        if (self.stale_entry) |stale| {
+            stale.data.deinit();
+            self.stale_entry = null;
         }
 
         const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
