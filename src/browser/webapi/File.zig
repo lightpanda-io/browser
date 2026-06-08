@@ -60,6 +60,18 @@ pub fn init(
     return file;
 }
 
+pub fn deinit(self: *File, page: *Page) void {
+    self._proto.deinit(page);
+}
+
+pub fn releaseRef(self: *File, page: *Page) void {
+    self._proto.releaseRef(page);
+}
+
+pub fn acquireRef(self: *File) void {
+    self._proto.acquireRef();
+}
+
 pub fn getName(self: *const File) []const u8 {
     return self._name;
 }

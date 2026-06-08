@@ -3908,25 +3908,45 @@ fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
     return null;
 }
 
-pub fn triggerMouseClick(self: *Frame, x: f64, y: f64) !void {
-    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
-    if (comptime IS_DEBUG) {
-        log.debug(.frame, "frame mouse click", .{
-            .url = self.url,
-            .node = target,
-            .x = x,
-            .y = y,
-            .type = self._type,
-        });
-    }
-    const mouse_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
+// DOM MouseEvent.button values.
+// https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button
+pub const mouse_button = struct {
+    pub const main: i32 = 0; // left
+    pub const auxiliary: i32 = 1; // middle
+    pub const secondary: i32 = 2; // right
+    pub const fourth: i32 = 3; // back
+    pub const fifth: i32 = 4; // forward
+};
+
+// Dispatch a single trusted mouse event of the given type on `target`, carrying
+// the pressed button and pointer position. `detail` is the click count (used for
+// click/dblclick); 0 for events where it does not apply.
+fn dispatchMouseEventOn(self: *Frame, target: *Element, comptime typ: []const u8, x: f64, y: f64, button: i32, detail: u32) !void {
+    const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
         .clientX = x,
         .clientY = y,
+        .button = button,
+        .detail = detail,
     }, self);
-    try self._event_manager.dispatch(target.asEventTarget(), mouse_event.asEvent());
+    try self._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+}
+
+pub fn triggerMousePress(self: *Frame, x: f64, y: f64, button: i32) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.frame, "frame mouse press", .{
+            .url = self.url,
+            .node = target,
+            .x = x,
+            .y = y,
+            .button = button,
+            .type = self._type,
+        });
+    }
+    try self.dispatchMouseEventOn(target, "mousedown", x, y, button, 0);
 }
 
 pub fn triggerMouseMove(self: *Frame, x: f64, y: f64) !void {
@@ -3967,7 +3987,7 @@ pub fn triggerMouseMove(self: *Frame, x: f64, y: f64) !void {
     try self._event_manager.dispatch(target.asEventTarget(), enter_event.asEvent());
 }
 
-pub fn triggerMouseRelease(self: *Frame, x: f64, y: f64) !void {
+pub fn triggerMouseRelease(self: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
     const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
     if (comptime IS_DEBUG) {
         log.debug(.frame, "frame mouse release", .{
@@ -3975,17 +3995,28 @@ pub fn triggerMouseRelease(self: *Frame, x: f64, y: f64) !void {
             .node = target,
             .x = x,
             .y = y,
+            .button = button,
             .type = self._type,
         });
     }
-    const up_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseup"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .clientX = x,
-        .clientY = y,
-    }, self);
-    try self._event_manager.dispatch(target.asEventTarget(), up_event.asEvent());
+
+    const detail: u32 = if (click_count > 0) @intCast(click_count) else 1;
+
+    try self.dispatchMouseEventOn(target, "mouseup", x, y, button, detail);
+
+    // After mouseup, the activation event depends on the button.
+    switch (button) {
+        mouse_button.main => {
+            try self.dispatchMouseEventOn(target, "click", x, y, button, detail);
+            // A second click in quick succession also fires dblclick.
+            if (click_count == 2) {
+                try self.dispatchMouseEventOn(target, "dblclick", x, y, button, detail);
+            }
+        },
+        mouse_button.auxiliary => try self.dispatchMouseEventOn(target, "auxclick", x, y, button, detail),
+        mouse_button.secondary => try self.dispatchMouseEventOn(target, "contextmenu", x, y, button, detail),
+        else => {},
+    }
 }
 
 pub fn triggerMouseWheel(self: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
@@ -4277,6 +4308,8 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // The submitter can be an input box (if enter was entered on the box)
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, &self.js.execution);
+    // FormData.init acquires file's references. So we must release them once done.
+    defer form_data.deinit(self._page);
 
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);

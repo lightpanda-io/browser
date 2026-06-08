@@ -59,8 +59,12 @@ jobs:
 
       - run: chmod a+x ./lightpanda
 
-      # Always activate cache
-      - run: mkdir -p /tmp/lp-cache
+      - name: LP Cache
+        id: lp-cache
+        uses: actions/cache@v5
+        with:
+          path: /tmp/lp-cache
+          key: v1
 
       - name: run end to end integration tests
         continue-on-error: true

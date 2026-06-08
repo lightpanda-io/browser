@@ -171,13 +171,9 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
     const entry: *Entry = @fieldParentPtr("arena", arena);
     const bucket = entry.bucket;
 
-    // Reset the arena before acquiring the lock to minimize lock hold time
-    _ = arena.reset(.{ .retain_with_limit = bucket.retain_bytes });
-
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
     if (IS_DEBUG) {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         if (self._leak_track.getPtr(entry.debug)) |count| {
             count.* -= 1;
             if (count.* < 0) {
@@ -189,6 +185,11 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
             @panic("ArenaPool: release of untracked arena");
         }
     }
+
+    _ = arena.reset(.{ .retain_with_limit = bucket.retain_bytes });
+
+    self.mutex.lock();
+    defer self.mutex.unlock();
 
     if ((comptime SAFETY) or bucket.free_list_len >= bucket.free_list_max) {
         // In Debug, we never pool. It can mask UAF bugs.

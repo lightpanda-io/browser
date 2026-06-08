@@ -161,7 +161,7 @@ test "BodyInit: FormData emits multipart with random boundary" {
     const arena = testing.arena_allocator;
 
     const fd = try arena.create(FormData);
-    fd.* = .{ ._arena = arena, ._entries = .empty };
+    fd.* = .{ ._rc = .{}, ._arena = arena, ._entries = .empty };
     try fd.append("username", "alice");
     try fd.append("email", "alice@example.com");
 
