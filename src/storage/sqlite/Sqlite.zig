@@ -148,6 +148,18 @@ pub const Conn = struct {
     pub fn lastError(self: Conn) [:0]const u8 {
         return std.mem.span(c.sqlite3_errmsg(self.conn));
     }
+
+    pub fn begin(self: Conn) !void {
+        try self.exec("begin", .{});
+    }
+
+    pub fn commit(self: Conn) !void {
+        try self.exec("commit", .{});
+    }
+
+    pub fn rollback(self: Conn) !void {
+        try self.exec("rollback", .{});
+    }
 };
 
 const Statement = struct {

@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const Http = @import("../http.zig");
 const FsCache = @import("FsCache.zig");
+const SqliteCache = @import("SqliteCache.zig");
 
 const log = lp.log;
 
@@ -29,6 +30,7 @@ pub const Cache = @This();
 
 kind: union(enum) {
     fs: FsCache,
+    sqlite: SqliteCache,
 },
 
 pub fn deinit(self: *Cache) void {
@@ -37,7 +39,7 @@ pub fn deinit(self: *Cache) void {
     };
 }
 
-pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) ?CachedResponse {
+pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
     return switch (self.kind) {
         inline else => |*c| c.get(arena, req),
     };
@@ -49,9 +51,15 @@ pub fn put(self: *Cache, metadata: CachedMetadata, body: []const u8) !void {
     };
 }
 
-pub fn evict(self: *Cache, url: []const u8) void {
+pub fn evict(self: *Cache, url: []const u8) !void {
     return switch (self.kind) {
         inline else => |*c| c.evict(url),
+    };
+}
+
+pub fn renew(self: *Cache, arena: std.mem.Allocator, url: []const u8, timestamp: i64) !void {
+    return switch (self.kind) {
+        inline else => |*c| c.renew(arena, url, timestamp),
     };
 }
 
@@ -63,6 +71,7 @@ pub fn clear(self: *Cache) !void {
 
 pub const CacheControl = struct {
     max_age: u64,
+    must_revalidate: bool = false,
 
     pub fn parse(value: []const u8) ?CacheControl {
         var cc: CacheControl = .{ .max_age = undefined };
@@ -82,7 +91,8 @@ pub const CacheControl = struct {
                 return null;
             }
             if (std.mem.eql(u8, directive, "no-cache")) {
-                return null;
+                cc.must_revalidate = true;
+                continue;
             }
             if (std.mem.eql(u8, directive, "private")) {
                 return null;
@@ -122,16 +132,21 @@ pub const CachedMetadata = struct {
     cache_control: CacheControl,
     /// Response Headers
     headers: []const Http.Header,
-
     /// These are Request Headers used by Vary.
     vary_headers: []const Http.Header,
 
+    // Validators for conditional requests.
+    etag: ?[]const u8 = null,
+    last_modified: ?[]const u8 = null,
+
     pub fn format(self: CachedMetadata, writer: *std.Io.Writer) !void {
-        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | vary=[", .{
+        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | etag={s} | last-modified={s} | vary=[", .{
             self.url,
             self.status,
             self.content_type,
             self.cache_control.max_age,
+            self.etag orelse "null",
+            self.last_modified orelse "null",
         });
 
         // Logging all headers gets pretty verbose...
@@ -144,6 +159,16 @@ pub const CachedMetadata = struct {
             }
         }
         try writer.print("]", .{});
+    }
+
+    pub fn isStale(self: CachedMetadata, timestamp: i64) bool {
+        if (self.cache_control.must_revalidate) return true;
+        const age = (timestamp - self.stored_at) + @as(i64, @intCast(self.age_at_store));
+        return age >= @as(i64, @intCast(self.cache_control.max_age));
+    }
+
+    pub fn hasValidators(self: CachedMetadata) bool {
+        return self.etag != null or self.last_modified != null;
     }
 };
 
@@ -161,6 +186,13 @@ pub const CachedData = union(enum) {
         len: usize,
     },
 
+    pub fn deinit(self: CachedData) void {
+        switch (self) {
+            .buffer => {},
+            .file => |*f| f.file.close(),
+        }
+    }
+
     pub fn format(self: CachedData, writer: *std.Io.Writer) !void {
         switch (self) {
             .buffer => |buf| try writer.print("buffer({d} bytes)", .{buf.len}),
@@ -172,8 +204,10 @@ pub const CachedData = union(enum) {
 pub const CachedResponse = struct {
     metadata: CachedMetadata,
     data: CachedData,
+    expired: bool,
 
     pub fn format(self: *const CachedResponse, writer: *std.Io.Writer) !void {
+        try writer.print("expired={}, ", .{self.expired});
         try writer.print("metadata=(", .{});
         try self.metadata.format(writer);
         try writer.print("), data=", .{});
@@ -190,6 +224,8 @@ pub fn tryCache(
     cache_control: ?[]const u8,
     vary: ?[]const u8,
     age: ?[]const u8,
+    etag: ?[]const u8,
+    last_modified: ?[]const u8,
     has_set_cookie: bool,
     has_authorization: bool,
 ) !?CachedMetadata {
@@ -230,6 +266,8 @@ pub fn tryCache(
         .cache_control = cc,
         .headers = &.{},
         .vary_headers = &.{},
+        .etag = if (etag) |e| try arena.dupe(u8, e) else null,
+        .last_modified = if (last_modified) |lm| try arena.dupe(u8, lm) else null,
     };
 }
 const testing = @import("../../testing.zig");
@@ -249,7 +287,10 @@ test "Cache: CacheControl.parse" {
     try testing.expectEqual(null, CacheControl.parse("no-cache"));
     try testing.expectEqual(null, CacheControl.parse("private"));
     try testing.expectEqual(null, CacheControl.parse("max-age=300, no-store"));
-    try testing.expectEqual(null, CacheControl.parse("no-cache, max-age=300"));
+    try testing.expectEqual(
+        CacheControl{ .max_age = 300, .must_revalidate = true },
+        CacheControl.parse("no-cache, max-age=300"),
+    );
     try testing.expectEqual(null, CacheControl.parse("Private, max-age=300"));
 
     try testing.expectEqual(null, CacheControl.parse("max-age=0"));

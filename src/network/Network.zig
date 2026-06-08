@@ -34,6 +34,7 @@ const CurlDebugAllocator = @import("CurlDebugAllocator.zig");
 
 const Cache = @import("cache/Cache.zig");
 const FsCache = @import("cache/FsCache.zig");
+const SqliteCache = @import("cache/SqliteCache.zig");
 
 const log = lp.log;
 const net = std.net;
@@ -238,21 +239,31 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     else
         null;
 
-    const cache = if (config.httpCacheDir()) |cache_dir_path|
-        Cache{
-            .kind = .{
-                .fs = FsCache.init(cache_dir_path) catch |e| {
-                    log.err(.cache, "failed to init", .{
-                        .kind = "FsCache",
-                        .path = cache_dir_path,
-                        .err = e,
-                    });
-                    return e;
+    const cache = blk: {
+        if (config.httpCacheDir()) |cache_dir_path| {
+            // TODO: Fix leak.
+            const cache_path = try std.fmt.allocPrintSentinel(
+                allocator,
+                "{s}/cache.db",
+                .{cache_dir_path},
+                0,
+            );
+            errdefer allocator.free(cache_path);
+
+            break :blk Cache{
+                .kind = .{
+                    .sqlite = SqliteCache.init(allocator, cache_path) catch |e| {
+                        log.err(.cache, "failed to init", .{
+                            .kind = "SqliteCache",
+                            .path = cache_path,
+                            .err = e,
+                        });
+                        return e;
+                    },
                 },
-            },
-        }
-    else
-        null;
+            };
+        } else break :blk null;
+    };
 
     return .{
         .allocator = allocator,
