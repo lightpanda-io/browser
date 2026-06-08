@@ -463,7 +463,7 @@ fn httpHeaderCallback(response: HttpClient.Response, header: http.Header) !void 
     try self._response_headers.append(self._arena, joined);
 }
 
-fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
+fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
 
     if (comptime IS_DEBUG) {
@@ -481,7 +481,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
                 .err = e,
                 .url = self._url,
             });
-            return false;
+            return .abort;
         };
     }
 
@@ -508,7 +508,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
     try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, exec);
     try self.stateChanged(.loading, exec);
 
-    return true;
+    return .proceed;
 }
 
 fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {

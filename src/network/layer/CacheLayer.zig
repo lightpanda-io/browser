@@ -28,6 +28,7 @@ const Cache = @import("../cache/Cache.zig");
 const CachedMetadata = @import("../cache/Cache.zig").CachedMetadata;
 const CachedResponse = @import("../cache/Cache.zig").CachedResponse;
 
+const HeaderResult = @import("../../browser/HttpClient.zig").HeaderResult;
 const Forward = @import("Forward.zig");
 
 const log = lp.log;
@@ -161,8 +162,8 @@ fn forwardFromCache(
     defer cached.data.deinit();
 
     try forward.forwardStart(response);
-    const proceed = try forward.forwardHeader(response);
-    if (!proceed) return error.Abort;
+    const result = try forward.forwardHeader(response);
+    if (result == .abort) return error.Abort;
 
     switch (cached.data) {
         .buffer => |data| {
@@ -203,8 +204,8 @@ fn serveFromCache(transfer: *Transfer, cached: *const CachedResponse) !void {
         try cb(response);
     }
 
-    const proceed = try req.header_callback(response);
-    if (!proceed) {
+    const result = try req.header_callback(response);
+    if (result == .abort) {
         return error.Abort;
     }
 
@@ -254,7 +255,7 @@ const CacheContext = struct {
         return self.forward.forwardData(response, chunk);
     }
 
-    fn headerCallback(response: Response) anyerror!bool {
+    fn headerCallback(response: Response) anyerror!HeaderResult {
         const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
 
         // For non-transfer responses (fulfilled by interception, or future
@@ -282,8 +283,7 @@ const CacheContext = struct {
             };
 
             try forwardFromCache(transfer, &self.forward, &stale);
-            self.forward = Forward.noop();
-            return true;
+            return .handled;
         }
 
         if (self.stale_entry) |stale| {
