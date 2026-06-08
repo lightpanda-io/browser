@@ -760,62 +760,72 @@ const api_keys_hint = settings.api_keys_hint;
 const llm_setup_hint = "set an API key (" ++ api_keys_hint ++ ") and run /provider <name>";
 
 const logo =
-    \\  ⠀⠀⠀⠀⠀⠀⠀⣀⣴⣶⣾⣿⣿⣿⣿⣷⣶⣤⣀⠀⠀⠀⠀⠀
-    \\  ⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣆⠀⠀⠀
-    \\  ⠀⠀⠀⢠⣾⣿⣿⣿⣿⠉⠀⣉⣭⣭⣥⣤⡀⣿⣿⣿⣿⣷⡀⠀
-    \\  ⠀⠀⢀⣿⠿⠟⠛⠛⠋⢠⣾⣿⠟⠛⢿⣿⠛⢎⢿⣿⣿⣿⣷⠀
-    \\  ⠀⠀⢸⣀⠀⠀⠀⠀⠀⣿⣿⣿⠀⠠⣼⡿⠾⣸⢸⣿⣿⣿⣿⡇
-    \\  ⠀⠀⢸⣿⣿⣷⣶⣤⡀⠹⣿⣿⣿⣿⣟⣗⣐⠟⠸⣿⣿⣿⣿⡇
-    \\  ⠀⠀⠸⣿⣿⣿⣿⡿⠓⠀⠈⠛⠻⠿⠟⠛⠁⠀⠀⠘⣿⣿⣿⠃
-    \\  ⠀⠀⠀⠻⠛⠉⠉⠀⠀⠘⠲⠇⠀⠀⠀⠀⠀⢀⠀⠀⠘⣿⠏⠀
-    \\  ⠀⣀⣤⣶⣶⣶⣶⣶⣶⣤⣀⠀⠀⠀⠀⠀⠀⠀⠑⢤⣤⠏⠀⠀
-    \\  ⠊⠉⠀⠀⠀⠀⠀⠀⠀⠉⠙⠻⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+    \\ ⠀⠀⠀⠀⠀⠀⠀⣀⣴⣶⣾⣿⣿⣿⣿⣷⣶⣤⣀⠀⠀⠀⠀⠀
+    \\ ⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣆⠀⠀⠀
+    \\ ⠀⠀⠀⢠⣾⣿⣿⣿⣿⠉⠀⣉⣭⣭⣥⣤⡀⣿⣿⣿⣿⣷⡀⠀
+    \\ ⠀⠀⢀⣿⠿⠟⠛⠛⠋⢠⣾⣿⠟⠛⢿⣿⠛⢎⢿⣿⣿⣿⣷⠀
+    \\ ⠀⠀⢸⣀⠀⠀⠀⠀⠀⣿⣿⣿⠀⠠⣼⡿⠾⣸⢸⣿⣿⣿⣿⡇
+    \\ ⠀⠀⢸⣿⣿⣷⣶⣤⡀⠹⣿⣿⣿⣿⣟⣗⣐⠟⠸⣿⣿⣿⣿⡇
+    \\ ⠀⠀⠸⣿⣿⣿⣿⡿⠓⠀⠈⠛⠻⠿⠟⠛⠁⠀⠀⠘⣿⣿⣿⠃
+    \\ ⠀⠀⠀⠻⠛⠉⠉⠀⠀⠘⠲⠇⠀⠀⠀⠀⠀⢀⠀⠀⠘⣿⠏⠀
+    \\ ⠀⣀⣤⣶⣶⣶⣶⣶⣶⣤⣀⠀⠀⠀⠀⠀⠀⠀⠑⢤⣤⠏⠀⠀
+    \\ ⠊⠉⠀⠀⠀⠀⠀⠀⠀⠉⠙⠻⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ;
 
-const logo_cols = 26; // "  " + 24 braille cells
+const logo_cols = 25; // " " + 24 braille cells
 const logo_rows = std.mem.count(u8, logo, "\n") + 1;
 const welcome_gap = "   ";
 
-/// `plain` is measured for width; `styled` is printed. They differ for the
-/// title, which mixes bold and dim.
-const WelcomeText = struct { plain: []const u8, styled: []const u8 };
+/// Banner text. Kept narrow enough that the logo + gap + the widest line fits in
+/// 80 columns (asserted at comptime below), so the banner always shows in full
+/// and never needs to measure the terminal or shed the logo.
+const banner_tagline_llm = "Control the browser with natural language";
+const banner_tagline_basic = "Basic REPL (--no-llm) — commands only";
+const banner_setup = "Set an API key, then run /provider <name>";
+const banner_hints = [_][]const u8{
+    "/goto <url> to navigate",
+    "/save to generate a reproducible script",
+    "/help to list commands   /quit to exit",
+    "! to run JavaScript on the current page",
+};
 
-/// Prints the welcome banner: a logo cell and a message (title + command hints)
-/// per row. When both don't fit the terminal width, the logo is shed and the
-/// message printed flush-left. `llm_active` picks the basic-REPL tagline.
+comptime {
+    const fixed = [_][]const u8{
+        "Lightpanda Agent (" ++ lp.build_config.version ++ ")",
+        banner_tagline_llm,
+        banner_tagline_basic,
+        banner_setup,
+    } ++ banner_hints;
+    var maxw: usize = 0;
+    for (fixed) |s| maxw = @max(maxw, std.unicode.utf8CountCodepoints(s) catch s.len);
+    if (logo_cols + welcome_gap.len + maxw > 79) @compileError("welcome banner exceeds 79 columns");
+}
+
+/// Prints the welcome banner: the logo on the left with the title and command
+/// hints beside it, vertically centered. `llm_active` picks the tagline.
 fn printWelcome(llm_active: bool) void {
     const a = Terminal.ansi;
 
-    var title_buf: [128]u8 = undefined;
-    const title_plain = std.fmt.bufPrint(&title_buf, "Lightpanda Agent ({s})", .{lp.build_config.version}) catch "Lightpanda Agent";
-    var styled_buf: [192]u8 = undefined;
-    const title_styled = std.fmt.bufPrint(&styled_buf, a.bold ++ "Lightpanda Agent" ++ a.reset ++ " " ++ a.dim ++ "({s})" ++ a.reset, .{lp.build_config.version}) catch title_plain;
+    var title_buf: [192]u8 = undefined;
+    const title: []const u8 = std.fmt.bufPrint(&title_buf, a.bold ++ "Lightpanda Agent" ++ a.reset ++ " " ++ a.dim ++ "({s})" ++ a.reset, .{lp.build_config.version}) catch a.bold ++ "Lightpanda Agent" ++ a.reset;
 
-    var lines: [8]WelcomeText = undefined;
+    var lines: [8][]const u8 = undefined;
     var n: usize = 0;
-    lines[n] = .{ .plain = title_plain, .styled = title_styled };
+    lines[n] = title;
     n += 1;
-    lines[n] = .{ .plain = "", .styled = "" };
+    lines[n] = "";
     n += 1;
     if (llm_active) {
-        const t = "Control the Lightpanda browser with natural language and commands";
-        lines[n] = .{ .plain = t, .styled = a.italic ++ t ++ a.reset };
+        lines[n] = a.italic ++ banner_tagline_llm ++ a.reset;
         n += 1;
     } else {
-        const t = "Basic REPL (--no-llm) — commands only";
-        lines[n] = .{ .plain = t, .styled = a.italic ++ t ++ a.reset };
+        lines[n] = a.italic ++ banner_tagline_basic ++ a.reset;
         n += 1;
-        const t2 = "To enable natural language, " ++ llm_setup_hint ++ ".";
-        lines[n] = .{ .plain = t2, .styled = a.dim ++ t2 ++ a.reset };
+        lines[n] = a.dim ++ banner_setup ++ a.reset;
         n += 1;
     }
-    inline for (.{
-        "/goto <url> to navigate",
-        "/save to generate a reproducible script",
-        "/help to list commands   /quit to exit",
-        "! to evaluate JavaScript (on the current page's context)",
-    }) |t| {
-        lines[n] = .{ .plain = t, .styled = a.dim ++ t ++ a.reset };
+    inline for (banner_hints) |t| {
+        lines[n] = a.dim ++ t ++ a.reset;
         n += 1;
     }
     const text = lines[0..n];
@@ -825,20 +835,14 @@ fn printWelcome(llm_active: bool) void {
     var i: usize = 0;
     while (it.next()) |logo_line| : (i += 1) logo_lines[i] = logo_line;
 
-    var text_cols: usize = 0;
-    for (text) |line| text_cols = @max(text_cols, Terminal.displayWidth(line.plain));
-
-    const cols = Terminal.columns() orelse 80;
-    const show_logo = cols >= logo_cols + welcome_gap.len + text_cols;
-    const out_rows = if (show_logo) logo_rows else text.len;
-    const start = if (show_logo) (logo_rows - text.len) / 2 else 0;
-
+    // center the text block against the taller logo (line counts only, no widths)
+    const start = (logo_rows - text.len) / 2;
     std.debug.print("\n", .{});
-    for (0..out_rows) |row| {
-        if (show_logo) std.debug.print("{s}", .{logo_lines[row]});
+    for (0..logo_rows) |row| {
+        std.debug.print("{s}", .{logo_lines[row]});
         if (row >= start and row - start < text.len) {
             const line = text[row - start];
-            if (line.plain.len != 0) std.debug.print("{s}{s}", .{ if (show_logo) welcome_gap else "  ", line.styled });
+            if (line.len != 0) std.debug.print("{s}{s}", .{ welcome_gap, line });
         }
         std.debug.print("\n", .{});
     }

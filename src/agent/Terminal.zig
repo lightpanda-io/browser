@@ -1005,10 +1005,6 @@ pub fn clearPromptFrame(self: *Terminal) void {
     std.debug.print("\x1b[2A\r\x1b[J", .{});
 }
 
-pub fn displayWidth(s: []const u8) usize {
-    return std.unicode.utf8CountCodepoints(s) catch s.len;
-}
-
 pub fn interactiveTty() bool {
     return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
 }
