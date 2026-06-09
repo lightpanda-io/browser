@@ -47,7 +47,8 @@ _root: ?*Element = null,
 _root_margin: []const u8 = "0px",
 _threshold: []const f64 = &.{0.0},
 _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .{},
-_previous_states: std.AutoHashMapUnmanaged(*Element, bool) = .{},
+// tracked targets that aren't reported yet
+_tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
 
 // Shared zero DOMRect to avoid repeated allocations for non-intersecting elements
 var zero_rect: DOMRect = .{
@@ -140,8 +141,7 @@ pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !vo
         try frame.registerIntersectionObserver(self);
     }
 
-    // Don't initialize previous state yet - let checkIntersection do it
-    // This ensures we get an entry on first observation
+    try self._tracked.put(self._arena, target, {});
 
     // Check intersection for this new target and schedule delivery
     try self.checkIntersection(target, frame);
@@ -155,7 +155,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
     for (self._observing.items, 0..) |elem, i| {
         if (elem == target) {
             _ = self._observing.swapRemove(i);
-            _ = self._previous_states.remove(target);
+            _ = self._tracked.remove(target);
 
             // Remove any pending entries for this target.
             // Entries will be cleaned up by V8 GC via the finalizer.
@@ -182,7 +182,7 @@ pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
         entry.deinit(frame._page);
     }
     self._pending_entries.clearRetainingCapacity();
-    self._previous_states.clearRetainingCapacity();
+    self._tracked.clearRetainingCapacity();
 
     if (self._observing.items.len > 0) {
         frame.unregisterIntersectionObserver(self);
@@ -199,6 +199,7 @@ pub fn takeRecords(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionO
 fn calculateIntersection(
     self: *IntersectionObserver,
     target: *Element,
+    has_parent: bool,
     frame: *Frame,
 ) !IntersectionData {
     const target_rect = target.getBoundingClientRect(frame);
@@ -219,15 +220,13 @@ fn calculateIntersection(
     // This avoids fingerprinting issues (massive viewports) and matches the behavior
     // scripts expect when querying element visibility.
     // However, elements without a parent cannot intersect (they have no containing block).
-    const has_parent = target.asNode().parentNode() != null;
-    const is_intersecting = has_parent;
     const intersection_ratio: f64 = if (has_parent) 1.0 else 0.0;
 
     // Intersection rect is the same as the target rect if visible, otherwise zero rect
     const intersection_rect = if (has_parent) target_rect else zero_rect;
 
     return .{
-        .is_intersecting = is_intersecting,
+        .is_intersecting = has_parent,
         .intersection_ratio = intersection_ratio,
         .intersection_rect = intersection_rect,
         .bounding_client_rect = target_rect,
@@ -253,37 +252,40 @@ fn meetsThreshold(self: *IntersectionObserver, ratio: f64) bool {
 }
 
 fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
-    const data = try self.calculateIntersection(target, frame);
-    const was_intersecting_opt = self._previous_states.get(target);
-    const is_now_intersecting = data.is_intersecting and self.meetsThreshold(data.intersection_ratio);
+    const tracked = self._tracked.getEntry(target) orelse {
+        // If target isn't tracked then it was already reported. This is an
+        // important optimization which lets us skip the heavy work below.
+        // This function can be called a lot.
+        return;
+    };
 
-    // Create entry if:
-    // 1. First time observing this target AND it's intersecting
-    // 2. State changed
-    const should_report = (was_intersecting_opt == null and is_now_intersecting) or
-        (was_intersecting_opt != null and was_intersecting_opt.? != is_now_intersecting);
-
-    if (should_report) {
-        const arena = try frame.getArena(.tiny, "IntersectionObserverEntry");
-        errdefer frame.releaseArena(arena);
-
-        const entry = try arena.create(IntersectionObserverEntry);
-        entry.* = .{
-            ._arena = arena,
-            ._target = target,
-            ._time = frame.window._performance.now(),
-            ._is_intersecting = is_now_intersecting,
-            ._root_bounds = try frame._factory.create(data.root_bounds),
-            ._intersection_rect = try frame._factory.create(data.intersection_rect),
-            ._bounding_client_rect = try frame._factory.create(data.bounding_client_rect),
-            ._intersection_ratio = data.intersection_ratio,
-        };
-        try self._pending_entries.append(self._arena, entry);
+    const has_parent = target.asNode().parentNode() != null;
+    const is_now_intersecting = has_parent and self.meetsThreshold(1.0);
+    if (!is_now_intersecting) {
+        // Not intersecting yet (e.g. observed while still orphaned) — keep
+        // tracking so a later attach is reported.
+        return;
     }
 
-    // Always update the previous state, even if we didn't report
-    // This ensures we can detect state changes on subsequent checks
-    try self._previous_states.put(self._arena, target, is_now_intersecting);
+    // Building the entry is the expensive part — getBoundingClientRect walks the
+    // document to fake a position (O(node count)) — so it only runs here.
+    const data = try self.calculateIntersection(target, has_parent, frame);
+    const arena = try frame.getArena(.tiny, "IntersectionObserverEntry");
+    errdefer frame.releaseArena(arena);
+
+    const entry = try arena.create(IntersectionObserverEntry);
+    entry.* = .{
+        ._arena = arena,
+        ._target = target,
+        ._time = frame.window._performance.now(),
+        ._is_intersecting = is_now_intersecting,
+        ._root_bounds = try frame._factory.create(data.root_bounds),
+        ._intersection_rect = try frame._factory.create(data.intersection_rect),
+        ._bounding_client_rect = try frame._factory.create(data.bounding_client_rect),
+        ._intersection_ratio = data.intersection_ratio,
+    };
+    try self._pending_entries.append(self._arena, entry);
+    _ = self._tracked.removeByPtr(tracked.key_ptr);
 }
 
 pub fn checkIntersections(self: *IntersectionObserver, frame: *Frame) !void {
