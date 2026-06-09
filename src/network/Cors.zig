@@ -16,7 +16,11 @@ const CorsContext = @import("./layer/CorsLayer.zig").CorsContext;
 
 /// Determine if a request is simple or not.
 /// If not, any unsafe headers will be stored in ctx.
-pub fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.ArrayList([]const u8), req: *const HttpClient.Request) !bool {
+pub fn determineSimpleRequestCtx(ctx: *CorsContext, req: *const HttpClient.Request) !bool {
+    return determineSimpleRequest(ctx.arena, &ctx.unsafe_headers, req);
+}
+
+fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.ArrayList([]const u8), req: *const HttpClient.Request) !bool {
     var simple = switch (req.method) {
         .GET, .HEAD, .POST => true,
         else => false,
@@ -42,6 +46,13 @@ pub fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.Arr
             if (safeHeaderBytes(h.value) and safeContentType(h.value)) continue;
         } else if (std.ascii.eqlIgnoreCase(h.name, "range")) {
             if (safeRange(h.value)) continue;
+        } else if (std.ascii.eqlIgnoreCase(h.name, "x-http-method") or
+            std.ascii.eqlIgnoreCase(h.name, "x-http-method-override") or
+            std.ascii.eqlIgnoreCase(h.name, "x-method-override"))
+        {
+            for (forbidden_methods) |n| {
+                if (std.mem.eql(u8, h.value, n)) continue :outer;
+            }
         } else {
             for (safe_headers) |a_h| {
                 if (std.ascii.eqlIgnoreCase(h.name, a_h)) {
@@ -49,8 +60,7 @@ pub fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.Arr
                 }
             }
         }
-
-        // dupe it since adding headers can invalidate existing pointers
+        // dupe it since headers can be invalidated
         try unsafe_headers.append(arena, try arena.dupe(u8, h.name));
     }
 
@@ -58,7 +68,7 @@ pub fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.Arr
 }
 
 /// Dertermine if a response passes CORS checks using an existing Context
-pub fn responsePassesCors(ctx: *CorsContext, response: Response) !bool {
+pub fn responsePassesCorsCtx(ctx: *CorsContext, response: Response) !bool {
     const arena = ctx.arena;
     var res_store: HeaderStore = .{};
 
@@ -241,6 +251,19 @@ fn safeRange(range: []const u8) bool {
     return true;
 }
 
+pub const CorsMode = enum {
+    same_origin,
+    cross_site,
+    none,
+};
+
+const HeaderStore = struct {
+    res_origin: ?[]const u8 = null,
+    res_methods: std.ArrayList([]const u8) = .empty,
+    res_headers: std.ArrayList([]const u8) = .empty,
+    res_credentials: bool = false,
+};
+
 const safe_headers = [_][]const u8{
     "accept-charset",
     "access-control-request-headers",
@@ -263,12 +286,6 @@ const safe_headers = [_][]const u8{
     "upgrade",
     "user-agent",
     "via",
-    // FIXME: separate for further checks:
-    // - https://developer.mozilla.org/en-US/docs/Glossary/CORS-safelisted_request_header#additional_restrictions
-    // - https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_request_header
-    "x-http-method",
-    "x-http-method-override",
-    "x-method-override",
 };
 
 const safe_content_types = [_][]const u8{
@@ -277,20 +294,13 @@ const safe_content_types = [_][]const u8{
     "text/plain",
 };
 
+const forbidden_methods = [_][]const u8{
+    "CONNECT",
+    "TRACE",
+    "TRACK",
+};
+
 const unsafe_bytes = "():<>?@[\\]{}\x7f";
-
-pub const CorsMode = enum {
-    same_origin,
-    cross_site,
-    none,
-};
-
-const HeaderStore = struct {
-    res_origin: ?[]const u8 = null,
-    res_methods: std.ArrayList([]const u8) = .empty,
-    res_headers: std.ArrayList([]const u8) = .empty,
-    res_credentials: bool = false,
-};
 
 test "safe-range" {
     // safe

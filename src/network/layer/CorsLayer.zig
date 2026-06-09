@@ -109,7 +109,8 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     transfer.req.error_callback = CorsContext.errorCallback;
     transfer.req.shutdown_callback = if (corstext.forward.shutdown != null) CorsContext.shutdownCallback else null;
 
-    if (try Cors.determineSimpleRequest(arena, &corstext.unsafe_headers, req)) {
+    if (try Cors.determineSimpleRequestCtx(corstext, req)) {
+        log.debug(.http, "Simple CORS request tracked", .{});
         return cors_layer.next.request(transfer);
     }
 
@@ -170,7 +171,7 @@ pub const CorsContext = struct {
     fn headerCallback(response: Response) anyerror!bool {
         const corstext: *CorsContext = @ptrCast(@alignCast(response.ctx));
 
-        if (try Cors.responsePassesCors(corstext, response)) {
+        if (try Cors.responsePassesCorsCtx(corstext, response)) {
             if (corstext.held == null) return corstext.forward.forwardHeader(response);
             return true;
         } else {
