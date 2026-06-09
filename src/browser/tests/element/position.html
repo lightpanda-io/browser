@@ -63,6 +63,52 @@
 }
 </script>
 
+<script id="scrollMethods">
+{
+  const test3 = $('#test2');
+  test3.scrollTop = 0;
+  test3.scrollLeft = 0;
+
+  // scroll()/scrollTo() with (x, y) positional args
+  test3.scrollTo(30, 40);
+  testing.expectEqual(30, test3.scrollLeft);
+  testing.expectEqual(40, test3.scrollTop);
+
+  test3.scroll(5, 6);
+  testing.expectEqual(5, test3.scrollLeft);
+  testing.expectEqual(6, test3.scrollTop);
+
+  // scrollTo() with an options dictionary; omitted axes are left unchanged
+  test3.scrollTo({left: 11, top: 22});
+  testing.expectEqual(11, test3.scrollLeft);
+  testing.expectEqual(22, test3.scrollTop);
+
+  test3.scrollTo({top: 99});
+  testing.expectEqual(11, test3.scrollLeft); // unchanged
+  testing.expectEqual(99, test3.scrollTop);
+
+  // Negative values clamp to 0
+  test3.scrollTo(-10, -10);
+  testing.expectEqual(0, test3.scrollLeft);
+  testing.expectEqual(0, test3.scrollTop);
+
+  // scrollBy() is relative to the current position
+  test3.scrollTo(10, 10);
+  test3.scrollBy(5, 7);
+  testing.expectEqual(15, test3.scrollLeft);
+  testing.expectEqual(17, test3.scrollTop);
+
+  test3.scrollBy({left: -3, top: -2});
+  testing.expectEqual(12, test3.scrollLeft);
+  testing.expectEqual(15, test3.scrollTop);
+
+  // scrollBy() clamps to 0 and never goes negative
+  test3.scrollBy(-1000, -1000);
+  testing.expectEqual(0, test3.scrollLeft);
+  testing.expectEqual(0, test3.scrollTop);
+}
+</script>
+
 <script id="offsetDimensions">
 {
   const test1 = $('#test1');
