@@ -302,12 +302,10 @@ fn renderLocked(self: *Spinner) void {
             const cap = @min(max_args_cells, room);
             const cut = truncToCells(all_args, cap);
             const suffix: []const u8 = if (cut < all_args.len) ellipsis else "";
-            // No space between name and args when there are none (e.g. run_script).
-            const sep: []const u8 = if (cut == 0) "" else " ";
             break :blk std.fmt.bufPrint(
                 &buf,
-                "\r" ++ ansi.yellow ++ "{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s}{s}{s}{s}]" ++ ansi.reset ++ clear_eol,
-                .{ glyph, prefix, name, sep, all_args[0..cut], suffix },
+                "\r" ++ ansi.yellow ++ "{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s} {s}{s}]" ++ ansi.reset ++ clear_eol,
+                .{ glyph, prefix, name, all_args[0..cut], suffix },
             ) catch return;
         },
     };

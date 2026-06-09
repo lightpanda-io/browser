@@ -193,6 +193,8 @@ pub fn deinit(self: *Terminal) void {
     if (self.repl_arena) |*a| a.deinit();
 }
 
+const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
+
 /// Mark the start of a manual REPL tool call. Pairs with `endTool`.
 pub fn beginTool(self: *Terminal, name: []const u8, args: []const u8) void {
     self.spinner.setTool(name, args);
@@ -204,64 +206,47 @@ pub fn endTool(self: *Terminal) void {
     self.spinner.cancel();
 }
 
-/// Bullet color for a committed `●` line: ok=green, warn=yellow, fail=red.
-pub const BulletStatus = enum {
-    ok,
-    warn,
-    fail,
-
-    fn color(self: BulletStatus) []const u8 {
-        return switch (self) {
-            .ok => ansi.green,
-            .warn => ansi.yellow,
-            .fail => ansi.red,
-        };
-    }
-};
-
-/// A completed step in a multi-phase agent operation (e.g. `/save`'s "captured
-/// the intent"). Committed above the spinner at any verbosity.
-pub fn agentStep(self: *Terminal, text: []const u8) void {
-    self.emitBullet(.ok, "{s}{s}{s}", .{ ansi.dim, text, ansi.reset });
-}
-
-/// Called after a tool returns. At `medium`+, commits a `● [tool: …]` line above
-/// the spinner (green/red bullet for ok/fail) so the run leaves a trace.
+/// Called after the tool returns. At `medium`+, commits a `● [tool: …]` line
+/// above the spinner (green/red bullet for ok/fail) so the run leaves a trace.
+/// ANSI is emitted even in non-TTY contexts — pipes that strip color see plain
+/// text via the bullet character.
 pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
     if (!self.verbosity.atLeast(.medium)) return;
-    self.emitToolBullet(name, args, if (ok) .ok else .fail);
+    self.emitToolBullet(name, args, ok);
 }
 
-/// Trace one `/save` candidate run — shown even at the REPL's default `.low`
-/// verbosity. `detail` carries the error on failure, empty otherwise. `status`:
-/// ok=the kept run, warn=superseded by a re-run, fail=errored.
-pub fn agentVerifyRun(self: *Terminal, detail: []const u8, status: BulletStatus) void {
-    self.emitToolBullet("run_script", detail, status);
+/// Trace one `/save` candidate run. Unlike `agentToolDone` this is shown even at
+/// the REPL's default `.low` verbosity: the verify loop is an infrequent,
+/// user-initiated step the user needs to watch happen.
+pub fn agentVerifyRun(self: *Terminal, summary: []const u8, ok: bool) void {
+    self.emitToolBullet("run_script", summary, ok);
 }
 
-fn emitToolBullet(self: *Terminal, name: []const u8, args: []const u8, status: BulletStatus) void {
-    if (args.len == 0)
-        self.emitBullet(status, "{s}[tool: {s}]{s}", .{ ansi.dim, name, ansi.reset })
-    else
-        self.emitBullet(status, "{s}[tool: {s}]{s} {s}", .{ ansi.dim, name, ansi.reset, args });
-}
-
-/// Commit a `● <body>` line above the spinner (or to stderr when it's off);
-/// `status` colors the bullet, which doubles as a plain-text marker for pipes.
-/// Shared by phase steps and tool-call traces.
-fn emitBullet(self: *Terminal, status: BulletStatus, comptime fmt: []const u8, args: anytype) void {
-    const bullet = status.color();
+fn emitToolBullet(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
     if (self.spinner.isEnabled()) {
         const a = if (self.repl_arena) |*ra| ra else return;
         defer _ = a.reset(.retain_capacity);
-        const body = std.fmt.allocPrint(a.allocator(), fmt, args) catch return;
-        const line = std.fmt.allocPrint(a.allocator(), "{s}●{s} {s}\n", .{ bullet, ansi.reset, body }) catch return;
-        _ = self.spinner.emitAbove(line);
+        const bytes = formatBulletLine(a.allocator(), name, args, ok) catch return;
+        _ = self.spinner.emitAbove(bytes);
         return;
     }
-    std.debug.print("{s}●{s} ", .{ bullet, ansi.reset });
-    std.debug.print(fmt, args);
-    std.debug.print("\n", .{});
+    if (self.stderr_is_tty) {
+        const bullet_color = if (ok) ansi.green else ansi.red;
+        std.debug.print(bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });
+    } else {
+        std.debug.print(
+            "{s}{s}[tool: {s}]{s} {s}\n",
+            .{ ansi.dim, ansi.cyan, name, ansi.reset, args },
+        );
+    }
+}
+
+fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8, ok: bool) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const w = &aw.writer;
+    const bullet_color = if (ok) ansi.green else ansi.red;
+    try w.print(bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });
+    return aw.written();
 }
 
 const completion_buf_len = 512;

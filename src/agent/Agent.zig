@@ -110,10 +110,13 @@ node_registry: CDPNode.Registry,
 terminal: Terminal,
 save_buffer: Recorder,
 save_path: ?[]u8,
+/// Backs `last_extract_json`; reset alongside `save_buffer`.
 last_extract_arena: std.heap.ArenaAllocator,
-/// JSON the latest `extract` returned this session; grounds `/save` synthesis.
+/// The JSON the most recent successful `extract` returned this session — the
+/// real data `/save` grounds and verifies its synthesized script against.
 last_extract_json: ?[]const u8 = null,
-/// Set during an LLM `/save` so `handleToolCall` can route `run_script`.
+/// Set for the duration of an LLM `/save` so the `run_script` tool can reach
+/// the dry-run runtime it executes candidates on.
 active_verify: ?*Verify = null,
 script_runtime_mutex: std.Thread.Mutex = .{},
 active_script_runtime: ?*ScriptRuntime = null,
@@ -973,15 +976,12 @@ fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
     self.failSave(reason);
 }
 
-/// `/save` verification state: the runtime `run_script` executes candidates on,
-/// and the last source that ran cleanly (the saved script if the model's final
-/// message omits it).
+/// In-flight `/save` verification harness: the dry-run runtime the `run_script`
+/// tool executes candidates on, plus the last source it ran (a fallback script
+/// if the model finishes the loop without re-emitting it as text).
 const Verify = struct {
     runtime: *ScriptRuntime,
     last_source: ?[]const u8 = null,
-    /// A clean run whose bullet is held back until we know its verdict: yellow if
-    /// a re-run supersedes it, green if it's the one we keep.
-    pending_ok: bool = false,
 };
 
 /// Agent-only addendum (kept out of the shared `save_synthesis_prompt`) telling
@@ -997,8 +997,8 @@ const save_verify_addendum =
     \\JavaScript source.
 ;
 
-/// Cap on the extract sample shown in the synthesis prompt, so a large result
-/// doesn't dominate context.
+/// Cap on the captured extract sample shown in the synthesis prompt (the full
+/// data still feeds the dry run); keeps a large result from dominating context.
 const save_sample_cap = 8 * 1024;
 
 /// LLM-synthesized `/save`. Pin the output shape first — derive the session's
@@ -1008,11 +1008,6 @@ const save_sample_cap = 8 * 1024;
 fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8) void {
     self.conversation.ensureSystemPrompt() catch return self.failSave("out of memory");
     const baseline = self.conversation.messages.items.len;
-
-    // One spinner session for the save; cancel (not stop) leaves the phase steps
-    // without a per-turn "worked for" summary.
-    self.terminal.spinner.start();
-    defer self.terminal.spinner.cancel();
 
     const anchor = prompt orelse self.one_shot_task;
     const schema = self.deriveOutputSchema(arena, baseline, anchor);
@@ -1024,20 +1019,18 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     self.synthesizeScript(arena, filename, prompt, schema);
 }
 
-/// Steps 1–2 of `/save`: session intent → typed output schema. Null if either
-/// turn produced nothing usable (the caller then synthesizes without a schema).
+/// Steps 1–2 of `/save`: intent (over the session) → typed output schema. Both
+/// turns leave the conversation as they found it; returns null if either turn
+/// produced nothing usable (the caller then synthesizes without a schema).
 fn deriveOutputSchema(self: *Agent, arena: std.mem.Allocator, baseline: usize, anchor: ?[]const u8) ?[]const u8 {
     const intent = self.deriveIntent(arena, baseline, anchor) orelse return null;
-    self.terminal.agentStep("captured the intent");
     if (self.cancel_requested.load(.acquire)) return null;
-    const schema = self.deriveSchema(arena, intent) orelse return null;
-    self.terminal.agentStep("generated output schema");
-    return schema;
+    return self.deriveSchema(arena, intent);
 }
 
-/// One-sentence intent from the session. Runs over the live conversation then
-/// rolls back to `baseline`, keeping the turn out of history; an explicit anchor
-/// is authoritative.
+/// One-sentence intent from the session turns. Runs over the live conversation
+/// (so the model sees the session) but rolls back to `baseline`, keeping the
+/// turn out of history. An explicit anchor is folded in as authoritative.
 fn deriveIntent(self: *Agent, arena: std.mem.Allocator, baseline: usize, anchor: ?[]const u8) ?[]const u8 {
     const ma = self.conversation.arena.allocator();
     var out: std.Io.Writer.Allocating = .init(ma);
@@ -1047,11 +1040,12 @@ fn deriveIntent(self: *Agent, arena: std.mem.Allocator, baseline: usize, anchor:
     }
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = out.written() }) catch return null;
     defer self.conversation.rollback(baseline);
-    return self.runTextTurn(&self.conversation.messages, arena, self.allocator, ma, 512, "capturing the intent");
+    return self.runTextTurn(&self.conversation.messages, arena, self.allocator, ma, 512, "understanding the task");
 }
 
-/// Typed output schema from the intent. Runs over a throwaway message list (not
-/// the conversation) so it's derived from the intent alone, blind to the page.
+/// Typed output schema from the intent. Runs over a throwaway message list —
+/// not the conversation — so the schema is derived from the logical intent
+/// alone, blind to the page structure and how the data was fetched.
 fn deriveSchema(self: *Agent, arena: std.mem.Allocator, intent: []const u8) ?[]const u8 {
     var msgs: std.ArrayList(zenai.provider.Message) = .empty;
     const msg = std.fmt.allocPrint(arena, "{s} {s}", .{ browser_tools.save_schema_prompt, intent }) catch return null;
@@ -1060,8 +1054,9 @@ fn deriveSchema(self: *Agent, arena: std.mem.Allocator, intent: []const u8) ?[]c
     return string.stripCodeFence(raw);
 }
 
-/// Single no-tools text turn; returns the model's text duped into `dest` (so it
-/// survives a rollback of `messages`), or null on cancel/error/empty output.
+/// Run a single no-tools text turn over `messages` and return the model's text
+/// duped into `dest` (so it survives any rollback of `messages`), or null on
+/// cancel, error, or empty output. Shared by the intent and schema steps.
 fn runTextTurn(
     self: *Agent,
     messages: *std.ArrayList(zenai.provider.Message),
@@ -1071,6 +1066,7 @@ fn runTextTurn(
     max_tokens: i32,
     status: []const u8,
 ) ?[]const u8 {
+    self.terminal.spinner.start();
     self.terminal.spinner.setStatus(status);
     var result = self.ai_client.?.runTools(
         self.model,
@@ -1087,9 +1083,11 @@ fn runTextTurn(
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
     ) catch |err| {
+        self.terminal.spinner.cancel();
         if (!self.cancel_requested.load(.acquire)) log.err(.app, "AI save schema turn error", .{ .err = err });
         return null;
     };
+    self.terminal.spinner.stop();
     defer result.deinit();
     self.total_usage.add(result.usage);
     if (result.cancelled) return null;
@@ -1098,8 +1096,9 @@ fn runTextTurn(
     return dest.dupe(u8, text) catch null;
 }
 
-/// Step 3 of `/save`: synthesize the script from the catalog, conversation,
-/// recorded calls, and output schema, then write it.
+/// Step 3 of `/save`: hand the model the builtin catalog, the full conversation,
+/// the deterministic record of what ran, and the required output schema, then
+/// write the idiomatic script it returns.
 fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8, schema: ?[]const u8) void {
     const provider_client = self.ai_client.?;
 
@@ -1111,12 +1110,13 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
     const ma = self.conversation.arena.allocator();
     const baseline = self.conversation.messages.items.len;
 
-    // With captured extract data, give the model `run_script` to test candidates;
-    // otherwise a single no-tools synthesis.
+    // When the session captured extract data, let the model test candidates on
+    // it via `run_script`; otherwise fall back to a single no-tools synthesis.
     var verify: Verify = .{ .runtime = undefined };
     var run_tools: [1]ProviderTool = undefined;
     const verifying = blk: {
-        // A captured extract means there's a loaded page worth verifying against.
+        // Gate on a captured extract: it means the session loaded the page and
+        // left it in a state worth verifying against (and gives a prompt sample).
         if (self.last_extract_json == null) break :blk false;
         run_tools[0] = browser_tools.runScriptToolDef(ma) catch break :blk false;
         const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch break :blk false;
@@ -1143,6 +1143,7 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
     const user_msg = self.buildSaveSynthesisMessage(ma, prompt, schema, sample) catch return self.failSave("out of memory");
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
 
+    self.terminal.spinner.start();
     self.terminal.spinner.setStatus(if (verifying) "writing and testing the script" else "writing the script");
     var result = provider_client.runTools(
         self.model,
@@ -1159,6 +1160,7 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
     ) catch |err| {
+        self.terminal.spinner.cancel();
         if (self.cancel_requested.load(.acquire)) {
             self.resetAfterCancel(baseline);
             return;
@@ -1166,6 +1168,7 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
         log.err(.app, "AI save synthesis error", .{ .err = err });
         return self.abortSave(baseline, @errorName(err));
     };
+    self.terminal.spinner.stop();
     defer result.deinit();
     self.total_usage.add(result.usage);
 
@@ -1174,8 +1177,10 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
         return;
     }
 
-    // Prefer the last cleanly-run candidate: verified, pure JS without the model's
-    // surrounding commentary. Fall back to the final text only when nothing ran.
+    // Prefer the last candidate that ran cleanly — it's verified, pure JS, with
+    // none of the commentary the model sometimes wraps its final message in. Fall
+    // back to the final text only when nothing ran (no extract data, or it never
+    // called run_script).
     const raw: []const u8 = blk: {
         if (verifying) {
             if (verify.last_source) |s| break :blk s;
@@ -1186,7 +1191,8 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
         return self.abortSave(baseline, "the model returned no script");
     };
 
-    // `raw` is freed by the rollback below; copy into the command arena first.
+    // `raw` lives in the conversation arena, freed by the rollback below; copy
+    // into the command arena first (scrubbing may return its input as-is).
     const owned = arena.dupe(u8, string.stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
     const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
 
@@ -1200,50 +1206,38 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
 
     self.rememberSavePath(path);
     self.resetSaveBuffers();
-    self.flushPendingRun(.ok);
-    self.terminal.agentStep(std.fmt.allocPrint(arena, "saved synthesized script to {s}", .{path}) catch "saved synthesized script");
+    self.terminal.printInfo("Saved synthesized script to {s}", .{path});
 }
 
-/// Emit the clean run held back by `runScriptTool`, colored by `status` (warn if
-/// a re-run superseded it, ok if it's the one we kept), at most once.
-fn flushPendingRun(self: *Agent, status: Terminal.BulletStatus) void {
-    const verify = self.active_verify orelse return;
-    if (!verify.pending_ok) return;
-    verify.pending_ok = false;
-    self.terminal.agentVerifyRun("", status);
-}
-
-/// `run_script` handler: run the candidate live and return its completion value
-/// (or error) to the model so it can judge and fix its own script.
+/// `run_script` tool handler: execute `source` on the dry-run runtime and hand
+/// the model back the completion value (or the error), so it can judge and fix
+/// its own script against real data.
 fn runScriptTool(self: *Agent, allocator: std.mem.Allocator, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const verify = self.active_verify.?;
-    // This call supersedes any clean run held back from the previous one.
-    self.flushPendingRun(.warn);
-
     const args = browser_tools.parseArgsOrDefault(struct { source: []const u8 = "" }, allocator, arguments) catch
         return .{ .content = "invalid run_script arguments", .is_error = true };
     const source = args.source;
     if (source.len == 0) return .{ .content = "run_script requires a non-empty \"source\" string", .is_error = true };
 
-    // Blank page per candidate, like a standalone replay, so a script missing
-    // goto(...) fails here instead of using the page the session left loaded.
+    // Start each candidate from a blank page, exactly like a standalone replay —
+    // so a script that forgets to goto(...) fails here instead of silently relying
+    // on the page the session left loaded.
     if (self.session.hasPage()) self.session.removePage();
 
     const outcome = verify.runtime.runSourceCapture(source, "candidate.js") catch
         return .{ .content = "out of memory running candidate", .is_error = true };
     if (outcome.err) |e| {
-        self.terminal.agentVerifyRun(oneLinePreview(allocator, e, 120), .fail);
+        self.terminal.agentVerifyRun(oneLinePreview(allocator, e, 120), false);
         return .{ .content = std.fmt.allocPrint(allocator, "Script threw: {s}", .{e}) catch "Script threw an error", .is_error = true };
     }
 
     // Keep the last source that ran cleanly — it's the verified, prose-free
     // artifact `synthesizeScript` saves, instead of the model's final message
-    // (which may wrap the script in commentary). Hold its bullet until we know
-    // whether the model keeps this run or tries another.
+    // (which may wrap the script in commentary).
     verify.last_source = self.conversation.arena.allocator().dupe(u8, source) catch source;
-    verify.pending_ok = true;
 
     const body = if (outcome.output.len == 0) "(completion value is empty/undefined)" else outcome.output;
+    self.terminal.agentVerifyRun(oneLinePreview(allocator, body, 120), true);
     const content = std.fmt.allocPrint(allocator, "Completion value:\n{s}", .{body}) catch body;
     return .{ .content = string.truncateWithMarker(allocator, content, tool_output_max_bytes), .is_error = false };
 }
