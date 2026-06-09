@@ -109,7 +109,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     transfer.req.error_callback = CorsContext.errorCallback;
     transfer.req.shutdown_callback = if (corstext.forward.shutdown != null) CorsContext.shutdownCallback else null;
 
-    if (try Cors.determineSimpleRequest(corstext, req)) {
+    if (try Cors.determineSimpleRequest(arena, &corstext.unsafe_headers, req)) {
         return cors_layer.next.request(transfer);
     }
 
@@ -139,7 +139,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         };
 
         const acr_headers: [:0]const u8 = blk: {
-            const headers_csv = try std.mem.join(arena, ",", corstext.extra_headers.items);
+            const headers_csv = try std.mem.join(arena, ",", corstext.unsafe_headers.items);
             break :blk try std.mem.joinZ(arena, "", &.{ "Access-Control-Request-Headers: ", headers_csv });
         };
 
@@ -163,7 +163,7 @@ pub const CorsContext = struct {
     from_origin: []const u8,
     original_method: [:0]const u8,
     credentials: bool = false,
-    extra_headers: std.ArrayList([]const u8) = .empty,
+    unsafe_headers: std.ArrayList([]const u8) = .empty,
     layer: *CorsLayer,
     held: ?*Transfer = null,
 
@@ -171,7 +171,8 @@ pub const CorsContext = struct {
         const corstext: *CorsContext = @ptrCast(@alignCast(response.ctx));
 
         if (try Cors.responsePassesCors(corstext, response)) {
-            return corstext.forward.forwardHeader(response);
+            if (corstext.held == null) return corstext.forward.forwardHeader(response);
+            return true;
         } else {
             return error.CorsDeinied;
         }
@@ -203,17 +204,17 @@ pub const CorsContext = struct {
     }
 
     fn shutdownCallback(ctx: *anyopaque) void {
-        const cors_ctx: *CorsContext = @ptrCast(@alignCast(ctx));
-        cors_ctx.forward.forwardShutdown();
+        const corstext: *CorsContext = @ptrCast(@alignCast(ctx));
+        if (corstext.held == null) corstext.forward.forwardShutdown();
     }
 
     fn startCallback(response: Response) anyerror!void {
-        const cors_ctx: *CorsContext = @ptrCast(@alignCast(response.ctx));
-        return cors_ctx.forward.forwardStart(response);
+        const corstext: *CorsContext = @ptrCast(@alignCast(response.ctx));
+        if (corstext.held == null) return corstext.forward.forwardStart(response);
     }
 
     fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
-        const cors_ctx: *CorsContext = @ptrCast(@alignCast(response.ctx));
-        return cors_ctx.forward.forwardData(response, chunk);
+        const corstext: *CorsContext = @ptrCast(@alignCast(response.ctx));
+        if (corstext.held == null) return corstext.forward.forwardData(response, chunk);
     }
 };

@@ -14,10 +14,9 @@ const CorsContext = @import("./layer/CorsLayer.zig").CorsContext;
 // - https://developer.mozilla.org/en-US/docs/Glossary/CORS-safelisted_request_header#additional_restrictions
 // - https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_request_header
 
-/// determine if a request is simple or not.
-/// if not, any unsafe headers will be stored in the context.
-pub fn determineSimpleRequest(ctx: *CorsContext, req: *const HttpClient.Request) !bool {
-    const arena = ctx.arena;
+/// Determine if a request is simple or not.
+/// If not, any unsafe headers will be stored in ctx.
+pub fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.ArrayList([]const u8), req: *const HttpClient.Request) !bool {
     var simple = switch (req.method) {
         .GET, .HEAD, .POST => true,
         else => false,
@@ -36,11 +35,13 @@ pub fn determineSimpleRequest(ctx: *CorsContext, req: *const HttpClient.Request)
         } else if (std.ascii.eqlIgnoreCase(h.name, "accept-language") or
             std.ascii.eqlIgnoreCase(h.name, "content-language"))
         {
-            if (safeLanguageValue(h.value)) continue :outer;
+            if (safeLanguageValue(h.value)) continue;
         } else if (std.ascii.eqlIgnoreCase(h.name, "accept")) {
-            if (safeHeaderBytes(h.value)) continue :outer;
+            if (safeHeaderBytes(h.value)) continue;
         } else if (std.ascii.eqlIgnoreCase(h.name, "content-type")) {
-            if (safeHeaderBytes(h.value) and safeContentType(h.value)) continue :outer;
+            if (safeHeaderBytes(h.value) and safeContentType(h.value)) continue;
+        } else if (std.ascii.eqlIgnoreCase(h.name, "range")) {
+            if (safeRange(h.value)) continue;
         } else {
             for (safe_headers) |a_h| {
                 if (std.ascii.eqlIgnoreCase(h.name, a_h)) {
@@ -50,13 +51,13 @@ pub fn determineSimpleRequest(ctx: *CorsContext, req: *const HttpClient.Request)
         }
 
         // dupe it since adding headers can invalidate existing pointers
-        try ctx.extra_headers.append(arena, try arena.dupe(u8, h.name));
+        try unsafe_headers.append(arena, try arena.dupe(u8, h.name));
     }
 
-    return ctx.extra_headers.items.len == 0 and simple;
+    return unsafe_headers.items.len == 0 and simple;
 }
 
-/// dertermine if a response passes CORS checks based on an existing Context
+/// Dertermine if a response passes CORS checks using an existing Context
 pub fn responsePassesCors(ctx: *CorsContext, response: Response) !bool {
     const arena = ctx.arena;
     var res_store: HeaderStore = .{};
@@ -84,7 +85,7 @@ pub fn responsePassesCors(ctx: *CorsContext, response: Response) !bool {
 
     return passesCors(
         ctx.from_origin,
-        ctx.extra_headers.items,
+        ctx.unsafe_headers.items,
         ctx.original_method,
         ctx.held != null,
         ctx.credentials,
@@ -190,6 +191,56 @@ fn safeContentType(header_value: []const u8) bool {
     } else false;
 }
 
+// https://fetch.spec.whatwg.org/#simple-range-header-value
+fn safeRange(range: []const u8) bool {
+    if (!std.mem.startsWith(u8, range, "bytes")) return false;
+    if (std.mem.containsAtLeastScalar(u8, range[5..], 1, ',')) return false;
+
+    var rem = range[5..];
+    var pos: usize = 0;
+
+    while (std.ascii.isWhitespace(range[pos])) {
+        pos += 1;
+    }
+    if (rem[pos] != '=') return false;
+    pos += 1;
+
+    while (std.ascii.isWhitespace(range[pos])) {
+        pos += 1;
+    }
+    rem = rem[pos..];
+    pos = 0;
+
+    while (std.ascii.isDigit(rem[pos])) {
+        pos += 1;
+    }
+
+    const range_start = std.fmt.parseInt(u32, rem[0..pos], 10) catch null;
+
+    while (std.ascii.isWhitespace(range[pos])) {
+        pos += 1;
+    }
+    if (rem[pos] != '-') return false;
+    pos += 1;
+
+    while (std.ascii.isWhitespace(range[pos])) {
+        pos += 1;
+    }
+    rem = rem[pos..];
+    pos = 0;
+
+    while (std.ascii.isDigit(rem[pos])) {
+        pos += 1;
+    }
+
+    const range_end = std.fmt.parseInt(u32, rem[0..pos], 10) catch null;
+
+    if (pos < range.len) return false;
+    if (range_start == null and range_end == null) return false;
+
+    return true;
+}
+
 const safe_headers = [_][]const u8{
     "accept-charset",
     "access-control-request-headers",
@@ -215,7 +266,6 @@ const safe_headers = [_][]const u8{
     // FIXME: separate for further checks:
     // - https://developer.mozilla.org/en-US/docs/Glossary/CORS-safelisted_request_header#additional_restrictions
     // - https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_request_header
-    "range",
     "x-http-method",
     "x-http-method-override",
     "x-method-override",
@@ -241,3 +291,24 @@ const HeaderStore = struct {
     res_headers: std.ArrayList([]const u8) = .empty,
     res_credentials: bool = false,
 };
+
+test "safe-range" {
+    // safe
+    // "bytes=0-499"
+    // "bytes=100-"
+    // "bytes=-500"
+    // "bytes=0-0"
+
+    // unsafe
+    // "bytes=0-100, 200-300"
+    // "bytes=100-200, 500-600"
+    // "bits=0-1024"
+    // "items=0-10"
+    // "bytes=0-100-200"
+    // "0-100"
+    // "bytes=0-100 " // trailing space
+}
+
+test "safe-content-type" {}
+test "safe-language-value" {}
+test "safe-header-bytes" {}
