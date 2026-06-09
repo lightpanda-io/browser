@@ -4302,8 +4302,8 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // The submitter can be an input box (if enter was entered on the box)
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, &self.js.execution);
-    // FormData.init acquires file's references. So we must release them once done.
-    defer form_data.deinit(self._page);
+    form_data.acquireRef();
+    defer form_data.releaseRef(self._page);
 
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
