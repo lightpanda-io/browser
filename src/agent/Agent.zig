@@ -110,14 +110,6 @@ node_registry: CDPNode.Registry,
 terminal: Terminal,
 save_buffer: Recorder,
 save_path: ?[]u8,
-/// Backs `last_extract_json`; reset alongside `save_buffer`.
-last_extract_arena: std.heap.ArenaAllocator,
-/// The JSON the most recent successful `extract` returned this session — the
-/// real data `/save` grounds and verifies its synthesized script against.
-last_extract_json: ?[]const u8 = null,
-/// Set for the duration of an LLM `/save` so the `run_script` tool can reach
-/// the dry-run runtime it executes candidates on.
-active_verify: ?*Verify = null,
 script_runtime_mutex: std.Thread.Mutex = .{},
 active_script_runtime: ?*ScriptRuntime = null,
 conversation: Conversation,
@@ -262,7 +254,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .terminal = .init(allocator, history_paths, verbosity, will_repl),
         .save_buffer = .init(allocator),
         .save_path = null,
-        .last_extract_arena = .init(allocator),
         .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
         .model = model,
         .effort = effort,
@@ -303,7 +294,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 pub fn deinit(self: *Agent) void {
     self.terminal.uninstallLogSink();
     self.save_buffer.deinit();
-    self.last_extract_arena.deinit();
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
     self.conversation.deinit();
@@ -640,17 +630,9 @@ fn handleUsage(self: *Agent) void {
 /// node IDs. Shared by `/clear` and `/reset`.
 fn clearConversation(self: *Agent) void {
     self.conversation.rollback(0);
-    self.resetSaveBuffers();
+    self.save_buffer.reset();
     self.total_usage = .{};
     self.node_registry.reset();
-}
-
-/// Drop everything `/save` accumulates: the recorded action buffer and the
-/// captured extract data that grounds synthesis.
-fn resetSaveBuffers(self: *Agent) void {
-    self.save_buffer.reset();
-    _ = self.last_extract_arena.reset(.retain_capacity);
-    self.last_extract_json = null;
 }
 
 /// Forget the conversation while leaving the browser session live — loaded page
@@ -880,7 +862,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         new_save_path = null;
     }
     const saved_lines = self.save_buffer.lines;
-    self.resetSaveBuffers();
+    self.save_buffer.reset();
     self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, self.save_path.? });
 }
 
@@ -976,130 +958,10 @@ fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
     self.failSave(reason);
 }
 
-/// In-flight `/save` verification harness: the dry-run runtime the `run_script`
-/// tool executes candidates on, plus the last source it ran (a fallback script
-/// if the model finishes the loop without re-emitting it as text).
-const Verify = struct {
-    runtime: *ScriptRuntime,
-    last_source: ?[]const u8 = null,
-};
-
-/// Agent-only addendum (kept out of the shared `save_synthesis_prompt`) telling
-/// the model to derive every value at runtime and check the result with run_script.
-const save_verify_addendum =
-    \\Read data with the recorded extract(...), not evaluate() — extract can read a
-    \\card's whole text via an empty selector (""). Reshape its result in plain JS so the
-    \\completion value matches the schema exactly (same keys, parsed numbers); don't
-    \\return the raw extract or hard-code values.
-    \\Before finalizing, test with run_script: it runs your FULL script for real from a
-    \\blank page, so it must goto(...) first (missing goto → "no page loaded", a wrong
-    \\selector → null). Confirm every field is populated, then reply with ONLY the final
-    \\JavaScript source.
-;
-
-/// Cap on the captured extract sample shown in the synthesis prompt (the full
-/// data still feeds the dry run); keeps a large result from dominating context.
-const save_sample_cap = 8 * 1024;
-
-/// LLM-synthesized `/save`. Pin the output shape first — derive the session's
-/// intent, then a typed output schema from it — so the script's result shape is
-/// stable across runs, then synthesize the script honoring that schema. Each
-/// step degrades gracefully: a null schema falls back to plain synthesis.
+/// LLM-synthesized `/save`: hand the model the builtin catalog, the full
+/// conversation, and the deterministic record of what ran, then write the
+/// idiomatic script it returns.
 fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8) void {
-    self.conversation.ensureSystemPrompt() catch return self.failSave("out of memory");
-    const baseline = self.conversation.messages.items.len;
-
-    const anchor = prompt orelse self.one_shot_task;
-    const schema = self.deriveOutputSchema(arena, baseline, anchor);
-    if (self.cancel_requested.load(.acquire)) {
-        self.resetAfterCancel(baseline);
-        return;
-    }
-
-    self.synthesizeScript(arena, filename, prompt, schema);
-}
-
-/// Steps 1–2 of `/save`: intent (over the session) → typed output schema. Both
-/// turns leave the conversation as they found it; returns null if either turn
-/// produced nothing usable (the caller then synthesizes without a schema).
-fn deriveOutputSchema(self: *Agent, arena: std.mem.Allocator, baseline: usize, anchor: ?[]const u8) ?[]const u8 {
-    const intent = self.deriveIntent(arena, baseline, anchor) orelse return null;
-    if (self.cancel_requested.load(.acquire)) return null;
-    return self.deriveSchema(arena, intent);
-}
-
-/// One-sentence intent from the session turns. Runs over the live conversation
-/// (so the model sees the session) but rolls back to `baseline`, keeping the
-/// turn out of history. An explicit anchor is folded in as authoritative.
-fn deriveIntent(self: *Agent, arena: std.mem.Allocator, baseline: usize, anchor: ?[]const u8) ?[]const u8 {
-    const ma = self.conversation.arena.allocator();
-    var out: std.Io.Writer.Allocating = .init(ma);
-    out.writer.writeAll(browser_tools.save_intent_prompt) catch return null;
-    if (anchor) |a| {
-        out.writer.print("\nThe user described the goal as: {s}\nTreat that as authoritative and reconcile it with the session.", .{a}) catch return null;
-    }
-    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = out.written() }) catch return null;
-    defer self.conversation.rollback(baseline);
-    return self.runTextTurn(&self.conversation.messages, arena, self.allocator, ma, 512, "understanding the task");
-}
-
-/// Typed output schema from the intent. Runs over a throwaway message list —
-/// not the conversation — so the schema is derived from the logical intent
-/// alone, blind to the page structure and how the data was fetched.
-fn deriveSchema(self: *Agent, arena: std.mem.Allocator, intent: []const u8) ?[]const u8 {
-    var msgs: std.ArrayList(zenai.provider.Message) = .empty;
-    const msg = std.fmt.allocPrint(arena, "{s} {s}", .{ browser_tools.save_schema_prompt, intent }) catch return null;
-    msgs.append(arena, .{ .role = .user, .content = msg }) catch return null;
-    const raw = self.runTextTurn(&msgs, arena, arena, arena, 1024, "designing the output schema") orelse return null;
-    return string.stripCodeFence(raw);
-}
-
-/// Run a single no-tools text turn over `messages` and return the model's text
-/// duped into `dest` (so it survives any rollback of `messages`), or null on
-/// cancel, error, or empty output. Shared by the intent and schema steps.
-fn runTextTurn(
-    self: *Agent,
-    messages: *std.ArrayList(zenai.provider.Message),
-    dest: std.mem.Allocator,
-    list_alloc: std.mem.Allocator,
-    data_alloc: std.mem.Allocator,
-    max_tokens: i32,
-    status: []const u8,
-) ?[]const u8 {
-    self.terminal.spinner.start();
-    self.terminal.spinner.setStatus(status);
-    var result = self.ai_client.?.runTools(
-        self.model,
-        messages,
-        list_alloc,
-        data_alloc,
-        .{ .context = @ptrCast(self), .callFn = handleToolCall },
-        .{
-            .tools = &.{},
-            .max_turns = 1,
-            .max_tokens = max_tokens,
-            .tool_choice = .none,
-            .effort = .low,
-            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
-        },
-    ) catch |err| {
-        self.terminal.spinner.cancel();
-        if (!self.cancel_requested.load(.acquire)) log.err(.app, "AI save schema turn error", .{ .err = err });
-        return null;
-    };
-    self.terminal.spinner.stop();
-    defer result.deinit();
-    self.total_usage.add(result.usage);
-    if (result.cancelled) return null;
-    const text = std.mem.trim(u8, result.text orelse return null, &std.ascii.whitespace);
-    if (text.len == 0) return null;
-    return dest.dupe(u8, text) catch null;
-}
-
-/// Step 3 of `/save`: hand the model the builtin catalog, the full conversation,
-/// the deterministic record of what ran, and the required output schema, then
-/// write the idiomatic script it returns.
-fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8, schema: ?[]const u8) void {
     const provider_client = self.ai_client.?;
 
     const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
@@ -1110,41 +972,10 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
     const ma = self.conversation.arena.allocator();
     const baseline = self.conversation.messages.items.len;
 
-    // When the session captured extract data, let the model test candidates on
-    // it via `run_script`; otherwise fall back to a single no-tools synthesis.
-    var verify: Verify = .{ .runtime = undefined };
-    var run_tools: [1]ProviderTool = undefined;
-    const verifying = blk: {
-        // Gate on a captured extract: it means the session loaded the page and
-        // left it in a state worth verifying against (and gives a prompt sample).
-        if (self.last_extract_json == null) break :blk false;
-        run_tools[0] = browser_tools.runScriptToolDef(ma) catch break :blk false;
-        const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch break :blk false;
-        verify.runtime = runtime;
-        self.active_verify = &verify;
-        self.script_runtime_mutex.lock();
-        self.active_script_runtime = runtime;
-        self.script_runtime_mutex.unlock();
-        break :blk true;
-    };
-    defer if (verifying) {
-        self.script_runtime_mutex.lock();
-        self.active_script_runtime = null;
-        self.script_runtime_mutex.unlock();
-        self.active_verify = null;
-        verify.runtime.cancelTerminate();
-        verify.runtime.deinit();
-    };
-
-    const sample: ?[]const u8 = if (verifying) blk: {
-        const d = self.last_extract_json.?;
-        break :blk d[0..@min(d.len, save_sample_cap)];
-    } else null;
-    const user_msg = self.buildSaveSynthesisMessage(ma, prompt, schema, sample) catch return self.failSave("out of memory");
+    const user_msg = self.buildSaveSynthesisMessage(ma, prompt) catch return self.failSave("out of memory");
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
 
     self.terminal.spinner.start();
-    self.terminal.spinner.setStatus(if (verifying) "writing and testing the script" else "writing the script");
     var result = provider_client.runTools(
         self.model,
         &self.conversation.messages,
@@ -1152,10 +983,10 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = if (verifying) run_tools[0..1] else &.{},
-            .max_turns = if (verifying) 6 else 1,
+            .tools = &.{},
+            .max_turns = 1,
             .max_tokens = 8192,
-            .tool_choice = if (verifying) .auto else .none,
+            .tool_choice = .none,
             .effort = .medium,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
@@ -1177,23 +1008,12 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
         return;
     }
 
-    // Prefer the last candidate that ran cleanly — it's verified, pure JS, with
-    // none of the commentary the model sometimes wraps its final message in. Fall
-    // back to the final text only when nothing ran (no extract data, or it never
-    // called run_script).
-    const raw: []const u8 = blk: {
-        if (verifying) {
-            if (verify.last_source) |s| break :blk s;
-        }
-        if (result.text) |t| {
-            if (std.mem.trim(u8, t, &std.ascii.whitespace).len > 0) break :blk t;
-        }
-        return self.abortSave(baseline, "the model returned no script");
-    };
+    const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
 
-    // `raw` lives in the conversation arena, freed by the rollback below; copy
-    // into the command arena first (scrubbing may return its input as-is).
-    const owned = arena.dupe(u8, string.stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
+    // `result.text` lives in the conversation arena, freed by the rollback
+    // below; copy into the command arena first (scrubbing may return its input
+    // as-is).
+    const owned = arena.dupe(u8, stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
     const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
 
     // The save turn is a meta-action; keep it out of the ongoing conversation.
@@ -1205,51 +1025,8 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
     };
 
     self.rememberSavePath(path);
-    self.resetSaveBuffers();
+    self.save_buffer.reset();
     self.terminal.printInfo("Saved synthesized script to {s}", .{path});
-}
-
-/// `run_script` tool handler: execute `source` on the dry-run runtime and hand
-/// the model back the completion value (or the error), so it can judge and fix
-/// its own script against real data.
-fn runScriptTool(self: *Agent, allocator: std.mem.Allocator, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
-    const verify = self.active_verify.?;
-    const args = browser_tools.parseArgsOrDefault(struct { source: []const u8 = "" }, allocator, arguments) catch
-        return .{ .content = "invalid run_script arguments", .is_error = true };
-    const source = args.source;
-    if (source.len == 0) return .{ .content = "run_script requires a non-empty \"source\" string", .is_error = true };
-
-    // Start each candidate from a blank page, exactly like a standalone replay —
-    // so a script that forgets to goto(...) fails here instead of silently relying
-    // on the page the session left loaded.
-    if (self.session.hasPage()) self.session.removePage();
-
-    const outcome = verify.runtime.runSourceCapture(source, "candidate.js") catch
-        return .{ .content = "out of memory running candidate", .is_error = true };
-    if (outcome.err) |e| {
-        self.terminal.agentVerifyRun(oneLinePreview(allocator, e, 120), false);
-        return .{ .content = std.fmt.allocPrint(allocator, "Script threw: {s}", .{e}) catch "Script threw an error", .is_error = true };
-    }
-
-    // Keep the last source that ran cleanly — it's the verified, prose-free
-    // artifact `synthesizeScript` saves, instead of the model's final message
-    // (which may wrap the script in commentary).
-    verify.last_source = self.conversation.arena.allocator().dupe(u8, source) catch source;
-
-    const body = if (outcome.output.len == 0) "(completion value is empty/undefined)" else outcome.output;
-    self.terminal.agentVerifyRun(oneLinePreview(allocator, body, 120), true);
-    const content = std.fmt.allocPrint(allocator, "Completion value:\n{s}", .{body}) catch body;
-    return .{ .content = string.truncateWithMarker(allocator, content, tool_output_max_bytes), .is_error = false };
-}
-
-/// Collapse `text` to a single trimmed line capped at `max` cells (with an
-/// ellipsis when cut) — a compact preview for the verify-run trace bullet.
-fn oneLinePreview(arena: std.mem.Allocator, text: []const u8, max: usize) []const u8 {
-    const trimmed = std.mem.trim(u8, text, &std.ascii.whitespace);
-    const first = trimmed[0 .. std.mem.indexOfScalar(u8, trimmed, '\n') orelse trimmed.len];
-    if (first.len <= max) return first;
-    const cut = string.truncateUtf8(first, max);
-    return std.fmt.allocPrint(arena, "{s}…", .{cut}) catch cut;
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
@@ -1262,26 +1039,16 @@ fn rememberSavePath(self: *Agent, path: []const u8) void {
     self.save_path = dup;
 }
 
-fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]const u8, schema: ?[]const u8, sample: ?[]const u8) ![]const u8 {
+fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]const u8) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
     try w.writeAll(browser_tools.save_synthesis_prompt);
-    try w.writeAll("\n\nBuiltin functions (call them as JS functions). extract is the main way to read data — use it for every value you need; the rest navigate or act on the page:\n");
+    try w.writeAll("\n\nBuiltin functions to prefer (call them as JS functions):\n");
     try renderBuiltinCatalog(w);
     const recorded = self.save_buffer.bytes();
     if (recorded.len > 0) {
         try w.writeAll("\nCommands and JS that actually ran this session:\n");
         try w.writeAll(recorded);
-    }
-    if (schema) |s| {
-        try w.writeAll("\nThe completion value must match this output schema (types are examples):\n");
-        try w.writeAll(s);
-    }
-    if (sample) |data| {
-        try w.writeAll("\nWhat a recorded extract returned this session, for reference:\n");
-        try w.writeAll(data);
-        try w.writeAll("\n\n");
-        try w.writeAll(save_verify_addendum);
     }
     if (prompt) |p| {
         try w.writeAll("\nThe user's instruction for this script:\n");
@@ -1295,26 +1062,26 @@ fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]
 /// dialect (e.g. `extract`'s schema format) without the tool schemas a no-tools
 /// synthesis turn omits.
 fn renderBuiltinCatalog(w: *std.Io.Writer) !void {
-    // The primary builtins first; `evaluate` is held back and framed as a last
-    // resort below, so it isn't presented as a peer way to read data.
     for (Schema.all()) |s| {
-        if (!s.tool.isRecorded() or s.tool == .evaluate) continue;
-        try renderBuiltinEntry(w, s);
-    }
-    for (Schema.all()) |s| {
-        if (s.tool != .evaluate) continue;
-        try w.writeAll("\nEscape hatch for advanced page interaction or page-side logic no builtin above can express — not for reading data extract can read:\n");
-        try renderBuiltinEntry(w, s);
+        if (!s.tool.isRecorded()) continue;
+        try w.print("\n{s}(", .{s.tool_name});
+        for (s.required, 0..) |req, i| {
+            if (i != 0) try w.writeAll(", ");
+            try w.writeAll(req);
+        }
+        try w.print("):\n{s}\n", .{s.description});
     }
 }
 
-fn renderBuiltinEntry(w: *std.Io.Writer, s: Schema) !void {
-    try w.print("\n{s}(", .{s.tool_name});
-    for (s.required, 0..) |req, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.writeAll(req);
-    }
-    try w.print("):\n{s}\n", .{s.description});
+/// Strip a surrounding ```` ```lang … ``` ```` markdown fence if the model
+/// wrapped its output in one despite being told not to.
+fn stripCodeFence(text: []const u8) []const u8 {
+    const t = std.mem.trim(u8, text, &std.ascii.whitespace);
+    if (!std.mem.startsWith(u8, t, "```")) return t;
+    const first_nl = std.mem.indexOfScalar(u8, t, '\n') orelse return t;
+    const body = t[first_nl + 1 ..];
+    const close = std.mem.lastIndexOf(u8, body, "```") orelse return std.mem.trim(u8, body, &std.ascii.whitespace);
+    return std.mem.trim(u8, body[0..close], &std.ascii.whitespace);
 }
 
 fn logSaveBufferError(self: *Agent, err: anyerror) void {
@@ -1542,9 +1309,9 @@ fn recordSlashToolCall(
         .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
     };
 
-    // truncateWithMarker returns its input unchanged under the cap; dupe so
-    // content doesn't alias the caller's per-iteration arena.
-    const capped = string.truncateWithMarker(ma, result.text, tool_output_max_bytes);
+    // capToolOutput returns its input unchanged under the cap; dupe so content
+    // doesn't alias the caller's per-iteration arena.
+    const capped = capToolOutput(ma, result.text);
     const content = if (capped.ptr == result.text.ptr) try ma.dupe(u8, capped) else capped;
 
     const tool_results = try ma.alloc(zenai.provider.ToolResult, 1);
@@ -1646,13 +1413,6 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         for (result.tool_calls_made, 0..) |tc, i| {
             const t = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
             if (!tc.is_error and t == .extract) last_extract_idx = i;
-        }
-
-        // Keep the latest extract's real result so `/save` can ground and
-        // verify its synthesized post-processing against actual data.
-        if (last_extract_idx) |idx| {
-            _ = self.last_extract_arena.reset(.retain_capacity);
-            self.last_extract_json = self.last_extract_arena.allocator().dupe(u8, result.tool_calls_made[idx].result) catch null;
         }
 
         var recorded_any = false;
@@ -1786,14 +1546,19 @@ fn buildUserMessageParts(
 // the next request body) without bound.
 const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
+fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
+    if (output.len <= tool_output_max_bytes) return output;
+    const prefix = string.truncateUtf8(output, tool_output_max_bytes);
+    var suffix_buf: [64]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
+    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
+}
+
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
-    // `run_script`'s only arg is the whole candidate script — too long and noisy
-    // to render, so suppress it and let the label/phase carry the context.
-    const is_run_script = self.active_verify != null and std.mem.eql(u8, tool_name, browser_tools.run_script_tool_name);
     // The spinner doesn't render args, and `agentToolDone` skips the body line
     // at low verbosity — don't pay for the stringify when nobody reads it.
-    const needs_args = !is_run_script and (self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low);
+    const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
     // Stringify the pre-substitution args so $LP_* placeholders the model
     // emitted stay redacted in the UI.
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
@@ -1803,15 +1568,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome: zenai.provider.Client.ToolHandler.Result = if (is_run_script)
-        self.runScriptTool(allocator, arguments)
-    else if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
-        .{ .content = string.truncateWithMarker(allocator, result.text, tool_output_max_bytes), .is_error = result.is_error }
+    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
+        .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error }
     else |err|
         .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
 
-    // run_script emits its own always-visible trace inside `runScriptTool`.
-    if (!is_run_script) self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
+    self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
     return outcome;
 }
@@ -1882,6 +1644,35 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
     return ids;
 }
 
+test "capToolOutput: passes through when under cap" {
+    const ta = std.testing.allocator;
+    const out = capToolOutput(ta, "short");
+    try std.testing.expectEqualStrings("short", out);
+}
+
+// Boundary correctness lives in string.zig's `truncateUtf8` tests; here we only
+// assert the agent-specific policy: an over-cap body keeps valid UTF-8 and gains
+// the truncation marker.
+test "capToolOutput: appends a marker when truncating" {
+    const ta = std.testing.allocator;
+
+    // 3-byte Hangul codepoint (U+D55C '한' = 0xED 0x95 0x9C) straddling the cap.
+    const cap = tool_output_max_bytes;
+    const buf = try ta.alloc(u8, cap + 8);
+    defer ta.free(buf);
+    @memset(buf[0 .. cap - 1], 'a');
+    buf[cap - 1] = 0xED;
+    buf[cap + 0] = 0x95;
+    buf[cap + 1] = 0x9C;
+    @memset(buf[cap + 2 ..], 'b');
+
+    const out = capToolOutput(ta, buf);
+    defer if (out.ptr != buf.ptr) ta.free(out);
+
+    try std.testing.expect(std.unicode.utf8ValidateSlice(out));
+    try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
+}
+
 test "parseSaveCommand: filename only" {
     const r = try parseSaveCommand("out.js");
     try std.testing.expectEqualStrings("out.js", r.filename.?);
@@ -1929,4 +1720,9 @@ test "renderBuiltinCatalog: lists recorded tools, omits read-only ones" {
     // tree/markdown are read-only and not callable from a saved script.
     try std.testing.expect(std.mem.indexOf(u8, text, "tree(") == null);
     try std.testing.expect(std.mem.indexOf(u8, text, "markdown(") == null);
+}
+
+test "stripCodeFence: unwraps a fenced block and passes plain text through" {
+    try std.testing.expectEqualStrings("goto(\"x\");", stripCodeFence("```js\ngoto(\"x\");\n```"));
+    try std.testing.expectEqualStrings("goto(\"x\");", stripCodeFence("goto(\"x\");"));
 }

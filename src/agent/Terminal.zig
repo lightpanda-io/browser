@@ -212,18 +212,9 @@ pub fn endTool(self: *Terminal) void {
 /// text via the bullet character.
 pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
     if (!self.verbosity.atLeast(.medium)) return;
-    self.emitToolBullet(name, args, ok);
-}
+    const spinner_on = self.spinner.isEnabled();
 
-/// Trace one `/save` candidate run. Unlike `agentToolDone` this is shown even at
-/// the REPL's default `.low` verbosity: the verify loop is an infrequent,
-/// user-initiated step the user needs to watch happen.
-pub fn agentVerifyRun(self: *Terminal, summary: []const u8, ok: bool) void {
-    self.emitToolBullet("run_script", summary, ok);
-}
-
-fn emitToolBullet(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
-    if (self.spinner.isEnabled()) {
+    if (spinner_on) {
         const a = if (self.repl_arena) |*ra| ra else return;
         defer _ = a.reset(.retain_capacity);
         const bytes = formatBulletLine(a.allocator(), name, args, ok) catch return;
