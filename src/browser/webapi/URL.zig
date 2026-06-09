@@ -17,9 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const U_ = @import("../../sys/url.zig");
+const Page = @import("../Page.zig");
 const URLSearchParams = @import("net/URLSearchParams.zig");
 const Blob = @import("Blob.zig");
 const Execution = js.Execution;
@@ -30,6 +32,8 @@ _url: *U_.Url = undefined,
 /// Largest port possible is 65535; which require 5 bytes.
 _port: [5]u8 = undefined,
 _search_params: ?*URLSearchParams = null,
+/// We have to track lifetime of URL to free `_url`.
+_rc: lp.RC(u32) = .{},
 
 // convenience
 pub const resolve = @import("../URL.zig").resolve;
@@ -57,6 +61,19 @@ pub fn init(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !*
     errdefer U_.url_free(u);
 
     return exec._factory.create(URL{ ._url = u });
+}
+
+pub fn deinit(self: *URL, _: *Page) void {
+    // Not tracked by arena.
+    U_.url_free(self._url);
+}
+
+pub fn acquireRef(self: *URL) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *URL, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn getUsername(self: *const URL) []const u8 {
