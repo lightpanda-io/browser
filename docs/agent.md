@@ -12,10 +12,6 @@ saying so ("go to news.ycombinator.com") or by typing `/goto <url>`. There's
 no window to look at; the browser runs headlessly and you see its output
 (extracted data, the agent's answer) in your terminal.
 
-**New here?** The [tutorial](agent-tutorial.md) walks you from a fresh build
-to a recorded, replayable Hacker News script in a few minutes. For the JavaScript script format, see
-[agent-script.md](agent-script.md).
-
 ## How to think about it
 
 The agent stacks three layers:
@@ -73,6 +69,9 @@ You now have a `.js` file that does the same job deterministically:
 ```
 
 No LLM call, no API key needed at replay time, sub-second to run.
+
+For a longer worked example (logging into a site, extracting structured
+data across pages), see the [tutorial](agent-tutorial.md).
 
 ### Other ways to launch
 
