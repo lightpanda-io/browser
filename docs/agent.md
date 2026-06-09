@@ -88,6 +88,8 @@ data across pages), see the [tutorial](agent-tutorial.md).
 
 ## Tips for getting useful saved scripts
 
+The whole value of a saved script is that it keeps working after you walk away. 
+
 - **Ask for the data you want, not the conversation about it.** "Get me the
   top 5 HN story titles and points, print them to stdout" beats "show me
   what's on Hacker News today." The synthesizer captures the data you asked
@@ -121,6 +123,8 @@ overrides the API endpoint (Ollama defaults to `http://localhost:11434/v1`).
 defaults to `low`, escalating to `high` when stderr is piped or redirected
 so harnesses capture the full `[tool/result]` trace).
 
+### How a provider gets picked
+
 Without `--provider`, the agent picks one in this order:
 
 1. **Remembered** - whatever you last selected with `/provider` or `/model`,
@@ -151,6 +155,14 @@ defaults to `low` so turns stay snappy. `--task` and script runs default to
 effort can mean fewer tool calls per task (the model plans better), so it's
 a real tradeoff rather than a pure slowdown. Change it live in the REPL
 with `/effort`; selection persists in `.lp-agent.zon`.
+
+The default depends on how you launched, which is easy to miss:
+ 
+| Context        | Default effort | Why                                  |
+|----------------|----------------|--------------------------------------|
+| REPL           | `low`          | Keeps turns snappy                   |
+| `--task`       | `medium`       | Answer quality matters more          |
+| Script replay  | `medium`       | Same: correctness over latency       |
 
 ## Slash commands
 
@@ -229,7 +241,10 @@ a completely clean browser (no cookies, no current page, no storage).
   stdout. Tool calls, progress, and errors go to stderr. So
   `lightpanda agent --task ... > out.txt` captures a clean answer.
 
-## Example slash-command session
+## Extracting data 
+
+`/extract` takes a JSON schema where each value tells the extractor what to
+lift off the page. The result is printed to stdout as a single JSON object.
 
 ```console
 # Log into the demo and grab the dashboard title and visible cards.
@@ -244,8 +259,6 @@ a completely clean browser (no cookies, no current page, no storage).
 /extract '{"title": ".dashboard h1", "cards": [".dashboard .card .name"]}'
 ```
 
-`/extract` takes a JSON schema where each value tells the extractor what to
-lift off the page. The result is printed to stdout as a single JSON object.
 Supported value forms:
 
 - `"<sel>"`: `textContent.trim()` of the first match.
@@ -254,6 +267,11 @@ Supported value forms:
 - `{"selector": "<sel>", "attr": "<name>"}`: attribute of the first match.
 - `[{"selector": "<sel>", "fields": {…}}]`: array of records, each
   `fields` value resolved relative to the matched element.
+
+A selector that matches nothing yields a null or empty field, not an error.
+That's deliberate, but it means a stale selector fails quietly. If a run
+comes back with blanks where you expected data, suspect the selectors or a
+missing wait before you suspect the page.
 
 The schema is parsed in Zig before the page-side walker runs, so malformed
 schemas are rejected up front with a plain `Error: InvalidParams` rather
