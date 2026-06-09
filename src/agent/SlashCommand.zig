@@ -17,10 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! REPL-only meta slash commands (`/help`, `/quit`, `/verbosity`, `/effort`,
-//! `/usage`, `/model`, `/provider`). Meta commands aren't tool slash commands — they're handled
-//! by `Agent.handleMeta` and never reach the recorder. Tool slash-command
-//! schema primitives live in `lp.Schema`; consumers should import that
-//! directly.
+//! `/usage`, `/model`, `/provider`). Not tool slash commands — handled by
+//! `Agent.handleMeta`, never reaching the recorder. Tool slash-command schema
+//! primitives live in `lp.Schema`; import that directly.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -36,17 +35,17 @@ pub const Help = struct {
 pub const MetaCommand = struct {
     tag: Tag,
     name: [:0]const u8,
-    /// Ghost-text fragment shown after the name + space. Empty when the
-    /// command takes no args (`/help`, `/quit`).
+    /// Ghost-text fragment shown after the name + space. Empty when the command
+    /// takes no args (`/help`, `/quit`).
     hint: []const u8,
     /// Tab-completion candidates for the first positional arg.
     values: []const []const u8,
-    /// Terse one-liner for the `/help` listing; longer detail is rendered
-    /// by `Agent.printSlashHelp` for the per-command lookup.
+    /// Terse one-liner for the `/help` listing; longer per-command detail is
+    /// rendered by `Agent.printSlashHelp`.
     description: []const u8,
 
-    /// Dispatched by `Agent.handleMeta` via an exhaustive switch so adding
-    /// a new meta command is a compile error until it's wired up there too.
+    /// Dispatched by `Agent.handleMeta` via an exhaustive switch, so a new meta
+    /// command is a compile error until it's wired up there too.
     const Tag = enum { help, quit, verbosity, effort, usage, clear, reset, save, load, model, provider };
 };
 
@@ -67,8 +66,8 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .provider, .name = "provider", .hint = "[name|null]", .values = &.{}, .description = "Change the provider, or 'null' to disable the LLM" },
 };
 
-/// Derived from `Command.LlmCommand` — name and description both come from
-/// the enum, so a new trigger there surfaces here automatically.
+/// Derived from `Command.LlmCommand` — name and description both come from the
+/// enum, so a new trigger there surfaces here automatically.
 pub const llm_commands = blk: {
     const values = std.enums.values(Command.LlmCommand);
     var rows: [values.len]Help = undefined;

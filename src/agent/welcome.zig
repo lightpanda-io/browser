@@ -54,9 +54,9 @@ const logo_rows = blk: {
 };
 const welcome_gap = "   ";
 
-/// Banner text. Kept narrow enough that the logo + gap + the widest line fits in
-/// 80 columns (asserted at comptime below), so the banner always shows in full
-/// and never needs to measure the terminal or shed the logo.
+/// Banner text. Kept narrow enough that logo + gap + widest line fits in 80
+/// columns (asserted at comptime below), so the banner always shows in full
+/// without measuring the terminal or shedding the logo.
 const banner_tagline_llm = "Control the browser with natural language";
 const banner_tagline_basic = "Basic REPL (--no-llm) — commands only";
 const banner_setup = "Set an API key, then run /provider <name>";

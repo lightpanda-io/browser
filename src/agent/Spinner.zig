@@ -28,14 +28,14 @@ const Spinner = @This();
 const braille = [_][]const u8{ "⡇", "⣆", "⣤", "⣰", "⢸", "⠹", "⠛", "⠏" };
 const interval_ns: u64 = 100 * std.time.ns_per_ms;
 /// Minimum dwell on a tool label so the user can read it. Slow tools exceed
-/// this naturally; fast ones (getUrl, getCookies) get padded.
+/// it naturally; fast ones (getUrl, getCookies) get padded.
 const min_tool_display_ns: u64 = 1500 * std.time.ns_per_ms;
 const clear_eol = ansi.clear_eol;
 
 const max_args_bytes: usize = 256;
 const frame_buf_bytes: usize = 512;
-/// Visual ceiling on the args slice. Combined with the terminal-width cap so
-/// the spinner line stays single-row even when the script body is huge.
+/// Visual ceiling on the args slice. With the terminal-width cap, keeps the
+/// spinner line single-row even when the script body is huge.
 const max_args_cells: usize = 70;
 /// UTF-8 horizontal ellipsis ("…") — 3 bytes, 1 visual cell.
 const ellipsis = "\xe2\x80\xa6";
@@ -48,11 +48,11 @@ const ToolState = struct {
     args_len: usize = 0,
     /// Wall-clock at which `setTool` last fired; gates dwell-honoring.
     set_ns: i128 = 0,
-    /// Worker should flip back to thinking once dwell elapses. Cleared by a
-    /// fresh `setTool` (which overrides the dwell with a new label).
+    /// Worker should flip back to thinking once dwell elapses. A fresh
+    /// `setTool` clears it, overriding the dwell with a new label.
     dwell_pending: bool = false,
-    /// User-typed REPL commands drop the `agent:` framing since no agent
-    /// is involved — it's lightpanda running the command directly.
+    /// User-typed REPL commands drop the `agent:` framing: no agent is
+    /// involved, it's lightpanda running the command directly.
     manual: bool = false,
 };
 
@@ -125,7 +125,7 @@ fn ensureWorkerLocked(self: *Spinner) void {
 }
 
 /// End an agent turn cleanly: clear the indicator, commit a one-line summary,
-/// reset state. Called from a `defer` in the agent code so it always runs.
+/// reset state. Called from a `defer` in agent code so it always runs.
 pub fn stop(self: *Spinner) void {
     if (!self.isEnabled()) return;
     self.mu.lock();
@@ -160,8 +160,8 @@ pub fn cancel(self: *Spinner) void {
 
 /// Switch the indicator to "running tool <name> <args>". Counts toward the
 /// turn's tool-call total. Args are truncated to `max_args_bytes`. Called
-/// without a preceding `start()` (state `.idle`) the label drops the `agent:`
-/// prefix — that path is for user-typed REPL commands, not LLM tool calls.
+/// without a preceding `start()` (state `.idle`), the label drops the `agent:`
+/// prefix — that path is user-typed REPL commands, not LLM tool calls.
 pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     if (!self.isEnabled()) return;
     self.mu.lock();
@@ -173,24 +173,24 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     tool.name_len = name_prefix.len;
     @memcpy(tool.name_buf[0..name_prefix.len], name_prefix);
     // Strip control chars: a literal `\n` in args (e.g. /evaluate """…""" bodies)
-    // breaks the spinner's `\r`-based redraw — the cursor only rewinds to the
-    // start of the last line, leaving prior frames stuck on screen.
+    // breaks the `\r`-based redraw — `\r` only rewinds to the start of the last
+    // line, leaving prior frames stuck on screen.
     const args_prefix = truncateUtf8(args, tool.args_buf.len);
     tool.args_len = args_prefix.len;
     for (args_prefix, 0..) |ch, i| {
         tool.args_buf[i] = if (ch < 0x20 or ch == 0x7f) ' ' else ch;
     }
     self.state = .{ .tool = tool };
-    // Manual paths skip `start()`, so spawn the worker on demand to drive
-    // the braille animation.
+    // Manual paths skip `start()`, so spawn the worker on demand to drive the
+    // braille animation.
     if (manual) self.ensureWorkerLocked();
     self.renderLocked();
     self.cv.signal();
 }
 
 /// Request a transition back to the cycling "thinking" state. The worker
-/// honors `min_tool_display_ns` — if the current tool label has not been
-/// up long enough, the flip is deferred until it has.
+/// honors `min_tool_display_ns`: if the current tool label has not been up
+/// long enough, the flip is deferred until it has.
 pub fn setThinking(self: *Spinner) void {
     if (!self.isEnabled()) return;
     self.mu.lock();
@@ -230,7 +230,7 @@ fn workerLoop(self: *Spinner) void {
         switch (self.state) {
             .tool => {
                 if (self.state.tool.dwell_pending) {
-                    // Compare signed: a backward clock jump (NTP slew, suspend/resume)
+                    // Signed compare: a backward clock jump (NTP slew, suspend/resume)
                     // can make the delta negative; `@intCast` to u64 would panic.
                     const delta: i128 = std.time.nanoTimestamp() - self.state.tool.set_ns;
                     if (delta >= @as(i128, min_tool_display_ns)) {
@@ -262,15 +262,14 @@ fn renderLocked(self: *Spinner) void {
             const prefix: []const u8 = if (tool.manual) "" else "agent: ";
             const name = tool.name_buf[0..tool.name_len];
             const all_args = tool.args_buf[0..tool.args_len];
-            // "<glyph> [<prefix><name> <args>]" — 5 visible cells of fixed
-            // decoration (glyph, two spaces, `[`, `]`) around prefix+name+args.
-            // `\r` and ANSI escapes are zero-width, so they don't count toward
-            // terminal wrap.
+            // "<glyph> [<prefix><name> <args>]" — 5 fixed decoration cells
+            // (glyph, two spaces, `[`, `]`) around prefix+name+args. `\r` and
+            // ANSI escapes are zero-width, so they don't count toward wrap.
             const decoration_cells: usize = 5 + prefix.len + name.len;
             const cols: usize = Terminal.columns() orelse 80;
-            // Reserve one extra cell so the line is strictly less than `cols` —
-            // terminals with auto-wrap (DECAWM) advance past a row that exactly
-            // fills the width.
+            // Reserve one extra cell so the line is strictly less than `cols`:
+            // auto-wrap (DECAWM) terminals advance past a row that exactly fills
+            // the width.
             const reserved = decoration_cells + ellipsis_cells + 1;
             const room: usize = if (cols > reserved) cols - reserved else 0;
             const cap = @min(max_args_cells, room);
@@ -289,10 +288,9 @@ fn renderLocked(self: *Spinner) void {
     _ = std.posix.write(std.posix.STDERR_FILENO, written) catch {};
 }
 
-/// Returns the byte length of `bytes` that fits in `max_cells` cells,
-/// rounded down to a whole UTF-8 codepoint. Multi-cell glyphs (CJK,
-/// wide emoji) are counted as 1 — args are typically ASCII so the
-/// approximation is good enough.
+/// Returns the byte length of `bytes` that fits in `max_cells` cells, rounded
+/// down to a whole UTF-8 codepoint. Multi-cell glyphs (CJK, wide emoji) count
+/// as 1 — args are typically ASCII, so the approximation is good enough.
 fn truncToCells(bytes: []const u8, max_cells: usize) usize {
     var cells: usize = 0;
     var i: usize = 0;

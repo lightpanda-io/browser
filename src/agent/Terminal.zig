@@ -63,10 +63,10 @@ const Verbosity = Config.AgentVerbosity;
 
 allocator: std.mem.Allocator,
 verbosity: Verbosity,
-/// Non-null in REPL mode. Doubles as scratch arena for the pretty-printer
-/// (reset per `printToolOutcome`, so memory is bounded by the largest
-/// single tool output). REPL forces tool calls/results visible regardless
-/// of verbosity — the dial only gates non-interactive runs.
+/// Non-null in REPL mode. Doubles as pretty-printer scratch arena (reset per
+/// `printToolOutcome`, so memory is bounded by the largest single tool output).
+/// REPL forces tool calls/results visible regardless of verbosity — the dial
+/// only gates non-interactive runs.
 repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 spinner: Spinner,
@@ -140,8 +140,8 @@ pub const HistoryPaths = struct {
 
 pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosity: Verbosity, is_repl: bool) Terminal {
     // Isocline probes the terminal on init (writes ESC[6n cursor-report on
-    // stdout), so skip the whole setup in script-only mode — `ic_readline` is
-    // never reached there anyway.
+    // stdout), so skip setup in script-only mode — `ic_readline` is never
+    // reached there anyway.
     if (is_repl) {
         _ = c.ic_enable_multiline(true);
         _ = c.ic_enable_hint(true);
@@ -168,8 +168,8 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         c.ic_set_prompt_marker("❯ ", "");
         _ = c.ic_enable_highlight(true);
         if (history_paths) |hp| {
-            // Mode is inactive at launch, so load the normal file; modeCallback
-            // swaps to the JS file when JS mode is entered.
+            // Mode inactive at launch, so load the normal file; modeCallback
+            // swaps to JS on mode entry.
             c.ic_set_history(hp.normal.ptr, -1); // -1 → 200-entry default cap
         }
     }
@@ -200,16 +200,16 @@ pub fn beginTool(self: *Terminal, name: []const u8, args: []const u8) void {
     self.spinner.setTool(name, args);
 }
 
-/// Mark the end of a manual REPL tool call. Clears the running spinner; the
-/// caller's `printToolOutcome` lays down the colored status dot.
+/// Mark the end of a manual REPL tool call. Clears the spinner; the caller's
+/// `printToolOutcome` lays down the colored status dot.
 pub fn endTool(self: *Terminal) void {
     self.spinner.cancel();
 }
 
 /// Called after the tool returns. At `medium`+, commits a `● [tool: …]` line
 /// above the spinner (green/red bullet for ok/fail) so the run leaves a trace.
-/// In non-TTY contexts ANSI is still emitted — pipes that strip color see
-/// plain text via the bullet character.
+/// ANSI is emitted even in non-TTY contexts — pipes that strip color see plain
+/// text via the bullet character.
 pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
     if (!self.verbosity.atLeast(.medium)) return;
     const spinner_on = self.spinner.isEnabled();
@@ -256,8 +256,8 @@ fn addPrefixedCompletion(
     _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
 }
 
-// Cap on tokens we read out of the body. Real schemas and CLI inputs have far
-// fewer fields than this; extra tokens are ignored.
+// Cap on tokens read out of the body; extra tokens are ignored. Real schemas
+// and CLI inputs have far fewer fields.
 const max_tokens = 32;
 
 const BodyAnalysis = struct {
@@ -301,9 +301,8 @@ fn analyzeBody(schema: *const Schema, body: []const u8, ends_ws: bool) BodyAnaly
             a.markUsed(tok[0..eq]);
             continue;
         }
-        // Single-required schemas accept the first arg positionally
-        // (`/goto https://example.com`); the schema's only required field
-        // is implicitly bound.
+        // Single-required schemas bind the first arg positionally to their
+        // lone required field (`/goto https://example.com`).
         if (i == 0 and schema.required.len == 1) {
             a.markUsed(schema.required[0]);
             continue;
@@ -502,7 +501,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
             const partial = input[1..];
             // Trailing space on commands with params hands off to the hinter,
             // which renders the full ` <url> [timeout=…]` template uniformly
-            // whether the user typed the name or Tab-completed it.
+            // whether the name was typed or Tab-completed.
             for (all_slash_names) |name| {
                 const suffix: []const u8 = if (slashHasParams(name)) " " else "";
                 addPrefixedCompletion(cenv, &buf, input, "/", name, suffix, partial);
@@ -527,8 +526,8 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
 }
 
 // File-scope so the buffer outlives the callback's stack frame. Isocline's
-// `sbuf_replace` copies the returned string into its own stringbuf, so it's
-// safe to overwrite this on the next invocation. Single-threaded — isocline's
+// `sbuf_replace` copies the returned string into its own stringbuf, so
+// overwriting this on the next invocation is safe. Single-threaded: isocline's
 // edit loop runs on the main thread, and we have one Terminal instance.
 var hint_buf: [completion_buf_len:0]u8 = undefined;
 
@@ -567,8 +566,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
 
 /// Join `fragments` into `hint_buf` with single-space separators, prefixed by
 /// `lead` (typically `""` or `" "`). Null-terminates and returns the isocline
-/// C pointer, or null when there's nothing to render or the buffer would
-/// overflow.
+/// C pointer, or null when nothing to render or the buffer would overflow.
 fn writeHints(lead: []const u8, fragments: []const []const u8) [*c]const u8 {
     if (fragments.len == 0) return null;
     const cap = hint_buf.len - 1;
@@ -653,8 +651,8 @@ fn ghostFirstMatch(names: []const []const u8, body: []const u8, lead: []const u8
 /// `<keyname>=…` when the user is typing a key prefix.
 fn renderSchemaHint(schema: *const Schema, body: []const u8, ends_ws: bool) [*c]const u8 {
     // Ghost a matching enum value once the user is typing one. A bare leading
-    // positional with nothing typed yet keeps the `<state> …` template below,
-    // which is more informative than ghosting one arbitrary value.
+    // positional with nothing typed keeps the `<state> …` template below — more
+    // informative than ghosting one arbitrary value.
     if (valueAt(schema, body, ends_ws)) |v| {
         if (v.field.enum_values.len > 0 and (v.kv or v.partial.len > 0)) {
             return ghostFirstMatch(v.field.enum_values, v.partial, "");
@@ -705,7 +703,7 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?
     var i = cmd_start;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
     const cmd = text[cmd_start..i];
-    // Commit to red once the user has moved past the token, OR as soon as the
+    // Commit to red once the cursor moves past the token, OR as soon as the
     // prefix cannot complete to any known name.
     const closed = i < text.len;
     if (cmd.len > 0 and cmd[0] == '/') {
@@ -723,8 +721,7 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?
         highlightSlashArgs(henv, text, i);
     } else {
         // No leading `/`: a natural-language prompt, so no command validation.
-        // Start at `cmd_start`, not `i` — a `$LP_*` as the first token must
-        // highlight too.
+        // Start at `cmd_start`, not `i`, so a `$LP_*` first token highlights too.
         highlightDollarVars(henv, text, cmd_start);
     }
 }
@@ -831,9 +828,8 @@ fn highlightDollarVarsIn(henv: ?*c.ic_highlight_env_t, text: []const u8, start: 
         if (i > tok_start + 1) {
             c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_var.ptr);
         }
-        // Don't post-step — the inner loop already landed on the char
-        // after the identifier (or end-of-text). Auto-advancing would
-        // skip an adjacent `$LP_*`.
+        // Don't post-step: the inner loop already landed on the char after the
+        // identifier (or end-of-text); auto-advancing would skip an adjacent `$LP_*`.
     }
 }
 
@@ -942,8 +938,8 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
 pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
     // Kitty-keyboard "disambiguate" (Ctrl+Enter as a distinct CSI-u, not bare
     // \r) only while isocline reads: while active, Ctrl-C arrives as a CSI-u
-    // escape, not a raw \x03, so the tty driver raises no SIGINT — leaving it on
-    // during thinking/tool runs would make Ctrl-C unable to interrupt them.
+    // escape rather than raw \x03, so the tty driver raises no SIGINT. Leaving
+    // it on during thinking/tool runs would make Ctrl-C unable to interrupt them.
     _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[>1u") catch {};
     defer _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[<u") catch {};
     // Isocline auto-appends the line to its (optionally-persisted) history.
@@ -983,13 +979,13 @@ fn logSink(bytes: []const u8) void {
 
 /// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
 /// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
-/// (some pseudo-ttys leave the field unset). Cheap enough to call per
-/// render frame — picks up resizes without SIGWINCH plumbing.
+/// (some pseudo-ttys leave the field unset). Cheap enough to call per render
+/// frame; picks up resizes without SIGWINCH plumbing.
 pub fn columns() ?u16 {
     var ws: std.posix.winsize = undefined;
     // bitcast via c_uint: on archs where `_IOR` sets the direction bit
-    // (MIPS/PPC/SPARC), `IOCGWINSZ` exceeds i32 range — a plain @intCast
-    // panics there. The bitcast preserves the bit pattern.
+    // (MIPS/PPC/SPARC), `IOCGWINSZ` exceeds i32 range, so a plain @intCast
+    // panics; the bitcast preserves the bit pattern.
     const req: c_int = @bitCast(@as(c_uint, std.posix.T.IOCGWINSZ));
     const rc = std.c.ioctl(std.posix.STDERR_FILENO, req, &ws);
     if (rc != 0 or ws.col == 0) return null;
@@ -997,7 +993,7 @@ pub fn columns() ?u16 {
 }
 
 /// Erase the frame after an empty submit. The bars collapse on submit, leaving
-/// the spacing and prompt lines with the cursor one line below; move up two and
+/// the spacing and prompt lines with the cursor one line below; move up two,
 /// clear to end of screen.
 pub fn clearPromptFrame(self: *Terminal) void {
     if (!self.isRepl()) return;
@@ -1279,16 +1275,16 @@ pub fn printAssistant(_: *Terminal, text: []const u8) void {
     _ = std.posix.write(fd, "\n") catch {};
 }
 
-// Must exceed the downstream LLM-judge's snapshot window so it has full
-// grounding evidence. Does not cap the agent's own LLM, which gets up to
-// tool_output_max_bytes (1 MiB) via Agent.zig:capToolOutput. Bypassed in
-// REPL where the human can scroll.
+// Must exceed the downstream LLM-judge's snapshot window for full grounding
+// evidence. Does not cap the agent's own LLM, which gets up to
+// tool_output_max_bytes (1 MiB) via Agent.zig:capToolOutput. Bypassed in REPL
+// where the human can scroll.
 const max_result_display_len = 2000;
 
 /// Tool-outcome line shared by REPL slash commands and LLM tool calls.
 /// REPL: green ● on success, red ● on error. Non-REPL prefixes `[result:
-/// name]`; success gates on `medium+`, errors bypass the gate so a
-/// failing script still surfaces *why* at the default verbosity.
+/// name]`; success gates on `medium+`, errors bypass the gate so a failing
+/// script still surfaces *why* at default verbosity.
 pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_error: bool) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
@@ -1331,9 +1327,9 @@ pub fn reindentJson(arena: std.mem.Allocator, text: []const u8) ?[]const u8 {
     return aw.written();
 }
 
-/// REPL outcome line: colored ● marker followed by the body, pretty-printed
-/// if JSON. Builds the entire payload in the arena so callers can route it
-/// past the spinner (`emitAbove`) without interleaving with frame writes.
+/// REPL outcome line: colored ● marker followed by the body, pretty-printed if
+/// JSON. Builds the whole payload in the arena so callers can route it past the
+/// spinner (`emitAbove`) without interleaving with frame writes.
 fn formatReplOutcome(arena: std.mem.Allocator, text: []const u8, is_error: bool) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;

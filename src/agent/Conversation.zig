@@ -16,12 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! The agent's chat history and the arena backing every message's bytes. The
-//! pairing is the point: pruning and rollback re-home the surviving messages
-//! into a fresh arena so dropped turns' bytes are freed in one shot, and the
-//! system prompt at index 0 is the one message kept outside the arena so those
-//! rebuilds never disturb it. `Agent` appends turns and reads `messages` /
-//! `arena` directly; it leaves the lifecycle (seed, prune, rollback) here.
+//! The agent's chat history paired with the arena backing every message's
+//! bytes: prune and rollback re-home the surviving messages into a fresh arena,
+//! freeing dropped turns' bytes in one shot. The system prompt at index 0 lives
+//! outside the arena so those rebuilds never disturb it. `Agent` appends turns
+//! and reads `messages` / `arena` directly; lifecycle (seed, prune, rollback)
+//! lives here.
 
 const std = @import("std");
 const zenai = @import("zenai");

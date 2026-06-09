@@ -110,11 +110,11 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
 pub const remembered_path = ".lp-agent.zon";
 
 /// Last user-selected provider/model/effort/verbosity, persisted per-directory
-/// in `.lp-agent.zon`. `model` is owned by the caller. A null `provider` means
-/// the user disabled the LLM (`/provider null`), so the REPL starts in basic
-/// mode without re-prompting. `effort` and `verbosity` are optional so files
-/// written before they existed still parse; null means "use the mode default"
-/// (see `Agent.resolveEffort` / `Agent.resolveVerbosity`).
+/// in `.lp-agent.zon`. `model` is caller-owned. A null `provider` means the user
+/// disabled the LLM (`/provider null`), so the REPL starts in basic mode without
+/// re-prompting. `effort`/`verbosity` are optional so files predating them still
+/// parse; null means "use the mode default" (see `Agent.resolveEffort` /
+/// `Agent.resolveVerbosity`).
 pub const Remembered = struct {
     provider: ?Config.AiProvider = null,
     model: []const u8,
@@ -185,10 +185,10 @@ pub const ReconciledModel = union(enum) {
 };
 
 /// Validate `desired` against the provider's catalog, mirroring the interactive
-/// `/model` command. An unreachable server (empty list) leaves it unchecked.
-/// An explicit model that isn't listed is fatal. Ollama's local catalog is
-/// authoritative, so its default is substituted when not pulled; cloud defaults
-/// are hardcoded real models and trusted as-is.
+/// `/model` command. Empty list (unreachable server) leaves it unchecked; an
+/// explicit unlisted model is fatal. Ollama's local catalog is authoritative, so
+/// its default is substituted when not pulled; cloud defaults are hardcoded real
+/// models, trusted as-is.
 pub fn reconcileModel(
     allocator: std.mem.Allocator,
     llm: Credentials,

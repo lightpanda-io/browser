@@ -42,9 +42,8 @@ const string = @import("../string.zig");
 
 const Agent = @This();
 
-/// Errors raised by Agent.init / listModels where the function has already
-/// printed a human-readable message to stderr. Callers should exit non-zero
-/// without further logging.
+/// Raised by init/listModels after they've printed a user-facing message to
+/// stderr; callers should exit non-zero without logging more.
 pub const UserError = error{
     MissingApiKey,
     MissingProvider,
@@ -94,14 +93,14 @@ const synthesis_prompt =
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 model_credentials: ?Credentials,
-/// True when the no-LLM state is a persisted preference (a remembered null
-/// provider or a runtime `/provider null`), so `reportSaved` writes
-/// `provider = null`. A transient `--no-llm` run leaves this false so saving
+/// True when the no-LLM state is a persisted preference (remembered null
+/// provider or runtime `/provider null`), so `reportSaved` writes
+/// `provider = null`. A transient `--no-llm` run leaves it false so saving
 /// other settings doesn't clobber the remembered provider.
 no_llm_persisted: bool,
 model_base_url: ?[:0]const u8,
 /// Cached chat-model ids for the current provider, backed by
-/// `model_completion_arena` and invalidated on `/provider` switch.
+/// `model_completion_arena`; invalidated on `/provider` switch.
 model_completions: ?ModelCompletions,
 model_completion_arena: std.heap.ArenaAllocator,
 notification: *lp.Notification,
@@ -125,10 +124,9 @@ cancel_requested: std.atomic.Value(bool) = .init(false),
 /// mid-request instead of blocking until the model's full response arrives.
 http_interrupt: zenai.http.Interrupt = .{},
 synthetic_tool_call_id: u32 = 0,
-/// Aggregate Anthropic/OpenAI/Gemini token usage across every model call
-/// this Agent has made. Printed as a structured `$usage ...` line on stderr
-/// at the end of `--task` (one-shot) mode so wrappers can capture
-/// per-task cost.
+/// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
+/// Printed as a structured `$usage ...` line on stderr at the end of `--task`
+/// (one-shot) mode so wrappers can capture per-task cost.
 total_usage: zenai.provider.Usage = .{},
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
@@ -164,31 +162,30 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const is_one_shot = opts.task != null;
     const will_repl = !is_one_shot and opts.script_file == null;
 
-    // Load the remembered selection up front so a saved null provider can flip
-    // the REPL into basic mode before resolution. Pure script runs need nothing.
+    // Load remembered selection up front so a saved null provider can flip the
+    // REPL into basic mode before resolution. Pure script runs need nothing.
     const remembered: ?settings.Remembered = if (will_repl or is_one_shot) settings.loadRemembered(allocator) else null;
     defer if (remembered) |r| std.zon.parse.free(allocator, r);
 
     // A remembered null provider means the user disabled the LLM via
-    // `/provider null`; honor it for the interactive REPL only (one-shot --task
-    // and script runs always need a model). An explicit --provider overrides it.
+    // `/provider null`; honor it for the REPL only (one-shot --task and script
+    // runs always need a model). An explicit --provider overrides it.
     const remembered_no_llm = will_repl and opts.provider == null and
         remembered != null and remembered.?.provider == null;
 
     // Basic-mode REPL (no LLM) must be opted into via --no-llm or a remembered
-    // null provider. Without it, the REPL accepts natural language and an absent
-    // API key would only surface at the first non-slash-command line — too late
-    // to be useful. Pure JavaScript script runs stay allowed: no REPL, no LLM.
+    // null provider. Without it the REPL accepts natural language, so an absent
+    // API key would only surface at the first non-slash-command line — too late.
+    // Pure JavaScript script runs stay allowed: no REPL, no LLM.
     const requires_llm = is_one_shot or (will_repl and !opts.no_llm and !remembered_no_llm);
 
-    // Skip resolve when no client is wanted — otherwise resolveCredentials
-    // prints "No API key detected" for a run that does not need one.
+    // Skip resolve when no client is wanted — else resolveCredentials prints
+    // "No API key detected" for a run that does not need one.
     const resolve = !opts.no_llm and requires_llm;
 
-    // Print the banner before provider resolution so it appears before any
-    // interactive "Select a provider" prompt.  On error paths (missing key /
-    // no key detected) resolveCredentials prints its own message and the
-    // banner is skipped.
+    // Print the banner before provider resolution so it precedes any
+    // interactive "Select a provider" prompt. On error paths (missing key / no
+    // key detected) resolveCredentials prints its own message; banner skipped.
     if (will_repl and (!resolve or settings.wouldResolve(allocator, opts, remembered))) {
         welcome.print(resolve);
     }
@@ -206,7 +203,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     var model = try allocator.dupe(u8, settings.resolveModelName(opts, resolved, remembered));
     errdefer allocator.free(model);
 
-    // The REPL skips this network round trip to keep startup snappy; an invalid
+    // The REPL skips this network round trip for snappy startup; an invalid
     // model surfaces on the first turn instead.
     if (llm) |l| if (!will_repl) {
         const remembered_matches = remembered != null and remembered.?.provider == l.provider;
@@ -287,8 +284,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             .providers = completionProviders,
             .models = completionModels,
         };
-        // The model-list cache fills lazily on the first `/model` completion so
-        // startup never blocks on the network.
+        // The model-list cache fills lazily on the first `/model` completion,
+        // so startup never blocks on the network.
     }
 
     return self;
@@ -312,13 +309,13 @@ pub fn deinit(self: *Agent) void {
 }
 
 /// Create a fresh browser session and wire its cancel hook back to this agent
-/// so Ctrl-C aborts in-flight page work. Used at startup and by `/reset`.
+/// so Ctrl-C aborts in-flight page work. Startup and `/reset`.
 fn startSession(self: *Agent) !void {
     self.session = try self.browser.newSession(self.notification);
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
 }
 
-// Compile-time constant; project them once per process to avoid rebuilding per call.
+// Compile-time constant; projected once per process to avoid rebuilding per call.
 var global_tools_storage: [browser_tools.tool_defs.len]ProviderTool = undefined;
 var global_tools_once = std.once(initGlobalTools);
 
@@ -333,11 +330,10 @@ fn globalTools() []const ProviderTool {
     return global_tools_storage[0..browser_tools.tool_defs.len];
 }
 
-/// Called from the sighandler thread. Flips `cancel_requested` for the
-/// LLM streaming/HTTP probe and any code polling `Session.isCancelled`,
-/// then asks V8 to bail out of whatever JS is currently running. Both
-/// hooks are thread-safe (`Env.terminate` takes a mutex); no terminal
-/// touches from this context.
+/// Called from the sighandler thread. Flips `cancel_requested` for the LLM
+/// streaming/HTTP probe and any code polling `Session.isCancelled`, then asks
+/// V8 to bail out of whatever JS is running. Both hooks are thread-safe
+/// (`Env.terminate` takes a mutex); no terminal touches from this context.
 pub fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
     self.http_interrupt.fire();
@@ -351,10 +347,10 @@ pub fn requestCancel(self: *Agent) void {
     self.browser.env.terminate();
 }
 
-/// Lives in main's stack so it can be registered with the sighandler
-/// before the agent thread exists. The agent attaches itself once it's
-/// constructed and detaches before deinit, so the sighandler-thread
-/// listener can fire safely whether or not an agent is currently up.
+/// Lives in main's stack so it can be registered with the sighandler before the
+/// agent thread exists. The agent attaches once constructed and detaches before
+/// deinit, so the sighandler-thread listener can fire safely whether or not an
+/// agent is currently up.
 pub const SigBridge = struct {
     agent: std.atomic.Value(?*Agent) = .init(null),
 
@@ -377,10 +373,9 @@ fn checkCancel(ctx: *anyopaque) bool {
     return self.cancel_requested.load(.acquire);
 }
 
-/// Roll the agent back to `baseline` messages, clear the V8 termination
-/// flag, drop the cancel signal, and surface `error.UserCancelled` to the
-/// caller. Caller is responsible for any spinner cleanup that hasn't
-/// already happened on its path.
+/// Roll the agent back to `baseline` messages, clear the V8 termination flag,
+/// drop the cancel signal, and surface `error.UserCancelled`. Caller handles
+/// any spinner cleanup not already done on its path.
 fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
     self.resetAfterCancel(baseline);
     return error.UserCancelled;
@@ -394,9 +389,9 @@ fn resetAfterCancel(self: *Agent, baseline: usize) void {
     self.cancel_requested.store(false, .release);
 }
 
-/// One agent turn: the prompt sent to the model, plus optional context
-/// (a recorder comment to write before the turn, file attachments to bundle
-/// into the first user message, and a display label used in error output).
+/// One agent turn: the prompt sent to the model, plus optional context — a
+/// recorder comment to write before the turn, file attachments to bundle into
+/// the first user message, and a display label used in error output.
 pub const TurnInput = struct {
     prompt: []const u8,
     record_comment: ?[]const u8 = null,
@@ -422,11 +417,11 @@ pub fn run(self: *Agent) bool {
     return true;
 }
 
-/// Print a single-line summary of cumulative token usage to stderr, so
-/// wrappers driving `lightpanda agent --task ...` can capture per-task cost
-/// by `grep`-ing for the `$usage` prefix. Format is stable and key=value:
+/// Print single-line cumulative token usage to stderr, so wrappers driving
+/// `lightpanda agent --task ...` can capture per-task cost by `grep`-ing the
+/// `$usage` prefix. Stable key=value format:
 ///   $usage prompt=N completion=N total=N cached=N cache_creation=N
-/// Fields are emitted with value 0 when the provider didn't report them.
+/// Fields emit 0 when the provider didn't report them.
 fn printUsageSummary(self: *Agent) void {
     const u = self.total_usage;
     std.debug.print(
@@ -477,8 +472,8 @@ fn runRepl(self: *Agent) void {
         const line = Terminal.readLine("") orelse break;
         defer Terminal.freeLine(line);
 
-        // Slash commands and idle Ctrl-C set the cancel flag without
-        // clearing V8's terminate state; drain both before the next turn.
+        // Slash commands and idle Ctrl-C set the cancel flag without clearing
+        // V8's terminate state; drain both before the next turn.
         if (self.cancel_requested.swap(false, .acq_rel)) {
             self.browser.env.cancelTerminate();
         }
@@ -506,8 +501,8 @@ fn runRepl(self: *Agent) void {
                 }});
                 continue :repl;
             };
-            // Surface console output: slash commands (and thus /consoleLogs) are
-            // unreachable in JS mode, so a console must echo logs itself.
+            // Surface console output: slash commands (and thus /consoleLogs)
+            // are unreachable in JS mode, so a console must echo logs itself.
             const logs = std.mem.trimRight(u8, self.session.drainConsoleMessages(), "\n");
             if (logs.len > 0) self.printData(logs);
             if (result.is_error) {
@@ -573,9 +568,8 @@ fn runRepl(self: *Agent) void {
     }
 }
 
-/// Handle a REPL-only meta slash command. These aren't tool slash commands
-/// and never reach the browser tool dispatcher. Returns `true` if the user
-/// asked to quit.
+/// Handle a REPL-only meta slash command — not a tool slash command, never
+/// reaches the browser tool dispatcher. Returns `true` if the user asked to quit.
 fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.MetaCommand, rest: []const u8) bool {
     switch (meta.tag) {
         .quit => return true,
@@ -595,7 +589,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
 
 /// Shared body of `/verbosity` and `/effort`: bare prints the current level; an
 /// argument is parsed against the enum, stored in `target`, and persisted.
-/// `name` drives the slash name, the usage hint, and the report label together.
+/// `name` drives the slash name, usage hint, and report label.
 fn setEnumOption(self: *Agent, comptime name: []const u8, target: anytype, rest: []const u8) void {
     const T = @typeInfo(@TypeOf(target)).pointer.child;
     if (rest.len == 0) {
@@ -610,10 +604,10 @@ fn setEnumOption(self: *Agent, comptime name: []const u8, target: anytype, rest:
     self.reportSaved(name, @tagName(level));
 }
 
-/// Print cumulative token usage for the session, broken down so the cache's
-/// effect is visible — the REPL otherwise never surfaces the `$usage` line that
-/// `--task` prints. Reads `total_usage`, accumulated across every turn by
-/// `processUserMessage`; the fresh/cache split semantics live on `Usage`.
+/// Print cumulative session token usage, broken down so the cache's effect is
+/// visible — the REPL otherwise never surfaces the `$usage` line `--task`
+/// prints. Reads `total_usage` (accumulated per turn by `processUserMessage`);
+/// fresh/cache split semantics live on `Usage`.
 fn handleUsage(self: *Agent) void {
     const u = self.total_usage;
     const input = u.inputTokens();
@@ -631,9 +625,9 @@ fn handleUsage(self: *Agent) void {
     }
 }
 
-/// Drop everything tied to the conversation: history (the system prompt
-/// re-seeds lazily on the next turn), cumulative usage, the recorded action
-/// buffer, and DOM node IDs. Shared by `/clear` and `/reset`.
+/// Drop everything tied to the conversation: history (system prompt re-seeds
+/// lazily next turn), cumulative usage, the recorded action buffer, and DOM
+/// node IDs. Shared by `/clear` and `/reset`.
 fn clearConversation(self: *Agent) void {
     self.conversation.rollback(0);
     self.save_buffer.reset();
@@ -641,8 +635,8 @@ fn clearConversation(self: *Agent) void {
     self.node_registry.reset();
 }
 
-/// Forget the conversation while leaving the browser session live — the loaded
-/// page stays put and cookies/logins are preserved.
+/// Forget the conversation while leaving the browser session live — loaded page
+/// stays put, cookies/logins preserved.
 fn handleClear(self: *Agent) void {
     self.clearConversation();
     self.terminal.printInfo("Cleared conversation, usage, and node IDs. Page and cookies kept.", .{});
@@ -671,8 +665,8 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
 const api_keys_hint = settings.api_keys_hint;
 const llm_setup_hint = "set an API key (" ++ api_keys_hint ++ ") and run /provider <name>";
 
-/// `/provider <keyword>` disables the LLM and persists it; shared by the command
-/// parser, autocomplete, and the save report so they can't drift apart.
+/// `/provider <keyword>` disables the LLM and persists it; shared by command
+/// parser, autocomplete, and save report so they can't drift apart.
 const provider_off_keyword = "null";
 
 fn requireLlm(self: *Agent, name: []const u8) bool {
@@ -692,7 +686,7 @@ fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         return;
     }
     const ids = completionModels(self, self.allocator);
-    // Empty list = fetch failed or unlisted local models; can't confirm, so allow.
+    // Empty list = fetch failed or unlisted local models; can't confirm, allow.
     if (ids.len != 0 and !string.isOneOf(trimmed, ids)) {
         self.terminal.printError("unknown model: {s} (Tab to list)", .{trimmed});
         return;
@@ -702,9 +696,9 @@ fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     };
 }
 
-/// Persist the current provider/model/effort/verbosity to `.lp-agent.zon` and report it
-/// as "<label>: <value>", appending "(saved to …)" when the write succeeds. With no
-/// model credentials it persists `provider = null` only when that's an intentional
+/// Persist provider/model/effort/verbosity to `.lp-agent.zon` and report it as
+/// "<label>: <value>", appending "(saved to …)" on write success. With no model
+/// credentials it persists `provider = null` only when that's an intentional
 /// preference (`no_llm_persisted`); a transient --no-llm run reports without saving.
 fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
     const provider: ?Config.AiProvider = if (self.model_credentials) |c| c.provider else null;
@@ -847,8 +841,8 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     const mode = resolved.mode;
 
     // `path` aliases either an arena-owned string (first save) or
-    // `self.save_path` (subsequent saves to the same destination); only
-    // the former needs to be persisted into agent-owned memory.
+    // `self.save_path` (subsequent saves to the same destination); only the
+    // former needs persisting into agent-owned memory.
     var new_save_path: ?[]u8 = if (self.save_path == null)
         self.allocator.dupe(u8, path) catch |err| {
             self.terminal.printError("failed to remember save destination {s}: {s}", .{ path, @errorName(err) });
@@ -876,8 +870,8 @@ const SaveCommand = struct { filename: ?[]const u8, prompt: ?[]const u8 };
 
 /// Split `/save` arguments into an optional filename and an optional trailing
 /// natural-language prompt. A quoted leading token is always a filename; an
-/// unquoted one is a filename only if it ends in `.js` (otherwise the whole
-/// argument is the prompt, and a name is chosen automatically).
+/// unquoted one is a filename only if it ends in `.js` (else the whole argument
+/// is the prompt, and a name is chosen automatically).
 fn parseSaveCommand(rest: []const u8) !SaveCommand {
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
     if (trimmed.len == 0) return .{ .filename = null, .prompt = null };
@@ -1016,8 +1010,8 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
 
     const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
 
-    // `result.text` lives in the conversation arena, which the rollback below
-    // frees; copy into the command arena first (scrubbing may return its input
+    // `result.text` lives in the conversation arena, freed by the rollback
+    // below; copy into the command arena first (scrubbing may return its input
     // as-is).
     const owned = arena.dupe(u8, stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
     const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
@@ -1064,9 +1058,9 @@ fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]
 }
 
 /// Document the recorded browser tools — the subset callable from a saved
-/// script — with their full descriptions, so the model gets each function's
-/// argument dialect (e.g. `extract`'s schema format) without being handed the
-/// tool schemas a no-tools synthesis turn omits.
+/// script — with full descriptions, so the model gets each function's argument
+/// dialect (e.g. `extract`'s schema format) without the tool schemas a no-tools
+/// synthesis turn omits.
 fn renderBuiltinCatalog(w: *std.Io.Writer) !void {
     for (Schema.all()) |s| {
         if (!s.tool.isRecorded()) continue;
@@ -1187,7 +1181,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
 }
 
 /// Caller contract: `cmd` must be `.tool_call` — `.comment` and `.llm` are
-/// filtered upstream because they have no tool mapping.
+/// filtered upstream, having no tool mapping.
 fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tools.ToolResult {
     const tc = switch (cmd) {
         .tool_call => |t| t,
@@ -1205,9 +1199,9 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
 
 /// Data output (/extract, /evaluate, /markdown, /tree, …) → plain stdout on
 /// success so a caller can pipe it. Everything else routes through
-/// `printToolOutcome`, which lays down the green ● / red ● dot shared
-/// with the LLM tool-call path. Callers only invoke this for `.tool_call`
-/// commands (the comment/login/acceptCookies branches take other paths).
+/// `printToolOutcome`, which lays down the green ● / red ● dot shared with the
+/// LLM tool-call path. Callers only invoke this for `.tool_call` commands (the
+/// comment/login/acceptCookies branches take other paths).
 fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResult) void {
     const tc = switch (cmd) {
         .tool_call => |t| t,
@@ -1227,10 +1221,9 @@ fn printData(self: *Agent, text: []const u8) void {
     self.terminal.printAssistant(Terminal.reindentJson(arena.allocator(), text) orelse text);
 }
 
-/// Tracks whether a `/load`-run script has emitted any `console.*` output,
-/// which decides how `runScript` ends: a script that printed nothing freezes
-/// the spinner into a `/goto`-style bullet; one that printed leaves its
-/// output as the result.
+/// Tracks whether a `/load`-run script emitted any `console.*` output, deciding
+/// how `runScript` ends: one that printed nothing freezes the spinner into a
+/// `/goto`-style bullet; one that printed leaves its output as the result.
 const ScriptOutput = struct {
     terminal: *Terminal,
     emitted: bool = false,
@@ -1285,16 +1278,15 @@ fn runScript(self: *Agent, path: []const u8) bool {
         return false;
     }
 
-    // A script that printed nothing leaves no trace, so freeze the spinner
-    // into a green bullet (like /goto); one that printed already showed its
-    // result.
+    // A script that printed nothing leaves no trace, so freeze the spinner into
+    // a green bullet (like /goto); one that printed already showed its result.
     if (!output.emitted) self.terminal.printScriptDone("script", path);
     return true;
 }
 
-/// Mirror a user-typed slash command into `self.conversation.messages` as if the LLM
-/// had called the tool itself, so the next natural-language turn sees
-/// the same conversation shape either way.
+/// Mirror a user-typed slash command into `self.conversation.messages` as if the
+/// LLM had called the tool itself, so the next natural-language turn sees the
+/// same conversation shape either way.
 fn recordSlashToolCall(
     self: *Agent,
     user_input: []const u8,
@@ -1317,8 +1309,8 @@ fn recordSlashToolCall(
         .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
     };
 
-    // capToolOutput returns its input unchanged under the cap; dupe so
-    // content doesn't alias the caller's per-iteration arena.
+    // capToolOutput returns its input unchanged under the cap; dupe so content
+    // doesn't alias the caller's per-iteration arena.
     const capped = capToolOutput(ma, result.text);
     const content = if (capped.ptr == result.text.ptr) try ma.dupe(u8, capped) else capped;
 
@@ -1348,18 +1340,16 @@ fn recordSlashToolCall(
     });
 }
 
-/// Returned text lives in `conversation.arena`, so it's only valid until the
-/// next prune. The caller is responsible for calling `conversation.prune()`
-/// after consuming the returned text — pruning earlier would free the
-/// arena the slice points into. `null` means the model emitted nothing
+/// Returned text lives in `conversation.arena`, valid only until the next prune.
+/// Caller must call `conversation.prune()` after consuming it — pruning earlier
+/// frees the arena the slice points into. `null` means the model emitted nothing
 /// even after the synthesis turn.
 fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const ma = self.conversation.arena.allocator();
 
     try self.conversation.ensureSystemPrompt();
 
-    // Attachments only ride on the very first user turn (just after the
-    // system prompt).
+    // Attachments only ride on the first user turn (just after the system prompt).
     const turn_attachments: ?[]const []const u8 =
         if (self.conversation.messages.items.len == 1) input.attachments else null;
 
@@ -1396,16 +1386,15 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             .max_tokens = 4096,
             .tool_choice = .auto,
             // Per-turn reasoning budget; resolved from --effort / .lp-agent.zon
-            // / mode default and adjustable at runtime via /effort. Ignored by
+            // / mode default, adjustable at runtime via /effort. Ignored by
             // non-thinking models.
             .effort = self.effort,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
     ) catch |err| {
         self.terminal.spinner.cancel();
-        // Ctrl-C can land while runTools is unwinding an HTTP error —
-        // surface UserCancelled, not ApiError, so the user sees the
-        // outcome they asked for.
+        // Ctrl-C can land while runTools unwinds an HTTP error — surface
+        // UserCancelled, not ApiError, so the user sees the outcome they asked for.
         if (self.cancel_requested.load(.acquire)) return self.drainCancellation(msg_baseline);
         log.err(.app, "AI API error", .{ .err = err });
         self.conversation.rollback(msg_baseline);
@@ -1419,7 +1408,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
 
     if (input.capture_for_save) {
         // When the LLM tries multiple `extract` schemas in one turn, only the
-        // last successful one is the answer — earlier probes are noise.
+        // last successful one is the answer; earlier probes are noise.
         var last_extract_idx: ?usize = null;
         for (result.tool_calls_made, 0..) |tc, i| {
             const t = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
@@ -1444,7 +1433,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         }
     }
 
-    // Dupe into the conversation arena — RunToolsResult arenas are deinited below.
+    // Dupe into the conversation arena — RunToolsResult arenas deinit below.
     self.last_turn_refused = result.finish_reason == .safety;
     const final_text: ?[]const u8 = blk: {
         if (result.text) |text| {
@@ -1493,17 +1482,17 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         break :blk if (synth.text) |text| try ma.dupe(u8, text) else null;
     };
 
-    // NB: pruning is deferred to the caller. `final_text` is allocated in the
-    // conversation arena, and `conversation.prune()` may rebuild that arena —
-    // running it here would hand the caller a dangling slice.
+    // NB: pruning is deferred to the caller. `final_text` is in the conversation
+    // arena, and `conversation.prune()` may rebuild that arena — running it here
+    // would hand the caller a dangling slice.
     return final_text;
 }
 
-/// Build a `parts`-based user message when `--attach` was given.
-/// Text-ish files are inlined into the text prefix (surrounded by clear
-/// markers); binary files (image/audio/pdf) are base64-encoded and sent as
-/// provider inline-data parts. Unknown extensions error out so the caller
-/// fails loudly instead of silently dropping the attachment.
+/// Build a `parts`-based user message when `--attach` was given. Text-ish files
+/// are inlined into the text prefix (surrounded by clear markers); binary files
+/// (image/audio/pdf) are base64-encoded as provider inline-data parts. Unknown
+/// extensions error out so the caller fails loudly instead of silently dropping
+/// the attachment.
 fn buildUserMessageParts(
     self: *Agent,
     ma: std.mem.Allocator,
@@ -1553,8 +1542,8 @@ fn buildUserMessageParts(
     return parts.toOwnedSlice(ma);
 }
 
-// Cap per-call tool output so heavy pages don't balloon the message arena
-// (and the next request body) without bound.
+// Cap per-call tool output so heavy pages don't balloon the message arena (and
+// the next request body) without bound.
 const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
@@ -1567,8 +1556,8 @@ fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
-    // The spinner doesn't render args, and `agentToolDone` skips the body
-    // line at low verbosity — don't pay for the stringify when nobody reads it.
+    // The spinner doesn't render args, and `agentToolDone` skips the body line
+    // at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
     // Stringify the pre-substitution args so $LP_* placeholders the model
     // emitted stay redacted in the UI.
@@ -1589,8 +1578,8 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     return outcome;
 }
 
-/// One-shot for `--list-models`: resolve provider+key, fetch chat-capable
-/// model IDs, print to stdout (one per line).
+/// One-shot for `--list-models`: resolve provider+key, fetch chat-capable model
+/// IDs, print to stdout one per line.
 pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     if (opts.no_llm) {
         log.fatal(.app, "list-models needs LLM", .{
@@ -1620,12 +1609,12 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
 const ModelCompletions = struct {
     provider: Config.AiProvider,
     /// Empty when the fetch failed — cached so the per-keystroke hinter doesn't
-    /// re-hit the network on every press.
+    /// re-hit the network each press.
     ids: []const []const u8,
 };
 
-/// `CompletionSource.providers`. Reuses pre-detected available providers to avoid
-/// reading environment variables on every autocomplete keypress.
+/// `CompletionSource.providers`. Reuses pre-detected available providers to
+/// avoid reading environment variables on each autocomplete keypress.
 fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []const u8 {
     const self: *Agent = @ptrCast(@alignCast(context));
     const names = arena.alloc([]const u8, self.available_providers.len + 1) catch return &.{};
@@ -1637,7 +1626,7 @@ fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []
 }
 
 /// `CompletionSource.models`. Blocks on a one-time fetch per provider, caching
-/// success or empty so the per-keystroke hinter pays the round-trip only once.
+/// success or empty so the per-keystroke hinter pays the round-trip once.
 fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u8 {
     const self: *Agent = @ptrCast(@alignCast(context));
     const llm = self.model_credentials orelse return &.{};
