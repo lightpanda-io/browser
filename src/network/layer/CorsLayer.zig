@@ -126,6 +126,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     new_req.method = .OPTIONS;
     new_req.resource_type = .preflight;
     new_req.start_callback = null;
+    new_req.data_callback = HttpClient.Noop.dataCallback;
     new_req.shutdown_callback = null;
     {
         // once request is sent, client owns the headers,
@@ -186,8 +187,9 @@ pub const CorsContext = struct {
             corstext.layer.next.request(held) catch |e| {
                 held.abort(e);
             };
+        } else {
+            return corstext.forward.forwardDone();
         }
-        return corstext.forward.forwardDone();
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -195,13 +197,14 @@ pub const CorsContext = struct {
         if (corstext.held) |held| {
             corstext.held = null;
             held.abort(err);
+        } else {
+            corstext.forward.forwardErr(err);
         }
-        return corstext.forward.forwardErr(err);
     }
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const cors_ctx: *CorsContext = @ptrCast(@alignCast(ctx));
-        return cors_ctx.forward.forwardShutdown();
+        cors_ctx.forward.forwardShutdown();
     }
 
     fn startCallback(response: Response) anyerror!void {

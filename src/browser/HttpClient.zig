@@ -2159,13 +2159,13 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     };
 }
 
-const Noop = struct {
-    fn headerCallback(_: Response) !bool {
+pub const Noop = struct {
+    pub fn headerCallback(_: Response) !bool {
         return true;
     }
-    fn dataCallback(_: Response, _: []const u8) !void {}
-    fn doneCallback(_: *anyopaque) !void {}
-    fn errorCallback(_: *anyopaque, _: anyerror) void {}
+    pub fn dataCallback(_: Response, _: []const u8) !void {}
+    pub fn doneCallback(_: *anyopaque) !void {}
+    pub fn errorCallback(_: *anyopaque, _: anyerror) void {}
 };
 
 // An opaque-from-the-outside handle that Frame / WorkerGlobalScope embed
