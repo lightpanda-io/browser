@@ -545,6 +545,8 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
     // Inside an open `'''…'''` body the buffer is script text, not kv args.
     if (Schema.hasUnclosedTripleQuote(input)) return null;
 
+    if (std.mem.eql(u8, input, "/")) return ghostFirstMatch(&all_slash_names, "", "");
+
     if (Schema.parseSlashCommand(input)) |parts| {
         const ends_ws = input[input.len - 1] == ' ';
         if (Schema.findByName(parts.name)) |schema| {
