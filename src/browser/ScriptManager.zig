@@ -46,23 +46,39 @@ frame: *Frame,
 // "load" event).
 frame_notified_of_completion: bool,
 
+// scripts loaded based on a <link rel=preload as=script href=...> found during parsing
+preloaded_scripts: std.StringHashMapUnmanaged(PreloadedScript),
+
 pub fn init(allocator: Allocator, http_client: *HttpClient, frame: *Frame) ScriptManager {
     var base = ScriptManagerBase.init(allocator, http_client, .{ .frame = frame });
     base.tail_hook = tailHook;
     return .{
-        .frame = frame,
         .base = base,
+        .frame = frame,
+        .preloaded_scripts = .empty,
         .frame_notified_of_completion = false,
     };
 }
 
 pub fn deinit(self: *ScriptManager) void {
+    self.freePreloads();
     self.base.deinit();
+    self.preloaded_scripts.deinit(self.base.allocator);
 }
 
 pub fn reset(self: *ScriptManager) void {
+    self.freePreloads();
+    self.preloaded_scripts.clearRetainingCapacity();
     self.base.reset();
     self.frame_notified_of_completion = false;
+}
+
+// Frees every preloaded Script
+fn freePreloads(self: *ScriptManager) void {
+    var it = self.preloaded_scripts.valueIterator();
+    while (it.next()) |preload_script| {
+        preload_script.deinit();
+    }
 }
 
 // Frame wrapper uses this to fire documentIsLoaded and scriptsCompletedLoading
@@ -84,6 +100,81 @@ pub fn tailHook(base: *ScriptManagerBase) void {
 
 fn getHeaders(self: *ScriptManager) !HttpClient.Headers {
     return self.base.getHeaders();
+}
+
+pub fn preloadScript(self: *ScriptManager, url: []const u8) !void {
+    if (self.preloaded_scripts.contains(url)) {
+        return;
+    }
+
+    const frame = self.frame;
+    const arena = try frame.getArena(.large, "SM.preloadScript");
+    errdefer frame.releaseArena(arena);
+
+    const owned_url = try arena.dupeZ(u8, url);
+
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = owned_url,
+        .node = .{},
+        .manager = &self.base,
+        .complete = false,
+        .source = .{ .remote = .{} },
+        .extra = .preload,
+    };
+
+    try self.preloaded_scripts.putNoClobber(self.base.allocator, owned_url, .{ .state = .{ .loading = script } });
+    errdefer _ = self.preloaded_scripts.remove(owned_url);
+
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "script queue", .{ .url = owned_url, .ctx = "preload" });
+    }
+
+    try frame.makeRequest(.{
+        .ctx = script,
+        .url = owned_url,
+        .method = .GET,
+        .frame_id = frame._frame_id,
+        .loader_id = frame._loader_id,
+        .headers = try self.base.getHeaders(),
+        .cookie_jar = &frame._session.cookie_jar,
+        .cookie_origin = frame.url,
+        .resource_type = .script,
+        .notification = frame._session.notification,
+        .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
+        .header_callback = Script.headerCallback,
+        .data_callback = Script.dataCallback,
+        .done_callback = PreloadedScript.doneCallback,
+        .error_callback = PreloadedScript.errorCallback,
+    });
+}
+
+fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
+    if (self.preloaded_scripts.getPtr(url) == null) {
+        return null;
+    }
+
+    const was_evaluating = self.base.is_evaluating;
+    self.base.is_evaluating = true;
+    defer self.base.is_evaluating = was_evaluating;
+
+    var client = self.base.client;
+    while (true) {
+        const entry = self.preloaded_scripts.getPtr(url) orelse return null;
+        switch (entry.state) {
+            .loading => {
+                _ = client.tick(200, .sync_wait) catch return null;
+                continue;
+            },
+            .done => |script| {
+                // Preload scripts are single-use. We return it and it becomes
+                // the caller's responsibility to free.
+                _ = self.preloaded_scripts.remove(url);
+                return script;
+            },
+        }
+    }
 }
 
 pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_element: *Element.Html.Script, comptime ctx: []const u8) !void {
@@ -131,6 +222,13 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
     var handover = false;
     const frame = self.frame;
+
+    // A consumed preload (waitForPreload below) is owned by us: its buffer is
+    // borrowed by `script`, so it must outlive eval.
+    var consumed_preload: ?*Script = null;
+    defer if (consumed_preload) |p| {
+        p.deinit();
+    };
 
     const arena = try frame.getArena(.large, "SM.addFromElement");
     errdefer if (!handover) {
@@ -237,24 +335,30 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         self.base.is_evaluating = true;
         defer self.base.is_evaluating = was_evaluating;
 
-        const headers = try self.getHeaders();
-
         if (is_blocking) {
-            const response = try self.base.client.syncRequest(arena, .{
-                .url = url,
-                .method = .GET,
-                .frame_id = frame._frame_id,
-                .loader_id = frame._loader_id,
-                .headers = headers,
-                .cookie_jar = &frame._session.cookie_jar,
-                .cookie_origin = frame.url,
-                .resource_type = .script,
-                .notification = frame._session.notification,
-            });
+            if (self.waitForPreload(url)) |pre| {
+                // There was a preloaded script, we borrow it's source and status
+                consumed_preload = pre;
+                script.source = pre.source;
+                script.status = pre.status;
+                script.complete = true;
+            } else {
+                const response = try self.base.client.syncRequest(arena, .{
+                    .url = url,
+                    .method = .GET,
+                    .frame_id = frame._frame_id,
+                    .loader_id = frame._loader_id,
+                    .headers = try self.getHeaders(),
+                    .cookie_jar = &frame._session.cookie_jar,
+                    .cookie_origin = frame.url,
+                    .resource_type = .script,
+                    .notification = frame._session.notification,
+                });
 
-            script.source = .{ .remote = response.body };
-            script.status = response.status;
-            script.complete = true;
+                script.source = .{ .remote = response.body };
+                script.status = response.status;
+                script.complete = true;
+            }
         } else {
             errdefer {
                 self.base.scriptList(script).remove(&script.node);
@@ -267,7 +371,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 .method = .GET,
                 .frame_id = frame._frame_id,
                 .loader_id = frame._loader_id,
-                .headers = headers,
+                .headers = try self.getHeaders(),
                 .cookie_jar = &frame._session.cookie_jar,
                 .cookie_origin = frame.url,
                 .resource_type = .script,
@@ -311,3 +415,42 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 pub fn staticScriptsDone(self: *ScriptManager) void {
     self.base.staticScriptsDone();
 }
+
+const PreloadedScript = struct {
+    state: State,
+
+    const State = union(enum) {
+        loading: *Script,
+        done: *Script,
+    };
+
+    pub fn deinit(self: PreloadedScript) void {
+        switch (self.state) {
+            inline else => |script| script.deinit(),
+        }
+    }
+
+    fn doneCallback(ctx: *anyopaque) !void {
+        const script: *Script = @ptrCast(@alignCast(ctx));
+        script.complete = true;
+        if (comptime IS_DEBUG) {
+            log.debug(.http, "script fetch complete", .{ .req = script.url });
+        }
+
+        const self: *ScriptManager = @fieldParentPtr("base", script.manager);
+        self.preloaded_scripts.getPtr(script.url).?.state = .{ .done = script };
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const script: *Script = @ptrCast(@alignCast(ctx));
+        if (script.status == 404) {
+            log.info(.http, "script 404", .{ .req = script.url, .extra = "preload" });
+        } else {
+            log.warn(.http, "script fetch error", .{ .err = err, .req = script.url, .extra = "preload", .status = script.status });
+        }
+
+        const self: *ScriptManager = @fieldParentPtr("base", script.manager);
+        _ = self.preloaded_scripts.remove(script.url);
+        script.deinit();
+    }
+};

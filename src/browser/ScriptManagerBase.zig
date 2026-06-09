@@ -193,6 +193,7 @@ fn releaseArena(self: *ScriptManagerBase, arena: Allocator) void {
 pub fn scriptList(self: *ScriptManagerBase, script: *const Script) *std.DoublyLinkedList {
     return switch (script.extra) {
         .import, .import_async => &self.async_scripts,
+        .preload => unreachable, // done/error are handled directly, never via scriptList
         .frame => |fe| switch (fe.mode) {
             .normal => unreachable, // not added to a list, executed immediately
             .@"defer" => &self.defer_scripts,
@@ -433,6 +434,7 @@ pub fn evaluate(self: *ScriptManagerBase) void {
                 }
             },
             .import => unreachable, // .import doesn't go through ready_scripts
+            .preload => unreachable, // .preload is buffered in the map, never queued
         }
     }
 
@@ -505,6 +507,8 @@ pub const Script = struct {
         import,
         // Dynamic JS import() — resolved via ready_scripts callback.
         import_async: ImportAsync,
+        // <link rel=preload as=script href=...>
+        preload,
         // <script> tag in a frame.
         frame: FrameExtra,
 
@@ -646,6 +650,7 @@ pub const Script = struct {
                 entry.state = .{ .done = self };
                 entry.buffer = self.source.remote;
             },
+            .preload => unreachable, // preloads use ScriptManager.PreloadedScript.doneCallback
         }
         manager.evaluate();
     }
@@ -688,6 +693,7 @@ pub const Script = struct {
                 entry.state = .err;
             },
             .frame => self.executeCallback(comptime .wrap("error")),
+            .preload => unreachable, // preloads use ScriptManager.PreloadedScript.errorCallback
         }
         self.deinit();
         manager.evaluate();
