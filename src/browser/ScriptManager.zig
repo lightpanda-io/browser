@@ -61,19 +61,20 @@ pub fn init(allocator: Allocator, http_client: *HttpClient, frame: *Frame) Scrip
 }
 
 pub fn deinit(self: *ScriptManager) void {
-    self.freeDonePreloads();
+    self.freePreloads();
     self.base.deinit();
     self.preloaded_scripts.deinit(self.base.allocator);
 }
 
 pub fn reset(self: *ScriptManager) void {
-    self.freeDonePreloads();
+    self.freePreloads();
     self.preloaded_scripts.clearRetainingCapacity();
     self.base.reset();
     self.frame_notified_of_completion = false;
 }
 
-fn freeDonePreloads(self: *ScriptManager) void {
+// Frees every preloaded Script
+fn freePreloads(self: *ScriptManager) void {
     var it = self.preloaded_scripts.valueIterator();
     while (it.next()) |preload_script| {
         preload_script.deinit();
@@ -107,7 +108,7 @@ pub fn preloadScript(self: *ScriptManager, url: []const u8) !void {
     }
 
     const frame = self.frame;
-    const arena = try frame.getArena(.medium, "SM.preloadScript");
+    const arena = try frame.getArena(.large, "SM.preloadScript");
     errdefer frame.releaseArena(arena);
 
     const owned_url = try arena.dupeZ(u8, url);
@@ -123,24 +124,14 @@ pub fn preloadScript(self: *ScriptManager, url: []const u8) !void {
         .extra = .preload,
     };
 
-    try self.preloaded_scripts.putNoClobber(self.base.allocator, owned_url, .{});
+    try self.preloaded_scripts.putNoClobber(self.base.allocator, owned_url, .{ .state = .{ .loading = script } });
     errdefer _ = self.preloaded_scripts.remove(owned_url);
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "script queue", .{ .url = owned_url, .ctx = "preload" });
     }
 
-    // Tracked in async_scripts only while in flight so shutdown/reset can free a
-    // never-consumed preload; preloadDoneCallback moves ownership to the map.
-    self.base.async_scripts.append(&script.node);
-
-    // Guard against a synchronous completion re-entering evaluate() mid-parse,
-    // the same reason getAsyncImport does.
-    const was_evaluating = self.base.is_evaluating;
-    self.base.is_evaluating = true;
-    defer self.base.is_evaluating = was_evaluating;
-
-    frame.makeRequest(.{
+    try frame.makeRequest(.{
         .ctx = script,
         .url = owned_url,
         .method = .GET,
@@ -156,10 +147,7 @@ pub fn preloadScript(self: *ScriptManager, url: []const u8) !void {
         .data_callback = Script.dataCallback,
         .done_callback = PreloadedScript.doneCallback,
         .error_callback = PreloadedScript.errorCallback,
-    }) catch |err| {
-        self.base.async_scripts.remove(&script.node);
-        return err;
-    };
+    });
 }
 
 fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
@@ -185,7 +173,6 @@ fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
                 _ = self.preloaded_scripts.remove(url);
                 return script;
             },
-            .err => return null,
         }
     }
 }
@@ -430,18 +417,16 @@ pub fn staticScriptsDone(self: *ScriptManager) void {
 }
 
 const PreloadedScript = struct {
-    state: State = .loading,
+    state: State,
 
     const State = union(enum) {
-        err,
-        loading,
+        loading: *Script,
         done: *Script,
     };
 
     pub fn deinit(self: PreloadedScript) void {
         switch (self.state) {
-            .done => |script| script.deinit(),
-            else => {},
+            inline else => |script| script.deinit(),
         }
     }
 
@@ -453,12 +438,7 @@ const PreloadedScript = struct {
         }
 
         const self: *ScriptManager = @fieldParentPtr("base", script.manager);
-        // Hand ownership to the map; the blocking path adopts the body via
-        // waitForPreload, and reset() frees the .done entry.
-        self.base.async_scripts.remove(&script.node);
         self.preloaded_scripts.getPtr(script.url).?.state = .{ .done = script };
-
-        self.base.evaluate();
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -470,12 +450,7 @@ const PreloadedScript = struct {
         }
 
         const self: *ScriptManager = @fieldParentPtr("base", script.manager);
-        self.base.async_scripts.remove(&script.node);
         _ = self.preloaded_scripts.remove(script.url);
         script.deinit();
-
-        if (self.base.shutdown == false) {
-            self.base.evaluate();
-        }
     }
 };

@@ -650,7 +650,7 @@ pub const Script = struct {
                 entry.state = .{ .done = self };
                 entry.buffer = self.source.remote;
             },
-            .preload => unreachable, // preloads use ScriptManager.preloadDoneCallback
+            .preload => unreachable, // preloads use ScriptManager.PreloadedScript.doneCallback
         }
         manager.evaluate();
     }
@@ -693,7 +693,7 @@ pub const Script = struct {
                 entry.state = .err;
             },
             .frame => self.executeCallback(comptime .wrap("error")),
-            .preload => unreachable, // preloads use ScriptManager.preloadErrorCallback
+            .preload => unreachable, // preloads use ScriptManager.PreloadedScript.errorCallback
         }
         self.deinit();
         manager.evaluate();
