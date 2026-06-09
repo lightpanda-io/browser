@@ -206,6 +206,10 @@ These don't drive the browser, they control the REPL itself:
 
 Meta commands are never recorded.
 
+Use `/clear` when you want to test a new prompt against the current
+page without losing your login or cookies. Use `/reset` when you need
+a completely clean browser (no cookies, no current page, no storage).
+
 ## REPL features
 
 - **Status bar.** A line under the prompt shows the active model and quick
@@ -245,13 +249,12 @@ Meta commands are never recorded.
 lift off the page. The result is printed to stdout as a single JSON object.
 Supported value forms:
 
-- `"<sel>"` — `textContent.trim()` of the first match.
-- `""` — the matched element's own text (only inside a `fields` block).
-- `["<sel>"]` — text of every match. Sugar for `[{"selector": "<sel>"}]`.
-- `{"selector": "<sel>", "attr": "<name>"}` — attribute of the first match.
-- `[{"selector": "<sel>", "fields": {…}}]` — array of records, each
+- `"<sel>"`: `textContent.trim()` of the first match.
+- `""`: the matched element's own text (only inside a `fields` block).
+- `["<sel>"]`: text of every match. Sugar for `[{"selector": "<sel>"}]`.
+- `{"selector": "<sel>", "attr": "<name>"}`: attribute of the first match.
+- `[{"selector": "<sel>", "fields": {…}}]`: array of records, each
   `fields` value resolved relative to the matched element.
-- Add `"limit": N` inside any array's object spec to cap matches.
 
 The schema is parsed in Zig before the page-side walker runs, so malformed
 schemas are rejected up front with a plain `Error: InvalidParams` rather
@@ -310,13 +313,10 @@ click({ selector: "a.login" });
 evaluate("document.title");
 ```
 
-The script runs in an agent-only V8 context. No `window`, no `document`, no
-DOM APIs at the top level — browser interaction happens through the
-primitives only. The primitives are **synchronous and blocking**, each
-returns its result directly, so write `const data = extract(…)`, not
-`await extract(…)`. There's no Promise contract around them.
-(`evaluate(...)` can run async JS inside the page, but the `evaluate(...)`
-call itself still returns synchronously.)
+The primitives are **synchronous and blocking**: each returns its
+result directly, so write `const data = extract(…)`, not
+`await extract(…)`. (`evaluate(...)` can run async JS inside the page,
+but the `evaluate(...)` call itself still returns synchronously.)
 
 It's not Node.js. There's no `require`, `process`, `fs`, npm package
 loading, or Node standard library. The `evaluate(...)` primitive runs its
