@@ -1,149 +1,232 @@
 # Agent mode
 
-`lightpanda agent` turns Lightpanda's headless engine into a browsing agent you
-can talk to in plain English, script deterministically, or drive from your own
-LLM. There's no rendering and no images — it reasons over pages as text, which
-makes browsing fast and cheap to automate.
+`lightpanda agent` lets you drive a headless browser by talking to it.
 
-**New here?** The [tutorial](agent-tutorial.md) walks you from a fresh build to a
-recorded, replayable Hacker News scraper in a few minutes. This page is the
-reference: every flag, slash command, and browser tool. For the JavaScript
-script format, see [agent-script.md](agent-script.md).
+You tell it where to go and what to extract, in plain English or with slash
+commands, and it controls a real browser to do the work. Think of it as a
+robot you're directing to use the web, not a chatbot you're having a
+conversation with.
 
-`lightpanda agent` can act as:
+Every session starts by navigating to a page, either by
+saying so ("go to news.ycombinator.com") or by typing `/goto <url>`. There's
+no window to look at; the browser runs headlessly and you see its output
+(extracted data, the agent's answer) in your terminal.
 
-- an **LLM agent** that drives the browser with tool calls (`--provider`),
-- a **scripted runner** that runs a recorded `.js` script deterministically,
-- a **basic REPL** for hand-driven slash commands with no LLM at all,
-- a **one-shot task runner** that prints a single answer to stdout (`--task`).
+**New here?** The [tutorial](agent-tutorial.md) walks you from a fresh build
+to a recorded, replayable Hacker News script in a few minutes. For the JavaScript script format, see
+[agent-script.md](agent-script.md).
 
-All four modes share the same browser tools (`goto`, `click`, `fill`, `tree`,
-`markdown`, `search`, ...). The same set is exposed over MCP via `lightpanda
-mcp`, so an agent script and an MCP client see the same surface — that is
-also the way to drive Lightpanda from an external LLM agent (Claude Code,
-etc.) without giving Lightpanda its own API key.
+## How to think about it
+
+The agent stacks three layers:
+
+1. **The browser.** Loads pages, runs JavaScript, tracks cookies, follows
+   redirects. The same engine that powers `lightpanda serve` and
+   `lightpanda fetch`.
+2. **A set of tools.** Things the browser knows how to do: `goto`, `click`,
+   `fill`, `extract`, `evaluate`, `search`, and more. Each is available as a
+   slash command (`/goto`, `/click`, ...).
+3. **An LLM.** Reads your plain-English request and decides which tools to
+   call. Optional. The agent can also run without it.
+
+You can talk to any of the three layers. Type `/goto example.com` and you
+call the browser tool directly. Type "find me the cheapest flight from NYC
+to Tokyo" and the LLM picks the tools to use. Save what worked to a `.js`
+file and you can replay the whole flow later without ever calling the LLM
+again.
 
 ## Quick start
 
-```console
-# Interactive REPL — auto-detects an API key from your environment
-./lightpanda agent
+Set an API key for your preferred provider:
 
-# Force a specific provider
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+(Or `OPENAI_API_KEY` / `GOOGLE_API_KEY`. Without a key the agent runs in a
+slash-commands-only mode without natural language.)
+
+Launch the REPL:
+
+```bash
+./lightpanda agent
+```
+
+Tell it what you want:
+
+```
+❯ go to news.ycombinator.com and get me the top story title and points
+```
+
+The agent navigates, extracts, prints the answer. When you're happy with
+the result, save it:
+
+```
+❯ /save hn-top-story.js
+❯ /quit
+```
+
+You now have a `.js` file that does the same job deterministically:
+
+```bash
+./lightpanda agent hn-top-story.js
+```
+
+No LLM call, no API key needed at replay time, sub-second to run.
+
+### Other ways to launch
+
+```bash
+# Force a specific provider, ignoring auto-detection
 ./lightpanda agent --provider anthropic
 
-# Basic REPL (no LLM, slash commands only)
+# Slash-commands-only REPL, no LLM at all
 ./lightpanda agent --no-llm
 
-# Run a saved script, then exit
-./lightpanda agent session.js
-
-# One-shot: ask a question, capture the answer on stdout
+# One-shot: ask a question, print the answer to stdout, exit
 ./lightpanda agent --task "what is on the front page of hn?"
-
-# See which models the resolved provider offers
-./lightpanda agent --list-models
 ```
+
+## Tips for getting useful saved scripts
+
+- **Ask for the data you want, not the conversation about it.** "Get me the
+  top 5 HN story titles and points, print them to stdout" beats "show me
+  what's on Hacker News today." The synthesizer captures the data you asked
+  for as an `extract()` call; vague prompts produce vague recordings.
+- **Be specific about the page.** "Go to news.ycombinator.com" is much
+  better than "find me what's on Hacker News".
+- **Check the file with `cat your-script.js` before running it.** If the
+  extracted data isn't in the script, the recording missed something. Try
+  rewording your prompt.
+- **When the page changes and a saved script breaks**, re-run with the LLM,
+  get an updated answer, save again. You only pay the LLM when something
+  genuinely changed.
 
 ## Providers and API keys
 
-| Provider    | Flag                   | API key env                          |
-|-------------|------------------------|--------------------------------------|
-| Anthropic   | `--provider anthropic` | `ANTHROPIC_API_KEY`                  |
-| OpenAI      | `--provider openai`    | `OPENAI_API_KEY`                     |
-| Gemini      | `--provider gemini`    | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
-| Ollama      | `--provider ollama`    | none (local)                         |
+The agent needs an LLM to interpret natural language. Set the relevant API
+key as an environment variable, or pass `--provider` explicitly.
 
-Defaults: `--model` falls back to a sensible per-provider default; in the REPL,
-`/provider <name>` and `/model <name>` change the current selection (Tab
-completes the candidates). `--base-url` overrides the API endpoint (Ollama
-defaults to `http://localhost:11434/v1`). Run `--list-models` to see exactly
-what the resolved provider offers, `--system-prompt` to swap in your own
-system prompt, and `--verbosity <low|medium|high>` to tune how much progress
-detail goes to stderr (`--task` defaults to `low`, or `high` when stderr is
-piped/redirected so harnesses capture the full `[tool/result]` trace).
+| Provider  | Flag                   | API key env                          |
+|-----------|------------------------|--------------------------------------|
+| Anthropic | `--provider anthropic` | `ANTHROPIC_API_KEY`                  |
+| OpenAI    | `--provider openai`    | `OPENAI_API_KEY`                     |
+| Gemini    | `--provider gemini`    | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
+| Ollama    | `--provider ollama`    | none (local)                         |
 
-`--effort <none|minimal|low|medium|high|xhigh>` sets the per-turn reasoning
-budget for thinking models (it maps to each provider's native thinking /
-reasoning-effort knob and is ignored by non-thinking models). The interactive
-REPL defaults to `low` so turns stay snappy; `--task` and script runs default
-to `medium`, where answer quality matters more than per-turn latency. Higher
-effort can reduce the number of tool calls by planning better, so it's a real
-tradeoff rather than a pure slowdown. Change it live with `/effort`; the
-selection is remembered in `.lp-agent.zon`.
+`--model` falls back to a sensible per-provider default. `--base-url`
+overrides the API endpoint (Ollama defaults to `http://localhost:11434/v1`).
+`--list-models` prints what the resolved provider offers and exits.
+`--system-prompt` swaps in your own system prompt. `--verbosity
+<low|medium|high>` tunes how much progress detail goes to stderr (`--task`
+defaults to `low`, escalating to `high` when stderr is piped or redirected
+so harnesses capture the full `[tool/result]` trace).
 
-`--model` is validated against the provider's catalog up front: an unknown name
-fails fast with a pointer to `--list-models` rather than erroring mid-task. For
-Ollama, the default model is checked against what's actually pulled — if it's
-missing, the agent falls back to the first installed model (an explicit
-`--model` that isn't installed errors instead, with an `ollama pull` hint).
+Without `--provider`, the agent picks one in this order:
 
-### Provider auto-detection
-
-When `--provider` is omitted, lightpanda picks one in this order. The REPL shows
-the resolved model and effort level in its status bar; the multi-key picker and any
-fallback notices (e.g. an Ollama default that isn't installed) print to stderr:
-
-1. **Remembered** → the provider/model you last selected with `/provider` or
-   `/model` (plus the `/effort` level), persisted per-directory in
-   `.lp-agent.zon`, as long as its key is still set.
-2. **Auto-detected** → otherwise the first key found in priority order
-   (`ANTHROPIC_API_KEY` → `GOOGLE_API_KEY`/`GEMINI_API_KEY` → `OPENAI_API_KEY`).
-   If several keys are set and you're in an interactive REPL, the agent prompts
-   you to choose; non-interactive runs (`--task`, pipes, `--list-models`) take
-   the first. Switch any time with `/provider`, or override with `--provider`.
-3. **Local Ollama** → if no cloud key is set, the agent probes a local Ollama
-   server (`http://localhost:11434/v1`, or `--base-url`) and uses it when it
-   answers with at least one pulled model.
-4. **No provider at all** → falls back to the basic REPL (slash commands only).
-   Natural language and the LLM-driven commands (`/login`, `/logout`,
+1. **Remembered** - whatever you last selected with `/provider` or `/model`,
+   persisted per-directory in `.lp-agent.zon`, as long as its key is still
+   set.
+2. **Auto-detected** - the first key found in priority order
+   (`ANTHROPIC_API_KEY` → `GOOGLE_API_KEY`/`GEMINI_API_KEY` →
+   `OPENAI_API_KEY`). With several keys on a TTY, you'll be prompted to
+   pick.
+3. **Local Ollama** - if no cloud key is set, the agent probes
+   `http://localhost:11434/v1` and uses it if there's at least one model
+   pulled.
+4. **No provider at all** - falls back to the basic REPL (slash commands
+   only). Natural language and LLM-driven commands (`/login`, `/logout`,
    `/acceptCookies`) will reject.
 
-`--no-llm` is the explicit bypass: it forces the basic REPL even when an
-API key is present or `--provider` is set. Use it to test slash commands
-without burning tokens, or to disable the LLM in a saved command without
-editing the existing flags. `--no-llm` wins over `--provider`.
+`--no-llm` is the explicit override. It forces the basic REPL even when an
+API key is present. Useful for testing slash commands without burning
+tokens.
 
-## REPL Slash Commands
+### Reasoning effort
 
-The REPL uses a tiny slash-command language for browser actions. Each command is
-`/<tool> [args]`, a `#` comment, or blank. There is no other syntax in basic
-REPL mode: anything that doesn't match those three forms is a parse error.
+`--effort <none|minimal|low|medium|high|xhigh>` sets the per-turn reasoning
+budget for thinking models. It maps to each provider's native
+reasoning-effort knob and is ignored by non-thinking models. The REPL
+defaults to `low` so turns stay snappy. `--task` and script runs default to
+`medium` where answer quality matters more than per-turn latency. Higher
+effort can mean fewer tool calls per task (the model plans better), so it's
+a real tradeoff rather than a pure slowdown. Change it live in the REPL
+with `/effort`; selection persists in `.lp-agent.zon`.
 
-Slash commands accept any of:
+## Slash commands
 
-- a single positional value, when the tool has exactly one required field —
-  `/goto 'https://example.com'`, `/extract '{"karma":"#karma"}'`;
-- `key=value` pairs — values may be bare or quoted; strings with whitespace
-  must be quoted (`/fill selector='#email' value='user@x.com'`);
-- a raw `{json}` blob — handed straight to the tool (`/findElement
-  {"role":"button"}`).
+The REPL uses a small slash-command language for browser actions. Each line
+is either a slash command, a `#` comment, a blank line, or (when an LLM is
+configured) a natural-language prompt.
 
-Tools whose selector is optional (e.g. `/click`, `/hover`, `/findElement`)
-have zero required fields, so they don't take a positional and must be
-written as `key=value`: `/click selector='a.login'`, not `/click 'a.login'`.
+Slash commands accept:
+
+- A single positional value, when the tool has exactly one required field.
+  `/goto 'https://example.com'`, `/extract '{"karma":"#karma"}'`.
+- `key=value` pairs. Values may be bare or quoted; strings with whitespace
+  must be quoted. `/fill selector='#email' value='user@x.com'`.
+- A raw `{json}` blob, handed straight to the tool.
+  `/findElement {"role":"button"}`.
+
+Tools whose selector is optional (`/click`, `/hover`, `/findElement`) take
+no positional and must use `key=value` form: `/click selector='a.login'`.
 
 Quoting is content-aware: `'…'`, `"…"`, and triple-quoted `'''…'''` /
-`"""…"""` for values that mix both quote styles or span multiple lines.
-Recorded JavaScript scripts use the equivalent function-call form instead of
-slash lines.
+`"""…"""` for values that mix quote styles or span multiple lines.
 
-Two slash commands have no underlying tool — they trigger an LLM turn that
-the agent translates into actual tool calls:
+### LLM-driven helpers
 
-| Command          | Notes                                                |
-|------------------|------------------------------------------------------|
-| `/login`         | LLM-driven: fills credentials from `$LP_*` env vars. |
-| `/logout`        | LLM-driven: find the logout control and sign out.    |
-| `/acceptCookies` | LLM-driven: dismiss the consent banner.              |
+Three slash commands trigger an LLM turn rather than a direct tool call:
+
+| Command          | What it does                                          |
+|------------------|-------------------------------------------------------|
+| `/login`         | Fills credentials from `$LP_*` env vars.              |
+| `/logout`        | Finds the logout control and signs out.               |
+| `/acceptCookies` | Dismisses the consent banner.                         |
 
 All three require an LLM. `--no-llm` rejects them.
 
-In the REPL (and only the REPL), a line that isn't a slash command and
-doesn't start with `#` is sent to the LLM as a natural-language prompt. To
-leave the REPL, use the `/quit` meta command.
+### Meta commands
 
-### Example script
+These don't drive the browser, they control the REPL itself:
+
+| Command                  | What it does                                       |
+|--------------------------|----------------------------------------------------|
+| `/help`                  | Lists tools. `/help <tool>` prints the JSON schema.|
+| `/provider [name]`       | Lists or switches provider.                        |
+| `/model [name]`          | Lists or switches model for the active provider.   |
+| `/effort <level>`        | Sets reasoning budget. Saved to `.lp-agent.zon`.   |
+| `/verbosity <level>`     | Tunes the log level. Levels: low, medium, high.    |
+| `/usage`                 | Prints cumulative token usage and cache hit rate.  |
+| `/save [file.js]`        | Writes the session to a script.                    |
+| `/load <path>`           | Runs a script from disk against the current session.|
+| `/clear`                 | Forgets the conversation (history, usage, recorded actions, node IDs); keeps the page and cookies.|
+| `/reset`                 | Full reset: everything `/clear` does, plus a fresh browser session, dropping the page, cookies, and storage.|
+| `/quit`                  | Exits the REPL.                                    |
+
+Meta commands are never recorded.
+
+## REPL features
+
+- **Status bar.** A line under the prompt shows the active model and quick
+  hints. In `--no-llm` it reads "basic REPL — slash commands only." It drops
+  the least-important segments first when the terminal is narrow.
+- **JS mode (`!`).** Type `!` on an empty prompt to toggle a scratchpad
+  where the whole line runs as page-side JavaScript, same context as
+  `/evaluate` so `document` and `window` are in scope. Handy for poking at
+  a page without wrapping every line in `/evaluate`. `$LP_*` refs are still
+  resolved at execution, console output is echoed back, and `Esc` exits.
+  JS-mode lines are not recorded.
+- **Tab completion** (case-insensitive). Cycles through `/<tool>` and meta
+  slash commands. The dim grey suffix shown after the cursor is the first
+  match.
+- **Persistent history.** Stored in `.lp-history` in the working directory.
+- **Stdout vs stderr.** The final assistant answer and data-producing slash
+  commands (`/extract`, `/evaluate`, `/markdown`, `/tree`, ...) write to
+  stdout. Tool calls, progress, and errors go to stderr. So
+  `lightpanda agent --task ... > out.txt` captures a clean answer.
+
+## Example slash-command session
 
 ```console
 # Log into the demo and grab the dashboard title and visible cards.
@@ -158,37 +241,27 @@ leave the REPL, use the `/quit` meta command.
 /extract '{"title": ".dashboard h1", "cards": [".dashboard .card .name"]}'
 ```
 
-`/extract` takes a JSON schema object — each value tells the extractor
-what to lift off the page, and the whole result is printed to stdout
-as a single JSON object. Supported value forms:
+`/extract` takes a JSON schema where each value tells the extractor what to
+lift off the page. The result is printed to stdout as a single JSON object.
+Supported value forms:
 
-- `"<sel>"` — `textContent.trim()` of the first match (string or `null`).
+- `"<sel>"` — `textContent.trim()` of the first match.
 - `""` — the matched element's own text (only inside a `fields` block).
-- `["<sel>"]` — text of every match (string array). Sugar for
-  `[{"selector": "<sel>"}]`.
+- `["<sel>"]` — text of every match. Sugar for `[{"selector": "<sel>"}]`.
 - `{"selector": "<sel>", "attr": "<name>"}` — attribute of the first match.
 - `[{"selector": "<sel>", "fields": {…}}]` — array of records, each
   `fields` value resolved relative to the matched element.
-- Add `"limit": N` inside any array's object spec to cap matches at N
-  (works for text, attribute, and `fields` shapes — e.g.
-  `[{"selector": ".story .title", "limit": 5}]` for top 5 titles).
+- Add `"limit": N` inside any array's object spec to cap matches.
 
-Use `/extract '''…'''` (or `"""…"""`) to spread a schema across multiple
-lines. The schema is parsed in Zig before the page-side walker runs, so a
-malformed schema is rejected up front with a plain `Error: InvalidParams`
-rather than a V8 stack trace. See [agent-tutorial.md](agent-tutorial.md)
-section 3 for a worked example against Hacker News.
+The schema is parsed in Zig before the page-side walker runs, so malformed
+schemas are rejected up front with a plain `Error: InvalidParams` rather
+than a V8 stack trace.
 
-### Cross-call state with `lp.*`
+## Cross-call state with `lp.*`
 
-`/extract` and `/evaluate` each return one value per call, but real scrapes
-often need to carry data forward — capture a list on one page, then walk
-it across navigations. Two primitives keep that simple.
-
-**`save=<name>`** on `/extract` or `/evaluate` stashes the result in a
-Session-scoped store keyed by `<name>` instead of dumping it to stdout.
-The stored value is then exposed to every subsequent `/evaluate` as
-`globalThis.lp.<name>`:
+`/extract` and `/evaluate` each return one value per call. To carry data
+between calls (capture a list on one page, walk it across navigations) use
+the `save=` modifier:
 
 ```console
 /goto 'https://news.ycombinator.com/'
@@ -211,54 +284,24 @@ console.log(lp.front.stories[0].title);
 '''
 ```
 
-`save=`d commands print nothing on success so scripts pipe cleanly.
+`save=<name>` stashes the result keyed by `<name>` in a session-scoped
+store instead of printing it. Every subsequent `/evaluate` sees it as
+`globalThis.lp.<name>`.
 
-**Auto-sync.** Any mutation of `lp.*` inside an `/evaluate` is persisted at
-the end of the call. Adding a key (`lp.x = …`), updating a nested value
-(`lp.front.stories[0].comments = […]`), or removing a key
-(`delete lp.x`) all propagate to the store. The next `/evaluate` sees the
-update — even after a navigation, because the store lives Session-side,
-not on the page.
+Any mutation of `lp.*` inside `/evaluate` is persisted at the end of the
+call. Adding (`lp.x = …`), updating
+(`lp.front.stories[0].comments = […]`), or deleting (`delete lp.x`) all
+propagate. The next `/evaluate` sees the update, even after a navigation,
+because the store lives session-side, not on the page.
 
-**List → detail.** A common scrape captures a list, then visits each row
-for more data. Capture the list with `/extract save=<name>`, then loop in
-`/evaluate`: read `lp.<name>`, `goto` each row's URL, and extract the
-detail — `/evaluate`'s top-level `await` and full JS make the round-trip
-explicit.
+The store is **script-run scoped**: bound to the session that runs the
+script, gone when that session ends. There's no cross-session persistence;
+if you need that, use `localStorage` (origin-scoped, persists within a
+session).
 
-**Async evaluate.** When a scrape needs logic `/extract` can't express, `/evaluate`
-is the escape hatch: top-level `await` works directly — the body runs as
-an async function, so use `return` to produce a value. `runEval` pumps
-the event loop until it settles, then surfaces the resolved value (or the
-rejection as an error). A body with no explicit `return` resolves to
-`undefined`, which evaluate treats as silent. Returned objects and arrays
-are serialized to JSON automatically, so no `JSON.stringify` is needed.
+## JavaScript scripts
 
-The store is **script-run scoped**: it's bound to the Session that runs
-the script, and goes away when that Session does. There is no
-cross-session persistence; if you need that, use `localStorage` (which
-is origin-scoped and persists across navigations within a session).
-
-### Saving and loading
-
-From the REPL, `/save [file.js]` writes the session back to a `.js` file
-and `/load <path>` runs a script from disk against the current session.
-
-`/save` works one of two ways. **With `--no-llm`** it transcribes the session
-deterministically: state-mutating commands (`/goto`, `/click`, `/fill`,
-`/scroll`, `/hover`, `/selectOption`, `/setChecked`, `/waitForSelector`,
-`/waitForScript`, `/waitForState`, `/press`, `/evaluate`, `/extract`) become JavaScript calls,
-read-only commands (`/tree`, `/markdown`, `/links`, `/findElement`, …) are
-dropped, and each natural-language prompt that produced recorded actions is
-written as a `// <prompt>` comment above those calls so the script stays
-readable. **With an LLM** it instead synthesizes an idiomatic script from the
-whole session — the synthesis prompt asks for JavaScript only ("no
-commentary"), so the result generally has no such comments: the model folds
-intent into the code and drops dead-ends.
-
-### JavaScript Script Running
-
-`./lightpanda agent script.js` runs without making any LLM call. Agent scripts
+`./lightpanda agent script.js` runs a script without any LLM call. Scripts
 are plain synchronous JavaScript plus the installed Lightpanda primitives:
 
 ```js
@@ -267,60 +310,46 @@ click({ selector: "a.login" });
 evaluate("document.title");
 ```
 
-The script runs in an agent-only V8 context. It has no `window`, `document`, or
-DOM APIs. Browser interaction happens only through the installed primitives
-(`goto`, `click`, `fill`, `evaluate`, `extract`, and the other recorded browser
-actions). The primitives are **synchronous and blocking** — each returns its
-result directly, so write `const data = extract(…)`, not `await extract(…)`.
-There is no `async`/`await`/Promise contract around them. (`evaluate(...)` can
-run async JS *inside* the page, but the `evaluate(...)` call itself still returns
-synchronously.) It is not Node.js either: there is no `require`, `process`, `fs`,
-npm package loading, or Node standard library. The `evaluate(...)` primitive
-executes its string in the current page context; page scripts cannot see agent
-variables or agent primitives.
+The script runs in an agent-only V8 context. No `window`, no `document`, no
+DOM APIs at the top level — browser interaction happens through the
+primitives only. The primitives are **synchronous and blocking**, each
+returns its result directly, so write `const data = extract(…)`, not
+`await extract(…)`. There's no Promise contract around them.
+(`evaluate(...)` can run async JS inside the page, but the `evaluate(...)`
+call itself still returns synchronously.)
 
+It's not Node.js. There's no `require`, `process`, `fs`, npm package
+loading, or Node standard library. The `evaluate(...)` primitive runs its
+string in the current page context; page scripts can't see agent variables
+or agent primitives.
+
+The last expression in the script is printed automatically, so a script
+that ends with `extract({...})` will print the extraction result to stdout.
 Tool errors throw JavaScript exceptions and stop execution.
+
 See [agent-script.md](agent-script.md) for the full script format reference.
 
-## REPL features
+### Saving and loading
 
-- **Status bar**: a line under the prompt shows the active model and quick
-  hints (`! JS`, `Tab completes`, `/help`); in `--no-llm` it reads `basic REPL —
-  slash commands only`. It drops the least-important segments first when the
-  terminal is narrow.
-- **JS mode** (`!`): type `!` on an empty prompt to toggle a scratchpad where the
-  whole line runs as page-side JavaScript — the same context as `evaluate`, so
-  `document` and `window` are in scope. Handy for poking at a page without
-  wrapping every line in `/evaluate`. `$LP_*` refs are still resolved at
-  execution, console output is echoed back, and `Esc` exits. JS-mode lines are
-  not recorded.
-- **Tab completion** (case-insensitive): cycles through `/<tool>` and meta
-  slash commands. The dim grey suffix shown after the cursor is the first
-  match.
-- **Persistent history**: stored in `.lp-history` in the working directory.
-- **Meta slash commands**: `/help` lists tools (`/help <tool>` prints the
-  JSON schema), `/provider [name]` and `/model [name]` change the active
-  provider/model — Tab after the space completes from detected providers and
-  the provider's fetched model list, and bare `/provider`/`/model` print the
-  current selection — `/save [file.js]` writes the session to a script and
-  `/load <path>` runs one from disk (Tab completes file paths), `/quit` exits
-  the REPL, `/verbosity <low|medium|high>` tunes the log level,
-  `/effort <none|minimal|low|medium|high|xhigh>` sets the per-turn reasoning
-  budget (saved to `.lp-agent.zon`), and `/usage` prints cumulative token usage
-  and the cache hit rate for the session — `/clear` forgets the conversation
-  (history, usage, recorded actions, node IDs) while keeping the loaded page and
-  cookies, and `/reset` goes further by also starting a fresh browser session,
-  dropping the page, cookies, storage, and history. These are REPL-only and never recorded.
-  ```
-  > /goto https://example.com
-  > /findElement role=button name=Submit
-  > /evaluate {"script": "document.title"}
-  > /quit
-  ```
-- **Stdout vs stderr**: the final assistant answer and data-producing slash
-  commands (`/extract`, `/evaluate`, `/markdown`, `/tree`, …) write to stdout.
-  Tool calls, progress, and errors go to stderr, so `lightpanda agent --task
-  ... > out.txt` captures a clean answer.
+`/save [file.js]` writes the current session to a `.js` file. `/load <path>`
+runs a script from disk against the current session.
+
+`/save` works one of two ways:
+
+- **With `--no-llm`** it transcribes the session deterministically.
+  State-mutating commands (`/goto`, `/click`, `/fill`, `/scroll`, `/hover`,
+  `/selectOption`, `/setChecked`, `/waitForSelector`, `/waitForScript`,
+  `/waitForState`, `/press`, `/evaluate`, `/extract`) become JavaScript
+  calls. Read-only
+  commands (`/tree`, `/markdown`, `/links`, `/findElement`, ...) are
+  dropped. Each natural-language prompt that produced recorded actions is
+  written as a `// <prompt>` comment above its calls so the script stays
+  readable.
+- **With an LLM** it synthesizes an idiomatic script from the whole
+  session. The synthesis prompt asks for JavaScript only ("no commentary"),
+  so the result generally has no such comments: the model folds intent
+  into the code and drops dead-ends. Returned data is the last expression,
+  which prints automatically on replay.
 
 ## One-shot mode (`--task`)
 
@@ -329,20 +358,22 @@ See [agent-script.md](agent-script.md) for the full script format reference.
   --task "what is the top story on news.ycombinator.com?"
 ```
 
-`--task` runs a single user turn, prints the final answer on stdout, and
-exits. Combine with `-a <path>` / `--attach <path>` (repeatable) to feed local
-files to providers that accept attachments. Text files are inlined into
-the prompt (max 512 KiB each); binary files (`image/*`, `audio/*`, `pdf`)
-are base64-encoded inline (max 20 MiB each). Unsupported MIME types
-error out before any browser work runs.
+`--task` runs a single user turn, prints the final answer to stdout, and
+exits. Combine with `-a <path>` / `--attach <path>` (repeatable) to feed
+local files to providers that accept attachments. Text files are inlined
+into the prompt (max 512 KiB each); binary files (image, audio, pdf) are
+base64-encoded inline (max 20 MiB each). Unsupported MIME types fail before
+any browser work runs.
+
+`--task` conflicts with the positional script argument.
 
 ## Driving Lightpanda from an external LLM agent
 
 When the calling agent already has its own LLM (e.g. Claude Code), use
-`lightpanda mcp` rather than `lightpanda agent`. The MCP server exposes
-the same browser tools (`goto`, `click`, `fill`, ...) listed below, so
-the external agent does the planning while Lightpanda only drives the
-browser. No `--provider` or API key is required on the Lightpanda side.
+`lightpanda mcp` rather than `lightpanda agent`. The MCP server exposes the
+same browser tools listed below, so the external agent does the planning
+while Lightpanda only drives the browser. No `--provider` or API key is
+required on the Lightpanda side.
 
 ```json
 {
@@ -355,48 +386,47 @@ browser. No `--provider` or API key is required on the Lightpanda side.
 }
 ```
 
-Tool names are camelCase and case-sensitive — there are no aliases. MCP
-clients must call the canonical tags (`goto`, `evaluate`, `tree`, `save`, …).
+Tool names are camelCase and case-sensitive. MCP clients must call the
+canonical tags (`goto`, `evaluate`, `tree`, `save`, ...).
 
-For sub-task delegation in the other direction — calling Lightpanda's
-own LLM-driven agent in a one-shot fashion — use `--task` on stdin
-instead.
+For sub-task delegation in the other direction (calling Lightpanda's own
+LLM-driven agent in a one-shot fashion), use `--task` on stdin.
 
 ### Saving a script over MCP
 
-`lightpanda mcp` exposes a `save` tool so an external agent can persist
-the session as a `.js` script for later deterministic replay. Unlike the
-standalone agent's `/save`, the MCP server has no LLM of its own — the
-calling client holds the conversation, so it synthesizes the script and
-passes it in:
+`lightpanda mcp` exposes a `save` tool so an external agent can persist the
+session as a `.js` script for later deterministic replay. Unlike the
+standalone agent's `/save`, the MCP server has no LLM of its own, so the
+calling client holds the conversation and synthesizes the script itself.
 
-| Tool   | Args                               | Effect                                                                                                              |
-|--------|------------------------------------|-------------------------------------------------------------------------------------------------------------------|
+| Tool   | Args                               | Effect                                                                                                                |
+|--------|------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
 | `save` | `{ path: string, script: string }` | Write `script` to `path` (relative, no `..`; created or overwritten) and return the absolute location and line count. |
 
 The tool's description carries the same synthesis guidance the agent's
-`/save` gives its LLM: prefer the builtins you called as tools (`goto`,
-`click`, `fill`, `extract`, …) as JavaScript calls, drop dead-ends, and
-keep `$LP_*` placeholders. Any literal `LP_*` value is scrubbed back to
-its placeholder before the file is written. The result runs without an
-LLM via `./lightpanda agent session.js`.
+`/save` gives its LLM: prefer the builtins (`goto`, `click`, `fill`,
+`extract`, ...) as JavaScript calls, drop dead-ends, keep `$LP_*`
+placeholders. Any literal `LP_*` value is scrubbed back to its placeholder
+before the file is written. The result runs without an LLM via
+`./lightpanda agent session.js`.
 
 ## Browser tools
 
-The agent and MCP server share the tool set defined in `src/browser/tools.zig`.
-Highlights:
+The agent and MCP server share the tool set defined in
+`src/browser/tools.zig`. Highlights:
 
-- `goto`, `search` (Tavily when `TAVILY_API_KEY` is set, DuckDuckGo otherwise)
-- `tree`, `markdown`, `html`, `links`, `interactiveElements`, `structuredData`,
-  `detectForms`, `nodeDetails`, `findElement`
+- `goto`, `search` (Tavily when `TAVILY_API_KEY` is set, DuckDuckGo
+  otherwise)
+- `tree`, `markdown`, `html`, `links`, `interactiveElements`,
+  `structuredData`, `detectForms`, `nodeDetails`, `findElement`
 - `click`, `fill`, `hover`, `press`, `scroll`, `selectOption`, `setChecked`,
   `waitForSelector`, `waitForScript`, `waitForState`
-- `extract` (the schema-driven data tool), `evaluate`, `consoleLogs`, `getUrl`,
-  `getCookies`, `getEnv`
+- `extract` (the schema-driven data tool), `evaluate`, `consoleLogs`,
+  `getUrl`, `getCookies`, `getEnv`
 
-Selectors prefer CSS over `backendNodeId` for the click-family tools, since
-node IDs are invalidated by any DOM mutation. The system prompt enforces this
-for the LLM.
+Selectors prefer CSS over `backendNodeId` for the click-family tools since
+node IDs are invalidated by any DOM mutation. The system prompt enforces
+this for the LLM.
 
 ## Security notes
 
@@ -409,19 +439,17 @@ for the LLM.
   unprefixed `LP_USERNAME` / `LP_PASSWORD` form is the generic fallback.
 - The `getEnv` tool only reads variables whose name starts with `LP_`.
   Everything else (provider API keys, system env, third-party secrets)
-  reports "not set" so the model can't probe for it. The user controls
-  what lives under `LP_*`. Note that `getEnv` returns the *value* to the
-  model — fine for non-secret config like base URLs, but never call it
-  on credentials (use `$LP_*` placeholders in fill values instead).
+  reports "not set" so the model can't probe for it. `getEnv` returns the
+  *value* to the model: fine for non-secret config like base URLs, never
+  call it on credentials (use `$LP_*` placeholders in fill values instead).
 - `--obey-robots`, `--http-proxy`, `--user-agent`, and the rest of the
   browser-level CLI flags apply to `agent` the same way they apply to
   `serve`, `fetch`, and `mcp`.
-- REPL prompts are persisted to `.lp-history` in the current working
-  directory in plaintext (no encryption). Anything you type at the prompt
-  — including natural-language context that accompanies a `/login` —
-  lands in that file. Delete it or move out of sensitive directories if
-  you don't want it retained.
-- `save` rejects empty, absolute, and `..` paths, but does **not**
-  follow up on symlinks. On a shared filesystem, a pre-existing symlink
-  at the target would be written through to whatever it points at.
-  Prefer a fresh directory you own when saving in untrusted environments.
+- REPL prompts are persisted to `.lp-history` in plaintext (no encryption).
+  Anything you type at the prompt, including natural-language context that
+  accompanies a `/login`, lands in that file. Delete it or move out of
+  sensitive directories if you don't want it retained.
+- `save` rejects empty, absolute, and `..` paths, but does **not** follow
+  up on symlinks. On a shared filesystem, a pre-existing symlink at the
+  target would be written through to whatever it points at. Prefer a fresh
+  directory you own when saving in untrusted environments.
