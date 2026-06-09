@@ -137,5 +137,5 @@ test "MCP.Server - Integration: ping request returns an empty result" {
 
     try router.processRequests(server, &in_reader);
 
-    try testing.expectJson(.{ .jsonrpc = "2.0", .id = "ping-1", .result = .{} }, out_alloc.writer.buffered());
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = "ping-1", .result = struct {}{} }, out_alloc.writer.buffered());
 }
