@@ -48,6 +48,7 @@ const TestContext = struct {
     pub fn deinit(self: *TestContext) void {
         if (self.cdp_initialized) self.cdp_.deinit();
         posix.close(self.socket);
+        posix.close(self.cdp_socket);
         base.reset();
     }
 
