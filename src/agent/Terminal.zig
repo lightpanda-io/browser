@@ -86,7 +86,6 @@ pub const CompletionSource = struct {
     models: *const fn (context: *anyopaque, arena: std.mem.Allocator) []const []const u8,
 };
 
-// Flat name list for the "match any slash command" search/completion paths.
 const llm_values = std.enums.values(Command.LlmCommand);
 const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + llm_values.len][]const u8 = blk: {
     var arr: [browser_tools.names.len + SlashCommand.meta_commands.len + llm_values.len][]const u8 = undefined;

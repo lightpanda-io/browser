@@ -99,7 +99,7 @@ pub fn deinit(self: *Spinner) void {
     }
 }
 
-/// Begin a new agent turn. Spawns the worker thread on first call.
+/// Spawns the worker thread on first call.
 pub fn start(self: *Spinner) void {
     if (!self.isEnabled()) return;
     self.mu.lock();

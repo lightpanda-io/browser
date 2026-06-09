@@ -318,7 +318,7 @@ fn startSession(self: *Agent) !void {
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
 }
 
-// Tool definitions are compile-time constant; project them once per process.
+// Compile-time constant; project them once per process to avoid rebuilding per call.
 var global_tools_storage: [browser_tools.tool_defs.len]ProviderTool = undefined;
 var global_tools_once = std.once(initGlobalTools);
 
@@ -494,7 +494,6 @@ fn runRepl(self: *Agent) void {
         defer arena.deinit();
         const aa = arena.allocator();
 
-        // JS mode: evaluate the whole line against the page, bypassing command parsing.
         if (self.terminal.jsMode()) {
             // `line` keeps the `$LP_*` placeholder so the secret never reaches
             // the recorder; only the evaluated copy is expanded.
@@ -835,8 +834,6 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         return;
     };
 
-    // With a client, synthesize an idiomatic script from the session intent;
-    // the trailing prompt is optional extra steering.
     if (self.ai_client != null) {
         self.synthesizeSave(arena, parsed.filename, parsed.prompt);
         return;
@@ -1362,12 +1359,12 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     try self.conversation.ensureSystemPrompt();
 
     // Attachments only ride on the very first user turn (just after the
-    // system prompt) — wired into the message's rich `parts`.
+    // system prompt).
     const turn_attachments: ?[]const []const u8 =
         if (self.conversation.messages.items.len == 1) input.attachments else null;
 
-    // Save message count so we can roll back on API failure — otherwise the
-    // failed user turn stays in history and replays on the next attempt.
+    // Roll-back baseline: on API failure the failed user turn would otherwise
+    // stay in history and replay on the next attempt.
     const msg_baseline = self.conversation.messages.items.len;
 
     if (turn_attachments) |paths| {

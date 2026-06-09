@@ -27,8 +27,7 @@ const lp = @import("lightpanda");
 const Command = lp.Command;
 const Config = lp.Config;
 
-/// Shared row format for the `/help` listing — `name` is the command name
-/// (no `/`), `description` is a terse one-liner.
+/// Row format for the `/help` listing — `name` carries no leading `/`.
 pub const Help = struct {
     name: []const u8,
     description: []const u8,
