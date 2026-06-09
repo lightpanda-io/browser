@@ -349,7 +349,11 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     });
     errdefer browser.env.destroyContext(self.js);
 
-    self.window._location = try Location.init("about:blank", self);
+    const location = try Location.init("about:blank", self);
+    // We're holding a reference in Zig-side.
+    location.acquireRef();
+    errdefer location.releaseRef(page);
+    self.window._location = location;
 
     document._frame = self;
 
@@ -429,6 +433,9 @@ pub fn deinit(self: *Frame) void {
         if (document._fonts) |f| {
             f.releaseRef(page);
         }
+
+        // Release our reference to location.
+        self.window._location.releaseRef(page);
     }
 
     const browser = page.session.browser;
@@ -559,7 +566,14 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         // have to do this to make sure window.location is at a unique _address_.
         // If we don't do this, multiple window._location will have the same
         // address and thus be mapped to the same v8::Object in the identity map.
-        self.window._location = try Location.init(self.url, self);
+        //
+        // We don't hold a reference to old location anymore.
+        self.window._location.releaseRef(self._page);
+        // Create new location.
+        const location = try Location.init(self.url, self);
+        location.acquireRef();
+        errdefer location.releaseRef(self._page);
+        self.window._location = location;
 
         if (is_blob) {
             // strip out blob:
@@ -795,7 +809,14 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
         target.url = try target.arena.dupeZ(u8, resolved_url);
-        target.window._location = try Location.init(target.url, target);
+
+        // Release our reference to the previous location before replacing it.
+        target.window._location.releaseRef(target._page);
+        const location = try Location.init(target.url, target);
+        location.acquireRef();
+        errdefer location.releaseRef(target._page);
+        target.window._location = location;
+
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
@@ -1073,8 +1094,13 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
         }
     }
 
-    self.window._location = try Location.init(self.url, self);
-    self.document._location = self.window._location;
+    // Release our reference to location before.
+    self.window._location.releaseRef(self._page);
+    // Init new location.
+    const location = try Location.init(self.url, self);
+    location.acquireRef();
+    errdefer location.releaseRef(self._page);
+    self.window._location = location;
 
     if (comptime IS_DEBUG) {
         log.debug(.frame, "navigate header", .{
