@@ -33,9 +33,11 @@ const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
+const Conversation = @import("Conversation.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
+const welcome = @import("welcome.zig");
 const string = @import("../string.zig");
 
 const Agent = @This();
@@ -111,12 +113,10 @@ save_buffer: Recorder,
 save_path: ?[]u8,
 script_runtime_mutex: std.Thread.Mutex = .{},
 active_script_runtime: ?*ScriptRuntime = null,
-messages: std.ArrayList(zenai.provider.Message),
-message_arena: std.heap.ArenaAllocator,
+conversation: Conversation,
 model: []u8,
 /// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
 effort: Config.Effort,
-system_prompt: []const u8,
 script_file: ?[]const u8,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
@@ -133,81 +133,6 @@ total_usage: zenai.provider.Usage = .{},
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
 available_providers: []const []const u8,
-
-fn resolveModelName(opts: Config.Agent, resolved: ?settings.ResolvedProvider, remembered: ?settings.Remembered) []const u8 {
-    if (opts.model) |m| return m;
-    if (resolved) |r| {
-        // Use the remembered model whenever it matches the chosen provider,
-        // not only when the provider itself came from the remembered file.
-        if (remembered) |rem| {
-            if (rem.provider) |p| if (p == r.credentials.provider) return rem.model;
-        }
-        return zenai.provider.defaultModel(r.credentials.provider);
-    }
-    return "";
-}
-
-/// Precedence: explicit `--effort` flag > remembered `.lp-agent.zon` value >
-/// mode default. The interactive REPL defaults to `.low` so turns stay snappy;
-/// one-shot `--task` and script runs default to `.medium`, where answer
-/// quality matters more than per-turn latency.
-fn resolveEffort(opts: Config.Agent, remembered: ?settings.Remembered, will_repl: bool) Config.Effort {
-    if (opts.effort) |e| return e;
-    if (remembered) |r| if (r.effort) |e| return e;
-    return if (will_repl) .low else .medium;
-}
-
-/// Precedence: explicit `--verbosity` flag > remembered `.lp-agent.zon` value >
-/// mode default (see `Config.agentVerbosity`).
-fn resolveVerbosity(opts: Config.Agent, remembered: ?settings.Remembered) Config.AgentVerbosity {
-    if (opts.verbosity) |v| return v;
-    if (remembered) |r| if (r.verbosity) |v| return v;
-    return Config.agentVerbosity(opts);
-}
-
-const ReconciledModel = union(enum) {
-    /// Owned by the allocator passed to reconcileModel.
-    use: []u8,
-    abort,
-};
-
-/// Validate `desired` against the provider's catalog, mirroring the interactive
-/// `/model` command. An unreachable server (empty list) leaves it unchecked.
-/// An explicit model that isn't listed is fatal. Ollama's local catalog is
-/// authoritative, so its default is substituted when not pulled; cloud defaults
-/// are hardcoded real models and trusted as-is.
-fn reconcileModel(
-    allocator: std.mem.Allocator,
-    llm: Credentials,
-    desired: []const u8,
-    base_url: ?[:0]const u8,
-    explicit: bool,
-) !ReconciledModel {
-    var arena: std.heap.ArenaAllocator = .init(allocator);
-    defer arena.deinit();
-    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, base_url) catch &.{};
-    if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
-
-    if (!explicit) {
-        if (llm.provider != .ollama) return .{ .use = try allocator.dupe(u8, desired) };
-        std.debug.print("Default Ollama model '{s}' is not installed; using '{s}'.\n", .{ desired, ids[0] });
-        return .{ .use = try allocator.dupe(u8, ids[0]) };
-    }
-
-    if (llm.provider == .ollama) {
-        const installed = std.mem.join(arena.allocator(), ", ", ids) catch "";
-        std.debug.print(
-            "Model '{s}' is not installed in Ollama.\nInstalled: {s}\nRun `ollama pull {s}` to install it, or choose one of the above.\n",
-            .{ desired, installed, desired },
-        );
-    } else {
-        std.debug.print(
-            "Model '{s}' is not available for {s}.\nRun with --list-models to see options.\n",
-            .{ desired, @tagName(llm.provider) },
-        );
-    }
-    return .abort;
-}
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
@@ -265,7 +190,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // no key detected) resolveCredentials prints its own message and the
     // banner is skipped.
     if (will_repl and (!resolve or settings.wouldResolve(allocator, opts, remembered))) {
-        printWelcome(resolve);
+        welcome.print(resolve);
     }
 
     const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
@@ -278,7 +203,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         return error.MissingProvider;
     }
 
-    var model = try allocator.dupe(u8, resolveModelName(opts, resolved, remembered));
+    var model = try allocator.dupe(u8, settings.resolveModelName(opts, resolved, remembered));
     errdefer allocator.free(model);
 
     // The REPL skips this network round trip to keep startup snappy; an invalid
@@ -286,7 +211,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (llm) |l| if (!will_repl) {
         const remembered_matches = remembered != null and remembered.?.provider == l.provider;
         const explicit = opts.model != null or remembered_matches;
-        switch (try reconcileModel(allocator, l, model, opts.base_url, explicit)) {
+        switch (try settings.reconcileModel(allocator, l, model, opts.base_url, explicit)) {
             .use => |m| {
                 allocator.free(model);
                 model = m;
@@ -295,8 +220,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         }
     };
 
-    const effort = resolveEffort(opts, remembered, will_repl);
-    const verbosity = resolveVerbosity(opts, remembered);
+    const effort = settings.resolveEffort(opts, remembered, will_repl);
+    const verbosity = settings.resolveVerbosity(opts, remembered);
 
     if (resolved) |r| {
         if (r.source == .picked) {
@@ -332,11 +257,9 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .terminal = .init(allocator, history_paths, verbosity, will_repl),
         .save_buffer = .init(allocator),
         .save_path = null,
-        .messages = .empty,
-        .message_arena = .init(allocator),
+        .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
         .model = model,
         .effort = effort,
-        .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
@@ -344,7 +267,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     };
     errdefer self.node_registry.deinit();
     errdefer self.terminal.deinit();
-    errdefer self.message_arena.deinit();
+    errdefer self.conversation.deinit();
     self.terminal.installLogSink();
     errdefer self.terminal.uninstallLogSink();
 
@@ -376,9 +299,8 @@ pub fn deinit(self: *Agent) void {
     self.save_buffer.deinit();
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
-    self.message_arena.deinit();
+    self.conversation.deinit();
     self.model_completion_arena.deinit();
-    self.messages.deinit(self.allocator);
     self.node_registry.deinit();
     self.browser.deinit();
     self.notification.deinit();
@@ -467,7 +389,7 @@ fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
 /// The side effects of `drainCancellation` without surfacing the error, for
 /// void callers (e.g. `/save` synthesis) that just need to clean up.
 fn resetAfterCancel(self: *Agent, baseline: usize) void {
-    self.rollbackMessages(baseline);
+    self.conversation.rollback(baseline);
     self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
 }
@@ -524,7 +446,7 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
         error.UserCancelled => {
             self.terminal.printInfo("Interrupted.", .{});
-            self.pruneMessages();
+            self.conversation.prune();
             return false;
         },
         else => {
@@ -538,7 +460,7 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
         self.terminal.printInfo("(model declined to respond — safety refusal)", .{})
     else
         self.terminal.printInfo("(no response from model)", .{});
-    self.pruneMessages();
+    self.conversation.prune();
     return true;
 }
 
@@ -723,7 +645,7 @@ fn handleUsage(self: *Agent) void {
 /// re-seeds lazily on the next turn), cumulative usage, the recorded action
 /// buffer, and DOM node IDs. Shared by `/clear` and `/reset`.
 fn clearConversation(self: *Agent) void {
-    self.rollbackMessages(0);
+    self.conversation.rollback(0);
     self.save_buffer.reset();
     self.total_usage = .{};
     self.node_registry.reset();
@@ -758,111 +680,6 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
 
 const api_keys_hint = settings.api_keys_hint;
 const llm_setup_hint = "set an API key (" ++ api_keys_hint ++ ") and run /provider <name>";
-
-// A pre-colored (truecolor braille) panda. Each line carries its own ANSI and
-// resets at the end, so it prints as-is; non-empty lines are the visible rows.
-const logo =
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n" ++
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⢀⣠⣤⣶⣶⣶⣶⣶⣶⣶⣤⣄⡀⠀⠀⠀⠀⠀⠀⠀\x1b[0m\n" ++
-    "⠀⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⢀⣤⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀\x1b[0m\n" ++
-    "⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⣴⣿⣿⣿⣿⣿⡿⠿⢿⣿⡿⠿⠟⠛⠛⣿⣿⣿⣿⣷⣄⠀⠀⠀\x1b[0m\n" ++
-    "⠀⠀⠀⠀\x1b[38;2;247;247;239m⣼⣿⣿⣿⣿⣿⡇⠀⢀⣤⣶⣾⣿⣿⣶⣄⢸⣿⣿⣿⣿⣿⣆⠀⠀\x1b[0m\n" ++
-    "⠀⠀⠀\x1b[38;2;247;247;239m⣼⠿⠟⠛⠋⠉⠉⠁⣼⣿⣿⡟⠛⠛⣿⣿⠋⢳⢹⣿⣿⣿⣿⣿⡆⠀\x1b[0m\n" ++
-    "⠀⠀⠀\x1b[38;2;247;247;239m⣇⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⠀⠀⢤⣿⣿⣿⡃⡇⣿⣿⣿⣿⣿⣷⠀\x1b[0m\n" ++
-    "⠀⠀⠀\x1b[38;2;247;247;239m⣿⣿⣿⣶⣦⣤⡀⠀⢿⣿⣿⣷⣶⣟⠿⡷⠠⣾⠃⣿⣿⣿⣿⣿⣿⠀\x1b[0m\n" ++
-    "⠀⠀⠀\x1b[38;2;247;247;239m⣿⣿⣿⣿⣿⣿⣿⡄⠈⠻⢿⣿⣿⣿⣿⡿⠟⠁⠀⠈⢿⣿⣿⣿⡿⠀\x1b[0m\n" ++
-    "⠀⠀⠀\x1b[38;2;247;247;239m⢹⣿⣿⣿⣿⣏\x1b[38;2;9;126;179m⣁⠀\x1b[38;2;247;247;239m⣤⢀⡤⠀\x1b[38;2;100;112;112m⠈⠁⠀⠀⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⢻⣿⣿⠇⠀\x1b[0m\n" ++
-    "⠀⠀\x1b[38;2;9;126;179m⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⣄⠀⠀⠀⠀⠀\x1b[38;2;247;247;239m⠐⢄⠀⠀⠈⣿⠏⠀⠀\x1b[0m\n" ++
-    "\x1b[38;2;106;197;230m⢀⣰⣿⠿⠿⠿⠿⠿⠿⣿⣿⣿\x1b[38;2;9;126;179m⣿⣿⣿⣿⣶⣤⣄⣀⠀⠀\x1b[38;2;247;247;239m⠑⢶⣶\x1b[38;2;106;197;230m⣃\x1b[38;2;9;126;179m⣀⣤⠄\x1b[0m\n" ++
-    "\x1b[38;2;106;197;230m⠋⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠙⠻⠿⣝\x1b[38;2;9;126;179m⠛⠿⣿⣿⣿⣿⣿⣿⠿⠛⠉⠀⠀\x1b[0m\n" ++
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n" ++
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀";
-const logo_cols = 29; // braille cells per row
-const logo_rows = blk: {
-    @setEvalBranchQuota(20000);
-    var n: usize = 0;
-    var it = std.mem.splitScalar(u8, logo, '\n');
-    while (it.next()) |line| {
-        if (line.len != 0) n += 1;
-    }
-    break :blk n;
-};
-const welcome_gap = "   ";
-
-/// Banner text. Kept narrow enough that the logo + gap + the widest line fits in
-/// 80 columns (asserted at comptime below), so the banner always shows in full
-/// and never needs to measure the terminal or shed the logo.
-const banner_tagline_llm = "Control the browser with natural language";
-const banner_tagline_basic = "Basic REPL (--no-llm) — commands only";
-const banner_setup = "Set an API key, then run /provider <name>";
-const banner_hints = [_][]const u8{
-    "/goto <url> to navigate",
-    "/save to generate a reproducible script",
-    "/help to list commands   /quit to exit",
-    "! to run JavaScript on the current page",
-};
-
-comptime {
-    // Excludes the version line: it's build-environment-controlled (nightly tags
-    // add a commit count + hash), so asserting it would break the build over an
-    // input this file doesn't own.
-    const fixed = [_][]const u8{
-        "Lightpanda Agent",
-        banner_tagline_llm,
-        banner_tagline_basic,
-        banner_setup,
-    } ++ banner_hints;
-    var maxw: usize = 0;
-    for (fixed) |s| maxw = @max(maxw, std.unicode.utf8CountCodepoints(s) catch s.len);
-    if (logo_cols + welcome_gap.len + maxw > 79) @compileError("welcome banner exceeds 79 columns");
-}
-
-/// Prints the welcome banner: the logo on the left with the title and command
-/// hints beside it, vertically centered. `llm_active` picks the tagline.
-fn printWelcome(llm_active: bool) void {
-    const a = Terminal.ansi;
-
-    var version_buf: [192]u8 = undefined;
-    const version: []const u8 = std.fmt.bufPrint(&version_buf, a.dim ++ "{s}" ++ a.reset, .{lp.build_config.version}) catch "";
-
-    var lines: [9][]const u8 = undefined;
-    var n: usize = 0;
-    lines[n] = a.bold ++ "Lightpanda Agent" ++ a.reset;
-    n += 1;
-    lines[n] = version;
-    n += 1;
-    lines[n] = "";
-    n += 1;
-    if (llm_active) {
-        lines[n] = a.italic ++ banner_tagline_llm ++ a.reset;
-        n += 1;
-    } else {
-        lines[n] = a.italic ++ banner_tagline_basic ++ a.reset;
-        n += 1;
-        lines[n] = a.dim ++ banner_setup ++ a.reset;
-        n += 1;
-    }
-    inline for (banner_hints) |t| {
-        lines[n] = a.dim ++ t ++ a.reset;
-        n += 1;
-    }
-    const text = lines[0..n];
-
-    const start = (logo_rows - text.len) / 2 -| 1;
-    std.debug.print("\n", .{});
-    var row: usize = 0;
-    var it = std.mem.splitScalar(u8, logo, '\n');
-    while (it.next()) |logo_line| {
-        if (logo_line.len == 0) continue;
-        std.debug.print("{s}", .{logo_line});
-        if (row >= start and row - start < text.len) {
-            const line = text[row - start];
-            if (line.len != 0) std.debug.print("{s}{s}", .{ welcome_gap, line });
-        }
-        std.debug.print("\n", .{});
-        row += 1;
-    }
-}
 
 /// `/provider <keyword>` disables the LLM and persists it; shared by the command
 /// parser, autocomplete, and the save report so they can't drift apart.
@@ -1161,18 +978,18 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
     const path = resolved.path;
 
-    self.ensureSystemPrompt() catch return self.failSave("out of memory");
+    self.conversation.ensureSystemPrompt() catch return self.failSave("out of memory");
 
-    const ma = self.message_arena.allocator();
-    const baseline = self.messages.items.len;
+    const ma = self.conversation.arena.allocator();
+    const baseline = self.conversation.messages.items.len;
 
     const user_msg = self.buildSaveSynthesisMessage(ma, prompt) catch return self.failSave("out of memory");
-    self.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
+    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
 
     self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
-        &self.messages,
+        &self.conversation.messages,
         self.allocator,
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
@@ -1191,7 +1008,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
             return;
         }
         log.err(.app, "AI save synthesis error", .{ .err = err });
-        self.rollbackMessages(baseline);
+        self.conversation.rollback(baseline);
         return self.failSave(@errorName(err));
     };
     self.terminal.spinner.stop();
@@ -1204,23 +1021,23 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     }
 
     const raw = result.text orelse {
-        self.rollbackMessages(baseline);
+        self.conversation.rollback(baseline);
         return self.failSave("the model returned no script");
     };
 
     // `result.text` lives in `message_arena`, which the rollback below frees;
     // copy into the command arena first (scrubbing may return its input as-is).
     const owned = arena.dupe(u8, stripCodeFence(raw)) catch {
-        self.rollbackMessages(baseline);
+        self.conversation.rollback(baseline);
         return self.failSave("out of memory");
     };
     const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch {
-        self.rollbackMessages(baseline);
+        self.conversation.rollback(baseline);
         return self.failSave("out of memory");
     };
 
     // The save turn is a meta-action; keep it out of the ongoing conversation.
-    self.rollbackMessages(baseline);
+    self.conversation.rollback(baseline);
 
     writeContentFile(path, script, resolved.mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
@@ -1489,16 +1306,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
     return true;
 }
 
-fn ensureSystemPrompt(self: *Agent) !void {
-    if (self.messages.items.len == 0) {
-        try self.messages.append(self.allocator, .{
-            .role = .system,
-            .content = self.system_prompt,
-        });
-    }
-}
-
-/// Mirror a user-typed slash command into `self.messages` as if the LLM
+/// Mirror a user-typed slash command into `self.conversation.messages` as if the LLM
 /// had called the tool itself, so the next natural-language turn sees
 /// the same conversation shape either way.
 fn recordSlashToolCall(
@@ -1509,9 +1317,9 @@ fn recordSlashToolCall(
     result: browser_tools.ToolResult,
 ) !void {
     if (self.ai_client == null) return;
-    try self.ensureSystemPrompt();
+    try self.conversation.ensureSystemPrompt();
 
-    const ma = self.message_arena.allocator();
+    const ma = self.conversation.arena.allocator();
     self.synthetic_tool_call_id += 1;
 
     const user_content = try ma.dupe(u8, user_input);
@@ -1536,106 +1344,51 @@ fn recordSlashToolCall(
         .is_error = result.is_error,
     };
 
-    const baseline = self.messages.items.len;
-    errdefer self.messages.shrinkRetainingCapacity(baseline);
+    const baseline = self.conversation.messages.items.len;
+    errdefer self.conversation.messages.shrinkRetainingCapacity(baseline);
     // User turn before the assistant tool_call satisfies Gemini's rule
     // that a function call must follow a user or function-response turn.
-    try self.messages.append(self.allocator, .{
+    try self.conversation.messages.append(self.allocator, .{
         .role = .user,
         .content = user_content,
     });
-    try self.messages.append(self.allocator, .{
+    try self.conversation.messages.append(self.allocator, .{
         .role = .assistant,
         .tool_calls = tool_calls,
     });
-    try self.messages.append(self.allocator, .{
+    try self.conversation.messages.append(self.allocator, .{
         .role = .tool,
         .tool_results = tool_results,
     });
 }
 
-const prune_high = 30;
-const prune_keep = 20;
-
-fn pruneMessages(self: *Agent) void {
-    const msgs = self.messages.items;
-    if (msgs.len <= prune_high) return;
-
-    const tail_start = zenai.provider.safeTruncationStart(msgs, msgs.len - prune_keep) orelse return;
-
-    // Dupe into the new arena before mutating self.messages — a partial
-    // failure would otherwise leave items pointing into a freed arena.
-    var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
-    const duped = zenai.provider.dupeMessages(new_arena.allocator(), msgs[tail_start..]) catch {
-        new_arena.deinit();
-        return;
-    };
-
-    // System prompt at index 0 lives outside the arena and is preserved.
-    @memcpy(self.messages.items[1..][0..duped.len], duped);
-    self.messages.shrinkRetainingCapacity(1 + duped.len);
-    self.message_arena.deinit();
-    self.message_arena = new_arena;
-}
-
-/// Shrink `self.messages` back to `baseline` and rebuild the arena. Used
-/// after a failed turn (API error, synthesis) so the next turn doesn't
-/// replay the dropped messages and the arena doesn't accumulate their bytes.
-fn rollbackMessages(self: *Agent, baseline: usize) void {
-    self.messages.shrinkRetainingCapacity(baseline);
-    self.rebuildMessageArena();
-}
-
-/// Rebuild `message_arena` keeping only the messages currently in
-/// `self.messages`. Used after a rolled-back turn so the arena doesn't
-/// accumulate prompt/tool-output bytes from doomed turns.
-fn rebuildMessageArena(self: *Agent) void {
-    const msgs = self.messages.items;
-    if (msgs.len <= 1) {
-        // Only the system prompt (or nothing) remains — the system prompt
-        // lives outside the arena, so we can reset freely.
-        _ = self.message_arena.reset(.retain_capacity);
-        return;
-    }
-
-    var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
-    // System prompt at index 0 lives outside the arena and is preserved.
-    const duped = zenai.provider.dupeMessages(new_arena.allocator(), msgs[1..]) catch {
-        new_arena.deinit();
-        return;
-    };
-    @memcpy(self.messages.items[1..][0..duped.len], duped);
-    self.message_arena.deinit();
-    self.message_arena = new_arena;
-}
-
-/// Returned text lives in `message_arena`, so it's only valid until the
-/// next prune. The caller is responsible for calling `pruneMessages()`
+/// Returned text lives in `conversation.arena`, so it's only valid until the
+/// next prune. The caller is responsible for calling `conversation.prune()`
 /// after consuming the returned text — pruning earlier would free the
 /// arena the slice points into. `null` means the model emitted nothing
 /// even after the synthesis turn.
 fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
-    const ma = self.message_arena.allocator();
+    const ma = self.conversation.arena.allocator();
 
-    try self.ensureSystemPrompt();
+    try self.conversation.ensureSystemPrompt();
 
     // Attachments only ride on the very first user turn (just after the
     // system prompt) — wired into the message's rich `parts`.
     const turn_attachments: ?[]const []const u8 =
-        if (self.messages.items.len == 1) input.attachments else null;
+        if (self.conversation.messages.items.len == 1) input.attachments else null;
 
     // Save message count so we can roll back on API failure — otherwise the
     // failed user turn stays in history and replays on the next attempt.
-    const msg_baseline = self.messages.items.len;
+    const msg_baseline = self.conversation.messages.items.len;
 
     if (turn_attachments) |paths| {
         const parts = try self.buildUserMessageParts(ma, input.prompt, paths);
-        try self.messages.append(self.allocator, .{
+        try self.conversation.messages.append(self.allocator, .{
             .role = .user,
             .parts = parts,
         });
     } else {
-        try self.messages.append(self.allocator, .{
+        try self.conversation.messages.append(self.allocator, .{
             .role = .user,
             .content = try ma.dupe(u8, input.prompt),
         });
@@ -1646,7 +1399,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
-        &self.messages,
+        &self.conversation.messages,
         self.allocator,
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
@@ -1669,7 +1422,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         // outcome they asked for.
         if (self.cancel_requested.load(.acquire)) return self.drainCancellation(msg_baseline);
         log.err(.app, "AI API error", .{ .err = err });
-        self.rollbackMessages(msg_baseline);
+        self.conversation.rollback(msg_baseline);
         return error.ApiError;
     };
     self.terminal.spinner.stop();
@@ -1694,7 +1447,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             if (last_extract_idx) |idx| {
                 if (tool == .extract and idx != i) continue;
             }
-            const args = browser_tools.normalizeArgKeys(self.message_arena.allocator(), tool, tc.arguments) catch tc.arguments;
+            const args = browser_tools.normalizeArgKeys(self.conversation.arena.allocator(), tool, tc.arguments) catch tc.arguments;
             const cmd = Command.fromToolCall(tool, args);
             if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
@@ -1718,15 +1471,15 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         // Without a synthesis turn forbidding tools+pretraining, models
         // confabulate when the page was blocked or empty.
         log.info(.app, "synthesizing final answer", .{});
-        const synth_baseline = self.messages.items.len;
-        try self.messages.append(self.allocator, .{
+        const synth_baseline = self.conversation.messages.items.len;
+        try self.conversation.messages.append(self.allocator, .{
             .role = .user,
             .content = try ma.dupe(u8, synthesis_prompt),
         });
 
         var synth = provider_client.runTools(
             self.model,
-            &self.messages,
+            &self.conversation.messages,
             self.allocator,
             ma,
             .{ .context = @ptrCast(self), .callFn = handleToolCall },
@@ -1743,7 +1496,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         ) catch |err| {
             if (self.cancel_requested.load(.acquire)) return self.drainCancellation(msg_baseline);
             log.err(.app, "AI synthesis error", .{ .err = err });
-            self.rollbackMessages(synth_baseline);
+            self.conversation.rollback(synth_baseline);
             break :blk null;
         };
         defer synth.deinit();

@@ -27,6 +27,7 @@ const zenai = @import("zenai");
 const lp = @import("lightpanda");
 const Config = lp.Config;
 const Terminal = @import("Terminal.zig");
+const string = @import("../string.zig");
 const Credentials = zenai.provider.Credentials;
 
 pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY";
@@ -144,4 +145,79 @@ pub fn saveRemembered(remembered: Remembered) !void {
 
 pub fn availableProviders(buf: []Credentials) []Credentials {
     return zenai.provider.detectKeys(buf, std.enums.values(Config.AiProvider));
+}
+
+pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembered: ?Remembered) []const u8 {
+    if (opts.model) |m| return m;
+    if (resolved) |r| {
+        // Use the remembered model whenever it matches the chosen provider,
+        // not only when the provider itself came from the remembered file.
+        if (remembered) |rem| {
+            if (rem.provider) |p| if (p == r.credentials.provider) return rem.model;
+        }
+        return zenai.provider.defaultModel(r.credentials.provider);
+    }
+    return "";
+}
+
+/// Precedence: explicit `--effort` flag > remembered `.lp-agent.zon` value >
+/// mode default. The interactive REPL defaults to `.low` so turns stay snappy;
+/// one-shot `--task` and script runs default to `.medium`, where answer
+/// quality matters more than per-turn latency.
+pub fn resolveEffort(opts: Config.Agent, remembered: ?Remembered, will_repl: bool) Config.Effort {
+    if (opts.effort) |e| return e;
+    if (remembered) |r| if (r.effort) |e| return e;
+    return if (will_repl) .low else .medium;
+}
+
+/// Precedence: explicit `--verbosity` flag > remembered `.lp-agent.zon` value >
+/// mode default (see `Config.agentVerbosity`).
+pub fn resolveVerbosity(opts: Config.Agent, remembered: ?Remembered) Config.AgentVerbosity {
+    if (opts.verbosity) |v| return v;
+    if (remembered) |r| if (r.verbosity) |v| return v;
+    return Config.agentVerbosity(opts);
+}
+
+pub const ReconciledModel = union(enum) {
+    /// Owned by the allocator passed to reconcileModel.
+    use: []u8,
+    abort,
+};
+
+/// Validate `desired` against the provider's catalog, mirroring the interactive
+/// `/model` command. An unreachable server (empty list) leaves it unchecked.
+/// An explicit model that isn't listed is fatal. Ollama's local catalog is
+/// authoritative, so its default is substituted when not pulled; cloud defaults
+/// are hardcoded real models and trusted as-is.
+pub fn reconcileModel(
+    allocator: std.mem.Allocator,
+    llm: Credentials,
+    desired: []const u8,
+    base_url: ?[:0]const u8,
+    explicit: bool,
+) !ReconciledModel {
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, base_url) catch &.{};
+    if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
+
+    if (!explicit) {
+        if (llm.provider != .ollama) return .{ .use = try allocator.dupe(u8, desired) };
+        std.debug.print("Default Ollama model '{s}' is not installed; using '{s}'.\n", .{ desired, ids[0] });
+        return .{ .use = try allocator.dupe(u8, ids[0]) };
+    }
+
+    if (llm.provider == .ollama) {
+        const installed = std.mem.join(arena.allocator(), ", ", ids) catch "";
+        std.debug.print(
+            "Model '{s}' is not installed in Ollama.\nInstalled: {s}\nRun `ollama pull {s}` to install it, or choose one of the above.\n",
+            .{ desired, installed, desired },
+        );
+    } else {
+        std.debug.print(
+            "Model '{s}' is not available for {s}.\nRun with --list-models to see options.\n",
+            .{ desired, @tagName(llm.provider) },
+        );
+    }
+    return .abort;
 }
