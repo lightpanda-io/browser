@@ -3,7 +3,7 @@
 This tutorial will walk you through how to use Lightpanda Agent to create a
 reproducible JavaScript browser script.
 
-For flag and command tables, see [agent.md](agent.md). 
+For flag and command tables, see [agent.md](agent.md).
 
 ## Prerequisites
 
