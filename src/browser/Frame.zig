@@ -1042,7 +1042,7 @@ fn notifyParentLoadComplete(self: *Frame) void {
     parent.iframeCompletedLoading(self.iframe.?);
 }
 
-fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
+fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
     var self: *Frame = @ptrCast(@alignCast(response.ctx));
 
     // Commit point for a pending root navigation. The session has been
@@ -1110,7 +1110,7 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
         });
     }
 
-    return true;
+    return .proceed;
 }
 
 fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {

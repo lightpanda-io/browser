@@ -21,6 +21,7 @@
 // call forwardX(...) to invoke the captured originals with the original ctx.
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
+const HeaderResult = @import("../../browser/HttpClient.zig").HeaderResult;
 
 const Forward = @This();
 
@@ -50,7 +51,7 @@ pub fn forwardStart(self: Forward, response: Response) anyerror!void {
     if (self.start) |cb| try cb(fwd);
 }
 
-pub fn forwardHeader(self: Forward, response: Response) anyerror!bool {
+pub fn forwardHeader(self: Forward, response: Response) anyerror!HeaderResult {
     var fwd = response;
     fwd.ctx = self.ctx;
     return self.header(fwd);
@@ -72,4 +73,26 @@ pub fn forwardErr(self: Forward, e: anyerror) void {
 
 pub fn forwardShutdown(self: Forward) void {
     if (self.shutdown) |cb| cb(self.ctx);
+}
+
+pub fn noop() Forward {
+    return .{
+        .ctx = @ptrFromInt(0x1),
+        .start = null,
+        .header = struct {
+            fn header(_: Response) anyerror!bool {
+                return true;
+            }
+        }.header,
+        .data = struct {
+            fn data(_: Response, _: []const u8) anyerror!void {}
+        }.data,
+        .done = struct {
+            fn done(_: *anyopaque) anyerror!void {}
+        }.done,
+        .err = struct {
+            fn err(_: *anyopaque, _: anyerror) void {}
+        }.err,
+        .shutdown = null,
+    };
 }

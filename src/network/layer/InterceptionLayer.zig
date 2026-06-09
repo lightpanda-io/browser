@@ -29,6 +29,7 @@ const Response = @import("../../browser/HttpClient.zig").Response;
 const FulfilledResponse = @import("../../browser/HttpClient.zig").FulfilledResponse;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
 const Forward = @import("Forward.zig");
+const HeaderResult = @import("../../browser/HttpClient.zig").HeaderResult;
 
 const InterceptionLayer = @This();
 
@@ -111,7 +112,7 @@ pub const InterceptContext = struct {
         return self.forward.forwardStart(response);
     }
 
-    fn headerCallback(response: Response) anyerror!bool {
+    fn headerCallback(response: Response) anyerror!HeaderResult {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
         log.debug(.http, "intercept header", .{
             .url = self.transfer.req.url,
@@ -263,8 +264,8 @@ fn fulfillInner(
         try cb(response);
     }
 
-    const proceed = try req.header_callback(response);
-    if (!proceed) {
+    const result = try req.header_callback(response);
+    if (result == .abort) {
         return error.Abort;
     }
 
