@@ -144,36 +144,73 @@ pub const driver_guidance =
 /// Shared: the agent's `/save` feeds it to its own LLM; the MCP `save` tool
 /// hands it to the driving client as the tool description.
 pub const save_synthesis_prompt =
-    \\Write a single Lightpanda agent script (.js) that reproduces what the user
-    \\set out to do this session. Infer the goal from the whole conversation and
-    \\keep only the steps a clean, repeatable script needs — drop failed attempts,
-    \\retries, exploratory reads (tree/markdown/extract probes), and corrections.
-    \\Pick the right layer for each step:
-    \\- builtins (goto, click, fill, extract, …) for actions and for reading data;
-    \\  extract is how you pull structured data out of a page.
-    \\- plain top-level JavaScript for logic — loops, cross-page aggregation,
-    \\  filtering, string building. It runs in the script, not the page.
-    \\- evaluate(...) only for page-side JavaScript no builtin can express. It is
-    \\  an escape hatch, not a default, and cannot see the script's variables —
-    \\  interpolate any value into its string.
-    \\Stay faithful to the recorded calls: same options each one actually used.
-    \\Do NOT add a `timeout` to goto (or any tool) unless the session
-    \\did. Never round-trip a result through `lp.*`, and never append no-op
-    \\extract(...) probes or `evaluate("return lp....")` tails to surface output.
-    \\The completion value — the last top-level expression — prints automatically
-    \\(objects and arrays as JSON), so end with the bare result expression: a final
-    \\`extract({...});`, or `results;` after an aggregation loop. No console.log,
-    \\JSON.stringify, or `return` (illegal at top level) needed.
-    \\Write modern, readable JavaScript: `for (const x of xs)`, `const`/`let` over
-    \\`var`, template literals, destructuring, 2-space indent (including multi-line
-    \\extract({...}) schemas).
-    \\The script runs as a classic script, so top-level `await` is a syntax error.
-    \\The builtins are synchronous — each returns its result directly, so never
-    \\wrap them in async/await, .then, or Promises (`const data = extract(...)`,
-    \\not `await extract(...)`). evaluate(...) may run async JS in the page, but
-    \\the call itself returns synchronously.
-    \\Output ONLY JavaScript source — no markdown fences, no commentary.
+    \\Write a single Lightpanda agent script (.js) that reproduces what the user set
+    \\out to do this session. Keep only the steps a clean, repeatable script needs —
+    \\drop failed attempts, retries, and exploratory probes.
+    \\Use the builtins for actions and data — extract is the main way to read data —
+    \\and plain top-level JavaScript for logic (loops, aggregation, filtering, string
+    \\work). Reserve evaluate(...) for advanced page interaction or page-side logic no
+    \\builtin can express; it can't see the script's variables, so interpolate them into
+    \\its string. Stay faithful to the recorded calls and their options (e.g. don't add
+    \\a timeout the session didn't use).
+    \\The last top-level expression prints automatically (objects/arrays as JSON), so
+    \\end with the bare result — a final extract({...}); or results; after a loop. No
+    \\console.log, JSON.stringify, or return.
+    \\Top-level await is a syntax error and the builtins are synchronous, so never await
+    \\them (const data = extract(...), not await extract(...)).
+    \\If an output schema is given below, the completion value MUST match it — parse or
+    \\split the extracted text as needed.
+    \\Write modern, readable JavaScript (const/let, template literals, destructuring,
+    \\2-space indent). Output ONLY JavaScript — no markdown fences, no commentary.
 ;
+
+/// Agent `/save`, step 1: distill the session into a one-sentence intent that
+/// feeds `save_schema_prompt`. Appended to the full conversation, so the model
+/// reads the turns; an explicit anchor (a `--task` or `/save` prompt) is added
+/// by the caller when present.
+pub const save_intent_prompt =
+    \\In one sentence, state what the user set out to accomplish this session:
+    \\the goal and the data or outcome they wanted — not the individual steps,
+    \\tools, selectors, or page structure. Phrase it as a task description, e.g.
+    \\"Go to HackerNews and retrieve the top 10 stories with their last 3
+    \\comments (author and text)". Output ONLY that one sentence.
+;
+
+/// Agent `/save`, step 2: turn the step-1 intent into a logical output schema.
+/// Given ONLY the intent — deliberately blind to the page and how data was
+/// fetched — so the resulting shape is stable across runs of the same session.
+pub const save_schema_prompt =
+    \\Generate the JSON output schema describing the following intent. Do not
+    \\focus on the intent context (the actual webpage structure or how to
+    \\retrieve the data), just the logical JSON schema example. Do not provide
+    \\actual data, just data types ("string", "number", "boolean").
+    \\Example: the intent "Go to HackerNews and retrieve the top 10 stories with
+    \\their last 3 comments with author and text" produces:
+    \\{"results": [{"title": "string", "url": "string", "comments": [{"author": "string", "text": "string"}]}]}
+    \\Output ONLY the JSON schema, no markdown fences, no commentary.
+    \\
+    \\Intent:
+;
+
+/// Name of the agent `/save` verification tool — the model calls it to run a
+/// candidate script before finalizing. The agent dispatches it by this name.
+pub const run_script_tool_name = "run_script";
+
+const run_script_tool_desc =
+    "Run your full candidate script for real, from a blank page, and return its completion value " ++
+    "(or error) — exactly as it will run when saved and replayed. It must navigate itself with " ++
+    "goto(...). Use it to verify navigation, extraction, and your transform before finalizing.";
+
+const run_script_params_json =
+    \\{"type":"object","properties":{"source":{"type":"string","description":"Full JavaScript source of the candidate script to execute."}},"required":["source"]}
+;
+
+/// The `run_script` tool definition for an LLM `/save` synthesis turn. `arena`
+/// backs the parsed parameter schema, so it must outlive the `runTools` call.
+pub fn runScriptToolDef(arena: std.mem.Allocator) !zenai.provider.Tool {
+    const params = try std.json.parseFromSliceLeaky(std.json.Value, arena, run_script_params_json, .{});
+    return .{ .name = run_script_tool_name, .description = run_script_tool_desc, .parameters = params };
+}
 
 /// Reject paths that an untrusted MCP client could use to escape the
 /// working directory: empty paths, absolute paths, and any path with a

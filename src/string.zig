@@ -332,6 +332,29 @@ pub fn truncateUtf8(bytes: []const u8, max_bytes: usize) []const u8 {
     return bytes[0..i];
 }
 
+/// Truncate `text` to at most `max_bytes` on a UTF-8 boundary and, when it
+/// overflows, append a marker noting the original length. Returns `text`
+/// unchanged when it fits; otherwise allocates the marked result in `allocator`
+/// (falling back to the bare prefix if that allocation fails).
+pub fn truncateWithMarker(allocator: std.mem.Allocator, text: []const u8, max_bytes: usize) []const u8 {
+    if (text.len <= max_bytes) return text;
+    const prefix = truncateUtf8(text, max_bytes);
+    var suffix_buf: [64]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{text.len}) catch return prefix;
+    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
+}
+
+/// Strip a surrounding ```lang … ``` markdown fence if the text is wrapped in
+/// one, returning the inner block; passes already-bare text through unchanged.
+pub fn stripCodeFence(text: []const u8) []const u8 {
+    const t = std.mem.trim(u8, text, &std.ascii.whitespace);
+    if (!std.mem.startsWith(u8, t, "```")) return t;
+    const first_nl = std.mem.indexOfScalar(u8, t, '\n') orelse return t;
+    const body = t[first_nl + 1 ..];
+    const close = std.mem.lastIndexOf(u8, body, "```") orelse return std.mem.trim(u8, body, &std.ascii.whitespace);
+    return std.mem.trim(u8, body[0..close], &std.ascii.whitespace);
+}
+
 // Discriminatory type that signals the bridge to use arena instead of call_arena
 // Use this for strings that need to persist beyond the current call
 // The caller can unwrap and store just the underlying .str field
@@ -376,6 +399,32 @@ test "truncateUtf8" {
     // Invalid leader byte counts as one byte so the loop terminates.
     try testing.expectEqual("\xFF", truncateUtf8("\xFFx", 1));
     try testing.expectEqual("\xFFx", truncateUtf8("\xFFx", 2));
+}
+
+test "truncateWithMarker" {
+    const ta = std.testing.allocator;
+    try std.testing.expectEqualStrings("short", truncateWithMarker(ta, "short", 1024));
+
+    // Over-cap: a 3-byte Hangul codepoint (U+D55C, 0xED 0x95 0x9C) straddling the
+    // cap must stay valid UTF-8, and the marker must be appended.
+    const cap: usize = 1024;
+    const buf = try ta.alloc(u8, cap + 8);
+    defer ta.free(buf);
+    @memset(buf[0 .. cap - 1], 'a');
+    buf[cap - 1] = 0xED;
+    buf[cap + 0] = 0x95;
+    buf[cap + 1] = 0x9C;
+    @memset(buf[cap + 2 ..], 'b');
+
+    const out = truncateWithMarker(ta, buf, cap);
+    defer if (out.ptr != buf.ptr) ta.free(out);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(out));
+    try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
+}
+
+test "stripCodeFence" {
+    try std.testing.expectEqualStrings("goto(\"x\");", stripCodeFence("```js\ngoto(\"x\");\n```"));
+    try std.testing.expectEqualStrings("goto(\"x\");", stripCodeFence("goto(\"x\");"));
 }
 
 test "String" {

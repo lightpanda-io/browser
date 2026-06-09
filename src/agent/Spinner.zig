@@ -71,6 +71,12 @@ cv: std.Thread.Condition = .{},
 state: State = .idle,
 frame: u8 = 0,
 
+/// Custom label for the thinking state — a phase like "writing the script".
+/// Empty falls back to "thinking". Set via `setStatus`, cleared when the turn
+/// ends so the next turn starts plain.
+status_buf: [48]u8 = undefined,
+status_len: usize = 0,
+
 tool_calls: u32 = 0,
 turn_started_ns: i128 = 0,
 
@@ -143,6 +149,7 @@ pub fn stop(self: *Spinner) void {
     _ = std.posix.write(std.posix.STDERR_FILENO, summary) catch {};
 
     self.state = .idle;
+    self.status_len = 0;
     self.last_render_len = 0;
 }
 
@@ -155,6 +162,7 @@ pub fn cancel(self: *Spinner) void {
     if (self.state == .idle) return;
     _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
     self.state = .idle;
+    self.status_len = 0;
     self.last_render_len = 0;
 }
 
@@ -186,6 +194,22 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     if (manual) self.ensureWorkerLocked();
     self.renderLocked();
     self.cv.signal();
+}
+
+/// Label the thinking indicator with the current phase (e.g. "writing the
+/// script"). Stored even while a tool label is up or before `start()`, so it
+/// shows the moment the indicator next renders thinking. Cleared at turn end.
+pub fn setStatus(self: *Spinner, text: []const u8) void {
+    if (!self.isEnabled()) return;
+    self.mu.lock();
+    defer self.mu.unlock();
+    const t = truncateUtf8(text, self.status_buf.len);
+    @memcpy(self.status_buf[0..t.len], t);
+    self.status_len = t.len;
+    if (self.state == .thinking) {
+        self.renderLocked();
+        self.cv.signal();
+    }
 }
 
 /// Request a transition back to the cycling "thinking" state. The worker
@@ -253,11 +277,14 @@ fn renderLocked(self: *Spinner) void {
     const glyph = braille[self.frame % braille.len];
     const written = switch (self.state) {
         .idle => return,
-        .thinking => std.fmt.bufPrint(
-            &buf,
-            "\r" ++ ansi.yellow ++ "{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[agent: thinking]" ++ ansi.reset ++ clear_eol,
-            .{glyph},
-        ) catch return,
+        .thinking => blk: {
+            const label = if (self.status_len > 0) self.status_buf[0..self.status_len] else "thinking";
+            break :blk std.fmt.bufPrint(
+                &buf,
+                "\r" ++ ansi.yellow ++ "{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[agent: {s}]" ++ ansi.reset ++ clear_eol,
+                .{ glyph, label },
+            ) catch return;
+        },
         .tool => |tool| blk: {
             const prefix: []const u8 = if (tool.manual) "" else "agent: ";
             const name = tool.name_buf[0..tool.name_len];
