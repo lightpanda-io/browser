@@ -47,7 +47,8 @@ _root: ?*Element = null,
 _root_margin: []const u8 = "0px",
 _threshold: []const f64 = &.{0.0},
 _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .{},
-_previous_states: std.AutoHashMapUnmanaged(*Element, bool) = .{},
+// tracked targets that aren't reported yet
+_tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
 
 // Shared zero DOMRect to avoid repeated allocations for non-intersecting elements
 var zero_rect: DOMRect = .{
@@ -140,8 +141,7 @@ pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !vo
         try frame.registerIntersectionObserver(self);
     }
 
-    // false = tracked but not yet reported
-    try self._previous_states.put(self._arena, target, false);
+    try self._tracked.put(self._arena, target, {});
 
     // Check intersection for this new target and schedule delivery
     try self.checkIntersection(target, frame);
@@ -155,7 +155,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
     for (self._observing.items, 0..) |elem, i| {
         if (elem == target) {
             _ = self._observing.swapRemove(i);
-            _ = self._previous_states.remove(target);
+            _ = self._tracked.remove(target);
 
             // Remove any pending entries for this target.
             // Entries will be cleaned up by V8 GC via the finalizer.
@@ -182,7 +182,7 @@ pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
         entry.deinit(frame._page);
     }
     self._pending_entries.clearRetainingCapacity();
-    self._previous_states.clearRetainingCapacity();
+    self._tracked.clearRetainingCapacity();
 
     if (self._observing.items.len > 0) {
         frame.unregisterIntersectionObserver(self);
@@ -252,22 +252,21 @@ fn meetsThreshold(self: *IntersectionObserver, ratio: f64) bool {
 }
 
 fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
-    const previous_state = self._previous_states.getEntry(target) orelse {
-        // If target isn't in `_previous_states` then it was already reported.
-        // This is an important optimization which lets us skip the heavy work.
+    const tracked = self._tracked.getEntry(target) orelse {
+        // If target isn't tracked then it was already reported. This is an
+        // important optimization which lets us skip the heavy work below.
         // This function can be called a lot.
         return;
     };
 
     const has_parent = target.asNode().parentNode() != null;
     const is_now_intersecting = has_parent and self.meetsThreshold(1.0);
-    if (is_now_intersecting == previous_state.value_ptr.*) {
-        // Unchanged (e.g. observed while still orphaned) — leave the entry as-is
-        // so a later attach is reported.
+    if (!is_now_intersecting) {
+        // Not intersecting yet (e.g. observed while still orphaned) — keep
+        // tracking so a later attach is reported.
         return;
     }
 
-    // The only reachable transition is false → intersecting.
     // Building the entry is the expensive part — getBoundingClientRect walks the
     // document to fake a position (O(node count)) — so it only runs here.
     const data = try self.calculateIntersection(target, has_parent, frame);
@@ -286,7 +285,7 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
         ._intersection_ratio = data.intersection_ratio,
     };
     try self._pending_entries.append(self._arena, entry);
-    _ = self._previous_states.removeByPtr(previous_state.key_ptr);
+    _ = self._tracked.removeByPtr(tracked.key_ptr);
 }
 
 pub fn checkIntersections(self: *IntersectionObserver, frame: *Frame) !void {
