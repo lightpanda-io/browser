@@ -72,13 +72,17 @@ pub const Entry = struct {
 };
 
 pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormData {
-    const form = form_ orelse {
-        return try exec._factory.create(FormData{
-            ._rc = .{},
-            ._arena = exec.arena,
-            ._entries = .empty,
-        });
+    const arena = try exec.getArena(.small, "FormData");
+    errdefer exec.releaseArena(arena);
+
+    const form_data = try arena.create(FormData);
+    form_data.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._entries = .empty,
     };
+
+    const form = form_ orelse return form_data;
 
     const frame = switch (exec.js.global) {
         .frame => |f| f,
@@ -93,12 +97,10 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
     form._constructing_entry_list = true;
     defer form._constructing_entry_list = false;
 
-    const form_data = try exec._factory.create(FormData{
-        ._rc = .{},
-        ._arena = exec.arena,
-        ._entries = try collectForm(frame.arena, form, submitter, frame),
-    });
+    form_data._entries = try collectForm(arena, form, submitter, frame);
 
+    // Hold a reference on each entry's File for the FormData's lifetime; released
+    // in deinit.
     for (form_data._entries.items) |entry| {
         switch (entry.value) {
             .file => |file| file.acquireRef(),
@@ -123,6 +125,8 @@ pub fn deinit(self: *FormData, page: *Page) void {
             else => {},
         }
     }
+    // Frees the entry list and this FormData itself; do not touch self afterwards.
+    page.releaseArena(self._arena);
 }
 
 pub fn releaseRef(self: *FormData, page: *Page) void {

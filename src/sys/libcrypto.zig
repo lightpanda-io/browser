@@ -239,11 +239,87 @@ pub extern fn HMAC(
     out_len: *c_uint,
 ) ?[*]u8;
 
+pub extern fn PKCS5_PBKDF2_HMAC(
+    password: [*c]const u8,
+    password_len: usize,
+    salt: [*c]const u8,
+    salt_len: usize,
+    iterations: c_uint,
+    digest: *const EVP_MD,
+    key_len: usize,
+    out_key: [*c]u8,
+) c_int;
+
+pub extern fn HKDF(
+    out_key: [*c]u8,
+    out_len: usize,
+    digest: *const EVP_MD,
+    secret: [*c]const u8,
+    secret_len: usize,
+    salt: [*c]const u8,
+    salt_len: usize,
+    info: [*c]const u8,
+    info_len: usize,
+) c_int;
+
 pub const X25519_PRIVATE_KEY_LEN = 32;
 pub const X25519_PUBLIC_VALUE_LEN = 32;
 pub const X25519_SHARED_KEY_LEN = 32;
 
 pub extern fn X25519_keypair(out_public_value: *[32]u8, out_private_key: *[32]u8) void;
+
+pub const struct_ec_point_st = opaque {};
+pub const EC_POINT = struct_ec_point_st;
+
+pub const EVP_CIPHER = opaque {};
+pub const EVP_CIPHER_CTX = opaque {};
+
+pub extern fn EVP_aes_128_cbc() *const EVP_CIPHER;
+pub extern fn EVP_aes_192_cbc() *const EVP_CIPHER;
+pub extern fn EVP_aes_256_cbc() *const EVP_CIPHER;
+pub extern fn EVP_aes_128_ctr() *const EVP_CIPHER;
+pub extern fn EVP_aes_192_ctr() *const EVP_CIPHER;
+pub extern fn EVP_aes_256_ctr() *const EVP_CIPHER;
+pub extern fn EVP_aes_128_gcm() *const EVP_CIPHER;
+pub extern fn EVP_aes_192_gcm() *const EVP_CIPHER;
+pub extern fn EVP_aes_256_gcm() *const EVP_CIPHER;
+
+pub extern fn EVP_CIPHER_CTX_new() ?*EVP_CIPHER_CTX;
+pub extern fn EVP_CIPHER_CTX_free(ctx: ?*EVP_CIPHER_CTX) void;
+pub extern fn EVP_CIPHER_CTX_ctrl(ctx: *EVP_CIPHER_CTX, command: c_int, arg: c_int, ptr: ?*anyopaque) c_int;
+pub extern fn EVP_CIPHER_CTX_set_padding(ctx: *EVP_CIPHER_CTX, padding: c_int) c_int;
+
+pub extern fn EVP_EncryptInit_ex(ctx: *EVP_CIPHER_CTX, cipher: ?*const EVP_CIPHER, impl: ?*ENGINE, key: [*c]const u8, iv: [*c]const u8) c_int;
+pub extern fn EVP_EncryptUpdate(ctx: *EVP_CIPHER_CTX, out: [*c]u8, out_len: *c_int, in: [*c]const u8, in_len: c_int) c_int;
+pub extern fn EVP_EncryptFinal_ex(ctx: *EVP_CIPHER_CTX, out: [*c]u8, out_len: *c_int) c_int;
+pub extern fn EVP_DecryptInit_ex(ctx: *EVP_CIPHER_CTX, cipher: ?*const EVP_CIPHER, impl: ?*ENGINE, key: [*c]const u8, iv: [*c]const u8) c_int;
+pub extern fn EVP_DecryptUpdate(ctx: *EVP_CIPHER_CTX, out: [*c]u8, out_len: *c_int, in: [*c]const u8, in_len: c_int) c_int;
+pub extern fn EVP_DecryptFinal_ex(ctx: *EVP_CIPHER_CTX, out: [*c]u8, out_len: *c_int) c_int;
+
+// EVP_CIPHER_CTX_ctrl commands for AES-GCM.
+pub const EVP_CTRL_GCM_SET_IVLEN = 0x9;
+pub const EVP_CTRL_GCM_GET_TAG = 0x10;
+pub const EVP_CTRL_GCM_SET_TAG = 0x11;
+
+// EC key type + curve identifiers.
+pub const EVP_PKEY_EC = 408; // NID_X9_62_id_ecPublicKey
+pub const NID_X9_62_prime256v1 = 415; // P-256
+pub const NID_secp384r1 = 715; // P-384
+pub const NID_secp521r1 = 716; // P-521
+
+pub extern fn EVP_PKEY_new() ?*EVP_PKEY;
+pub extern fn EVP_PKEY_id(pkey: *const EVP_PKEY) c_int;
+pub extern fn EVP_PKEY_set1_EC_KEY(pkey: *EVP_PKEY, key: *EC_KEY) c_int;
+
+pub extern fn EC_KEY_new_by_curve_name(nid: c_int) ?*EC_KEY;
+pub extern fn EC_KEY_generate_key(key: *EC_KEY) c_int;
+pub extern fn EC_KEY_free(key: ?*EC_KEY) void;
+pub extern fn EC_KEY_get0_public_key(key: *const EC_KEY) ?*const EC_POINT;
+pub extern fn EC_KEY_set_public_key(key: *EC_KEY, point: *const EC_POINT) c_int;
+
+// DER decoders (advance `inp` past the parsed structure).
+pub extern fn d2i_PUBKEY(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
+pub extern fn d2i_AutoPrivateKey(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
 
 pub const NID_X25519 = @as(c_int, 948);
 pub const EVP_PKEY_X25519 = NID_X25519;

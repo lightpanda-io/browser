@@ -24,6 +24,7 @@ const crypto = @import("../../../sys/libcrypto.zig");
 
 const js = @import("../../js/js.zig");
 const algorithm = @import("algorithm.zig");
+const common = @import("common.zig");
 
 const CryptoKey = @import("../CryptoKey.zig");
 
@@ -36,12 +37,13 @@ pub fn init(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    // Per spec, an unrecognized hash is caught during algorithm normalization
-    // and surfaces as NotSupportedError.
-    const digest = crypto.findDigest(switch (params.hash) {
+    const hash_name = switch (params.hash) {
         .string => |str| str,
         .object => |obj| obj.name,
-    }) catch return local.rejectPromise(.{
+    };
+    // Per spec, an unrecognized hash is caught during algorithm normalization
+    // and surfaces as NotSupportedError.
+    const digest = crypto.findDigest(hash_name) catch return local.rejectPromise(.{
         .dom_exception = .{ .err = error.NotSupported },
     });
 
@@ -76,7 +78,6 @@ pub fn init(
 
     // Should we reject this in promise too?
     const key = try exec.arena.alloc(u8, block_size);
-    errdefer exec.arena.free(key);
 
     // HMAC is simply CSPRNG.
     const res = crypto.RAND_bytes(key.ptr, key.len);
@@ -87,6 +88,46 @@ pub fn init(
         ._extractable = extractable,
         ._usages = mask,
         ._key = key,
+        ._algorithm = .{ .name = "HMAC", .hash = try exec.arena.dupe(u8, hash_name) },
+        ._vary = .{ .digest = digest },
+    });
+
+    return local.resolvePromise(crypto_key);
+}
+
+/// Imports raw HMAC key material (from the `raw` or `jwk` formats; the caller
+/// has already turned both into the underlying bytes).
+pub fn import(
+    hash_name: []const u8,
+    raw: []const u8,
+    extractable: bool,
+    key_usages: []const []const u8,
+    exec: *const Execution,
+) !js.Promise {
+    const local = exec.js.local.?;
+
+    const digest = crypto.findDigest(hash_name) catch return local.rejectPromise(.{
+        .dom_exception = .{ .err = error.NotSupported },
+    });
+
+    const mask = common.usageMask(&.{ "sign", "verify" }, key_usages) catch |err| {
+        return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
+    };
+
+    if (raw.len == 0) {
+        return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
+    }
+
+    const key = try exec.arena.dupe(u8, raw);
+    errdefer exec.arena.free(key);
+
+    const crypto_key = try exec._factory.create(CryptoKey{
+        ._type = .hmac,
+        ._kind = .secret,
+        ._extractable = extractable,
+        ._usages = mask,
+        ._key = key,
+        ._algorithm = .{ .name = "HMAC", .hash = try exec.arena.dupe(u8, hash_name) },
         ._vary = .{ .digest = digest },
     });
 

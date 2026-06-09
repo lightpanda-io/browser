@@ -89,9 +89,126 @@ pub const Init = union(enum) {
     };
 };
 
-/// Algorithm for deriveBits() and deriveKey().
+/// Algorithm for deriveBits() and deriveKey(). Variants are distinguished by
+/// their required members (`iterations` for PBKDF2, `info` for HKDF, `public`
+/// for ECDH/X25519), so probe order doesn't cause ambiguity.
 pub const Derive = union(enum) {
+    pbkdf2: Pbkdf2Params,
+    hkdf: HkdfParams,
     ecdh_or_x25519: Init.EcdhKeyDeriveParams,
+
+    /// A hash AlgorithmIdentifier — either `"SHA-256"` or `{name: "SHA-256"}`.
+    pub const Hash = union(enum) {
+        string: []const u8,
+        object: struct { name: []const u8 },
+
+        pub fn name(self: Hash) []const u8 {
+            return switch (self) {
+                .string => |s| s,
+                .object => |o| o.name,
+            };
+        }
+    };
+
+    pub const Pbkdf2Params = struct {
+        name: []const u8,
+        hash: Hash,
+        salt: js.TypedArray(u8),
+        iterations: u32,
+    };
+
+    pub const HkdfParams = struct {
+        name: []const u8,
+        hash: Hash,
+        salt: js.TypedArray(u8),
+        info: js.TypedArray(u8),
+    };
+};
+
+/// The `derivedKeyType` argument to `deriveKey()` — the algorithm of the key to
+/// produce. HMAC carries a hash; AES carries a length. Probed in that order so
+/// the more specific shapes win.
+pub const DerivedKey = union(enum) {
+    hmac: struct { name: []const u8, hash: Derive.Hash, length: ?u32 = null },
+    keyed: struct { name: []const u8, length: u32 },
+    object: struct { name: []const u8 },
+    name: []const u8,
+};
+
+/// Algorithm passed to `importKey()`. HMAC carries a hash, so it must be probed
+/// before the bare-`{name}` object; the plain string is the final fallback (any
+/// JS value coerces to a string).
+pub const Import = union(enum) {
+    hmac: struct {
+        name: []const u8,
+        hash: union(enum) {
+            string: []const u8,
+            object: struct { name: []const u8 },
+        },
+        length: ?u32 = null,
+    },
+    ec: struct { name: []const u8, namedCurve: []const u8 },
+    object: struct { name: []const u8 },
+    name: []const u8,
+
+    pub fn algoName(self: Import) []const u8 {
+        return switch (self) {
+            .hmac => |h| h.name,
+            .ec => |e| e.name,
+            .object => |o| o.name,
+            .name => |n| n,
+        };
+    }
+
+    /// The `namedCurve` if this is an EC import, else empty.
+    pub fn namedCurve(self: Import) []const u8 {
+        return switch (self) {
+            .ec => |e| e.namedCurve,
+            else => "",
+        };
+    }
+};
+
+/// Key material handed to `importKey()`: either a BufferSource (raw/spki/pkcs8)
+/// or a JSON Web Key object (jwk). `bytes` is probed first — a JWK is a plain
+/// object and won't coerce to a TypedArray.
+pub const KeyData = union(enum) {
+    bytes: js.TypedArray(u8),
+    jwk: Jwk,
+
+    /// Minimal JWK fields we read on import. Symmetric ("oct") keys only need
+    /// `kty` and `k`; `d` marks an asymmetric private key. The rest are accepted
+    /// for forward-compatibility.
+    pub const Jwk = struct {
+        kty: []const u8,
+        k: ?[]const u8 = null,
+        d: ?[]const u8 = null,
+        alg: ?[]const u8 = null,
+        use: ?[]const u8 = null,
+        ext: ?bool = null,
+    };
+};
+
+/// Algorithm for `encrypt()` / `decrypt()`. AES-CBC/CTR/GCM share one struct
+/// (fields are mode-specific and optional) and dispatch on `name`; a bare string
+/// is the fallback form.
+pub const Encrypt = union(enum) {
+    params: struct {
+        name: []const u8,
+        iv: ?js.TypedArray(u8) = null,
+        counter: ?js.TypedArray(u8) = null,
+        length: ?u32 = null,
+        additionalData: ?js.TypedArray(u8) = null,
+        tagLength: ?u32 = null,
+    },
+    name: []const u8,
+
+    pub fn algoName(self: Encrypt) []const u8 {
+        return switch (self) {
+            .params => |p| p.name,
+            .name => |n| n,
+        };
+    }
 };
 
 /// For `sign()` functionality.
