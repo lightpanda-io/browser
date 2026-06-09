@@ -17,8 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
+const Page = @import("../Page.zig");
 const URL = @import("URL.zig");
 const U = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
@@ -26,12 +28,28 @@ const Frame = @import("../Frame.zig");
 const Location = @This();
 
 _url: *URL,
+_rc: lp.RC(u32) = .{},
 
 pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
     const url = try URL.init(raw_url, null, &frame.js.execution);
+    url.acquireRef();
+    errdefer url.releaseRef(frame._page);
+
     return frame._factory.create(Location{
         ._url = url,
     });
+}
+
+pub fn deinit(self: *const Location, page: *Page) void {
+    self._url.releaseRef(page);
+}
+
+pub fn acquireRef(self: *Location) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *Location, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn getPathname(self: *const Location) []const u8 {
