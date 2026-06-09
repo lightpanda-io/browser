@@ -581,8 +581,8 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
     switch (meta.tag) {
         .quit => return true,
         .help => self.printSlashHelp(arena, rest),
-        .verbosity => self.handleVerbosity(rest),
-        .effort => self.handleEffort(rest),
+        .verbosity => self.setEnumOption("verbosity", &self.terminal.verbosity, rest),
+        .effort => self.setEnumOption("effort", &self.effort, rest),
         .usage => self.handleUsage(),
         .clear => self.handleClear(),
         .reset => self.handleReset(),
@@ -594,30 +594,21 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
     return false;
 }
 
-fn handleVerbosity(self: *Agent, rest: []const u8) void {
+/// Shared body of `/verbosity` and `/effort`: bare prints the current level; an
+/// argument is parsed against the enum, stored in `target`, and persisted.
+/// `name` drives the slash name, the usage hint, and the report label together.
+fn setEnumOption(self: *Agent, comptime name: []const u8, target: anytype, rest: []const u8) void {
+    const T = @typeInfo(@TypeOf(target)).pointer.child;
     if (rest.len == 0) {
-        self.terminal.printInfo("verbosity: {s}", .{@tagName(self.terminal.verbosity)});
+        self.terminal.printInfo(name ++ ": {s}", .{@tagName(target.*)});
         return;
     }
-    const level = std.meta.stringToEnum(Config.AgentVerbosity, rest) orelse {
-        self.terminal.printError("usage: /verbosity " ++ Config.tagHint(Config.AgentVerbosity) ++ " (got {s})", .{rest});
+    const level = std.meta.stringToEnum(T, rest) orelse {
+        self.terminal.printError("usage: /" ++ name ++ " " ++ Config.tagHint(T) ++ " (got {s})", .{rest});
         return;
     };
-    self.terminal.verbosity = level;
-    self.reportSaved("verbosity", @tagName(level));
-}
-
-fn handleEffort(self: *Agent, rest: []const u8) void {
-    if (rest.len == 0) {
-        self.terminal.printInfo("effort: {s}", .{@tagName(self.effort)});
-        return;
-    }
-    const level = std.meta.stringToEnum(Config.Effort, rest) orelse {
-        self.terminal.printError("usage: /effort " ++ Config.tagHint(Config.Effort) ++ " (got {s})", .{rest});
-        return;
-    };
-    self.effort = level;
-    self.reportSaved("effort", @tagName(level));
+    target.* = level;
+    self.reportSaved(name, @tagName(level));
 }
 
 /// Print cumulative token usage for the session, broken down so the cache's
@@ -969,6 +960,13 @@ fn failSave(self: *Agent, reason: []const u8) void {
     self.terminal.printError("save failed: {s}", .{reason});
 }
 
+/// Roll the in-flight save turn back out of the conversation, then report the
+/// failure — so a doomed `/save` synthesis never leaks its messages into history.
+fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
+    self.conversation.rollback(baseline);
+    self.failSave(reason);
+}
+
 /// LLM-synthesized `/save`: hand the model the builtin catalog, the full
 /// conversation, and the deterministic record of what ran, then write the
 /// idiomatic script it returns.
@@ -1008,8 +1006,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
             return;
         }
         log.err(.app, "AI save synthesis error", .{ .err = err });
-        self.conversation.rollback(baseline);
-        return self.failSave(@errorName(err));
+        return self.abortSave(baseline, @errorName(err));
     };
     self.terminal.spinner.stop();
     defer result.deinit();
@@ -1020,21 +1017,13 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
         return;
     }
 
-    const raw = result.text orelse {
-        self.conversation.rollback(baseline);
-        return self.failSave("the model returned no script");
-    };
+    const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
 
-    // `result.text` lives in `message_arena`, which the rollback below frees;
-    // copy into the command arena first (scrubbing may return its input as-is).
-    const owned = arena.dupe(u8, stripCodeFence(raw)) catch {
-        self.conversation.rollback(baseline);
-        return self.failSave("out of memory");
-    };
-    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch {
-        self.conversation.rollback(baseline);
-        return self.failSave("out of memory");
-    };
+    // `result.text` lives in the conversation arena, which the rollback below
+    // frees; copy into the command arena first (scrubbing may return its input
+    // as-is).
+    const owned = arena.dupe(u8, stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
+    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
 
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
@@ -1458,7 +1447,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         }
     }
 
-    // Dupe into `message_arena` — RunToolsResult arenas are deinited below.
+    // Dupe into the conversation arena — RunToolsResult arenas are deinited below.
     self.last_turn_refused = result.finish_reason == .safety;
     const final_text: ?[]const u8 = blk: {
         if (result.text) |text| {
@@ -1507,9 +1496,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         break :blk if (synth.text) |text| try ma.dupe(u8, text) else null;
     };
 
-    // NB: pruning is deferred to the caller. `final_text` is allocated in
-    // `message_arena`, and `pruneMessages` may rebuild that arena — running
-    // it here would hand the caller a dangling slice.
+    // NB: pruning is deferred to the caller. `final_text` is allocated in the
+    // conversation arena, and `conversation.prune()` may rebuild that arena —
+    // running it here would hand the caller a dangling slice.
     return final_text;
 }
 
@@ -1593,17 +1582,14 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result| {
-        const capped = capToolOutput(allocator, result.text);
-        self.terminal.agentToolDone(tool_name, args_str, !result.is_error);
-        if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, capped, result.is_error);
-        return .{ .content = capped, .is_error = result.is_error };
-    } else |err| {
-        const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
-        self.terminal.agentToolDone(tool_name, args_str, false);
-        if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, msg, true);
-        return .{ .content = msg, .is_error = true };
-    }
+    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
+        .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error }
+    else |err|
+        .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
+
+    self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
+    if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
+    return outcome;
 }
 
 /// One-shot for `--list-models`: resolve provider+key, fetch chat-capable
