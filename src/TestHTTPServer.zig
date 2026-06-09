@@ -81,8 +81,7 @@ fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !voi
 
     while (true) {
         var req = http_server.receiveHead() catch |err| switch (err) {
-            error.ReadFailed => continue,
-            error.HttpConnectionClosing => continue,
+            error.ReadFailed, error.HttpConnectionClosing => return,
             else => {
                 std.debug.print("Test HTTP Server error: {}\n", .{err});
                 return err;
