@@ -37,6 +37,7 @@ const Conversation = @import("Conversation.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
+const save = @import("save.zig");
 const welcome = @import("welcome.zig");
 const string = @import("../string.zig");
 
@@ -110,11 +111,6 @@ node_registry: CDPNode.Registry,
 terminal: Terminal,
 save_buffer: Recorder,
 save_path: ?[]u8,
-last_extract_arena: std.heap.ArenaAllocator,
-/// JSON the latest `extract` returned this session; grounds `/save` synthesis.
-last_extract_json: ?[]const u8 = null,
-/// Set during an LLM `/save` so `handleToolCall` can route `run_script`.
-active_verify: ?*Verify = null,
 script_runtime_mutex: std.Thread.Mutex = .{},
 active_script_runtime: ?*ScriptRuntime = null,
 conversation: Conversation,
@@ -259,7 +255,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .terminal = .init(allocator, history_paths, verbosity, will_repl),
         .save_buffer = .init(allocator),
         .save_path = null,
-        .last_extract_arena = .init(allocator),
         .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
         .model = model,
         .effort = effort,
@@ -300,7 +295,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 pub fn deinit(self: *Agent) void {
     self.terminal.uninstallLogSink();
     self.save_buffer.deinit();
-    self.last_extract_arena.deinit();
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
     self.conversation.deinit();
@@ -637,17 +631,9 @@ fn handleUsage(self: *Agent) void {
 /// node IDs. Shared by `/clear` and `/reset`.
 fn clearConversation(self: *Agent) void {
     self.conversation.rollback(0);
-    self.resetSaveBuffers();
+    self.save_buffer.reset();
     self.total_usage = .{};
     self.node_registry.reset();
-}
-
-/// Drop everything `/save` accumulates: the recorded action buffer and the
-/// captured extract data that grounds synthesis.
-fn resetSaveBuffers(self: *Agent) void {
-    self.save_buffer.reset();
-    _ = self.last_extract_arena.reset(.retain_capacity);
-    self.last_extract_json = null;
 }
 
 /// Forget the conversation while leaving the browser session live — loaded page
@@ -800,9 +786,7 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
     _ = completionModels(self, self.allocator);
 }
 
-const SaveMode = enum { append, replace };
-
-const PathAndMode = struct { path: []const u8, mode: SaveMode };
+const PathAndMode = struct { path: []const u8, mode: save.Mode };
 
 fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8) ?PathAndMode {
     if (self.save_path) |saved| {
@@ -814,7 +798,7 @@ fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]c
         }
         return .{ .path = saved, .mode = .append };
     } else if (filename) |name| {
-        const exists = fileExists(name) catch |err| {
+        const exists = save.fileExists(name) catch |err| {
             self.terminal.printError("failed to inspect {s}: {s}", .{ name, @errorName(err) });
             return null;
         };
@@ -824,7 +808,7 @@ fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]c
             .replace;
         return .{ .path = name, .mode = mode };
     } else {
-        const path = randomSaveFilename(arena) catch |err| {
+        const path = save.randomFilename(arena) catch |err| {
             self.terminal.printError("failed to choose save filename: {s}", .{@errorName(err)});
             return null;
         };
@@ -833,7 +817,7 @@ fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]c
 }
 
 fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
-    const parsed = parseSaveCommand(rest) catch |err| {
+    const parsed = save.parseCommand(rest) catch |err| {
         const msg: []const u8 = switch (err) {
             error.UnterminatedQuote => "unterminated filename quote",
             error.EmptyFilename => "filename cannot be empty",
@@ -867,7 +851,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         null;
     defer if (new_save_path) |p| self.allocator.free(p);
 
-    self.writeSaveFile(path, mode) catch |err| {
+    save.writeContentFile(path, self.save_buffer.bytes(), mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -877,89 +861,19 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         new_save_path = null;
     }
     const saved_lines = self.save_buffer.lines;
-    self.resetSaveBuffers();
+    self.save_buffer.reset();
     self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, self.save_path.? });
 }
 
-const SaveCommand = struct { filename: ?[]const u8, prompt: ?[]const u8 };
-
-/// Split `/save` arguments into an optional filename and an optional trailing
-/// natural-language prompt. A quoted leading token is always a filename; an
-/// unquoted one is a filename only if it ends in `.js` (else the whole argument
-/// is the prompt, and a name is chosen automatically).
-fn parseSaveCommand(rest: []const u8) !SaveCommand {
-    const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
-    if (trimmed.len == 0) return .{ .filename = null, .prompt = null };
-
-    if (trimmed[0] == '\'' or trimmed[0] == '"') {
-        const quote = trimmed[0];
-        const end = std.mem.indexOfScalarPos(u8, trimmed, 1, quote) orelse return error.UnterminatedQuote;
-        const name = trimmed[1..end];
-        try validateSaveFilename(name);
-        const rest_prompt = std.mem.trim(u8, trimmed[end + 1 ..], &std.ascii.whitespace);
-        return .{ .filename = name, .prompt = if (rest_prompt.len == 0) null else rest_prompt };
-    }
-
-    const tok_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
-    const first = trimmed[0..tok_end];
-    if (std.mem.endsWith(u8, first, ".js")) {
-        try validateSaveFilename(first);
-        const rest_prompt = std.mem.trim(u8, trimmed[tok_end..], &std.ascii.whitespace);
-        return .{ .filename = first, .prompt = if (rest_prompt.len == 0) null else rest_prompt };
-    }
-    return .{ .filename = null, .prompt = trimmed };
-}
-
-fn validateSaveFilename(name: []const u8) !void {
-    if (name.len == 0) return error.EmptyFilename;
-    if (std.fs.path.isAbsolute(name)) return error.InvalidFilename;
-    if (std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidFilename;
-    if (std.mem.indexOfScalar(u8, name, '\\') != null) return error.InvalidFilename;
-    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.InvalidFilename;
-}
-
-fn randomSaveFilename(arena: std.mem.Allocator) ![]const u8 {
-    for (0..100) |_| {
-        const n = std.crypto.random.int(u64);
-        const path = try std.fmt.allocPrint(arena, "session-{x}.js", .{n});
-        if (!(try fileExists(path))) return path;
-    }
-    return error.NameCollision;
-}
-
-fn fileExists(path: []const u8) !bool {
-    std.fs.cwd().access(path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return false,
-        else => return err,
-    };
-    return true;
-}
-
-fn promptSaveMode(self: *Agent, path: []const u8) ?SaveMode {
+fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
     var header_buf: [256]u8 = undefined;
     const header = std.fmt.bufPrint(&header_buf, "{s} already exists. Pick save mode:", .{path}) catch
         "File already exists. Pick save mode:";
-    const idx = Terminal.promptNumberedChoice(header, std.meta.fieldNames(SaveMode), 0) catch {
+    const idx = Terminal.promptNumberedChoice(header, std.meta.fieldNames(save.Mode), 0) catch {
         self.terminal.printInfo("Save cancelled.", .{});
         return null;
     };
     return @enumFromInt(idx);
-}
-
-fn writeSaveFile(self: *Agent, path: []const u8, mode: SaveMode) !void {
-    return writeContentFile(path, self.save_buffer.bytes(), mode);
-}
-
-fn writeContentFile(path: []const u8, content: []const u8, mode: SaveMode) !void {
-    const file = try std.fs.cwd().createFile(path, .{ .truncate = mode == .replace });
-    defer file.close();
-    if (mode == .append) {
-        try file.seekFromEnd(0);
-        const pos = try file.getPos();
-        if (pos > 0 and content.len > 0) try file.writeAll("\n");
-    }
-    try file.writeAll(content);
-    if (content.len > 0 and content[content.len - 1] != '\n') try file.writeAll("\n");
 }
 
 fn failSave(self: *Agent, reason: []const u8) void {
@@ -973,134 +887,10 @@ fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
     self.failSave(reason);
 }
 
-/// `/save` verification state: the runtime `run_script` executes candidates on,
-/// and the last source that ran cleanly (the saved script if the model's final
-/// message omits it).
-const Verify = struct {
-    runtime: *ScriptRuntime,
-    last_source: ?[]const u8 = null,
-    /// A clean run whose bullet is held back until we know its verdict: yellow if
-    /// a re-run supersedes it, green if it's the one we keep.
-    pending_ok: bool = false,
-};
-
-/// Agent-only addendum (kept out of the shared `save_synthesis_prompt`) telling
-/// the model to derive every value at runtime and check the result with run_script.
-const save_verify_addendum =
-    \\Read data with the recorded extract(...), not evaluate() — extract can read a
-    \\card's whole text via an empty selector (""). Reshape its result in plain JS so the
-    \\completion value matches the schema exactly (same keys, parsed numbers); don't
-    \\return the raw extract or hard-code values.
-    \\Before finalizing, test with run_script: it runs your FULL script for real from a
-    \\blank page, so it must goto(...) first (missing goto → "no page loaded", a wrong
-    \\selector → null). Confirm every field is populated, then reply with ONLY the final
-    \\JavaScript source.
-;
-
-/// Cap on the extract sample shown in the synthesis prompt, so a large result
-/// doesn't dominate context.
-const save_sample_cap = 8 * 1024;
-
-/// LLM-synthesized `/save`. Pin the output shape first — derive the session's
-/// intent, then a typed output schema from it — so the script's result shape is
-/// stable across runs, then synthesize the script honoring that schema. Each
-/// step degrades gracefully: a null schema falls back to plain synthesis.
+/// LLM-synthesized `/save`: hand the model the builtin catalog, the full
+/// conversation, and the deterministic record of what ran, then write the
+/// idiomatic script it returns.
 fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8) void {
-    self.conversation.ensureSystemPrompt() catch return self.failSave("out of memory");
-    const baseline = self.conversation.messages.items.len;
-
-    // One spinner session for the save; cancel (not stop) leaves the phase steps
-    // without a per-turn "worked for" summary.
-    self.terminal.spinner.start();
-    defer self.terminal.spinner.cancel();
-
-    const anchor = prompt orelse self.one_shot_task;
-    const schema = self.deriveOutputSchema(arena, baseline, anchor);
-    if (self.cancel_requested.load(.acquire)) {
-        self.resetAfterCancel(baseline);
-        return;
-    }
-
-    self.synthesizeScript(arena, filename, prompt, schema);
-}
-
-/// Steps 1–2 of `/save`: session intent → typed output schema. Null if either
-/// turn produced nothing usable (the caller then synthesizes without a schema).
-fn deriveOutputSchema(self: *Agent, arena: std.mem.Allocator, baseline: usize, anchor: ?[]const u8) ?[]const u8 {
-    const intent = self.deriveIntent(arena, baseline, anchor) orelse return null;
-    self.terminal.agentStep("captured the intent");
-    if (self.cancel_requested.load(.acquire)) return null;
-    const schema = self.deriveSchema(arena, intent) orelse return null;
-    self.terminal.agentStep("generated output schema");
-    return schema;
-}
-
-/// One-sentence intent from the session. Runs over the live conversation then
-/// rolls back to `baseline`, keeping the turn out of history; an explicit anchor
-/// is authoritative.
-fn deriveIntent(self: *Agent, arena: std.mem.Allocator, baseline: usize, anchor: ?[]const u8) ?[]const u8 {
-    const ma = self.conversation.arena.allocator();
-    var out: std.Io.Writer.Allocating = .init(ma);
-    out.writer.writeAll(browser_tools.save_intent_prompt) catch return null;
-    if (anchor) |a| {
-        out.writer.print("\nThe user described the goal as: {s}\nTreat that as authoritative and reconcile it with the session.", .{a}) catch return null;
-    }
-    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = out.written() }) catch return null;
-    defer self.conversation.rollback(baseline);
-    return self.runTextTurn(&self.conversation.messages, arena, self.allocator, ma, 512, "capturing the intent");
-}
-
-/// Typed output schema from the intent. Runs over a throwaway message list (not
-/// the conversation) so it's derived from the intent alone, blind to the page.
-fn deriveSchema(self: *Agent, arena: std.mem.Allocator, intent: []const u8) ?[]const u8 {
-    var msgs: std.ArrayList(zenai.provider.Message) = .empty;
-    const msg = std.fmt.allocPrint(arena, "{s} {s}", .{ browser_tools.save_schema_prompt, intent }) catch return null;
-    msgs.append(arena, .{ .role = .user, .content = msg }) catch return null;
-    const raw = self.runTextTurn(&msgs, arena, arena, arena, 1024, "designing the output schema") orelse return null;
-    return string.stripCodeFence(raw);
-}
-
-/// Single no-tools text turn; returns the model's text duped into `dest` (so it
-/// survives a rollback of `messages`), or null on cancel/error/empty output.
-fn runTextTurn(
-    self: *Agent,
-    messages: *std.ArrayList(zenai.provider.Message),
-    dest: std.mem.Allocator,
-    list_alloc: std.mem.Allocator,
-    data_alloc: std.mem.Allocator,
-    max_tokens: i32,
-    status: []const u8,
-) ?[]const u8 {
-    self.terminal.spinner.setStatus(status);
-    var result = self.ai_client.?.runTools(
-        self.model,
-        messages,
-        list_alloc,
-        data_alloc,
-        .{ .context = @ptrCast(self), .callFn = handleToolCall },
-        .{
-            .tools = &.{},
-            .max_turns = 1,
-            .max_tokens = max_tokens,
-            .tool_choice = .none,
-            .effort = .low,
-            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
-        },
-    ) catch |err| {
-        if (!self.cancel_requested.load(.acquire)) log.err(.app, "AI save schema turn error", .{ .err = err });
-        return null;
-    };
-    defer result.deinit();
-    self.total_usage.add(result.usage);
-    if (result.cancelled) return null;
-    const text = std.mem.trim(u8, result.text orelse return null, &std.ascii.whitespace);
-    if (text.len == 0) return null;
-    return dest.dupe(u8, text) catch null;
-}
-
-/// Step 3 of `/save`: synthesize the script from the catalog, conversation,
-/// recorded calls, and output schema, then write it.
-fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8, schema: ?[]const u8) void {
     const provider_client = self.ai_client.?;
 
     const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
@@ -1111,39 +901,10 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
     const ma = self.conversation.arena.allocator();
     const baseline = self.conversation.messages.items.len;
 
-    // With captured extract data, give the model `run_script` to test candidates;
-    // otherwise a single no-tools synthesis.
-    var verify: Verify = .{ .runtime = undefined };
-    var run_tools: [1]ProviderTool = undefined;
-    const verifying = blk: {
-        // A captured extract means there's a loaded page worth verifying against.
-        if (self.last_extract_json == null) break :blk false;
-        run_tools[0] = browser_tools.runScriptToolDef(ma) catch break :blk false;
-        const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch break :blk false;
-        verify.runtime = runtime;
-        self.active_verify = &verify;
-        self.script_runtime_mutex.lock();
-        self.active_script_runtime = runtime;
-        self.script_runtime_mutex.unlock();
-        break :blk true;
-    };
-    defer if (verifying) {
-        self.script_runtime_mutex.lock();
-        self.active_script_runtime = null;
-        self.script_runtime_mutex.unlock();
-        self.active_verify = null;
-        verify.runtime.cancelTerminate();
-        verify.runtime.deinit();
-    };
-
-    const sample: ?[]const u8 = if (verifying) blk: {
-        const d = self.last_extract_json.?;
-        break :blk d[0..@min(d.len, save_sample_cap)];
-    } else null;
-    const user_msg = self.buildSaveSynthesisMessage(ma, prompt, schema, sample) catch return self.failSave("out of memory");
+    const user_msg = self.buildSaveSynthesisMessage(ma, prompt) catch return self.failSave("out of memory");
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
 
-    self.terminal.spinner.setStatus(if (verifying) "writing and testing the script" else "writing the script");
+    self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
         &self.conversation.messages,
@@ -1151,14 +912,15 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = if (verifying) run_tools[0..1] else &.{},
-            .max_turns = if (verifying) 6 else 1,
+            .tools = &.{},
+            .max_turns = 1,
             .max_tokens = 8192,
-            .tool_choice = if (verifying) .auto else .none,
+            .tool_choice = .none,
             .effort = .medium,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
     ) catch |err| {
+        self.terminal.spinner.cancel();
         if (self.cancel_requested.load(.acquire)) {
             self.resetAfterCancel(baseline);
             return;
@@ -1166,6 +928,7 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
         log.err(.app, "AI save synthesis error", .{ .err = err });
         return self.abortSave(baseline, @errorName(err));
     };
+    self.terminal.spinner.stop();
     defer result.deinit();
     self.total_usage.add(result.usage);
 
@@ -1174,88 +937,25 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u
         return;
     }
 
-    // Prefer the last cleanly-run candidate: verified, pure JS without the model's
-    // surrounding commentary. Fall back to the final text only when nothing ran.
-    const raw: []const u8 = blk: {
-        if (verifying) {
-            if (verify.last_source) |s| break :blk s;
-        }
-        if (result.text) |t| {
-            if (std.mem.trim(u8, t, &std.ascii.whitespace).len > 0) break :blk t;
-        }
-        return self.abortSave(baseline, "the model returned no script");
-    };
+    const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
 
-    // `raw` is freed by the rollback below; copy into the command arena first.
-    const owned = arena.dupe(u8, string.stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
+    // `result.text` lives in the conversation arena, freed by the rollback
+    // below; copy into the command arena first (scrubbing may return its input
+    // as-is).
+    const owned = arena.dupe(u8, save.stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
     const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
 
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
 
-    writeContentFile(path, script, resolved.mode) catch |err| {
+    save.writeContentFile(path, script, resolved.mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
 
     self.rememberSavePath(path);
-    self.resetSaveBuffers();
-    self.flushPendingRun(.ok);
-    self.terminal.agentStep(std.fmt.allocPrint(arena, "saved synthesized script to {s}", .{path}) catch "saved synthesized script");
-}
-
-/// Emit the clean run held back by `runScriptTool`, colored by `status` (warn if
-/// a re-run superseded it, ok if it's the one we kept), at most once.
-fn flushPendingRun(self: *Agent, status: Terminal.BulletStatus) void {
-    const verify = self.active_verify orelse return;
-    if (!verify.pending_ok) return;
-    verify.pending_ok = false;
-    self.terminal.agentVerifyRun("", status);
-}
-
-/// `run_script` handler: run the candidate live and return its completion value
-/// (or error) to the model so it can judge and fix its own script.
-fn runScriptTool(self: *Agent, allocator: std.mem.Allocator, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
-    const verify = self.active_verify.?;
-    // This call supersedes any clean run held back from the previous one.
-    self.flushPendingRun(.warn);
-
-    const args = browser_tools.parseArgsOrDefault(struct { source: []const u8 = "" }, allocator, arguments) catch
-        return .{ .content = "invalid run_script arguments", .is_error = true };
-    const source = args.source;
-    if (source.len == 0) return .{ .content = "run_script requires a non-empty \"source\" string", .is_error = true };
-
-    // Blank page per candidate, like a standalone replay, so a script missing
-    // goto(...) fails here instead of using the page the session left loaded.
-    if (self.session.hasPage()) self.session.removePage();
-
-    const outcome = verify.runtime.runSourceCapture(source, "candidate.js") catch
-        return .{ .content = "out of memory running candidate", .is_error = true };
-    if (outcome.err) |e| {
-        self.terminal.agentVerifyRun(oneLinePreview(allocator, e, 120), .fail);
-        return .{ .content = std.fmt.allocPrint(allocator, "Script threw: {s}", .{e}) catch "Script threw an error", .is_error = true };
-    }
-
-    // Keep the last source that ran cleanly — it's the verified, prose-free
-    // artifact `synthesizeScript` saves, instead of the model's final message
-    // (which may wrap the script in commentary). Hold its bullet until we know
-    // whether the model keeps this run or tries another.
-    verify.last_source = self.conversation.arena.allocator().dupe(u8, source) catch source;
-    verify.pending_ok = true;
-
-    const body = if (outcome.output.len == 0) "(completion value is empty/undefined)" else outcome.output;
-    const content = std.fmt.allocPrint(allocator, "Completion value:\n{s}", .{body}) catch body;
-    return .{ .content = string.truncateWithMarker(allocator, content, tool_output_max_bytes), .is_error = false };
-}
-
-/// Collapse `text` to a single trimmed line capped at `max` cells (with an
-/// ellipsis when cut) — a compact preview for the verify-run trace bullet.
-fn oneLinePreview(arena: std.mem.Allocator, text: []const u8, max: usize) []const u8 {
-    const trimmed = std.mem.trim(u8, text, &std.ascii.whitespace);
-    const first = trimmed[0 .. std.mem.indexOfScalar(u8, trimmed, '\n') orelse trimmed.len];
-    if (first.len <= max) return first;
-    const cut = string.truncateUtf8(first, max);
-    return std.fmt.allocPrint(arena, "{s}…", .{cut}) catch cut;
+    self.save_buffer.reset();
+    self.terminal.printInfo("Saved synthesized script to {s}", .{path});
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
@@ -1268,59 +968,22 @@ fn rememberSavePath(self: *Agent, path: []const u8) void {
     self.save_path = dup;
 }
 
-fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]const u8, schema: ?[]const u8, sample: ?[]const u8) ![]const u8 {
+fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]const u8) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
     try w.writeAll(browser_tools.save_synthesis_prompt);
-    try w.writeAll("\n\nBuiltin functions (call them as JS functions). extract is the main way to read data — use it for every value you need; the rest navigate or act on the page:\n");
-    try renderBuiltinCatalog(w);
+    try w.writeAll("\n\nBuiltin functions to prefer (call them as JS functions):\n");
+    try save.renderBuiltinCatalog(w);
     const recorded = self.save_buffer.bytes();
     if (recorded.len > 0) {
         try w.writeAll("\nCommands and JS that actually ran this session:\n");
         try w.writeAll(recorded);
-    }
-    if (schema) |s| {
-        try w.writeAll("\nThe completion value must match this output schema (types are examples):\n");
-        try w.writeAll(s);
-    }
-    if (sample) |data| {
-        try w.writeAll("\nWhat a recorded extract returned this session, for reference:\n");
-        try w.writeAll(data);
-        try w.writeAll("\n\n");
-        try w.writeAll(save_verify_addendum);
     }
     if (prompt) |p| {
         try w.writeAll("\nThe user's instruction for this script:\n");
         try w.writeAll(p);
     }
     return out.written();
-}
-
-/// Document the recorded browser tools — the subset callable from a saved
-/// script — with full descriptions, so the model gets each function's argument
-/// dialect (e.g. `extract`'s schema format) without the tool schemas a no-tools
-/// synthesis turn omits.
-fn renderBuiltinCatalog(w: *std.Io.Writer) !void {
-    // The primary builtins first; `evaluate` is held back and framed as a last
-    // resort below, so it isn't presented as a peer way to read data.
-    for (Schema.all()) |s| {
-        if (!s.tool.isRecorded() or s.tool == .evaluate) continue;
-        try renderBuiltinEntry(w, s);
-    }
-    for (Schema.all()) |s| {
-        if (s.tool != .evaluate) continue;
-        try w.writeAll("\nEscape hatch for advanced page interaction or page-side logic no builtin above can express — not for reading data extract can read:\n");
-        try renderBuiltinEntry(w, s);
-    }
-}
-
-fn renderBuiltinEntry(w: *std.Io.Writer, s: Schema) !void {
-    try w.print("\n{s}(", .{s.tool_name});
-    for (s.required, 0..) |req, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.writeAll(req);
-    }
-    try w.print("):\n{s}\n", .{s.description});
 }
 
 fn logSaveBufferError(self: *Agent, err: anyerror) void {
@@ -1548,9 +1211,9 @@ fn recordSlashToolCall(
         .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
     };
 
-    // truncateWithMarker returns its input unchanged under the cap; dupe so
-    // content doesn't alias the caller's per-iteration arena.
-    const capped = string.truncateWithMarker(ma, result.text, tool_output_max_bytes);
+    // capToolOutput returns its input unchanged under the cap; dupe so content
+    // doesn't alias the caller's per-iteration arena.
+    const capped = capToolOutput(ma, result.text);
     const content = if (capped.ptr == result.text.ptr) try ma.dupe(u8, capped) else capped;
 
     const tool_results = try ma.alloc(zenai.provider.ToolResult, 1);
@@ -1652,13 +1315,6 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         for (result.tool_calls_made, 0..) |tc, i| {
             const t = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
             if (!tc.is_error and t == .extract) last_extract_idx = i;
-        }
-
-        // Keep the latest extract's real result so `/save` can ground and
-        // verify its synthesized post-processing against actual data.
-        if (last_extract_idx) |idx| {
-            _ = self.last_extract_arena.reset(.retain_capacity);
-            self.last_extract_json = self.last_extract_arena.allocator().dupe(u8, result.tool_calls_made[idx].result) catch null;
         }
 
         var recorded_any = false;
@@ -1792,14 +1448,19 @@ fn buildUserMessageParts(
 // the next request body) without bound.
 const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
+fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
+    if (output.len <= tool_output_max_bytes) return output;
+    const prefix = string.truncateUtf8(output, tool_output_max_bytes);
+    var suffix_buf: [64]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
+    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
+}
+
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
-    // `run_script`'s only arg is the whole candidate script — too long and noisy
-    // to render, so suppress it and let the label/phase carry the context.
-    const is_run_script = self.active_verify != null and std.mem.eql(u8, tool_name, browser_tools.run_script_tool_name);
     // The spinner doesn't render args, and `agentToolDone` skips the body line
     // at low verbosity — don't pay for the stringify when nobody reads it.
-    const needs_args = !is_run_script and (self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low);
+    const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
     // Stringify the pre-substitution args so $LP_* placeholders the model
     // emitted stay redacted in the UI.
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
@@ -1809,15 +1470,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome: zenai.provider.Client.ToolHandler.Result = if (is_run_script)
-        self.runScriptTool(allocator, arguments)
-    else if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
-        .{ .content = string.truncateWithMarker(allocator, result.text, tool_output_max_bytes), .is_error = result.is_error }
+    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
+        .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error }
     else |err|
         .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
 
-    // run_script emits its own always-visible trace inside `runScriptTool`.
-    if (!is_run_script) self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
+    self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
     return outcome;
 }
@@ -1888,51 +1546,35 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
     return ids;
 }
 
-test "parseSaveCommand: filename only" {
-    const r = try parseSaveCommand("out.js");
-    try std.testing.expectEqualStrings("out.js", r.filename.?);
-    try std.testing.expect(r.prompt == null);
+test {
+    _ = save;
 }
 
-test "parseSaveCommand: filename and prompt" {
-    const r = try parseSaveCommand("out.js summarize the login flow");
-    try std.testing.expectEqualStrings("out.js", r.filename.?);
-    try std.testing.expectEqualStrings("summarize the login flow", r.prompt.?);
+test "capToolOutput: passes through when under cap" {
+    const ta = std.testing.allocator;
+    const out = capToolOutput(ta, "short");
+    try std.testing.expectEqualStrings("short", out);
 }
 
-test "parseSaveCommand: quoted filename keeps trailing prompt" {
-    const r = try parseSaveCommand("\"my flow.js\"  do X");
-    try std.testing.expectEqualStrings("my flow.js", r.filename.?);
-    try std.testing.expectEqualStrings("do X", r.prompt.?);
-}
+// Boundary correctness lives in string.zig's `truncateUtf8` tests; here we only
+// assert the agent-specific policy: an over-cap body keeps valid UTF-8 and gains
+// the truncation marker.
+test "capToolOutput: appends a marker when truncating" {
+    const ta = std.testing.allocator;
 
-test "parseSaveCommand: prompt only when first token is not a .js name" {
-    const r = try parseSaveCommand("make a login script");
-    try std.testing.expect(r.filename == null);
-    try std.testing.expectEqualStrings("make a login script", r.prompt.?);
-}
+    // 3-byte Hangul codepoint (U+D55C '한' = 0xED 0x95 0x9C) straddling the cap.
+    const cap = tool_output_max_bytes;
+    const buf = try ta.alloc(u8, cap + 8);
+    defer ta.free(buf);
+    @memset(buf[0 .. cap - 1], 'a');
+    buf[cap - 1] = 0xED;
+    buf[cap + 0] = 0x95;
+    buf[cap + 1] = 0x9C;
+    @memset(buf[cap + 2 ..], 'b');
 
-test "parseSaveCommand: empty is all null" {
-    const r = try parseSaveCommand("   ");
-    try std.testing.expect(r.filename == null);
-    try std.testing.expect(r.prompt == null);
-}
+    const out = capToolOutput(ta, buf);
+    defer if (out.ptr != buf.ptr) ta.free(out);
 
-test "parseSaveCommand: rejects path-like filenames" {
-    try std.testing.expectError(error.InvalidFilename, parseSaveCommand("../evil.js"));
-    try std.testing.expectError(error.InvalidFilename, parseSaveCommand("/tmp/x.js"));
-    try std.testing.expectError(error.UnterminatedQuote, parseSaveCommand("\"unclosed.js"));
-}
-
-test "renderBuiltinCatalog: lists recorded tools, omits read-only ones" {
-    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer out.deinit();
-    try renderBuiltinCatalog(&out.writer);
-    const text = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, text, "goto(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "extract(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "click(") != null);
-    // tree/markdown are read-only and not callable from a saved script.
-    try std.testing.expect(std.mem.indexOf(u8, text, "tree(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "markdown(") == null);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(out));
+    try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
 }

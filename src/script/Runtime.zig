@@ -95,13 +95,6 @@ pub const RunError = error{
     OutOfMemory,
 };
 
-/// A captured script run: `err` is the formatted failure (null on success);
-/// `output` is the completion value's display string (empty when void).
-pub const RunOutcome = struct {
-    err: ?[]const u8 = null,
-    output: []const u8 = "",
-};
-
 pub fn init(
     allocator: std.mem.Allocator,
     app: *lp.App,
@@ -245,23 +238,6 @@ fn setObjectProperty(
 /// compile/runtime exception returns a formatted error allocated in this
 /// runtime's call arena and valid until deinit or the next run.
 pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
-    return (try self.runInner(source, name, false)).err;
-}
-
-/// Like `runSource`, but capture the completion value's display string instead
-/// of printing it (used by `/save` verification to feed output back to the LLM).
-/// Both fields live in the call arena — valid until the next run or deinit.
-///
-/// Each call gets a fresh global context so a prior candidate's top-level
-/// `const`/`let` doesn't collide ("Identifier 'x' has already been declared")
-/// — verification candidates are independent runs, unlike a `/load` script.
-pub fn runSourceCapture(self: *Runtime, source: []const u8, name: []const u8) RunError!RunOutcome {
-    self.resetContext();
-    self.createContext() catch return .{ .err = try self.dupeError("script context reset failed") };
-    return self.runInner(source, name, true);
-}
-
-fn runInner(self: *Runtime, source: []const u8, name: []const u8, capture: bool) RunError!RunOutcome {
     _ = self.call_arena.reset(.retain_capacity);
 
     var hs: lp.js.HandleScope = undefined;
@@ -269,7 +245,7 @@ fn runInner(self: *Runtime, source: []const u8, name: []const u8, capture: bool)
     defer hs.deinit();
 
     const context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.context, self.env.isolate.handle) orelse
-        return .{ .err = try self.dupeError("agent script context is not available") });
+        return try self.dupeError("agent script context is not available"));
     v8.v8__Context__Enter(context);
     defer v8.v8__Context__Exit(context);
 
@@ -292,27 +268,19 @@ fn runInner(self: *Runtime, source: []const u8, name: []const u8, capture: bool)
         &compiler_source,
         v8.kNoCompileOptions,
         v8.kNoCacheNoReason,
-    ) orelse return .{ .err = try self.formatCaught(context, &try_catch, "compile failed") };
+    ) orelse return try self.formatCaught(context, &try_catch, "compile failed");
 
     const completion = v8.v8__Script__Run(script, context) orelse
-        return .{ .err = try self.formatCaught(context, &try_catch, "script failed") };
+        return try self.formatCaught(context, &try_catch, "script failed");
 
     // Explicit microtask policy: promise continuations only run once drained.
     self.env.performIsolateMicrotasks();
     if (v8.v8__TryCatch__HasCaught(&try_catch)) {
-        return .{ .err = try self.formatCaught(context, &try_catch, "script failed") };
+        return try self.formatCaught(context, &try_catch, "script failed");
     }
 
-    if (capture) {
-        if (v8.v8__Value__IsUndefined(completion)) return .{};
-        const output = self.displayString(self.call_arena.allocator(), context, completion) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.JsException => return .{ .output = "<completion value could not be serialized>" },
-        };
-        return .{ .output = output };
-    }
     self.printCompletion(context, completion);
-    return .{};
+    return null;
 }
 
 /// Echo a script's completion value (its last-evaluated expression) so a script
@@ -709,10 +677,10 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -730,10 +698,10 @@ test "agent script runtime: extract returns a JavaScript object" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -784,10 +752,10 @@ test "agent script runtime: extract tolerates list selectors that match nothing"
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -812,10 +780,10 @@ test "agent script runtime: strict-mode scripts can call primitives" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -830,10 +798,10 @@ test "agent script runtime: strict-mode scripts can call primitives" {
 test "agent script runtime: promise microtasks run to completion" {
     defer testing.reset();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -851,10 +819,10 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -873,10 +841,10 @@ test "agent script runtime: terminate interrupts local JavaScript" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     const thread = try std.Thread.spawn(.{}, terminateRuntimeSoon, .{runtime});
@@ -891,10 +859,10 @@ test "agent script runtime: agent variables persist and page globals are isolate
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -916,10 +884,10 @@ test "agent script runtime: page evaluate cannot see agent primitives or binding
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -934,10 +902,10 @@ test "agent script runtime: page evaluate cannot see agent primitives or binding
 test "agent script runtime: console is available in agent context" {
     defer testing.reset();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -951,10 +919,10 @@ test "agent script runtime: tool errors throw and stop execution" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     const message = (try runtime.runSource(
@@ -977,10 +945,10 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
     try runTestScript(runtime,
@@ -1025,73 +993,4 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
         , "agent-runtime-arity.js")).?;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
-}
-
-test "agent script runtime: runSourceCapture runs the full script live and captures completion" {
-    defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
-
-    var registry: CDPNode.Registry = .init(testing.allocator);
-    defer registry.deinit();
-
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
-    defer runtime.deinit();
-
-    // Verification runs the candidate exactly as a standalone replay does — it
-    // must navigate itself; extract then runs against the page it loaded.
-    const outcome = try runtime.runSourceCapture(
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\click("#btn");
-        \\const data = extract({ label: "#btn" });
-        \\data.label;
-    , "candidate.js");
-    try testing.expect(outcome.err == null);
-    try std.testing.expectEqualStrings("Click Me", outcome.output);
-}
-
-test "agent script runtime: runSourceCapture surfaces a candidate's error" {
-    defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
-
-    var registry: CDPNode.Registry = .init(testing.allocator);
-    defer registry.deinit();
-
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
-    defer runtime.deinit();
-
-    // extract returns an object; treating it as an array throws — the real
-    // `raw.map is not a function` failure the model must see and fix.
-    const bad = try runtime.runSourceCapture(
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\const raw = extract({ items: [{ selector: "li" }] });
-        \\raw.map(x => x);
-    , "candidate.js");
-    try testing.expect(bad.err != null);
-}
-
-test "agent script runtime: each capture run gets a fresh global scope" {
-    defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
-
-    var registry: CDPNode.Registry = .init(testing.allocator);
-    defer registry.deinit();
-
-    const runtime: *Runtime = try .init(testing.allocator, testing.test_app, testing.test_session, &registry);
-    defer runtime.deinit();
-
-    // The same top-level `const` in two consecutive candidates must not collide —
-    // each run starts from a clean context, not the previous run's globals.
-    const src =
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\const data = extract({ label: "#btn" });
-        \\const out = data.label;
-        \\out;
-    ;
-    const first = try runtime.runSourceCapture(src, "candidate.js");
-    try testing.expect(first.err == null);
-    try std.testing.expectEqualStrings("Click Me", first.output);
-
-    const second = try runtime.runSourceCapture(src, "candidate.js");
-    try testing.expect(second.err == null);
-    try std.testing.expectEqualStrings("Click Me", second.output);
 }
