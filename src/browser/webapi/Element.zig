@@ -1502,6 +1502,50 @@ pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) 
     frame.window.scrollTo(.{ .x = 0 }, @intFromFloat(@max(0, y)), frame) catch {};
 }
 
+const ScrollToOpts = union(enum) {
+    x: i32,
+    opts: Opts,
+
+    const Opts = struct {
+        top: ?i32 = null,
+        left: ?i32 = null,
+        behavior: []const u8 = "",
+    };
+};
+
+pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
+    const o = opts orelse return;
+    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    switch (o) {
+        .x => |x| {
+            gop.value_ptr.x = @intCast(@max(0, x));
+            gop.value_ptr.y = @intCast(@max(0, y orelse 0));
+        },
+        .opts => |dict| {
+            if (dict.left) |left| gop.value_ptr.x = @intCast(@max(0, left));
+            if (dict.top) |top| gop.value_ptr.y = @intCast(@max(0, top));
+        },
+    }
+}
+
+// scrollBy(): like scrollTo() but relative to the current position.
+pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
+    const o = opts orelse return;
+    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    const dx: i32, const dy: i32 = switch (o) {
+        .x => |x| .{ x, y orelse 0 },
+        .opts => |dict| .{ dict.left orelse 0, dict.top orelse 0 },
+    };
+    gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
+    gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
+}
+
 pub fn format(self: *Element, writer: *std.Io.Writer) !void {
     try writer.writeByte('<');
     try writer.writeAll(self.getTagNameDump());
@@ -1916,6 +1960,9 @@ pub const JsApi = struct {
     pub const blur = bridge.function(Element.blur, .{});
     pub const scrollIntoView = bridge.function(Element.scrollIntoView, .{});
     pub const scrollIntoViewIfNeeded = bridge.function(Element.scrollIntoViewIfNeeded, .{});
+    pub const scroll = bridge.function(Element.scrollTo, .{});
+    pub const scrollTo = bridge.function(Element.scrollTo, .{});
+    pub const scrollBy = bridge.function(Element.scrollBy, .{});
 };
 
 pub const Build = struct {
