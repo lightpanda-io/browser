@@ -195,20 +195,12 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
 
     const element = self.asElement();
 
-    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
-    const loadable_rels = std.StaticStringMap(void).initComptime(.{
-        .{ "stylesheet", {} },
-        .{ "preload", {} },
-        .{ "modulepreload", {} },
-    });
-    if (loadable_rels.has(rel) == false) {
-        return;
-    }
-
     const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
     if (href.len == 0) {
         return;
     }
+
+    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
 
     // Opt-in fetch for `rel="stylesheet"` — drives `frame.loadExternalStylesheet`,
     // which fires the load/error event itself. Other rels (preload,
@@ -216,6 +208,28 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     // fires a synthetic `load` event without touching the network.
     if (std.mem.eql(u8, rel, "stylesheet")) {
         return frame.loadExternalStylesheet(self, href);
+    }
+
+    var queue_load = false;
+    if (std.mem.eql(u8, rel, "preload")) {
+        const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
+        if (std.ascii.eqlIgnoreCase(as, "script")) {
+            frame.preloadScriptHint(href);
+        }
+        queue_load = true;
+    }
+
+    {
+        // this block just means we don't need to re-check rel for a type we
+        // already processed, e.g. "preload"
+        const loadable_rels = std.StaticStringMap(void).initComptime(.{
+            .{ "stylesheet", {} },
+            .{ "modulepreload", {} },
+        });
+
+        if (queue_load == false and loadable_rels.has(rel) == false) {
+            return;
+        }
     }
 
     try frame.queueLoad(self._proto);

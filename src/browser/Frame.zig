@@ -1697,6 +1697,23 @@ pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
 // splitting by route anyway).
 const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
 
+// start prefetching <link rel="preload" as="script" href=...>`
+pub fn preloadScriptHint(self: *Frame, href: []const u8) void {
+    if (self.isGoingAway() or self._parse_mode == .fragment) {
+        return;
+    }
+
+    const arena = self.getArena(.small, "Frame.preloadScriptHint") catch return;
+    defer self.releaseArena(arena);
+
+    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch return;
+    if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
+        // data:/blob: are synthesized locally — no round-trip to hide.
+        return;
+    }
+    self._script_manager.preloadScript(resolved) catch {};
+}
+
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.
 // href is passed in as an optimization since the [currently] only callsite has
 // it, so why look it up again?
