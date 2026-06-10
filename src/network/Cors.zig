@@ -268,6 +268,31 @@ pub fn isSimpleRequest(method: []const u8, headers: *const RequestHeaders) bool 
     return true;
 }
 
+pub fn buildPreflightHeaders(allocator: Allocator, method: []const u8, headers: *const RequestHeaders) !RequestHeaders {
+    var out = RequestHeaders.init(allocator);
+    errdefer out.deinit();
+
+    try out.put("Access-Control-Request-Method", method);
+
+    var custom_headers: std.ArrayList([]const u8) = .empty;
+    defer custom_headers.deinit();
+
+    var it = headers.values.iterator();
+    while (it.next()) |entry| {
+        if (!isSimpleRequestHeader(entry.key_ptr.*) and !std.ascii.eqlIgnoreCase(entry.key_ptr.*, "origin")) {
+            try custom_headers.append(allocator, entry.key_ptr.*);
+        }
+    }
+
+    if (custom_headers.items.len > 0) {
+        const joined = try std.mem.join(allocator, ", ", custom_headers.items);
+        defer allocator.free(joined);
+        try out.put("Access-Control-Request-Headers", joined);
+    }
+
+    return out;
+}
+
 pub fn processCors(
     allocator: Allocator,
     options: *const CorsOptions,
