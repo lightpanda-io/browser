@@ -18,13 +18,15 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = lp.log;
+
+const WebBotAuth = @import("../WebBotAuth.zig");
 
 const URL = @import("../../browser/URL.zig");
-const WebBotAuth = @import("../WebBotAuth.zig");
-const Client = @import("../../browser/HttpClient.zig").Client;
-const Request = @import("../../browser/HttpClient.zig").Request;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
+const Client = @import("../../browser/HttpClient.zig").Client;
+const Transfer = @import("../../browser/HttpClient.zig").Transfer;
+
+const log = lp.log;
 
 const WebBotAuthLayer = @This();
 
@@ -37,15 +39,13 @@ pub fn layer(self: *WebBotAuthLayer) Layer {
     };
 }
 
-fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
+fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *WebBotAuthLayer = @ptrCast(@alignCast(ptr));
-    var our_req = req;
 
-    const wba = client.network.web_bot_auth orelse @panic("WebBotAuthLayer shouldn't be active without WebBotAuth");
+    const wba = transfer.client.network.web_bot_auth orelse @panic("WebBotAuthLayer shouldn't be active without WebBotAuth");
 
-    const arena = req.params.arena;
-    const authority = URL.getHost(req.params.url);
-    try wba.signRequest(arena, &our_req.params.headers, authority);
+    const authority = URL.getHost(transfer.url);
+    try wba.signRequest(transfer.arena, &transfer.req.params.headers, authority);
 
-    return self.next.request(client, our_req);
+    return self.next.request(transfer);
 }

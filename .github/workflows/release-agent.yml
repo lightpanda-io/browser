@@ -1,0 +1,113 @@
+name: agent nightly pre release build
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ vars.NIGHTLY_BUILD_AWS_ACCESS_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.NIGHTLY_BUILD_AWS_SECRET_ACCESS_KEY }}
+  AWS_BUCKET: ${{ vars.NIGHTLY_BUILD_AWS_BUCKET }}
+  AWS_REGION: ${{ vars.NIGHTLY_BUILD_AWS_REGION }}
+  AWS_CLOUDFRONT_DISTRIBUTION_ID: 'E2LP2HUMLR5GQD'
+
+  VERSION_FLAG: '-Dversion=agent-nightly'
+
+on:
+  schedule:
+    - cron: "2 2 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            cpu_flag: -Dcpu=x86_64
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            cpu_flag: -Dcpu=generic
+
+    env:
+      ARCH: ${{ matrix.arch }}
+      OS: linux
+
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: agent
+
+      - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
+
+      - name: v8 snapshot
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+
+      - name: zig build
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ env.VERSION_FLAG }}
+
+      - name: Rename binary
+        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
+
+      - name: upload on s3
+        run: |
+          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/agent-nightly/lightpanda-agent-${{ env.ARCH }}-${{ env.OS }}
+
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 runs on arm CPU. see
+          # https://github.com/actions/runner-images?tab=readme-ov-file
+          - arch: aarch64
+            runner: macos-14
+          - arch: x86_64
+            runner: macos-14-large
+
+    env:
+      ARCH: ${{ matrix.arch }}
+      OS: macos
+
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: agent
+
+      - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
+
+      - name: v8 snapshot
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+
+      - name: zig build
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast ${{ env.VERSION_FLAG }}
+
+      - name: Rename binary
+        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
+
+      - name: upload on s3
+        run: |
+          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/agent-nightly/lightpanda-agent-${{ env.ARCH }}-${{ env.OS }}
+
+  invalidate-cloudfront:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: cloudfront cache invalidation
+        run: |
+          aws cloudfront create-invalidation --distribution-id ${{ env.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths "/agent-nightly/*"

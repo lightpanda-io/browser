@@ -21,10 +21,11 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const color = @import("../../color.zig");
-const Frame = @import("../../Frame.zig");
 
 const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
+
+const Execution = js.Execution;
 
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `HTMLCanvasElement#getContext`.
@@ -41,8 +42,8 @@ pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
 }
 
-pub fn getFillStyle(self: *const CanvasRenderingContext2D, frame: *Frame) ![]const u8 {
-    var w = std.Io.Writer.Allocating.init(frame.call_arena);
+pub fn getFillStyle(self: *const CanvasRenderingContext2D, exec: *Execution) ![]const u8 {
+    var w = std.Io.Writer.Allocating.init(exec.call_arena);
     try self._fill_style.format(&w.writer);
     return w.written();
 }
@@ -67,15 +68,15 @@ pub fn createImageData(
     maybe_height: ?u32,
     /// Can be used if width and height provided.
     maybe_settings: ?ImageData.ConstructorSettings,
-    frame: *Frame,
+    exec: *Execution,
 ) !*ImageData {
     switch (width_or_image_data) {
         .width => |width| {
             const height = maybe_height orelse return error.TypeError;
-            return ImageData.init(width, height, maybe_settings, frame);
+            return ImageData.init(width, height, maybe_settings, exec);
         },
         .image_data => |image_data| {
-            return ImageData.init(image_data._width, image_data._height, null, frame);
+            return ImageData.init(image_data._width, image_data._height, null, exec);
         },
     }
 }
@@ -88,12 +89,12 @@ pub fn getImageData(
     _: i32, // sy
     sw: i32,
     sh: i32,
-    frame: *Frame,
+    exec: *Execution,
 ) !*ImageData {
     if (sw <= 0 or sh <= 0) {
         return error.IndexSizeError;
     }
-    return ImageData.init(@intCast(sw), @intCast(sh), null, frame);
+    return ImageData.init(@intCast(sw), @intCast(sh), null, exec);
 }
 
 pub fn save(_: *CanvasRenderingContext2D) void {}

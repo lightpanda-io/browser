@@ -20,9 +20,9 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 
 const String = lp.String;
+const Execution = js.Execution;
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/ImageData/ImageData
 const ImageData = @This();
@@ -55,7 +55,7 @@ pub fn init(
     width: u32,
     height: u32,
     maybe_settings: ?ConstructorSettings,
-    frame: *Frame,
+    exec: *Execution,
 ) !*ImageData {
     // Though arguments are unsigned long, these are capped to max. i32 on Chrome.
     // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/canvas/image_data.cc#L61
@@ -77,10 +77,10 @@ pub fn init(
     size, overflown = @mulWithOverflow(size, 4);
     if (overflown == 1) return error.IndexSizeError;
 
-    return frame._factory.create(ImageData{
+    return exec._factory.create(ImageData{
         ._width = width,
         ._height = height,
-        ._data = try frame.js.local.?.createTypedArray(.uint8_clamped, size).persist(),
+        ._data = try exec.context.local.?.createTypedArray(.uint8_clamped, size).persist(),
     });
 }
 

@@ -262,6 +262,15 @@ See [#1279](https://github.com/lightpanda-io/browser/pull/1279) for more details
 
 You can test Lightpanda by running `make test`.
 
+```bash
+make test                                       # Run all tests
+make test F="server"                            # Filter by substring
+TEST_FILTER="WebApi: #selector_all" make test   # Filter main + subtest (separator: #)
+TEST_VERBOSE=true make test
+TEST_FAIL_FIRST=true make test
+METRICS=true make test                          # Capture allocation/duration metrics as JSON
+```
+
 ### End to end tests
 
 To run end to end tests, you need to clone the [demo

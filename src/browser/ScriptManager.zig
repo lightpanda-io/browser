@@ -256,7 +256,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 // Let the outer errdefer handle releasing the arena if client.request fails
             }
 
-            try self.base.client.request(.{
+            try frame.makeRequest(.{
                 .ctx = script,
                 .params = .{
                     .url = url,

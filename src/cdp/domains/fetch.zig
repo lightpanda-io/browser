@@ -51,15 +51,15 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     }
 }
 
-// Stored in CDP
+// Stored in CDP. Holds *transfer ids* (not *Transfer pointers) of paused
+// transfers waiting for CDP continueRequest/fulfillRequest/failRequest/
+// continueWithAuth. Anyone resolving an entry must look the transfer up via
+// `Client.findTransfer(id)` — if the transfer has been destroyed out-of-band
+// (e.g. frame shutdown), the lookup returns null and the CDP command should
+// no-op rather than UAF.
 pub const InterceptState = struct {
     allocator: Allocator,
-    waiting: std.AutoArrayHashMapUnmanaged(u32, Pending),
-
-    const Pending = union(enum) {
-        transfer: *HttpClient.Transfer,
-        request: HttpClient.Request,
-    };
+    waiting: std.AutoArrayHashMapUnmanaged(u32, void),
 
     pub fn init(allocator: Allocator) !InterceptState {
         return .{
@@ -72,25 +72,21 @@ pub const InterceptState = struct {
         return self.waiting.count() == 0;
     }
 
-    pub fn putRequest(self: *InterceptState, request: HttpClient.Request) !void {
-        return self.waiting.put(self.allocator, request.params.request_id, .{ .request = request });
+    pub fn put(self: *InterceptState, transfer_id: u32) !void {
+        return self.waiting.put(self.allocator, transfer_id, {});
     }
 
-    pub fn putTransfer(self: *InterceptState, transfer: *HttpClient.Transfer) !void {
-        return self.waiting.put(self.allocator, transfer.id, .{ .transfer = transfer });
-    }
-
-    pub fn remove(self: *InterceptState, request_id: u32) ?Pending {
-        const entry = self.waiting.fetchSwapRemove(request_id) orelse return null;
-        return entry.value;
+    // Returns true if the id was present and removed, false otherwise.
+    pub fn remove(self: *InterceptState, transfer_id: u32) bool {
+        return self.waiting.swapRemove(transfer_id);
     }
 
     pub fn deinit(self: *InterceptState) void {
         self.waiting.deinit(self.allocator);
     }
 
-    pub fn pendingIntercepts(self: *const InterceptState) []Pending {
-        return self.waiting.values();
+    pub fn pendingIntercepts(self: *const InterceptState) []u32 {
+        return self.waiting.keys();
     }
 };
 
@@ -201,26 +197,26 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
     // We keep it around to wait for modifications to the request.
     // TODO: What to do when receiving replies for a previous frame's requests?
 
-    const request = intercept.request;
-    try bc.intercept_state.putRequest(request.*);
+    const transfer = intercept.transfer;
+    try bc.intercept_state.put(transfer.id);
 
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
-        .requestId = &id.toInterceptId(request.params.request_id),
-        .frameId = &id.toFrameId(request.params.frame_id),
-        .request = network.RequestWriter.init(request),
-        .resourceType = switch (request.params.resource_type) {
+        .requestId = &id.toInterceptId(transfer.id),
+        .frameId = &id.toFrameId(transfer.req.params.frame_id),
+        .request = network.RequestWriter.init(transfer),
+        .resourceType = switch (transfer.req.params.resource_type) {
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",
             .fetch => "Fetch",
         },
-        .networkId = &id.toRequestId(request), // matches the Network REQ-ID
+        .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
 
     log.debug(.cdp, "request intercept", .{
         .state = "paused",
-        .id = request.params.request_id,
-        .url = request.params.url,
+        .id = transfer.id,
+        .url = transfer.url,
     });
     // Await either continueRequest, failRequest or fulfillRequest
 
@@ -242,20 +238,28 @@ fn continueRequest(cmd: *CDP.Command) !void {
         return error.NotImplemented;
     }
 
+    const client = &bc.cdp.browser.http_client;
     var intercept_state = &bc.intercept_state;
-    const request_id = try idFromRequestId(params.requestId);
+    const transfer_id = try idFromRequestId(params.requestId);
 
-    const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
-    var request = pending.request;
+    if (!intercept_state.remove(transfer_id)) return error.RequestNotFound;
+    // Transfer may have been destroyed out-of-band between pause and now
+    // (e.g. frame shutdown). Treat as a no-op rather than an error — the CDP
+    // client's view of "this request still exists" is just stale.
+    const transfer = client.findTransfer(transfer_id) orelse {
+        log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "continue" });
+        return cmd.sendResult(null, .{});
+    };
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue",
-        .id = request.params.request_id,
-        .url = request.params.url,
+        .id = transfer.id,
+        .url = transfer.url,
         .new_url = params.url,
     });
 
-    const arena = request.params.arena;
+    const arena = transfer.arena;
+    const request = &transfer.req;
     // Update the request with the new parameters
     if (params.url) |url| {
         request.params.url = try arena.dupeZ(u8, url);
@@ -285,9 +289,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         request.params.body = body;
     }
 
-    // todo: replace.
-    const client = &bc.cdp.browser.http_client;
-    try client.interception_layer.continueRequest(client, request);
+    try client.interception_layer.continueRequest(transfer);
     return cmd.sendResult(null, .{});
 }
 
@@ -309,31 +311,37 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
         },
     })) orelse return error.InvalidParams;
 
+    const client = &bc.cdp.browser.http_client;
     var intercept_state = &bc.intercept_state;
-    const request_id = try idFromRequestId(params.requestId);
-    const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
-    const transfer = pending.transfer;
-    const request = transfer.req;
+    const transfer_id = try idFromRequestId(params.requestId);
+
+    if (!intercept_state.remove(transfer_id)) return error.RequestNotFound;
+    const transfer = client.findTransfer(transfer_id) orelse {
+        log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "auth" });
+        return cmd.sendResult(null, .{});
+    };
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue with auth",
-        .id = request.params.request_id,
+        .id = transfer.id,
         .response = params.authChallengeResponse.response,
     });
-
-    const client = &bc.cdp.browser.http_client;
 
     if (params.authChallengeResponse.response != .ProvideCredentials) {
         transfer.abortAuthChallenge();
         return cmd.sendResult(null, .{});
     }
 
-    // cancel the request, deinit the transfer on error.
+    // TODO: double-decrement of interception_layer.intercepted if
+    // continueTransfer fails: continueTransfer decrements unconditionally,
+    // and the errdefer below decrements again via abortAuthChallenge.
+    // Worse: if continueTransfer's failure path destroys the transfer
+    // (start_callback fail in makeRequest), this errdefer hits a freed
+    // transfer. Pre-existing; needs makeRequest failure-semantics cleanup.
     errdefer transfer.abortAuthChallenge();
 
-    const arena = request.params.arena;
     transfer.updateCredentials(try std.fmt.allocPrintSentinel(
-        arena,
+        transfer.arena,
         "{s}:{s}",
         .{
             params.authChallengeResponse.username,
@@ -363,16 +371,20 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
         return error.NotImplemented;
     }
 
+    const client = &bc.cdp.browser.http_client;
     var intercept_state = &bc.intercept_state;
-    const request_id = try idFromRequestId(params.requestId);
+    const transfer_id = try idFromRequestId(params.requestId);
 
-    const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
-    var request = pending.request;
+    if (!intercept_state.remove(transfer_id)) return error.RequestNotFound;
+    const transfer = client.findTransfer(transfer_id) orelse {
+        log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "fulfill" });
+        return cmd.sendResult(null, .{});
+    };
 
     log.debug(.cdp, "request intercept", .{
         .state = "fulfilled",
-        .id = request.params.request_id,
-        .url = request.params.url,
+        .id = transfer.id,
+        .url = transfer.url,
         .status = params.responseCode,
         .body = params.body != null,
     });
@@ -380,13 +392,12 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
     var body: ?[]const u8 = null;
     if (params.body) |b| {
         const decoder = std.base64.standard.Decoder;
-        const buf = try request.params.arena.alloc(u8, try decoder.calcSizeForSlice(b));
+        const buf = try transfer.arena.alloc(u8, try decoder.calcSizeForSlice(b));
         try decoder.decode(buf, b);
         body = buf;
     }
 
-    const client = &bc.cdp.browser.http_client;
-    try client.interception_layer.fulfillRequest(client, request, params.responseCode, params.responseHeaders orelse &.{}, body);
+    try client.interception_layer.fulfillRequest(transfer, params.responseCode, params.responseHeaders orelse &.{}, body);
     return cmd.sendResult(null, .{});
 }
 
@@ -397,19 +408,22 @@ fn failRequest(cmd: *CDP.Command) !void {
         errorReason: ErrorReason,
     })) orelse return error.InvalidParams;
 
-    var intercept_state = &bc.intercept_state;
-    const request_id = try idFromRequestId(params.requestId);
-
-    const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
-    const request = pending.request;
-
     const client = &bc.cdp.browser.http_client;
-    defer client.interception_layer.abortRequest(client, request);
+    var intercept_state = &bc.intercept_state;
+    const transfer_id = try idFromRequestId(params.requestId);
+
+    if (!intercept_state.remove(transfer_id)) return error.RequestNotFound;
+    const transfer = client.findTransfer(transfer_id) orelse {
+        log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "fail" });
+        return cmd.sendResult(null, .{});
+    };
+
+    defer client.interception_layer.abortRequest(transfer);
 
     log.info(.cdp, "request intercept", .{
         .state = "fail",
-        .id = request_id,
-        .url = request.params.url,
+        .id = transfer.id,
+        .url = transfer.url,
         .reason = params.errorReason,
     });
     return cmd.sendResult(null, .{});
@@ -425,15 +439,15 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
     // TODO: What to do when receiving replies for a previous frame's requests?
 
     const transfer = intercept.transfer;
-    try bc.intercept_state.putTransfer(transfer);
-    var request = transfer.req;
+    try bc.intercept_state.put(transfer.id);
+    const request = &transfer.req;
 
     const challenge = transfer._auth_challenge orelse return error.NullAuthChallenge;
 
     try bc.cdp.sendEvent("Fetch.authRequired", .{
-        .requestId = &id.toInterceptId(request.params.request_id),
+        .requestId = &id.toInterceptId(transfer.id),
         .frameId = &id.toFrameId(request.params.frame_id),
-        .request = network.RequestWriter.init(&request),
+        .request = network.RequestWriter.init(transfer),
         .resourceType = switch (request.params.resource_type) {
             .script => "Script",
             .xhr => "XHR",
@@ -446,13 +460,13 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
             .scheme = if (challenge.scheme) |s| (if (s == .digest) "digest" else "basic") else "",
             .realm = challenge.realm orelse "",
         },
-        .networkId = &id.toRequestId(&request),
+        .networkId = &id.toRequestId(transfer),
     }, .{ .session_id = session_id });
 
     log.debug(.cdp, "request auth required", .{
         .state = "paused",
-        .id = request.params.request_id,
-        .url = request.params.url,
+        .id = transfer.id,
+        .url = transfer.url,
     });
     // Await continueWithAuth
 

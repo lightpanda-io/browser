@@ -44,8 +44,8 @@ pub fn build(b: *Build) !void {
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
 
     const version = resolveVersion(b);
-    var stdout = std.fs.File.stdout().writer(&.{});
-    try stdout.interface.print("Lightpanda {f}\n", .{version});
+    var stderr = std.fs.File.stderr().writer(&.{});
+    try stderr.interface.print("Lightpanda {f}\n", .{version});
 
     const version_string = b.fmt("{f}", .{version});
     const version_encoded = std.mem.replaceOwned(u8, b.allocator, version_string, "+", "%2B") catch @panic("OOM");

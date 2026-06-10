@@ -48,6 +48,7 @@ _event_phase: EventPhase = .none,
 _time_stamp: u64,
 _needs_retargeting: bool = false,
 _is_trusted: bool = false,
+_in_passive_listener: bool = false,
 
 // There's a period of time between creating an event and handing it off to v8
 // where things can fail. If it does fail, we need to deinit the event. The timing
@@ -204,7 +205,7 @@ pub fn getCurrentTarget(self: *const Event) ?*EventTarget {
 }
 
 pub fn preventDefault(self: *Event) void {
-    if (self._cancelable) {
+    if (self._cancelable and !self._in_passive_listener) {
         self._prevent_default = true;
     }
 }
@@ -229,7 +230,7 @@ pub fn getReturnValue(self: *const Event) bool {
 pub fn setReturnValue(self: *Event, v: bool) void {
     if (!v) {
         // Setting returnValue=false is equivalent to preventDefault()
-        if (self._cancelable) {
+        if (self._cancelable and !self._in_passive_listener) {
             self._prevent_default = true;
         }
     }

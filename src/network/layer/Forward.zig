@@ -16,6 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// A snapshot of the original ctx + callbacks from a Request, taken before a
+// layer overwrites them with its own wrappers. The layer's wrapper callbacks
+// call forwardX(...) to invoke the captured originals with the original ctx.
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
 
@@ -29,7 +32,7 @@ done: Request.DoneCallback,
 err: Request.ErrorCallback,
 shutdown: ?Request.ShutdownCallback,
 
-pub fn fromRequest(req: Request) Forward {
+pub fn capture(req: *const Request) Forward {
     return .{
         .ctx = req.ctx,
         .start = req.start_callback,
@@ -38,68 +41,6 @@ pub fn fromRequest(req: Request) Forward {
         .done = req.done_callback,
         .err = req.error_callback,
         .shutdown = req.shutdown_callback,
-    };
-}
-
-pub const Overrides = struct {
-    start: ?Request.StartCallback = null,
-    header: ?Request.HeaderCallback = null,
-    data: ?Request.DataCallback = null,
-    done: ?Request.DoneCallback = null,
-    err: ?Request.ErrorCallback = null,
-    shutdown: ?Request.ShutdownCallback = null,
-};
-
-pub fn wrapRequest(
-    self: *Forward,
-    req: Request,
-    new_ctx: anytype,
-    overrides: Overrides,
-) Request {
-    const T = @TypeOf(new_ctx.*);
-    const PassthroughT = makePassthrough(T, "forward");
-    var wrapped = req;
-    wrapped.ctx = new_ctx;
-    wrapped.start_callback = overrides.start orelse if (self.start != null) PassthroughT.start else null;
-    wrapped.header_callback = overrides.header orelse PassthroughT.header;
-    wrapped.data_callback = overrides.data orelse PassthroughT.data;
-    wrapped.done_callback = overrides.done orelse PassthroughT.done;
-    wrapped.error_callback = overrides.err orelse PassthroughT.err;
-    wrapped.shutdown_callback = overrides.shutdown orelse if (self.shutdown != null) PassthroughT.shutdown else null;
-    return wrapped;
-}
-
-fn makePassthrough(comptime T: type, comptime field: []const u8) type {
-    return struct {
-        pub fn start(response: Response) anyerror!void {
-            const self: *T = @ptrCast(@alignCast(response.ctx));
-            return @field(self, field).forwardStart(response);
-        }
-
-        pub fn header(response: Response) anyerror!bool {
-            const self: *T = @ptrCast(@alignCast(response.ctx));
-            return @field(self, field).forwardHeader(response);
-        }
-
-        pub fn data(response: Response, chunk: []const u8) anyerror!void {
-            const self: *T = @ptrCast(@alignCast(response.ctx));
-            return @field(self, field).forwardData(response, chunk);
-        }
-
-        pub fn done(ctx_ptr: *anyopaque) anyerror!void {
-            const self: *T = @ptrCast(@alignCast(ctx_ptr));
-            return @field(self, field).forwardDone();
-        }
-
-        pub fn err(ctx_ptr: *anyopaque, e: anyerror) void {
-            const self: *T = @ptrCast(@alignCast(ctx_ptr));
-            @field(self, field).forwardErr(e);
-        }
-
-        pub fn shutdown(ctx_ptr: *anyopaque) void {
-            const self: *T = @ptrCast(@alignCast(ctx_ptr));
-            @field(self, field).forwardShutdown();
-        }
     };
 }
 

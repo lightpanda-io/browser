@@ -1144,7 +1144,7 @@ pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Fram
     });
 }
 
-fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, height: f64 } {
+pub fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, height: f64 } {
     var width: f64 = 5.0;
     var height: f64 = 5.0;
 

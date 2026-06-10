@@ -19,11 +19,10 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const js = @import("browser/js/js.zig");
 const Frame = @import("browser/Frame.zig");
 const Transfer = @import("browser/HttpClient.zig").Transfer;
-const Request = @import("browser/HttpClient.zig").Request;
 const Response = @import("browser/HttpClient.zig").Response;
-const InterceptContext = @import("network/layer/InterceptionLayer.zig").InterceptContext;
 
 const log = lp.log;
 const List = std.DoublyLinkedList;
@@ -86,6 +85,8 @@ const EventListeners = struct {
     http_response_data: List = .{},
     http_response_header_done: List = .{},
     javascript_dialog_opening: List = .{},
+    console_message: List = .{},
+    runtime_console_message: List = .{},
 };
 
 const Events = union(enum) {
@@ -106,6 +107,8 @@ const Events = union(enum) {
     http_response_data: *const ResponseData,
     http_response_header_done: *const ResponseHeaderDone,
     javascript_dialog_opening: *const JavascriptDialogOpening,
+    console_message: *const ConsoleMessage,
+    runtime_console_message: *const ConsoleMessage,
 };
 const EventType = std.meta.FieldEnum(Events);
 
@@ -170,11 +173,11 @@ pub const FrameLoaded = struct {
 };
 
 pub const RequestStart = struct {
-    request: *Request,
+    transfer: *Transfer,
 };
 
 pub const RequestIntercept = struct {
-    request: *Request,
+    transfer: *Transfer,
     wait_for_interception: *bool,
 };
 
@@ -185,21 +188,21 @@ pub const RequestAuthRequired = struct {
 
 pub const ResponseData = struct {
     data: []const u8,
-    request: *Request,
+    transfer: *Transfer,
 };
 
 pub const ResponseHeaderDone = struct {
-    request: *Request,
+    transfer: *Transfer,
     response: *const Response,
 };
 
 pub const RequestDone = struct {
-    request: *Request,
+    transfer: *Transfer,
     content_length: usize,
 };
 
 pub const RequestFail = struct {
-    request: *Request,
+    transfer: *Transfer,
     err: anyerror,
 };
 
@@ -221,6 +224,37 @@ pub const DialogResponse = struct {
     // is owned by whoever filled in the response (typically the BrowserContext
     // arena) and must outlive a single dispatch call.
     prompt_text: ?[]const u8 = null,
+};
+
+pub const ConsoleMessageType = enum {
+    debug,
+    info,
+    warn,
+    @"error",
+    fatal,
+    trace,
+};
+
+pub const ConsoleMessage = struct {
+    timestamp: u64,
+    source: enum {
+        xml,
+        javascript,
+        network,
+        console_api,
+        storage,
+        appcache,
+        rendering,
+        security,
+        other,
+        deprecation,
+        worker,
+    },
+    type: ConsoleMessageType,
+    values: []js.Value,
+    url: ?[]const u8 = null,
+    line: ?u32 = null,
+    columns: ?u32 = null,
 };
 
 pub fn init(allocator: Allocator) !*Notification {

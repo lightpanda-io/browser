@@ -123,7 +123,8 @@
   const signal = AbortSignal.abort();
 
   testing.expectEqual(true, signal.aborted);
-  testing.expectEqual("AbortError", signal.reason);
+  testing.expectEqual(true, signal.reason instanceof DOMException);
+  testing.expectEqual("AbortError", signal.reason.name);
 }
 </script>
 
@@ -229,7 +230,8 @@
   a1.abort();
   testing.expectEqual(true, s1.aborted)
   testing.expectEqual(s1, target)
-  testing.expectEqual('AbortError', s1.reason)
+  testing.expectEqual(true, s1.reason instanceof DOMException)
+  testing.expectEqual('AbortError', s1.reason.name)
   testing.expectEqual(1, called)
 </script>
 
@@ -237,7 +239,80 @@
   var s2 = AbortSignal.abort('over 9000');
   testing.expectEqual(true, s2.aborted);
   testing.expectEqual('over 9000', s2.reason);
-  testing.expectEqual('AbortError', AbortSignal.abort().reason);
+  testing.expectEqual('AbortError', AbortSignal.abort().reason.name);
+</script>
+
+<script id=abortSignalAnyEmpty>
+{
+  const signal = AbortSignal.any([]);
+  testing.expectEqual(false, signal.aborted);
+}
+</script>
+
+<script id=abortSignalAnyAlreadyAborted>
+{
+  const aborted = AbortSignal.abort("already gone");
+  const c = new AbortController();
+  const signal = AbortSignal.any([c.signal, aborted]);
+
+  testing.expectEqual(true, signal.aborted);
+  testing.expectEqual("already gone", signal.reason);
+}
+</script>
+
+<script id=abortSignalAnyPropagates>
+{
+  const c1 = new AbortController();
+  const c2 = new AbortController();
+  const signal = AbortSignal.any([c1.signal, c2.signal]);
+
+  let eventFired = false;
+  signal.addEventListener('abort', () => {
+    eventFired = true;
+  });
+
+  testing.expectEqual(false, signal.aborted);
+
+  c2.abort("second");
+
+  testing.expectEqual(true, signal.aborted);
+  testing.expectEqual("second", signal.reason);
+  testing.expectEqual(true, eventFired);
+}
+</script>
+
+<script id=abortSignalAnyFirstSourceWins>
+{
+  const c1 = new AbortController();
+  const c2 = new AbortController();
+  const signal = AbortSignal.any([c1.signal, c2.signal]);
+
+  c1.abort("first");
+  c2.abort("second");
+
+  testing.expectEqual(true, signal.aborted);
+  testing.expectEqual("first", signal.reason);
+}
+</script>
+
+<script id=abortSignalAnyTransitive>
+{
+  const c = new AbortController();
+  const mid = AbortSignal.any([c.signal]);
+  const leaf = AbortSignal.any([mid]);
+
+  let leafFired = false;
+  leaf.addEventListener('abort', () => {
+    leafFired = true;
+  });
+
+  c.abort("root");
+
+  testing.expectEqual(true, mid.aborted);
+  testing.expectEqual(true, leaf.aborted);
+  testing.expectEqual("root", leaf.reason);
+  testing.expectEqual(true, leafFired);
+}
 </script>
 
 <script id=abortsignal_timeout type=module>
@@ -250,8 +325,9 @@
 
     await state.done(() => {
       testing.expectEqual(true, s3.aborted);
-      testing.expectEqual('TimeoutError', s3.reason);
-      testing.expectError('Error: TimeoutError', () => {
+      testing.expectEqual(true, s3.reason instanceof DOMException);
+      testing.expectEqual('TimeoutError', s3.reason.name);
+      testing.expectError('TimeoutError: The operation timed out', () => {
         s3.throwIfAborted()
       });
     });

@@ -96,6 +96,22 @@ pub fn lookupBlobUrl(self: *const Execution, url: []const u8) ?*Blob {
     };
 }
 
+pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
+    return switch (self.context.global) {
+        inline else => |g| g.makeRequest(req),
+    };
+}
+
+// HttpClient.Owner of the current global (Frame or WGS). Used by code
+// that needs to register an in-flight network operation against the
+// owning scope without caring whether it's a Frame or a Worker — e.g.
+// WebSocket.init appending to `.websockets`.
+pub fn httpOwner(self: *const Execution) *HttpClient.Owner {
+    return switch (self.context.global) {
+        inline else => |g| &g._http_owner,
+    };
+}
+
 pub fn dispatch(
     self: *const Execution,
     target: *EventTarget,
