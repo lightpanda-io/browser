@@ -47,6 +47,7 @@ const Frame = @import("browser/Frame.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
 const Notification = @import("Notification.zig");
+const Cors = @import("network/Cors.zig");
 
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
@@ -566,6 +567,33 @@ test "tests:afterAll" {
     test_config.deinit(@import("root").tracking_allocator);
 }
 
+fn buildCorsRequestHeaders(test_allocator: Allocator, req: *std.http.Server.Request) !Cors.RequestHeaders {
+    var aw: std.Io.Writer.Allocating = .init(test_allocator);
+    defer aw.deinit();
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        try aw.writer.print("{s}: {s}\r\n", .{ h.name, h.value });
+    }
+    try aw.writer.writeAll("\r\n");
+
+    return Cors.parseHeaders(test_allocator, aw.written());
+}
+
+fn appendCorsResponseHeaders(
+    test_allocator: Allocator,
+    list: *std.ArrayList(std.http.Header),
+    result: *const Cors.CorsResult,
+) !void {
+    for (result.headers.keys, 0..) |key, i| {
+        try list.append(test_allocator, .{ .name = key, .value = result.headers.values[i] });
+    }
+
+    if (result.vary.len > 0) {
+        const vary_value = try std.mem.join(test_allocator, ", ", result.vary);
+        try list.append(test_allocator, .{ .name = "Vary", .value = vary_value });
+    }
+}
+
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
 
@@ -662,6 +690,84 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/octet-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/ok")) {
+        var cors_arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        defer cors_arena.deinit();
+        const cors_allocator = cors_arena.allocator();
+
+        var cors_options = Cors.CorsOptions.defaultOptions();
+        cors_options.request_headers = &.{ "Accept", "Accept-Language", "Content-Language", "Content-Type", "Range", "X-Custom-Header" };
+        cors_options.response_headers = &.{ "X-Test-Header" };
+        defer cors_options.deinit(cors_allocator);
+
+        var req_headers = try buildCorsRequestHeaders(cors_allocator, req);
+        defer req_headers.deinit();
+
+        var cors_result = try Cors.processCors(cors_allocator, &cors_options, @tagName(req.head.method), &req_headers);
+        defer cors_result.deinit(cors_allocator);
+
+        var cors_only: std.ArrayList(std.http.Header) = .empty;
+        try appendCorsResponseHeaders(cors_allocator, &cors_only, &cors_result);
+
+        if (req.head.method == .OPTIONS and cors_result.status != null) {
+            return req.respond("", .{
+                .status = @enumFromInt(cors_result.status.?),
+                .extra_headers = cors_only.items,
+            });
+        }
+
+        var extra: std.ArrayList(std.http.Header) = .empty;
+        try extra.append(cors_allocator, .{ .name = "Content-Type", .value = "text/plain" });
+        try extra.append(cors_allocator, .{ .name = "X-Test-Header", .value = "allowed" });
+        try extra.append(cors_allocator, .{ .name = "X-Blocked", .value = "blocked" });
+        try extra.appendSlice(cors_allocator, cors_only.items);
+
+        return req.respond("cors-ok", .{ .extra_headers = extra.items });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/cred")) {
+        var cors_arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        defer cors_arena.deinit();
+        const cors_allocator = cors_arena.allocator();
+
+        var cors_options = Cors.CorsOptions.defaultOptions();
+        cors_options.request_headers = &.{ "Accept", "Accept-Language", "Content-Language", "Content-Type", "Range", "X-Custom-Header" };
+        cors_options.response_headers = &.{ "X-Test-Header" };
+        cors_options.supports_credentials = true;
+        defer cors_options.deinit(cors_allocator);
+
+        var req_headers = try buildCorsRequestHeaders(cors_allocator, req);
+        defer req_headers.deinit();
+
+        var cors_result = try Cors.processCors(cors_allocator, &cors_options, @tagName(req.head.method), &req_headers);
+        defer cors_result.deinit(cors_allocator);
+
+        var cors_only: std.ArrayList(std.http.Header) = .empty;
+        try appendCorsResponseHeaders(cors_allocator, &cors_only, &cors_result);
+
+        if (req.head.method == .OPTIONS and cors_result.status != null) {
+            return req.respond("", .{
+                .status = @enumFromInt(cors_result.status.?),
+                .extra_headers = cors_only.items,
+            });
+        }
+
+        var extra: std.ArrayList(std.http.Header) = .empty;
+        try extra.append(cors_allocator, .{ .name = "Content-Type", .value = "text/plain" });
+        try extra.append(cors_allocator, .{ .name = "X-Test-Header", .value = "allowed" });
+        try extra.appendSlice(cors_allocator, cors_only.items);
+
+        return req.respond("cors-cred", .{ .extra_headers = extra.items });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/block")) {
+        return req.respond("cors-block", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
             },
         });
     }
