@@ -18,6 +18,7 @@
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Page = @import("../Page.zig");
 
 const DataTransfer = @import("DataTransfer.zig");
 const DataTransferItem = @import("DataTransferItem.zig");
@@ -29,6 +30,14 @@ const DataTransferItem = @import("DataTransferItem.zig");
 const DataTransferItemList = @This();
 
 _data_transfer: *DataTransfer,
+
+pub fn acquireRef(self: *DataTransferItemList) void {
+    self._data_transfer.acquireRef();
+}
+
+pub fn releaseRef(self: *DataTransferItemList, page: *Page) void {
+    self._data_transfer.releaseRef(page);
+}
 
 pub fn getLength(self: *const DataTransferItemList) u32 {
     return @intCast(self._data_transfer._items.items.len);
@@ -68,6 +77,14 @@ const GenericIterator = @import("collections/iterator.zig").Entry;
 pub const Iterator = GenericIterator(struct {
     index: u32,
     list: *DataTransferItemList,
+
+    pub fn acquireRef(self: *@This()) void {
+        self.list.acquireRef();
+    }
+
+    pub fn releaseRef(self: *@This(), page: *Page) void {
+        self.list.releaseRef(page);
+    }
 
     pub fn next(self: *@This(), _: *const js.Execution) ?*DataTransferItem {
         const index = self.index;

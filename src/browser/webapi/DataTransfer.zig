@@ -98,8 +98,7 @@ fn normalizeFormat(arena: Allocator, format: []const u8) ![]const u8 {
     if (std.ascii.eqlIgnoreCase(format, "url")) {
         return "text/uri-list";
     }
-    const buf = try arena.dupe(u8, format);
-    return std.ascii.lowerString(buf, buf);
+    return std.ascii.allocLowerString(arena, format);
 }
 
 pub fn getData(self: *const DataTransfer, format: []const u8, frame: *Frame) ![]const u8 {
@@ -114,15 +113,15 @@ pub fn getData(self: *const DataTransfer, format: []const u8, frame: *Frame) ![]
 
 pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void {
     const norm = try normalizeFormat(self._arena, format);
-    const dup = try self._arena.dupe(u8, data);
+    const owned_data = try self._arena.dupe(u8, data);
     for (self._items.items) |it| {
         if (it._kind == .string and std.mem.eql(u8, it._type, norm)) {
-            it._payload = .{ .string = dup };
+            it._payload = .{ .string = owned_data };
             return;
         }
     }
     const it = try self._arena.create(DataTransferItem);
-    it.* = .{ ._kind = .string, ._type = norm, ._payload = .{ .string = dup } };
+    it.* = .{ ._data_transfer = self, ._kind = .string, ._type = norm, ._payload = .{ .string = owned_data } };
     try self._items.append(self._arena, it);
 }
 
@@ -159,11 +158,10 @@ pub fn addItem(self: *DataTransfer, data: js.Value, type_: ?[]const u8, frame: *
         return try self.addFileItem(file, frame);
     } else |_| {}
 
-    const s = try data.toZig([]const u8);
+    const owned_data = try data.toStringSliceWithAlloc(self._arena);
     const norm = try normalizeFormat(self._arena, type_ orelse "");
-    const dup = try self._arena.dupe(u8, s);
     const it = try self._arena.create(DataTransferItem);
-    it.* = .{ ._kind = .string, ._type = norm, ._payload = .{ .string = dup } };
+    it.* = .{ ._data_transfer = self, ._kind = .string, ._type = norm, ._payload = .{ .string = owned_data } };
     try self._items.append(self._arena, it);
     return it;
 }
@@ -171,7 +169,7 @@ pub fn addItem(self: *DataTransfer, data: js.Value, type_: ?[]const u8, frame: *
 fn addFileItem(self: *DataTransfer, file: *File, frame: *Frame) !*DataTransferItem {
     file._proto.acquireRef();
     const it = try self._arena.create(DataTransferItem);
-    it.* = .{ ._kind = .file, ._type = file._proto.getType(), ._payload = .{ .file = file } };
+    it.* = .{ ._data_transfer = self, ._kind = .file, ._type = file._proto.getType(), ._payload = .{ .file = file } };
     try self._items.append(self._arena, it);
     try self.rebuildFiles(frame);
     return it;

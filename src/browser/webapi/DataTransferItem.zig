@@ -22,6 +22,8 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const File = @import("File.zig");
+const Page = @import("../Page.zig");
+const DataTransfer = @import("DataTransfer.zig");
 
 const log = lp.log;
 
@@ -30,6 +32,10 @@ const DataTransferItem = @This();
 
 pub const Kind = enum { string, file };
 
+// The owning DataTransfer. The item lives in that DataTransfer's arena and is
+// handed to JS, so it forwards acquireRef/releaseRef to keep the arena alive as
+// long as JS holds the item.
+_data_transfer: *DataTransfer,
 _kind: Kind,
 // For string items: the normalized format (e.g. "text/plain").
 // For file items: the File's MIME type.
@@ -40,6 +46,14 @@ pub const Payload = union(Kind) {
     string: []const u8,
     file: *File,
 };
+
+pub fn acquireRef(self: *DataTransferItem) void {
+    self._data_transfer.acquireRef();
+}
+
+pub fn releaseRef(self: *DataTransferItem, page: *Page) void {
+    self._data_transfer.releaseRef(page);
+}
 
 pub fn getKind(self: *const DataTransferItem) []const u8 {
     return switch (self._kind) {
