@@ -20,9 +20,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Frame = @import("../Frame.zig");
-const Location = @import("Location.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
-const URL = @import("URL.zig");
 
 const History = @This();
 
@@ -77,13 +75,8 @@ pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     _ = try frame._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;
-
-    frame.window._location.releaseRef(frame._page);
-    // Initialize new location.
-    const location = try Location.init(url, frame);
-    location.acquireRef();
-    errdefer location.releaseRef(frame._page);
-    frame.window._location = location;
+    // setHref == reinitializing.
+    try frame.window._location._url.setHref(url, &frame.js.execution);
 }
 
 fn goInner(delta: i32, frame: *Frame) !void {
