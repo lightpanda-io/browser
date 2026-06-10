@@ -701,7 +701,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
 
         var cors_options = Cors.CorsOptions.defaultOptions();
         cors_options.request_headers = &.{ "Accept", "Accept-Language", "Content-Language", "Content-Type", "Range", "X-Custom-Header" };
-        cors_options.response_headers = &.{ "X-Test-Header" };
+        cors_options.response_headers = &.{"X-Test-Header"};
         defer cors_options.deinit(cors_allocator);
 
         var req_headers = try buildCorsRequestHeaders(cors_allocator, req);
@@ -736,7 +736,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
 
         var cors_options = Cors.CorsOptions.defaultOptions();
         cors_options.request_headers = &.{ "Accept", "Accept-Language", "Content-Language", "Content-Type", "Range", "X-Custom-Header" };
-        cors_options.response_headers = &.{ "X-Test-Header" };
+        cors_options.response_headers = &.{"X-Test-Header"};
         cors_options.supports_credentials = true;
         defer cors_options.deinit(cors_allocator);
 
