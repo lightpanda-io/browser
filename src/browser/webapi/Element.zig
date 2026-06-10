@@ -763,10 +763,7 @@ fn isValidShadowHost(self: *const Element) bool {
     };
 }
 
-pub fn attachShadow(self: *Element, mode_str: String, frame: *Frame) !*ShadowRoot {
-    if (frame._element_shadow_roots.get(self)) |_| {
-        return error.NotSupported;
-    }
+pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Frame) !*ShadowRoot {
     if (!self.isValidShadowHost()) {
         return error.NotSupported;
     }
@@ -780,13 +777,20 @@ pub fn attachShadow(self: *Element, mode_str: String, frame: *Frame) !*ShadowRoo
             }
         }
     }
-    const mode: ShadowRoot.Mode = blk: {
-        if (mode_str.eql(comptime .wrap("open"))) break :blk .open;
-        if (mode_str.eql(comptime .wrap("closed"))) break :blk .closed;
-        return error.InvalidArgument;
-    };
 
-    const shadow_root = try ShadowRoot.init(self, mode, frame);
+    if (frame._element_shadow_roots.get(self)) |existing| {
+        // Imperative attachShadow over a declarative shadow root with a matching
+        // mode empties it and returns the same root. The parser
+        // (opts.declarative) never replaces an existing root.
+        if (opts.declarative or !existing._declarative or existing._mode != opts.mode) {
+            return error.NotSupported;
+        }
+        try existing.asNode().replaceChildren(&.{}, frame);
+        existing._declarative = false;
+        return existing;
+    }
+
+    const shadow_root = try ShadowRoot.init(self, opts, frame);
     try frame._element_shadow_roots.put(frame.arena, self, shadow_root);
     return shadow_root;
 }
@@ -1459,9 +1463,32 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     const node = try frame.createElementNS(self._namespace, tag_name, self._attributes);
 
     // Allow element-specific types to copy their runtime state
-    _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), frame }) catch |err| {
+    _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), deep, frame }) catch |err| {
         log.err(.dom, "element.clone.failed", .{ .err = err });
     };
+
+    // Per spec, a clonable shadow root is cloned along with its host — its
+    // children always deep-cloned, even when the host clone is shallow.
+    if (frame._element_shadow_roots.get(self)) |shadow| {
+        if (shadow._clonable) {
+            const cloned_shadow = node.as(Element).attachShadow(.{
+                .mode = shadow._mode,
+                .clonable = true,
+                .delegates_focus = shadow._delegates_focus,
+                .slot_assignment = shadow._slot_assignment,
+                .serializable = shadow._serializable,
+                .declarative = shadow._declarative,
+            }, frame) catch return error.CloneError;
+
+            const cloned_shadow_node = cloned_shadow.asNode();
+            var shadow_child_it = shadow.asNode().childrenIterator();
+            while (shadow_child_it.next()) |child| {
+                if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+                    try frame.appendNode(cloned_shadow_node, cloned_child, .{ .child_already_connected = true });
+                }
+            }
+        }
+    }
 
     if (deep) {
         var child_it = self.asNode().childrenIterator();
@@ -1915,9 +1942,30 @@ pub const JsApi = struct {
 
     const ShadowRootInit = struct {
         mode: String,
+        delegatesFocus: bool = false,
+        slotAssignment: ?String = null,
+        clonable: bool = false,
+        serializable: bool = false,
     };
     fn _attachShadow(self: *Element, init: ShadowRootInit, frame: *Frame) !*ShadowRoot {
-        return self.attachShadow(init.mode, frame);
+        const mode: ShadowRoot.Mode = blk: {
+            if (init.mode.eql(comptime .wrap("open"))) break :blk .open;
+            if (init.mode.eql(comptime .wrap("closed"))) break :blk .closed;
+            return error.InvalidArgument;
+        };
+        const slot_assignment: ShadowRoot.SlotAssignment = blk: {
+            const sa = init.slotAssignment orelse break :blk .named;
+            if (sa.eql(comptime .wrap("named"))) break :blk .named;
+            if (sa.eql(comptime .wrap("manual"))) break :blk .manual;
+            return error.InvalidArgument;
+        };
+        return self.attachShadow(.{
+            .mode = mode,
+            .delegates_focus = init.delegatesFocus,
+            .slot_assignment = slot_assignment,
+            .clonable = init.clonable,
+            .serializable = init.serializable,
+        }, frame);
     }
     pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
     pub const replaceWith = bridge.function(Element.replaceWith, .{ .dom_exception = true, .ce_reactions = true });

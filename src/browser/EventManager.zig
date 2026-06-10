@@ -176,12 +176,21 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
 
     const activation_state = try ActivationState.create(event, target, frame);
 
+    var path_len: usize = 0;
+    var node_path_len: usize = 0;
+    var path_buffer: [128]*EventTarget = undefined;
+
     // Defer runs even on early return - ensures event phase is reset
     // and default actions execute (unless prevented)
     defer {
         event._event_phase = .none;
+        event._current_target = null;
         event._stop_propagation = false;
         event._stop_immediate_propagation = false;
+        if (event._needs_retargeting and node_path_len > 0) {
+            const adjusted = getAdjustedTarget(event._dispatch_target, path_buffer[node_path_len - 1]);
+            event._target = if (rootIsShadowRoot(adjusted)) null else adjusted;
+        }
         // Handle checkbox/radio activation rollback or commit
         if (activation_state) |state| {
             state.restore(event, frame);
@@ -200,9 +209,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             };
         }
     }
-
-    var path_len: usize = 0;
-    var path_buffer: [128]*EventTarget = undefined;
 
     var node: ?*Node = target;
     while (node) |n| {
@@ -227,11 +233,18 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         node = n._parent;
     }
 
+    node_path_len = path_len;
+
     // Even though the window isn't part of the DOM, most events propagate
-    // through it in the capture phase (unless we stopped at a shadow boundary)
-    // The only explicit exception is "load"
-    if (event._type_string.eql(comptime .wrap("load")) == false) {
-        if (path_len < path_buffer.len) {
+    // through it in the capture phase. It only participates when the tree's
+    // root is the document (not for detached trees, and not when propagation
+    // stopped at a shadow boundary). The only explicit exception is "load".
+    if (event._type_string.eql(comptime .wrap("load")) == false and path_len < path_buffer.len) {
+        const root_is_document = path_len > 0 and switch (path_buffer[path_len - 1]._type) {
+            .node => |n| n._type == .document,
+            else => false,
+        };
+        if (root_is_document) {
             path_buffer[path_len] = frame.window.asEventTarget();
             path_len += 1;
         }
@@ -452,6 +465,22 @@ fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarge
     }
 
     return original_target;
+}
+
+// Whether the target's tree root (without crossing shadow boundaries) is a
+// shadow root. Used for the spec's post-dispatch "clear targets" step.
+fn rootIsShadowRoot(target_: ?*EventTarget) bool {
+    const ShadowRoot = @import("webapi/ShadowRoot.zig");
+
+    const target = target_ orelse return false;
+    var current: *Node = switch (target._type) {
+        .node => |n| n,
+        else => return false,
+    };
+    while (current._parent) |p| {
+        current = p;
+    }
+    return current.is(ShadowRoot) != null;
 }
 
 // Check if ancestor is an ancestor of (or the same as) node

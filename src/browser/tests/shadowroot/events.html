@@ -281,3 +281,48 @@
     host.remove();
 }
 </script>
+
+<script id="composedPath_detached_tree_excludes_window">
+{
+    // A detached tree's path ends at its root: no document, no window.
+    const root = document.createElement('div');
+    const target = document.createElement('span');
+    root.appendChild(target);
+
+    let capturedPath = null;
+    root.addEventListener('my-event', (e) => {
+        capturedPath = e.composedPath();
+    });
+    target.dispatchEvent(new Event('my-event', { bubbles: true, composed: true }));
+
+    testing.expectEqual(2, capturedPath.length);
+    testing.expectEqual(target, capturedPath[0]);
+    testing.expectEqual(root, capturedPath[1]);
+}
+</script>
+
+<script id="post_dispatch_state">
+{
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('span');
+    shadow.appendChild(target);
+    shadow.addEventListener('my-event', () => {});
+
+    // composed: crossing the boundary retargets to the host post-dispatch.
+    const composed = new Event('my-event', { bubbles: true, composed: true });
+    target.dispatchEvent(composed);
+    testing.expectEqual(host, composed.target);
+    testing.expectEqual(null, composed.currentTarget);
+    testing.expectEqual(0, composed.eventPhase);
+    testing.expectEqual(0, composed.composedPath().length);
+
+    // non-composed: the event never left the shadow tree, targets are cleared.
+    const scoped = new Event('my-event', { bubbles: true, composed: false });
+    target.dispatchEvent(scoped);
+    testing.expectEqual(null, scoped.target);
+
+    host.remove();
+}
+</script>

@@ -122,3 +122,96 @@
     testing.expectError('NotSupportedError', () => sd.attachShadow({ mode: 'open' }));
 }
 </script>
+
+<script id=attachShadow_options_reflection>
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({
+        mode: 'open',
+        delegatesFocus: true,
+        slotAssignment: 'manual',
+        clonable: true,
+        serializable: true,
+    });
+    testing.expectEqual(true, shadow.delegatesFocus);
+    testing.expectEqual('manual', shadow.slotAssignment);
+    testing.expectEqual(true, shadow.clonable);
+    testing.expectEqual(true, shadow.serializable);
+
+    const defaults = document.createElement('div').attachShadow({ mode: 'open' });
+    testing.expectEqual(false, defaults.delegatesFocus);
+    testing.expectEqual('named', defaults.slotAssignment);
+    testing.expectEqual(false, defaults.clonable);
+    testing.expectEqual(false, defaults.serializable);
+}
+</script>
+
+<script id=attachShadow_declarative_reattach>
+{
+    const wrapper = document.createElement('div');
+    wrapper.setHTMLUnsafe('<div><template shadowrootmode="open" shadowrootdelegatesfocus><span>declared</span></template></div>');
+    const host = wrapper.firstElementChild;
+    const declarative = host.shadowRoot;
+    testing.expectEqual(true, declarative.delegatesFocus);
+    testing.expectEqual('declared', declarative.firstElementChild.textContent);
+
+    // Mismatched mode throws.
+    let caught = null;
+    try { host.attachShadow({ mode: 'closed' }); } catch (e) { caught = e.name; }
+    testing.expectEqual('NotSupportedError', caught);
+
+    // Matching mode returns the same root, emptied.
+    const reattached = host.attachShadow({ mode: 'open' });
+    testing.expectEqual(declarative, reattached);
+    testing.expectEqual(0, reattached.childNodes.length);
+
+    // No longer declarative: a second attachShadow now throws.
+    caught = null;
+    try { host.attachShadow({ mode: 'open' }); } catch (e) { caught = e.name; }
+    testing.expectEqual('NotSupportedError', caught);
+}
+</script>
+
+<script id=clonable_shadow_cloned_with_host>
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open', clonable: true });
+    shadow.innerHTML = '<input><div><span></span></div>';
+
+    // Even a shallow host clone deep-clones a clonable shadow root.
+    const shallow = host.cloneNode(false);
+    testing.expectEqual(true, shallow.shadowRoot.clonable);
+    testing.expectEqual(2, shallow.shadowRoot.children.length);
+    testing.expectEqual('SPAN', shallow.shadowRoot.children[1].firstElementChild.tagName);
+
+    // Non-clonable shadow roots are not cloned.
+    const plainHost = document.createElement('div');
+    plainHost.attachShadow({ mode: 'open' });
+    testing.expectEqual(null, plainHost.cloneNode(true).shadowRoot);
+}
+</script>
+
+<script id=template_shadowroot_reflection>
+{
+    const t = document.createElement('template');
+    testing.expectEqual('', t.shadowRootMode);
+    testing.expectEqual(false, t.shadowRootDelegatesFocus);
+
+    t.shadowRootMode = 'open';
+    testing.expectEqual('open', t.shadowRootMode);
+    testing.expectEqual('open', t.getAttribute('shadowrootmode'));
+
+    // Limited to known values: invalid reads back as "".
+    t.shadowRootMode = 'blah';
+    testing.expectEqual('', t.shadowRootMode);
+    testing.expectEqual('blah', t.getAttribute('shadowrootmode'));
+
+    t.shadowRootDelegatesFocus = true;
+    testing.expectEqual(true, t.hasAttribute('shadowrootdelegatesfocus'));
+    t.shadowRootClonable = true;
+    testing.expectEqual(true, t.shadowRootClonable);
+    t.shadowRootClonable = false;
+    testing.expectEqual(false, t.hasAttribute('shadowrootclonable'));
+    testing.expectEqual(false, t.shadowRootSerializable);
+}
+</script>

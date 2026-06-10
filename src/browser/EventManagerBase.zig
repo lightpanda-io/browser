@@ -253,6 +253,9 @@ pub fn dispatchDirect(
         ls.deinit();
     }
 
+    // Per spec, currentTarget is only set while listeners are being invoked
+    defer event._current_target = null;
+
     // Call the property handler (e.g., onmessage) if present
     if (getFunction(handler, &ls.local)) |func| {
         event._current_target = target;
