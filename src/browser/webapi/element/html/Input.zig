@@ -1517,7 +1517,8 @@ pub const Build = struct {
         }
     }
 
-    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Frame) !void {
+    pub fn cloned(source_element: *Element, cloned_element: *Element, deep: bool, _: *Frame) !void {
+        _ = deep;
         const source = source_element.as(Input);
         const clone = cloned_element.as(Input);
 

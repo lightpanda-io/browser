@@ -31,18 +31,42 @@ pub const Mode = enum {
     closed,
 };
 
+pub const SlotAssignment = enum {
+    named,
+    manual,
+};
+
+pub const AttachOptions = struct {
+    mode: Mode,
+    delegates_focus: bool = false,
+    slot_assignment: SlotAssignment = .named,
+    clonable: bool = false,
+    serializable: bool = false,
+    declarative: bool = false,
+};
+
 _proto: *DocumentFragment,
 _mode: Mode,
 _host: *Element,
+_delegates_focus: bool,
+_slot_assignment: SlotAssignment,
+_clonable: bool,
+_serializable: bool,
+_declarative: bool,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .{},
 _removed_ids: std.StringHashMapUnmanaged(void) = .{},
 _adopted_style_sheets: ?js.Object.Global = null,
 
-pub fn init(host: *Element, mode: Mode, frame: *Frame) !*ShadowRoot {
+pub fn init(host: *Element, opts: AttachOptions, frame: *Frame) !*ShadowRoot {
     return frame._factory.documentFragment(ShadowRoot{
         ._proto = undefined,
-        ._mode = mode,
+        ._mode = opts.mode,
         ._host = host,
+        ._delegates_focus = opts.delegates_focus,
+        ._slot_assignment = opts.slot_assignment,
+        ._clonable = opts.clonable,
+        ._serializable = opts.serializable,
+        ._declarative = opts.declarative,
     });
 }
 
@@ -64,6 +88,22 @@ pub fn getMode(self: *const ShadowRoot) []const u8 {
 
 pub fn getHost(self: *const ShadowRoot) *Element {
     return self._host;
+}
+
+pub fn getDelegatesFocus(self: *const ShadowRoot) bool {
+    return self._delegates_focus;
+}
+
+pub fn getSlotAssignment(self: *const ShadowRoot) []const u8 {
+    return @tagName(self._slot_assignment);
+}
+
+pub fn getClonable(self: *const ShadowRoot) bool {
+    return self._clonable;
+}
+
+pub fn getSerializable(self: *const ShadowRoot) bool {
+    return self._serializable;
 }
 
 pub fn setHTMLUnsafe(self: *ShadowRoot, html: []const u8, frame: *Frame) !void {
@@ -125,6 +165,10 @@ pub const JsApi = struct {
 
     pub const mode = bridge.accessor(ShadowRoot.getMode, null, .{});
     pub const host = bridge.accessor(ShadowRoot.getHost, null, .{});
+    pub const delegatesFocus = bridge.accessor(ShadowRoot.getDelegatesFocus, null, .{});
+    pub const slotAssignment = bridge.accessor(ShadowRoot.getSlotAssignment, null, .{});
+    pub const clonable = bridge.accessor(ShadowRoot.getClonable, null, .{});
+    pub const serializable = bridge.accessor(ShadowRoot.getSerializable, null, .{});
     pub const getElementById = bridge.function(_getElementById, .{});
     fn _getElementById(self: *ShadowRoot, value_: ?js.Value, frame: *Frame) !?*Element {
         const value = value_ orelse return null;

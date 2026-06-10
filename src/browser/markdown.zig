@@ -775,7 +775,7 @@ fn testMarkdownShadow(light: []const u8, shadow: []const u8, expected: []const u
         try frame.parseHtmlAsChildren(host.asNode(), light);
     }
 
-    const sr = try host.attachShadow(comptime .wrap("open"), frame);
+    const sr = try host.attachShadow(.{ .mode = .open }, frame);
     try frame.parseHtmlAsChildren(sr.asNode(), shadow);
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);

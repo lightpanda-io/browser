@@ -90,3 +90,19 @@
     host.remove();
 }
 </script>
+
+<script id="ownerDocument_in_shadow_of_other_document">
+{
+    const doc = document.implementation.createHTMLDocument('Test');
+    const host = doc.createElement('div');
+    doc.body.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const child = doc.createElement('span');
+    shadow.appendChild(child);
+
+    // Nodes in a shadow tree belong to the host's document, not the
+    // frame's main document.
+    testing.expectEqual(doc, child.ownerDocument);
+    testing.expectEqual(doc, shadow.ownerDocument);
+}
+</script>

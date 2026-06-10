@@ -154,7 +154,8 @@ pub const Build = struct {
 
     // Per the HTML spec, the "already started" flag must be propagated to the
     // clone so that re-inserting a cloned <script> doesn't run it again.
-    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Frame) !void {
+    pub fn cloned(source_element: *Element, cloned_element: *Element, deep: bool, _: *Frame) !void {
+        _ = deep;
         const source = source_element.as(Script);
         const clone = cloned_element.as(Script);
         clone._executed = source._executed;

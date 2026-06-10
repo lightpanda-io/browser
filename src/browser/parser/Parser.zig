@@ -579,14 +579,19 @@ fn attachDeclarativeShadowCallback(ctx: *anyopaque, host_ref: *anyopaque, templa
 fn _attachDeclarativeShadowCallback(self: *Parser, host_node: *Node, template_node: *Node, mode_is_open: bool) !u8 {
     // guaranteed by html5ever
     const host = host_node.as(Element);
-    const mode: lp.String = if (mode_is_open) comptime .wrap("open") else comptime .wrap("closed");
-    const shadow = host.attachShadow(mode, self.frame) catch |err| switch (err) {
-        // Expected per-spec fall-backs (host can't host a shadow, or already
-        // has one): keep the <template> in the light DOM instead.
+    const template_el = template_node.as(Element);
+    const shadow = host.attachShadow(.{
+        .declarative = true,
+        .mode = if (mode_is_open) .open else .closed,
+        .delegates_focus = template_el.hasAttributeSafe(.wrap("shadowrootdelegatesfocus")),
+        .clonable = template_el.hasAttributeSafe(.wrap("shadowrootclonable")),
+        .serializable = template_el.hasAttributeSafe(.wrap("shadowrootserializable")),
+    }, self.frame) catch |err| switch (err) {
         error.NotSupported => return 0,
         else => return err,
     };
-    const template = template_node.as(Element).is(Element.Html.Template) orelse return 0;
+
+    const template = template_el.is(Element.Html.Template) orelse return 0;
     template._content = shadow.asDocumentFragment();
     return 1;
 }
