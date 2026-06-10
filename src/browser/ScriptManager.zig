@@ -157,7 +157,7 @@ fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
 
     const was_evaluating = self.base.is_evaluating;
     self.base.is_evaluating = true;
-    defer self.base.is_evaluating = was_evaluating;
+    defer self.base.endEvaluationWindow(was_evaluating);
 
     var client = self.base.client;
     while (true) {
@@ -333,7 +333,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
         const was_evaluating = self.base.is_evaluating;
         self.base.is_evaluating = true;
-        defer self.base.is_evaluating = was_evaluating;
+        defer self.base.endEvaluationWindow(was_evaluating);
 
         if (is_blocking) {
             if (self.waitForPreload(url)) |pre| {
@@ -405,8 +405,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     const was_evaluating = self.base.is_evaluating;
     self.base.is_evaluating = true;
     defer {
-        self.base.is_evaluating = was_evaluating;
         script.deinit();
+        self.base.endEvaluationWindow(was_evaluating);
     }
 
     script.eval();
