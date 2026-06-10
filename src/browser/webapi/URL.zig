@@ -41,24 +41,14 @@ pub const eqlDocument = @import("../URL.zig").eqlDocument;
 
 pub fn init(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !*URL {
     // NOTE: about:blank address is valid in rust-url.
-
     var err: i32 = 0;
-    if (maybe_base) |base| {
-        const base_url = U_.url_parse(base.ptr, base.len, &err) orelse return error.TypeError;
-        errdefer U_.url_free(base_url);
-
-        const joined_url = U_.url_join(base_url, url.ptr, url.len, &err) orelse return error.TypeError;
-        errdefer U_.url_free(joined_url);
-        // `base_url` has no use now.
-        U_.url_free(base_url);
-
-        return exec._factory.create(URL{ ._url = joined_url });
-    }
-
-    const u = U_.url_parse(url.ptr, url.len, &err) orelse {
-        return error.TypeError;
+    const u = blk: {
+        if (maybe_base) |base| {
+            break :blk U.url_parse_with_base(base.ptr, base.len, url.ptr, url.len, &err) orelse return error.TypeError;
+        }
+        break :blk U.url_parse(url.ptr, url.len, &err) orelse return error.TypeError;
     };
-    errdefer U_.url_free(u);
+    errdefer U.url_free(u);
 
     return exec._factory.create(URL{ ._url = u });
 }

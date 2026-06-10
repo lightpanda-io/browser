@@ -51,6 +51,9 @@ pub const ParseError = enum(i32) {
 /// If return value is null, `err` indicates `ParseError`.
 pub extern "c" fn url_parse(ptr: [*]const u8, len: usize, err: *i32) ?*Url;
 /// If return value is null, `err` indicates `ParseError`.
+/// More efficient than url_parse + url_join combination where possible.
+pub extern "c" fn url_parse_with_base(base_ptr: [*]const u8, base_len: usize, ptr: [*]const u8, len: usize, err: *i32) ?*Url;
+/// If return value is null, `err` indicates `ParseError`.
 pub extern "c" fn url_join(base: *const Url, ptr: [*]const u8, len: usize, err: *i32) ?*Url;
 pub extern "c" fn url_free(url: *Url) void;
 pub extern "c" fn url_can_parse(ptr: [*]const u8, len: usize) bool;

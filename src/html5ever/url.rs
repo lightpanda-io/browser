@@ -103,6 +103,44 @@ pub unsafe extern "C" fn url_parse(ptr: *const c_uchar, len: usize, err: *mut i3
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn url_parse_with_base(
+    base_ptr: *const c_uchar,
+    base_len: usize,
+    ptr: *const c_uchar,
+    len: usize,
+    err: *mut i32,
+) -> *mut Url {
+    let base_slice = match str_from(base_ptr, base_len) {
+        Some(s) => s,
+        None => {
+            *err = url::ParseError::EmptyHost as i32;
+            return std::ptr::null_mut();
+        }
+    };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => {
+            *err = url::ParseError::EmptyHost as i32;
+            return std::ptr::null_mut();
+        }
+    };
+
+    match Url::parse(base_slice) {
+        Ok(base) => match base.join(slice) {
+            Ok(url) => Box::into_raw(Box::new(url)),
+            Err(e) => {
+                *err = e as i32;
+                std::ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            *err = e as i32;
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn url_join(
     base: *const Url,
     ptr: *const c_uchar,
