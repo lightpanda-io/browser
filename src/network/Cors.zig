@@ -14,7 +14,7 @@ const CorsContext = @import("./layer/CorsLayer.zig").CorsContext;
 // - https://developer.mozilla.org/en-US/docs/Glossary/CORS-safelisted_request_header#additional_restrictions
 // - https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_request_header
 
-/// Determine if a request is simple or not.
+/// Determine if a request is simple or not using CorsContext.
 /// If not, any unsafe headers will be stored in ctx.
 pub fn determineSimpleRequestCtx(ctx: *CorsContext, req: *const HttpClient.Request) !bool {
     return determineSimpleRequest(ctx.arena, &ctx.unsafe_headers, req);
@@ -31,7 +31,6 @@ fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.ArrayLi
         if (h.value.len > 128) {
             simple = false;
         }
-        // safe headers are case-insensitive
         if (std.ascii.startsWithIgnoreCase(h.name, "sec-") or
             std.ascii.startsWithIgnoreCase(h.name, "proxy-"))
         {
@@ -51,7 +50,7 @@ fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.ArrayLi
             std.ascii.eqlIgnoreCase(h.name, "x-method-override"))
         {
             for (forbidden_methods) |n| {
-                if (std.mem.eql(u8, h.value, n)) continue :outer;
+                if (std.ascii.eqlIgnoreCase(h.value, n)) continue :outer;
             }
         } else {
             for (safe_headers) |a_h| {
@@ -60,17 +59,17 @@ fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.ArrayLi
                 }
             }
         }
-        // dupe it since headers can be invalidated
+        // dupe it since req headers can be invalidated
         try unsafe_headers.append(arena, try arena.dupe(u8, h.name));
     }
 
     return unsafe_headers.items.len == 0 and simple;
 }
 
-/// Dertermine if a response passes CORS checks using an existing Context
+/// Dertermine if a response passes CORS checks using an existing CorsContext
 pub fn responsePassesCorsCtx(ctx: *CorsContext, response: Response) !bool {
     const arena = ctx.arena;
-    var res_store: HeaderStore = .{};
+    var res_store: ResponseHeaderStore = undefined;
 
     var header_it = response.headerIterator();
     const headers = try header_it.collect(arena);
@@ -81,42 +80,32 @@ pub fn responsePassesCorsCtx(ctx: *CorsContext, response: Response) !bool {
         } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-credentials")) {
             res_store.res_credentials = std.ascii.eqlIgnoreCase(h.value, "true");
         } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-methods")) {
-            var iter = std.mem.tokenizeAny(u8, h.value, ", ");
-            while (iter.next()) |val| {
-                try res_store.res_methods.append(arena, val);
-            }
+            res_store.res_methods = h.value;
         } else if (std.ascii.eqlIgnoreCase(h.name, "access-control-allow-headers")) {
-            var iter = std.mem.tokenizeAny(u8, h.value, ", ");
-            while (iter.next()) |val| {
-                try res_store.res_headers.append(arena, val);
-            }
+            res_store.res_headers = h.value;
         }
     }
 
     return passesCors(
         ctx.from_origin,
-        ctx.unsafe_headers.items,
         ctx.original_method,
-        ctx.held != null,
+        ctx.unsafe_headers.items,
         ctx.credentials,
+        ctx.held != null,
         res_store,
     );
 }
 
 fn passesCors(
-    from_origin: []const u8,
-    req_extra_headers: [][]const u8,
-    original_method: []const u8,
+    req_from_origin: []const u8,
+    req_method: []const u8,
+    req_unsafe_headers: [][]const u8,
+    req_credentials: bool,
     preflight: bool,
-    credentials: bool,
-    store: HeaderStore,
+    store: ResponseHeaderStore,
 ) bool {
-    if (store.res_origin == null) {
-        return false;
-    }
-
-    const origin_wildcard: bool = std.mem.eql(u8, store.res_origin.?, "*");
-    const origin_match = std.mem.eql(u8, store.res_origin.?, from_origin);
+    const origin_wildcard: bool = std.mem.eql(u8, store.res_origin, "*");
+    const origin_match = std.mem.eql(u8, store.res_origin, req_from_origin);
 
     if (!origin_wildcard and !origin_match) {
         return false;
@@ -125,29 +114,35 @@ fn passesCors(
     if (!preflight) {
         // non-preflight:
         // no wildcards if credentials
-        return !credentials or (store.res_credentials and !origin_wildcard);
+        return !req_credentials or (store.res_credentials and !origin_wildcard);
     }
+
     // this is a preflight request;
     // mandatory: methods & headers, ~credentials.
     // optional: max-age
+
+    // methods
+    var method_it = std.mem.tokenizeAny(u8, store.res_methods, " ,");
     var method_wildcard = false;
-    var method_match = false;
-    for (store.res_methods.items) |h| {
-        if (std.mem.eql(u8, h, original_method)) {
-            method_match = true;
-        } else if (std.mem.eql(u8, h, "*")) {
+    const method_match = while (method_it.next()) |m| {
+        if (std.mem.eql(u8, m, req_method)) {
+            break true;
+        } else if (std.mem.eql(u8, m, "*")) {
             method_wildcard = true;
         }
-    }
+    } else false;
 
+    // headers
+    var header_it = std.mem.tokenizeAny(u8, store.res_headers, " ,");
     var headers_wildcard = false;
     const headers_match = match: {
-        for (req_extra_headers) |req_header| {
-            for (store.res_headers.items) |h| {
+        for (req_unsafe_headers) |req_header| {
+            header_it.reset();
+            while (header_it.next()) |h| {
                 if (std.mem.eql(u8, h, "*")) {
                     headers_wildcard = true;
                     continue;
-                } else if (std.mem.eql(u8, h, req_header)) {
+                } else if (std.ascii.eqlIgnoreCase(h, req_header)) {
                     break;
                 }
             } else break :match false;
@@ -156,7 +151,7 @@ fn passesCors(
 
     // results:
     // no wildcards if credentials
-    if (credentials) {
+    if (req_credentials) {
         if (store.res_credentials and
             !(origin_wildcard or method_wildcard or headers_wildcard) and
             (origin_match and method_match and headers_match))
@@ -257,10 +252,10 @@ pub const CorsMode = enum {
     none,
 };
 
-const HeaderStore = struct {
-    res_origin: ?[]const u8 = null,
-    res_methods: std.ArrayList([]const u8) = .empty,
-    res_headers: std.ArrayList([]const u8) = .empty,
+const ResponseHeaderStore = struct {
+    res_origin: []const u8,
+    res_methods: []const u8,
+    res_headers: []const u8,
     res_credentials: bool = false,
 };
 
