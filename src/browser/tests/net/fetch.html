@@ -330,3 +330,84 @@
     });
   }
 </script>
+
+<script id=fetch_cors_ok type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch('http://localhost:9582/cors/ok');
+    const text = await response.text();
+
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(200, response.status);
+      testing.expectEqual(true, response.ok);
+      testing.expectEqual('cors', response.type);
+      testing.expectEqual('cors-ok', text);
+      testing.expectEqual('text/plain', response.headers.get('Content-Type'));
+      testing.expectEqual('allowed', response.headers.get('X-Test-Header'));
+      testing.expectEqual(null, response.headers.get('X-Blocked'));
+      testing.expectEqual(null, response.headers.get('Content-Length'));
+    });
+  }
+</script>
+
+<script id=fetch_cors_credentials type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch('http://localhost:9582/cors/cred', {
+      credentials: 'include'
+    });
+    const text = await response.text();
+
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(200, response.status);
+      testing.expectEqual(true, response.ok);
+      testing.expectEqual('cors', response.type);
+      testing.expectEqual('cors-cred', text);
+      testing.expectEqual('allowed', response.headers.get('X-Test-Header'));
+    });
+  }
+</script>
+
+<script id=fetch_cors_blocked type=module>
+  {
+    const state = await testing.async();
+    try {
+      await fetch('http://localhost:9582/cors/block');
+      state.resolve({ ok: false });
+    } catch (e) {
+      state.resolve({ ok: true, name: e.name });
+    }
+
+    await state.done((result) => {
+      testing.expectEqual(true, result.ok);
+      testing.expectEqual('TypeError', result.name);
+    });
+  }
+</script>
+
+<script id=fetch_cors_non_simple_blocked type=module>
+  {
+    const state = await testing.async();
+    try {
+      await fetch('http://localhost:9582/cors/ok', {
+        method: 'POST',
+        headers: {
+          'X-Custom-Header': '1'
+        },
+        body: 'hi'
+      });
+      state.resolve({ ok: false });
+    } catch (e) {
+      state.resolve({ ok: true, name: e.name });
+    }
+
+    await state.done((result) => {
+      testing.expectEqual(true, result.ok);
+      testing.expectEqual('TypeError', result.name);
+    });
+  }
+</script>
