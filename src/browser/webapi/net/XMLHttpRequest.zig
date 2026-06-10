@@ -257,6 +257,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
 
     const exec = self._exec;
+    const session = exec.context.page.session;
+    const http_client = &session.browser.http_client;
 
     if (std.mem.startsWith(u8, self._url, "blob:")) {
         return self.handleBlobUrl(exec);
@@ -270,13 +272,53 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         defer cors_headers.deinit();
 
         if (!Cors.isSimpleRequest(@tagName(self._method), &cors_headers)) {
-            self.handleError(error.CorsBlocked);
+            var preflight_headers = try Cors.buildPreflightHeaders(self._arena, @tagName(self._method), &cors_headers);
+            defer preflight_headers.deinit();
+
+            var preflight_http_headers = try http_client.newHeaders();
+            defer preflight_http_headers.deinit();
+
+            if (request_origin != null) {
+                const origin_header = try std.fmt.allocPrintSentinel(self._arena, "Origin: {s}", .{request_origin.?}, 0);
+                try preflight_http_headers.add(origin_header);
+            }
+
+            var preflight_it = preflight_headers.values.iterator();
+            while (preflight_it.next()) |entry| {
+                const hdr = try std.fmt.allocPrintSentinel(self._arena, "{s}: {s}", .{ entry.key_ptr.*, entry.value_ptr.* }, 0);
+                try preflight_http_headers.add(hdr);
+            }
+
+            self.acquireRef();
+            self._active_request = true;
+
+            exec.makeRequest(.{
+                .ctx = self,
+                .params = .{
+                    .url = self._url,
+                    .method = .OPTIONS,
+                    .headers = preflight_http_headers,
+                    .frame_id = exec.frameId(),
+                    .loader_id = exec.loaderId(),
+                    .cookie_jar = null,
+                    .cookie_origin = exec.url.*,
+                    .resource_type = .xhr,
+                    .notification = session.notification,
+                },
+                .start_callback = httpStartCallback,
+                .header_callback = preflightHeaderDoneCallback,
+                .data_callback = httpDataCallback,
+                .done_callback = preflightDoneCallback,
+                .error_callback = httpErrorCallback,
+                .shutdown_callback = httpShutdownCallback,
+            }) catch |err| {
+                self.releaseSelfRef();
+                return err;
+            };
             return;
         }
     }
 
-    const session = exec.context.page.session;
-    const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
 
     // Only add cookies for same-origin or when withCredentials is true
@@ -477,6 +519,110 @@ fn httpHeaderCallback(response: HttpClient.Response, header: http.Header) !void 
     const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ header.name, header.value });
     try self._response_headers.append(self._arena, joined);
+}
+
+fn preflightHeaderDoneCallback(response: HttpClient.Response) !bool {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
+
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "preflight header", .{
+            .source = "xhr",
+            .url = self._url,
+            .status = response.status(),
+        });
+    }
+
+    var allow_origin: ?[]const u8 = null;
+    var allow_credentials = false;
+    var allow_methods: ?[]const u8 = null;
+    var allow_headers: ?[]const u8 = null;
+
+    var it = response.headerIterator();
+    while (it.next()) |hdr| {
+        const name = try self._arena.dupe(u8, hdr.name);
+        const value = try self._arena.dupe(u8, hdr.value);
+        const value_trimmed = std.mem.trim(u8, value, " \t");
+
+        if (std.ascii.eqlIgnoreCase(name, "access-control-allow-origin")) {
+            allow_origin = value_trimmed;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-allow-credentials") and
+            std.ascii.eqlIgnoreCase(value_trimmed, "true"))
+        {
+            allow_credentials = true;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-allow-methods")) {
+            allow_methods = value_trimmed;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-allow-headers")) {
+            allow_headers = value_trimmed;
+        }
+    }
+
+    const exec = self._exec;
+    const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
+
+    if (!Cors.isResponseAllowed(allow_origin, allow_credentials, request_origin.?, self._with_credentials)) {
+        response.abort(error.CorsBlocked);
+        return false;
+    }
+
+    // TODO: validate allow_methods and allow_headers against the actual request
+
+    return true;
+}
+
+fn preflightDoneCallback(ctx: *anyopaque) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
+
+    log.info(.http, "preflight complete", .{
+        .source = "xhr",
+        .url = self._url,
+    });
+
+    const exec = self._exec;
+    const session = exec.context.page.session;
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeaders();
+    defer headers.deinit();
+
+    try self._request_headers.populateHttpHeader(exec.call_arena, &headers);
+    const cookie_support = self._with_credentials or exec.isSameOrigin(self._url);
+    if (cookie_support) {
+        try exec.headersForRequest(&headers);
+    }
+
+    const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
+    if (request_origin != null) {
+        const has_origin = self._request_headers.has("origin", exec);
+        if (!has_origin) {
+            const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin.?}, 0);
+            try headers.add(origin_header);
+        }
+    }
+
+    exec.makeRequest(.{
+        .ctx = self,
+        .params = .{
+            .url = self._url,
+            .method = self._method,
+            .headers = headers,
+            .frame_id = exec.frameId(),
+            .loader_id = exec.loaderId(),
+            .body = self._request_body,
+            .cookie_jar = if (cookie_support) &session.cookie_jar else null,
+            .cookie_origin = exec.url.*,
+            .resource_type = .xhr,
+            .timeout_ms = self._timeout,
+            .notification = session.notification,
+        },
+        .start_callback = httpStartCallback,
+        .header_callback = httpHeaderDoneCallback,
+        .data_callback = httpDataCallback,
+        .done_callback = httpDoneCallback,
+        .error_callback = httpErrorCallback,
+        .shutdown_callback = httpShutdownCallback,
+    }) catch |err| {
+        self.releaseSelfRef();
+        return err;
+    };
 }
 
 fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
