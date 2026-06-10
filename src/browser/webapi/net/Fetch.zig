@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const HttpClient = @import("../../HttpClient.zig");
+const http = @import("../../../network/http.zig");
 const Cors = @import("../../../network/Cors.zig");
 
 const js = @import("../../js/js.zig");
@@ -47,6 +48,9 @@ _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
 _signal: ?*AbortSignal,
 _allow_credentials: bool,
+_method: http.Method,
+_body: ?[]const u8,
+_credentials: Request.Credentials,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -79,16 +83,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     const request_origin = URL.getOrigin(exec.call_arena, exec.url.*) catch null;
     const cross_origin = request_origin != null and !exec.isSameOrigin(request._url);
 
-    if (cross_origin) {
-        var cors_headers = try buildCorsRequestHeaders(exec.call_arena, request._headers);
-        defer cors_headers.deinit();
-
-        if (!Cors.isSimpleRequest(@tagName(request._method), &cors_headers)) {
-            resolver.rejectError("fetch error", .{ .type_error = "fetch error" });
-            return resolver.promise();
-        }
-    }
-
     const response = try Response.init(null, .{ .status = 0 }, exec);
     errdefer response.deinit(exec.context.page);
 
@@ -102,10 +96,62 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._owns_response = true,
         ._signal = request._signal,
         ._allow_credentials = request._credentials == .include,
+        ._method = request._method,
+        ._body = request._body,
+        ._credentials = request._credentials,
     };
 
     const session = exec.context.page.session;
     const http_client = &session.browser.http_client;
+
+    if (cross_origin) {
+        var cors_headers = try buildCorsRequestHeaders(exec.call_arena, request._headers);
+        defer cors_headers.deinit();
+
+        if (!Cors.isSimpleRequest(@tagName(request._method), &cors_headers)) {
+            var preflight_headers = try Cors.buildPreflightHeaders(exec.call_arena, @tagName(request._method), &cors_headers);
+            defer preflight_headers.deinit();
+
+            var preflight_http_headers = try http_client.newHeaders();
+            defer preflight_http_headers.deinit();
+
+            if (request_origin != null) {
+                const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin.?}, 0);
+                try preflight_http_headers.add(origin_header);
+            }
+
+            var preflight_it = preflight_headers.values.iterator();
+            while (preflight_it.next()) |entry| {
+                const hdr = try std.fmt.allocPrintSentinel(exec.call_arena, "{s}: {s}", .{ entry.key_ptr.*, entry.value_ptr.* }, 0);
+                try preflight_http_headers.add(hdr);
+            }
+
+            const preflight_req = HttpClient.Request{
+                .ctx = fetch,
+                .params = .{
+                    .url = request._url,
+                    .method = .OPTIONS,
+                    .frame_id = exec.frameId(),
+                    .loader_id = exec.loaderId(),
+                    .headers = preflight_http_headers,
+                    .resource_type = .fetch,
+                    .cookie_jar = null,
+                    .cookie_origin = exec.url.*,
+                    .notification = session.notification,
+                },
+                .start_callback = httpStartCallback,
+                .header_callback = preflightHeaderDoneCallback,
+                .data_callback = httpDataCallback,
+                .done_callback = preflightDoneCallback,
+                .error_callback = httpErrorCallback,
+                .shutdown_callback = httpShutdownCallback,
+            };
+
+            exec.makeRequest(preflight_req) catch {};
+            return resolver.promise();
+        }
+    }
+
     var headers = try http_client.newHeaders();
     if (request._headers) |h| {
         try h.populateHttpHeader(exec.call_arena, &headers);
@@ -185,6 +231,106 @@ fn httpStartCallback(response: HttpClient.Response) !void {
         log.debug(.http, "request start", .{ .url = self._url, .source = "fetch" });
     }
     self._response._http_response = response;
+}
+
+fn preflightHeaderDoneCallback(response: HttpClient.Response) !bool {
+    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
+
+    if (self._signal) |signal| {
+        if (signal._aborted) {
+            return false;
+        }
+    }
+
+    const arena = self._response._arena;
+    var allow_origin: ?[]const u8 = null;
+    var allow_credentials = false;
+    var allow_methods: ?[]const u8 = null;
+    var allow_headers: ?[]const u8 = null;
+
+    var it = response.headerIterator();
+    while (it.next()) |hdr| {
+        const name = try arena.dupe(u8, hdr.name);
+        const value = try arena.dupe(u8, hdr.value);
+        const value_trimmed = std.mem.trim(u8, value, " \t");
+
+        if (std.ascii.eqlIgnoreCase(name, "access-control-allow-origin")) {
+            allow_origin = value_trimmed;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-allow-credentials") and
+            std.ascii.eqlIgnoreCase(value_trimmed, "true"))
+        {
+            allow_credentials = true;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-allow-methods")) {
+            allow_methods = value_trimmed;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-allow-headers")) {
+            allow_headers = value_trimmed;
+        }
+    }
+
+    const exec = self._exec;
+    const requesting_origin = URL.getOrigin(arena, exec.url.*) catch null;
+
+    if (!Cors.isResponseAllowed(allow_origin, allow_credentials, requesting_origin.?, self._allow_credentials)) {
+        response.abort(error.CorsBlocked);
+        return false;
+    }
+
+    // TODO: validate allow_methods and allow_headers against the actual request
+
+    return true;
+}
+
+fn preflightDoneCallback(ctx: *anyopaque) !void {
+    const self: *Fetch = @ptrCast(@alignCast(ctx));
+
+    log.info(.http, "preflight complete", .{
+        .source = "fetch",
+        .url = self._url,
+    });
+
+    const exec = self._exec;
+    const session = exec.context.page.session;
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeaders();
+    try self._response._headers.populateHttpHeader(exec.call_arena, &headers);
+    try exec.headersForRequest(&headers);
+
+    const request_origin = URL.getOrigin(exec.call_arena, exec.url.*) catch null;
+    if (request_origin != null) {
+        const has_origin = self._response._headers.has("origin", exec);
+        if (!has_origin) {
+            const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin.?}, 0);
+            try headers.add(origin_header);
+        }
+    }
+
+    const cookie_jar = switch (self._credentials) {
+        .omit => null,
+        .include => &session.cookie_jar,
+        .@"same-origin" => if (exec.isSameOrigin(try exec.call_arena.dupeZ(u8, self._url))) &session.cookie_jar else null,
+    };
+
+    exec.makeRequest(.{
+        .ctx = self,
+        .params = .{
+            .url = try exec.call_arena.dupeZ(u8, self._url),
+            .method = self._method,
+            .frame_id = exec.frameId(),
+            .loader_id = exec.loaderId(),
+            .body = self._body,
+            .headers = headers,
+            .resource_type = .fetch,
+            .cookie_jar = cookie_jar,
+            .cookie_origin = exec.url.*,
+            .notification = session.notification,
+        },
+        .start_callback = httpStartCallback,
+        .header_callback = httpHeaderDoneCallback,
+        .data_callback = httpDataCallback,
+        .done_callback = httpDoneCallback,
+        .error_callback = httpErrorCallback,
+        .shutdown_callback = httpShutdownCallback,
+    }) catch {};
 }
 
 fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
