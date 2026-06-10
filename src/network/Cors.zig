@@ -405,6 +405,32 @@ fn isSimpleResponseHeader(header: []const u8) bool {
         std.ascii.eqlIgnoreCase(header, "Pragma");
 }
 
+pub fn isResponseHeaderExposed(
+    header: []const u8,
+    expose_headers: ?[]const u8,
+    request_credentials: bool,
+) bool {
+    if (isSimpleResponseHeader(header)) return true;
+
+    const expose = expose_headers orelse return false;
+    var start: usize = 0;
+    while (start < expose.len) {
+        const comma = std.mem.indexOfScalarPos(u8, expose, start, ',') orelse expose.len;
+        const token = std.mem.trim(u8, expose[start..comma], " \t");
+        if (token.len > 0) {
+            if (std.ascii.eqlIgnoreCase(token, "*")) {
+                if (!request_credentials) return true;
+            } else if (std.ascii.eqlIgnoreCase(token, header)) {
+                return true;
+            }
+        }
+        if (comma == expose.len) break;
+        start = comma + 1;
+    }
+
+    return false;
+}
+
 fn buildExposeHeadersValue(allocator: Allocator, response_headers: []const []const u8) !?[]u8 {
     var count: usize = 0;
     var total_len: usize = 0;
@@ -535,4 +561,24 @@ test "isResponseAllowed: credentials" {
     try testing.expect(isResponseAllowed("https://example.com", true, "https://example.com", true));
     try testing.expect(!isResponseAllowed("*", true, "https://example.com", true));
     try testing.expect(!isResponseAllowed("https://example.com", false, "https://example.com", true));
+}
+
+test "isSimpleRequest: simple vs non-simple" {
+    var headers = RequestHeaders.init(testing.allocator);
+    defer headers.deinit();
+
+    try headers.put("origin", "https://example.com");
+    try headers.put("content-type", "text/plain");
+    try testing.expect(isSimpleRequest("POST", &headers));
+
+    try headers.put("x-custom", "1");
+    try testing.expect(!isSimpleRequest("POST", &headers));
+}
+
+test "isResponseHeaderExposed: list and wildcard" {
+    try testing.expect(isResponseHeaderExposed("Content-Type", null, false));
+    try testing.expect(isResponseHeaderExposed("X-Token", "X-Token", false));
+    try testing.expect(!isResponseHeaderExposed("X-Other", "X-Token", false));
+    try testing.expect(isResponseHeaderExposed("X-Any", "*", false));
+    try testing.expect(!isResponseHeaderExposed("X-Any", "*", true));
 }
