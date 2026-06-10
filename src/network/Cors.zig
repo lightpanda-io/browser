@@ -275,7 +275,7 @@ pub fn buildPreflightHeaders(allocator: Allocator, method: []const u8, headers: 
     try out.put("Access-Control-Request-Method", method);
 
     var custom_headers: std.ArrayList([]const u8) = .empty;
-    defer custom_headers.deinit();
+    defer custom_headers.deinit(allocator);
 
     var it = headers.values.iterator();
     while (it.next()) |entry| {

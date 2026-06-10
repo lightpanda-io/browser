@@ -56,7 +56,7 @@ pub const InitOpts = struct {
     signal: ?*AbortSignal = null,
 };
 
-const Credentials = enum {
+pub const Credentials = enum {
     omit,
     include,
     @"same-origin",
