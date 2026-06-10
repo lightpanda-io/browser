@@ -44,6 +44,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
+    try self.session.enableConsoleCapture();
 
     if (app.config.cookieFile()) |cookie_path| {
         lp.cookies.loadFromFile(self.session, cookie_path);
