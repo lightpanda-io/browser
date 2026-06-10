@@ -314,6 +314,7 @@ pub fn deinit(self: *Agent) void {
 fn startSession(self: *Agent) !void {
     self.session = try self.browser.newSession(self.notification);
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
+    try self.session.enableConsoleCapture();
 }
 
 // Compile-time constant; projected once per process to avoid rebuilding per call.

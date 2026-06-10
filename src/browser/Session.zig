@@ -90,10 +90,11 @@ subframe_loading_enabled: bool = true,
 // session init; the LP.configureLoading CDP method can flip it per-session.
 worker_loading_enabled: bool = true,
 
-// Session-scoped capture of console.* output for the `consoleLogs` MCP tool.
-// Fed by an `console_message` notification listener; drained on tool call.
-// Capped at `max_console_bytes` so a runaway page can't grow it unbounded.
+// Console.* capture for the `consoleLogs` tool, capped at `max_console_bytes`.
+// Opt-in via `enableConsoleCapture`: plain CDP `serve` never drains it, so
+// leaving the listener off keeps the buffer at zero bytes.
 _console_messages: std.Io.Writer.Allocating,
+_console_capture: bool = false,
 
 // Opt-in fetch of external <link rel=stylesheet> resources. Defaults to
 // false to preserve the current rendering-free fast path: drivers that
@@ -147,12 +148,19 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .load_external_stylesheets = browser.app.config.enableExternalStylesheets(),
     };
     errdefer self._console_messages.deinit();
+}
 
-    try notification.register(.console_message, self, onConsoleMessage);
+/// Register the console listener so `drainConsoleMessages` returns output. Idempotent.
+pub fn enableConsoleCapture(self: *Session) !void {
+    if (self._console_capture) return;
+    try self.notification.register(.console_message, self, onConsoleMessage);
+    self._console_capture = true;
 }
 
 pub fn deinit(self: *Session) void {
-    self.notification.unregister(.console_message, self);
+    if (self._console_capture) {
+        self.notification.unregister(.console_message, self);
+    }
 
     if (self._pending != null) {
         self.discardPendingPage();
