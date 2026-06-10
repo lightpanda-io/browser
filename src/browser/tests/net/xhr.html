@@ -386,3 +386,76 @@
     });
   }
 </script>
+
+<script id=xhr_cors_ok type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve({ ok: true }); };
+    req.onerror = () => { state.resolve({ ok: false }); };
+    req.open('GET', 'http://localhost:9582/cors/ok');
+    req.send();
+
+    await state.done((result) => {
+      testing.expectEqual(true, result.ok);
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('cors-ok', req.responseText);
+      testing.expectEqual('allowed', req.getResponseHeader('X-Test-Header'));
+      testing.expectEqual(null, req.getResponseHeader('X-Blocked'));
+      const all = req.getAllResponseHeaders();
+      testing.expectEqual(false, all.toLowerCase().includes('x-blocked'));
+    });
+  }
+</script>
+
+<script id=xhr_cors_credentials type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve({ ok: true }); };
+    req.onerror = () => { state.resolve({ ok: false }); };
+    req.withCredentials = true;
+    req.open('GET', 'http://localhost:9582/cors/cred');
+    req.send();
+
+    await state.done((result) => {
+      testing.expectEqual(true, result.ok);
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('cors-cred', req.responseText);
+      testing.expectEqual('allowed', req.getResponseHeader('X-Test-Header'));
+    });
+  }
+</script>
+
+<script id=xhr_cors_blocked type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve({ ok: false }); };
+    req.onerror = () => { state.resolve({ ok: true }); };
+    req.open('GET', 'http://localhost:9582/cors/block');
+    req.send();
+
+    await state.done((result) => {
+      testing.expectEqual(true, result.ok);
+      testing.expectEqual(0, req.status);
+    });
+  }
+</script>
+
+<script id=xhr_cors_non_simple_blocked type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve({ ok: false }); };
+    req.onerror = () => { state.resolve({ ok: true }); };
+    req.open('POST', 'http://localhost:9582/cors/ok');
+    req.setRequestHeader('X-Custom-Header', '1');
+    req.send('hi');
+
+    await state.done((result) => {
+      testing.expectEqual(true, result.ok);
+      testing.expectEqual(0, req.status);
+    });
+  }
+</script>
