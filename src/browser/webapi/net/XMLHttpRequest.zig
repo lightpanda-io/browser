@@ -69,6 +69,14 @@ _on_ready_state_change: ?js.Function.Temp = null,
 _with_credentials: bool = false,
 _timeout: u32 = 0,
 
+fn buildCorsRequestHeaders(allocator: Allocator, headers: *Headers) !Cors.RequestHeaders {
+    var out = Cors.RequestHeaders.init(allocator);
+    for (headers._list._entries.items) |entry| {
+        try out.put(entry.name.str(), entry.value.str());
+    }
+    return out;
+}
+
 const ReadyState = enum(u8) {
     unsent = 0,
     opened = 1,
@@ -254,6 +262,19 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         return self.handleBlobUrl(exec);
     }
 
+    const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
+    const cross_origin = request_origin != null and !exec.isSameOrigin(self._url);
+
+    if (cross_origin) {
+        var cors_headers = try buildCorsRequestHeaders(self._arena, self._request_headers);
+        defer cors_headers.deinit();
+
+        if (!Cors.isSimpleRequest(@tagName(self._method), &cors_headers)) {
+            self.handleError(error.CorsBlocked);
+            return;
+        }
+    }
+
     const session = exec.context.page.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
@@ -264,6 +285,14 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     try self._request_headers.populateHttpHeader(exec.call_arena, &headers);
     if (cookie_support) {
         try exec.headersForRequest(&headers);
+    }
+
+    if (cross_origin and request_origin != null) {
+        const has_origin = self._request_headers.has("origin", exec);
+        if (!has_origin) {
+            const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin.?}, 0);
+            try headers.add(origin_header);
+        }
     }
 
     self.acquireRef();
@@ -474,18 +503,30 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
 
     var allow_origin: ?[]const u8 = null;
     var allow_credentials = false;
+    var expose_headers: ?[]const u8 = null;
+
+    const RawHeader = struct {
+        name: []const u8,
+        value: []const u8,
+    };
+    var header_list: std.ArrayList(RawHeader) = .empty;
 
     var it = response.headerIterator();
     while (it.next()) |hdr| {
-        if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
-            allow_origin = hdr.value;
-        } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials") and
-            std.ascii.eqlIgnoreCase(hdr.value, "true"))
+        const name = try self._arena.dupe(u8, hdr.name);
+        const value = try self._arena.dupe(u8, hdr.value);
+        const value_trimmed = std.mem.trim(u8, value, " \t");
+        try header_list.append(self._arena, .{ .name = name, .value = value });
+
+        if (std.ascii.eqlIgnoreCase(name, "access-control-allow-origin")) {
+            allow_origin = value_trimmed;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-allow-credentials") and
+            std.ascii.eqlIgnoreCase(value_trimmed, "true"))
         {
             allow_credentials = true;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-expose-headers")) {
+            expose_headers = value_trimmed;
         }
-        const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
-        try self._response_headers.append(self._arena, joined);
     }
 
     self._response_status = response.status().?;
@@ -506,8 +547,21 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
 
     if (cross_origin) {
         if (!Cors.isResponseAllowed(allow_origin, allow_credentials, request_origin.?, self._with_credentials)) {
+            self._response_status = 0;
+            self._response_len = 0;
+            self._response_url = "";
+            self._response_mime = null;
+            self._response_headers.clearRetainingCapacity();
+            self._response_data.clearRetainingCapacity();
             response.abort(error.CorsBlocked);
             return false;
+        }
+    }
+
+    for (header_list.items) |hdr| {
+        if (!cross_origin or Cors.isResponseHeaderExposed(hdr.name, expose_headers, self._with_credentials)) {
+            const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
+            try self._response_headers.append(self._arena, joined);
         }
     }
 
