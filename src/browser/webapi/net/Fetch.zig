@@ -28,11 +28,13 @@ const URL = @import("../../URL.zig");
 const Blob = @import("../Blob.zig");
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
+const Headers = @import("Headers.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 const DOMException = @import("../DOMException.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();
@@ -49,6 +51,16 @@ _allow_credentials: bool,
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
+fn buildCorsRequestHeaders(allocator: Allocator, headers: ?*Headers) !Cors.RequestHeaders {
+    var out = Cors.RequestHeaders.init(allocator);
+    if (headers) |h| {
+        for (h._list._entries.items) |entry| {
+            try out.put(entry.name.str(), entry.value.str());
+        }
+    }
+    return out;
+}
+
 pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
     const request = try Request.init(input, options, exec);
     const resolver = exec.context.local.?.createPromiseResolver();
@@ -62,6 +74,19 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
 
     if (std.mem.startsWith(u8, request._url, "blob:")) {
         return handleBlobUrl(request._url, resolver, exec);
+    }
+
+    const request_origin = URL.getOrigin(exec.call_arena, exec.url.*) catch null;
+    const cross_origin = request_origin != null and !exec.isSameOrigin(request._url);
+
+    if (cross_origin) {
+        var cors_headers = try buildCorsRequestHeaders(exec.call_arena, request._headers);
+        defer cors_headers.deinit();
+
+        if (!Cors.isSimpleRequest(@tagName(request._method), &cors_headers)) {
+            resolver.rejectError("fetch error", .{ .type_error = "fetch error" });
+            return resolver.promise();
+        }
     }
 
     const response = try Response.init(null, .{ .status = 0 }, exec);
@@ -86,6 +111,14 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         try h.populateHttpHeader(exec.call_arena, &headers);
     }
     try exec.headersForRequest(&headers);
+
+    if (cross_origin and request_origin != null) {
+        const has_origin = if (request._headers) |h| h.has("origin", exec) else false;
+        if (!has_origin) {
+            const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin.?}, 0);
+            try headers.add(origin_header);
+        }
+    }
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
@@ -194,17 +227,30 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
 
     var allow_origin: ?[]const u8 = null;
     var allow_credentials = false;
+    var expose_headers: ?[]const u8 = null;
+
+    const RawHeader = struct {
+        name: []const u8,
+        value: []const u8,
+    };
+    var header_list: std.ArrayList(RawHeader) = .empty;
 
     var it = response.headerIterator();
     while (it.next()) |hdr| {
-        if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
-            allow_origin = hdr.value;
-        } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials") and
-            std.ascii.eqlIgnoreCase(hdr.value, "true"))
+        const name = try arena.dupe(u8, hdr.name);
+        const value = try arena.dupe(u8, hdr.value);
+        const value_trimmed = std.mem.trim(u8, value, " \t");
+        try header_list.append(arena, .{ .name = name, .value = value });
+
+        if (std.ascii.eqlIgnoreCase(name, "access-control-allow-origin")) {
+            allow_origin = value_trimmed;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-allow-credentials") and
+            std.ascii.eqlIgnoreCase(value_trimmed, "true"))
         {
             allow_credentials = true;
+        } else if (std.ascii.eqlIgnoreCase(name, "access-control-expose-headers")) {
+            expose_headers = value_trimmed;
         }
-        try res._headers.append(hdr.name, hdr.value, exec);
     }
 
     if (cross_origin) {
@@ -215,6 +261,12 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
         res._type = .cors;
     } else {
         res._type = .basic;
+    }
+
+    for (header_list.items) |hdr| {
+        if (!cross_origin or Cors.isResponseHeaderExposed(hdr.name, expose_headers, self._allow_credentials)) {
+            try res._headers.append(hdr.name, hdr.value, exec);
+        }
     }
 
     return true;
