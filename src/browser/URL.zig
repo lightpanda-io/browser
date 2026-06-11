@@ -831,6 +831,7 @@ test "URL: resolve" {
         base: [:0]const u8,
         path: [:0]const u8,
         expected: [:0]const u8,
+        expected_error: bool = false,
     };
 
     const cases = [_]Case{
@@ -984,30 +985,37 @@ test "URL: resolve" {
             .path = "./.././.././hello",
             .expected = "https://example/hello",
         },
+        // A base must itself be a valid absolute URL; schemeless bases are
+        // rejected, matching `new URL(path, base)`.
         .{
             .base = "some/page",
             .path = "hello",
-            .expected = "some/hello",
+            .expected = "",
+            .expected_error = true,
         },
         .{
             .base = "some/page/",
             .path = "hello",
-            .expected = "some/page/hello",
+            .expected = "",
+            .expected_error = true,
         },
         .{
             .base = "some/page/other",
             .path = ".././hello",
-            .expected = "some/hello",
+            .expected = "",
+            .expected_error = true,
         },
         .{
             .base = "https://www.example.com/hello/world",
             .path = "//example/about",
             .expected = "https://example/about",
         },
+        // "http:" alone is not a valid base (special scheme without a host).
         .{
             .base = "http:",
             .path = "//example.com/over/9000",
-            .expected = "http://example.com/over/9000",
+            .expected = "",
+            .expected_error = true,
         },
         .{
             .base = "https://example.com/",
@@ -1052,8 +1060,13 @@ test "URL: resolve" {
     };
 
     for (cases) |case| {
-        const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
-        try testing.expectString(case.expected, result);
+        if (case.expected_error) {
+            const result = resolve(testing.arena_allocator, case.base, case.path, .{});
+            try testing.expectError(error.TypeError, result);
+        } else {
+            const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+            try testing.expectString(case.expected, result);
+        }
     }
 }
 
@@ -1093,15 +1106,13 @@ test "URL: resolve strips tab and newline from input" {
 test "URL: resolve validates ASCII punycode (xn--) labels" {
     defer testing.reset();
 
-    // Valid punycode is left untouched (the needsAscii fast path would skip it,
-    // so this exercises the xn-- gate going through toAscii and back).
-    const ok = try resolve(testing.arena_allocator, "", "https://xn--rksmrgs-5wao1o.se/x", .{});
+    // Valid punycode is left untouched.
+    const ok = try resolve(testing.arena_allocator, "https://example.com/", "https://xn--rksmrgs-5wao1o.se/x", .{});
     try testing.expectString("https://xn--rksmrgs-5wao1o.se/x", ok);
 
     // Malformed punycode must be rejected rather than passed through verbatim.
-    // (URL.init remaps this error.Idna to TypeError for `new URL`.)
-    try testing.expectError(error.Idna, resolve(testing.arena_allocator, "", "https://xn--0.pt/x", .{}));
-    try testing.expectError(error.Idna, resolve(testing.arena_allocator, "", "https://xn--a.pt/x", .{}));
+    try testing.expectError(error.TypeError, resolve(testing.arena_allocator, "https://example.com/", "https://xn--0.pt/x", .{}));
+    try testing.expectError(error.TypeError, resolve(testing.arena_allocator, "https://example.com/", "https://xn--a.pt/x", .{}));
 }
 
 test "URL: hasAceLabel" {
@@ -1273,11 +1284,11 @@ test "URL: resolve with encoding" {
             .path = "path with  multiple   spaces",
             .expected = "https://example.com/path%20with%20%20multiple%20%20%20spaces",
         },
-        // Special characters that need encoding
+        // Brackets are not in the WHATWG path percent-encode set
         .{
             .base = "https://example.com/",
             .path = "file[1].html",
-            .expected = "https://example.com/file%5B1%5D.html",
+            .expected = "https://example.com/file[1].html",
         },
         .{
             .base = "https://example.com/",
@@ -1294,20 +1305,24 @@ test "URL: resolve with encoding" {
             .path = "file\"quote\".html",
             .expected = "https://example.com/file%22quote%22.html",
         },
+        // Pipe is not in the WHATWG path percent-encode set
         .{
             .base = "https://example.com/",
             .path = "file|pipe.html",
-            .expected = "https://example.com/file%7Cpipe.html",
+            .expected = "https://example.com/file|pipe.html",
         },
+        // Backslash is a path separator in special URLs
         .{
             .base = "https://example.com/",
             .path = "file\\backslash.html",
-            .expected = "https://example.com/file%5Cbackslash.html",
+            .expected = "https://example.com/file/backslash.html",
         },
+        // Note: the current URL spec percent-encodes '^' in paths, but
+        // rust-url does not (yet); harmless divergence locked in here.
         .{
             .base = "https://example.com/",
             .path = "file^caret.html",
-            .expected = "https://example.com/file%5Ecaret.html",
+            .expected = "https://example.com/file^caret.html",
         },
         .{
             .base = "https://example.com/",
@@ -1762,31 +1777,31 @@ test "URL: resolve path scheme" {
         .{
             .base = "https://www.example.com/example",
             .path = "https://about",
-            .expected = "https://about",
+            .expected = "https://about/",
         },
         //different schemes and path as absolute (without slash)
         .{
             .base = "https://www.example.com/example",
             .path = "http:about",
-            .expected = "http://about",
+            .expected = "http://about/",
         },
         //different schemes and path as absolute (with one slash)
         .{
             .base = "https://www.example.com/example",
             .path = "http:/about",
-            .expected = "http://about",
+            .expected = "http://about/",
         },
         //different schemes and path as absolute (with two slashes)
         .{
             .base = "https://www.example.com/example",
             .path = "http://about",
-            .expected = "http://about",
+            .expected = "http://about/",
         },
         //same schemes and path as absolute (with more slashes)
         .{
             .base = "https://site/",
             .path = "https://path",
-            .expected = "https://path",
+            .expected = "https://path/",
         },
         //path scheme is not special and path as absolute (without additional slashes)
         .{
@@ -1798,19 +1813,19 @@ test "URL: resolve path scheme" {
         .{
             .base = "https://www.example.com/example",
             .path = "ws://about",
-            .expected = "ws://about",
+            .expected = "ws://about/",
         },
         //different schemes and path as absolute (path scheme=wss)
         .{
             .base = "https://www.example.com/example",
             .path = "wss://about",
-            .expected = "wss://about",
+            .expected = "wss://about/",
         },
         //different schemes and path as absolute (path scheme=ftp)
         .{
             .base = "https://www.example.com/example",
             .path = "ftp://about",
-            .expected = "ftp://about",
+            .expected = "ftp://about/",
         },
         //different schemes and path as absolute (path scheme=file)
         .{
