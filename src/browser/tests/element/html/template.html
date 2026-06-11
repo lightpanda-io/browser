@@ -228,3 +228,25 @@
 
   testing.expectEqual('<p>hello, world</p>', out.innerHTML);
 </script>
+
+<script id=cloneNode_copies_content>
+{
+  const template = $('#basic');
+
+  // Per spec, template content is only copied on a deep clone.
+  const shallow = template.cloneNode(false);
+  testing.expectEqual(0, shallow.content.childNodes.length);
+
+  const deep = template.cloneNode(true);
+  testing.expectEqual('Hello Template', deep.content.querySelector('h1').textContent);
+  testing.expectTrue(deep.content.querySelector('h1') !== template.content.querySelector('h1'));
+
+  // Cloning an ancestor must also clone nested template content.
+  const wrapper = document.createElement('div');
+  const inner = document.createElement('template');
+  inner.innerHTML = '<span id="in-template">x</span>';
+  wrapper.appendChild(inner);
+  const wrapperClone = wrapper.cloneNode(true);
+  testing.expectEqual('x', wrapperClone.querySelector('template').content.querySelector('#in-template').textContent);
+}
+</script>

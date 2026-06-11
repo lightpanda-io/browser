@@ -119,7 +119,8 @@
   window.reportError(err);
 
   testing.expectEqual(window, evt.target);
-  testing.expectEqual(window, evt.currentTarget);
+  // currentTarget is only set while listeners are invoked; null post-dispatch
+  testing.expectEqual(null, evt.currentTarget);
 }
 </script>
 

@@ -98,7 +98,7 @@ fn handleOptional(server: anytype, req: protocol.Request, comptime method: []con
 
 fn handlePing(server: anytype, req: protocol.Request) !void {
     const id = req.id orelse return;
-    try server.sendResult(id, .{});
+    try server.sendResult(id, struct {}{});
 }
 
 const Server = @import("Server.zig");
@@ -130,7 +130,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
     try handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":2,"method":"ping"}
     );
-    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 2, .result = .{} }, out_alloc.writer.buffered());
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 2, .result = struct {}{} }, out_alloc.writer.buffered());
     out_alloc.writer.end = 0;
 
     // 3. Tools list

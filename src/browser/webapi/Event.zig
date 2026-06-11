@@ -330,15 +330,23 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
         node = n._parent;
     }
 
-    // Add window at the end (unless we stopped at shadow boundary)
-    if (!stopped_at_shadow_boundary) {
-        if (path_len < path_buffer.len) {
-            switch (exec.js.global) {
-                .worker => {},
-                .frame => |frame| {
-                    path_buffer[path_len] = frame.window.asEventTarget();
-                    path_len += 1;
-                },
+    // Add window at the end. It only participates when propagation did not stop
+    // at a shadow boundary...
+    if (stopped_at_shadow_boundary == false) {
+        // ... AND when the tree's root is a document
+        const root_is_document = path_len > 0 and switch (path_buffer[path_len - 1]._type) {
+            .node => |n| n._type == .document,
+            else => false,
+        };
+        if (root_is_document) {
+            if (path_len < path_buffer.len) {
+                switch (exec.js.global) {
+                    .worker => {},
+                    .frame => |frame| {
+                        path_buffer[path_len] = frame.window.asEventTarget();
+                        path_len += 1;
+                    },
+                }
             }
         }
     }

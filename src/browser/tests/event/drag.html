@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=default>
+{
+  const event = new DragEvent('drop');
+  testing.expectEqual('drop', event.type);
+  testing.expectEqual(true, event instanceof DragEvent);
+  testing.expectEqual(true, event instanceof MouseEvent);
+  testing.expectEqual(true, event instanceof UIEvent);
+  testing.expectEqual(true, event instanceof Event);
+  // no dataTransfer supplied -> null
+  testing.expectEqual(null, event.dataTransfer);
+}
+</script>
+
+<script id=mouse_inherited>
+{
+  const event = new DragEvent('dragover', { clientX: 5, clientY: 9, button: 0 });
+  testing.expectEqual(5, event.clientX);
+  testing.expectEqual(9, event.clientY);
+}
+</script>
+
+<script id=carries_data_transfer>
+{
+  const dt = new DataTransfer();
+  dt.items.add(new File(["x"], "drop.txt", { type: "text/plain" }));
+
+  const event = new DragEvent('drop', { dataTransfer: dt, bubbles: true });
+  testing.expectEqual(dt, event.dataTransfer);
+  testing.expectEqual(1, event.dataTransfer.files.length);
+  testing.expectEqual("drop.txt", event.dataTransfer.files[0].name);
+}
+</script>
+
+<script id=dispatched_drop>
+{
+  const dt = new DataTransfer();
+  dt.items.add(new File(["x"], "drop.txt", { type: "text/plain" }));
+
+  const el = document.createElement('div');
+  let seen = -1;
+  el.addEventListener('drop', function (e) {
+    testing.expectEqual(true, e instanceof DragEvent);
+    seen = e.dataTransfer.files.length;
+  });
+  el.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+  testing.expectEqual(1, seen);
+}
+</script>
+
+<script id=refcount_balance>
+{
+  // A DragEvent holds a ref on its DataTransfer so the store outlives the event
+  // even if the JS wrapper is dropped first. Build many event/store pairs and
+  // retain none: at teardown every acquire must be matched by a release, or the
+  // leak-checking test runner fails. Encodes the acquire/release contract that a
+  // plain "read the files" assertion wouldn't exercise.
+  let last = 0;
+  for (let i = 0; i < 25; i++) {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["payload"], "f" + i + ".txt", { type: "text/plain" }));
+    const ev = new DragEvent('drop', { dataTransfer: dt });
+    last = ev.dataTransfer.files.length;
+  }
+  testing.expectEqual(1, last);
+}
+</script>

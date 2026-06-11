@@ -479,7 +479,7 @@ pub fn getRootNode(self: *Node, opts_: ?GetRootNodeOpts) *Node {
     // If composed is true, traverse through shadow boundaries
     if (opts.composed) {
         while (true) {
-            const shadow_root = @constCast(root).is(ShadowRoot) orelse break;
+            const shadow_root = root.is(ShadowRoot) orelse break;
             root = shadow_root.getHost().asNode();
             while (root._parent) |parent| {
                 root = parent;
@@ -523,6 +523,16 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     // If the root is a document, then that's our owner.
     if (current._type == .document) {
         return current._type.document;
+    }
+
+    // A shadow tree's root is a parent-less ShadowRoot fragment; its owner
+    // is the host's owner document.
+    // can't use current.is(ShadowRoot) without @constCast on `current`
+    if (current._type == .document_fragment) {
+        const df = current._type.document_fragment;
+        if (df._type == .shadow_root) {
+            return df._type.shadow_root._host.asNode().ownerDocument(frame);
+        }
     }
 
     // Otherwise, this is a detached node. Check if it has a specific owner

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<!--
+  The preload hint is declared before the <script> that consumes it, so by the
+  time the parser blocks on `preload.js` the fetch is already in flight (or
+  done). ScriptManager.waitForPreload adopts that body instead of issuing a
+  fresh syncRequest, then the consumed entry is freed by the caller. Both halves
+  of that ownership handover run under the leak detector here.
+-->
+<link rel="preload" as="script" href="preload.js">
+
+<!--
+  A preload with no matching <script> is fetched but never executed. It lingers
+  as a `.done` (or still-loading) entry until reset() frees it — exercises
+  freePreloads / map cleanup under the leak detector — and it must not run on
+  its own, nor delay the load event.
+-->
+<link rel="preload" as="script" href="preload_unused.js">
+
+<script id="setup">
+    var order = '';
+    testing.expectEqual('', order);
+</script>
+
+<!-- Blocking remote script: its body is adopted from the preload above. -->
+<script id="preloaded" src="preload.js"></script>
+
+<script id="after">
+    // The preloaded blocking script executed, in document order, before us.
+    order += 'b';
+    testing.expectEqual('ab', order);
+</script>
+
+<script id="unused_check">
+    // A preload hint that nothing consumes must never execute.
+    testing.expectEqual(undefined, window.unused_preload_ran);
+</script>
