@@ -1419,6 +1419,7 @@ pub fn printSlashParseError(self: *Terminal, err: Schema.ParseError, name: []con
         error.UnknownField => "unknown field (typo?)",
         error.DuplicateField => "the same field was supplied twice (check for case-variants like Selector vs selector)",
         error.PositionalNotAllowed => "positional only works for commands with one required field. Use key=value",
+        error.PositionalMustComeFirst => "the positional value must come before key=value pairs",
         error.UnterminatedQuote => "unterminated quote",
         error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
         error.InvalidValue => "invalid value (check argument type)",

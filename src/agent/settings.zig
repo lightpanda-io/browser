@@ -162,8 +162,9 @@ pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembe
 
 /// Precedence: explicit `--effort` flag > remembered `.lp-agent.zon` value >
 /// mode default. The interactive REPL defaults to `.low` so turns stay snappy;
-/// one-shot `--task` and script runs default to `.medium`, where answer
-/// quality matters more than per-turn latency.
+/// one-shot `--task` defaults to `.medium`, where answer quality matters more
+/// than per-turn latency. (Script runs never call the LLM, so the resolved
+/// effort is unused there.)
 pub fn resolveEffort(opts: Config.Agent, remembered: ?Remembered, will_repl: bool) Config.Effort {
     if (opts.effort) |e| return e;
     if (remembered) |r| if (r.effort) |e| return e;

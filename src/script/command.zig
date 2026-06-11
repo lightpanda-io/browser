@@ -384,6 +384,14 @@ test "parse: /click rejects positional (zero required fields)" {
     try testing.expectString("Login", cmd.tool_call.args.?.object.get("selector").?.string);
 }
 
+test "parse: /extract rejects positional after key=value" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectError(error.PositionalMustComeFirst, Command.parse(arena.allocator(), "/extract save=front '{\"karma\":\"#karma\"}'"));
+    const cmd = try Command.parse(arena.allocator(), "/extract '{\"karma\":\"#karma\"}' save=front");
+    try testing.expectString("front", cmd.tool_call.args.?.object.get("save").?.string);
+}
+
 test "parse: /scroll y=200" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
