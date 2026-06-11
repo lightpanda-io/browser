@@ -307,9 +307,11 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     const frame_id = req.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
-    // Modify request with extra CDP headers
+    // Modify request with extra CDP headers. Use set (replace by name) so a
+    // caller-supplied header overrides a built-in default of the same name
+    // (e.g. User-Agent) instead of producing a duplicate libcurl drops.
     for (bc.extra_headers.items) |extra| {
-        try req.headers.add(extra);
+        try req.headers.set(extra);
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
