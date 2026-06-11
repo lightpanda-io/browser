@@ -19,206 +19,42 @@
 const std = @import("std");
 const idna = @import("../sys/idna.zig");
 
+const U = @import("../sys/url.zig");
+
 const Allocator = std.mem.Allocator;
 
-pub const ResolveOpts = struct {
+pub const ResolveOptions = struct {
     /// null = don't encode, "UTF-8" = standard percent encoding,
-    /// other charset = encode query string using that charset with NCR fallback
+    /// other charset = encode query string using that charset with NCR fallback.
     encoding: ?[]const u8 = null,
     always_dupe: bool = false,
 };
 
-// path is anytype, so that it can be used with both []const u8 and [:0]const u8
-pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, opts: ResolveOpts) ![:0]const u8 {
-    const PT = @TypeOf(source_path);
+pub fn resolve(
+    allocator: Allocator,
+    base: [:0]const u8,
+    source_path: anytype,
+    options: ResolveOptions,
+) ![:0]const u8 {
+    const path = source_path;
 
-    const needs_dupe = comptime !isNullTerminated(PT);
-    var path: [:0]const u8 = if (needs_dupe or opts.always_dupe) try allocator.dupeZ(u8, source_path) else source_path;
+    var err: i32 = 0;
+    const href = if (options.encoding) |encoding|
+        U.url_resolve_with_encoding(base.ptr, base.len, path.ptr, path.len, encoding.ptr, encoding.len, &err)
+    else
+        U.url_resolve_without_encoding(base.ptr, base.len, path.ptr, path.len, &err);
 
-    if (std.mem.indexOfAny(u8, path, "\t\r\n")) |first| {
-        path = blk: {
-            var buf: std.ArrayList(u8) = try .initCapacity(allocator, path.len);
-            buf.appendSliceAssumeCapacity(path[0..first]);
-            for (path[first + 1 ..]) |c| {
-                if (c != '\t' and c != '\r' and c != '\n') {
-                    buf.appendAssumeCapacity(c);
-                }
-            }
-            buf.appendAssumeCapacity(0);
-            break :blk buf.items[0 .. buf.items.len - 1 :0];
-        };
+    if (err != 0) {
+        return error.TypeError;
     }
+    defer href.deinit();
 
-    if (base.len == 0) {
-        return processResolved(allocator, path, opts);
-    }
-
-    // Minimum is "x:" and skip relative path (very common case)
-    if (path.len >= 2 and path[0] != '/') {
-        if (std.mem.indexOfScalar(u8, path[0..], ':')) |scheme_path_end| {
-            scheme_check: {
-                const scheme_path = path[0..scheme_path_end];
-                //from "ws" to "https"
-                if (scheme_path_end >= 2 and scheme_path_end <= 5) {
-                    const has_double_slashes: bool = scheme_path_end + 3 <= path.len and path[scheme_path_end + 1] == '/' and path[scheme_path_end + 2] == '/';
-                    const special_schemes = [_][]const u8{ "https", "http", "ws", "wss", "file", "ftp" };
-
-                    for (special_schemes) |special_scheme| {
-                        if (std.ascii.eqlIgnoreCase(scheme_path, special_scheme)) {
-                            const base_scheme_end = std.mem.indexOf(u8, base, "://") orelse 0;
-
-                            if (base_scheme_end > 0 and std.mem.eql(u8, base[0..base_scheme_end], scheme_path) and !has_double_slashes) {
-                                //Skip ":" and exit as relative state
-                                path = path[scheme_path_end + 1 ..];
-                                break :scheme_check;
-                            } else {
-                                var rest_start: usize = scheme_path_end + 1;
-                                //Skip any slashas after "scheme:"
-                                while (rest_start < path.len and (path[rest_start] == '/' or path[rest_start] == '\\')) {
-                                    rest_start += 1;
-                                }
-                                // A special scheme (exclude "file") must contain at least any chars after "://"
-                                if (rest_start == path.len and !std.ascii.eqlIgnoreCase(scheme_path, "file")) {
-                                    return error.TypeError;
-                                }
-                                //File scheme allow empty host
-                                const separator: []const u8 = if (!has_double_slashes and std.ascii.eqlIgnoreCase(scheme_path, "file")) ":///" else "://";
-
-                                path = try std.mem.joinZ(allocator, "", &.{ scheme_path, separator, path[rest_start..] });
-                                return processResolved(allocator, path, opts);
-                            }
-                        }
-                    }
-                }
-                if (scheme_path.len > 0) {
-                    for (scheme_path[1..]) |c| {
-                        if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') {
-                            //Exit as relative state
-                            break :scheme_check;
-                        }
-                    }
-                }
-                //path is complete http url
-                return processResolved(allocator, path, opts);
-            }
-        }
-    }
-
-    if (path.len == 0) {
-        if (opts.always_dupe) {
-            const dupe = try allocator.dupeZ(u8, base);
-            return processResolved(allocator, dupe, opts);
-        }
-        return processResolved(allocator, base, opts);
-    }
-
-    if (path[0] == '?') {
-        const base_path_end = std.mem.indexOfAny(u8, base, "?#") orelse base.len;
-        const result = try std.mem.joinZ(allocator, "", &.{ base[0..base_path_end], path });
-        return processResolved(allocator, result, opts);
-    }
-    if (path[0] == '#') {
-        const base_fragment_start = std.mem.indexOfScalar(u8, base, '#') orelse base.len;
-        const result = try std.mem.joinZ(allocator, "", &.{ base[0..base_fragment_start], path });
-        return processResolved(allocator, result, opts);
-    }
-
-    if (std.mem.startsWith(u8, path, "//")) {
-        // network-path reference
-        const index = std.mem.indexOfScalar(u8, base, ':') orelse {
-            return processResolved(allocator, path, opts);
-        };
-        const protocol = base[0 .. index + 1];
-        const result = try std.mem.joinZ(allocator, "", &.{ protocol, path });
-        return processResolved(allocator, result, opts);
-    }
-
-    const scheme_end = std.mem.indexOf(u8, base, "://");
-    const authority_start = if (scheme_end) |end| end + 3 else 0;
-    const path_start = std.mem.indexOfAnyPos(u8, base, authority_start, "/?#") orelse base.len;
-    const path_end = std.mem.indexOfAnyPos(u8, base, path_start, "?#") orelse base.len;
-
-    var out: []u8 = undefined;
-    if (path[0] == '/') {
-        // Absolute path — keep base authority, replace path. Two trailing
-        // spaces give us safe lookahead for the dot-segment loop below.
-        out = try std.mem.join(allocator, "", &.{ base[0..path_start], path, "  " });
-    } else {
-        var normalized_base: []const u8 = base[0..path_start];
-        if (path_start < path_end) {
-            if (std.mem.lastIndexOfScalar(u8, base[path_start + 1 .. path_end], '/')) |pos| {
-                normalized_base = base[0 .. path_start + 1 + pos];
-            }
-        }
-
-        // trailing space so that we always have space to append the null terminator
-        // and so that we can compare the next two characters without needing to length check
-        out = try std.mem.join(allocator, "", &.{ normalized_base, "/", path, "  " });
-    }
-
-    const end = out.len - 2;
-
-    const path_marker = path_start + 1;
-
-    // Strip out ./ and ../. This is done in-place, because doing so can
-    // only ever make `out` smaller. After this, `out` cannot be freed by
-    // an allocator, which is ok, because we expect allocator to be an arena.
-    var in_i: usize = 0;
-    var out_i: usize = 0;
-    while (in_i < end) {
-        if (out[in_i] == '.' and (out_i == 0 or out[out_i - 1] == '/')) {
-            if (out[in_i + 1] == '/') { // always safe, because we added a whitespace
-                // /./
-                in_i += 2;
-                continue;
-            }
-            if (out[in_i + 1] == '.' and (out[in_i + 2] == '/' or in_i + 2 == end)) {
-                // /../ or trailing /.. — both step up one segment. The
-                // trailing slash stays implicit (out_i ends up right after
-                // the previous '/'), matching `new URL("..", base)`.
-                if (out_i > path_marker) {
-                    // go back before the /
-                    out_i -= 2;
-                    while (out_i > 1 and out[out_i - 1] != '/') {
-                        out_i -= 1;
-                    }
-                } else {
-                    // if out_i == path_marker, than we've reached the start of
-                    // the path. We can't ../ any more. E.g.:
-                    //    http://www.example.com/../hello.
-                    // You might think that's an error, but, at least with
-                    //     new URL('../hello', 'http://www.example.com/')
-                    // it just ignores the extra ../
-                }
-                in_i += 3;
-                continue;
-            }
-            if (in_i == end - 1) {
-                // ignore trailing dot
-                break;
-            }
-        }
-
-        const c = out[in_i];
-        out[out_i] = c;
-        in_i += 1;
-        out_i += 1;
-    }
-
-    // we always have an extra space
-    out[out_i] = 0;
-    return processResolved(allocator, out[0..out_i :0], opts);
-}
-
-fn processResolved(allocator: Allocator, url: [:0]const u8, opts: ResolveOpts) ![:0]const u8 {
-    const encoding = opts.encoding orelse return ensureHostAscii(allocator, url);
-    return ensureEncoded(allocator, url, encoding);
+    return allocator.dupeZ(u8, href.slice());
 }
 
 /// IDNA pass: converts a non-ASCII host (`räksmörgås.se`) to its punycode form
 /// (`xn--rksmrgs-5wao1o.se`), validates any ASCII punycode (`xn--…`) labels,
-/// and leaves everything else alone. Returns `error.Idna` for an invalid
-/// domain (e.g. malformed punycode), which surfaces as a URL parse failure.
+/// and leaves everything else alone.
 fn ensureHostAscii(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     const hostname = getHostname(url);
     if (hostname.len == 0 or (!idna.needsAscii(hostname) and !hasAceLabel(hostname))) {
