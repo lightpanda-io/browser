@@ -778,13 +778,13 @@ fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
 
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
     if (trimmed.len == 0) {
-        self.terminal.printInfo("Current model: {s} (Tab to list)", .{self.model});
+        self.terminal.printInfo("Current model: {s}", .{self.model});
         return;
     }
     const ids = completionModels(self, self.allocator);
     // Empty list = fetch failed or unlisted local models; can't confirm, allow.
     if (ids.len != 0 and !string.isOneOf(trimmed, ids)) {
-        self.terminal.printError("unknown model: {s} (Tab to list)", .{trimmed});
+        self.terminal.printError("unknown model: {s}", .{trimmed});
         return;
     }
     self.setModel(trimmed) catch |err| {
@@ -823,9 +823,9 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
 
     if (trimmed.len == 0) {
         if (self.model_credentials) |c| {
-            self.terminal.printInfo("Current provider: {s} (Tab to list, /provider null to disable)", .{@tagName(c.provider)});
+            self.terminal.printInfo("Current provider: {s}", .{@tagName(c.provider)});
         } else {
-            self.terminal.printInfo("Current provider: none — LLM disabled (/provider <name> to enable)", .{});
+            self.terminal.printInfo("Current provider: null — LLM disabled", .{});
         }
         return;
     }
