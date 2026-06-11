@@ -55,7 +55,7 @@ pub var opts = Opts{};
 // synchronizes access to last_log
 var last_log_lock: Thread.Mutex = .{};
 
-pub fn enabled(comptime scope: Scope, level: Level) bool {
+pub fn enabled(scope: Scope, level: Level) bool {
     if (@intFromEnum(level) < @intFromEnum(opts.level)) {
         return false;
     }
@@ -91,27 +91,27 @@ pub const Format = enum {
     pretty,
 };
 
-pub fn debug(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn debug(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .debug, msg, data);
 }
 
-pub fn info(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn info(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .info, msg, data);
 }
 
-pub fn warn(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn warn(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .warn, msg, data);
 }
 
-pub fn err(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn err(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .err, msg, data);
 }
 
-pub fn fatal(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn fatal(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .fatal, msg, data);
 }
 
-pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype) void {
+pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
     if (enabled(scope, level) == false) {
         return;
     }
@@ -128,15 +128,19 @@ pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: 
     };
 }
 
-fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
-    comptime {
+fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
+    if (builtin.mode == .Debug) {
         if (msg.len > 30) {
-            @compileError("log msg cannot be more than 30 characters: '" ++ msg ++ "'");
+            std.debug.print("debug-only-panic: log msg cannot be more than 30 characters: {s}", .{msg});
+            @panic("ivnalid log msg");
         }
         for (msg) |b| {
             switch (b) {
                 'A'...'Z', 'a'...'z', ' ', '0'...'9', '_', '-', '.', '{', '}' => {},
-                else => @compileError("log msg contains an invalid character '" ++ msg ++ "'"),
+                else => {
+                    std.debug.print("debug-only-panic: log msg cannot has invalid character: {s}", .{msg});
+                    @panic("invalid log msg");
+                },
             }
         }
     }
@@ -147,7 +151,7 @@ fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: an
     out.flush() catch return;
 }
 
-fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
+fn logLogfmt(scope: Scope, level: Level, msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
     try logLogFmtPrefix(scope, level, msg, writer);
     inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
         const value = @field(data, f.name);
@@ -162,7 +166,7 @@ fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data
     try writer.writeByte('\n');
 }
 
-fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: *std.Io.Writer) !void {
+fn logLogFmtPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.Writer) !void {
     try writer.writeAll("$time=");
     try writer.print("{d}", .{timestamp(.clock)});
 
@@ -172,18 +176,12 @@ fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
     try writer.writeAll(" $level=");
     try writer.writeAll(if (level == .err) "error" else @tagName(level));
 
-    const full_msg = comptime blk: {
-        // only wrap msg in quotes if it contains a space
-        const prefix = " $msg=";
-        if (std.mem.indexOfScalar(u8, msg, ' ') == null) {
-            break :blk prefix ++ msg;
-        }
-        break :blk prefix ++ "\"" ++ msg ++ "\"";
-    };
-    try writer.writeAll(full_msg);
+    try writer.writeAll(" $msg=\"");
+    try writer.writeAll(msg);
+    try writer.writeByte('"');
 }
 
-fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
+fn logPretty(scope: Scope, level: Level, msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
     try logPrettyPrefix(scope, level, msg, writer);
     inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
         const key = "      " ++ f.name ++ " = ";
@@ -194,8 +192,8 @@ fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data
     try writer.writeByte('\n');
 }
 
-fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: *std.Io.Writer) !void {
-    if (scope == .console and level == .fatal and comptime std.mem.eql(u8, msg, "lightpanda")) {
+fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.Writer) !void {
+    if (scope == .console and level == .fatal) {
         try writer.writeAll("\x1b[0;104mWARN  ");
     } else {
         try writer.writeAll(switch (level) {
@@ -207,13 +205,16 @@ fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
         });
     }
 
-    const prefix = @tagName(scope) ++ " : " ++ msg;
-    try writer.writeAll(prefix);
+    try writer.writeAll(@tagName(scope));
+    try writer.writeAll(" : ");
+    try writer.writeAll(msg);
+
 
     {
         // msg.len cannot be > 30, and @tagName(scope).len cannot be > 15
         // so this is safe
-        const padding = 55 - prefix.len;
+        const prefix_len = @tagName(scope).len + msg.len + 2;
+        const padding = 55 - prefix_len;
         for (0..padding / 2) |_| {
             try writer.writeAll(" .");
         }
@@ -369,7 +370,7 @@ test "log: data" {
 
     {
         try logTo(.browser, .err, "nope", .{}, &aw.writer);
-        try testing.expectEqual("$time=1739795092929 $scope=browser $level=error $msg=nope\n", aw.written());
+        try testing.expectEqual("$time=1739795092929 $scope=browser $level=error $msg=\"nope\"\n", aw.written());
     }
 
     {
@@ -406,7 +407,7 @@ test "log: string escape" {
     var aw = std.Io.Writer.Allocating.init(testing.allocator);
     defer aw.deinit();
 
-    const prefix = "$time=1739795092929 $scope=app $level=error $msg=test ";
+    const prefix = "$time=1739795092929 $scope=app $level=error $msg=\"test\" ";
     {
         try logTo(.app, .err, "test", .{ .string = "hello world" }, &aw.writer);
         try testing.expectEqual(prefix ++ "string=\"hello world\"\n", aw.written());
