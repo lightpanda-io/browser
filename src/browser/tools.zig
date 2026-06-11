@@ -68,7 +68,7 @@ pub const driver_guidance =
     \\  form submit, navigation, waitForSelector). Stale node IDs and tree
     \\  snapshots do NOT reflect the new DOM.
     \\- For any task asking for a specific value or list, finish with
-    \\  `extract` (JSON-schema-driven). Only `extract` calls survive replay
+    \\  `extract` (selector-schema-driven). Only `extract` calls survive replay
     \\  as recorded `extract(...)` script calls; answering from `markdown` content
     \\  in chat does NOT. Do NOT guess selectors from memorized site
     \\  structure — even well-known sites (HN, GitHub, …) are where models
@@ -350,14 +350,15 @@ pub const Tool = enum {
             },
             .extract => .{
                 .description =
-                \\Extract structured data via a JSON schema. The only tool whose result is recorded as an `extract(...)` script call (replay-friendly); answering from `markdown` content in chat is not. Schema is a JSON object literal passed as a string in `schema`. Each value picks what to lift:
-                \\  "<sel>"                                → first match's textContent.trim() (string|null)
-                \\  ""                                     → element's own textContent.trim() (only meaningful inside `fields`)
-                \\  ["<sel>"]                              → every match's text (string[]) — sugar for [{"selector":"<sel>"}]
-                \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute (string|null)
+                \\Extract structured data from the current page (navigate first). `schema` is a JSON object (passed as a string) mapping output field names to CSS-selector specs. It is NOT a JSON Schema — no "type"/"properties" wrappers; the keys ARE your output fields. Value shapes:
+                \\  "<sel>"                                → first match's text (trimmed; null if no match)
+                \\  ["<sel>"]                              → every match's text (string[])
+                \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute value
                 \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
-                \\  [{"selector":"<sel>","fields":{…}}]    → array of objects, fields resolved relative to each match
-                \\  add `"limit": N` inside any array's object spec to cap matches at N (works for text, attr, and fields shapes)
+                \\  [{"selector":"<sel>","fields":{…}}]    → one object per match; field selectors resolve relative to that match and accept any shape above ("" = the match's own text; nest arrays for per-item sub-lists)
+                \\Add "limit": N inside any array's object spec to cap matches.
+                \\Every extracted value is a string or null — parse numbers downstream. An empty array is a valid result, but if ALL top-level keys miss, the call errors: inspect the page (tree/markdown) and retry with corrected selectors.
+                \\Finish data tasks with extract — it is the only read recorded as a replayable `extract(...)` script call; answers lifted from `markdown` text in chat are not.
                 \\
                 \\Examples (schema → result):
                 \\  {"karma": "#karma"} → {"karma":"42"}
@@ -366,12 +367,12 @@ pub const Tool = enum {
                 \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
                 \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
                 ,
-                .summary = "Extract structured data via a JSON schema",
+                .summary = "Extract structured data via a CSS-selector schema",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." },
+                    \\    "schema": { "type": "string", "description": "Extraction schema as a string: a JSON object literal mapping output field names to CSS-selector specs (see tool description). Not a JSON Schema." },
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The extracted JSON is stored under this name and exposed as `lp.<name>` in subsequent /evaluate calls." }
                     \\  },
                     \\  "required": ["schema"]
