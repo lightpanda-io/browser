@@ -19,6 +19,8 @@
 // host string becomes its punycode form, or an error.
 
 use ::url::Url;
+use encoding_rs::{EncoderResult, Encoding};
+use std::borrow::Cow;
 use std::os::raw::c_uchar;
 use std::slice;
 
@@ -279,6 +281,11 @@ pub struct OwnedString {
     pub ptr: *mut c_uchar,
     pub len: usize,
 }
+
+const EMPTY_OWNED_STRING: OwnedString = OwnedString {
+    ptr: std::ptr::null_mut(),
+    len: 0,
+};
 
 #[no_mangle]
 pub unsafe extern "C" fn free_owned_string(owned: OwnedString) {
@@ -567,4 +574,169 @@ pub unsafe extern "C" fn url_get_href(
     let href = url.as_str();
     *out_ptr = href.as_ptr();
     *out_len = href.len();
+}
+
+fn encode_query_ncr(encoding: &'static Encoding, s: &str) -> Cow<'static, [u8]> {
+    // fast path: fully mappable
+    let (out, _, had_errors) = encoding.encode(s);
+    if !had_errors {
+        return Cow::Owned(out.into_owned());
+    }
+
+    let mut encoder = encoding.new_encoder();
+    let mut result = Vec::with_capacity(s.len() * 2);
+    let mut input = s;
+    loop {
+        let needed = encoder
+            .max_buffer_length_from_utf8_without_replacement(input.len())
+            .unwrap();
+        let start = result.len();
+        result.resize(start + needed, 0);
+        let (r, read, written) =
+            encoder.encode_from_utf8_without_replacement(input, &mut result[start..], true);
+        result.truncate(start + written);
+        input = &input[read..];
+        match r {
+            EncoderResult::InputEmpty => break,
+            EncoderResult::Unmappable(c) => {
+                result.extend_from_slice(format!("%26%23{}%3B", c as u32).as_bytes());
+            }
+            // Output was sized with max_buffer_length, so it cannot run out.
+            EncoderResult::OutputFull => unreachable!(),
+        }
+    }
+    Cow::Owned(result)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_resolve_with_encoding(
+    base_ptr: *const c_uchar,
+    base_len: usize,
+    input_ptr: *const c_uchar,
+    input_len: usize,
+    enc_ptr: *const c_uchar,
+    enc_len: usize,
+    err: *mut i32,
+) -> OwnedString {
+    let base_slice = match str_from(base_ptr, base_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+    // An empty base means the input must be an absolute URL.
+    let base = if base_slice.is_empty() {
+        None
+    } else {
+        match Url::parse(base_slice) {
+            Ok(u) => Some(u),
+            Err(_) => {
+                *err = -1;
+                return EMPTY_OWNED_STRING;
+            }
+        }
+    };
+
+    let slice = match str_from(input_ptr, input_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+
+    let encoding_slice = match str_from(enc_ptr, enc_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+    // Per the URL spec, queries use the document encoding's *output encoding*.
+    let encoding = Encoding::for_label(encoding_slice.as_bytes())
+        .map(|encoding| encoding.output_encoding())
+        .filter(|&encoding| encoding != encoding_rs::UTF_8);
+
+    let result = match encoding {
+        Some(encoding) => Url::options()
+            .base_url(base.as_ref())
+            .encoding_override(Some(&move |s| encode_query_ncr(encoding, s)))
+            .parse(slice),
+        // Fallback to default.
+        None => match &base {
+            Some(base) => base.join(slice),
+            None => Url::parse(slice),
+        },
+    };
+
+    match result {
+        Ok(url) => {
+            *err = 0;
+            let s = String::from(url); // Moves the serialization, no copy.
+            let len = s.len();
+            let ptr = Box::into_raw(s.into_bytes().into_boxed_slice()) as *mut c_uchar;
+            OwnedString { ptr, len }
+        }
+        Err(_) => {
+            *err = -1;
+            EMPTY_OWNED_STRING
+        }
+    }
+}
+
+/// Similar to url_parse_with_base; returns a href instead.
+#[no_mangle]
+pub unsafe extern "C" fn url_resolve_without_encoding(
+    base_ptr: *const c_uchar,
+    base_len: usize,
+    input_ptr: *const c_uchar,
+    input_len: usize,
+    err: *mut i32,
+) -> OwnedString {
+    let base_slice = match str_from(base_ptr, base_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+    // An empty base means the input must be an absolute URL.
+    let base = if base_slice.is_empty() {
+        None
+    } else {
+        match Url::parse(base_slice) {
+            Ok(u) => Some(u),
+            Err(_) => {
+                *err = -1;
+                return EMPTY_OWNED_STRING;
+            }
+        }
+    };
+
+    let input = match str_from(input_ptr, input_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+
+    let result = match &base {
+        Some(base) => base.join(input),
+        None => Url::parse(input),
+    };
+    match result {
+        Ok(url) => {
+            *err = 0;
+            let s = String::from(url); // Moves the serialization, no copy.
+            let len = s.len();
+            let ptr = Box::into_raw(s.into_bytes().into_boxed_slice()) as *mut c_uchar;
+            OwnedString { ptr, len }
+        }
+        Err(_) => {
+            *err = -1;
+            EMPTY_OWNED_STRING
+        }
+    }
 }
