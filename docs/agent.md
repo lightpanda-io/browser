@@ -234,19 +234,23 @@ a completely clean browser (no cookies, no current page, no storage).
 
 ## REPL features
 
-- **Status bar.** A line under the prompt shows the active model and quick
-  hints. In `--no-llm` it reads "basic REPL — slash commands only." It drops
-  the least-important segments first when the terminal is narrow.
+- **Ghost hints.** There's no separate status line; guidance renders as dim
+  ghost text after the cursor and disappears as you type over it. It
+  previews the rest of the first matching command name, the argument shape
+  of the tool you're typing (`/evaluate ` shows
+  `<script> [url=…] [timeout=…] [save=…]`), and contextual nudges like
+  "press Ctrl-D again to exit".
 - **JS mode (`!`).** Type `!` on an empty prompt to toggle a scratchpad
   where the whole line runs as page-side JavaScript, same context as
-  `/evaluate` so `document` and `window` are in scope. Handy for poking at
+  `/evaluate` so `document` and `window` are in scope. The prompt switches
+  to `!` with a "JS mode - esc to exit" ghost hint. Handy for poking at
   a page without wrapping every line in `/evaluate`:
 
   ```
   ❯ !
-  ! ❯ document.title
+  ! document.title
   "Hacker News"
-  ! ❯ document.querySelectorAll('tr.athing').length
+  ! document.querySelectorAll('tr.athing').length
   30
   ```
 

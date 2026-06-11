@@ -38,9 +38,9 @@ username:
 ./lightpanda agent
 ```
 
-The status bar under the prompt shows the resolved model and whether
-natural language is available. REPL history lives in `.lp-history` in
-the working directory.
+The startup banner shows whether natural language is available;
+`/model` prints the resolved model. REPL history lives in `.lp-history`
+in the working directory.
 
 ```
 > /help            # list every browser tool
