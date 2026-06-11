@@ -49,7 +49,6 @@ pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
-pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
 pub const NamespaceUriLookup = std.AutoHashMapUnmanaged(*Element, []const u8);
 
 pub const ScrollPosition = struct {
@@ -748,7 +747,8 @@ pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
 }
 
 pub fn getAssignedSlot(self: *Element, frame: *Frame) ?*Html.Slot {
-    return frame._element_assigned_slots.get(self);
+    // Hidden by a closed shadow tree
+    return frame.findSlotForSlottable(self.asNode(), true);
 }
 
 // Whether this element may host a shadow root

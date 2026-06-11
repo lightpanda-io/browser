@@ -19,6 +19,7 @@
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const CData = @import("../CData.zig");
+const Slot = @import("../element/html/Slot.zig");
 
 const Text = @This();
 
@@ -31,6 +32,10 @@ pub fn init(str: ?js.NullableString, frame: *Frame) !*Text {
 
 pub fn getWholeText(self: *Text) []const u8 {
     return self._proto._data.str();
+}
+
+pub fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {
+    return frame.findSlotForSlottable(self._proto.asNode(), true);
 }
 
 pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {
@@ -77,5 +82,6 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(Text.init, .{});
     pub const wholeText = bridge.accessor(Text.getWholeText, null, .{});
+    pub const assignedSlot = bridge.accessor(Text.getAssignedSlot, null, .{});
     pub const splitText = bridge.function(Text.splitText, .{ .dom_exception = true });
 };
