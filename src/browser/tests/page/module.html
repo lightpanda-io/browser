@@ -58,6 +58,18 @@
   testing.expectEqual('a', getFromA());
 </script>
 
+<script id=diamond-imports type=module>
+  // a and b both statically import diamond-shared.js: two waiter
+  // registrations on one imported_modules entry, but only one waitForImport —
+  // the other resolution is satisfied from module_cache and must release its
+  // slot (Context._resolveModuleCallback) so the source buffer is freed at
+  // resolution, not at reset. Runs under the leak detector.
+  import { aShared } from "./modules/diamond-a.js";
+  import { bShared } from "./modules/diamond-b.js";
+  testing.expectEqual('diamond-shared', aShared);
+  testing.expectEqual('diamond-shared', bShared);
+</script>
+
 <script id=basic-async type=module>
   import { "val1" as val1 } from "./mod1.js";
   const m = await import("./mod1.js");
