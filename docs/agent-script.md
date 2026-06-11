@@ -33,7 +33,10 @@ web page's JavaScript context.
   navigations and primitive calls. A later `lightpanda agent script.js` run
   starts with a fresh agent context.
 - The installed primitives are synchronous and blocking. Do not write an
-  `async`/`await` automation contract around them.
+  `async`/`await` automation contract around them. Scripts compile as classic
+  scripts, so top-level `await` is a `SyntaxError`; promise callbacks
+  (`.then`) only run after the script body finishes, never in between
+  primitive calls.
 - Tool failures throw JavaScript `Error` exceptions and stop execution unless
   you catch them.
 - The script's completion value — its last top-level expression — is printed
@@ -113,28 +116,33 @@ Only recorded browser primitives are installed globally:
 | `goto` | `goto(url[, { timeout }])` | Browser session |
 | `extract` | `extract(schema)` or `extract({ schema })` | Browser page via extractor; returns a JS object or array |
 | `evaluate` | `evaluate(script[, { url, timeout, save }])` | Browser page JS context |
-| `click` | `click({ selector })` | Browser page |
-| `fill` | `fill({ selector, value })` | Browser page |
+| `click` | `click(selector)` or `click({ selector })` | Browser page |
+| `fill` | `fill(selector, value)` or `fill({ selector, value })` | Browser page |
 | `scroll` | `scroll()` or `scroll({ x, y })` | Browser page |
 | `waitForSelector` | `waitForSelector(selector[, { timeout }])` | Browser page |
 | `waitForScript` | `waitForScript(script[, { timeout }])` | Browser page JS context |
 | `waitForState` | `waitForState(state[, { timeout }])` | Browser page |
-| `hover` | `hover({ selector })` | Browser page |
-| `press` | `press({ key })` or `press({ key, selector })` | Browser page |
-| `selectOption` | `selectOption({ selector, value })` | Browser page |
-| `setChecked` | `setChecked({ selector, checked })` | Browser page |
+| `hover` | `hover(selector)` or `hover({ selector })` | Browser page |
+| `press` | `press(selector, key)` or `press({ key[, selector] })` | Browser page |
+| `selectOption` | `selectOption(selector, value)` or `selectOption({ selector, value })` | Browser page |
+| `setChecked` | `setChecked(selector[, checked])` or `setChecked({ selector, checked })` | Browser page |
 
 `goto` returns at the `load` event (a fast snapshot). When a page's content is
 still loading (rendered by post-load JS), call `waitForState("networkidle")`
 before reading. `waitForState`'s `state` accepts `"load"`,
 `"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`, or `"done"`.
+`goto`'s `timeout` defaults to 10000 ms; the `waitFor*` timeouts default to
+5000 ms.
 
 The `[, { … }]` is an optional trailing options object: leading arguments are
 positional (`waitForSelector("#row", { timeout: 2000 })`), and the options ride
 in a final object. Passing a single object with everything
 (`waitForSelector({ selector: "#row", timeout: 2000 })`) is equivalent — that's
 the shape `/save` records into saved scripts. An option can't be a bare
-positional, though: `waitForSelector("#row", 2000)` is an error.
+positional, though: `waitForSelector("#row", 2000)` is an error. A `null`
+positional omits that field (`press(null, "Enter")` presses on the focused
+element), and setting the same field positionally and in the options object
+(`goto(url, { url: ... })`) is an `invalid arguments` error.
 
 Script primitives address elements by CSS selector only. The tools that hand
 out `backendNodeId`s (`tree`, `findElement`, `nodeDetails`) aren't installed in
@@ -157,7 +165,11 @@ goto({
 });
 ```
 
-The call returns a status string. It throws if navigation fails or times out.
+The call returns a status string and throws if navigation fails. A timeout
+does **not** throw: the call returns `"Navigation started but the page did not
+finish loading before the timeout."` and the page stays in whatever state it
+reached. Check the return value — or follow with `waitForState(...)` /
+`waitForSelector(...)` — when completeness matters.
 
 ## Structured Extraction
 
@@ -201,6 +213,13 @@ Return shape follows the top-level schema:
 - `extract([{ selector: "a" }])` is shorthand for a single anonymous array
   extraction and returns the array directly.
 
+Every value is a string (trimmed text or a raw attribute) or `null` — parse
+numbers in script logic. An array field that matches nothing yields `[]`
+without complaint (a page with zero comments is a valid result), but if
+*every* field in the schema misses, `extract(...)` throws
+`no schema selector matched any element` — treat that as "my selectors are
+wrong", not "the page is empty".
+
 `extract(...)` reads only the current page. For list-to-detail scraping —
 capture a list, then visit each row for more — capture the list, then loop in
 the script: `goto` each row's URL and `extract` the detail. The local agent
@@ -215,6 +234,10 @@ extract({ title: "h1" });
 extract({ schema: { title: "h1" } });
 extract('{ "title": "h1" }');
 ```
+
+The wrapped form accepts only `schema`: the REPL's `save=` option does not
+exist in scripts (`extract({ schema: ..., save: ... })` is rejected). Keep
+results in local variables instead.
 
 Use local variables to keep extracted data available to later script logic:
 
@@ -280,10 +303,12 @@ scroll({ y: 600 });
 scroll();
 ```
 
-`setChecked` defaults `checked` to `true` when the field is omitted. Pass
-`press` an object (`press({ key: "Enter" })`): a bare `press("Enter")` binds the
-string to the optional `selector`, not `key`, and fails. To target an element,
-add the selector — `press({ key: "Enter", selector: "#search" })`.
+`setChecked` defaults `checked` to `true` when the field is omitted
+(`setChecked("#chk")` checks the box). `press`'s leading positional is the
+optional `selector`, not `key`: a bare `press("Enter")` binds `"Enter"` to
+`selector` and fails. Press on the focused element with
+`press({ key: "Enter" })` or `press(null, "Enter")`; target an element with
+`press("#search", "Enter")` or `press({ key: "Enter", selector: "#search" })`.
 
 `$LP_*` placeholders in string arguments are resolved inside the Lightpanda
 process. This keeps credentials out of recorded scripts and LLM prompts. In
@@ -309,8 +334,9 @@ click({ selector: "a.login" });
 Only replayable browser actions are recorded:
 
 - Recorded: `goto`, `click`, `fill`, `scroll`, `hover`, `press`,
-  `selectOption`, `setChecked`, `waitForSelector`, `waitForScript`, `evaluate`,
-  and `extract`.
+  `selectOption`, `setChecked`, `waitForSelector`, `waitForScript`,
+  `waitForState`, `evaluate`, and `extract` — the same set installed as script
+  primitives.
 - Not recorded: read-only exploration tools such as `tree`, `markdown`, `html`,
   `links`, `findElement`, `consoleLogs`, `getUrl`, `getCookies`, and `getEnv`.
 - Natural-language prompts are written as `//` comments above the actions they
@@ -341,6 +367,7 @@ Common failures:
 | `ReferenceError: require is not defined` | Agent scripts are not Node.js scripts. |
 | `no page loaded - run goto(url) first` | A page-dependent primitive ran before navigation. |
 | `invalid arguments` | A primitive received the wrong number or shape of arguments, or a non-JSON-serializable value. |
+| `extract: no schema selector matched any element` | Every field in the schema missed. Fix the selectors; an empty page section yields `null`/`[]` per field, not this error. |
 
 ## Complete Example
 
