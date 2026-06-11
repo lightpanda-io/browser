@@ -40,6 +40,7 @@ const style_err = "ps-err";
 const style_jsmode = "ps-jsmode";
 const style_keyword = "ps-keyword";
 const style_comment = "ps-comment";
+const style_jsglobal = "ps-jsglobal";
 
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
@@ -160,6 +161,7 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         c.ic_style_def(style_jsmode, "ansi-red bold");
         c.ic_style_def(style_keyword, "ansi-blue bold");
         c.ic_style_def(style_comment, "ansi-darkgray italic");
+        c.ic_style_def(style_jsglobal, "ansi-cyan");
         // lighten the ghost/inline-hint color from isocline's default ansi-darkgray
         c.ic_style_def("ic-hint", "ansi-color=244");
         // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
@@ -844,9 +846,20 @@ const js_keywords = [_][]const u8{
     "throw",    "true",   "false", "null",    "undefined", "NaN",    "Infinity",
 };
 
+// Globals available in the JS-mode page context; highlighted so it's visible
+// at the prompt that they're in scope.
+const js_globals = [_][]const u8{ "document", "window", "globalThis", "console", "lp" };
+
 fn isJsKeyword(tok: []const u8) bool {
     for (js_keywords) |kw| {
         if (std.mem.eql(u8, kw, tok)) return true;
+    }
+    return false;
+}
+
+fn isJsGlobal(tok: []const u8) bool {
+    for (js_globals) |g| {
+        if (std.mem.eql(u8, g, tok)) return true;
     }
     return false;
 }
@@ -902,8 +915,12 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
             const start = i;
             i += 1;
             while (i < text.len and isIdChar(text[i])) i += 1;
-            if (isJsKeyword(text[start..i])) {
+            const tok = text[start..i];
+            if (isJsKeyword(tok)) {
                 c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_keyword.ptr);
+            } else if (isJsGlobal(tok) and (start == 0 or text[start - 1] != '.')) {
+                // `.document` is a property access, not the global
+                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_jsglobal.ptr);
             }
             continue;
         }
