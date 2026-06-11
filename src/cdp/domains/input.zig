@@ -314,3 +314,59 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
     const result = try ls.local.compileAndRun("window.downButton === 2 && window.ctxButton === 2 && window.dbl === true", null);
     try testing.expect(result.isTrue());
 }
+
+test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const frame = try bc.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    var runner = try bc.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    // Three controls whose tabindex order (1, 2, 3) differs from document
+    // order (2, 1, 3): focus order must follow tabindex, not the tree.
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML =
+        \\  '<input id="i2" tabindex="2">' +
+        \\  '<button id="b1" tabindex="1">b</button>' +
+        \\  '<select id="s3" tabindex="3"></select>';
+    , null);
+
+    // Nothing focused yet → activeElement is <body>.
+    try testing.expect((try ls.local.compileAndRun("document.activeElement === document.body", null)).isTrue());
+
+    // First Tab → lowest positive tabindex (#b1), regardless of document order.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "Tab", .code = "Tab" },
+    });
+    try testing.expect((try ls.local.compileAndRun("document.activeElement.id === 'b1'", null)).isTrue());
+
+    // Second Tab → next in tabindex order (#i2).
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "Tab", .code = "Tab" },
+    });
+    try testing.expect((try ls.local.compileAndRun("document.activeElement.id === 'i2'", null)).isTrue());
+
+    // Shift+Tab (modifiers bit 8) walks backward → back to #b1.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "Tab", .code = "Tab", .modifiers = 8 },
+    });
+    try testing.expect((try ls.local.compileAndRun("document.activeElement.id === 'b1'", null)).isTrue());
+}
