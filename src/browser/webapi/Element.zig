@@ -1353,6 +1353,52 @@ pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
     return calculateSiblingPosition(self.asNode());
 }
 
+pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
+    if (!self.asNode().isConnected() or !self.checkVisibilityCached(null, frame)) {
+        return null;
+    }
+
+    switch (self.getTag()) {
+        .html, .body => return null,
+        else => {},
+    }
+
+    const self_position = self.positionStyle(frame);
+    if (std.mem.eql(u8, self_position, "fixed")) {
+        return null;
+    }
+    const self_static = self_position.len == 0 or std.mem.eql(u8, self_position, "static");
+
+    var node: ?*Node = self.asNode()._parent;
+    while (node) |n| {
+        if (n.is(ShadowRoot)) |sr| {
+            // this always pokes through the shadow dom
+            node = sr.getHost().asNode();
+            continue;
+        }
+        const ancestor = n.is(Element) orelse break;
+
+        const tag = ancestor.getTag();
+        if (tag == .body) {
+            return ancestor;
+        }
+        const position = ancestor.positionStyle(frame);
+        if (position.len > 0 and !std.mem.eql(u8, position, "static")) {
+            return ancestor;
+        }
+        if (self_static and (tag == .td or tag == .th or tag == .table)) {
+            return ancestor;
+        }
+        node = n._parent;
+    }
+    return null;
+}
+
+fn positionStyle(self: *Element, frame: *Frame) []const u8 {
+    const style = self.getStyle(frame) orelse return "";
+    return style.asCSSStyleDeclaration().getPropertyValue("position", frame);
+}
+
 pub fn getClientTop(_: *Element) f64 {
     // Border width - in our dummy layout, we don't apply borders to layout
     return 0.0;
@@ -1998,6 +2044,7 @@ pub const JsApi = struct {
     pub const offsetLeft = bridge.accessor(Element.getOffsetLeft, null, .{});
     pub const offsetWidth = bridge.accessor(Element.getOffsetWidth, null, .{});
     pub const offsetHeight = bridge.accessor(Element.getOffsetHeight, null, .{});
+    pub const offsetParent = bridge.accessor(Element.getOffsetParent, null, .{});
     pub const getClientRects = bridge.function(Element.getClientRects, .{});
     pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});
