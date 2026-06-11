@@ -606,6 +606,17 @@ fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callcon
     @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }
 
+// The bridge's runtime cache descriptors can't carry the comptime field name,
+// so they store the field's byte offset instead (see Caller.Function.Descriptor).
+pub fn privateSymbolOffset(comptime name: []const u8) usize {
+    return @offsetOf(PrivateSymbols, name);
+}
+
+pub fn privateSymbolAt(self: *Env, offset: usize) *PrivateSymbols.Private {
+    const base: [*]u8 = @ptrCast(&self.private_symbols);
+    return @ptrCast(@alignCast(base + offset));
+}
+
 const PrivateSymbols = struct {
     const Private = @import("Private.zig");
 

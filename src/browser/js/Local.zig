@@ -102,8 +102,9 @@ pub fn newCallback(
 ) js.Function {
     const external = self.isolate.createExternal(data);
     const handle = v8.v8__Function__New__DEFAULT2(self.handle, struct {
+        const desc = Caller.Function.descriptor(@TypeOf(data), callback, .{ .embedded_receiver = true });
         fn wrap(info_handle: ?*const js.v8.FunctionCallbackInfo) callconv(.c) void {
-            Caller.Function.call(@TypeOf(data), info_handle.?, callback, .{ .embedded_receiver = true });
+            Caller.Function.call(info_handle.?, &desc);
         }
     }.wrap, @ptrCast(external)).?;
     return .{ .local = self, .handle = handle };

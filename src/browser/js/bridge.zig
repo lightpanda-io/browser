@@ -121,30 +121,12 @@ pub const Constructor = struct {
         return .{
             .arity = comptime Function.getArity(@TypeOf(func), if (opts.new_target) 1 else 0),
             .func = struct {
+                const desc = Caller.constructorDescriptor(T, func, .{
+                    .dom_exception = opts.dom_exception,
+                    .new_target = opts.new_target,
+                });
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-                    var caller: Caller = undefined;
-                    if (!caller.init(v8_isolate)) {
-                        return;
-                    }
-                    defer caller.deinit();
-
-                    // Constructors are a JS-execution boundary, just like
-                    // [CEReactions] methods. Open a reactions scope so any
-                    // callbacks queued by the user's constructor body (or
-                    // by attribute_changed reactions queued before invocation)
-                    // drain at the constructor's exit, not later.
-                    const ce_frame: ?*Frame = switch (caller.local.ctx.global) {
-                        .frame => |frame| frame,
-                        .worker => null,
-                    };
-                    const ce_checkpoint: usize = if (ce_frame) |frame| frame._ce_reactions.push() else 0;
-                    defer if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
-
-                    caller.constructor(T, func, handle.?, .{
-                        .dom_exception = opts.dom_exception,
-                        .new_target = opts.new_target,
-                    });
+                    Caller.construct(handle.?, &desc);
                 }
             }.wrap,
         };
@@ -170,8 +152,9 @@ pub const Function = struct {
             // methods don't, so don't skip the first param for them.
             .arity = getArity(@TypeOf(func), if (opts.static) 0 else 1),
             .func = if (opts.noop) noopFunction else struct {
+                const desc = Caller.Function.descriptor(T, func, opts);
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    Caller.Function.call(T, handle.?, func, opts);
+                    Caller.Function.call(handle.?, &desc);
                 }
             }.wrap,
         };
@@ -240,16 +223,18 @@ pub const Accessor = struct {
             };
 
             accessor.getter = struct {
+                const desc = Caller.Function.descriptor(T, getter, getter_opts);
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    Caller.Function.call(T, handle.?, getter, getter_opts);
+                    Caller.Function.call(handle.?, &desc);
                 }
             }.wrap;
         }
 
         if (@typeInfo(@TypeOf(setter)) != .null) {
             accessor.setter = struct {
+                const desc = Caller.Function.descriptor(T, setter, opts);
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    Caller.Function.call(T, handle.?, setter, opts);
+                    Caller.Function.call(handle.?, &desc);
                 }
             }.wrap;
         }
@@ -425,10 +410,11 @@ pub const Iterator = struct {
         return .{
             .async = opts.async,
             .func = struct {
+                const desc = Caller.Function.descriptor(T, struct_or_func, .{
+                    .null_as_undefined = opts.null_as_undefined,
+                });
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    return Caller.Function.call(T, handle.?, struct_or_func, .{
-                        .null_as_undefined = opts.null_as_undefined,
-                    });
+                    return Caller.Function.call(handle.?, &desc);
                 }
             }.wrap,
         };
@@ -444,10 +430,11 @@ pub const Callable = struct {
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Callable {
         return .{ .func = struct {
+            const desc = Caller.Function.descriptor(T, func, .{
+                .null_as_undefined = opts.null_as_undefined,
+            });
             fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                Caller.Function.call(T, handle.?, func, .{
-                    .null_as_undefined = opts.null_as_undefined,
-                });
+                Caller.Function.call(handle.?, &desc);
             }
         }.wrap };
     }

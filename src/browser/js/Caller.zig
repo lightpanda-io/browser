@@ -25,6 +25,7 @@ const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 
 const js = @import("js.zig");
+const Env = @import("Env.zig");
 const Local = @import("Local.zig");
 const Context = @import("Context.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
@@ -116,61 +117,96 @@ pub const CallOpts = struct {
     new_target: bool = false,
 };
 
-pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
-    const local = &self.local;
+// One ConstructorDescriptor constant is generated per constructor binding;
+// `construct` is compiled once and shared by all of them. Everything that
+// doesn't depend on the constructor's signature lives in `construct`; the
+// per-signature argument/return conversion lives in the `invoke` thunk.
+pub const ConstructorDescriptor = struct {
+    invoke: *const fn (local: *const Local, info: FunctionCallbackInfo) anyerror!void,
+    dom_exception: bool,
+    names: DebugNames,
+};
+
+pub fn constructorDescriptor(comptime T: type, comptime func: anytype, comptime opts: CallOpts) ConstructorDescriptor {
+    return .{
+        .invoke = struct {
+            fn invoke(local: *const Local, info: FunctionCallbackInfo) anyerror!void {
+                const F = @TypeOf(func);
+                const offset: comptime_int = if (opts.new_target) 1 else 0;
+                var args = try getArgs(F, offset, local, info);
+                if (comptime opts.new_target) {
+                    const new_target_handle = v8.v8__FunctionCallbackInfo__NewTarget(info.handle).?;
+                    @field(args, "0") = js.Function{ .local = local, .handle = @ptrCast(new_target_handle) };
+                }
+                const res = @call(.auto, func, args);
+
+                const ReturnType = @typeInfo(F).@"fn".return_type orelse {
+                    @compileError(@typeName(F) ++ " has a constructor without a return type");
+                };
+
+                const new_this_handle = info.getThis();
+                var this = js.Object{ .local = local, .handle = new_this_handle };
+                if (@typeInfo(ReturnType) == .error_union) {
+                    const non_error_res = try res;
+                    this = try local.mapZigInstanceToJs(new_this_handle, non_error_res);
+                } else {
+                    this = try local.mapZigInstanceToJs(new_this_handle, res);
+                }
+
+                // If we got back a different object (existing wrapper), copy the prototype
+                // from new object. (this happens when we're upgrading an CustomElement)
+                if (this.handle != new_this_handle) {
+                    const prototype_handle = v8.v8__Object__GetPrototype(new_this_handle).?;
+                    var out: v8.MaybeBool = undefined;
+                    v8.v8__Object__SetPrototype(this.handle, local.handle, prototype_handle, &out);
+                    if (comptime IS_DEBUG) {
+                        std.debug.assert(out.has_value and out.value);
+                    }
+                }
+
+                info.getReturnValue().set(this.handle);
+            }
+        }.invoke,
+        .dom_exception = opts.dom_exception,
+        .names = debugNames(T, @TypeOf(func)),
+    };
+}
+
+pub fn construct(info_handle: *const v8.FunctionCallbackInfo, desc: *const ConstructorDescriptor) void {
+    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(info_handle).?;
+    var caller: Caller = undefined;
+    if (!caller.init(v8_isolate)) {
+        return;
+    }
+    defer caller.deinit();
+
+    // Constructors are a JS-execution boundary, just like [CEReactions]
+    // methods. Open a reactions scope so any callbacks queued by the user's
+    // constructor body (or by attribute_changed reactions queued before
+    // invocation) drain at the constructor's exit, not later.
+    const ce_frame: ?*Frame = switch (caller.local.ctx.global) {
+        .frame => |frame| frame,
+        .worker => null,
+    };
+    const ce_checkpoint: usize = if (ce_frame) |frame| frame._ce_reactions.push() else 0;
+    defer if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+
+    const local = &caller.local;
 
     var hs: js.HandleScope = undefined;
     hs.init(local.isolate);
     defer hs.deinit();
 
-    const info = FunctionCallbackInfo{ .handle = handle };
+    const info = FunctionCallbackInfo{ .handle = info_handle };
 
     if (!info.isConstructCall()) {
-        handleError(T, @TypeOf(func), local, error.InvalidArgument, info, opts);
+        handleError(local, error.InvalidArgument, info, desc.dom_exception, desc.names);
         return;
     }
 
-    self._constructor(func, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+    desc.invoke(local, info) catch |err| {
+        handleError(local, err, info, desc.dom_exception, desc.names);
     };
-}
-
-fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo, comptime opts: CallOpts) !void {
-    const F = @TypeOf(func);
-    const local = &self.local;
-    const offset: comptime_int = if (opts.new_target) 1 else 0;
-    var args = try getArgs(F, offset, local, info);
-    if (comptime opts.new_target) {
-        const new_target_handle = v8.v8__FunctionCallbackInfo__NewTarget(info.handle).?;
-        @field(args, "0") = js.Function{ .local = local, .handle = @ptrCast(new_target_handle) };
-    }
-    const res = @call(.auto, func, args);
-
-    const ReturnType = @typeInfo(F).@"fn".return_type orelse {
-        @compileError(@typeName(F) ++ " has a constructor without a return type");
-    };
-
-    const new_this_handle = info.getThis();
-    var this = js.Object{ .local = local, .handle = new_this_handle };
-    if (@typeInfo(ReturnType) == .error_union) {
-        const non_error_res = try res;
-        this = try local.mapZigInstanceToJs(new_this_handle, non_error_res);
-    } else {
-        this = try local.mapZigInstanceToJs(new_this_handle, res);
-    }
-
-    // If we got back a different object (existing wrapper), copy the prototype
-    // from new object. (this happens when we're upgrading an CustomElement)
-    if (this.handle != new_this_handle) {
-        const prototype_handle = v8.v8__Object__GetPrototype(new_this_handle).?;
-        var out: v8.MaybeBool = undefined;
-        v8.v8__Object__SetPrototype(this.handle, self.local.handle, prototype_handle, &out);
-        if (comptime IS_DEBUG) {
-            std.debug.assert(out.has_value and out.value);
-        }
-    }
-
-    info.getReturnValue().set(this.handle);
 }
 
 pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
@@ -182,7 +218,7 @@ pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndex(T, local, func, idx, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(local, err, info, opts.dom_exception, debugNames(T, @TypeOf(func)));
         // not intercepted
         return 0;
     };
@@ -209,7 +245,7 @@ pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedIndex(T, local, func, name, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(local, err, info, opts.dom_exception, debugNames(T, @TypeOf(func)));
         // not intercepted
         return 0;
     };
@@ -236,7 +272,7 @@ pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setNamedIndex(T, local, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(local, err, info, opts.dom_exception, debugNames(T, @TypeOf(func)));
         // not intercepted
         return 0;
     };
@@ -264,7 +300,7 @@ pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *c
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _deleteNamedIndex(T, local, func, name, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(local, err, info, opts.dom_exception, debugNames(T, @TypeOf(func)));
         return 0;
     };
 }
@@ -290,7 +326,7 @@ pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *co
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getEnumerator(T, local, func, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(local, err, info, opts.dom_exception, debugNames(T, @TypeOf(func)));
         // not intercepted
         return 0;
     };
@@ -322,7 +358,7 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
                         return 0;
                     }
                 }
-                handleError(T, F, local, err, info, opts);
+                handleError(local, err, info, opts.dom_exception, debugNames(T, F));
                 // not intercepted
                 return 0;
             };
@@ -355,7 +391,20 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
     return try js.String.toSlice(.{ .local = local, .handle = handle });
 }
 
-fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype, comptime opts: CallOpts) void {
+// In release builds, error handling doesn't depend on the bound type or
+// function at all, so this takes runtime values (a Descriptor's fields)
+// and is shared by every binding. `info` stays generic only because
+// function and property callbacks have different ReturnValue accessors.
+const DebugNames = if (IS_DEBUG) struct {
+    type_name: []const u8,
+    func_name: []const u8,
+} else struct {};
+
+fn debugNames(comptime T: type, comptime F: type) DebugNames {
+    return if (comptime IS_DEBUG) .{ .type_name = @typeName(T), .func_name = @typeName(F) } else .{};
+}
+
+fn handleError(local: *const Local, err: anyerror, info: anytype, dom_exception: bool, names: DebugNames) void {
     const isolate = local.isolate;
 
     if (comptime IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
@@ -363,7 +412,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
             const DOMException = @import("../webapi/DOMException.zig");
             if (DOMException.fromError(err) == null) {
                 // This isn't a DOMException, let's log it
-                logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
+                logFunctionCallError(local, names.type_name, names.func_name, err, info);
             }
         }
     }
@@ -377,7 +426,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         error.OutOfMemory => isolate.createError("out of memory"),
         error.IllegalConstructor => isolate.createError("Illegal Constructor"),
         else => blk: {
-            if (comptime opts.dom_exception) {
+            if (dom_exception) {
                 const DOMException = @import("../webapi/DOMException.zig");
                 if (DOMException.fromError(err)) |ex| {
                     const value = local.zigValueToJs(ex, .{}) catch break :blk isolate.createError("internal error");
@@ -599,7 +648,61 @@ pub const Function = struct {
         };
     };
 
-    pub fn call(comptime T: type, info_handle: *const v8.FunctionCallbackInfo, func: anytype, comptime opts: Opts) void {
+    // One Descriptor constant is generated per binding; `call` is compiled
+    // once and shared by all ~2000 of them. Everything that doesn't depend
+    // on the bound function's signature lives in `call` and runs off the
+    // Descriptor's runtime fields; the per-signature argument/return
+    // conversion lives in the `invoke` thunk.
+    pub const Descriptor = struct {
+        invoke: *const fn (local: *const Local, info: FunctionCallbackInfo) anyerror!js.Value,
+        dom_exception: bool,
+        ce_reactions: bool,
+        cache: ?Caching,
+        names: DebugNames,
+
+        pub const Caching = union(enum) {
+            internal: u8,
+            // byte offset of the js.Private within Env.private_symbols
+            private: usize,
+        };
+    };
+
+    pub fn descriptor(comptime T: type, comptime func: anytype, comptime opts: Opts) Descriptor {
+        return .{
+            .invoke = struct {
+                fn invoke(local: *const Local, info: FunctionCallbackInfo) anyerror!js.Value {
+                    const F = @TypeOf(func);
+                    var args: ParameterTypes(F) = undefined;
+                    if (comptime opts.static) {
+                        args = try getArgs(F, 0, local, info);
+                    } else if (comptime opts.embedded_receiver) {
+                        args = try getArgs(F, 1, local, info);
+                        @field(args, "0") = @ptrCast(@alignCast(info.getData() orelse unreachable));
+                    } else {
+                        args = try getArgs(F, 1, local, info);
+                        @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+                    }
+                    const res = @call(.auto, func, args);
+                    const js_value = try local.zigValueToJs(res, .{
+                        .dom_exception = opts.dom_exception,
+                        .as_typed_array = opts.as_typed_array,
+                        .null_as_undefined = opts.null_as_undefined,
+                    });
+                    info.getReturnValue().set(js_value);
+                    return js_value;
+                }
+            }.invoke,
+            .dom_exception = opts.dom_exception,
+            .ce_reactions = opts.ce_reactions,
+            .cache = if (opts.cache) |cache| switch (cache) {
+                .internal => |idx| .{ .internal = idx },
+                .private => |name| .{ .private = Env.privateSymbolOffset(name) },
+            } else null,
+            .names = debugNames(T, @TypeOf(func)),
+        };
+    }
+
+    pub fn call(info_handle: *const v8.FunctionCallbackInfo, desc: *const Descriptor) void {
         const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(info_handle).?;
         const ctx, const v8_context = Context.fromIsolate(.{ .handle = v8_isolate }) orelse {
             throwDetachedError(v8_isolate);
@@ -612,7 +715,7 @@ pub const Function = struct {
         defer hs.deinit();
 
         var cache_state: CacheState = undefined;
-        if (comptime opts.cache) |cache| {
+        if (desc.cache) |cache| {
             // This API is a bit weird. On
             if (respondFromCache(cache, ctx, v8_context, info, &cache_state)) {
                 // Value was fetched from the cache and returned already
@@ -630,56 +733,26 @@ pub const Function = struct {
         // callbacks queued by DOM mutation inside `func` fire after it
         // returns, never mid-algorithm.
         var ce_checkpoint: usize = undefined;
-        const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (ctx.global) {
+        const ce_frame: ?*Frame = if (desc.ce_reactions) switch (ctx.global) {
             .frame => |frame| frame,
             .worker => null,
         } else null;
 
-        if (comptime opts.ce_reactions) {
-            if (ce_frame) |frame| {
-                ce_checkpoint = frame._ce_reactions.push();
-            }
+        if (ce_frame) |frame| {
+            ce_checkpoint = frame._ce_reactions.push();
         }
-        defer if (comptime opts.ce_reactions) {
-            if (ce_frame) |frame| {
-                frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
-            }
+        defer if (ce_frame) |frame| {
+            frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
         };
 
-        const js_value = _call(T, &caller.local, info, func, opts) catch |err| {
-            handleError(T, @TypeOf(func), &caller.local, err, info, .{
-                .dom_exception = opts.dom_exception,
-                .as_typed_array = opts.as_typed_array,
-                .null_as_undefined = opts.null_as_undefined,
-            });
+        const js_value = desc.invoke(&caller.local, info) catch |err| {
+            handleError(&caller.local, err, info, desc.dom_exception, desc.names);
             return;
         };
 
-        if (comptime opts.cache) |cache| {
-            cache_state.save(cache, js_value);
+        if (desc.cache != null) {
+            cache_state.save(js_value);
         }
-    }
-
-    fn _call(comptime T: type, local: *const Local, info: FunctionCallbackInfo, func: anytype, comptime opts: Opts) !js.Value {
-        const F = @TypeOf(func);
-        var args: ParameterTypes(F) = undefined;
-        if (comptime opts.static) {
-            args = try getArgs(F, 0, local, info);
-        } else if (comptime opts.embedded_receiver) {
-            args = try getArgs(F, 1, local, info);
-            @field(args, "0") = @ptrCast(@alignCast(info.getData() orelse unreachable));
-        } else {
-            args = try getArgs(F, 1, local, info);
-            @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
-        }
-        const res = @call(.auto, func, args);
-        const js_value = try local.zigValueToJs(res, .{
-            .dom_exception = opts.dom_exception,
-            .as_typed_array = opts.as_typed_array,
-            .null_as_undefined = opts.null_as_undefined,
-        });
-        info.getReturnValue().set(js_value);
-        return js_value;
     }
 
     // We can cache a value directly into the v8::Object so that our callback to fetch a property
@@ -694,7 +767,7 @@ pub const Function = struct {
     // But on miss, it's also setting the `cache_state` with all of the data it
     // got checking the cache, so that, once we get the value from our Zig code,
     // it's quick to store in the v8::Object for subsequent calls.
-    fn respondFromCache(comptime cache: Opts.Caching, ctx: *Context, v8_context: *const v8.Context, info: FunctionCallbackInfo, cache_state: *CacheState) bool {
+    fn respondFromCache(cache: Descriptor.Caching, ctx: *Context, v8_context: *const v8.Context, info: FunctionCallbackInfo, cache_state: *CacheState) bool {
         const js_this = info.getThis();
         const return_value = info.getReturnValue();
 
@@ -728,8 +801,8 @@ pub const Function = struct {
                     .mode = .{ .internal = idx },
                 };
             },
-            .private => |private_symbol| {
-                const global_handle = &@field(ctx.env.private_symbols, private_symbol).handle;
+            .private => |private_offset| {
+                const global_handle = &ctx.env.privateSymbolAt(private_offset).handle;
                 const private_key: *const v8.Private = v8.v8__Global__Get(global_handle, ctx.isolate.handle).?;
                 if (v8.v8__Object__GetPrivate(js_this, v8_context, private_key)) |cached| {
                     // This means we can't cache "undefined", since we can't tell
@@ -764,12 +837,13 @@ pub const Function = struct {
             private: *const v8.Private,
         },
 
-        pub fn save(self: *const CacheState, comptime cache: Opts.Caching, js_value: js.Value) void {
-            if (comptime cache == .internal) {
-                v8.v8__Object__SetInternalField(self.js_this, self.mode.internal, js_value.handle);
-            } else {
-                var out: v8.MaybeBool = undefined;
-                v8.v8__Object__SetPrivate(self.js_this, self.v8_context, self.mode.private, js_value.handle, &out);
+        pub fn save(self: *const CacheState, js_value: js.Value) void {
+            switch (self.mode) {
+                .internal => |idx| v8.v8__Object__SetInternalField(self.js_this, idx, js_value.handle),
+                .private => |private_key| {
+                    var out: v8.MaybeBool = undefined;
+                    v8.v8__Object__SetPrivate(self.js_this, self.v8_context, private_key, js_value.handle, &out);
+                },
             }
         }
     };
