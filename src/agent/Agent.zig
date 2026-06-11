@@ -912,11 +912,12 @@ fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]c
 }
 
 fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
-    const parsed = save.parseCommand(rest) catch |err| {
+    const parsed = save.parseCommand(arena, rest) catch |err| {
         const msg: []const u8 = switch (err) {
             error.UnterminatedQuote => "unterminated filename quote",
             error.EmptyFilename => "filename cannot be empty",
             error.InvalidFilename => "filename must be a local file name, not a path",
+            error.OutOfMemory => "out of memory",
         };
         self.terminal.printError("{s}", .{msg});
         return;
