@@ -352,7 +352,6 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     const location = try Location.init("about:blank", self);
     // We're holding a reference in Zig-side.
     location.acquireRef();
-    errdefer location.releaseRef(page);
     self.window._location = location;
 
     document._frame = self;
@@ -568,7 +567,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         // address and thus be mapped to the same v8::Object in the identity map.
         const location = try Location.init(self.url, self);
         location.acquireRef();
-        errdefer location.releaseRef(self._page);
         // We're not holding a ref to old location anymore.
         self.window._location.releaseRef(self._page);
         self.window._location = location;
@@ -810,7 +808,6 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
 
         const location = try Location.init(target.url, target);
         location.acquireRef();
-        errdefer location.releaseRef(target._page);
         target.window._location.releaseRef(target._page);
         target.window._location = location;
 
@@ -1094,7 +1091,6 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
     // Init new location.
     const location = try Location.init(self.url, self);
     location.acquireRef();
-    errdefer location.releaseRef(self._page);
     self.window._location.releaseRef(self._page);
     self.window._location = location;
 
