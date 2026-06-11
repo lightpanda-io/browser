@@ -169,7 +169,7 @@ const script_skill =
 
 // Sytem prompt of the `/save` command
 // With the save instructions and the skill-like agent script documentation.
-const save_system_prompt = browser_tools.save_synthesis_prompt ++ "\n" ++ script_skill;
+const save_system_prompt = browser_tools.save_synthesis_prompt ++ "\n\n" ++ script_skill;
 
 const synthesis_prompt =
     \\You have used your tool budget or cannot finish the exploration.
