@@ -55,7 +55,7 @@ pub var opts = Opts{};
 // synchronizes access to last_log
 var last_log_lock: Thread.Mutex = .{};
 
-pub fn enabled(comptime scope: Scope, level: Level) bool {
+pub fn enabled(scope: Scope, level: Level) bool {
     if (@intFromEnum(level) < @intFromEnum(opts.level)) {
         return false;
     }
@@ -91,27 +91,27 @@ pub const Format = enum {
     pretty,
 };
 
-pub fn debug(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn debug(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .debug, msg, data);
 }
 
-pub fn info(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn info(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .info, msg, data);
 }
 
-pub fn warn(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn warn(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .warn, msg, data);
 }
 
-pub fn err(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn err(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .err, msg, data);
 }
 
-pub fn fatal(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
+pub fn fatal(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .fatal, msg, data);
 }
 
-pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype) void {
+pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
     if (enabled(scope, level) == false) {
         return;
     }
@@ -128,41 +128,57 @@ pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: 
     };
 }
 
-fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
-    comptime {
+// Converts each field of `data` into a runtime Value so that a single copy of
+// the formatting code (logToErased and below) can do the actual writing.
+fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
+    const fields = @typeInfo(@TypeOf(data)).@"struct".fields;
+    var kvs: [fields.len]KV = undefined;
+    inline for (fields, 0..) |f, i| {
+        const value = @field(data, f.name);
+        kvs[i] = .{ .key = f.name, .value = Value.init(&value) };
+    }
+    return logToErased(scope, level, msg, &kvs, out);
+}
+
+fn logToErased(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, out: *std.Io.Writer) !void {
+    if (builtin.mode == .Debug) {
         if (msg.len > 30) {
-            @compileError("log msg cannot be more than 30 characters: '" ++ msg ++ "'");
+            std.debug.print("debug-only-panic: log msg cannot be more than 30 characters: {s}", .{msg});
+            @panic("invalid log msg");
         }
         for (msg) |b| {
             switch (b) {
                 'A'...'Z', 'a'...'z', ' ', '0'...'9', '_', '-', '.', '{', '}' => {},
-                else => @compileError("log msg contains an invalid character '" ++ msg ++ "'"),
+                else => {
+                    std.debug.print("debug-only-panic: log msg contains an invalid character: {s}", .{msg});
+                    @panic("invalid log msg");
+                },
             }
         }
     }
     switch (opts.format) {
-        .logfmt => try logLogfmt(scope, level, msg, data, out),
-        .pretty => try logPretty(scope, level, msg, data, out),
+        .logfmt => try logLogfmt(scope, level, msg, kvs, out),
+        .pretty => try logPretty(scope, level, msg, kvs, out),
     }
     out.flush() catch return;
 }
 
-fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
+fn logLogfmt(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, writer: *std.Io.Writer) !void {
     try logLogFmtPrefix(scope, level, msg, writer);
-    inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
-        const value = @field(data, f.name);
-        if (std.meta.hasMethod(@TypeOf(value), "logFmt")) {
-            try value.logFmt(f.name, LogFormatWriter{ .writer = writer });
-        } else {
-            const key = " " ++ f.name ++ "=";
-            try writer.writeAll(key);
-            try writeValue(.logfmt, value, writer);
+    for (kvs) |kv| {
+        switch (kv.value) {
+            // logFmt implementations write their own complete " key=value" pairs
+            .log_fmt => |f| try f.logFmtFn(f.ptr, kv.key, writer),
+            else => {
+                try writer.print(" {s}=", .{kv.key});
+                try writeErased(.logfmt, kv.value, writer);
+            },
         }
     }
     try writer.writeByte('\n');
 }
 
-fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: *std.Io.Writer) !void {
+fn logLogFmtPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.Writer) !void {
     try writer.writeAll("$time=");
     try writer.print("{d}", .{timestamp(.clock)});
 
@@ -172,30 +188,23 @@ fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
     try writer.writeAll(" $level=");
     try writer.writeAll(if (level == .err) "error" else @tagName(level));
 
-    const full_msg = comptime blk: {
-        // only wrap msg in quotes if it contains a space
-        const prefix = " $msg=";
-        if (std.mem.indexOfScalar(u8, msg, ' ') == null) {
-            break :blk prefix ++ msg;
-        }
-        break :blk prefix ++ "\"" ++ msg ++ "\"";
-    };
-    try writer.writeAll(full_msg);
+    try writer.writeAll(" $msg=\"");
+    try writer.writeAll(msg);
+    try writer.writeByte('"');
 }
 
-fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
+fn logPretty(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, writer: *std.Io.Writer) !void {
     try logPrettyPrefix(scope, level, msg, writer);
-    inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
-        const key = "      " ++ f.name ++ " = ";
-        try writer.writeAll(key);
-        try writeValue(.pretty, @field(data, f.name), writer);
+    for (kvs) |kv| {
+        try writer.print("      {s} = ", .{kv.key});
+        try writeErased(.pretty, kv.value, writer);
         try writer.writeByte('\n');
     }
     try writer.writeByte('\n');
 }
 
-fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: *std.Io.Writer) !void {
-    if (scope == .console and level == .fatal and comptime std.mem.eql(u8, msg, "lightpanda")) {
+fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.Writer) !void {
+    if (scope == .console and level == .fatal) {
         try writer.writeAll("\x1b[0;104mWARN  ");
     } else {
         try writer.writeAll(switch (level) {
@@ -207,13 +216,15 @@ fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
         });
     }
 
-    const prefix = @tagName(scope) ++ " : " ++ msg;
-    try writer.writeAll(prefix);
+    try writer.writeAll(@tagName(scope));
+    try writer.writeAll(" : ");
+    try writer.writeAll(msg);
 
     {
         // msg.len cannot be > 30, and @tagName(scope).len cannot be > 15
         // so this is safe
-        const padding = 55 - prefix.len;
+        const prefix_len = @tagName(scope).len + msg.len + 2;
+        const padding = 55 - prefix_len;
         for (0..padding / 2) |_| {
             try writer.writeAll(" .");
         }
@@ -226,50 +237,147 @@ fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
     }
 }
 
-pub fn writeValue(comptime format: Format, value: anytype, writer: *std.Io.Writer) !void {
-    const T = @TypeOf(value);
-    if (std.meta.hasMethod(T, "format")) {
-        return writer.print("{f}", .{value});
-    }
+const KV = struct {
+    key: []const u8,
+    value: Value,
+};
 
-    switch (@typeInfo(T)) {
-        .optional => {
-            if (value) |v| {
-                return writeValue(format, v, writer);
-            }
-            return writer.writeAll("null");
-        },
-        .comptime_int, .int, .comptime_float, .float => {
-            return writer.print("{d}", .{value});
-        },
-        .bool => {
-            return writer.writeAll(if (value) "true" else "false");
-        },
-        .error_set => return writer.writeAll(@errorName(value)),
-        .@"enum" => return writer.writeAll(@tagName(value)),
-        .array => return writeValue(format, &value, writer),
-        .pointer => |ptr| switch (ptr.size) {
-            .slice => switch (ptr.child) {
-                u8 => return writeString(format, value, writer),
+const Value = union(enum) {
+    null,
+    string: []const u8,
+    int: i64,
+    uint: u64,
+    float32: f32,
+    float64: f64,
+    boolean: bool,
+    formatter: Formatter,
+    log_fmt: LogFmt,
+
+    const Formatter = struct {
+        ptr: *const anyopaque,
+        writeFn: *const fn (ptr: *const anyopaque, writer: *std.Io.Writer) anyerror!void,
+    };
+
+    const LogFmt = struct {
+        ptr: *const anyopaque,
+        // writes one or more complete " key=value" pairs (logfmt only)
+        logFmtFn: *const fn (ptr: *const anyopaque, key: []const u8, writer: *std.Io.Writer) anyerror!void,
+        // value-only formatting, used by the pretty format
+        writeFn: *const fn (ptr: *const anyopaque, writer: *std.Io.Writer) anyerror!void,
+    };
+
+    fn init(vp: anytype) Value {
+        const T = @TypeOf(vp.*);
+
+        if (comptime std.meta.hasMethod(T, "logFmt")) {
+            const Thunk = struct {
+                fn logFmt(ptr: *const anyopaque, key: []const u8, writer: *std.Io.Writer) anyerror!void {
+                    const value: *const T = @ptrCast(@alignCast(ptr));
+                    return value.logFmt(key, LogFormatWriter{ .writer = writer });
+                }
+            };
+            return .{ .log_fmt = .{
+                .ptr = @ptrCast(vp),
+                .logFmtFn = Thunk.logFmt,
+                .writeFn = writeThunk(T, if (std.meta.hasMethod(T, "format")) "f" else ""),
+            } };
+        }
+
+        if (comptime std.meta.hasMethod(T, "format")) {
+            return formatterValue(vp, "f");
+        }
+
+        switch (@typeInfo(T)) {
+            .optional => {
+                if (vp.*) |_| {
+                    return init(&vp.*.?);
+                }
+                return .null;
+            },
+            .comptime_int => {
+                const value = vp.*;
+                if (value >= 0 and value <= std.math.maxInt(u64)) {
+                    return .{ .uint = value };
+                }
+                if (value < 0 and value >= std.math.minInt(i64)) {
+                    return .{ .int = value };
+                }
+                return .{ .string = std.fmt.comptimePrint("{d}", .{value}) };
+            },
+            .int => |int_info| {
+                if (comptime int_info.bits <= 64) {
+                    return if (comptime int_info.signedness == .signed) .{ .int = vp.* } else .{ .uint = vp.* };
+                }
+                return formatterValue(vp, "d");
+            },
+            .comptime_float => return .{ .float64 = vp.* },
+            .float => |float_info| switch (comptime float_info.bits) {
+                32 => return .{ .float32 = vp.* },
+                64 => return .{ .float64 = vp.* },
+                else => return formatterValue(vp, "d"),
+            },
+            .bool => return .{ .boolean = vp.* },
+            .error_set => return .{ .string = @errorName(vp.*) },
+            .@"enum" => return .{ .string = @tagName(vp.*) },
+            .array => |arr| if (comptime arr.child == u8) {
+                return .{ .string = vp };
+            },
+            .pointer => |ptr| switch (comptime ptr.size) {
+                .slice => if (comptime ptr.child == u8) {
+                    return .{ .string = vp.* };
+                },
+                .one => switch (@typeInfo(ptr.child)) {
+                    .array => |arr| if (comptime arr.child == u8) {
+                        return .{ .string = vp.* };
+                    },
+                    else => return formatterValue(vp, "f"),
+                },
                 else => {},
             },
-            .one => switch (@typeInfo(ptr.child)) {
-                .array => |arr| if (arr.child == u8) {
-                    return writeString(format, value, writer);
-                },
-                else => return writer.print("{f}", .{value}),
-            },
+            .@"union", .@"struct" => return formatterValue(vp, ""),
             else => {},
-        },
-        .@"union" => return writer.print("{}", .{value}),
-        .@"struct" => return writer.print("{}", .{value}),
-        else => {},
-    }
+        }
 
-    @compileError("cannot log a: " ++ @typeName(T));
+        @compileError("cannot log a: " ++ @typeName(T));
+    }
+};
+
+pub fn writeValue(comptime format: Format, value: anytype, writer: *std.Io.Writer) !void {
+    return writeErased(format, Value.init(&value), writer);
 }
 
-fn writeString(comptime format: Format, value: []const u8, writer: *std.Io.Writer) !void {
+fn formatterValue(vp: anytype, comptime spec: []const u8) Value {
+    return .{ .formatter = .{
+        .ptr = @ptrCast(vp),
+        .writeFn = writeThunk(@TypeOf(vp.*), spec),
+    } };
+}
+
+// The per-type fallback for values that Value cannot represent as a primitive:
+fn writeThunk(comptime T: type, comptime spec: []const u8) *const fn (*const anyopaque, *std.Io.Writer) anyerror!void {
+    return struct {
+        fn write(ptr: *const anyopaque, writer: *std.Io.Writer) anyerror!void {
+            const vp: *const T = @ptrCast(@alignCast(ptr));
+            return writer.print("{" ++ spec ++ "}", .{vp.*});
+        }
+    }.write;
+}
+
+fn writeErased(format: Format, value: Value, writer: *std.Io.Writer) !void {
+    switch (value) {
+        .null => return writer.writeAll("null"),
+        .string => |s| return writeString(format, s, writer),
+        .int => |n| return writer.print("{d}", .{n}),
+        .uint => |n| return writer.print("{d}", .{n}),
+        .float32 => |n| return writer.print("{d}", .{n}),
+        .float64 => |n| return writer.print("{d}", .{n}),
+        .boolean => |b| return writer.writeAll(if (b) "true" else "false"),
+        .formatter => |f| return f.writeFn(f.ptr, writer),
+        .log_fmt => |f| return f.writeFn(f.ptr, writer),
+    }
+}
+
+fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void {
     if (format == .pretty) {
         return writer.writeAll(value);
     }
@@ -329,7 +437,7 @@ pub const LogFormatWriter = struct {
     pub fn write(self: LogFormatWriter, key: []const u8, value: anytype) !void {
         const writer = self.writer;
         try writer.print(" {s}=", .{key});
-        try writeValue(.logfmt, value, writer);
+        try writeErased(.logfmt, Value.init(&value), writer);
     }
 };
 
@@ -369,7 +477,7 @@ test "log: data" {
 
     {
         try logTo(.browser, .err, "nope", .{}, &aw.writer);
-        try testing.expectEqual("$time=1739795092929 $scope=browser $level=error $msg=nope\n", aw.written());
+        try testing.expectEqual("$time=1739795092929 $scope=browser $level=error $msg=\"nope\"\n", aw.written());
     }
 
     {
@@ -406,7 +514,7 @@ test "log: string escape" {
     var aw = std.Io.Writer.Allocating.init(testing.allocator);
     defer aw.deinit();
 
-    const prefix = "$time=1739795092929 $scope=app $level=error $msg=test ";
+    const prefix = "$time=1739795092929 $scope=app $level=error $msg=\"test\" ";
     {
         try logTo(.app, .err, "test", .{ .string = "hello world" }, &aw.writer);
         try testing.expectEqual(prefix ++ "string=\"hello world\"\n", aw.written());

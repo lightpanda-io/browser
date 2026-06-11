@@ -129,11 +129,12 @@ pub const Caught = struct {
         try writer.print("{s}caught: {any}", .{ separator, self.caught });
     }
 
-    pub fn logFmt(self: Caught, comptime prefix: []const u8, writer: anytype) !void {
-        try writer.write(prefix ++ ".exception", self.exception orelse "???");
-        try writer.write(prefix ++ ".stack", self.stack orelse "na");
-        try writer.write(prefix ++ ".line", self.line);
-        try writer.write(prefix ++ ".caught", self.caught);
+    pub fn logFmt(self: Caught, prefix: []const u8, writer: anytype) !void {
+        var buf: [64]u8 = undefined;
+        try writer.write(try std.fmt.bufPrint(&buf, "{s}.exception", .{prefix}), self.exception orelse "???");
+        try writer.write(try std.fmt.bufPrint(&buf, "{s}.stack", .{prefix}), self.stack orelse "na");
+        try writer.write(try std.fmt.bufPrint(&buf, "{s}.line", .{prefix}), self.line);
+        try writer.write(try std.fmt.bufPrint(&buf, "{s}.caught", .{prefix}), self.caught);
     }
 
     pub fn jsonStringify(self: Caught, jw: anytype) !void {
