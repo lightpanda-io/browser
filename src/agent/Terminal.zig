@@ -937,6 +937,10 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     }
 }
 
+pub fn setIdleCallback(fun: ?*const c.ic_idle_fun_t, arg: ?*anyopaque) void {
+    c.ic_set_idle_callback(fun, arg);
+}
+
 pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
     // Kitty-keyboard "disambiguate" (Ctrl+Enter as a distinct CSI-u, not bare
     // \r) only while isocline reads: while active, Ctrl-C arrives as a CSI-u

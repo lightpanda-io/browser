@@ -381,6 +381,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         };
         // The model-list cache fills lazily on the first `/model` completion,
         // so startup never blocks on the network.
+        Terminal.setIdleCallback(&idlePump, @ptrCast(self));
     }
 
     return self;
@@ -401,6 +402,12 @@ pub fn deinit(self: *Agent) void {
     for (self.available_providers) |p| self.allocator.free(p);
     self.allocator.free(self.available_providers);
     self.allocator.destroy(self);
+}
+
+/// isocline idle hook; returns the delay in ms before the next invocation.
+fn idlePump(arg: ?*anyopaque) callconv(.c) c_long {
+    const self: *Agent = @ptrCast(@alignCast(arg.?));
+    return self.session.idleSlice();
 }
 
 /// Create a fresh browser session and wire its cancel hook back to this agent

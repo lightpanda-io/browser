@@ -401,6 +401,20 @@ pub fn runner(self: *Session, opts: Runner.Opts) !Runner {
     return Runner.init(self, opts);
 }
 
+/// Page transfers run on the session thread's curl multi; left unserviced
+/// while the frontend waits on input they die on curl's wall-clock timeout.
+/// Returns how long the caller may block before pumping again.
+pub fn idleSlice(self: *Session) u31 {
+    const quiet_ms = 250;
+    self.processDestroyQueues();
+    var r = self.runner(.{}) catch return quiet_ms;
+    const result = r.tick(.{ .ms = 25 }) catch return quiet_ms;
+    return switch (result) {
+        .done => quiet_ms,
+        .ok => |next_ms| @intCast(@min(next_ms, quiet_ms)),
+    };
+}
+
 pub fn scheduleNavigation(self: *Session, frame: *Frame) !void {
     return self.currentPage().?.scheduleNavigation(frame);
 }
