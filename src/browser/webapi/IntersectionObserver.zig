@@ -22,6 +22,7 @@ const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const MediaQuery = @import("../css/MediaQuery.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -208,12 +209,12 @@ fn calculateIntersection(
     const root_rect = if (self._root) |root|
         root.getBoundingClientRect(frame)
     else
-        // Simplified viewport - assume 1920x1080 for now
+        // Simplified viewport sourced from the single MediaQuery.Viewport.default.
         DOMRect{
             ._x = 0.0,
             ._y = 0.0,
-            ._width = 1920.0,
-            ._height = 1080.0,
+            ._width = @floatFromInt(MediaQuery.Viewport.default.width),
+            ._height = @floatFromInt(MediaQuery.Viewport.default.height),
         };
 
     // For a headless browser without real layout, we treat all elements as fully visible.

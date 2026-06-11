@@ -23,6 +23,7 @@ const builtin = @import("builtin");
 const js = @import("../js/js.zig");
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
+const MediaQuery = @import("../css/MediaQuery.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
@@ -56,7 +57,9 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 // Faux-layout viewport height. Exposed as window.innerHeight and used to decide
 // whether an element is already within view (e.g. scrollIntoViewIfNeeded).
-const DEFAULT_INNER_HEIGHT: u32 = 1080;
+// Sourced from the single MediaQuery.Viewport.default so the cascade,
+// matchMedia and the window/screen dimensions stay in sync.
+const DEFAULT_INNER_HEIGHT: u32 = MediaQuery.Viewport.default.height;
 
 const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
@@ -1010,8 +1013,8 @@ pub const JsApi = struct {
     pub const isSecureContext = bridge.property(false, .{ .template = false });
 
     // [Replaceable] (CSSOM-View): writable so assignment overwrites rather than throws.
-    pub const innerWidth = bridge.property(1920, .{ .template = false, .readonly = false });
-    pub const innerHeight = bridge.property(DEFAULT_INNER_HEIGHT, .{ .template = false, .readonly = false });
+    pub const innerWidth = bridge.property(MediaQuery.Viewport.default.width, .{ .template = false, .readonly = false });
+    pub const innerHeight = bridge.property(MediaQuery.Viewport.default.height, .{ .template = false, .readonly = false });
     pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
 
     pub const opener = bridge.accessor(Window.getOpener, null, .{});
