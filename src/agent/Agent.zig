@@ -77,6 +77,100 @@ const default_system_prompt = browser_tools.driver_guidance ++
     \\  the Credentials section above) before reporting unavailable.
 ;
 
+/// Skill-like documentation for writing Lightpanda agent script
+/// Used in the system prompt of the `/save` command.
+const script_skill =
+    \\# Writing Lightpanda agent scripts
+    \\
+    \\Run with:
+    \\
+    \\```console
+    \\./lightpanda agent script.js
+    \\```
+    \\
+    \\## Mental model (get this right first)
+    \\
+    \\The script runs in its **own V8 context** — neither the page nor Node.js:
+    \\
+    \\- No `window`, `document`, DOM, `localStorage` — read pages with `extract(...)`, run page-side JS only via `evaluate("...")`.
+    \\- No `require`, `process`, `fs`, npm. Standard ECMAScript built-ins only (`JSON`, `Map`, template literals, …).
+    \\- All primitives are **synchronous and blocking**. Never wrap them in `async`/`await`/`.then` — `const data = extract({...})`, not `await extract(...)`. Top-level `await` is a `SyntaxError` (classic script); promise callbacks only run after the script body ends.
+    \\- Page `evaluate("...")` cannot see script variables — interpolate values into the string. Script code cannot see page variables.
+    \\- Variables persist across navigations within one run, so cross-page aggregation is plain JS.
+    \\- The **last top-level expression is the script's output**, printed automatically (objects/arrays as JSON). End with the bare result: `extract({...});` or `results;`. No `console.log(JSON.stringify(...))`, no top-level `return` (illegal).
+    \\
+    \\## Primitives
+    \\
+    \\| Call | Notes |
+    \\|------|-------|
+    \\| `goto(url[, { timeout }])` | Returns at `load`. Default timeout 10000 ms. Throws on failure; a **timeout does NOT throw** — it returns a "did not finish loading" status string. |
+    \\| `extract(schema)` | The only primitive returning a real JS value (object/array). See schema below. |
+    \\| `evaluate(script[, { url, timeout, save }])` | Page-side JS escape hatch; returns text (JSON for objects/arrays). |
+    \\| `click(sel)` / `hover(sel)` | |
+    \\| `fill(sel, value)` / `selectOption(sel, value)` | |
+    \\| `setChecked(sel[, checked])` | `checked` defaults to `true`. |
+    \\| `press(sel, key)` / `press(null, key)` / `press({ key })` | Selector first! `press("Enter")` binds "Enter" to `selector` and fails. |
+    \\| `scroll()` / `scroll({ x, y })` | |
+    \\| `waitForSelector(sel[, { timeout }])` | `waitFor*` default timeout 5000 ms. |
+    \\| `waitForScript(js[, { timeout }])` | Re-evaluates page JS until truthy. |
+    \\| `waitForState(state[, { timeout }])` | `"load"`, `"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`, `"done"`. |
+    \\
+    \\Calling convention: leading positionals + optional trailing options object, or one object with everything (`waitForSelector("#row", { timeout: 2000 })` ≡ `waitForSelector({ selector: "#row", timeout: 2000 })`). A bare option positional (`waitForSelector("#row", 2000)`) and a field passed both ways are `invalid arguments`. `null` skips a positional. Arguments must be JSON-serializable.
+    \\
+    \\CSS selectors only — `backendNodeId`s don't exist here. Standard CSS only: no jQuery `:contains()` or Playwright `:has-text()`.
+    \\
+    \\## extract schema
+    \\
+    \\Keys = output field names; values pick what to lift (not a JSON Schema):
+    \\
+    \\```js
+    \\const { stories } = extract({
+    \\  stories: [{
+    \\    selector: "tr.athing",          // one record per match
+    \\    limit: 5,
+    \\    fields: {                        // resolved relative to each match
+    \\      title: ".titleline > a",      // first match's text (null if missing)
+    \\      url: { selector: ".titleline > a", attr: "href" },
+    \\      text: ""                       // "" = the matched element's own text
+    \\    }
+    \\  }]
+    \\});
+    \\```
+    \\
+    \\- `"sel"` → first match's text; `["sel"]` → all matches' text; `{ selector, attr }` / `[{ selector, attr }]` → attribute(s); `limit: N` caps any array form.
+    \\- Every value is a string or null — parse numbers in script logic.
+    \\- Empty arrays are valid results; if **every** field misses, extract throws ("no schema selector matched any element") → your selectors are wrong, not the page empty.
+    \\- An object schema always returns an object (destructure it); a bare array schema returns the array directly.
+    \\- No `save:` option in scripts — keep results in variables.
+    \\
+    \\## Best practices
+    \\
+    \\1. **Navigate, settle, read.** After `goto` on a dynamic page (feeds, search results, comment threads), call `waitForState("networkidle")` or `waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
+    \\2. **Check `goto` when completeness matters** — it returns a status string instead of throwing on timeout.
+    \\3. **Aggregate in the script, not the page.** List-to-detail: extract the list, then loop `goto`/`extract` per item, assembling plain JS objects.
+    \\4. **Prefer `extract` over `evaluate`.** `evaluate` is for page behavior extraction can't express, not a default.
+    \\5. **Credentials via `$LP_*` placeholders** in any string argument (`fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
+    \\6. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
+    \\7. **Let failures fail.** Primitives throw on error and stop the script — only `try/catch` where you have a real fallback (e.g. optional cookie banner: `try { click("#accept") } catch {}`).
+    \\8. **End with the bare result expression.** `console.log` is for debug output only and doesn't JSON-format objects.
+    \\9. Modern, readable JS: `const`/`let`, `for (const x of xs)`, template literals, destructuring, 2-space indent.
+    \\
+    \\## Common errors
+    \\
+    \\| Error | Cause / fix |
+    \\|-------|-------------|
+    \\| `document is not defined` | DOM API in script context → use `extract` or `evaluate` |
+    \\| `require is not defined` | Not Node.js |
+    \\| `no page loaded - run goto(url) first` | Page primitive before navigation |
+    \\| `invalid arguments` | Wrong arity/shape, non-JSON value, or a field set both positionally and in options |
+    \\| `extract: no schema selector matched any element` | All schema fields missed → fix selectors |
+    \\| `press` fails with one string arg | Selector-first: use `press(null, "Enter")` or `press({ key: "Enter" })` |
+;
+
+// Sytem prompt of the `/save` command
+// With the save instructions and the skill-like agent script documentation.
+const save_system_prompt = browser_tools.save_synthesis_prompt ++ "\n" ++ script_skill;
+
 const synthesis_prompt =
     \\You have used your tool budget or cannot finish the exploration.
     \\Give your best final answer NOW based ONLY on what you actually observed
@@ -899,6 +993,13 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
 
     self.conversation.ensureSystemPrompt() catch return self.failSave("out of memory");
 
+    // Swap the dedicated save_system_prompt in as the system prompt for this one turn;
+    // regular turns keep the driver prompt. (`messages[0]` is the system
+    // message — rollback and prune never touch it.)
+    const plain_system = self.conversation.messages.items[0].content;
+    self.conversation.messages.items[0].content = save_system_prompt;
+    defer self.conversation.messages.items[0].content = plain_system;
+
     const ma = self.conversation.arena.allocator();
     const baseline = self.conversation.messages.items.len;
 
@@ -972,9 +1073,6 @@ fn rememberSavePath(self: *Agent, path: []const u8) void {
 fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]const u8) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
-    try w.writeAll(browser_tools.save_synthesis_prompt);
-    try w.writeAll("\n\nBuiltin functions to prefer (call them as JS functions):\n");
-    try save.renderBuiltinCatalog(w);
     const recorded = self.save_buffer.bytes();
     if (recorded.len > 0) {
         try w.writeAll("\nCommands and JS that actually ran this session:\n");

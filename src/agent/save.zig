@@ -93,22 +93,6 @@ pub fn writeContentFile(path: []const u8, content: []const u8, mode: Mode) !void
     if (content.len > 0 and content[content.len - 1] != '\n') try file.writeAll("\n");
 }
 
-/// Document the recorded browser tools — the subset callable from a saved
-/// script — with full descriptions, so the model gets each function's argument
-/// dialect (e.g. `extract`'s schema format) without the tool schemas a no-tools
-/// synthesis turn omits.
-pub fn renderBuiltinCatalog(w: *std.Io.Writer) !void {
-    for (Schema.all()) |s| {
-        if (!s.tool.isRecorded()) continue;
-        try w.print("\n{s}(", .{s.tool_name});
-        for (s.required, 0..) |req, i| {
-            if (i != 0) try w.writeAll(", ");
-            try w.writeAll(req);
-        }
-        try w.print("):\n{s}\n", .{s.description});
-    }
-}
-
 /// Strip a surrounding ```` ```lang … ``` ```` markdown fence if the model
 /// wrapped its output in one despite being told not to.
 pub fn stripCodeFence(text: []const u8) []const u8 {
@@ -154,19 +138,6 @@ test "parseCommand: rejects path-like filenames" {
     try std.testing.expectError(error.InvalidFilename, parseCommand("../evil.js"));
     try std.testing.expectError(error.InvalidFilename, parseCommand("/tmp/x.js"));
     try std.testing.expectError(error.UnterminatedQuote, parseCommand("\"unclosed.js"));
-}
-
-test "renderBuiltinCatalog: lists recorded tools, omits read-only ones" {
-    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer out.deinit();
-    try renderBuiltinCatalog(&out.writer);
-    const text = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, text, "goto(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "extract(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "click(") != null);
-    // tree/markdown are read-only and not callable from a saved script.
-    try std.testing.expect(std.mem.indexOf(u8, text, "tree(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "markdown(") == null);
 }
 
 test "stripCodeFence: unwraps a fenced block and passes plain text through" {
