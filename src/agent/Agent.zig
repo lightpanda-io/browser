@@ -148,7 +148,7 @@ const script_skill =
     \\1. **Navigate, settle, read.** After `goto` on a dynamic page (feeds, search results, comment threads), call `waitForState("networkidle")` or `waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
     \\2. **Check `goto` when completeness matters** — it returns a status string instead of throwing on timeout.
     \\3. **Aggregate in the script, not the page.** List-to-detail: extract the list, then loop `goto`/`extract` per item, assembling plain JS objects.
-    \\4. **Prefer `extract` over `evaluate`.** `evaluate` is for page behavior extraction can't express, not a default.
+    \\4. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `evaluate` block is always wrong: lift the raw strings with `extract`, then trim/split/parse them in top-level JS. Reserve `evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every `goto`/reload, while script variables persist.
     \\5. **Credentials via `$LP_*` placeholders** in any string argument (`fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
     \\6. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
     \\7. **Let failures fail.** Primitives throw on error and stop the script — only `try/catch` where you have a real fallback (e.g. optional cookie banner: `try { click("#accept") } catch {}`).

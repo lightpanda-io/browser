@@ -156,6 +156,13 @@ pub const save_synthesis_prompt =
     \\- Reasoning you did between tool calls — comparing, filtering, picking,
     \\  aggregating across pages — becomes plain top-level JavaScript, so the
     \\  script reaches the result without you.
+    \\- Read pages with extract(schema): CSS selectors lift text and
+    \\  attributes as strings, and every trim/split/regex/parse/merge on
+    \\  those strings is top-level JavaScript. Do NOT write an evaluate(...)
+    \\  that querySelects the page and massages the result — that is
+    \\  extract + top-level JS. evaluate is ONLY for what must execute
+    \\  inside the page and no builtin can do. Top-level variables also
+    \\  persist across goto/reload; everything in the page context is wiped.
     \\Stay faithful to the calls that worked: same arguments and options each
     \\one actually used. Do NOT add a `timeout` (or any option) the session
     \\didn't use. Never round-trip a result through `lp.*`, and never append
@@ -173,10 +180,13 @@ pub const save_script_rules =
     \\- The builtins are synchronous and the file runs as a classic script:
     \\  `const data = extract({...})` — never async/await/.then. Top-level
     \\  `await` is a SyntaxError; top-level `return` is illegal.
-    \\- Plain top-level JavaScript handles logic (loops, cross-page
-    \\  aggregation, filtering); it runs in the script context, not the page.
-    \\  evaluate(...) is the page-side escape hatch only — it cannot see
-    \\  script variables, so interpolate values into its string.
+    \\- Read pages with extract(schema); all processing of the returned
+    \\  strings (trim, split, parse, merge, loops, cross-page aggregation)
+    \\  is plain top-level JavaScript in the script context. evaluate(...)
+    \\  is ONLY for JS that must run inside the page and no builtin covers —
+    \\  never a querySelector-and-parse block. It cannot see script
+    \\  variables (interpolate values into its string), and page state is
+    \\  wiped by every goto/reload while script variables persist.
     \\- The last top-level expression is the script's output, printed
     \\  automatically (objects/arrays as JSON). End with the bare result —
     \\  `extract({...});` or `results;` — no console.log or JSON.stringify.
