@@ -1762,7 +1762,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const sm = &self._script_manager.base;
     const was_evaluating = sm.is_evaluating;
     sm.is_evaluating = true;
-    defer sm.is_evaluating = was_evaluating;
+    defer sm.endEvaluationWindow(was_evaluating);
 
     var response = http_client.syncRequest(arena, .{
         .url = resolved,

@@ -95,6 +95,10 @@ owner: Owner,
 // used to prevent recursive evaluation
 is_evaluating: bool,
 
+// an evaluate() arrived while is_evaluating was set, signal to call evaluate()
+// when is_evaluating becomes false (to prevent re-entrancy)
+evaluate_pending: bool = false,
+
 // Only once this is true can deferred scripts be run
 static_scripts_done: bool,
 
@@ -167,6 +171,7 @@ pub fn reset(self: *ScriptManagerBase) void {
     clearList(&self.async_scripts);
     clearList(&self.ready_scripts);
     self.static_scripts_done = false;
+    self.evaluate_pending = false;
 }
 
 fn clearList(list: *std.DoublyLinkedList) void {
@@ -288,7 +293,7 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
 
     const was_evaluating = self.is_evaluating;
     self.is_evaluating = true;
-    defer self.is_evaluating = was_evaluating;
+    defer self.endEvaluationWindow(was_evaluating);
 
     var client = self.client;
     while (true) {
@@ -351,13 +356,12 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
     }
 
     // It's possible, but unlikely, for client.request to immediately finish
-    // a request, thus calling our callback. We generally don't want a call
-    // from v8 (which is why we're here), to result in a new script evaluation.
-    // So we block even the slightest change that `client.request` immediately
-    // executes a callback.
+    // a request, thus calling our callback. We don't want that to trigger a
+    // script evaluation while we're still setting the request up (the script
+    // isn't fully linked into our lists yet).
     const was_evaluating = self.is_evaluating;
     self.is_evaluating = true;
-    defer self.is_evaluating = was_evaluating;
+    defer self.endEvaluationWindow(was_evaluating);
 
     const owner = self.owner;
     const session = self.owner.session();
@@ -406,63 +410,97 @@ pub fn scriptCreatedParseDone(self: *ScriptManagerBase) void {
 pub fn evaluate(self: *ScriptManagerBase) void {
     if (self.is_evaluating) {
         // It's possible for a script.eval to cause evaluate to be called again.
+        // Signal that this happened so that, once the outer evaluate finishes,
+        // we evaluate() again to catch what we're skipping now.
+        self.evaluate_pending = true;
         return;
     }
 
     self.is_evaluating = true;
-    defer self.is_evaluating = false;
+    defer self.endEvaluationWindow(false);
 
-    while (self.ready_scripts.popFirst()) |n| {
-        var script: *Script = @fieldParentPtr("node", n);
-        switch (script.extra) {
-            .frame => {
-                // Only .async mode reaches ready_scripts (defer stays in
-                // defer_scripts, normal is sync and never queued).
-                defer script.deinit();
-                script.eval();
-            },
-            .import_async => |ia| {
-                if (script.status < 200 or script.status > 299) {
+    while (true) {
+        self.evaluate_pending = false;
+
+        while (self.ready_scripts.popFirst()) |n| {
+            var script: *Script = @fieldParentPtr("node", n);
+            switch (script.extra) {
+                .frame => {
+                    // Only .async mode reaches ready_scripts (defer stays in
+                    // defer_scripts, normal is sync and never queued).
+                    defer script.deinit();
+                    script.eval();
+                },
+                .import_async => |ia| {
+                    if (script.status < 200 or script.status > 299) {
+                        script.deinit();
+                        ia.callback(ia.data, error.FailedToLoad);
+                    } else {
+                        ia.callback(ia.data, .{
+                            .shared = false,
+                            .script = script,
+                            .buffer = script.source.remote,
+                        });
+                    }
+                },
+                .import => unreachable, // .import doesn't go through ready_scripts
+                .preload => unreachable, // .preload is buffered in the map, never queued
+            }
+        }
+
+        if (self.static_scripts_done) {
+            while (self.defer_scripts.first) |n| {
+                var script: *Script = @fieldParentPtr("node", n);
+                if (script.complete == false) break;
+                defer {
+                    _ = self.defer_scripts.popFirst();
                     script.deinit();
-                    ia.callback(ia.data, error.FailedToLoad);
-                } else {
-                    ia.callback(ia.data, .{
-                        .shared = false,
-                        .script = script,
-                        .buffer = script.source.remote,
-                    });
                 }
-            },
-            .import => unreachable, // .import doesn't go through ready_scripts
-            .preload => unreachable, // .preload is buffered in the map, never queued
+                // Only frame scripts populate defer_scripts.
+                script.eval();
+            }
         }
-    }
 
-    if (self.static_scripts_done == false) {
-        // We can only execute deferred scripts if
-        // 1 - all the normal scripts are done
-        // 2 - we've finished parsing the HTML and at least queued all the scripts
-        // The last one isn't obvious, but it's possible for self.scripts to
-        // be empty not because we're done executing all the normal scripts
-        // but because we're done executing some (or maybe none), but we're still
-        // parsing the HTML.
-        return;
-    }
-
-    while (self.defer_scripts.first) |n| {
-        var script: *Script = @fieldParentPtr("node", n);
-        if (script.complete == false) return;
-        defer {
-            _ = self.defer_scripts.popFirst();
-            script.deinit();
+        // A script.eval above may have pumped the http client (module
+        // imports, preloads); anything that completed during the pump had
+        // its evaluate() swallowed by the re-entrancy guard, so re-drain
+        // here rather than relying on a future doneCallback that may never
+        // come.
+        if (self.evaluate_pending) {
+            continue;
         }
-        // Only frame scripts populate defer_scripts.
-        script.eval();
+
+        if (self.static_scripts_done == false) {
+            // We can only execute deferred scripts if
+            // 1 - all the normal scripts are done
+            // 2 - we've finished parsing the HTML and at least queued all the scripts
+            // The last one isn't obvious, but it's possible for self.scripts to
+            // be empty not because we're done executing all the normal scripts
+            // but because we're done executing some (or maybe none), but we're still
+            // parsing the HTML.
+            return;
+        }
+        if (self.defer_scripts.first != null) {
+            // Head of the defer list is still in flight; its doneCallback
+            // re-enters evaluate.
+            return;
+        }
+        break;
     }
 
     // Frame wrapper uses this to fire documentIsLoaded and
     // scriptsCompletedLoading. Null for workers.
-    if (self.tail_hook) |hook| hook(self);
+    if (self.tail_hook) |hook| {
+        hook(self);
+    }
+}
+
+pub fn endEvaluationWindow(self: *ScriptManagerBase, was_evaluating: bool) void {
+    self.is_evaluating = was_evaluating;
+    if (was_evaluating == false and self.evaluate_pending) {
+        // we have something to evaluate
+        self.evaluate();
+    }
 }
 
 pub const Script = struct {
