@@ -291,7 +291,7 @@ fn mcpThread(allocator: std.mem.Allocator, app: *App) void {
 
     var stdin_buf: [64 * 1024]u8 = undefined;
     var stdin = std.fs.File.stdin().reader(&stdin_buf);
-    lp.mcp.router.processRequests(mcp_server, &stdin.interface) catch |err| {
+    lp.mcp.router.processRequests(mcp_server, &stdin.interface, std.fs.File.stdin()) catch |err| {
         log.fatal(.mcp, "mcp error", .{ .err = err });
     };
 }

@@ -66,6 +66,21 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
+/// Pump the browser session for one short slice while the server waits on
+/// input. Page transfers live on this thread's curl multi; left unserviced
+/// between tool calls they die on curl's wall-clock timeout. Returns how
+/// long the caller may block before pumping again.
+pub fn idle(self: *Self) u31 {
+    const quiet_ms = 250;
+    self.session.processDestroyQueues();
+    var runner = self.session.runner(.{}) catch return quiet_ms; // no page yet
+    const result = runner.tick(.{ .ms = 25 }) catch return quiet_ms;
+    return switch (result) {
+        .done => quiet_ms,
+        .ok => |next_ms| @intCast(@min(next_ms, quiet_ms)),
+    };
+}
+
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
     return self.transport.sendError(id, code, message);
 }
@@ -119,7 +134,7 @@ test "MCP.Server - Integration: synchronous smoke test" {
     var server = try Self.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
 
-    try router.processRequests(server, &in_reader);
+    try router.processRequests(server, &in_reader, null);
 
     try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1, .result = .{ .protocolVersion = "2024-11-05" } }, out_alloc.writer.buffered());
 }
