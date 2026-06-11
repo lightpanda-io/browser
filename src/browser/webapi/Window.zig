@@ -54,8 +54,10 @@ const Notification = @import("../../Notification.zig");
 const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
-// Faux-layout viewport height. Exposed as window.innerHeight and used to decide
-// whether an element is already within view (e.g. scrollIntoViewIfNeeded).
+// Faux-layout viewport dimensions. Exposed as window.innerWidth/innerHeight and
+// used to decide whether an element is already within view (e.g.
+// scrollIntoViewIfNeeded). Overridable via CDP Emulation.setDeviceMetricsOverride.
+const DEFAULT_INNER_WIDTH: u32 = 1920;
 const DEFAULT_INNER_HEIGHT: u32 = 1080;
 
 const Allocator = std.mem.Allocator;
@@ -103,6 +105,12 @@ _scroll_pos: struct {
     .y = 0,
     .state = .done,
 },
+// Viewport dimensions exposed as window.innerWidth/innerHeight. Defaults match
+// the faux-layout size; overridable via CDP Emulation.setDeviceMetricsOverride.
+_viewport: struct {
+    width: u32 = DEFAULT_INNER_WIDTH,
+    height: u32 = DEFAULT_INNER_HEIGHT,
+} = .{},
 // A cross origin wrapper for this window
 _cross_origin_wrapper: CrossOriginWindow,
 
@@ -202,6 +210,14 @@ pub fn setScrollX(_: *Window, value: js.Value) void {
 
 pub fn setScrollY(_: *Window, value: js.Value) void {
     replaceGlobalProperty(value, "scrollY");
+}
+
+pub fn setInnerWidth(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "innerWidth");
+}
+
+pub fn setInnerHeight(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "innerHeight");
 }
 
 pub fn setPageXOffset(_: *Window, value: js.Value) void {
@@ -705,8 +721,19 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
-pub fn getInnerHeight(_: *const Window) u32 {
-    return DEFAULT_INNER_HEIGHT;
+pub fn getInnerWidth(self: *const Window) u32 {
+    return self._viewport.width;
+}
+
+pub fn getInnerHeight(self: *const Window) u32 {
+    return self._viewport.height;
+}
+
+// Set the viewport, e.g. from CDP Emulation.setDeviceMetricsOverride. A width or
+// height of 0 means "do not override that dimension" (matching the CDP default).
+pub fn setViewport(self: *Window, width: u32, height: u32) void {
+    if (width > 0) self._viewport.width = width;
+    if (height > 0) self._viewport.height = height;
 }
 
 const ScrollToOpts = union(enum) {
@@ -1010,8 +1037,8 @@ pub const JsApi = struct {
     pub const isSecureContext = bridge.property(false, .{ .template = false });
 
     // [Replaceable] (CSSOM-View): writable so assignment overwrites rather than throws.
-    pub const innerWidth = bridge.property(1920, .{ .template = false, .readonly = false });
-    pub const innerHeight = bridge.property(DEFAULT_INNER_HEIGHT, .{ .template = false, .readonly = false });
+    pub const innerWidth = bridge.accessor(Window.getInnerWidth, Window.setInnerWidth, .{});
+    pub const innerHeight = bridge.accessor(Window.getInnerHeight, Window.setInnerHeight, .{});
     pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
 
     pub const opener = bridge.accessor(Window.getOpener, null, .{});
