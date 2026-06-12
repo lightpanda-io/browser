@@ -39,19 +39,7 @@
 
 const std = @import("std");
 
-pub const Viewport = struct {
-    width: u32,
-    height: u32,
-
-    /// Mirrors the hardcoded values exposed by `Window.innerWidth` /
-    /// `innerHeight`, `Screen.width` / `height`, and `VisualViewport.width` /
-    /// `height`. When viewport emulation lands, this is the single helper to
-    /// rewire so the cascade and `matchMedia` move together.
-    pub const default = Viewport{
-        .width = 1920,
-        .height = 1080,
-    };
-};
+const Viewport = @import("../Viewport.zig");
 
 /// Returns true if `query` matches the given viewport. Comma-separated
 /// queries are evaluated independently and combined with OR.

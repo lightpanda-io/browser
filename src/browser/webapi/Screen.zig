@@ -18,6 +18,7 @@
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Viewport = @import("../Viewport.zig");
 const EventTarget = @import("EventTarget.zig");
 
 pub fn registerTypes() []const type {
@@ -54,9 +55,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.property(1920, .{ .template = false });
-    pub const height = bridge.property(1080, .{ .template = false });
-    pub const availWidth = bridge.property(1920, .{ .template = false });
+    pub const width = bridge.property(Viewport.default.width, .{ .template = false });
+    pub const height = bridge.property(Viewport.default.height, .{ .template = false });
+    pub const availWidth = bridge.property(Viewport.default.width, .{ .template = false });
     pub const availHeight = bridge.property(1040, .{ .template = false });
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });

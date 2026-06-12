@@ -20,6 +20,7 @@
 const js = @import("../../js/js.zig");
 const EventTarget = @import("../EventTarget.zig");
 const MediaQuery = @import("../../css/MediaQuery.zig");
+const Viewport = @import("../../Viewport.zig");
 
 const MediaQueryList = @This();
 
@@ -40,10 +41,10 @@ pub fn getMedia(self: *const MediaQueryList) []const u8 {
 
 /// Re-evaluates the stored query against the current viewport on every call
 /// so the result stays in sync if viewport emulation later lands. The
-/// viewport currently comes from `MediaQuery.Viewport.default` (1920×1080),
-/// matching `Window.innerWidth` / `innerHeight`.
+/// viewport currently comes from `Viewport.default` (1920×1080), matching
+/// `Window.innerWidth` / `innerHeight`.
 pub fn getMatches(self: *const MediaQueryList) bool {
-    return MediaQuery.matches(self._media, MediaQuery.Viewport.default);
+    return MediaQuery.matches(self._media, Viewport.default);
 }
 
 // TODO: once viewport emulation lands, `change` events need to fire on
