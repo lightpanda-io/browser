@@ -25,7 +25,10 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const Schema = lp.Schema;
 
-pub const Mode = enum { append, replace };
+/// How a save treats an existing destination file. `update` is synthesis-only:
+/// the model merges the saved script with the new material and returns the
+/// complete result, so at the file level it writes like `replace`.
+pub const Mode = enum { append, replace, update };
 
 pub const Command = struct { filename: ?[]const u8, prompt: ?[]const u8 };
 
@@ -73,6 +76,17 @@ pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
     return error.NameCollision;
 }
 
+/// Read a previously saved script back for revision. Returns null when there
+/// is nothing to feed the model: the file does not exist or is blank.
+pub fn readScript(arena: std.mem.Allocator, path: []const u8) !?[]const u8 {
+    const content = std.fs.cwd().readFileAlloc(arena, path, 1024 * 1024) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    if (std.mem.trim(u8, content, &std.ascii.whitespace).len == 0) return null;
+    return content;
+}
+
 pub fn fileExists(path: []const u8) !bool {
     std.fs.cwd().access(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
@@ -82,7 +96,7 @@ pub fn fileExists(path: []const u8) !bool {
 }
 
 pub fn writeContentFile(path: []const u8, content: []const u8, mode: Mode) !void {
-    const file = try std.fs.cwd().createFile(path, .{ .truncate = mode == .replace });
+    const file = try std.fs.cwd().createFile(path, .{ .truncate = mode != .append });
     defer file.close();
     if (mode == .append) {
         try file.seekFromEnd(0);
