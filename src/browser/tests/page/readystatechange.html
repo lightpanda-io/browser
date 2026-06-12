@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=readystatechange>
+  // This script runs while document.readyState === 'loading'. A readystatechange
+  // listener registered here must observe every subsequent readiness change.
+  // Per "update the current document readiness", the document fires
+  // readystatechange on each change to document.readyState — twice during a
+  // normal load: interactive, then complete.
+  // https://html.spec.whatwg.org/multipage/dom.html#current-document-readiness
+  const states = [];
+  const order = [];
+
+  testing.expectEqual('loading', document.readyState);
+
+  document.addEventListener('readystatechange', function(e) {
+    testing.expectEqual(document, e.target);
+    states.push(document.readyState);
+    order.push('readystatechange:' + document.readyState);
+  });
+  document.addEventListener('DOMContentLoaded', function() {
+    order.push('DOMContentLoaded');
+  });
+
+  testing.onload(() => {
+    // readystatechange fires twice, in readiness order.
+    testing.expectEqual(['interactive', 'complete'], states);
+    // The interactive change fires before DOMContentLoaded; the complete change
+    // fires before the load event (this onload callback runs on load).
+    testing.expectEqual(
+      ['readystatechange:interactive', 'DOMContentLoaded', 'readystatechange:complete'],
+      order,
+    );
+    testing.expectEqual('complete', document.readyState);
+  });
+</script>

@@ -932,6 +932,8 @@ pub fn documentIsLoaded(self: *Frame) void {
 }
 
 pub fn _documentIsLoaded(self: *Frame) !void {
+    try self.dispatchReadyStateChange();
+
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self._page);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
@@ -944,6 +946,18 @@ pub fn _documentIsLoaded(self: *Frame) !void {
         .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
+}
+
+// Fired at the document on every change to document.readyState: before
+// DOMContentLoaded (readiness -> interactive) and before the load event
+// (readiness -> complete). Does not bubble.
+// https://html.spec.whatwg.org/multipage/dom.html#current-document-readiness
+fn dispatchReadyStateChange(self: *Frame) !void {
+    const event = try Event.initTrusted(.wrap("readystatechange"), .{}, self._page);
+    try self._event_manager.dispatch(
+        self.document.asEventTarget(),
+        event,
+    );
 }
 
 pub fn scriptsCompletedLoading(self: *Frame) void {
@@ -1007,6 +1021,7 @@ pub fn documentIsComplete(self: *Frame) void {
 
 fn _documentIsComplete(self: *Frame) !void {
     self.document._ready_state = .complete;
+    try self.dispatchReadyStateChange();
 
     // Run load events before window.load.
     try self.dispatchLoad();
