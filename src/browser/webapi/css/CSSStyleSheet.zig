@@ -147,6 +147,7 @@ fn atRuleTypeFor(keyword_with_prefix: []const u8) CSSRule.Type {
     if (eql(keyword, "font-feature-values")) return .font_feature_values;
     if (eql(keyword, "viewport")) return .viewport;
     if (eql(keyword, "document")) return .document;
+    if (eql(keyword, "layer")) return .layer;
     return .unknown;
 }
 
@@ -218,4 +219,8 @@ test "WebApi: CSSStyleSheet" {
     const filter: testing.LogFilter = .init(&.{.js});
     defer filter.deinit();
     try testing.htmlRunner("css/stylesheet.html", .{});
+}
+
+test "WebApi: layer @-rule cascade" {
+    try testing.htmlRunner("css/layer_at_rule_cascade.html", .{});
 }
