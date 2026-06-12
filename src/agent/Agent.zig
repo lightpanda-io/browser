@@ -887,7 +887,7 @@ fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]c
     if (self.save_path) |saved| {
         if (filename) |name| {
             if (!std.mem.eql(u8, saved, name)) {
-                self.terminal.printError("already saving to {s}; use /save without a filename to append to it", .{saved});
+                self.terminal.printError("already saving to {s}; use /save without a filename to update it", .{saved});
                 return null;
             }
         }
@@ -988,8 +988,30 @@ fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
 fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8) void {
     const provider_client = self.ai_client.?;
 
+    // With nothing recorded and no prompt, a re-synthesis has nothing to act
+    // on — it would just re-roll the previous output.
+    if (self.save_buffer.bytes().len == 0 and prompt == null) {
+        if (self.save_path) |saved| {
+            self.terminal.printWarning("nothing ran since the last save; run more commands or give a prompt to revise {s}, e.g. /save <what to change>", .{saved});
+        } else {
+            self.terminal.printWarning("nothing to save yet; run some commands or give a prompt, e.g. /save <what the script should do>", .{});
+        }
+        return;
+    }
+
     const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
     const path = resolved.path;
+
+    // For synthesis, append means revise: the saved script is handed back to
+    // the model, which returns the complete updated script, so the write
+    // itself always truncates.
+    const previous_script: ?[]const u8 = if (resolved.mode == .append)
+        save.readScript(arena, path) catch |err| {
+            self.terminal.printError("failed to read {s}: {s}", .{ path, @errorName(err) });
+            return;
+        }
+    else
+        null;
 
     self.conversation.ensureSystemPrompt() catch return self.failSave("out of memory");
 
@@ -1003,7 +1025,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     const ma = self.conversation.arena.allocator();
     const baseline = self.conversation.messages.items.len;
 
-    const user_msg = self.buildSaveSynthesisMessage(ma, prompt) catch return self.failSave("out of memory");
+    const user_msg = self.buildSaveSynthesisMessage(ma, path, previous_script, prompt) catch return self.failSave("out of memory");
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
 
     self.terminal.spinner.start();
@@ -1050,7 +1072,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
 
-    save.writeContentFile(path, script, resolved.mode) catch |err| {
+    save.writeContentFile(path, script, .replace) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1070,12 +1092,17 @@ fn rememberSavePath(self: *Agent, path: []const u8) void {
     self.save_path = dup;
 }
 
-fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, prompt: ?[]const u8) ![]const u8 {
+fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, path: []const u8, previous_script: ?[]const u8, prompt: ?[]const u8) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
+    if (previous_script) |script| {
+        try w.print("\nThe script saved to {s} so far — revise or extend it per the rest of this message, and output the complete updated script:\n", .{path});
+        try w.writeAll(script);
+    }
     const recorded = self.save_buffer.bytes();
     if (recorded.len > 0) {
-        try w.writeAll("\nCommands and JS that actually ran this session:\n");
+        const since: []const u8 = if (previous_script != null) " since the last save" else " this session";
+        try w.print("\nCommands and JS that actually ran{s}:\n", .{since});
         try w.writeAll(recorded);
     }
     if (prompt) |p| {
@@ -1144,7 +1171,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .save => self.terminal.printInfo(
-                "/save [filename.js] [prompt] — save the session to [filename.js] (a random session-*.js if omitted). With an LLM, synthesizes an idiomatic script from the session and the optional prompt; with --no-llm, dumps the recorded actions verbatim.",
+                "/save [filename.js] [prompt] — save the session to [filename.js] (a random session-*.js if omitted). With an LLM, synthesizes an idiomatic script from the session and the optional prompt, and a repeat /save with a prompt revises the saved script; with --no-llm, dumps the recorded actions verbatim.",
                 .{},
             ),
             .load => self.terminal.printInfo(
