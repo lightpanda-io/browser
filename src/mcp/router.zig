@@ -10,14 +10,18 @@ const log = lp.log;
 /// `handleToolList`, `handleToolCall` methods. `handleResourceList` /
 /// `handleResourceRead` are optional — servers that don't expose
 /// resources can omit them and the router returns `MethodNotFound`
-/// automatically.
-pub fn processRequests(server: anytype, reader: *std.io.Reader) !void {
+/// automatically. When `input` is the file behind `reader`, the server must
+/// also expose `idle`: the router then pumps the browser session between
+/// requests instead of blocking on the read.
+pub fn processRequests(server: anytype, reader: *std.io.Reader, input: ?std.fs.File) !void {
     var arena: std.heap.ArenaAllocator = .init(server.allocator);
     defer arena.deinit();
 
     while (true) {
         _ = arena.reset(.retain_capacity);
         const aa = arena.allocator();
+
+        if (input) |file| idleUntilInput(server, reader, file);
 
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
@@ -38,6 +42,20 @@ pub fn processRequests(server: anytype, reader: *std.io.Reader) !void {
                 log.err(.mcp, "Failed to handle message", .{ .err = err, .msg = trimmed });
             };
         }
+    }
+}
+
+/// Returns once `reader` holds a delimiter or the fd is readable —
+/// `takeDelimiter` may still block on a partial line, but MCP clients write
+/// whole lines. A full buffer also returns so StreamTooLong surfaces.
+fn idleUntilInput(server: anytype, reader: *std.io.Reader, file: std.fs.File) void {
+    while (std.mem.indexOfScalar(u8, reader.buffered(), '\n') == null and
+        reader.bufferedLen() < reader.buffer.len)
+    {
+        const wait_ms = server.idle();
+        var fds = [_]std.posix.pollfd{.{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+        const ready = std.posix.poll(&fds, wait_ms) catch return;
+        if (ready > 0) return;
     }
 }
 

@@ -66,6 +66,10 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
+pub fn idle(self: *Self) u31 {
+    return self.session.idleSlice();
+}
+
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
     return self.transport.sendError(id, code, message);
 }
@@ -119,7 +123,7 @@ test "MCP.Server - Integration: synchronous smoke test" {
     var server = try Self.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
 
-    try router.processRequests(server, &in_reader);
+    try router.processRequests(server, &in_reader, null);
 
     try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1, .result = .{ .protocolVersion = "2024-11-05" } }, out_alloc.writer.buffered());
 }

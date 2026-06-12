@@ -78,6 +78,7 @@ pub const ParseError = error{
     DuplicateField,
     MalformedKv,
     PositionalNotAllowed,
+    PositionalMustComeFirst,
     UnterminatedQuote,
     UnsupportedEscape,
     InvalidValue,
@@ -224,7 +225,13 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
         list.appendAssumeCapacity(.{ .key = self.required[0], .value = stripQuotes(tokens[0]) });
     }
     for (tokens[kv_start..]) |tok| {
-        const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return error.MalformedKv;
+        const eq = std.mem.indexOfScalar(u8, tok, '=') orelse {
+            // `/extract save=x '{…}'` — the value would have bound fine as a
+            // leading positional, so point at the ordering instead of the
+            // generic kv complaint.
+            if (self.required.len == 1 and !leading_positional) return error.PositionalMustComeFirst;
+            return error.MalformedKv;
+        };
         if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
         const key = tok[0..eq];
         // Reject typos like `checke=false` that would otherwise be silently

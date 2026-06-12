@@ -55,10 +55,12 @@ Tell it what you want:
 ```
 
 The agent navigates, extracts, prints the answer. When you're happy with
-the result, save it:
+the result, save it and replay it right away to check it holds up without
+the LLM:
 
 ```
 ❯ /save hn-top-story.js
+❯ /load hn-top-story.js
 ❯ /quit
 ```
 
@@ -79,7 +81,7 @@ data across pages), see the [tutorial](agent-tutorial.md).
 # Force a specific provider, ignoring auto-detection
 ./lightpanda agent --provider anthropic
 
-# Slash-commands-only REPL, no LLM at all
+# REPL without an LLM: /goto, /extract, ... work; plain English doesn't
 ./lightpanda agent --no-llm
 
 # One-shot: ask a question, print the answer to stdout, exit
@@ -96,9 +98,10 @@ The whole value of a saved script is that it keeps working after you walk away.
   for as an `extract()` call; vague prompts produce vague recordings.
 - **Be specific about the page.** "Go to news.ycombinator.com" is much
   better than "find me what's on Hacker News".
-- **Check the file with `cat your-script.js` before running it.** If the
-  extracted data isn't in the script, the recording missed something. Try
-  rewording your prompt.
+- **Check the file with `cat your-script.js` before running it.** The
+  script holds the *calls*, not the data, so look for an `extract(...)`
+  whose schema covers the fields you asked for. If there isn't one, the
+  recording missed something — try rewording your prompt.
 - **When the page changes and a saved script breaks**, re-run with the LLM,
   get an updated answer, save again. You only pay the LLM when something
   genuinely changed.
@@ -150,11 +153,12 @@ tokens.
 `--effort <none|minimal|low|medium|high|xhigh>` sets the per-turn reasoning
 budget for thinking models. It maps to each provider's native
 reasoning-effort knob and is ignored by non-thinking models. The REPL
-defaults to `low` so turns stay snappy. `--task` and script runs default to
-`medium` where answer quality matters more than per-turn latency. Higher
+defaults to `low` so turns stay snappy. `--task` defaults to `medium`
+where answer quality matters more than per-turn latency. Higher
 effort can mean fewer tool calls per task (the model plans better), so it's
 a real tradeoff rather than a pure slowdown. Change it live in the REPL
-with `/effort`; selection persists in `.lp-agent.zon`.
+with `/effort`; selection persists in `.lp-agent.zon`. Script replay makes
+no LLM calls, so effort doesn't apply there.
 
 The default depends on how you launched, which is easy to miss:
  
@@ -162,28 +166,35 @@ The default depends on how you launched, which is easy to miss:
 |----------------|----------------|--------------------------------------|
 | REPL           | `low`          | Keeps turns snappy                   |
 | `--task`       | `medium`       | Answer quality matters more          |
-| Script replay  | `medium`       | Same: correctness over latency       |
 
 ## Slash commands
 
 The REPL uses a small slash-command language for browser actions. Each line
-is either a slash command, a `#` comment, a blank line, or (when an LLM is
-configured) a natural-language prompt.
+you type at the prompt is either a slash command, a `#` comment, a blank
+line, or (when an LLM is configured) a natural-language prompt.
 
 Slash commands accept:
 
 - A single positional value, when the tool has exactly one required field.
-  `/goto 'https://example.com'`, `/extract '{"karma":"#karma"}'`.
+  `/goto 'https://example.com'`. The value can itself be quoted JSON when
+  that's what the field takes: `/extract '{"karma":"#karma"}'` passes the
+  string to extract's one required field, `schema`.
 - `key=value` pairs. Values may be bare or quoted; strings with whitespace
-  must be quoted. `/fill selector='#email' value='user@x.com'`.
+  must be quoted. `/fill selector='#email' value='user@x.com'`. A positional
+  and `key=value` pairs can be mixed, but the positional must come first:
+  `/extract '{"karma":"#karma"}' save=me`.
 - A raw `{json}` blob, handed straight to the tool.
   `/findElement {"role":"button"}`.
 
 Tools whose selector is optional (`/click`, `/hover`, `/findElement`) take
 no positional and must use `key=value` form: `/click selector='a.login'`.
+`/help <tool>` prints any tool's JSON schema — required fields, optional
+fields, and types.
 
 Quoting is content-aware: `'…'`, `"…"`, and triple-quoted `'''…'''` /
-`"""…"""` for values that mix quote styles or span multiple lines.
+`"""…"""` for values that mix quote styles or span multiple lines. Paste a
+multi-line command and the REPL keeps the whole paste as one input; typed
+line by line, Enter submits at each newline.
 
 ### LLM-driven helpers
 
@@ -209,7 +220,7 @@ These don't drive the browser, they control the REPL itself:
 | `/effort <level>`        | Sets reasoning budget. Saved to `.lp-agent.zon`.   |
 | `/verbosity <level>`     | Tunes the log level. Levels: low, medium, high.    |
 | `/usage`                 | Prints cumulative token usage and cache hit rate.  |
-| `/save [file.js]`        | Writes the session to a script.                    |
+| `/save [file] [prompt]`  | Writes the session to a script. `.js` is appended to the name if missing; trailing words guide the synthesizer.|
 | `/load <path>`           | Runs a script from disk against the current session.|
 | `/clear`                 | Forgets the conversation (history, usage, recorded actions, node IDs); keeps the page and cookies.|
 | `/reset`                 | Full reset: everything `/clear` does, plus a fresh browser session, dropping the page, cookies, and storage.|
@@ -223,15 +234,28 @@ a completely clean browser (no cookies, no current page, no storage).
 
 ## REPL features
 
-- **Status bar.** A line under the prompt shows the active model and quick
-  hints. In `--no-llm` it reads "basic REPL — slash commands only." It drops
-  the least-important segments first when the terminal is narrow.
+- **Ghost hints.** There's no separate status line; guidance renders as dim
+  ghost text after the cursor and disappears as you type over it. It
+  previews the rest of the first matching command name, the argument shape
+  of the tool you're typing (`/evaluate ` shows
+  `<script> [url=…] [timeout=…] [save=…]`), and contextual nudges like
+  "press Ctrl-D again to exit".
 - **JS mode (`!`).** Type `!` on an empty prompt to toggle a scratchpad
   where the whole line runs as page-side JavaScript, same context as
-  `/evaluate` so `document` and `window` are in scope. Handy for poking at
-  a page without wrapping every line in `/evaluate`. `$LP_*` refs are still
-  resolved at execution, console output is echoed back, and `Esc` exits.
-  JS-mode lines are not recorded.
+  `/evaluate` so `document` and `window` are in scope. The prompt switches
+  to `!` with a "JS mode - esc to exit" ghost hint. Handy for poking at
+  a page without wrapping every line in `/evaluate`:
+
+  ```
+  ❯ !
+  ! document.title
+  "Hacker News"
+  ! document.querySelectorAll('tr.athing').length
+  30
+  ```
+
+  `$LP_*` refs are still resolved at execution, console output is echoed
+  back, and `Esc` exits. JS-mode lines are not recorded.
 - **Tab completion** (case-insensitive). Cycles through `/<tool>` and meta
   slash commands. The dim grey suffix shown after the cursor is the first
   match.
@@ -247,16 +271,23 @@ a completely clean browser (no cookies, no current page, no storage).
 lift off the page. The result is printed to stdout as a single JSON object.
 
 ```console
-# Log into the demo and grab the dashboard title and visible cards.
-# Site-scoped vars (LP_<SITE>_<FIELD>) avoid collisions when you have
-# credentials for several sites; the unprefixed form is the fallback.
-/goto 'https://demo-browser.lightpanda.io/'
-/acceptCookies
-/fill selector='#email' value='$LP_DEMO_USERNAME'
-/fill selector='#password' value='$LP_DEMO_PASSWORD'
-/click selector='button[type="submit"]'
-/waitForSelector '.dashboard'
-/extract '{"title": ".dashboard h1", "cards": [".dashboard .card .name"]}'
+# The demo shop renders its product data with an XHR after the initial
+# HTML, so wait for it to land before extracting.
+/goto 'https://demo-browser.lightpanda.io/campfire-commerce/'
+/waitForSelector '#product-features li'
+/extract '{"name": "#product-name", "price": "#product-price", "related": [{"selector": "#product-related div", "fields": {"name": "h4", "price": "p"}}]}'
+```
+
+```json
+{
+  "name": "Outdoor Odyssey Nomad Backpack 60 liters",
+  "price": "$244.99",
+  "related": [
+    { "name": "Outdoor Odyssey Hiking Poles", "price": "$79.99" },
+    { "name": "Outdoor Odyssey Sleeping Bag", "price": "$129.99" },
+    { "name": "Outdoor Odyssey Water Bottle", "price": "$19.99" }
+  ]
+}
 ```
 
 Supported value forms:
@@ -286,7 +317,7 @@ the `save=` modifier:
 ```console
 /goto 'https://news.ycombinator.com/'
 
-/extract save=front '''
+/extract '''
 {
   "stories": [{
     "selector": "tr.athing",
@@ -297,7 +328,7 @@ the `save=` modifier:
     }
   }]
 }
-'''
+''' save=front
 
 /evaluate '''
 console.log(lp.front.stories[0].title);
@@ -351,7 +382,15 @@ See [agent-script.md](agent-script.md) for the full script format reference.
 `/save [file.js]` writes the current session to a `.js` file. `/load <path>`
 runs a script from disk against the current session.
 
-`/save` works one of two ways:
+`/save` arguments are positional: the first token is the filename (`.js`
+is appended when missing, so `/save test` writes `test.js`; quote names
+with spaces) and anything after it is passed to the synthesizer as
+guidance — `/save hn.js keep only the extraction`. With no argument at
+all, the file gets an auto-generated `session-*.js` name.
+
+`/save` works one of two ways, decided by the session rather than by any
+argument — if the REPL has an LLM you get synthesis, with `--no-llm` (or
+no resolved provider) you get the deterministic transcription:
 
 - **With `--no-llm`** it transcribes the session deterministically.
   State-mutating commands (`/goto`, `/click`, `/fill`, `/scroll`, `/hover`,
@@ -376,8 +415,19 @@ runs a script from disk against the current session.
 ```
 
 `--task` runs a single user turn, prints the final answer to stdout, and
-exits. Combine with `-a <path>` / `--attach <path>` (repeatable) to feed
-local files to providers that accept attachments. Text files are inlined
+exits. On a TTY a spinner on stderr shows the tool currently running while
+the agent works; raise `--verbosity` for the full `[tool/result]` trace.
+
+Combine with `-a <path>` / `--attach <path>` (repeatable) to feed
+local files to providers that accept attachments — for example, a list of
+items to look up, or a document to cross-check against a live page:
+
+```console
+./lightpanda agent -a invoice.pdf \
+  --task "open shop.example.com/orders/1042 and check the order total matches the attached invoice"
+```
+
+Text files are inlined
 into the prompt (max 512 KiB each); binary files (image, audio, pdf) are
 base64-encoded inline (max 20 MiB each). Unsupported MIME types fail before
 any browser work runs.

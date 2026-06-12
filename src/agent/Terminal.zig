@@ -954,6 +954,10 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     }
 }
 
+pub fn setIdleCallback(fun: ?*const c.ic_idle_fun_t, arg: ?*anyopaque) void {
+    c.ic_set_idle_callback(fun, arg);
+}
+
 pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
     // Kitty-keyboard "disambiguate" (Ctrl+Enter as a distinct CSI-u, not bare
     // \r) only while isocline reads: while active, Ctrl-C arrives as a CSI-u
@@ -1432,6 +1436,7 @@ pub fn printSlashParseError(self: *Terminal, err: Schema.ParseError, name: []con
         error.UnknownField => "unknown field (typo?)",
         error.DuplicateField => "the same field was supplied twice (check for case-variants like Selector vs selector)",
         error.PositionalNotAllowed => "positional only works for commands with one required field. Use key=value",
+        error.PositionalMustComeFirst => "the positional value must come before key=value pairs",
         error.UnterminatedQuote => "unterminated quote",
         error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
         error.InvalidValue => "invalid value (check argument type)",

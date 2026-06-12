@@ -394,6 +394,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         };
         // The model-list cache fills lazily on the first `/model` completion,
         // so startup never blocks on the network.
+        Terminal.setIdleCallback(&idlePump, @ptrCast(self));
     }
 
     return self;
@@ -414,6 +415,12 @@ pub fn deinit(self: *Agent) void {
     for (self.available_providers) |p| self.allocator.free(p);
     self.allocator.free(self.available_providers);
     self.allocator.destroy(self);
+}
+
+/// isocline idle hook; returns the delay in ms before the next invocation.
+fn idlePump(arg: ?*anyopaque) callconv(.c) c_long {
+    const self: *Agent = @ptrCast(@alignCast(arg.?));
+    return self.session.idleSlice();
 }
 
 /// Create a fresh browser session and wire its cancel hook back to this agent
@@ -927,11 +934,12 @@ fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]c
 }
 
 fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
-    const parsed = save.parseCommand(rest) catch |err| {
+    const parsed = save.parseCommand(arena, rest) catch |err| {
         const msg: []const u8 = switch (err) {
             error.UnterminatedQuote => "unterminated filename quote",
             error.EmptyFilename => "filename cannot be empty",
             error.InvalidFilename => "filename must be a local file name, not a path",
+            error.OutOfMemory => "out of memory",
         };
         self.terminal.printError("{s}", .{msg});
         return;

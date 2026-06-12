@@ -32,31 +32,32 @@ pub const Mode = enum { append, replace, update };
 
 pub const Command = struct { filename: ?[]const u8, prompt: ?[]const u8 };
 
-/// Split `/save` arguments into an optional filename and an optional trailing
-/// natural-language prompt. A quoted leading token is always a filename; an
-/// unquoted one is a filename only if it ends in `.js` (else the whole argument
-/// is the prompt, and a name is chosen automatically).
-pub fn parseCommand(rest: []const u8) !Command {
+/// Split `/save` arguments positionally: the first (optionally quoted) token
+/// is the filename — `.js` is appended when missing — and everything after it
+/// is a natural-language prompt for the synthesizer. The filename may alias
+/// `rest` or be arena-allocated.
+pub fn parseCommand(arena: std.mem.Allocator, rest: []const u8) !Command {
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
     if (trimmed.len == 0) return .{ .filename = null, .prompt = null };
 
+    var name: []const u8 = undefined;
+    var after: []const u8 = undefined;
     if (trimmed[0] == '\'' or trimmed[0] == '"') {
         const quote = trimmed[0];
         const end = std.mem.indexOfScalarPos(u8, trimmed, 1, quote) orelse return error.UnterminatedQuote;
-        const name = trimmed[1..end];
-        try validateFilename(name);
-        const rest_prompt = std.mem.trim(u8, trimmed[end + 1 ..], &std.ascii.whitespace);
-        return .{ .filename = name, .prompt = if (rest_prompt.len == 0) null else rest_prompt };
+        name = trimmed[1..end];
+        after = trimmed[end + 1 ..];
+    } else {
+        const tok_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
+        name = trimmed[0..tok_end];
+        after = trimmed[tok_end..];
     }
-
-    const tok_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
-    const first = trimmed[0..tok_end];
-    if (std.mem.endsWith(u8, first, ".js")) {
-        try validateFilename(first);
-        const rest_prompt = std.mem.trim(u8, trimmed[tok_end..], &std.ascii.whitespace);
-        return .{ .filename = first, .prompt = if (rest_prompt.len == 0) null else rest_prompt };
+    try validateFilename(name);
+    if (!std.mem.endsWith(u8, name, ".js")) {
+        name = try std.mem.concat(arena, u8, &.{ name, ".js" });
     }
-    return .{ .filename = null, .prompt = trimmed };
+    const prompt = std.mem.trim(u8, after, &std.ascii.whitespace);
+    return .{ .filename = name, .prompt = if (prompt.len == 0) null else prompt };
 }
 
 fn validateFilename(name: []const u8) !void {
@@ -119,39 +120,68 @@ pub fn stripCodeFence(text: []const u8) []const u8 {
 }
 
 test "parseCommand: filename only" {
-    const r = try parseCommand("out.js");
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = try parseCommand(arena.allocator(), "out.js");
     try std.testing.expectEqualStrings("out.js", r.filename.?);
     try std.testing.expect(r.prompt == null);
 }
 
 test "parseCommand: filename and prompt" {
-    const r = try parseCommand("out.js summarize the login flow");
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = try parseCommand(arena.allocator(), "out.js summarize the login flow");
     try std.testing.expectEqualStrings("out.js", r.filename.?);
     try std.testing.expectEqualStrings("summarize the login flow", r.prompt.?);
 }
 
 test "parseCommand: quoted filename keeps trailing prompt" {
-    const r = try parseCommand("\"my flow.js\"  do X");
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = try parseCommand(arena.allocator(), "\"my flow.js\"  do X");
     try std.testing.expectEqualStrings("my flow.js", r.filename.?);
     try std.testing.expectEqualStrings("do X", r.prompt.?);
 }
 
-test "parseCommand: prompt only when first token is not a .js name" {
-    const r = try parseCommand("make a login script");
-    try std.testing.expect(r.filename == null);
-    try std.testing.expectEqualStrings("make a login script", r.prompt.?);
+test "parseCommand: appends .js to a bare name" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = try parseCommand(arena.allocator(), "test");
+    try std.testing.expectEqualStrings("test.js", r.filename.?);
+    try std.testing.expect(r.prompt == null);
+}
+
+test "parseCommand: appends .js and keeps trailing prompt" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = try parseCommand(arena.allocator(), "test keep only the extraction");
+    try std.testing.expectEqualStrings("test.js", r.filename.?);
+    try std.testing.expectEqualStrings("keep only the extraction", r.prompt.?);
+}
+
+test "parseCommand: appends .js to a quoted name" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = try parseCommand(arena.allocator(), "'my flow' do X");
+    try std.testing.expectEqualStrings("my flow.js", r.filename.?);
+    try std.testing.expectEqualStrings("do X", r.prompt.?);
 }
 
 test "parseCommand: empty is all null" {
-    const r = try parseCommand("   ");
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = try parseCommand(arena.allocator(), "   ");
     try std.testing.expect(r.filename == null);
     try std.testing.expect(r.prompt == null);
 }
 
 test "parseCommand: rejects path-like filenames" {
-    try std.testing.expectError(error.InvalidFilename, parseCommand("../evil.js"));
-    try std.testing.expectError(error.InvalidFilename, parseCommand("/tmp/x.js"));
-    try std.testing.expectError(error.UnterminatedQuote, parseCommand("\"unclosed.js"));
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    try std.testing.expectError(error.InvalidFilename, parseCommand(aa, "../evil.js"));
+    try std.testing.expectError(error.InvalidFilename, parseCommand(aa, "/tmp/x.js"));
+    try std.testing.expectError(error.UnterminatedQuote, parseCommand(aa, "\"unclosed.js"));
 }
 
 test "stripCodeFence: unwraps a fenced block and passes plain text through" {
