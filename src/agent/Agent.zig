@@ -171,6 +171,19 @@ const script_skill =
 // With the save instructions and the skill-like agent script documentation.
 const save_system_prompt = browser_tools.save_synthesis_prompt ++ "\n" ++ script_skill;
 
+// Swapped in instead of `save_system_prompt` when the user message carries a
+// previously saved script: the "this session" framing above would otherwise
+// make the model discard it as out-of-scope.
+const save_revision_note =
+    \\This save REVISES an existing script, included in the user message. Its
+    \\goal spans every session that contributed to it, not just this one. Use
+    \\it as the base: keep its steps, structure, and output shape unchanged
+    \\except where this session's commands or the user's instruction require
+    \\a change, and add what this session contributes. Output the complete
+    \\updated script — never a fragment, diff, or continuation.
+;
+const save_revision_system_prompt = browser_tools.save_synthesis_prompt ++ "\n" ++ save_revision_note ++ "\n" ++ script_skill;
+
 const synthesis_prompt =
     \\You have used your tool budget or cannot finish the exploration.
     \\Give your best final answer NOW based ONLY on what you actually observed
@@ -891,7 +904,9 @@ fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]c
                 return null;
             }
         }
-        return .{ .path = saved, .mode = .append };
+        // A repeat save reuses the destination without re-asking: revision
+        // when a model can merge, plain append for the verbatim dump.
+        return .{ .path = saved, .mode = if (self.ai_client != null) .update else .append };
     } else if (filename) |name| {
         const exists = save.fileExists(name) catch |err| {
             self.terminal.printError("failed to inspect {s}: {s}", .{ name, @errorName(err) });
@@ -964,11 +979,27 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
     var header_buf: [256]u8 = undefined;
     const header = std.fmt.bufPrint(&header_buf, "{s} already exists. Pick save mode:", .{path}) catch
         "File already exists. Pick save mode:";
-    const idx = Terminal.promptNumberedChoice(header, std.meta.fieldNames(save.Mode), 0) catch {
+    const with_llm = self.ai_client != null;
+    const modes: []const save.Mode = if (with_llm)
+        &.{ .update, .append, .replace }
+    else
+        &.{ .append, .replace };
+    const labels: []const [:0]const u8 = if (with_llm)
+        &.{
+            "update — revise the saved script with this session's actions and the prompt",
+            "append — keep the file as-is and add the new script at the end",
+            "replace — discard the file and write a fresh script",
+        }
+    else
+        &.{
+            "append — add the recorded commands at the end",
+            "replace — overwrite with the recorded commands",
+        };
+    const idx = Terminal.promptNumberedChoice(header, labels, 0) catch {
         self.terminal.printInfo("Save cancelled.", .{});
         return null;
     };
-    return @enumFromInt(idx);
+    return modes[idx];
 }
 
 fn failSave(self: *Agent, reason: []const u8) void {
@@ -1002,10 +1033,10 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
     const path = resolved.path;
 
-    // For synthesis, append means revise: the saved script is handed back to
-    // the model, which returns the complete updated script, so the write
-    // itself always truncates.
-    const previous_script: ?[]const u8 = if (resolved.mode == .append)
+    // Only update feeds the saved script back to the model; append stays
+    // blind — the script is synthesized from this session alone and written
+    // after the existing content.
+    const previous_script: ?[]const u8 = if (resolved.mode == .update)
         save.readScript(arena, path) catch |err| {
             self.terminal.printError("failed to read {s}: {s}", .{ path, @errorName(err) });
             return;
@@ -1019,7 +1050,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     // regular turns keep the driver prompt. (`messages[0]` is the system
     // message — rollback and prune never touch it.)
     const plain_system = self.conversation.messages.items[0].content;
-    self.conversation.messages.items[0].content = save_system_prompt;
+    self.conversation.messages.items[0].content = if (previous_script != null) save_revision_system_prompt else save_system_prompt;
     defer self.conversation.messages.items[0].content = plain_system;
 
     const ma = self.conversation.arena.allocator();
@@ -1072,7 +1103,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
 
-    save.writeContentFile(path, script, .replace) catch |err| {
+    save.writeContentFile(path, script, resolved.mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1096,7 +1127,7 @@ fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, path: []con
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
     if (previous_script) |script| {
-        try w.print("\nThe script saved to {s} so far — revise or extend it per the rest of this message, and output the complete updated script:\n", .{path});
+        try w.print("\nThe previously saved script in {s}, the base you are revising:\n", .{path});
         try w.writeAll(script);
     }
     const recorded = self.save_buffer.bytes();

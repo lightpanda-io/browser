@@ -25,7 +25,10 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const Schema = lp.Schema;
 
-pub const Mode = enum { append, replace };
+/// How a save treats an existing destination file. `update` is synthesis-only:
+/// the model merges the saved script with the new material and returns the
+/// complete result, so at the file level it writes like `replace`.
+pub const Mode = enum { append, replace, update };
 
 pub const Command = struct { filename: ?[]const u8, prompt: ?[]const u8 };
 
@@ -93,7 +96,7 @@ pub fn fileExists(path: []const u8) !bool {
 }
 
 pub fn writeContentFile(path: []const u8, content: []const u8, mode: Mode) !void {
-    const file = try std.fs.cwd().createFile(path, .{ .truncate = mode == .replace });
+    const file = try std.fs.cwd().createFile(path, .{ .truncate = mode != .append });
     defer file.close();
     if (mode == .append) {
         try file.seekFromEnd(0);
