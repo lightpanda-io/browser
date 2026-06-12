@@ -140,39 +140,58 @@ pub const driver_guidance =
     \\
 ;
 
-/// Guidance for synthesizing a clean, replayable agent script from a session.
-/// Shared: the agent's `/save` feeds it to its own LLM; the MCP `save` tool
-/// hands it to the driving client as the tool description.
+/// Save-specific guidance: how to distill a finished session into a clean,
+/// replayable agent script. Deliberately free of script-language rules —
+/// the agent's `/save` pairs it with the full script-writing skill in its
+/// system prompt, and the MCP `save` tool appends `save_script_rules`.
 pub const save_synthesis_prompt =
-    \\Write a single Lightpanda agent script (.js) that reproduces what the user
-    \\set out to do this session. Infer the goal from the whole conversation and
-    \\keep only the steps a clean, repeatable script needs — drop failed attempts,
-    \\retries, exploratory reads (tree/markdown/extract probes), and corrections.
-    \\Pick the right layer for each step:
-    \\- builtins (goto, click, fill, extract, …) for actions and for reading data;
-    \\  extract is how you pull structured data out of a page.
-    \\- plain top-level JavaScript for logic — loops, cross-page aggregation,
-    \\  filtering, string building. It runs in the script, not the page.
-    \\- evaluate(...) only for page-side JavaScript no builtin can express. It is
-    \\  an escape hatch, not a default, and cannot see the script's variables —
-    \\  interpolate any value into its string.
-    \\Stay faithful to the recorded calls: same options each one actually used.
-    \\Do NOT add a `timeout` to goto (or any tool) unless the session
-    \\did. Never round-trip a result through `lp.*`, and never append no-op
-    \\extract(...) probes or `evaluate("return lp....")` tails to surface output.
-    \\The completion value — the last top-level expression — prints automatically
-    \\(objects and arrays as JSON), so end with the bare result expression: a final
-    \\`extract({...});`, or `results;` after an aggregation loop. No console.log,
-    \\JSON.stringify, or `return` (illegal at top level) needed.
-    \\Write modern, readable JavaScript: `for (const x of xs)`, `const`/`let` over
-    \\`var`, template literals, destructuring, 2-space indent (including multi-line
-    \\extract({...}) schemas).
-    \\The script runs as a classic script, so top-level `await` is a syntax error.
-    \\The builtins are synchronous — each returns its result directly, so never
-    \\wrap them in async/await, .then, or Promises (`const data = extract(...)`,
-    \\not `await extract(...)`). evaluate(...) may run async JS in the page, but
-    \\the call itself returns synchronously.
+    \\Distill this session into ONE Lightpanda agent script (.js) that, run
+    \\later on its own, redoes what the user set out to accomplish. You are
+    \\reproducing the user's goal, not replaying the transcript:
+    \\- Infer the goal from the whole conversation, including corrections —
+    \\  the user's final intent wins over their first phrasing.
+    \\- Keep only the steps a clean re-run needs, in the order that worked.
+    \\  Drop failed attempts, retries, dead ends, and exploratory reads
+    \\  (tree/markdown/extract probes that only informed your next move).
+    \\- Reasoning you did between tool calls — comparing, filtering, picking,
+    \\  aggregating across pages — becomes plain top-level JavaScript, so the
+    \\  script reaches the result without you.
+    \\- Read pages with extract(schema): CSS selectors lift text and
+    \\  attributes as strings, and every trim/split/regex/parse/merge on
+    \\  those strings is top-level JavaScript. Do NOT write an evaluate(...)
+    \\  that querySelects the page and massages the result — that is
+    \\  extract + top-level JS. evaluate is ONLY for what must execute
+    \\  inside the page and no builtin can do. Top-level variables also
+    \\  persist across goto/reload; everything in the page context is wiped.
+    \\Stay faithful to the calls that worked: same arguments and options each
+    \\one actually used. Do NOT add a `timeout` (or any option) the session
+    \\didn't use. Never round-trip a result through `lp.*`, and never append
+    \\no-op extract(...) probes or `evaluate("return lp....")` tails to
+    \\surface output.
     \\Output ONLY JavaScript source — no markdown fences, no commentary.
+;
+
+/// Script-language rules for consumers that never see the full
+/// script-writing skill: appended to the MCP `save` tool description so a
+/// driving client that only knows the tool surface can still write a valid
+/// script. The agent's `/save` covers all of this via its skill doc instead.
+pub const save_script_rules =
+    \\Script rules:
+    \\- The builtins are synchronous and the file runs as a classic script:
+    \\  `const data = extract({...})` — never async/await/.then. Top-level
+    \\  `await` is a SyntaxError; top-level `return` is illegal.
+    \\- Read pages with extract(schema); all processing of the returned
+    \\  strings (trim, split, parse, merge, loops, cross-page aggregation)
+    \\  is plain top-level JavaScript in the script context. evaluate(...)
+    \\  is ONLY for JS that must run inside the page and no builtin covers —
+    \\  never a querySelector-and-parse block. It cannot see script
+    \\  variables (interpolate values into its string), and page state is
+    \\  wiped by every goto/reload while script variables persist.
+    \\- The last top-level expression is the script's output, printed
+    \\  automatically (objects/arrays as JSON). End with the bare result —
+    \\  `extract({...});` or `results;` — no console.log or JSON.stringify.
+    \\- Modern, readable JS: `const`/`let`, `for (const x of xs)`, template
+    \\  literals, destructuring, 2-space indent.
 ;
 
 /// Reject paths that an untrusted MCP client could use to escape the
