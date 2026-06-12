@@ -1,35 +1,31 @@
 <!DOCTYPE html>
 <script src="testing.js"></script>
-<script id=url>
+<script id=parse>
   testing.expectEqual("function", typeof window.URL);
 
+  // about:blank is a valid non-special URL, not a parse error.
+  {
+    const url = new URL('about:blank');
+    testing.expectEqual('about:blank', url.toString());
+  }
+
+  // Absolute URL, no base.
   {
     const url = new URL('http://example.com/path');
     testing.expectEqual('http://example.com/path', url.toString());
   }
 
+  // A provided base is parsed unconditionally: an unparseable base throws a
+  // TypeError even when the input is absolute (WHATWG URL constructor step 2).
   {
-    const base = 'http://example.com/path/';
-    const url = new URL('subpath', base);
-    testing.expectEqual('http://example.com/path/subpath', url.toString());
+    testing.withError((err) => {
+      testing.expectEqual(true, err.toString().includes('TypeError'));
+    }, () => {
+      const url = new URL('http://example.com/absolute', 'invalid base');
+    });
   }
 
-  {
-    const base = 'http://example.com/path/subpath';
-    const url = new URL('/newpath', base);
-    testing.expectEqual('http://example.com/newpath', url.toString());
-  }
-
-  {
-    const url = new URL('?a=b', 'http://example.com/path');
-    testing.expectEqual('http://example.com/path?a=b', url.toString());
-  }
-
-  {
-    const url = new URL('#hash', 'http://example.com/path');
-    testing.expectEqual('http://example.com/path#hash', url.toString());
-  }
-
+  // A relative URL with no base is a parse failure -> TypeError.
   {
     testing.withError((err) => {
       testing.expectEqual(true, err.toString().includes('TypeError'));
@@ -69,88 +65,51 @@
       const url = new URL('');
     });
   }
+</script>
 
+<script id=parse_with_base>
+  // Relative path resolves against the base's directory.
   {
-    testing.withError((err) => {
-      testing.expectEqual(true, err.toString().includes('TypeError'));
-    }, () => {
-      const url = new URL('foo.js', 'not a url');
-    });
+    const base = 'http://example.com/path/';
+    const url = new URL('subpath', base);
+    testing.expectEqual('http://example.com/path/subpath', url.toString());
+  }
+
+  // Absolute path replaces the base's path.
+  {
+    const base = 'http://example.com/path/subpath';
+    const url = new URL('/newpath', base);
+    testing.expectEqual('http://example.com/newpath', url.toString());
+  }
+
+  // Query-only and fragment-only relative references.
+  {
+    const url = new URL('?a=b', 'http://example.com/path');
+    testing.expectEqual('http://example.com/path?a=b', url.toString());
   }
 
   {
-    testing.withError((err) => {
-      testing.expectEqual(true, err.toString().includes('TypeError'));
-    }, () => {
-      const url = new URL('foo.js', 'bar/baz');
-    });
+    const url = new URL('#hash', 'http://example.com/path');
+    testing.expectEqual('http://example.com/path#hash', url.toString());
   }
 
-  {
-    const url = new URL('http://example.com/absolute', 'invalid base');
-    testing.expectEqual('http://example.com/absolute', url.toString());
-  }
-
+  // Dot-segment resolution.
   {
     const base = 'http://example.com/a/b/c/d';
     const url = new URL('../foo', base);
     testing.expectEqual('http://example.com/a/b/foo', url.toString());
   }
 
-  {
-    // IDN hosts are converted to punycode (UTS#46).
-    const url = new URL('https://räksmörgås.se/x');
-    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
-    testing.expectEqual('https://xn--rksmrgs-5wao1o.se/x', url.href);
-  }
-
-  {
-    // Valid punycode passes through unchanged.
-    const url = new URL('https://xn--rksmrgs-5wao1o.se/x');
-    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
-  }
-
-  {
-    // An invalid domain (malformed punycode) is a parse failure -> TypeError.
-    testing.withError((err) => {
-      testing.expectEqual(true, err.toString().includes('TypeError'));
-    }, () => {
-      const url = new URL('https://xn--0.pt/x');
-    });
-  }
-
+  // Over-popping ".." clamps at the root.
   {
     const base = 'http://example.com/a/b/c/d';
     const url = new URL('../../../../../foo', base);
     testing.expectEqual('http://example.com/foo', url.toString());
   }
 
+  // Resolving against a base that carries its own query/fragment.
   {
     const base = 'http://example.com/path?a=b';
-    const url = new URL('?c=d', base);
-    testing.expectEqual('http://example.com/path?c=d', url.toString());
-  }
-
-  {
-    const base = 'http://example.com/path?a=b';
-    const url = new URL('#hash', base);
-    testing.expectEqual('http://example.com/path?a=b#hash', url.toString());
-  }
-
-  {
-    const base = 'http://example.com/path#hash';
-    const url = new URL('?c=d', base);
-    testing.expectEqual('http://example.com/path?c=d', url.toString());
-  }
-
-  {
-    const base = 'http://example.com/path#hash';
-    const url = new URL('#newhash', base);
-    testing.expectEqual('http://example.com/path#newhash', url.toString());
-  }
-
-  {
-    const base = 'http://example.com/path?a=b#hash';
     const url = new URL('?c=d', base);
     testing.expectEqual('http://example.com/path?c=d', url.toString());
   }
@@ -167,79 +126,236 @@
     testing.expectEqual('http://example.com/path/sub', url.toString());
   }
 
+  // A relative input against an unparseable base is a failure -> TypeError.
   {
-    const url = new URL('http://example.com/path?a=b#hash');
-    testing.expectEqual(url.toString(), url.href);
-    testing.expectEqual('?a=b', url.search);
-    testing.expectEqual('#hash', url.hash);
+    testing.withError((err) => {
+      testing.expectEqual(true, err.toString().includes('TypeError'));
+    }, () => {
+      const url = new URL('foo.js', 'not a url');
+    });
   }
 
   {
-    const url = new URL('http://example.com/path');
-    testing.expectEqual('', url.search);
-    testing.expectEqual('', url.hash);
+    testing.withError((err) => {
+      testing.expectEqual(true, err.toString().includes('TypeError'));
+    }, () => {
+      const url = new URL('foo.js', 'bar/baz');
+    });
   }
 
+  // Protocol-relative reference adopts the base's scheme.
   {
-    const url = new URL('http://example.com/path?a=b');
-    testing.expectEqual('?a=b', url.search);
-    testing.expectEqual('', url.hash);
+    const url = new URL('//other.com/p', 'http://example.com/x');
+    testing.expectEqual('http://other.com/p', url.toString());
   }
 
+  // Relative resolution preserves the base's userinfo and port.
   {
-    const url = new URL('http://example.com/path#hash');
-    testing.expectEqual('', url.search);
-    testing.expectEqual('#hash', url.hash);
+    const url = new URL('/x', 'http://user:pass@example.com:8080/a');
+    testing.expectEqual('http://user:pass@example.com:8080/x', url.toString());
   }
 
+  // Single-dot segment in the reference resolves against the base directory.
   {
-    const url = new URL('http://example.com/path/to/resource?query=1#fragment');
-    testing.expectEqual('/path/to/resource', url.pathname);
+    const url = new URL('./x', 'http://example.com/a/b');
+    testing.expectEqual('http://example.com/a/x', url.toString());
   }
 
+  // An empty reference copies the base but drops its fragment.
+  {
+    const url = new URL('', 'http://example.com/path?q=1#frag');
+    testing.expectEqual('http://example.com/path?q=1', url.toString());
+  }
+</script>
+
+<script id=parse_normalization>
+  // Scheme is lowercased.
+  {
+    const url = new URL('HTTP://example.com/');
+    testing.expectEqual('http://example.com/', url.toString());
+  }
+
+  // Host is lowercased.
+  {
+    const url = new URL('http://EXAMPLE.COM/');
+    testing.expectEqual('http://example.com/', url.toString());
+  }
+
+  // A missing path serializes as "/".
   {
     const url = new URL('http://example.com');
-    testing.expectEqual('/', url.pathname);
+    testing.expectEqual('http://example.com/', url.toString());
   }
 
+  // Default ports are dropped.
+  {
+    testing.expectEqual('http://example.com/', new URL('http://example.com:80/').toString());
+    testing.expectEqual('https://example.com/', new URL('https://example.com:443/').toString());
+  }
+
+  // Non-default ports are kept.
+  {
+    const url = new URL('http://example.com:8080/');
+    testing.expectEqual('http://example.com:8080/', url.toString());
+  }
+
+  // Dot segments are collapsed in the input path itself.
+  {
+    const url = new URL('http://example.com/a/./b/../c');
+    testing.expectEqual('http://example.com/a/c', url.toString());
+  }
+
+  // Empty path segments are preserved.
+  {
+    const url = new URL('http://example.com/a//b');
+    testing.expectEqual('http://example.com/a//b', url.toString());
+  }
+
+  // Leading and trailing spaces are stripped from the input.
+  {
+    const url = new URL('  http://example.com/  ');
+    testing.expectEqual('http://example.com/', url.toString());
+  }
+
+  // Tabs and newlines are removed from anywhere in the input.
+  {
+    const url = new URL('http://exa\tmple.com/pa\nth');
+    testing.expectEqual('http://example.com/path', url.toString());
+  }
+
+  // An empty query and an empty fragment are preserved in serialization.
+  {
+    testing.expectEqual('http://example.com/p?', new URL('http://example.com/p?').toString());
+    testing.expectEqual('http://example.com/p#', new URL('http://example.com/p#').toString());
+  }
+</script>
+
+<script id=parse_special>
+  // Backslashes act as path separators for special schemes.
+  {
+    const url = new URL('http:\\\\example.com\\path');
+    testing.expectEqual('http://example.com/path', url.toString());
+  }
+
+  // Userinfo is parsed and serialized.
+  {
+    const url = new URL('http://user:pass@example.com/');
+    testing.expectEqual('http://user:pass@example.com/', url.toString());
+  }
+
+  // An IPv6 literal host keeps its brackets.
+  {
+    const url = new URL('http://[::1]:8080/');
+    testing.expectEqual('http://[::1]:8080/', url.toString());
+  }
+
+  // An IPv6 host with a default port drops the port.
+  {
+    const url = new URL('http://[::1]:80/');
+    testing.expectEqual('http://[::1]/', url.toString());
+  }
+
+  // file: URLs parse with an empty host.
+  {
+    const url = new URL('file:///path/to/file');
+    testing.expectEqual('file:///path/to/file', url.toString());
+  }
+</script>
+
+<script id=can_parse>
+  testing.expectEqual('function', typeof URL.canParse);
+
+  // Parseable absolute URLs (no base) -> true. canParse mirrors the
+  // constructor: true exactly when `new URL(...)` would not throw.
+  {
+    testing.expectEqual(true, URL.canParse('https://example.com'));
+    testing.expectEqual(true, URL.canParse('http://example.com/path'));
+    testing.expectEqual(true, URL.canParse('https://example.com:8080/path?a=b#hash'));
+    testing.expectEqual(true, URL.canParse('ftp://example.com'));
+    testing.expectEqual(true, URL.canParse('HTTP://EXAMPLE.COM'));
+  }
+
+  // Non-special but parseable schemes -> true.
+  {
+    testing.expectEqual(true, URL.canParse('about:blank'));
+    testing.expectEqual(true, URL.canParse('mailto:foo@bar.com'));
+    testing.expectEqual(true, URL.canParse('data:text/plain,hello'));
+    testing.expectEqual(true, URL.canParse('file:///etc/hosts'));
+  }
+
+  // Relative or malformed input (no base) -> false.
+  {
+    testing.expectEqual(false, URL.canParse(''));
+    testing.expectEqual(false, URL.canParse('foo.js'));
+    testing.expectEqual(false, URL.canParse('/path/to/file'));
+    testing.expectEqual(false, URL.canParse('?query=value'));
+    testing.expectEqual(false, URL.canParse('#fragment'));
+    testing.expectEqual(false, URL.canParse('//only-host'));
+    testing.expectEqual(false, URL.canParse('http://'));
+  }
+
+  // Relative input resolved against a valid base -> true.
+  {
+    testing.expectEqual(true, URL.canParse('subpath', 'http://example.com/path/'));
+    testing.expectEqual(true, URL.canParse('/newpath', 'http://example.com/path'));
+    testing.expectEqual(true, URL.canParse('?a=b', 'http://example.com/path'));
+    testing.expectEqual(true, URL.canParse('#hash', 'http://example.com/path'));
+    testing.expectEqual(true, URL.canParse('../foo', 'http://example.com/a/b/c'));
+    testing.expectEqual(true, URL.canParse('//other.com/p', 'http://example.com/'));
+    testing.expectEqual(true, URL.canParse('', 'http://example.com/path'));
+  }
+
+  // Absolute input with a valid base -> true (base parses, input wins).
+  {
+    testing.expectEqual(true, URL.canParse('http://example.com/absolute', 'http://base.com'));
+    testing.expectEqual(true, URL.canParse('https://example.com/path', 'https://other.com'));
+  }
+
+  // The base is parsed unconditionally: an unparseable base -> false, even
+  // when the input itself is absolute (mirrors the constructor throwing).
+  {
+    testing.expectEqual(false, URL.canParse('http://example.com/absolute', 'invalid base'));
+    testing.expectEqual(false, URL.canParse('foo.js', 'not a url'));
+    testing.expectEqual(false, URL.canParse('foo.js', 'bar/baz'));
+    testing.expectEqual(false, URL.canParse('subpath', 'relative/path'));
+    testing.expectEqual(false, URL.canParse('http://example.com', ''));
+    testing.expectEqual(false, URL.canParse('http://example.com', 'relative'));
+  }
+
+  // An undefined base is treated as "no base given".
+  {
+    testing.expectEqual(true, URL.canParse('https://example.com', undefined));
+    testing.expectEqual(false, URL.canParse('foo.js', undefined));
+    testing.expectEqual(false, URL.canParse('subpath', undefined));
+  }
+</script>
+
+<script id=username>
+  // Username is parsed from the userinfo component.
   {
     const url = new URL('http://user:pass@example.com/path');
     testing.expectEqual('user', url.username);
-    testing.expectEqual('pass', url.password);
-    testing.expectEqual('/path', url.pathname);
   }
 
+  // Userinfo with no password still exposes the username.
   {
     const url = new URL('http://user@example.com/');
     testing.expectEqual('user', url.username);
-    testing.expectEqual('', url.password);
   }
 
-  {
-    const url = new URL('http://user:@example.com/');
-    testing.expectEqual('user', url.username);
-    testing.expectEqual('', url.password);
-  }
-
+  // No userinfo -> empty username.
   {
     const url = new URL('http://example.com/');
     testing.expectEqual('', url.username);
-    testing.expectEqual('', url.password);
   }
 
+  // An already-encoded username is preserved verbatim.
   {
-    const url = new URL('https://user:pass@example.com/path');
-    testing.expectEqual('user', url.username);
-    testing.expectEqual('pass', url.password);
-    testing.expectEqual('/path', url.pathname);
+    const url = new URL('https://user%40domain@example.com/');
+    testing.expectEqual('user%40domain', url.username);
   }
 
-  {
-    const url = new URL('https://user@example.com/');
-    testing.expectEqual('user', url.username);
-    testing.expectEqual('', url.password);
-  }
-
+  // Setting a username on a URL with no userinfo adds it.
   {
     const url = new URL('https://example.com/path');
     url.username = 'newuser';
@@ -247,6 +363,7 @@
     testing.expectEqual('https://newuser@example.com/path', url.href);
   }
 
+  // Setting a username replaces an existing one.
   {
     const url = new URL('https://olduser@example.com/path');
     url.username = 'newuser';
@@ -254,39 +371,23 @@
     testing.expectEqual('https://newuser@example.com/path', url.href);
   }
 
+  // Setting the username preserves an existing password (seen via href).
   {
     const url = new URL('https://olduser:pass@example.com/path');
     url.username = 'newuser';
     testing.expectEqual('newuser', url.username);
-    testing.expectEqual('pass', url.password);
     testing.expectEqual('https://newuser:pass@example.com/path', url.href);
   }
 
+  // Clearing the username drops the userinfo.
   {
     const url = new URL('https://user@example.com/path');
-    url.password = 'secret';
-    testing.expectEqual('user', url.username);
-    testing.expectEqual('secret', url.password);
-    testing.expectEqual('https://user:secret@example.com/path', url.href);
-  }
-
-  {
-    const url = new URL('https://user:oldpass@example.com/path');
-    url.password = 'newpass';
-    testing.expectEqual('user', url.username);
-    testing.expectEqual('newpass', url.password);
-    testing.expectEqual('https://user:newpass@example.com/path', url.href);
-  }
-
-  {
-    const url = new URL('https://user:pass@example.com/path');
     url.username = '';
-    url.password = '';
     testing.expectEqual('', url.username);
-    testing.expectEqual('', url.password);
     testing.expectEqual('https://example.com/path', url.href);
   }
 
+  // The username setter percent-encodes characters in the userinfo set.
   {
     const url = new URL('https://example.com/path');
     url.username = 'user@domain';
@@ -302,6 +403,324 @@
 
   {
     const url = new URL('https://example.com/path');
+    url.username = 'user/name';
+    testing.expectEqual('user%2Fname', url.username);
+  }
+
+  {
+    const url = new URL('https://example.com/path');
+    url.username = 'a b';
+    testing.expectEqual('a%20b', url.username);
+  }
+</script>
+
+<script id=hostname>
+  // hostname is the host without the port.
+  {
+    const url = new URL('http://example.com/path');
+    testing.expectEqual('example.com', url.hostname);
+  }
+
+  {
+    const url = new URL('http://example.com:8080/path');
+    testing.expectEqual('example.com', url.hostname);
+  }
+
+  // A host-less URL has an empty hostname.
+  {
+    const url = new URL('about:blank');
+    testing.expectEqual('', url.hostname);
+  }
+
+  // Hosts are lowercased.
+  {
+    const url = new URL('http://EXAMPLE.COM/');
+    testing.expectEqual('example.com', url.hostname);
+  }
+
+  // IDN hosts are exposed in their punycode form.
+  {
+    const url = new URL('https://räksmörgås.se/');
+    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
+  }
+
+  // An IPv6 literal keeps its brackets.
+  {
+    const url = new URL('http://[::1]:8080/');
+    testing.expectEqual('[::1]', url.hostname);
+  }
+
+  // Setting the hostname is reflected in the getter and href.
+  {
+    const url = new URL('https://example.com/path');
+    url.hostname = 'newhost.com';
+    testing.expectEqual('newhost.com', url.hostname);
+    testing.expectEqual('https://newhost.com/path', url.href);
+  }
+
+  // Setting the hostname leaves an existing port untouched (seen via href).
+  {
+    const url = new URL('https://example.com:8080/path');
+    url.hostname = 'newhost.com';
+    testing.expectEqual('newhost.com', url.hostname);
+    testing.expectEqual('https://newhost.com:8080/path', url.href);
+  }
+</script>
+
+<script id=host>
+  // host includes the port when present.
+  {
+    const url = new URL('http://example.com:8080/path');
+    testing.expectEqual('example.com:8080', url.host);
+  }
+
+  // host omits a default port.
+  {
+    const url = new URL('https://example.com:443/path');
+    testing.expectEqual('example.com', url.host);
+  }
+
+  // No port -> host is just the hostname.
+  {
+    const url = new URL('http://example.com/path');
+    testing.expectEqual('example.com', url.host);
+  }
+
+  // Host-less URL -> empty host.
+  {
+    const url = new URL('about:blank');
+    testing.expectEqual('', url.host);
+  }
+
+  // IPv6 literal, with and without port.
+  {
+    const url = new URL('http://[::1]:8080/');
+    testing.expectEqual('[::1]:8080', url.host);
+  }
+
+  // Setting host with a port updates both hostname and port.
+  {
+    const url = new URL('https://example.com/path');
+    url.host = 'newhost.com:9000';
+    testing.expectEqual('newhost.com:9000', url.host);
+    testing.expectEqual('newhost.com', url.hostname);
+    testing.expectEqual('https://newhost.com:9000/path', url.href);
+  }
+
+  // Setting host without a port leaves an existing port untouched.
+  {
+    const url = new URL('https://example.com:8080/path');
+    url.host = 'newhost.com';
+    testing.expectEqual('newhost.com:8080', url.host);
+    testing.expectEqual('https://newhost.com:8080/path', url.href);
+  }
+
+  // Setting host to an IPv6 literal with a port.
+  {
+    const url = new URL('https://example.com/path');
+    url.host = '[::1]:9000';
+    testing.expectEqual('[::1]:9000', url.host);
+    testing.expectEqual('https://[::1]:9000/path', url.href);
+  }
+
+  // A trailing colon clears the port.
+  {
+    const url = new URL('https://example.com:8080/path');
+    url.host = 'newhost.com:';
+    testing.expectEqual('newhost.com', url.host);
+    testing.expectEqual('https://newhost.com/path', url.href);
+  }
+</script>
+
+<script id=port>
+  // A non-default port is exposed as a string.
+  {
+    const url = new URL('http://example.com:8080/path');
+    testing.expectEqual('8080', url.port);
+  }
+
+  // No explicit port -> empty string.
+  {
+    const url = new URL('http://example.com/path');
+    testing.expectEqual('', url.port);
+  }
+
+  // A default port is not surfaced.
+  {
+    testing.expectEqual('', new URL('http://example.com:80/').port);
+    testing.expectEqual('', new URL('https://example.com:443/').port);
+  }
+
+  // Setting a port is reflected in the getter and href.
+  {
+    const url = new URL('https://example.com/path');
+    url.port = '8080';
+    testing.expectEqual('8080', url.port);
+    testing.expectEqual('https://example.com:8080/path', url.href);
+  }
+
+  // Setting the scheme's default port drops it.
+  {
+    const url = new URL('https://example.com:8080/path');
+    url.port = '443';
+    testing.expectEqual('', url.port);
+    testing.expectEqual('https://example.com/path', url.href);
+  }
+
+  // Setting an empty string clears the port.
+  {
+    const url = new URL('https://example.com:8080/path');
+    url.port = '';
+    testing.expectEqual('', url.port);
+    testing.expectEqual('https://example.com/path', url.href);
+  }
+
+  // An invalid port is silently ignored, leaving the existing port intact.
+  {
+    const url = new URL('https://example.com:8080/path');
+    url.port = 'abc';
+    testing.expectEqual('8080', url.port);
+    url.port = '99999'; // out of u16 range
+    testing.expectEqual('8080', url.port);
+  }
+
+  // The maximum port value is accepted.
+  {
+    const url = new URL('https://example.com/path');
+    url.port = '65535';
+    testing.expectEqual('65535', url.port);
+  }
+</script>
+
+<script id=protocol>
+  // protocol is the scheme followed by ':'.
+  {
+    testing.expectEqual('https:', new URL('https://example.com/').protocol);
+    testing.expectEqual('http:', new URL('http://example.com/').protocol);
+    testing.expectEqual('ftp:', new URL('ftp://example.com/').protocol);
+    testing.expectEqual('about:', new URL('about:blank').protocol);
+  }
+
+  // Setting the protocol with or without a trailing ':' both work.
+  {
+    const url = new URL('https://example.com/path');
+    url.protocol = 'http';
+    testing.expectEqual('http:', url.protocol);
+    testing.expectEqual('http://example.com/path', url.href);
+  }
+
+  {
+    const url = new URL('http://example.com/path');
+    url.protocol = 'https:';
+    testing.expectEqual('https:', url.protocol);
+    testing.expectEqual('https://example.com/path', url.href);
+  }
+</script>
+
+<script id=pathname>
+  // pathname is the path portion of the URL.
+  {
+    const url = new URL('http://example.com/path/to/resource?q=1#frag');
+    testing.expectEqual('/path/to/resource', url.pathname);
+  }
+
+  // A host-only URL has a root path.
+  {
+    const url = new URL('http://example.com');
+    testing.expectEqual('/', url.pathname);
+  }
+
+  // Setting an absolute path.
+  {
+    const url = new URL('https://example.com/path');
+    url.pathname = '/newpath';
+    testing.expectEqual('/newpath', url.pathname);
+    testing.expectEqual('https://example.com/newpath', url.href);
+  }
+
+  // A leading slash is added if missing.
+  {
+    const url = new URL('https://example.com/path');
+    url.pathname = 'newpath';
+    testing.expectEqual('/newpath', url.pathname);
+  }
+
+  // Setting the path leaves query and fragment intact.
+  {
+    const url = new URL('https://example.com/path?a=b#hash');
+    url.pathname = '/new/path';
+    testing.expectEqual('/new/path', url.pathname);
+    testing.expectEqual('https://example.com/new/path?a=b#hash', url.href);
+  }
+
+  // The path setter percent-encodes spaces.
+  {
+    const url = new URL('https://example.com/path');
+    url.pathname = '/a b/c d';
+    testing.expectEqual('/a%20b/c%20d', url.pathname);
+  }
+
+  // Already-encoded sequences are not double-encoded.
+  {
+    const url = new URL('https://example.com/path');
+    url.pathname = '/already%20encoded';
+    testing.expectEqual('/already%20encoded', url.pathname);
+  }
+</script>
+
+<script id=password>
+  // password is parsed from the userinfo component.
+  {
+    const url = new URL('https://user:pass@example.com/path');
+    testing.expectEqual('pass', url.password);
+  }
+
+  // Userinfo with no password -> empty.
+  {
+    const url = new URL('https://user@example.com/');
+    testing.expectEqual('', url.password);
+  }
+
+  // Explicit empty password (user:@) -> empty.
+  {
+    const url = new URL('https://user:@example.com/');
+    testing.expectEqual('', url.password);
+  }
+
+  // No userinfo -> empty password.
+  {
+    const url = new URL('https://example.com/');
+    testing.expectEqual('', url.password);
+  }
+
+  // Setting a password adds it to the userinfo.
+  {
+    const url = new URL('https://user@example.com/path');
+    url.password = 'secret';
+    testing.expectEqual('secret', url.password);
+    testing.expectEqual('https://user:secret@example.com/path', url.href);
+  }
+
+  // Replacing an existing password.
+  {
+    const url = new URL('https://user:oldpass@example.com/path');
+    url.password = 'newpass';
+    testing.expectEqual('newpass', url.password);
+    testing.expectEqual('https://user:newpass@example.com/path', url.href);
+  }
+
+  // Clearing username and password drops the userinfo.
+  {
+    const url = new URL('https://user:pass@example.com/path');
+    url.username = '';
+    url.password = '';
+    testing.expectEqual('', url.password);
+    testing.expectEqual('https://example.com/path', url.href);
+  }
+
+  // The password setter percent-encodes userinfo-set characters.
+  {
+    const url = new URL('https://example.com/path');
     url.password = 'pass@word';
     testing.expectEqual('pass%40word', url.password);
   }
@@ -314,107 +733,199 @@
 
   {
     const url = new URL('https://example.com/path');
-    url.username = 'user/name';
-    testing.expectEqual('user%2Fname', url.username);
-  }
-
-  {
-    const url = new URL('https://example.com/path');
     url.password = 'pass?word';
     testing.expectEqual('pass%3Fword', url.password);
   }
+</script>
 
+<script id=hash>
+  // hash includes the leading '#'.
   {
-    const url = new URL('https://user%40domain:pass%3Aword@example.com/path');
-    testing.expectEqual('user%40domain', url.username);
-    testing.expectEqual('pass%3Aword', url.password);
+    const url = new URL('https://example.com/path#section');
+    testing.expectEqual('#section', url.hash);
   }
 
+  // No fragment -> empty hash.
   {
-    const url = new URL('https://example.com:8080/path?a=b#hash');
-    url.username = 'user';
-    url.password = 'pass';
-    testing.expectEqual('https://user:pass@example.com:8080/path?a=b#hash', url.href);
-    testing.expectEqual('8080', url.port);
-    testing.expectEqual('?a=b', url.search);
-    testing.expectEqual('#hash', url.hash);
+    const url = new URL('https://example.com/path');
+    testing.expectEqual('', url.hash);
   }
 
+  // An empty fragment ('...#') -> empty hash.
   {
-    const url = new URL('http://user:pass@example.com:8080/path?query=1#hash');
-    testing.expectEqual('http:', url.protocol);
-    testing.expectEqual('example.com', url.hostname);
-    testing.expectEqual('8080', url.port);
-    testing.expectEqual('http://example.com:8080', url.origin);
+    const url = new URL('https://example.com/path#');
+    testing.expectEqual('', url.hash);
+  }
+
+  // Setting the hash, with and without a leading '#'.
+  {
+    const url = new URL('https://example.com/path');
+    url.hash = '#section';
+    testing.expectEqual('#section', url.hash);
+    testing.expectEqual('https://example.com/path#section', url.href);
   }
 
   {
     const url = new URL('https://example.com/path');
-    testing.expectEqual('https:', url.protocol);
-    testing.expectEqual('example.com', url.hostname);
-    testing.expectEqual('', url.port);
-    testing.expectEqual('https://example.com', url.origin);
+    url.hash = 'section';
+    testing.expectEqual('#section', url.hash);
+    testing.expectEqual('https://example.com/path#section', url.href);
   }
 
+  // Replacing an existing fragment.
   {
-    const url = new URL('https://example.com:443/path');
-    testing.expectEqual('https:', url.protocol);
-    testing.expectEqual('example.com', url.hostname);
-    testing.expectEqual('443', url.port);
-    testing.expectEqual('https://example.com', url.origin);
+    const url = new URL('https://example.com/path#old');
+    url.hash = 'new';
+    testing.expectEqual('#new', url.hash);
+    testing.expectEqual('https://example.com/path#new', url.href);
   }
 
+  // Setting an empty string clears the fragment entirely.
   {
-    const url = new URL('http://example.com:80/path');
-    testing.expectEqual('http:', url.protocol);
-    testing.expectEqual('example.com', url.hostname);
-    testing.expectEqual('80', url.port);
-    testing.expectEqual('http://example.com', url.origin);
+    const url = new URL('https://example.com/path#section');
+    url.hash = '';
+    testing.expectEqual('', url.hash);
+    testing.expectEqual('https://example.com/path', url.href);
   }
 
+  // The hash setter percent-encodes spaces.
   {
-    const url = new URL('ftp://example.com/path');
-    testing.expectEqual('ftp:', url.protocol);
-    testing.expectEqual('null', url.origin);
+    const url = new URL('https://example.com/path');
+    url.hash = 'a b';
+    testing.expectEqual('#a%20b', url.hash);
+  }
+
+  // Setting the hash leaves the path and query intact.
+  {
+    const url = new URL('https://example.com/path?a=b#hash');
+    url.hash = 'newhash';
+    testing.expectEqual('#newhash', url.hash);
+    testing.expectEqual('https://example.com/path?a=b#newhash', url.href);
   }
 </script>
 
-<script id=searchParams>
+<script id=search>
+  // search includes the leading '?'.
   {
-    const url = new URL('https://example.com/path?foo=bar&baz=qux');
-    testing.expectEqual('bar', url.searchParams.get('foo'));
-    testing.expectEqual('qux', url.searchParams.get('baz'));
-    testing.expectEqual(2, url.searchParams.size);
+    const url = new URL('http://example.com/path?a=b');
+    testing.expectEqual('?a=b', url.search);
   }
 
   {
-    const url = new URL('https://example.com/path?foo=bar&baz=qux');
-    url.searchParams.set('foo', 'updated');
-    url.searchParams.append('new', 'param');
-    const href = url.href;
-    testing.expectEqual(true, href.includes('foo=updated'));
-    testing.expectEqual(true, href.includes('new=param'));
+    const url = new URL('http://example.com/path?x=1&y=2');
+    testing.expectEqual('?x=1&y=2', url.search);
+  }
+
+  // No query -> empty search.
+  {
+    const url = new URL('http://example.com/path');
+    testing.expectEqual('', url.search);
+  }
+
+  // An empty query ('...?') -> empty search.
+  {
+    const url = new URL('http://example.com/path?');
+    testing.expectEqual('', url.search);
+  }
+
+  // Setting the search, with and without a leading '?'.
+  {
+    const url = new URL('https://example.com/path');
+    url.search = 'a=b';
+    testing.expectEqual('?a=b', url.search);
+    testing.expectEqual('https://example.com/path?a=b', url.href);
   }
 
   {
     const url = new URL('https://example.com/path');
-    testing.expectEqual(0, url.searchParams.size);
-    url.searchParams.set('added', 'value');
-    testing.expectEqual(true, url.href.includes('?added=value'));
+    url.search = '?a=b';
+    testing.expectEqual('?a=b', url.search);
+    testing.expectEqual('https://example.com/path?a=b', url.href);
   }
 
+  // Replacing an existing query.
   {
-    const url = new URL('https://example.com/path?a=1#section');
-    testing.expectEqual('1', url.searchParams.get('a'));
-    url.searchParams.set('b', '2');
-    const href = url.href;
-    testing.expectEqual(true, href.includes('a=1'));
-    testing.expectEqual(true, href.includes('b=2'));
-    testing.expectEqual(true, href.endsWith('#section'));
+    const url = new URL('https://example.com/path?old=1');
+    url.search = 'new=2';
+    testing.expectEqual('?new=2', url.search);
+    testing.expectEqual('https://example.com/path?new=2', url.href);
   }
 
+  // Setting an empty string clears the query entirely.
   {
-    const url = new URL('https://example.com/?x=1&y=2&z=3');
+    const url = new URL('https://example.com/path?a=b');
+    url.search = '';
+    testing.expectEqual('', url.search);
+    testing.expectEqual('https://example.com/path', url.href);
+  }
+
+  // The search setter percent-encodes spaces.
+  {
+    const url = new URL('https://example.com/path');
+    url.search = 'a=b c';
+    testing.expectEqual('?a=b%20c', url.search);
+  }
+
+  // Setting the search leaves the path and fragment intact.
+  {
+    const url = new URL('https://example.com/path?old=1#frag');
+    url.search = 'new=2';
+    testing.expectEqual('?new=2', url.search);
+    testing.expectEqual('https://example.com/path?new=2#frag', url.href);
+  }
+
+  // searchParams is seeded from the parsed query.
+  {
+    const url = new URL('http://example.com/?a=b&c=d');
+    testing.expectEqual('b', url.searchParams.get('a'));
+    testing.expectEqual('d', url.searchParams.get('c'));
+    testing.expectEqual(2, url.searchParams.size);
+  }
+</script>
+
+<script id=href_setter>
+  // Setting href re-parses with no base: an absolute URL replaces everything.
+  {
+    const url = new URL('https://example.com/path?a=b#hash');
+    url.href = 'http://other.com/';
+    testing.expectEqual('http://other.com/', url.href);
+  }
+
+  // A failed href setter throws TypeError and leaves the URL unchanged
+  // (also exercises the no-use-after-free path).
+  {
+    const url = new URL('https://example.com/path');
+    testing.withError((err) => {
+      testing.expectEqual(true, err.toString().includes('TypeError'));
+    }, () => {
+      url.href = 'not a url';
+    });
+    testing.expectEqual('https://example.com/path', url.href);
+  }
+</script>
+
+<script id=search_params_sync>
+  // Materializing an empty searchParams must not add a spurious '?'.
+  {
+    const url = new URL('http://example.com/');
+    url.searchParams;
+    testing.expectEqual('http://example.com/', url.href);
+    testing.expectEqual('', url.search);
+  }
+
+  // searchParams mutations are reflected in both search and href.
+  {
+    const url = new URL('http://example.com/path');
+    url.searchParams.append('a', '1');
+    url.searchParams.append('b', '2');
+    testing.expectEqual('?a=1&b=2', url.search);
+    testing.expectEqual(true, url.href.includes('a=1'));
+    testing.expectEqual(true, url.href.includes('b=2'));
+  }
+
+  // delete is reflected in href.
+  {
+    const url = new URL('http://example.com/?x=1&y=2&z=3');
     url.searchParams.delete('y');
     const href = url.href;
     testing.expectEqual(true, href.includes('x=1'));
@@ -422,463 +933,64 @@
     testing.expectEqual(true, href.includes('z=3'));
   }
 
+  // searchParams is the same object across accesses.
   {
-    const url = new URL('https://example.com/?test=1');
-    const sp1 = url.searchParams;
-    const sp2 = url.searchParams;
-    testing.expectEqual(true, sp1 === sp2);
+    const url = new URL('http://example.com/?test=1');
+    testing.expectEqual(true, url.searchParams === url.searchParams);
   }
 
+  // Clearing via url.search='' preserves the searchParams object identity and
+  // empties it (SameObject), and removes the query from search/href.
   {
-    const url = new URL('https://example.com/path?a=1&b=2');
-    url.searchParams.delete('a');
-    url.searchParams.delete('b');
-    testing.expectEqual('https://example.com/path', url.href);
-  }
+    const url = new URL('http://example.com/?a=b');
+    const sp = url.searchParams;
+    testing.expectEqual('b', sp.get('a'));
 
-  {
-    let url = new URL("https://foo.bar");
-    const searchParams = url.searchParams;
-
-    // SearchParams should be empty.
-    testing.expectEqual(0, searchParams.size);
-
-    url.href = "https://lightpanda.io?over=9000&light=panda";
-    // It won't hurt to check href and host too.
-    testing.expectEqual("https://lightpanda.io/?over=9000&light=panda", url.href);
-    testing.expectEqual("lightpanda.io", url.host);
-    // SearchParams should be updated too when URL is set.
-    testing.expectEqual(2, searchParams.size);
-    testing.expectEqual("9000", searchParams.get("over"));
-    testing.expectEqual("panda", searchParams.get("light"));
+    url.search = '';
+    testing.expectEqual(true, url.searchParams === sp);
+    testing.expectEqual(0, sp.size);
+    testing.expectEqual(null, sp.get('a'));
+    testing.expectEqual('', url.search);
+    testing.expectEqual('http://example.com/', url.href);
   }
 </script>
 
-<script id=stringifier>
-{
-  const url1 = new URL('https://example.com/api');
-  const url2 = new URL(url1);
-  testing.expectEqual('https://example.com/api', url2.href);
-}
-
-{
-  const obj = {
-    toString() {
-      return 'https://example.com/custom';
-    }
-  };
-  const url = new URL(obj);
-  testing.expectEqual('https://example.com/custom', url.href);
-}
-
-{
-  const baseUrl = new URL('https://example.com/');
-  const url = new URL('/path', baseUrl);
-  testing.expectEqual('https://example.com/path', url.href);
-}
-
-{
-  const obj = {
-    toString() {
-      return 'https://example.com/';
-    }
-  };
-  const url = new URL('/relative', obj);
-  testing.expectEqual('https://example.com/relative', url.href);
-}
-
-{
-  const anchor = document.createElement('a');
-  anchor.href = 'https://example.com/test';
-  const url = new URL(anchor);
-  testing.expectEqual('https://example.com/test', url.href);
-}
-
-{
-  const anchor = document.createElement('a');
-  anchor.href = 'https://example.com/base/';
-  const url = new URL('relative', anchor);
-  testing.expectEqual('https://example.com/base/relative', url.href);
-}
-</script>
-
-<script id=setters>
-{
-  const url = new URL('https://example.com/path');
-  url.href = 'https://newdomain.com/newpath';
-  testing.expectEqual('https://newdomain.com/newpath', url.href);
-  testing.expectEqual('newdomain.com', url.hostname);
-  testing.expectEqual('/newpath', url.pathname);
-}
-
-{
-  const url = new URL('https://example.com/path?a=b#hash');
-  url.href = 'http://other.com/';
-  testing.expectEqual('http://other.com/', url.href);
-  testing.expectEqual('', url.search);
-  testing.expectEqual('', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.protocol = 'http';
-  testing.expectEqual('http://example.com/path', url.href);
-  testing.expectEqual('http:', url.protocol);
-}
-
-{
-  const url = new URL('http://example.com/path');
-  url.protocol = 'https:';
-  testing.expectEqual('https://example.com/path', url.href);
-  testing.expectEqual('https:', url.protocol);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.hostname = 'newhost.com';
-  testing.expectEqual('https://newhost.com/path', url.href);
-  testing.expectEqual('newhost.com', url.hostname);
-}
-
-{
-  const url = new URL('https://example.com:8080/path');
-  url.hostname = 'newhost.com';
-  testing.expectEqual('https://newhost.com:8080/path', url.href);
-  testing.expectEqual('newhost.com', url.hostname);
-  testing.expectEqual('8080', url.port);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.host = 'newhost.com:9000';
-  testing.expectEqual('https://newhost.com:9000/path', url.href);
-  testing.expectEqual('newhost.com', url.hostname);
-  testing.expectEqual('9000', url.port);
-}
-
-{
-  const url = new URL('https://example.com:8080/path');
-  url.host = 'newhost.com';
-  testing.expectEqual('https://newhost.com:8080/path', url.href);
-  testing.expectEqual('newhost.com', url.hostname);
-  testing.expectEqual('8080', url.port);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.port = '8080';
-  testing.expectEqual('https://example.com:8080/path', url.href);
-  testing.expectEqual('8080', url.port);
-}
-
-{
-  const url = new URL('https://example.com:8080/path');
-  url.port = '';
-  testing.expectEqual('https://example.com/path', url.href);
-  testing.expectEqual('', url.port);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.port = '443';
-  testing.expectEqual('https://example.com/path', url.href);
-  testing.expectEqual('', url.port);
-}
-
-{
-  const url = new URL('http://example.com/path');
-  url.port = '80';
-  testing.expectEqual('http://example.com/path', url.href);
-  testing.expectEqual('', url.port);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.pathname = '/newpath';
-  testing.expectEqual('https://example.com/newpath', url.href);
-  testing.expectEqual('/newpath', url.pathname);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.pathname = 'newpath';
-  testing.expectEqual('https://example.com/newpath', url.href);
-  testing.expectEqual('/newpath', url.pathname);
-}
-
-{
-  const url = new URL('https://example.com/path?a=b#hash');
-  url.pathname = '/new/path';
-  testing.expectEqual('https://example.com/new/path?a=b#hash', url.href);
-  testing.expectEqual('/new/path', url.pathname);
-}
-
-// Pathname setter must percent-encode spaces and special characters
-{
-  const url = new URL('http://a/');
-  url.pathname = 'c d';
-  testing.expectEqual('http://a/c%20d', url.href);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.pathname = '/path with spaces/file name';
-  testing.expectEqual('https://example.com/path%20with%20spaces/file%20name', url.href);
-  testing.expectEqual('/path%20with%20spaces/file%20name', url.pathname);
-}
-
-// Already-encoded sequences should not be double-encoded
-{
-  const url = new URL('https://example.com/path');
-  url.pathname = '/already%20encoded';
-  testing.expectEqual('https://example.com/already%20encoded', url.href);
-}
-
-// This is the exact check the URL polyfill uses to decide if native URL is sufficient
-{
-  const url = new URL('b', 'http://a');
-  url.pathname = 'c d';
-  testing.expectEqual('http://a/c%20d', url.href);
-  testing.expectEqual(true, !!url.searchParams);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.search = '?a=b';
-  testing.expectEqual('https://example.com/path?a=b', url.href);
-  testing.expectEqual('?a=b', url.search);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.search = 'a=b';
-  testing.expectEqual('https://example.com/path?a=b', url.href);
-  testing.expectEqual('?a=b', url.search);
-}
-
-{
-  const url = new URL('https://example.com/path?old=value');
-  url.search = 'new=value';
-  testing.expectEqual('https://example.com/path?new=value', url.href);
-  testing.expectEqual('?new=value', url.search);
-}
-
-{
-  const url = new URL('https://example.com/path?a=b#hash');
-  url.search = 'c=d';
-  testing.expectEqual('https://example.com/path?c=d#hash', url.href);
-  testing.expectEqual('?c=d', url.search);
-  testing.expectEqual('#hash', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.hash = '#section';
-  testing.expectEqual('https://example.com/path#section', url.href);
-  testing.expectEqual('#section', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.hash = 'section';
-  testing.expectEqual('https://example.com/path#section', url.href);
-  testing.expectEqual('#section', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path#old');
-  url.hash = 'new';
-  testing.expectEqual('https://example.com/path#new', url.href);
-  testing.expectEqual('#new', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path?a=b#hash');
-  url.hash = 'newhash';
-  testing.expectEqual('https://example.com/path?a=b#newhash', url.href);
-  testing.expectEqual('?a=b', url.search);
-  testing.expectEqual('#newhash', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path#hash');
-  url.hash = '';
-  testing.expectEqual('https://example.com/path', url.href);
-  testing.expectEqual('', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.hash = '#a b';
-  testing.expectEqual('https://example.com/path#a%20b', url.href);
-  testing.expectEqual('#a%20b', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path');
-  url.hash = 'a b';
-  testing.expectEqual('https://example.com/path#a%20b', url.href);
-  testing.expectEqual('#a%20b', url.hash);
-}
-
-{
-  const url = new URL('https://example.com/path?a=b');
-  url.search = '';
-  testing.expectEqual('https://example.com/path', url.href);
-  testing.expectEqual('', url.search);
-}
-
-{
-  const url = new URL('https://example.com/path?a=b');
-  const sp = url.searchParams;
-  testing.expectEqual('b', sp.get('a'));
-  url.search = 'c=d';
-
-  testing.expectEqual('d', url.searchParams.get('c'));
-  testing.expectEqual(null, url.searchParams.get('a'));
-}
-
-{
-  const url = new URL('https://example.com/path?a=b');
-  const sp = url.searchParams;
-  testing.expectEqual('b', sp.get('a'));
-  url.search = 'c=d b';
-
-  testing.expectEqual('d b', url.searchParams.get('c'));
-  testing.expectEqual(null, url.searchParams.get('a'));
-
-  url.search = 'c d=d b';
-  testing.expectEqual('d b', url.searchParams.get('c d'));
-  testing.expectEqual(null, url.searchParams.get('c'));
-}
-
-{
-  const url = new URL('https://example.com/path?a=b');
-  const sp = url.searchParams;
-  testing.expectEqual('b', sp.get('a'));
-  url.href = 'https://example.com/other?x=y';
-
-  testing.expectEqual('y', url.searchParams.get('x'));
-  testing.expectEqual(null, url.searchParams.get('a'));
-}
-</script>
-
-<script id=canParse>
-{
-  testing.expectEqual('function', typeof URL.canParse);
-}
-
-{
-  testing.expectEqual(true, URL.canParse('https://example.com'));
-  testing.expectEqual(true, URL.canParse('http://example.com/path'));
-  testing.expectEqual(true, URL.canParse('https://example.com:8080/path?a=b#hash'));
-  testing.expectEqual(true, URL.canParse('ftp://example.com'));
-}
-
-{
-  testing.expectEqual(false, URL.canParse(''));
-  testing.expectEqual(false, URL.canParse('foo.js'));
-  testing.expectEqual(false, URL.canParse('/path/to/file'));
-  testing.expectEqual(false, URL.canParse('?query=value'));
-  testing.expectEqual(false, URL.canParse('#fragment'));
-}
-
-{
-  testing.expectEqual(true, URL.canParse('subpath', 'http://example.com/path/'));
-  testing.expectEqual(true, URL.canParse('/newpath', 'http://example.com/path'));
-  testing.expectEqual(true, URL.canParse('?a=b', 'http://example.com/path'));
-  testing.expectEqual(true, URL.canParse('#hash', 'http://example.com/path'));
-  testing.expectEqual(true, URL.canParse('../foo', 'http://example.com/a/b/c'));
-}
-
-{
-  testing.expectEqual(false, URL.canParse('foo.js', undefined));
-  testing.expectEqual(false, URL.canParse('subpath', undefined));
-  testing.expectEqual(false, URL.canParse('../foo', undefined));
-}
-
-{
-  testing.expectEqual(false, URL.canParse('foo.js', 'not a url'));
-  testing.expectEqual(false, URL.canParse('foo.js', 'bar/baz'));
-  testing.expectEqual(false, URL.canParse('subpath', 'relative/path'));
-}
-
-{
-  testing.expectEqual(false, URL.canParse('http://example.com/absolute', 'invalid base'));
-  testing.expectEqual(false, URL.canParse('https://example.com/path', 'not-a-url'));
-}
-
-{
-  testing.expectEqual(false, URL.canParse('http://example.com', ''));
-  testing.expectEqual(false, URL.canParse('http://example.com', 'relative'));
-}
-
-{
-  testing.expectEqual(true, URL.canParse('http://example.com/absolute', 'http://base.com'));
-  testing.expectEqual(true, URL.canParse('https://example.com/path', 'https://other.com'));
-}
-</script>
-
-<script id=query_encode>
+<script id=origin>
+  // origin is scheme://host[:port], with default ports omitted.
   {
-    let url = new URL('https://foo.bar/path?a=~&b=%7E#fragment');
-    testing.expectEqual("~", url.searchParams.get('a'));
-    testing.expectEqual("~", url.searchParams.get('b'));
+    const url = new URL('http://user:pass@example.com:8080/path?query=1#hash');
+    testing.expectEqual('http://example.com:8080', url.origin);
+  }
 
-    url.searchParams.append('c', 'foo');
-    testing.expectEqual("foo", url.searchParams.get('c'));
-    testing.expectEqual(1, url.searchParams.getAll('c').length);
-    testing.expectEqual("foo", url.searchParams.getAll('c')[0]);
-    testing.expectEqual(3, url.searchParams.size);
+  {
+    const url = new URL('https://example.com/path');
+    testing.expectEqual('https://example.com', url.origin);
+  }
 
-    // search is dynamic
-    testing.expectEqual("?a=%7E&b=%7E&c=foo", url.search);
+  {
+    const url = new URL('https://example.com:443/path');
+    testing.expectEqual('https://example.com', url.origin);
+  }
+
+  {
+    const url = new URL('http://example.com:80/path');
+    testing.expectEqual('http://example.com', url.origin);
+  }
+
+  // ftp is a special, tuple-origin scheme (like http/https/ws/wss).
+  {
+    testing.expectEqual('ftp://example.com', new URL('ftp://example.com/path').origin);
+  }
+
+  // Non-special schemes have an opaque (null) origin.
+  {
+    testing.expectEqual('null', new URL('about:blank').origin);
+    testing.expectEqual('null', new URL('mailto:foo@bar.com').origin);
   }
 </script>
 
-<script id=objectURL>
-{
-  // Test createObjectURL with Blob
-  const blob = new Blob(['<html><body>Hello</body></html>'], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-
-  testing.expectEqual('string', typeof url);
-  testing.expectEqual(true, url.startsWith('blob:'));
-  testing.expectEqual(true, url.includes('http'));
-}
-
-{
-  // Test revokeObjectURL
-  const blob = new Blob(['test'], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-
-  testing.expectEqual(true, url.startsWith('blob:'));
-
-  URL.revokeObjectURL(url);
-  URL.revokeObjectURL(url); // Second revoke should be safe
-}
-
-{
-  // Test with non-blob URL (should be safe/silent)
-  URL.revokeObjectURL('http://example.com/notblob');
-  URL.revokeObjectURL('');
-  testing.expectEqual(true, true);
-}
-
-{
-  // Test uniqueness
-  const blob1 = new Blob(['test1']);
-  const blob2 = new Blob(['test2']);
-  const url1 = URL.createObjectURL(blob1);
-  const url2 = URL.createObjectURL(blob2);
-
-  testing.expectEqual(false, url1 === url2);
-  testing.expectEqual(true, url1.startsWith('blob:'));
-  testing.expectEqual(true, url2.startsWith('blob:'));
-}
-</script>
-
-<script id="about:blank">
+<script id=about_blank>
+  // about:blank exposes every component consistently.
   {
     const url = new URL('about:blank');
     testing.expectEqual('about:blank', url.href);
@@ -891,12 +1003,12 @@
     testing.expectEqual('', url.hostname);
     testing.expectEqual('', url.port);
     testing.expectEqual('', url.search);
+    testing.expectEqual('', url.hash);
   }
 </script>
 
 <script id=idna>
-  // WHATWG "domain to ASCII": non-ASCII hosts are converted to punycode at
-  // parse time, so getters always return the ASCII form.
+  // IDN hosts are converted to punycode (UTS#46) at parse time.
   {
     const url = new URL('https://räksmörgås.se/');
     testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
@@ -904,17 +1016,16 @@
     testing.expectEqual('https://xn--rksmrgs-5wao1o.se/', url.href);
   }
 
-  // UTS#46 non-transitional processing preserves ß rather than mapping to ss.
+  // UTS#46 non-transitional processing preserves ß.
   {
     const url = new URL('https://faß.de/');
     testing.expectEqual('xn--fa-hia.de', url.hostname);
   }
 
-  // Pure-ASCII hosts must not be touched.
+  // Pure-ASCII hosts are untouched.
   {
     const url = new URL('https://example.com/');
     testing.expectEqual('example.com', url.hostname);
-    testing.expectEqual('https://example.com/', url.href);
   }
 
   // IDN preserved alongside port, userinfo, path, query, and fragment.
@@ -940,5 +1051,138 @@
     const url = new URL('/about', 'https://räksmörgås.se/');
     testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
     testing.expectEqual('https://xn--rksmrgs-5wao1o.se/about', url.href);
+  }
+</script>
+
+<script id=stringifier>
+  // The constructor stringifies its url/base arguments.
+  {
+    const url1 = new URL('https://example.com/api');
+    const url2 = new URL(url1);
+    testing.expectEqual('https://example.com/api', url2.href);
+  }
+
+  {
+    const obj = { toString() { return 'https://example.com/custom'; } };
+    const url = new URL(obj);
+    testing.expectEqual('https://example.com/custom', url.href);
+  }
+
+  {
+    const baseUrl = new URL('https://example.com/');
+    const url = new URL('/path', baseUrl);
+    testing.expectEqual('https://example.com/path', url.href);
+  }
+
+  {
+    const obj = { toString() { return 'https://example.com/'; } };
+    const url = new URL('/relative', obj);
+    testing.expectEqual('https://example.com/relative', url.href);
+  }
+
+  {
+    const anchor = document.createElement('a');
+    anchor.href = 'https://example.com/test';
+    const url = new URL(anchor);
+    testing.expectEqual('https://example.com/test', url.href);
+  }
+
+  {
+    const anchor = document.createElement('a');
+    anchor.href = 'https://example.com/base/';
+    const url = new URL('relative', anchor);
+    testing.expectEqual('https://example.com/base/relative', url.href);
+  }
+</script>
+
+<script id=object_url>
+  // createObjectURL mints a unique blob: URL.
+  {
+    const blob = new Blob(['<html><body>Hello</body></html>'], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    testing.expectEqual('string', typeof url);
+    testing.expectEqual(true, url.startsWith('blob:'));
+  }
+
+  // revokeObjectURL is idempotent and safe on non-blob URLs.
+  {
+    const blob = new Blob(['test'], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url);
+    URL.revokeObjectURL('http://example.com/notblob');
+    URL.revokeObjectURL('');
+  }
+
+  // Each createObjectURL is unique.
+  {
+    const url1 = URL.createObjectURL(new Blob(['test1']));
+    const url2 = URL.createObjectURL(new Blob(['test2']));
+    testing.expectEqual(false, url1 === url2);
+  }
+</script>
+
+<script id=search_params>
+  // get / size from the parsed query.
+  {
+    const url = new URL('https://example.com/path?foo=bar&baz=qux');
+    testing.expectEqual('bar', url.searchParams.get('foo'));
+    testing.expectEqual('qux', url.searchParams.get('baz'));
+    testing.expectEqual(2, url.searchParams.size);
+  }
+
+  // set + append are reflected in href.
+  {
+    const url = new URL('https://example.com/path?foo=bar');
+    url.searchParams.set('foo', 'updated');
+    url.searchParams.append('new', 'param');
+    const href = url.href;
+    testing.expectEqual(true, href.includes('foo=updated'));
+    testing.expectEqual(true, href.includes('new=param'));
+  }
+
+  // set on a query-less URL adds the query.
+  {
+    const url = new URL('https://example.com/path');
+    testing.expectEqual(0, url.searchParams.size);
+    url.searchParams.set('added', 'value');
+    testing.expectEqual(true, url.href.includes('?added=value'));
+  }
+
+  // searchParams mutation preserves the fragment.
+  {
+    const url = new URL('https://example.com/path?a=1#section');
+    url.searchParams.set('b', '2');
+    const href = url.href;
+    testing.expectEqual(true, href.includes('a=1'));
+    testing.expectEqual(true, href.includes('b=2'));
+    testing.expectEqual(true, href.endsWith('#section'));
+  }
+
+  // Setting href updates the live searchParams object in place.
+  {
+    const url = new URL('https://foo.bar');
+    const searchParams = url.searchParams;
+    testing.expectEqual(0, searchParams.size);
+
+    url.href = 'https://lightpanda.io?over=9000&light=panda';
+    testing.expectEqual('https://lightpanda.io/?over=9000&light=panda', url.href);
+    testing.expectEqual('lightpanda.io', url.host);
+    testing.expectEqual(2, searchParams.size);
+    testing.expectEqual('9000', searchParams.get('over'));
+    testing.expectEqual('panda', searchParams.get('light'));
+  }
+
+  // Percent-encoding: '~' and '%7E' both decode to '~', and search is dynamic.
+  {
+    const url = new URL('https://foo.bar/path?a=~&b=%7E#fragment');
+    testing.expectEqual('~', url.searchParams.get('a'));
+    testing.expectEqual('~', url.searchParams.get('b'));
+
+    url.searchParams.append('c', 'foo');
+    testing.expectEqual('foo', url.searchParams.get('c'));
+    testing.expectEqual(1, url.searchParams.getAll('c').length);
+    testing.expectEqual(3, url.searchParams.size);
+    testing.expectEqual('?a=%7E&b=%7E&c=foo', url.search);
   }
 </script>

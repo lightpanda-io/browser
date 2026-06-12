@@ -978,7 +978,7 @@ test "cdp.dom: setFileInputFiles requires a node identifier" {
     try ctx.expectSentError(-31998, "MissingParams", .{ .id = 1 });
 }
 
-test "cdp.dom: setFileInputFiles errors (and leaks nothing) when a path is missing" {
+test "cdp.dom: setFileInputFiles errors when a path is missing" {
     var ctx = try testing.context();
     defer ctx.deinit();
 

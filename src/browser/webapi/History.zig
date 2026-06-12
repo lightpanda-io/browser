@@ -20,9 +20,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Frame = @import("../Frame.zig");
-const Location = @import("Location.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
-const URL = @import("URL.zig");
 
 const History = @This();
 
@@ -62,7 +60,8 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     _ = try frame._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;
-    frame.window._location._url = try URL.init(url, null, &frame.js.execution);
+    // setHref == reinitializing.
+    try frame.window._location._url.setHref(url, &frame.js.execution);
 }
 
 pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
@@ -76,7 +75,8 @@ pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     _ = try frame._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;
-    frame.window._location = try Location.init(url, frame);
+    // setHref == reinitializing.
+    try frame.window._location._url.setHref(url, &frame.js.execution);
 }
 
 fn goInner(delta: i32, frame: *Frame) !void {

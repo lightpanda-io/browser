@@ -287,6 +287,24 @@ pub fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     };
 }
 
+// :has() arguments are relative selectors. Absolutize them at parse time by
+// prepending a :scope anchor, e.g. ":has(~ .a .b)" is stored as
+// ":scope ~ .a .b". Matching then reuses the regular segment walk, binding
+// :scope to the element :has() is evaluated against.
+// https://drafts.csswg.org/selectors-4/#absolutizing
+const scope_anchor = [_]Part{.{ .pseudo_class = .scope }};
+
+fn absolutize(arena: Allocator, selector: Selector.Selector, combinator: Combinator) !Selector.Selector {
+    const segments = try arena.alloc(Segment, selector.segments.len + 1);
+    segments[0] = .{ .combinator = combinator, .compound = selector.first };
+    @memcpy(segments[1..], selector.segments);
+
+    return .{
+        .first = .{ .parts = &scope_anchor },
+        .segments = segments,
+    };
+}
+
 fn parsePart(self: *Parser, arena: Allocator) !Part {
     return switch (self.peek()) {
         '#' => .{ .id = try self.id(arena) },
@@ -525,8 +543,24 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
                 if (self.peek() == ')') break;
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
+                // :has() takes a <relative-selector-list>: each argument may
+                // start with an explicit combinator (":has(> div)", ":has(~ p)")
+                // and is anchored at the element being matched, with an implied
+                // descendant combinator when none is written.
+                // https://drafts.csswg.org/selectors-4/#relational
+                const combinator: Combinator = switch (self.peek()) {
+                    '>' => .child,
+                    '+' => .next_sibling,
+                    '~' => .subsequent_sibling,
+                    else => .descendant,
+                };
+                if (combinator != .descendant) {
+                    self.input = self.input[1..];
+                    _ = self.skipSpaces();
+                }
+
                 const selector = try parse(arena, self.consumeUntilCommaOrParen());
-                try selectors.append(arena, selector);
+                try selectors.append(arena, try absolutize(arena, selector, combinator));
 
                 _ = self.skipSpaces();
                 if (self.peek() == ',') {
@@ -1738,5 +1772,71 @@ test "Selector: Parser.attributeName" {
     {
         var parser = Parser{ .input = "=foo]" };
         try testing.expectError(error.InvalidAttributeSelector, parser.attributeName(arena));
+    }
+}
+
+test "Selector: Parser.has" {
+    const arena = testing.arena_allocator;
+
+    // No leading combinator: absolutized with an implied descendant combinator.
+    {
+        const selector = try parse(arena, "div:has(p)");
+        const args = selector.first.parts[1].pseudo_class.has;
+        try testing.expectEqual(1, args.len);
+        try testing.expectEqual(true, args[0].first.parts[0].pseudo_class == .scope);
+        try testing.expectEqual(1, args[0].segments.len);
+        try testing.expectEqual(.descendant, args[0].segments[0].combinator);
+        try testing.expectEqual(.p, args[0].segments[0].compound.parts[0].tag);
+    }
+
+    // Explicit leading combinators.
+    {
+        const selector = try parse(arena, "div:has(> p)");
+        const arg = selector.first.parts[1].pseudo_class.has[0];
+        try testing.expectEqual(true, arg.first.parts[0].pseudo_class == .scope);
+        try testing.expectEqual(.child, arg.segments[0].combinator);
+    }
+
+    {
+        const selector = try parse(arena, "li:has(~ li.active)");
+        const arg = selector.first.parts[1].pseudo_class.has[0];
+        try testing.expectEqual(.subsequent_sibling, arg.segments[0].combinator);
+        try testing.expectEqual(.li, arg.segments[0].compound.parts[0].tag);
+        try testing.expectEqual("active", arg.segments[0].compound.parts[1].class);
+    }
+
+    {
+        const selector = try parse(arena, "span:has(+em)");
+        const arg = selector.first.parts[1].pseudo_class.has[0];
+        try testing.expectEqual(.next_sibling, arg.segments[0].combinator);
+    }
+
+    // The argument's own combinators are preserved after the anchor segment.
+    {
+        const selector = try parse(arena, "div:has(~ p a)");
+        const arg = selector.first.parts[1].pseudo_class.has[0];
+        try testing.expectEqual(2, arg.segments.len);
+        try testing.expectEqual(.subsequent_sibling, arg.segments[0].combinator);
+        try testing.expectEqual(.descendant, arg.segments[1].combinator);
+    }
+
+    // Comma-separated relative selector list.
+    {
+        const selector = try parse(arena, "div:has(> p, ~ a)");
+        const args = selector.first.parts[1].pseudo_class.has;
+        try testing.expectEqual(2, args.len);
+        try testing.expectEqual(.child, args[0].segments[0].combinator);
+        try testing.expectEqual(.subsequent_sibling, args[1].segments[0].combinator);
+    }
+
+    // A combinator with nothing after it is invalid.
+    {
+        try testing.expectError(error.InvalidSelector, parse(arena, "div:has(>)"));
+        try testing.expectError(error.InvalidSelector, parse(arena, "div:has(~ )"));
+    }
+
+    // Empty :has() stays invalid.
+    {
+        try testing.expectError(error.InvalidPseudoClass, parse(arena, "div:has()"));
     }
 }

@@ -18,6 +18,7 @@
 // IDNA-2008 behavior diverged from the spec. Value-in / value-out: a UTF-8
 // host string becomes its punycode form, or an error.
 
+use ::url::Url;
 use std::os::raw::c_uchar;
 use std::slice;
 
@@ -80,4 +81,490 @@ pub extern "C" fn lpurl_free(ptr: *mut c_uchar, len: usize) {
         let slice = std::ptr::slice_from_raw_parts_mut(ptr, len + 1);
         drop(Box::from_raw(slice));
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_parse(ptr: *const c_uchar, len: usize, err: *mut i32) -> *mut Url {
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => {
+            *err = url::ParseError::EmptyHost as i32;
+            return std::ptr::null_mut();
+        }
+    };
+
+    match Url::parse(slice) {
+        Ok(url) => Box::into_raw(Box::new(url)),
+        Err(e) => {
+            *err = e as i32;
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_parse_with_base(
+    base_ptr: *const c_uchar,
+    base_len: usize,
+    ptr: *const c_uchar,
+    len: usize,
+    err: *mut i32,
+) -> *mut Url {
+    let base_slice = match str_from(base_ptr, base_len) {
+        Some(s) => s,
+        None => {
+            *err = url::ParseError::EmptyHost as i32;
+            return std::ptr::null_mut();
+        }
+    };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => {
+            *err = url::ParseError::EmptyHost as i32;
+            return std::ptr::null_mut();
+        }
+    };
+
+    match Url::parse(base_slice) {
+        Ok(base) => match base.join(slice) {
+            Ok(url) => Box::into_raw(Box::new(url)),
+            Err(e) => {
+                *err = e as i32;
+                std::ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            *err = e as i32;
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_join(
+    base: *const Url,
+    ptr: *const c_uchar,
+    len: usize,
+    err: *mut i32,
+) -> *mut Url {
+    let base = unsafe { &*base };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => {
+            *err = url::ParseError::EmptyHost as i32;
+            return std::ptr::null_mut();
+        }
+    };
+
+    match base.join(slice) {
+        Ok(url) => Box::into_raw(Box::new(url)),
+        Err(e) => {
+            *err = e as i32;
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_can_parse(ptr: *const c_uchar, len: usize) -> bool {
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return false,
+    };
+
+    Url::parse(slice).is_ok()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_can_parse_with_base(
+    base_ptr: *const c_uchar,
+    base_len: usize,
+    ptr: *const c_uchar,
+    len: usize,
+) -> bool {
+    let base_slice = match str_from(base_ptr, base_len) {
+        Some(s) => s,
+        None => return false,
+    };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return false,
+    };
+
+    match Url::parse(base_slice) {
+        Ok(url) => url.join(slice).is_ok(),
+        Err(_) => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_free(url: *mut Url) {
+    if url.is_null() {
+        return;
+    }
+    drop(Box::from_raw(url));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_to_string(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) {
+    let url = unsafe { &*url };
+    let s = url.as_str();
+    *out_ptr = s.as_ptr();
+    *out_len = s.len();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_username(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    match url.set_username(slice) {
+        Ok(()) => 0,
+        Err(()) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_username(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) {
+    let url = unsafe { &*url };
+    let username = url.username();
+    *out_ptr = username.as_ptr();
+    *out_len = username.len();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_password(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    match url.set_password(Some(slice)) {
+        Ok(()) => 0,
+        Err(()) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_password(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) -> i32 {
+    let url = unsafe { &*url };
+    match url.password() {
+        Some(password) => {
+            *out_ptr = password.as_ptr();
+            *out_len = password.len();
+            0
+        }
+        None => -1,
+    }
+}
+
+#[repr(C)]
+pub struct OwnedString {
+    pub ptr: *mut c_uchar,
+    pub len: usize,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn free_owned_string(owned: OwnedString) {
+    if owned.ptr.is_null() || owned.len == 0 {
+        return;
+    }
+
+    unsafe {
+        let slice = std::ptr::slice_from_raw_parts_mut(owned.ptr, owned.len);
+        drop(Box::from_raw(slice));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_origin(url: *const Url) -> OwnedString {
+    let url = unsafe { &*url };
+    let origin = url.origin().ascii_serialization();
+    let len = origin.len();
+    let ptr = Box::into_raw(origin.into_bytes().into_boxed_slice()) as *mut c_uchar;
+    OwnedString { ptr, len }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_port(url: *mut Url, port: u16) -> i32 {
+    let url = unsafe { &mut *url };
+    match url.set_port(Some(port)) {
+        Ok(()) => 0,
+        Err(()) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_port_to_null(url: *mut Url) -> i32 {
+    let url = unsafe { &mut *url };
+    match url.set_port(None) {
+        Ok(()) => 0,
+        Err(()) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_port(url: *const Url) -> i32 {
+    let url = unsafe { &*url };
+    match url.port() {
+        Some(port) => port as i32,
+        None => -1,
+    }
+}
+
+/// WHATWG `hostname` setter: sets the host without touching the port.
+#[no_mangle]
+pub unsafe extern "C" fn url_set_hostname(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    match url.set_host(Some(slice)) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// WHATWG `hostname` getter: the host without the port. Borrows into the Url's
+/// buffer; returns -1 (and writes an empty slice) when there is no host.
+#[no_mangle]
+pub unsafe extern "C" fn url_get_hostname(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) -> i32 {
+    let url = unsafe { &*url };
+
+    match url.host_str() {
+        Some(h) => unsafe {
+            *out_ptr = h.as_ptr();
+            *out_len = h.len();
+            0
+        },
+        None => unsafe {
+            *out_len = 0;
+            -1
+        },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_host(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) -> i32 {
+    let url = unsafe { &*url };
+    if url.host_str().is_none() {
+        unsafe {
+            *out_len = 0;
+        }
+        return -1;
+    }
+
+    let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
+    unsafe {
+        *out_ptr = host.as_ptr();
+        *out_len = host.len();
+    }
+    0
+}
+
+/// rust-url's `set_host` discards any trailing `:port`, so we split it off
+/// ourselves (respecting IPv6 `[...]` literals) and apply the port separately.
+#[no_mangle]
+pub unsafe extern "C" fn url_set_host(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+    let input = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    // Find the port separator ':', but only outside an IPv6 [...] literal.
+    let colon = if input.starts_with('[') {
+        input
+            .find(']')
+            .and_then(|b| input[b..].find(':').map(|i| b + i))
+    } else {
+        input.find(':')
+    };
+
+    let Some(i) = colon else {
+        // No port given: set the host only, leaving any existing port untouched.
+        return if url.set_host(Some(input)).is_ok() {
+            0
+        } else {
+            -1
+        };
+    };
+
+    let (host, port_str) = (&input[..i], &input[i + 1..]);
+
+    // Validate the port up-front so we never apply the host and then fail.
+    let new_port: Option<u16> = if port_str.is_empty() {
+        None // "host:" clears the port
+    } else {
+        match port_str.parse::<u16>() {
+            Ok(p) => Some(p),
+            Err(_) => return -1,
+        }
+    };
+
+    if url.set_host(Some(host)).is_err() {
+        return -1;
+    }
+    // set_port only errors on cannot-be-a-base, already ruled out by set_host.
+    let _ = url.set_port(new_port);
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_scheme(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    match url.set_scheme(slice) {
+        Ok(()) => 0,
+        Err(()) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_scheme(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) {
+    let url = unsafe { &*url };
+    let scheme = url.scheme();
+    *out_ptr = scheme.as_ptr();
+    *out_len = scheme.len();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_path(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    url.set_path(slice);
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_path(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) {
+    let url = unsafe { &*url };
+    let path = url.path();
+    *out_ptr = path.as_ptr();
+    *out_len = path.len();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_query(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    url.set_query(Some(slice));
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_query_to_null(url: *mut Url) {
+    let url = unsafe { &mut *url };
+    url.set_query(None);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_query(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) -> i32 {
+    let url = unsafe { &*url };
+    match url.query() {
+        Some(query) => {
+            *out_ptr = query.as_ptr();
+            *out_len = query.len();
+            0
+        }
+        None => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_fragment(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
+    let url = unsafe { &mut *url };
+    let slice = match str_from(ptr, len) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    url.set_fragment(Some(slice));
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_set_fragment_to_null(url: *mut Url) {
+    let url = unsafe { &mut *url };
+    url.set_fragment(None);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_fragment(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) -> i32 {
+    let url = unsafe { &*url };
+    match url.fragment() {
+        Some(fragment) => {
+            *out_ptr = fragment.as_ptr();
+            *out_len = fragment.len();
+            0
+        }
+        None => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_get_href(
+    url: *const Url,
+    out_ptr: *mut *const c_uchar,
+    out_len: *mut usize,
+) {
+    let url = unsafe { &*url };
+    let href = url.as_str();
+    *out_ptr = href.as_ptr();
+    *out_len = href.len();
 }

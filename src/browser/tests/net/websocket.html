@@ -745,3 +745,26 @@
   document.cookie = 'b=; path=/; Max-Age=0';
 }
 </script>
+
+<script id=origin_on_upgrade type=module>
+{
+  // The upgrade request must carry the document's origin in an Origin
+  // header — RFC 6455 §4.1 requires it for browser clients. Origin-checking
+  // endpoints (CSRF protection on WS servers) reject upgrades that arrive
+  // without it, before the handshake ever completes.
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => { ws.send('get-origin'); });
+  ws.addEventListener('message', (e) => { received.push(e.data); ws.close(); });
+  ws.addEventListener('close', () => { state.resolve(); });
+
+  await state.done(() => {
+    // The origin is the document's (fixture HTTP server, port 9582) —
+    // not the WS endpoint's 9584.
+    testing.expectEqual(['origin:http://127.0.0.1:9582'], received);
+  });
+}
+</script>

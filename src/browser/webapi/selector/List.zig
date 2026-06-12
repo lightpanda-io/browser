@@ -619,7 +619,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .target => {
             const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
-            const location = frame.document._location orelse return false;
+            const location = frame.document.getLocation() orelse return false;
             const hash = location.getHash();
             if (hash.len <= 1) return false;
             return std.mem.eql(u8, element_id, hash[1..]);
@@ -683,49 +683,28 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return false;
         },
         .has => |selectors| {
+            // Arguments were absolutized at parse time (":has(~ .a)" is stored
+            // as ":scope ~ .a"), so candidates are matched with :scope bound to
+            // this element. The leading combinator decides where candidates can
+            // live: sibling combinators anchor them in the parent's subtree,
+            // descendant/child in this element's own subtree.
             for (selectors) |selector| {
-                var child = node.firstChild();
-                while (child) |c| {
-                    const child_el = c.is(Node.Element) orelse {
-                        child = c.nextSibling();
-                        continue;
-                    };
+                const search_root = switch (selector.segments[0].combinator) {
+                    .next_sibling, .subsequent_sibling => node.parentNode() orelse continue,
+                    .descendant, .child => node,
+                };
 
-                    if (matches(child_el.asNode(), selector, scope, frame)) {
+                var tw = TreeWalker.init(search_root, .{});
+                _ = tw.next(); // the search root itself is never a candidate
+                while (tw.next()) |candidate| {
+                    if (matches(candidate, selector, node, frame)) {
                         return true;
                     }
-
-                    if (matchesHasDescendant(child_el, selector, scope, frame)) {
-                        return true;
-                    }
-
-                    child = c.nextSibling();
                 }
             }
             return false;
         },
     }
-}
-
-fn matchesHasDescendant(el: *Node.Element, selector: Selector.Selector, scope: *Node, frame: *Frame) bool {
-    var child = el.asNode().firstChild();
-    while (child) |c| {
-        const child_el = c.is(Node.Element) orelse {
-            child = c.nextSibling();
-            continue;
-        };
-
-        if (matches(child_el.asNode(), selector, scope, frame)) {
-            return true;
-        }
-
-        if (matchesHasDescendant(child_el, selector, scope, frame)) {
-            return true;
-        }
-
-        child = c.nextSibling();
-    }
-    return false;
 }
 
 fn hasInvalidDescendant(parent: *Node, frame: *Frame) bool {

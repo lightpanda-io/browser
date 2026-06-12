@@ -1045,6 +1045,13 @@ fn isTeardownMethod(method: []const u8) bool {
         std.mem.eql(u8, method, "Page.close");
 }
 
+fn isRedirectStatus(status: u16) bool {
+    return switch (status) {
+        301, 302, 303, 307, 308 => true,
+        else => false,
+    };
+}
+
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
     // State at entry: .inflight = conn (multi just delivered a completion).
     if (msg.err == null or msg.err.? == error.RecvError) {
@@ -1078,29 +1085,33 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     // Handle redirects: reuse the same connection to preserve TCP state.
+    // A redirect status without a Location header is not a redirect, it's a
+    // final response and falls through so its body is delivered.
     if (msg.err == null) {
         const status = try msg.conn.getResponseCode();
-        if (status >= 300 and status <= 399) {
-            try transfer.handleRedirect();
+        if (isRedirectStatus(status)) {
+            if (msg.conn.getResponseHeader("location", 0)) |location| {
+                try transfer.handleRedirect(location.value);
 
-            const conn = transfer._conn.?;
+                const conn = transfer._conn.?;
 
-            try self.handles.remove(conn);
-            conn.debug_removed = 3;
-            // Conn temporarily out of multi during reconfigure.
-            // _detached_conn lets processMessages release it if any of
-            // the steps below throw. State stays .inflight; _conn stays set
-            transfer._detached_conn = conn;
+                try self.handles.remove(conn);
+                conn.debug_removed = 3;
+                // Conn temporarily out of multi during reconfigure.
+                // _detached_conn lets processMessages release it if any of
+                // the steps below throw. State stays .inflight; _conn stays set
+                transfer._detached_conn = conn;
 
-            transfer.reset();
-            try transfer.configureConn(conn);
-            try self.handles.add(conn);
-            conn.debug_added = 2;
-            transfer._detached_conn = null;
+                transfer.reset();
+                try transfer.configureConn(conn);
+                try self.handles.add(conn);
+                conn.debug_added = 2;
+                transfer._detached_conn = null;
 
-            _ = try self.perform(0);
+                _ = try self.perform(0);
 
-            return false;
+                return false;
+            }
         }
     }
 
@@ -1862,7 +1873,7 @@ pub const Transfer = struct {
         self.req.url = url;
     }
 
-    fn handleRedirect(transfer: *Transfer) !void {
+    fn handleRedirect(transfer: *Transfer, location: []const u8) !void {
         const req = &transfer.req;
         const conn = transfer._conn.?;
         const arena = transfer.arena;
@@ -1885,21 +1896,17 @@ pub const Transfer = struct {
         }
 
         // resolve the redirect target.
-        const location = conn.getResponseHeader("location", 0) orelse {
-            return error.LocationNotFound;
-        };
-
         const url: [:0]const u8 = blk: {
-            if (location.value.len == 0) {
-                // Might seem silly, but URL.resovle will return location.value as-is
-                // if empty, and location.value is memory owned by libcurl.
+            if (location.len == 0) {
+                // Might seem silly, but URL.resovle will return location as-is
+                // if empty, and location is memory owned by libcurl.
                 break :blk "";
             }
 
             const base_url = try conn.getEffectiveUrl();
-            // base_url and location.value are owned by curl. The returned value
+            // base_url and location are owned by curl. The returned value
             // will be stored in transfer.req.url, hence the always_dupe.
-            const resolved = try URL.resolve(arena, std.mem.span(base_url), location.value, .{ .always_dupe = true });
+            const resolved = try URL.resolve(arena, std.mem.span(base_url), location, .{ .always_dupe = true });
 
             // RFC 7231 §7.1.2: if the Location value has no fragment, the redirect
             // inherits the fragment from the URI used to generate the request.
@@ -2034,7 +2041,10 @@ pub const Transfer = struct {
                 log.err(.http, "getResponseCode", .{ .err = err, .source = "body callback" });
                 return http.writefunc_error;
             };
-            if (status >= 300 and status <= 399) {
+            // Only skip the body when the response will actually be retried
+            // as a redirect (a redirect status with a Location header). Any
+            // other 3xx is a final response whose body must be kept.
+            if (isRedirectStatus(status) and conn.getResponseHeader("location", 0) != null) {
                 res.skip_body = true;
                 return @intCast(chunk_len);
             }

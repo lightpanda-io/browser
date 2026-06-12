@@ -17,6 +17,7 @@ tikv-jemalloc-ctl = {version = "0.6.1", features = ["stats"]}
 xml5ever = "0.39.0"
 encoding_rs = "0.8"
 idna = "1.1.0"
+url = "2.5.8"
 
 [profile.release]
 lto = true
