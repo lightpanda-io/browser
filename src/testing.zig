@@ -637,6 +637,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/303-no-location")) {
+        // 3xx WITHOUT a Location header: not a redirect, a final response
+        // whose body must be delivered (RFC 9110 §15.4).
+        return req.respond("<!DOCTYPE html><title>landed</title><p>see other body</p>", .{
+            .status = .see_other,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect-with-fragment")) {
         return req.respond("", .{
             .status = .found,

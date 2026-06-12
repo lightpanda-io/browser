@@ -1078,9 +1078,11 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     // Handle redirects: reuse the same connection to preserve TCP state.
+    // A 3xx without a Location header is not a redirect: per RFC 9110 §15.4
+    // it's a final response and falls through so its body is delivered.
     if (msg.err == null) {
         const status = try msg.conn.getResponseCode();
-        if (status >= 300 and status <= 399) {
+        if (status >= 300 and status <= 399 and msg.conn.getResponseHeader("location", 0) != null) {
             try transfer.handleRedirect();
 
             const conn = transfer._conn.?;
@@ -2034,7 +2036,10 @@ pub const Transfer = struct {
                 log.err(.http, "getResponseCode", .{ .err = err, .source = "body callback" });
                 return http.writefunc_error;
             };
-            if (status >= 300 and status <= 399) {
+            // Only skip the body when the 3xx will actually be retried as a
+            // redirect (it has a Location header). A 3xx without one is a
+            // final response whose body must be kept.
+            if (status >= 300 and status <= 399 and conn.getResponseHeader("location", 0) != null) {
                 res.skip_body = true;
                 return @intCast(chunk_len);
             }
