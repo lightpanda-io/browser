@@ -37,15 +37,19 @@ _pad: bool = false,
 const QueryDescriptor = struct {
     name: []const u8,
 };
-// We always report 'prompt' (the default safe value — neither granted nor denied).
+
+// Report the state set via CDP Browser.grantPermissions / setPermission, or
+// 'prompt' (the default safe value — neither granted nor denied) when unset.
 pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution) !js.Promise {
     const arena = try exec.getArena(.tiny, "PermissionStatus");
     errdefer exec.releaseArena(arena);
 
+    const state = exec.page.permissions.get(qd.name) orelse "prompt";
+
     const status = try arena.create(PermissionStatus);
     status.* = .{
         ._arena = arena,
-        ._state = "prompt",
+        ._state = try arena.dupe(u8, state),
         ._name = try arena.dupe(u8, qd.name),
     };
     return exec.js.local.?.resolvePromise(status);
