@@ -635,7 +635,7 @@ test "browser.markdown: block link" {
         \\### Title
         \\
         \\Description
-        \\[https://example.com](https://example.com)
+        \\[https://example.com/](https://example.com/)
         \\
     );
 }
@@ -651,7 +651,7 @@ test "browser.markdown: block link with aria-label" {
         \\### Title
         \\
         \\Description
-        \\[Docs](https://example.com)
+        \\[Docs](https://example.com/)
         \\
     );
 }
@@ -667,7 +667,7 @@ test "browser.markdown: block link with title" {
         \\### Title
         \\
         \\Description
-        \\[Docs](https://example.com)
+        \\[Docs](https://example.com/)
         \\
     );
 }
@@ -677,7 +677,7 @@ test "browser.markdown: inline link" {
         \\<p>Visit <a href="https://example.com">Example</a>.</p>
     ,
         \\
-        \\Visit [Example](https://example.com).
+        \\Visit [Example](https://example.com/).
         \\
     );
 }
