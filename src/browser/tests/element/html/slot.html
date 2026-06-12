@@ -537,6 +537,42 @@
 }
 </script>
 
+<script id="Slot#slotchange_on_fallback_content_insertion">
+{
+    // Appending fallback content to a slot that renders its fallback (no
+    // assigned nodes) fires slotchange (DOM insertion steps).
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+    slot.addEventListener('slotchange', () => { calls += 1; });
+
+    slot.appendChild(document.createTextNode('fallback'));
+
+    testing.onload(() => {
+        testing.expectEqual(1, calls);
+    });
+}
+</script>
+
+<script id="Slot#no_slotchange_on_empty_slot_innerHTML">
+{
+    // Fragment-parsing a slot (with fallback content) into a shadow tree must
+    // not fire slotchange when nothing gets assigned to it (empty -> empty).
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.addEventListener('slotchange', () => { calls += 1; });
+
+    shadow.innerHTML = '<slot name="z">fallback</slot>';
+
+    testing.onload(() => {
+        testing.expectEqual(0, calls);
+    });
+}
+</script>
+
 <script id="Slot#slotchange_bubbles_to_shadow_root">
 {
     let listener_calls = 0;

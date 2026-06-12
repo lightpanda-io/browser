@@ -3241,10 +3241,10 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     if (self._element_shadow_roots.count() != 0) {
         // html5ever wraps fragment parses in a temporary <html> element that
         // gets unwrapped later; it must not take part in slot assignment.
-        const is_fragment_wrapper = from_parser and
-            self._parse_mode == .fragment and child.is(Element.Html.Html) != null;
-        if (!is_fragment_wrapper) {
-            self.slotInsertionSteps(parent, child);
+        const in_fragment_parse = from_parser and self._parse_mode == .fragment;
+        const is_fragment_wrapper = in_fragment_parse and child.is(Element.Html.Html) != null;
+        if (is_fragment_wrapper == false) {
+            self.slotInsertionSteps(parent, child, in_fragment_parse);
         }
     }
 
@@ -3520,13 +3520,11 @@ fn _assignSlottables(self: *Frame, slot: *Element.Html.Slot) !void {
     }
 }
 
-// DOM spec "assign a slot"
 fn assignASlot(self: *Frame, slottable: *Node) void {
     const slot = self.findSlotForSlottable(slottable, false) orelse return;
     self.assignSlottables(slot);
 }
 
-// DOM spec "assign slottables for a tree"
 pub fn assignSlottablesForTree(self: *Frame, root: *Node) void {
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(root, .{});
     while (tw.next()) |el| {
@@ -3549,8 +3547,7 @@ fn subtreeHasSlot(node: *Node) bool {
     return false;
 }
 
-// DOM spec insertion steps that affect slot assignment.
-fn slotInsertionSteps(self: *Frame, parent: *Node, child: *Node) void {
+fn slotInsertionSteps(self: *Frame, parent: *Node, child: *Node, in_fragment_parse: bool) void {
     // The new child may be a slottable to assign in the parent's shadow tree.
     if (parent.is(Element)) |parent_el| {
         if (self._element_shadow_roots.get(parent_el) != null and isSlottable(child)) {
@@ -3559,9 +3556,14 @@ fn slotInsertionSteps(self: *Frame, parent: *Node, child: *Node) void {
     }
 
     // New fallback content in a slot that currently renders its fallback.
-    if (parent.is(Element.Html.Slot)) |parent_slot| {
-        if (parent_slot._assigned.items.len == 0 and parent.getRootNode(.{}).is(ShadowRoot) != null) {
-            self.signalSlotChange(parent_slot);
+    // Skipped during fragment parsing: signaling would fire a spurious
+    // slotchange when the fragment's slots end up with the same (empty)
+    // assignment they were parsed with.
+    if (!in_fragment_parse == false) {
+        if (parent.is(Element.Html.Slot)) |parent_slot| {
+            if (parent_slot._assigned.items.len == 0 and parent.getRootNode(.{}).is(ShadowRoot) != null) {
+                self.signalSlotChange(parent_slot);
+            }
         }
     }
 
