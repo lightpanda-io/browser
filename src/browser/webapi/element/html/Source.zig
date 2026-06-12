@@ -1,3 +1,4 @@
+const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
@@ -63,20 +64,24 @@ pub fn setType(self: *Source, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
 }
 
-pub fn getWidth(self: *const Source) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("width")) orelse "";
+pub fn getWidth(self: *const Source) u32 {
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("width")) orelse return 0;
+    return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
 }
 
-pub fn setWidth(self: *Source, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(value), frame);
+pub fn setWidth(self: *Source, value: u32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), frame);
 }
 
-pub fn getHeight(self: *const Source) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("height")) orelse "";
+pub fn getHeight(self: *const Source) u32 {
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("height")) orelse return 0;
+    return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
 }
 
-pub fn setHeight(self: *Source, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(value), frame);
+pub fn setHeight(self: *Source, value: u32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), frame);
 }
 
 pub const JsApi = struct {

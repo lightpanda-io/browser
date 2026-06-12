@@ -13,8 +13,8 @@
     testing.expectEqual('100vw', s1.sizes);
     testing.expectEqual('(min-width: 600px)', s1.media);
     testing.expectEqual('video/webm', s1.type);
-    testing.expectEqual('640', s1.width);
-    testing.expectEqual('480', s1.height);
+    testing.expectEqual(640, s1.width);
+    testing.expectEqual(480, s1.height);
 
     const s2 = document.getElementById('s2');
     testing.expectEqual('', s2.src);
@@ -22,8 +22,8 @@
     testing.expectEqual('', s2.sizes);
     testing.expectEqual('', s2.media);
     testing.expectEqual('', s2.type);
-    testing.expectEqual('', s2.width);
-    testing.expectEqual('', s2.height);
+    testing.expectEqual(0, s2.width);
+    testing.expectEqual(0, s2.height);
   }
 </script>
 
@@ -51,15 +51,17 @@
     s.setAttribute('type', 'image/svg+xml');
     testing.expectEqual('image/svg+xml', s.type);
 
-    s.width = '320';
+    s.width = 320;
     testing.expectEqual('320', s.getAttribute('width'));
     s.setAttribute('width', '160');
-    testing.expectEqual('160', s.width);
+    testing.expectEqual(160, s.width);
+    s.setAttribute('width', 'not-a-number');
+    testing.expectEqual(0, s.width);
 
-    s.height = '240';
+    s.height = 240;
     testing.expectEqual('240', s.getAttribute('height'));
     s.setAttribute('height', '120');
-    testing.expectEqual('120', s.height);
+    testing.expectEqual(120, s.height);
   }
 </script>
 
