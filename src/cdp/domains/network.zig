@@ -108,6 +108,16 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
     try extra_headers.ensureTotalCapacity(arena, params.headers.map.count());
     var it = params.headers.map.iterator();
     while (it.next()) |header| {
+        // Reject a non-printable User-Agent, but (unlike
+        // Emulation.setUserAgentOverride) allow Mozilla: this is the
+        // intended escape hatch for a real browser-like UA (#2704).
+        if (std.ascii.eqlIgnoreCase(header.key_ptr.*, "user-agent")) {
+            for (header.value_ptr.*) |c| {
+                if (!std.ascii.isPrint(c)) {
+                    return cmd.sendError(-32602, "User agent contains non-printable characters", .{});
+                }
+            }
+        }
         const header_string = try std.fmt.allocPrintSentinel(arena, "{s}: {s}", .{ header.key_ptr.*, header.value_ptr.* }, 0);
         extra_headers.appendAssumeCapacity(header_string);
     }
@@ -548,6 +558,53 @@ test "cdp.network setExtraHTTPHeaders" {
         .id = 4,
         .method = "Network.setExtraHTTPHeaders",
         .params = .{ .headers = .{ .food = "bars" } },
+    });
+
+    const bc = ctx.cdp().browser_context.?;
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+}
+
+test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA1", .session_id = "NESI-UA1" });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{ .@"User-Agent" = "Bot/1.0\x01hidden" } },
+    });
+
+    try ctx.expectSentError(-32602, "User agent contains non-printable characters", .{ .id = 3 });
+}
+
+test "cdp.network setExtraHTTPHeaders allows a Mozilla User-Agent" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA2", .session_id = "NESI-UA2" });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{ .@"User-Agent" = "Mozilla/5.0" } },
+    });
+
+    const bc = ctx.cdp().browser_context.?;
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+}
+
+test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA3", .session_id = "NESI-UA3" });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{ .@"User-Agent" = "CustomBot/2.0" } },
     });
 
     const bc = ctx.cdp().browser_context.?;
