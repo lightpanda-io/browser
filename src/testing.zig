@@ -648,6 +648,19 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/300-with-location")) {
+        // A non-redirect 3xx (fetch's redirect statuses are only 301, 302,
+        // 303, 307 and 308) carrying a Location header: the header is a
+        // preference hint, not a redirect — the body must be delivered.
+        return req.respond("<!DOCTYPE html><title>choices</title><p>multiple choices body</p>", .{
+            .status = .multiple_choice,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                .{ .name = "Location", .value = "http://127.0.0.1:9582/hi.html" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect-with-fragment")) {
         return req.respond("", .{
             .status = .found,

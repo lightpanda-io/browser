@@ -1338,6 +1338,35 @@ test "cdp.frame: navigate renders body of 3xx response without Location" {
     try testing.expect(v.toBool());
 }
 
+test "cdp.frame: navigate does not follow Location on a non-redirect 3xx" {
+    // The fetch standard's redirect statuses are exactly 301, 302, 303, 307
+    // and 308. A 300 (Multiple Choices) may carry a Location header as a
+    // preference hint, but it is not a redirect: the response itself must be
+    // delivered and the Location must not be followed.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-300L", .url = "hi.html", .target_id = "FID-0000003000".* });
+
+    try ctx.processMessage(.{
+        .id = 51,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/300-with-location" },
+    });
+
+    var runner = try bc.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
+
+    const frame = bc.session.currentFrame() orelse unreachable;
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/300-with-location", frame.url);
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("document.title === 'choices' && document.body.innerText.includes('multiple choices body')", null);
+    try testing.expect(v.toBool());
+}
+
 test "cdp.frame: navigate to about:blank replaces a non-blank document" {
     // Regression test for #2363. Page.navigate("about:blank") issued against a
     // tab that already holds a real document must replace the active document
