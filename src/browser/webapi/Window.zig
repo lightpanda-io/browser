@@ -23,7 +23,7 @@ const builtin = @import("builtin");
 const js = @import("../js/js.zig");
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
-const MediaQuery = @import("../css/MediaQuery.zig");
+const Viewport = @import("../Viewport.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
@@ -54,12 +54,6 @@ const Notification = @import("../../Notification.zig");
 
 const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
-
-// Faux-layout viewport height. Exposed as window.innerHeight and used to decide
-// whether an element is already within view (e.g. scrollIntoViewIfNeeded).
-// Sourced from the single MediaQuery.Viewport.default so the cascade,
-// matchMedia and the window/screen dimensions stay in sync.
-const DEFAULT_INNER_HEIGHT: u32 = MediaQuery.Viewport.default.height;
 
 const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
@@ -708,8 +702,10 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
+// Faux-layout viewport height, used to decide whether an element is already
+// within view (e.g. scrollIntoViewIfNeeded).
 pub fn getInnerHeight(_: *const Window) u32 {
-    return DEFAULT_INNER_HEIGHT;
+    return Viewport.default.height;
 }
 
 const ScrollToOpts = union(enum) {
@@ -1013,8 +1009,8 @@ pub const JsApi = struct {
     pub const isSecureContext = bridge.property(false, .{ .template = false });
 
     // [Replaceable] (CSSOM-View): writable so assignment overwrites rather than throws.
-    pub const innerWidth = bridge.property(MediaQuery.Viewport.default.width, .{ .template = false, .readonly = false });
-    pub const innerHeight = bridge.property(MediaQuery.Viewport.default.height, .{ .template = false, .readonly = false });
+    pub const innerWidth = bridge.property(Viewport.default.width, .{ .template = false, .readonly = false });
+    pub const innerHeight = bridge.property(Viewport.default.height, .{ .template = false, .readonly = false });
     pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
 
     pub const opener = bridge.accessor(Window.getOpener, null, .{});

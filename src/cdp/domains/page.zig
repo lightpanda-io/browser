@@ -29,7 +29,6 @@ const CDP = @import("../CDP.zig");
 const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
 const Frame = @import("../../browser/Frame.zig");
-const MediaQuery = @import("../../browser/css/MediaQuery.zig");
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
 
@@ -907,8 +906,9 @@ fn printToPDF(cmd: *CDP.Command) !void {
 }
 
 fn getLayoutMetrics(cmd: *CDP.Command) !void {
-    const width = MediaQuery.Viewport.default.width;
-    const height = MediaQuery.Viewport.default.height;
+    const viewport = @import("../../browser/Viewport.zig").default;
+    const width = viewport.width;
+    const height = viewport.height;
 
     return cmd.sendResult(.{
         .layoutViewport = .{

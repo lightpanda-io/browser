@@ -18,7 +18,7 @@
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
-const MediaQuery = @import("../css/MediaQuery.zig");
+const Viewport = @import("../Viewport.zig");
 const EventTarget = @import("EventTarget.zig");
 
 const VisualViewport = @This();
@@ -52,7 +52,7 @@ pub const JsApi = struct {
     pub const offsetTop = bridge.property(0, .{ .template = false });
     pub const pageLeft = bridge.accessor(VisualViewport.getPageLeft, null, .{});
     pub const pageTop = bridge.accessor(VisualViewport.getPageTop, null, .{});
-    pub const width = bridge.property(MediaQuery.Viewport.default.width, .{ .template = false });
-    pub const height = bridge.property(MediaQuery.Viewport.default.height, .{ .template = false });
+    pub const width = bridge.property(Viewport.default.width, .{ .template = false });
+    pub const height = bridge.property(Viewport.default.height, .{ .template = false });
     pub const scale = bridge.property(1.0, .{ .template = false });
 };
