@@ -96,19 +96,50 @@ fn setWindowBounds(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// TODO: noop method
+// Grant the listed permissions so navigator.permissions.query() reports them
+// as "granted". State is stored on the active Page and resets on navigation.
 fn grantPermissions(cmd: *CDP.Command) !void {
-    return cmd.sendResult(null, .{});
+    const params = (try cmd.params(struct {
+        permissions: []const []const u8,
+        origin: ?[]const u8 = null,
+        browserContextId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    for (params.permissions) |name| {
+        try page.setPermission(name, "granted");
+    }
+
+    return cmd.sendResult(null, .{ .include_session_id = false });
 }
 
-// TODO: noop method
+// Set a single permission to an explicit state ("granted", "denied" or
+// "prompt"), reflected by navigator.permissions.query().
 fn setPermission(cmd: *CDP.Command) !void {
-    return cmd.sendResult(null, .{});
+    const params = (try cmd.params(struct {
+        permission: struct { name: []const u8 },
+        setting: []const u8,
+        origin: ?[]const u8 = null,
+        browserContextId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    try page.setPermission(params.permission.name, params.setting);
+
+    return cmd.sendResult(null, .{ .include_session_id = false });
 }
 
-// TODO: noop method
+// Clear all granted permissions; navigator.permissions.query() falls back to
+// the default "prompt".
 fn resetPermissions(cmd: *CDP.Command) !void {
-    return cmd.sendResult(null, .{});
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    if (bc.session.currentPage()) |page| {
+        page.permissions.clearRetainingCapacity();
+    }
+
+    return cmd.sendResult(null, .{ .include_session_id = false });
 }
 
 const testing = @import("../testing.zig");
@@ -145,4 +176,39 @@ test "cdp.browser: getWindowForTarget" {
         .windowId = DEV_TOOLS_WINDOW_ID,
         .bounds = .{ .windowState = "normal" },
     }, .{ .id = 33, .index = 0, .session_id = null });
+}
+
+test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-PERM", .url = "cdp/dom1.html" });
+    const page = bc.session.currentPage() orelse unreachable;
+
+    // grantPermissions: each listed permission becomes "granted".
+    try ctx.processMessage(.{
+        .id = 40,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{ "geolocation", "notifications" } },
+    });
+    try ctx.expectSentResult(null, .{ .id = 40, .session_id = null });
+    try testing.expectEqualSlices(u8, "granted", page.permissions.get("geolocation").?);
+    try testing.expectEqualSlices(u8, "granted", page.permissions.get("notifications").?);
+
+    // setPermission: override a single permission to an explicit state.
+    try ctx.processMessage(.{
+        .id = 41,
+        .method = "Browser.setPermission",
+        .params = .{ .permission = .{ .name = "geolocation" }, .setting = "denied" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 41, .session_id = null });
+    try testing.expectEqualSlices(u8, "denied", page.permissions.get("geolocation").?);
+
+    // resetPermissions: clears everything; query falls back to "prompt".
+    try ctx.processMessage(.{
+        .id = 42,
+        .method = "Browser.resetPermissions",
+    });
+    try ctx.expectSentResult(null, .{ .id = 42, .session_id = null });
+    try testing.expectEqual(@as(usize, 0), page.permissions.count());
 }
