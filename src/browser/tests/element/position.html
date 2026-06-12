@@ -161,6 +161,72 @@
 }
 </script>
 
+<script id="offsetParent">
+{
+  const test1 = $('#test1');
+
+  // Default offset ancestor is the body.
+  testing.expectEqual(document.body, test1.offsetParent);
+
+  // The root and body elements have no offsetParent.
+  testing.expectEqual(null, document.documentElement.offsetParent);
+  testing.expectEqual(null, document.body.offsetParent);
+
+  // A positioned ancestor wins over the body.
+  const wrap = document.createElement('div');
+  wrap.style.position = 'relative';
+  const inner = document.createElement('span');
+  wrap.appendChild(inner);
+  document.body.appendChild(wrap);
+  testing.expectEqual(wrap, inner.offsetParent);
+
+  // A position:fixed element has no offsetParent.
+  inner.style.position = 'fixed';
+  testing.expectEqual(null, inner.offsetParent);
+  inner.style.position = '';
+
+  // Static elements offset from table machinery: content → cell, cell → table.
+  const table = document.createElement('table');
+  const tr = document.createElement('tr');
+  const td = document.createElement('td');
+  const cellContent = document.createElement('span');
+  td.appendChild(cellContent);
+  tr.appendChild(td);
+  table.appendChild(tr);
+  document.body.appendChild(table);
+  testing.expectEqual(td, cellContent.offsetParent);
+  testing.expectEqual(table, td.offsetParent);
+
+  // ...but a positioned element ignores the td/th/table rule.
+  cellContent.style.position = 'absolute';
+  testing.expectEqual(document.body, cellContent.offsetParent);
+
+  // display:none (own or inherited) → null.
+  const hidden = document.createElement('div');
+  hidden.style.display = 'none';
+  const hiddenChild = document.createElement('span');
+  hidden.appendChild(hiddenChild);
+  document.body.appendChild(hidden);
+  testing.expectEqual(null, hidden.offsetParent);
+  testing.expectEqual(null, hiddenChild.offsetParent);
+
+  // Detached elements → null.
+  testing.expectEqual(null, document.createElement('div').offsetParent);
+
+  // Shadow-tree elements hop the boundary to the host's offset ancestor.
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const shadow = host.attachShadow({mode: 'open'});
+  const shadowChild = document.createElement('div');
+  shadow.appendChild(shadowChild);
+  testing.expectEqual(document.body, shadowChild.offsetParent);
+
+  // A positioned host is itself the offsetParent.
+  host.style.position = 'relative';
+  testing.expectEqual(host, shadowChild.offsetParent);
+}
+</script>
+
 <script id="scrollIntoView">
 {
   // Add an element deep in the document so its position is non-zero.
