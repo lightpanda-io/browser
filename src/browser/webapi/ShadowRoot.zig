@@ -110,6 +110,18 @@ pub fn setHTMLUnsafe(self: *ShadowRoot, html: []const u8, frame: *Frame) !void {
     return self.asDocumentFragment().setHTMLUnsafe(html, frame);
 }
 
+pub fn getOnSlotChange(self: *ShadowRoot, frame: *Frame) ?js.Function.Global {
+    return frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onslotchange });
+}
+
+pub fn setOnSlotChange(self: *ShadowRoot, callback: ?js.Function.Global, frame: *Frame) !void {
+    if (callback) |cb| {
+        try frame._event_target_attr_listeners.put(frame.arena, .{ .target = self.asEventTarget(), .handler = .onslotchange }, cb);
+    } else {
+        _ = frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onslotchange });
+    }
+}
+
 pub fn getElementById(self: *ShadowRoot, id: []const u8, frame: *Frame) ?*Element {
     if (id.len == 0) {
         return null;
@@ -182,6 +194,7 @@ pub const JsApi = struct {
     }
     pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
     pub const setHTMLUnsafe = bridge.function(ShadowRoot.setHTMLUnsafe, .{ .dom_exception = true, .ce_reactions = true });
+    pub const onslotchange = bridge.accessor(ShadowRoot.getOnSlotChange, ShadowRoot.setOnSlotChange, .{});
 };
 
 const testing = @import("../../testing.zig");

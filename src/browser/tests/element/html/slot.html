@@ -516,3 +516,186 @@
     });
 }
 </script>
+
+<script id="Slot#no_slotchange_when_assignment_unchanged">
+{
+    // Renaming a detached slot or one whose assignment doesn't change must
+    // not fire slotchange.
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    slot.addEventListener('slotchange', () => { calls += 1; });
+    slot.name = 'detached-rename'; // detached: no signal
+    shadow.appendChild(slot); // host has no children: no signal
+    slot.name = 'still-nothing-assigned'; // assignment ([]) unchanged: no signal
+
+    testing.onload(() => {
+        testing.expectEqual(0, calls);
+    });
+}
+</script>
+
+<script id="Slot#slotchange_on_fallback_content_insertion">
+{
+    // Appending fallback content to a slot that renders its fallback (no
+    // assigned nodes) fires slotchange (DOM insertion steps).
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+    slot.addEventListener('slotchange', () => { calls += 1; });
+
+    slot.appendChild(document.createTextNode('fallback'));
+
+    testing.onload(() => {
+        testing.expectEqual(1, calls);
+    });
+}
+</script>
+
+<script id="Slot#no_slotchange_on_empty_slot_innerHTML">
+{
+    // Fragment-parsing a slot (with fallback content) into a shadow tree must
+    // not fire slotchange when nothing gets assigned to it (empty -> empty).
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.addEventListener('slotchange', () => { calls += 1; });
+
+    shadow.innerHTML = '<slot name="z">fallback</slot>';
+
+    testing.onload(() => {
+        testing.expectEqual(0, calls);
+    });
+}
+</script>
+
+<script id="Slot#slotchange_bubbles_to_shadow_root">
+{
+    let listener_calls = 0;
+    let handler_calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+
+    shadow.addEventListener('slotchange', (e) => {
+        testing.expectTrue(e.target === slot);
+        listener_calls += 1;
+    });
+    shadow.onslotchange = (e) => {
+        testing.expectTrue(e.target === slot);
+        handler_calls += 1;
+    };
+
+    host.appendChild(document.createElement('span'));
+
+    testing.onload(() => {
+        testing.expectEqual(1, listener_calls);
+        testing.expectEqual(1, handler_calls);
+    });
+}
+</script>
+
+<script id="Slot#assignedSlot_null_for_closed_shadow_root">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'closed' });
+
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+
+    const span = document.createElement('span');
+    host.appendChild(span);
+
+    // assigned (slot sees it), but hidden from the outside
+    testing.expectEqual(1, slot.assignedNodes().length);
+    testing.expectEqual(null, span.assignedSlot);
+}
+</script>
+
+<script id="Slot#text_assignedSlot">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+
+    const text = document.createTextNode('hello');
+    host.appendChild(text);
+
+    testing.expectEqual(slot, text.assignedSlot);
+    testing.expectEqual(null, document.createTextNode('detached').assignedSlot);
+}
+</script>
+
+<script id="Slot#manual_assignment">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open', slotAssignment: 'manual' });
+
+    const s1 = document.createElement('slot');
+    const s2 = document.createElement('slot');
+    shadow.appendChild(s1);
+    shadow.appendChild(s2);
+
+    const c1 = document.createElement('div');
+    const c2 = document.createElement('div');
+    const c3 = document.createElement('div');
+    c1.setAttribute('slot', 'ignored-in-manual-mode');
+    host.appendChild(c1);
+    host.appendChild(c2);
+    host.appendChild(c3);
+
+    // slot attribute is ignored in manual mode
+    testing.expectEqual(0, s1.assignedNodes().length);
+
+    // assign() order is preserved, not tree order
+    s1.assign(c2, c3, c1);
+    testing.expectEqual(3, s1.assignedNodes().length);
+    testing.expectTrue(s1.assignedNodes()[0] === c2);
+    testing.expectTrue(s1.assignedNodes()[1] === c3);
+    testing.expectTrue(s1.assignedNodes()[2] === c1);
+    testing.expectEqual(s1, c2.assignedSlot);
+
+    // re-assigning a node moves it to the new slot
+    s2.assign(c2);
+    testing.expectEqual(2, s1.assignedNodes().length);
+    testing.expectTrue(s1.assignedNodes()[0] === c3);
+    testing.expectEqual(1, s2.assignedNodes().length);
+    testing.expectEqual(s2, c2.assignedSlot);
+
+    // an array is not allowed: assign is variadic
+    testing.expectError('TypeError', () => { s1.assign([c1, c2]); });
+}
+</script>
+
+<script id="Slot#flatten_uses_fallback_of_nested_slot">
+{
+    // outer host content assigned to outer slot; outer slot's tree contains
+    // an inner shadow host whose slot has fallback content
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+
+    // fallback of the slot is itself a slot (not in a shadow tree of its own,
+    // it shares this shadow tree) with its own fallback
+    const innerSlot = document.createElement('slot');
+    innerSlot.name = 'inner';
+    const fallback = document.createElement('em');
+    innerSlot.appendChild(fallback);
+    slot.appendChild(innerSlot);
+
+    // host has no children: flatten resolves the fallback chain
+    const flat = slot.assignedNodes({ flatten: true });
+    testing.expectEqual(1, flat.length);
+    testing.expectTrue(flat[0] === fallback);
+}
+</script>
