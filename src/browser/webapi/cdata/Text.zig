@@ -20,6 +20,7 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const CData = @import("../CData.zig");
 const Slot = @import("../element/html/Slot.zig");
+const slotting = @import("../element/slotting.zig");
 
 const Text = @This();
 
@@ -35,7 +36,7 @@ pub fn getWholeText(self: *Text) []const u8 {
 }
 
 pub fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {
-    return frame.findSlotForSlottable(self._proto.asNode(), true);
+    return slotting.findSlot(self._proto.asNode(), true, frame);
 }
 
 pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {

@@ -24,20 +24,22 @@ const Frame = @import("../Frame.zig");
 const StyleManager = @import("../StyleManager.zig");
 const reflect = @import("../reflect.zig");
 
-const Node = @import("Node.zig");
 const CSS = @import("CSS.zig");
+const Node = @import("Node.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
+pub const DOMRect = @import("DOMRect.zig");
+
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
-const DOMStringMap = @import("element/DOMStringMap.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 
-pub const DOMRect = @import("DOMRect.zig");
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
+const slotting = @import("element/slotting.zig");
 pub const Attribute = @import("element/Attribute.zig");
+const DOMStringMap = @import("element/DOMStringMap.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -748,7 +750,7 @@ pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
 
 pub fn getAssignedSlot(self: *Element, frame: *Frame) ?*Html.Slot {
     // Hidden by a closed shadow tree
-    return frame.findSlotForSlottable(self.asNode(), true);
+    return slotting.findSlot(self.asNode(), true, frame);
 }
 
 // Whether this element may host a shadow root

@@ -5,11 +5,12 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const ShadowRoot = @import("../../ShadowRoot.zig");
+const slotting = @import("../slotting.zig");
 
 const Slot = @This();
 
 _proto: *HtmlElement,
-// DOM spec "assigned nodes". Maintained by Frame.assignSlottables; always
+// DOM spec "assigned nodes". Maintained by slotting.assignSlottables; always
 // empty while the slot isn't in a shadow tree.
 _assigned: std.ArrayList(*Node) = .empty,
 // DOM spec "manually assigned nodes", set via assign(). Only consulted when
@@ -85,7 +86,7 @@ fn collectFlattened(self: *Slot, comptime elements: bool, coll: CollectionType(e
     // no assigned nodes; flatten the slot's fallback content
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
-        if (!Frame.isSlottable(child)) {
+        if (!slotting.isSlottable(child)) {
             continue;
         }
         try appendFlattened(elements, coll, child, frame);
@@ -117,7 +118,7 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
     const nodes = try frame.call_arena.alloc(*Node, values.len);
     for (values, nodes) |value, *entry| {
         const node = value.toZig(*Node) catch return error.TypeError;
-        if (!Frame.isSlottable(node)) {
+        if (!slotting.isSlottable(node)) {
             return error.TypeError;
         }
         entry.* = node;
@@ -150,7 +151,7 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
 
     const root = self.asNode().getRootNode(.{});
     if (root.is(ShadowRoot) != null) {
-        frame.assignSlottablesForTree(root);
+        slotting.assignSlottablesForTree(root, frame);
     }
 }
 

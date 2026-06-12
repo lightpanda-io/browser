@@ -60,6 +60,7 @@ const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
 const popover = @import("webapi/element/popover.zig");
+const slotting = @import("webapi/element/slotting.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
@@ -3092,7 +3093,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         self.updateRangesForNodeRemoval(parent, child, idx);
     }
 
-    self.slotRemovalSteps(parent, child);
+    slotting.removalSteps(parent, child, self);
 
     if (self.hasMutationObservers()) {
         const removed = [_]*Node{child};
@@ -3244,7 +3245,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         const in_fragment_parse = from_parser and self._parse_mode == .fragment;
         const is_fragment_wrapper = in_fragment_parse and child.is(Element.Html.Html) != null;
         if (is_fragment_wrapper == false) {
-            self.slotInsertionSteps(parent, child, in_fragment_parse);
+            slotting.insertionSteps(parent, child, in_fragment_parse, self);
         }
     }
 
@@ -3359,11 +3360,11 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
     // Handle slot assignment changes
     if (name.eql(comptime .wrap("slot"))) {
         const old = if (old_value) |o| o.str() else "";
-        self.slottableNameChange(element.asNode(), old, value.str());
+        slotting.slotAttributeChanged(element.asNode(), old, value.str(), self);
     } else if (name.eql(comptime .wrap("name"))) {
         if (element.is(Element.Html.Slot)) |slot| {
             const old = if (old_value) |o| o.str() else "";
-            self.slotNameChange(slot, old, value.str());
+            slotting.nameAttributeChanged(slot, old, value.str(), self);
         }
     } else if (name.eql(comptime .wrap("popover"))) {
         const old = if (old_value) |o| o.str() else null;
@@ -3388,17 +3389,17 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
 
     // Handle slot assignment changes
     if (name.eql(comptime .wrap("slot"))) {
-        self.slottableNameChange(element.asNode(), old_value.str(), "");
+        slotting.slotAttributeChanged(element.asNode(), old_value.str(), "", self);
     } else if (name.eql(comptime .wrap("name"))) {
         if (element.is(Element.Html.Slot)) |slot| {
-            self.slotNameChange(slot, old_value.str(), "");
+            slotting.nameAttributeChanged(slot, old_value.str(), "", self);
         }
     } else if (name.eql(comptime .wrap("popover"))) {
         popover.attributeChanged(element, old_value.str(), null, self);
     }
 }
 
-fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {
+pub fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {
     self._slots_pending_slotchange.put(self.arena, slot, {}) catch |err| {
         log.err(.frame, "signalSlotChange.put", .{ .err = err, .type = self._type, .url = self.url });
         return;
@@ -3406,229 +3407,6 @@ fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {
     self.scheduleMutationDelivery() catch |err| {
         log.err(.frame, "signalSlotChange.schedule", .{ .err = err, .type = self._type, .url = self.url });
     };
-}
-
-pub fn isSlottable(node: *Node) bool {
-    return switch (node._type) {
-        .element => true,
-        .cdata => node.is(Text) != null,
-        else => false,
-    };
-}
-
-pub fn findSlotForSlottable(self: *Frame, slottable: *Node, comptime open_only: bool) ?*Element.Html.Slot {
-    const parent = slottable.parentElement() orelse return null;
-
-    const shadow_root = self._element_shadow_roots.get(parent) orelse return null;
-
-    if (open_only and shadow_root._mode != .open) {
-        return null;
-    }
-
-    const shadow_node = shadow_root.asNode();
-
-    if (shadow_root._slot_assignment == .manual) {
-        const slot = self._manual_slot_assignments.get(slottable) orelse return null;
-        if (slot.asNode().getRootNode(.{}) != shadow_node) {
-            return null;
-        }
-        return slot;
-    }
-
-    const slottable_name = blk: {
-        const el = slottable.is(Element) orelse break :blk "";
-        break :blk el.getAttributeSafe(comptime .wrap("slot")) orelse "";
-    };
-    return findNamedSlot(shadow_node, slottable_name);
-}
-
-// First slot, in tree order, with the given name.
-fn findNamedSlot(node: *Node, slot_name: []const u8) ?*Element.Html.Slot {
-    if (node.is(Element.Html.Slot)) |slot| {
-        if (std.mem.eql(u8, slot.getName(), slot_name)) {
-            return slot;
-        }
-    }
-
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
-        if (findNamedSlot(child, slot_name)) |slot| {
-            return slot;
-        }
-    }
-
-    return null;
-}
-
-// DOM spec "assign slottables": recompute a slot's assigned nodes, signaling
-// a slot change when the assignment actually changed.
-pub fn assignSlottables(self: *Frame, slot: *Element.Html.Slot) void {
-    self._assignSlottables(slot) catch |err| {
-        log.err(.frame, "assignSlottables", .{ .err = err, .type = self._type, .url = self.url });
-    };
-}
-
-fn _assignSlottables(self: *Frame, slot: *Element.Html.Slot) !void {
-    var slottables: std.ArrayList(*Node) = .empty;
-    if (slot.asNode().getRootNode(.{}).is(ShadowRoot)) |shadow_root| {
-        const host = shadow_root.getHost();
-        if (shadow_root._slot_assignment == .manual) {
-            // manual assignment preserves the assign(...) order, not tree order
-            for (slot._manually_assigned.items) |node| {
-                if (node._parent == host.asNode()) {
-                    try slottables.append(self.call_arena, node);
-                }
-            }
-        } else {
-            var it = host.asNode().childrenIterator();
-            while (it.next()) |child| {
-                if (!isSlottable(child)) {
-                    continue;
-                }
-                if (self.findSlotForSlottable(child, false) == slot) {
-                    try slottables.append(self.call_arena, child);
-                }
-            }
-        }
-    }
-
-    const old = slot._assigned.items;
-    const changed = blk: {
-        if (old.len != slottables.items.len) {
-            break :blk true;
-        }
-        for (old, slottables.items) |a, b| {
-            if (a != b) break :blk true;
-        }
-        break :blk false;
-    };
-    if (!changed) {
-        return;
-    }
-
-    self.signalSlotChange(slot);
-
-    for (old) |node| {
-        if (self._assigned_slots.get(node) == slot) {
-            _ = self._assigned_slots.remove(node);
-        }
-    }
-    slot._assigned.clearRetainingCapacity();
-    try slot._assigned.appendSlice(self.arena, slottables.items);
-    for (slottables.items) |node| {
-        try self._assigned_slots.put(self.arena, node, slot);
-    }
-}
-
-fn assignASlot(self: *Frame, slottable: *Node) void {
-    const slot = self.findSlotForSlottable(slottable, false) orelse return;
-    self.assignSlottables(slot);
-}
-
-pub fn assignSlottablesForTree(self: *Frame, root: *Node) void {
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(root, .{});
-    while (tw.next()) |el| {
-        if (el.is(Element.Html.Slot)) |slot| {
-            self.assignSlottables(slot);
-        }
-    }
-}
-
-fn subtreeHasSlot(node: *Node) bool {
-    if (node.is(Element) == null) {
-        return false;
-    }
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
-    while (tw.next()) |el| {
-        if (el.is(Element.Html.Slot) != null) {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn slotInsertionSteps(self: *Frame, parent: *Node, child: *Node, in_fragment_parse: bool) void {
-    // The new child may be a slottable to assign in the parent's shadow tree.
-    if (parent.is(Element)) |parent_el| {
-        if (self._element_shadow_roots.get(parent_el) != null and isSlottable(child)) {
-            self.assignASlot(child);
-        }
-    }
-
-    // New fallback content in a slot that currently renders its fallback.
-    // Skipped during fragment parsing: signaling would fire a spurious
-    // slotchange when the fragment's slots end up with the same (empty)
-    // assignment they were parsed with.
-    if (!in_fragment_parse == false) {
-        if (parent.is(Element.Html.Slot)) |parent_slot| {
-            if (parent_slot._assigned.items.len == 0 and parent.getRootNode(.{}).is(ShadowRoot) != null) {
-                self.signalSlotChange(parent_slot);
-            }
-        }
-    }
-
-    // A subtree containing slots was inserted into a shadow tree.
-    if (subtreeHasSlot(child)) {
-        const root = child.getRootNode(.{});
-        if (root.is(ShadowRoot) != null) {
-            self.assignSlottablesForTree(root);
-        }
-    }
-}
-
-// DOM spec removing steps that affect slot assignment. Runs after child has
-// been unlinked from parent.
-fn slotRemovalSteps(self: *Frame, parent: *Node, child: *Node) void {
-    if (self._element_shadow_roots.count() == 0) {
-        // shortcut
-        return;
-    }
-
-    if (self._assigned_slots.get(child)) |slot| {
-        self.assignSlottables(slot);
-    }
-
-    // Fallback content was removed from a slot that renders its fallback.
-    if (parent.is(Element.Html.Slot)) |parent_slot| {
-        if (parent_slot._assigned.items.len == 0 and parent.getRootNode(.{}).is(ShadowRoot) != null) {
-            self.signalSlotChange(parent_slot);
-        }
-    }
-
-    // A subtree containing slots was removed: update assignments in the old
-    // tree, and clear assignments held by slots in the detached subtree.
-    if (subtreeHasSlot(child)) {
-        const root = parent.getRootNode(.{});
-        if (root.is(ShadowRoot) != null) {
-            self.assignSlottablesForTree(root);
-        }
-        self.assignSlottablesForTree(child);
-    }
-}
-
-// DOM spec attribute change steps for the `slot` attribute on a slottable.
-fn slottableNameChange(self: *Frame, slottable: *Node, old_value: []const u8, value: []const u8) void {
-    if (std.mem.eql(u8, old_value, value)) {
-        return;
-    }
-    if (self._element_shadow_roots.count() == 0) {
-        return;
-    }
-    if (self._assigned_slots.get(slottable)) |old_slot| {
-        self.assignSlottables(old_slot);
-    }
-    self.assignASlot(slottable);
-}
-
-// HTML spec attribute change steps for the `name` attribute on a slot.
-fn slotNameChange(self: *Frame, slot: *Element.Html.Slot, old_value: []const u8, value: []const u8) void {
-    if (std.mem.eql(u8, old_value, value)) {
-        return;
-    }
-    const root = slot.asNode().getRootNode(.{});
-    if (root.is(ShadowRoot) != null) {
-        self.assignSlottablesForTree(root);
-    }
 }
 
 pub fn hasMutationObservers(self: *const Frame) bool {
@@ -3753,11 +3531,11 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, allow_d
     defer if (self._element_shadow_roots.count() != 0) {
         const root = node.getRootNode(.{});
         if (root.is(ShadowRoot) != null) {
-            self.assignSlottablesForTree(root);
+            slotting.assignSlottablesForTree(root, self);
         }
         if (node.is(Element)) |el| {
             if (self._element_shadow_roots.get(el)) |shadow_root| {
-                self.assignSlottablesForTree(shadow_root.asNode());
+                slotting.assignSlottablesForTree(shadow_root.asNode(), self);
             }
         }
     };
