@@ -217,10 +217,19 @@ pub fn resolveSpecifier(self: *ScriptManagerBase, arena: Allocator, base: [:0]co
     return error.SpecifierResolutionFailed;
 }
 
-pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []const u8) !void {
+const PreloadOpts = struct {
+    hint: bool = false,
+};
+pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []const u8, opts: PreloadOpts) !void {
     const gop = try self.imported_modules.getOrPut(self.allocator, url);
     if (gop.found_existing) {
-        gop.value_ptr.waiters += 1;
+        if (gop.value_ptr.hint) {
+            // A <link rel=modulepreload> never calls waitForImport, so the
+            // first real import adopts its waiter slot rather than adding one.
+            gop.value_ptr.hint = false;
+        } else {
+            gop.value_ptr.waiters += 1;
+        }
         return;
     }
     errdefer _ = self.imported_modules.remove(url);
@@ -239,7 +248,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .extra = .import,
     };
 
-    gop.value_ptr.* = ImportedModule{};
+    gop.value_ptr.* = .{ .state = .{ .loading = script }, .hint = opts.hint };
 
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
@@ -284,6 +293,15 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     };
 }
 
+// <link rel=modulepreload href=...> — start fetching a module before import
+// resolution discovers it.
+pub fn preloadModuleHint(self: *ScriptManagerBase, url: [:0]const u8, referrer: []const u8) !void {
+    if (self.imported_modules.contains(url)) {
+        return;
+    }
+    try self.preloadImport(url, referrer, .{ .hint = true });
+}
+
 pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource {
     const entry = self.imported_modules.getEntry(url) orelse {
         // It shouldn't be possible for v8 to ask for a module that we didn't
@@ -324,7 +342,57 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
     }
 }
 
+pub fn releaseImport(self: *ScriptManagerBase, url: [:0]const u8) void {
+    const entry = self.imported_modules.getEntry(url) orelse {
+        return;
+    };
+    if (entry.value_ptr.waiters > 1) {
+        entry.value_ptr.waiters -= 1;
+        return;
+    }
+    switch (entry.value_ptr.state) {
+        .done => |script| script.deinit(),
+        .loading, .err => return,
+    }
+    self.imported_modules.removeByPtr(entry.key_ptr);
+}
+
 pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
+    // A <link rel=modulepreload> hint may already be fetching/fetched this module
+    if (self.imported_modules.getEntry(url)) |entry| {
+        if (entry.value_ptr.hint) {
+            switch (entry.value_ptr.state) {
+                .loading => |script| {
+                    // fetch is in flight, take the script and turn it into
+                    // our normal getAsyncImport flow (e.g. what we do at the
+                    // end of this file as-if imported_modules didn't have this script)
+                    if (comptime IS_DEBUG) {
+                        log.debug(.http, "script adopt", .{ .url = url, .ctx = "dynamic module", .state = "loading" });
+                    }
+                    script.extra = .{ .import_async = .{ .callback = cb, .data = cb_data } };
+                    self.imported_modules.removeByPtr(entry.key_ptr);
+                    return;
+                },
+                .done => |script| {
+                    // fetch is complete; deliver through the normal
+                    // ready_scripts flow. evaluate() runs it now, or — if an
+                    // evaluation window is open — evaluate_pending runs it
+                    // when that window closes.
+                    if (comptime IS_DEBUG) {
+                        log.debug(.http, "script adopt", .{ .url = url, .ctx = "dynamic module", .state = "done" });
+                    }
+                    script.extra = .{ .import_async = .{ .callback = cb, .data = cb_data } };
+                    self.imported_modules.removeByPtr(entry.key_ptr);
+                    self.ready_scripts.append(&script.node);
+                    self.evaluate();
+                    return;
+                },
+                // The hint's fetch failed; give the import its own attempt.
+                .err => {},
+            }
+        }
+    }
+
     const arena = try self.acquireArena(.large, "SM.getAsyncImport");
     errdefer self.releaseArena(arena);
 
@@ -890,12 +958,17 @@ pub const ModuleSource = struct {
 
 pub const ImportedModule = struct {
     waiters: u16 = 1,
-    state: State = .loading,
+    // Created by a <link rel=modulepreload> hint and not yet claimed by a real
+    // import. While set, the single waiter slot belongs to the hint, which
+    // will never collect it (see preloadModuleHint). A dynamic import may
+    // adopt a hint entry outright (see getAsyncImport).
+    hint: bool = false,
+    state: State,
     buffer: std.ArrayList(u8) = .{},
 
     pub const State = union(enum) {
         err,
-        loading,
+        loading: *Script,
         done: *Script,
     };
 };
