@@ -821,6 +821,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/download/report.csv")) {
+        // A file download: Content-Disposition: attachment drives the
+        // Browser.setDownloadBehavior path (issue #2701).
+        return req.respond("col1,col2\nhello,world\n42,1337\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/csv" },
+                .{ .name = "Content-Disposition", .value = "attachment; filename=\"report.csv\"" },
+            },
+        });
+    }
+
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
         // strip off leading / so that it's relative to CWD
         return TestHTTPServer.sendFile(req, path[1..]);
