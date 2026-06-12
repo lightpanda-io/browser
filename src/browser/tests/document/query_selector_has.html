@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="root">
+  <ul id="list">
+    <li id="li1" class="item">One</li>
+    <li id="li2" class="item">Two</li>
+    <li id="li3" class="item active">Three</li>
+    <li id="li4" class="item">Four</li>
+  </ul>
+  <div id="box">
+    <p id="direct">direct child</p>
+    <section id="wrap">
+      <p id="nested">nested</p>
+    </section>
+  </div>
+  <div id="adjacent">
+    <span id="a1"></span>
+    text between
+    <em id="a2"></em>
+  </div>
+  <div id="rel">
+    <div id="r1"></div>
+    <div id="r2"><b id="deep"></b></div>
+  </div>
+  <span id="outer-span">
+    <div id="inverted"><p id="inner-p">text</p></div>
+  </span>
+</div>
+
+<script id=hasDescendant>
+{
+  // No leading combinator = descendant search (pre-existing behavior).
+  const withP = document.querySelectorAll('#root div:has(p)');
+  testing.expectEqual(2, withP.length);
+  testing.expectEqual('box', withP[0].id);
+  testing.expectEqual('inverted', withP[1].id);
+
+  // The argument is anchored at the element: #inner-p has a <span> ancestor,
+  // but that span is ABOVE #inverted, so ':scope span p' must not match.
+  const spanP = document.querySelectorAll('#root div:has(span p)');
+  testing.expectEqual(0, spanP.length);
+}
+</script>
+
+<script id=hasChild>
+{
+  const directP = document.querySelectorAll('#root div:has(> p)');
+  testing.expectEqual(2, directP.length);
+  testing.expectEqual('box', directP[0].id);
+  testing.expectEqual('inverted', directP[1].id);
+
+  // #nested is a grandchild of #box: the child constraint must exclude it.
+  const box = document.getElementById('box');
+  testing.expectEqual(true, box.matches(':has(#nested)'));
+  testing.expectEqual(false, box.matches(':has(> #nested)'));
+}
+</script>
+
+<script id=hasSubsequentSibling>
+{
+  const beforeActive = document.querySelectorAll('#list li:has(~ .active)');
+  testing.expectEqual(2, beforeActive.length);
+  testing.expectEqual('li1', beforeActive[0].id);
+  testing.expectEqual('li2', beforeActive[1].id);
+
+  const idiom = document.querySelectorAll('#list .item:not(.active):has(~ .item.active)');
+  testing.expectEqual(2, idiom.length);
+  testing.expectEqual('li1', idiom[0].id);
+  testing.expectEqual('li2', idiom[1].id);
+
+  // Siblings only look forward: nothing precedes #li1.
+  const beforeFirst = document.querySelectorAll('#list li:has(~ #li1)');
+  testing.expectEqual(0, beforeFirst.length);
+
+  // The argument's own combinators still apply after the sibling anchor.
+  const siblingDesc = document.querySelectorAll('#rel div:has(~ div b)');
+  testing.expectEqual(1, siblingDesc.length);
+  testing.expectEqual('r1', siblingDesc[0].id);
+}
+</script>
+
+<script id=hasNextSibling>
+{
+  // Non-element siblings (the text node) are skipped.
+  const beforeEm = document.querySelectorAll('#adjacent span:has(+ em)');
+  testing.expectEqual(1, beforeEm.length);
+  testing.expectEqual('a1', beforeEm[0].id);
+
+  const beforeActive = document.querySelectorAll('#list li:has(+ .active)');
+  testing.expectEqual(1, beforeActive.length);
+  testing.expectEqual('li2', beforeActive[0].id);
+}
+</script>
+
+<script id=hasRelativeList>
+{
+  const list = document.querySelectorAll('#root > *:has(> .active, > #direct)');
+  testing.expectEqual(2, list.length);
+  testing.expectEqual('list', list[0].id);
+  testing.expectEqual('box', list[1].id);
+}
+</script>
+
+<script id=hasMatches>
+{
+  const li2 = document.getElementById('li2');
+  const li4 = document.getElementById('li4');
+  testing.expectEqual(true, li2.matches(':has(~ .active)'));
+  testing.expectEqual(false, li4.matches(':has(~ .active)'));
+}
+</script>
+
+<script id=hasInvalid>
+{
+  // A combinator with nothing after it is not a valid relative selector.
+  testing.expectError("SyntaxError", () => document.querySelectorAll(':has(>)'));
+  testing.expectError("SyntaxError", () => document.querySelectorAll(':has(~ )'));
+}
+</script>
