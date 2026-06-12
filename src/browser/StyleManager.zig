@@ -77,11 +77,11 @@ pub fn deinit(self: *StyleManager) void {
     self.frame.releaseArena(self.arena);
 }
 
-/// Hard cap on `@media` nesting depth. CSS Nesting allows arbitrarily-deep
+/// Hard cap on `@media` / `@layer` nesting depth. CSS allows arbitrarily-deep
 /// at-rule nesting; without a cap a hostile inline stylesheet could blow the
-/// Zig stack via mutually-recursive `applyMediaAtRule` frames. 32 is well
-/// past anything seen in the wild.
-const MAX_MEDIA_NESTING: u8 = 32;
+/// Zig stack via mutually-recursive `applyMediaAtRule` / `applyLayerAtRule`
+/// frames. 32 is well past anything seen in the wild.
+const MAX_AT_RULE_NESTING: u8 = 32;
 
 fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
     if (sheet._css_rules) |css_rules| {
@@ -92,6 +92,9 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
                 // `insertRule` / `replaceSync` participates in the cascade
                 // when its query matches the viewport.
                 .media => try self.applyMediaAtRule(rule._text, 0),
+                // `@layer` blocks flatten into the cascade (see
+                // applyLayerAtRule for the deliberate scope).
+                .layer => try self.applyLayerAtRule(rule._text, 0),
                 else => {},
             }
         }
@@ -106,12 +109,15 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
             switch (parsed_rule) {
                 .style => |s| try self.addRawRule(s.selector, s.block),
                 .at_rule => |a| {
-                    // Only `@media` participates in the cascade here. Other
-                    // at-rules (`@keyframes`, `@supports`, `@font-face`, …)
-                    // don't carry top-level declarations relevant to the
-                    // visibility filter and stay skipped as before.
+                    // Only `@media` and `@layer` participate in the cascade
+                    // here. Other at-rules (`@keyframes`, `@supports`,
+                    // `@font-face`, …) don't carry top-level declarations
+                    // relevant to the visibility filter and stay skipped as
+                    // before.
                     if (std.ascii.eqlIgnoreCase(a.keyword, "media")) {
                         try self.applyMediaAtRule(a.text, 0);
+                    } else if (std.ascii.eqlIgnoreCase(a.keyword, "layer")) {
+                        try self.applyLayerAtRule(a.text, 0);
                     }
                 },
             }
@@ -124,8 +130,8 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
 /// lived at the top level. Non-matching queries silently drop the inner
 /// rules. Inline-only by design: external `<link rel="stylesheet">` is out
 /// of scope for the headless engine.
-fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) !void {
-    if (depth >= MAX_MEDIA_NESTING) return;
+fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) Allocator.Error!void {
+    if (depth >= MAX_AT_RULE_NESTING) return;
 
     // text shape: `@media <query> { <inner> }` for well-formed input.
     // `CssParser.RulesIterator.consumeAtRule` always emits a span starting
@@ -150,13 +156,45 @@ fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) !void {
 
     if (!MediaQuery.matches(query, Viewport.default)) return;
 
+    try self.applyInnerRules(inner, depth + 1);
+}
+
+/// Apply an `@layer` block rule by parsing its inner block into the cascade
+/// as if its rules lived at the top level, recursing into nested `@media` /
+/// `@layer`. Cascade-layer priority ordering (css-cascade-5 §6.4) is
+/// deliberately not implemented: layers are flattened and ties keep breaking
+/// on specificity + document order. Handles named blocks (including dotted
+/// sub-layer names like `@layer theme.dark`) and anonymous blocks; the
+/// statement form (`@layer a, b;`) declares ordering only and carries no
+/// block, so it applies nothing.
+fn applyLayerAtRule(self: *StyleManager, text: []const u8, depth: u8) Allocator.Error!void {
+    if (depth >= MAX_AT_RULE_NESTING) return;
+
+    // text shape: `@layer [<name>] { <inner> }` or `@layer <names>;`.
+    if (!std.ascii.startsWithIgnoreCase(text, "@layer")) return;
+    const rest = text["@layer".len..];
+
+    // Statement form has no block — nothing to apply.
+    const open = indexOfOpenBraceSkippingComments(rest) orelse return;
+    const close = open + (std.mem.lastIndexOfScalar(u8, rest[open..], '}') orelse return);
+    const inner = rest[open + 1 .. close];
+
+    try self.applyInnerRules(inner, depth + 1);
+}
+
+/// Parse a conditional at-rule's inner block, adding style rules to the
+/// cascade and recursing into nested `@media` / `@layer`. `depth` is the
+/// nesting depth of the *nested* at-rules (callers pass their own depth + 1).
+fn applyInnerRules(self: *StyleManager, inner: []const u8, depth: u8) Allocator.Error!void {
     var it = CssParser.parseStylesheet(inner);
     while (it.next()) |nested_rule| {
         switch (nested_rule) {
             .style => |s| try self.addRawRule(s.selector, s.block),
             .at_rule => |nested| {
                 if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
-                    try self.applyMediaAtRule(nested.text, depth + 1);
+                    try self.applyMediaAtRule(nested.text, depth);
+                } else if (std.ascii.eqlIgnoreCase(nested.keyword, "layer")) {
+                    try self.applyLayerAtRule(nested.text, depth);
                 }
             },
         }
