@@ -17,120 +17,246 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
-const U = @import("../URL.zig");
+const U = @import("../../sys/url.zig");
+const Page = @import("../Page.zig");
 const URLSearchParams = @import("net/URLSearchParams.zig");
 const Blob = @import("Blob.zig");
 const Execution = js.Execution;
 
-const Allocator = std.mem.Allocator;
-
 const URL = @This();
 
-_raw: [:0]const u8,
-_arena: ?Allocator = null,
+_url: *U.Url = undefined,
+/// Largest port possible is 65535; which require 5 bytes.
+_port: [5]u8 = undefined,
 _search_params: ?*URLSearchParams = null,
+/// We have to track lifetime of URL to free `_url`.
+_rc: lp.RC(u32) = .{},
 
 // convenience
 pub const resolve = @import("../URL.zig").resolve;
 pub const eqlDocument = @import("../URL.zig").eqlDocument;
 
-pub fn init(url: [:0]const u8, base_: ?[:0]const u8, exec: *const Execution) !*URL {
-    const arena = exec.arena;
-    const context_url = exec.url.*;
-
-    if (std.mem.eql(u8, url, "about:blank")) {
-        return exec._factory.create(URL{
-            ._raw = "about:blank",
-            ._arena = arena,
-        });
-    }
-    const url_is_absolute = @import("../URL.zig").isCompleteHTTPUrl(url);
-
-    const base = if (base_) |b| blk: {
-        // If URL is absolute, base is ignored (but we still use context url internally)
-        if (url_is_absolute) {
-            break :blk context_url;
+pub fn init(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !*URL {
+    // NOTE: about:blank address is valid in rust-url.
+    var err: i32 = 0;
+    const u = blk: {
+        if (maybe_base) |base| {
+            break :blk U.url_parse_with_base(base.ptr, base.len, url.ptr, url.len, &err) orelse return error.TypeError;
         }
-        // For relative URLs, base must be a valid absolute URL
-        if (!@import("../URL.zig").isCompleteHTTPUrl(b)) {
-            return error.TypeError;
-        }
-        break :blk b;
-    } else if (!url_is_absolute) {
-        return error.TypeError;
-    } else context_url;
+        break :blk U.url_parse(url.ptr, url.len, &err) orelse return error.TypeError;
+    };
+    errdefer U.url_free(u);
 
-    const raw = try resolve(arena, base, url, .{ .always_dupe = true });
+    return exec._factory.create(URL{ ._url = u });
+}
 
-    return exec._factory.create(URL{
-        ._raw = raw,
-        ._arena = arena,
-    });
+pub fn deinit(self: *URL, _: *Page) void {
+    // Not tracked by arena.
+    U.url_free(self._url);
+}
+
+pub fn acquireRef(self: *URL) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *URL, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn getUsername(self: *const URL) []const u8 {
-    return U.getUsername(self._raw);
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    U.url_get_username(self._url, &out, &len);
+    return out[0..len];
 }
 
 pub fn setUsername(self: *URL, value: []const u8) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setUsername(self._raw, value, allocator);
+    const res = U.url_set_username(self._url, value.ptr, value.len);
+    if (res != 0) {
+        return error.SetUsername;
+    }
 }
 
 pub fn getPassword(self: *const URL) []const u8 {
-    return U.getPassword(self._raw);
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const res = U.url_get_password(self._url, &out, &len);
+    if (res != 0) {
+        return "";
+    }
+    return out[0..len];
 }
 
 pub fn setPassword(self: *URL, value: []const u8) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setPassword(self._raw, value, allocator);
+    const res = U.url_set_password(self._url, value.ptr, value.len);
+    if (res != 0) {
+        return error.SetPassword;
+    }
 }
 
 pub fn getPathname(self: *const URL) []const u8 {
-    return U.getPathname(self._raw);
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    U.url_get_path(self._url, &out, &len);
+    return out[0..len];
+}
+
+pub fn setPathname(self: *URL, value: []const u8) !void {
+    const res = U.url_set_path(self._url, value.ptr, value.len);
+    if (res != 0) {
+        return error.SetPathname;
+    }
 }
 
 pub fn getProtocol(self: *const URL) []const u8 {
-    return U.getProtocol(self._raw);
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    U.url_get_scheme(self._url, &out, &len);
+    // rust-url's scheme() omits the ':'. The serialization always has it right
+    // after the scheme ("https://..."), so we extend the borrowed slice by one.
+    return out[0 .. len + 1];
+}
+
+pub fn setProtocol(self: *URL, value: []const u8) !void {
+    const res = U.url_set_scheme(self._url, value.ptr, value.len);
+    if (res != 0) {
+        return error.SetProtocol;
+    }
 }
 
 pub fn getHostname(self: *const URL) []const u8 {
-    return U.getHostname(self._raw);
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    if (U.url_get_hostname(self._url, &out, &len) != 0) {
+        return "";
+    }
+    return out[0..len];
+}
+
+pub fn setHostname(self: *URL, value: []const u8) !void {
+    const res = U.url_set_hostname(self._url, value.ptr, value.len);
+    if (res != 0) {
+        return error.SetHostname;
+    }
 }
 
 pub fn getHost(self: *const URL) []const u8 {
-    return U.getHost(self._raw);
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    if (U.url_get_host(self._url, &out, &len) != 0) {
+        return "";
+    }
+    return out[0..len];
 }
 
-pub fn getPort(self: *const URL) []const u8 {
-    return U.getPort(self._raw);
+pub fn setHost(self: *URL, value: []const u8) !void {
+    const res = U.url_set_host(self._url, value.ptr, value.len);
+    if (res != 0) {
+        return error.SetHost;
+    }
 }
 
-pub fn getOrigin(self: *const URL, exec: *const Execution) ![]const u8 {
-    return (try U.getOrigin(exec.call_arena, self._raw)) orelse {
-        // yes, a null string, that's what the spec wants
-        return "null";
+pub fn getPort(self: *URL) []const u8 {
+    const port = U.urlGetPort(self._url) orelse return "";
+    return std.fmt.bufPrint(&self._port, "{d}", .{port}) catch unreachable;
+}
+
+/// Spec requires us to silently ignore errors of this setter.
+pub fn setPort(self: *URL, maybe_value: ?[]const u8) void {
+    // A null or empty value clears the port.
+    const value = maybe_value orelse {
+        _ = U.url_set_port_to_null(self._url);
+        return;
     };
+    if (value.len == 0) {
+        _ = U.url_set_port_to_null(self._url);
+        return;
+    }
+
+    // Ignore invalid port numbers, leaving the port unchanged.
+    const port = std.fmt.parseInt(u16, value, 10) catch return;
+    _ = U.url_set_port(self._url, port);
 }
 
 pub fn getSearch(self: *const URL, exec: *const Execution) ![]const u8 {
-    // If searchParams has been accessed, generate search from it
-    if (self._search_params) |sp| {
-        if (sp.getSize() == 0) {
+    if (self._search_params) |search_params| {
+        if (search_params.getSize() == 0) {
             return "";
         }
+
         var buf = std.Io.Writer.Allocating.init(exec.call_arena);
         try buf.writer.writeByte('?');
-        try sp.toString(&buf.writer);
+        try search_params.toString(&buf.writer);
         return buf.written();
     }
-    return U.getSearch(self._raw);
+
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const res = U.url_get_query(self._url, &out, &len);
+    if (res != 0 or len == 0) {
+        return "";
+    }
+
+    // rust-url's query() omits the '?', which always precedes the query.
+    return (out - 1)[0 .. len + 1];
+}
+
+pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
+    // Empty value clears the query entirely.
+    if (value.len == 0) {
+        // Reset searchParams.
+        if (self._search_params) |search_params| {
+            search_params._params = .empty;
+        }
+
+        U.url_set_query_to_null(self._url);
+        return;
+    }
+
+    // Strip a single leading '?', then set the query.
+    const query = if (value[0] == '?') value[1..] else value;
+
+    const res = U.url_set_query(self._url, query.ptr, query.len);
+    if (res != 0) {
+        return error.SetSearch;
+    }
+
+    // If searchParams exists, update it too.
+    const search_params = self._search_params orelse return;
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) out[0..len] else "";
+    try search_params.updateFromString(search_value, exec);
 }
 
 pub fn getHash(self: *const URL) []const u8 {
-    return U.getHash(self._raw);
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const res = U.url_get_fragment(self._url, &out, &len);
+    // WHATWG `hash` is "" for both a null and an empty fragment.
+    if (res != 0 or len == 0) {
+        return "";
+    }
+    // rust-url's fragment() omits the '#', which always precedes the fragment
+    // in the serialization, so step the borrowed slice back one byte for it.
+    return (out - 1)[0 .. len + 1];
+}
+
+pub fn setHash(self: *URL, value: []const u8) !void {
+    // An empty value clears the fragment entirely (removes the '#').
+    if (value.len == 0) {
+        U.url_set_fragment_to_null(self._url);
+        return;
+    }
+    // Strip a single leading '#', then set the fragment.
+    const fragment = if (value[0] == '#') value[1..] else value;
+    const res = U.url_set_fragment(self._url, fragment.ptr, fragment.len);
+    if (res != 0) {
+        return error.SetHash;
+    }
 }
 
 pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
@@ -138,113 +264,67 @@ pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
         return sp;
     }
 
-    // Get current search string (without the '?')
-    const search = try self.getSearch(exec);
-    const search_value = if (search.len > 0) search[1..] else "";
+    // Get current search string (omitting '?').
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) out[0..len] else "";
 
     const params = try URLSearchParams.init(.{ .query_string = search_value }, exec);
     self._search_params = params;
     return params;
 }
 
+pub fn getOrigin(self: *const URL, exec: *const Execution) ![]const u8 {
+    const origin = U.url_get_origin(self._url);
+    defer origin.deinit();
+
+    return exec.call_arena.dupe(u8, origin.slice());
+}
+
 pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
-    const base = if (U.isCompleteHTTPUrl(value)) exec.url.* else self._raw;
-    const raw = try U.resolve(self._arena orelse exec.arena, base, value, .{ .always_dupe = true });
-    self._raw = raw;
+    // Parse first: a failed href setter must leave the URL unchanged (and we
+    // must not free self._url before we know we have a replacement, or any
+    // later access would be a use-after-free).
+    var err: i32 = 0;
+    const url = U.url_parse(value.ptr, value.len, &err) orelse return error.TypeError;
 
-    // Update existing searchParams if it exists
-    if (self._search_params) |sp| {
-        const search = U.getSearch(raw);
-        const search_value = if (search.len > 0) search[1..] else "";
-        try sp.updateFromString(search_value, exec);
-    }
+    U.url_free(self._url);
+    self._url = url;
+
+    // Update existing searchParams if exists.
+    const search_params = self._search_params orelse return;
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    const search_value = if (U.url_get_query(url, &out, &len) == 0) out[0..len] else "";
+    try search_params.updateFromString(search_value, exec);
 }
 
-pub fn setProtocol(self: *URL, value: []const u8) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setProtocol(self._raw, value, allocator);
-}
-
-pub fn setHost(self: *URL, value: []const u8) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setHost(self._raw, value, allocator);
-}
-
-pub fn setHostname(self: *URL, value: []const u8) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setHostname(self._raw, value, allocator);
-}
-
-pub fn setPort(self: *URL, value: ?[]const u8) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setPort(self._raw, value, allocator);
-}
-
-pub fn setPathname(self: *URL, value: []const u8) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setPathname(self._raw, value, allocator);
-}
-
-pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setSearch(self._raw, value, allocator);
-
-    // Update existing searchParams if it exists
-    if (self._search_params) |sp| {
-        const search = U.getSearch(self._raw);
-        const search_value = if (search.len > 0) search[1..] else "";
-        try sp.updateFromString(search_value, exec);
-    }
-}
-
-pub fn setHash(self: *URL, value: []const u8) !void {
-    const allocator = self._arena orelse return error.NoAllocator;
-    self._raw = try U.setHash(self._raw, value, allocator);
-}
-
-pub fn toString(self: *const URL, exec: *const Execution) ![:0]const u8 {
-    const sp = self._search_params orelse {
-        return self._raw;
-    };
-
-    // Rebuild URL from searchParams
-    const raw = self._raw;
-
-    // Find the base (everything before ? or #)
-    const base_end = std.mem.indexOfAnyPos(u8, raw, 0, "?#") orelse raw.len;
-    const base = raw[0..base_end];
-
-    // Get the hash if it exists
-    const hash = self.getHash();
-
-    // Build the new URL string
-    var buf = std.Io.Writer.Allocating.init(exec.call_arena);
-    try buf.writer.writeAll(base);
-
-    // Add / if missing (e.g., "https://example.com" -> "https://example.com/")
-    // Only add if pathname is just "/" and not already in the base
-    const pathname = U.getPathname(raw);
-    if (std.mem.eql(u8, pathname, "/") and !std.mem.endsWith(u8, base, "/")) {
-        try buf.writer.writeByte('/');
+pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
+    if (self._search_params) |search_params| {
+        if (search_params.getSize() == 0) {
+            U.url_set_query_to_null(self._url);
+        } else {
+            var buf = std.Io.Writer.Allocating.init(exec.call_arena);
+            defer buf.deinit();
+            try search_params.toString(&buf.writer);
+            const query = buf.written();
+            if (U.url_set_query(self._url, query.ptr, query.len) != 0) {
+                return error.ToString;
+            }
+        }
     }
 
-    // Only add ? if there are params
-    if (sp.getSize() > 0) {
-        try buf.writer.writeByte('?');
-        try sp.toString(&buf.writer);
-    }
-
-    try buf.writer.writeAll(hash);
-    try buf.writer.writeByte(0);
-
-    return buf.written()[0 .. buf.written().len - 1 :0];
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    U.url_to_string(self._url, &out, &len);
+    return out[0..len];
 }
 
-pub fn canParse(url: []const u8, base_: ?[]const u8) bool {
-    if (base_) |b| {
-        return U.isCompleteHTTPUrl(b);
+pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
+    if (maybe_base) |base| {
+        return U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len);
     }
-    return U.isCompleteHTTPUrl(url);
+    return U.url_can_parse(url.ptr, url.len);
 }
 
 pub fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {

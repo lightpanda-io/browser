@@ -31,3 +31,40 @@
 <script id=location_search_setter>
   testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(Location.prototype, 'search').set);
 </script>
+
+<div id="sec1"></div>
+<div id="sec2"></div>
+
+<script id=location_target>
+  // :target must reflect the CURRENT location's fragment. Each fragment
+  // navigation replaces the backing Location, so this verifies the selector
+  // reads the live location (not a stale/freed one), and that fragment
+  // navigation releases the previous Location without breaking the chain.
+  const sec1 = document.getElementById('sec1');
+  const sec2 = document.getElementById('sec2');
+
+  location.hash = "#sec1";
+  testing.expectEqual(true, sec1.matches(':target'));
+  testing.expectEqual(false, sec2.matches(':target'));
+
+  // Navigate to a new fragment: :target must follow the new location.
+  location.hash = "#sec2";
+  testing.expectEqual(false, sec1.matches(':target'));
+  testing.expectEqual(true, sec2.matches(':target'));
+
+  // No fragment -> nothing is :target.
+  location.hash = "";
+  testing.expectEqual(false, sec1.matches(':target'));
+  testing.expectEqual(false, sec2.matches(':target'));
+</script>
+
+<script id=location_fragment_churn>
+  // Hammer fragment navigation: every iteration creates a new Location and must
+  // release the previous one. Consistency must hold throughout.
+  for (let i = 0; i < 50; i++) {
+    location.hash = "#h" + i;
+    testing.expectEqual("#h" + i, location.hash);
+  }
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+</script>

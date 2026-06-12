@@ -69,7 +69,6 @@ const HttpClient = @import("HttpClient.zig");
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
-const WebApiURL = @import("webapi/URL.zig");
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
 const log = lp.log;
@@ -77,9 +76,6 @@ const String = lp.String;
 const IFrame = Element.Html.IFrame;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
-
-var default_url = WebApiURL{ ._raw = "about:blank" };
-pub var default_location: Location = Location{ ._url = &default_url };
 
 pub const BUF_SIZE = 1024;
 
@@ -331,7 +327,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._frame = self,
         ._proto = undefined,
         ._document = self.document,
-        ._location = &default_location,
+        ._location = undefined,
         ._performance = .init(),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
@@ -352,6 +348,11 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         .call_arena = self.call_arena,
     });
     errdefer browser.env.destroyContext(self.js);
+
+    const location = try Location.init("about:blank", self);
+    // We're holding a reference in Zig-side.
+    location.acquireRef();
+    self.window._location = location;
 
     document._frame = self;
 
@@ -431,6 +432,9 @@ pub fn deinit(self: *Frame) void {
         if (document._fonts) |f| {
             f.releaseRef(page);
         }
+
+        // Release our reference to location.
+        self.window._location.releaseRef(page);
     }
 
     const browser = page.session.browser;
@@ -557,11 +561,15 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     if (is_about_blank or is_blob) {
         self.url = if (is_about_blank) "about:blank" else try self.arena.dupeZ(u8, request_url);
 
-        // even though this might be the same _data_ as `default_location`, we
+        // even though about:blank navigations may share the same _data_, we
         // have to do this to make sure window.location is at a unique _address_.
         // If we don't do this, multiple window._location will have the same
         // address and thus be mapped to the same v8::Object in the identity map.
-        self.window._location = try Location.init(self.url, self);
+        const location = try Location.init(self.url, self);
+        location.acquireRef();
+        // We're not holding a ref to old location anymore.
+        self.window._location.releaseRef(self._page);
+        self.window._location = location;
 
         if (is_blob) {
             // strip out blob:
@@ -797,7 +805,12 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
         target.url = try target.arena.dupeZ(u8, resolved_url);
-        target.window._location = try Location.init(target.url, target);
+
+        const location = try Location.init(target.url, target);
+        location.acquireRef();
+        target.window._location.releaseRef(target._page);
+        target.window._location = location;
+
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
@@ -1075,8 +1088,11 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
         }
     }
 
-    self.window._location = try Location.init(self.url, self);
-    self.document._location = self.window._location;
+    // Init new location.
+    const location = try Location.init(self.url, self);
+    location.acquireRef();
+    self.window._location.releaseRef(self._page);
+    self.window._location = location;
 
     if (comptime IS_DEBUG) {
         log.debug(.frame, "navigate header", .{

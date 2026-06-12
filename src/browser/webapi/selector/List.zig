@@ -619,7 +619,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .target => {
             const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
-            const location = frame.document._location orelse return false;
+            const location = frame.document.getLocation() orelse return false;
             const hash = location.getHash();
             if (hash.len <= 1) return false;
             return std.mem.eql(u8, element_id, hash[1..]);
