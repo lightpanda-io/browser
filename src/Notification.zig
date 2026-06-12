@@ -265,9 +265,10 @@ pub const DialogResponse = struct {
 };
 
 pub const ConsoleMessageType = enum {
+    log,
     debug,
     info,
-    warn,
+    warning,
     @"error",
     fatal,
     trace,
