@@ -1198,7 +1198,165 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
         });
     }
 
+    // If the response is a file download, stream its body to disk instead of
+    // parsing it as a page. This sets _parse_state to .download, which the
+    // data/done callbacks below special-case.
+    _ = try self.maybeStartDownload(response);
+
     return .proceed;
+}
+
+// Returns true when the response was set up as a file download. A response is
+// treated as a download when Browser.setDownloadBehavior opted in
+// (allow/allowAndName) and the response carries Content-Disposition: attachment.
+// See issue #2701.
+fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
+    const session = self._session;
+    switch (session.download_behavior) {
+        .allow, .allow_and_name => {},
+        .default, .deny => return false,
+    }
+
+    const disposition = blk: {
+        var it = response.headerIterator();
+        while (it.next()) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "content-disposition")) {
+                break :blk hdr.value;
+            }
+        }
+        return false;
+    };
+    if (isAttachment(disposition) == false) {
+        return false;
+    }
+
+    const download_path = session.download_path orelse {
+        log.warn(.frame, "download without downloadPath", .{ .url = self.url });
+        return false;
+    };
+
+    var guid_buf: [36]u8 = undefined;
+    @import("../id.zig").uuidv4(&guid_buf);
+    const guid = try self.arena.dupe(u8, &guid_buf);
+
+    const suggested = dispositionFilename(disposition) orelse urlBasename(self.url) orelse guid;
+    const suggested_filename = try self.arena.dupe(u8, suggested);
+
+    // allowAndName stores the file under its guid; allow uses the suggested name.
+    const on_disk_name = switch (session.download_behavior) {
+        .allow_and_name => guid,
+        else => suggested_filename,
+    };
+
+    std.fs.cwd().makePath(download_path) catch |err| {
+        log.err(.frame, "download makePath", .{ .err = err, .path = download_path });
+        return false;
+    };
+    var dir = std.fs.cwd().openDir(download_path, .{}) catch |err| {
+        log.err(.frame, "download openDir", .{ .err = err, .path = download_path });
+        return false;
+    };
+    defer dir.close();
+    const file = dir.createFile(on_disk_name, .{ .truncate = true }) catch |err| {
+        log.err(.frame, "download createFile", .{ .err = err, .name = on_disk_name });
+        return false;
+    };
+
+    const total: ?u64 = if (response.contentLength()) |cl| cl else null;
+
+    self._parse_state = .{ .download = .{
+        .guid = guid,
+        .file = file,
+        .filename = suggested_filename,
+        .received = 0,
+        .total = total,
+    } };
+
+    if (session.download_events_enabled) {
+        session.notification.dispatch(.download_will_begin, &.{
+            .frame_id = self._frame_id,
+            .guid = guid,
+            .url = self.url,
+            .suggested_filename = suggested_filename,
+        });
+        session.notification.dispatch(.download_progress, &.{
+            .guid = guid,
+            .total_bytes = total orelse 0,
+            .received_bytes = 0,
+            .state = .in_progress,
+        });
+    }
+
+    return true;
+}
+
+// True when a Content-Disposition value's type token is "attachment".
+fn isAttachment(disposition: []const u8) bool {
+    const semi = std.mem.indexOfScalar(u8, disposition, ';') orelse disposition.len;
+    const token = std.mem.trim(u8, disposition[0..semi], " \t");
+    return std.ascii.eqlIgnoreCase(token, "attachment");
+}
+
+// Extracts the filename from a Content-Disposition value, handling the quoted,
+// unquoted, and RFC 5987 (filename*=charset''value) forms. Path components are
+// stripped so the result is always a bare basename.
+fn dispositionFilename(disposition: []const u8) ?[]const u8 {
+    // Prefer the extended filename*= form when present, per RFC 6266.
+    if (paramValue(disposition, "filename*")) |ext| {
+        // charset'lang'value — take everything after the second quote.
+        if (std.mem.indexOfScalar(u8, ext, '\'')) |first| {
+            if (std.mem.indexOfScalarPos(u8, ext, first + 1, '\'')) |second| {
+                return basename(ext[second + 1 ..]);
+            }
+        }
+        return basename(ext);
+    }
+    if (paramValue(disposition, "filename")) |name| {
+        return basename(name);
+    }
+    return null;
+}
+
+// Returns the (optionally quoted) value of `key=` within a parameter list.
+fn paramValue(disposition: []const u8, key: []const u8) ?[]const u8 {
+    var rest = disposition;
+    while (std.mem.indexOfScalar(u8, rest, ';')) |semi| {
+        const param = std.mem.trim(u8, rest[semi + 1 ..][0 .. (std.mem.indexOfScalarPos(u8, rest, semi + 1, ';') orelse rest.len) - semi - 1], " \t");
+        if (std.mem.indexOfScalar(u8, param, '=')) |eq| {
+            const name = std.mem.trim(u8, param[0..eq], " \t");
+            if (std.ascii.eqlIgnoreCase(name, key)) {
+                var value = std.mem.trim(u8, param[eq + 1 ..], " \t");
+                if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') {
+                    value = value[1 .. value.len - 1];
+                }
+                if (value.len > 0) {
+                    return value;
+                }
+            }
+        }
+        rest = rest[semi + 1 ..];
+    }
+    return null;
+}
+
+// Strips any directory components, guarding against path traversal.
+fn basename(name: []const u8) ?[]const u8 {
+    var out = name;
+    if (std.mem.lastIndexOfAny(u8, out, "/\\")) |i| {
+        out = out[i + 1 ..];
+    }
+    if (out.len == 0 or std.mem.eql(u8, out, ".") or std.mem.eql(u8, out, "..")) {
+        return null;
+    }
+    return out;
+}
+
+// Derives a filename from a URL's last path segment, ignoring query/fragment.
+fn urlBasename(url: []const u8) ?[]const u8 {
+    var path = url;
+    if (std.mem.indexOfScalar(u8, path, '?')) |i| path = path[0..i];
+    if (std.mem.indexOfScalar(u8, path, '#')) |i| path = path[0..i];
+    return basename(path);
 }
 
 fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
@@ -1279,6 +1437,13 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
             }
         },
         .raw, .image => |*buf| try buf.appendSlice(self.arena, data),
+        .download => |*download| {
+            download.file.writeAll(data) catch |err| {
+                log.err(.frame, "download write", .{ .err = err, .guid = download.guid });
+                return;
+            };
+            download.received += data.len;
+        },
         .pre => unreachable,
         .complete => unreachable,
         .err => unreachable,
@@ -1371,6 +1536,30 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
 
             parser.parse(html);
             self._parse_state = .complete;
+            self.documentIsComplete();
+        },
+        .download => |*download| {
+            download.file.close();
+
+            // Capture before invalidating the union below.
+            const guid = download.guid;
+            const received = download.received;
+            const total = download.total orelse download.received;
+            self._parse_state = .complete;
+
+            const session = self._session;
+            if (session.download_events_enabled) {
+                session.notification.dispatch(.download_progress, &.{
+                    .guid = guid,
+                    .total_bytes = total,
+                    .received_bytes = received,
+                    .state = .completed,
+                });
+            }
+
+            // The body went to disk; commit an empty document so the frame
+            // navigation still completes cleanly (mirrors the .raw path).
+            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></html>");
             self.documentIsComplete();
         },
         else => unreachable,
@@ -3793,13 +3982,32 @@ const ParseState = union(enum) {
     image: std.ArrayList(u8),
     raw: std.ArrayList(u8),
     raw_done: []const u8,
+    download: Download,
 
     fn deinit(self: *ParseState, frame: *Frame) void {
         switch (self.*) {
             .html => |html| frame.releaseArena(html.arena),
+            // Only reached when a frame is torn down mid-download (the normal
+            // completion path in frameDoneCallback already closes the file and
+            // transitions to .complete).
+            .download => |*download| download.file.close(),
             else => {},
         }
     }
+};
+
+// An in-flight file download (Content-Disposition: attachment under an
+// allow/allowAndName Browser.setDownloadBehavior). The response body is
+// streamed straight to `file` rather than parsed as a page. See issue #2701.
+const Download = struct {
+    // uuidv4, arena-owned. Matches the guid reported in the CDP events.
+    guid: []const u8,
+    file: std.fs.File,
+    // suggested filename surfaced to the client, arena-owned.
+    filename: []const u8,
+    received: u64,
+    // from Content-Length, when the response advertised one.
+    total: ?u64,
 };
 
 const LoadState = enum {
@@ -4644,6 +4852,35 @@ fn asUint(comptime string: anytype) std.meta.Int(
 }
 
 const testing = @import("../testing.zig");
+
+test "Frame: isAttachment" {
+    try testing.expectEqual(true, isAttachment("attachment"));
+    try testing.expectEqual(true, isAttachment("attachment; filename=\"a.csv\""));
+    try testing.expectEqual(true, isAttachment("  ATTACHMENT ; filename=a.csv"));
+    try testing.expectEqual(false, isAttachment("inline"));
+    try testing.expectEqual(false, isAttachment("inline; filename=a.csv"));
+    try testing.expectEqual(false, isAttachment(""));
+}
+
+test "Frame: dispositionFilename" {
+    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename("attachment; filename=\"report.csv\"").?);
+    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename("attachment; filename=report.csv").?);
+    try testing.expectEqualSlices(u8, "r e.csv", dispositionFilename("attachment; filename=\"r e.csv\"").?);
+    // RFC 5987 extended form is preferred over the plain filename when present
+    // (the value is taken verbatim after the charset'lang' prefix).
+    try testing.expectEqualSlices(u8, "extended.txt", dispositionFilename("attachment; filename=\"fallback.txt\"; filename*=UTF-8''extended.txt").?);
+    try testing.expect(dispositionFilename("attachment") == null);
+    // Path components are stripped to guard against traversal.
+    try testing.expectEqualSlices(u8, "evil.sh", dispositionFilename("attachment; filename=\"../../evil.sh\"").?);
+    try testing.expect(dispositionFilename("attachment; filename=\"..\"") == null);
+}
+
+test "Frame: urlBasename" {
+    try testing.expectEqualSlices(u8, "report.csv", urlBasename("http://x.com/a/b/report.csv").?);
+    try testing.expectEqualSlices(u8, "report.csv", urlBasename("http://x.com/report.csv?v=1#x").?);
+    try testing.expect(urlBasename("http://x.com/") == null);
+}
+
 test "WebApi: Frame" {
     const filter: testing.LogFilter = .init(&.{.http});
     defer filter.deinit();

@@ -164,7 +164,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
     const http_client = self.http_client;
 
     switch (frame._parse_state) {
-        .pre, .raw, .text, .image => {
+        .pre, .raw, .text, .image, .download => {
             // The main frame hasn't started/finished navigating.
             // There's no JS to run, and no reason to run the scheduler
             // — unless we're the CDP worker, in which case we want

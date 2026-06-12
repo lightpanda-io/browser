@@ -112,6 +112,24 @@ load_external_stylesheets: bool = false,
 /// timeout.
 cancel_hook: ?CancelHook = null,
 
+// Download handling configured via the `Browser.setDownloadBehavior` CDP
+// method (see issue #2701). When `download_behavior` is `.allow` or
+// `.allow_and_name`, a navigation whose response carries
+// `Content-Disposition: attachment` is written to `download_path` instead
+// of being parsed as a page, and (when `download_events_enabled` is set)
+// `Page.downloadWillBegin` / `Browser.downloadProgress` events are emitted.
+// `download_path` is duped into the Session arena.
+download_behavior: DownloadBehavior = .default,
+download_path: ?[]const u8 = null,
+download_events_enabled: bool = false,
+
+pub const DownloadBehavior = enum {
+    default,
+    allow,
+    allow_and_name,
+    deny,
+};
+
 pub const CancelHook = struct {
     context: *anyopaque,
     check: *const fn (*anyopaque) bool,

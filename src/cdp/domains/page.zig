@@ -806,6 +806,20 @@ pub fn frameNetworkAlmostIdle(bc: *CDP.BrowserContext, event: *const Notificatio
     return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.loader_id));
 }
 
+// https://chromedevtools.github.io/devtools-protocol/tot/Page/#event-downloadWillBegin
+// Dispatched by Frame when a navigation response is treated as a file download
+// (see issue #2701).
+pub fn downloadWillBegin(bc: *CDP.BrowserContext, event: *const Notification.DownloadWillBegin) !void {
+    const session_id = bc.session_id orelse return;
+
+    return bc.cdp.sendEvent("Page.downloadWillBegin", .{
+        .frameId = &id.toFrameId(event.frame_id),
+        .guid = event.guid,
+        .url = event.url,
+        .suggestedFilename = event.suggested_filename,
+    }, .{ .session_id = session_id });
+}
+
 fn sendPageLifecycle(bc: *CDP.BrowserContext, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
