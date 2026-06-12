@@ -133,12 +133,21 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
 
     var headers = try http_client.newHeaders();
     errdefer headers.deinit();
-    var has_extra_headers = false;
 
     if (protocols.len > 0) {
         const header = try std.fmt.allocPrintSentinel(arena, "Sec-WebSocket-Protocol: {s}", .{try std.mem.join(arena, ", ", protocols)}, 0);
         try headers.add(header);
-        has_extra_headers = true;
+    }
+
+    {
+        // The upgrade is a browser-initiated HTTP request and must carry the
+        // document's origin (RFC 6455 §4.1). Origin-checking endpoints (CSRF
+        // protection on WS servers) reject upgrades that arrive without it.
+        // Non-tuple origins (about:blank, data:) serialize to "null", like
+        // Chrome sends for opaque origins.
+        const origin = (try URL.getOrigin(arena, exec.url.*)) orelse "null";
+        const header = try std.fmt.allocPrintSentinel(arena, "Origin: {s}", .{origin}, 0);
+        try headers.add(header);
     }
 
     {
@@ -155,9 +164,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
         }
     }
 
-    if (has_extra_headers) {
-        try conn.setHeaders(&headers);
-    }
+    try conn.setHeaders(&headers);
 
     const self = try exec._factory.eventTargetWithAllocator(arena, WebSocket{
         ._exec = exec,

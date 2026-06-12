@@ -111,6 +111,20 @@ fn handleClient(client: posix.socket_t) void {
         @memcpy(cookie_buf[0..cookie_len], value[0..cookie_len]);
     }
 
+    // Same for the Origin header, exposed via the `get-origin` command.
+    // Match on "\r\nOrigin: " so the obsolete Sec-WebSocket-Origin header
+    // can never alias it.
+    var origin_buf: [1024]u8 = undefined;
+    var origin_len: usize = 0;
+    const origin_header = "\r\nOrigin: ";
+    if (std.mem.indexOf(u8, request, origin_header)) |origin_start| {
+        const value_start = origin_start + origin_header.len;
+        const value_end = std.mem.indexOfScalarPos(u8, request, value_start, '\r') orelse value_start;
+        const value = request[value_start..value_end];
+        origin_len = @min(value.len, origin_buf.len);
+        @memcpy(origin_buf[0..origin_len], value[0..origin_len]);
+    }
+
     // Compute accept key
     var hasher = std.crypto.hash.Sha1.init(.{});
     hasher.update(key);
@@ -144,7 +158,7 @@ fn handleClient(client: posix.socket_t) void {
 
         // Handle commands or echo
         if (frame.opcode == 1) { // Text
-            handleTextMessage(client, frame.payload, cookie_buf[0..cookie_len]) catch break;
+            handleTextMessage(client, frame.payload, cookie_buf[0..cookie_len], origin_buf[0..origin_len]) catch break;
         } else if (frame.opcode == 2) { // Binary
             handleBinaryMessage(client, frame.payload) catch break;
         }
@@ -249,7 +263,7 @@ const RecvBuffer = struct {
     }
 };
 
-fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header: []const u8) !void {
+fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header: []const u8, origin_header: []const u8) !void {
     // Command: force-close - close socket immediately without close frame
     if (std.mem.eql(u8, payload, "force-close")) {
         return error.ForceClose;
@@ -260,6 +274,14 @@ fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header:
     // upgrade regression test.
     if (std.mem.eql(u8, payload, "get-cookie")) {
         try sendFrame(client, 1, "cookie:", cookie_header);
+        return;
+    }
+
+    // Command: get-origin - send the Origin header value the upgrade
+    // request carried (empty string if none). Used by the origin-on-
+    // upgrade regression test.
+    if (std.mem.eql(u8, payload, "get-origin")) {
+        try sendFrame(client, 1, "origin:", origin_header);
         return;
     }
 
