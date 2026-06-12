@@ -427,8 +427,8 @@ test "Client: read invalid websocket message" {
         );
     }
 
-    // length of message is 0000 0810, i.e: 1024 * 512 + 265
-    try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 8, 1, 0, 'm', 'a', 's', 'k' });
+    // declared payload length is 0x0800 0000, i.e. 128MB — above CDP_MAX_MESSAGE_SIZE
+    try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 8, 0, 0, 0, 'm', 'a', 's', 'k' });
 
     // continuation type message must come after a normal message
     // even when not a fin frame
@@ -507,6 +507,45 @@ test "Client: close message" {
         // fin | close, masked | len, 4-byte mask
         &.{ 136, 128, 0, 0, 0, 0 },
     );
+}
+
+test "Client: large websocket message" {
+    // A message bigger than the historical 512KB ceiling must be framed
+    // and dispatched, not answered with a 1009 close. CDP clients
+    // routinely send Runtime.evaluate / Page.addScriptToEvaluateOnNewDocument
+    // payloads of this size (e.g. injecting a bundled JS library).
+    const allocator = testing.allocator;
+
+    const prefix = "{\"id\":9,\"method\":\"Browser.getVersion\",\"pad\":\"";
+    const suffix = "\"}";
+    const payload_len = 600 * 1024;
+
+    const payload = try allocator.alloc(u8, payload_len);
+    defer allocator.free(payload);
+    @memcpy(payload[0..prefix.len], prefix);
+    @memset(payload[prefix.len .. payload_len - suffix.len], 'a');
+    @memcpy(payload[payload_len - suffix.len ..], suffix);
+
+    // fin | text, masked | 127 (8-byte extended length), big-endian
+    // length, all-zero mask (XOR no-op)
+    var header = [_]u8{ 129, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    std.mem.writeInt(u64, header[2..10], payload_len, .big);
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    try c.handshake();
+    try c.stream.writeAll(&header);
+    try c.stream.writeAll(payload);
+
+    const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+    defer if (msg.cleanup_fragment) {
+        c.reader.cleanup();
+    };
+
+    try testing.expectEqual(.text, msg.type);
+    try testing.expect(std.mem.indexOf(u8, msg.data, "\"id\":9") != null);
+    try testing.expect(std.mem.indexOf(u8, msg.data, "protocolVersion") != null);
 }
 
 test "server: 404" {
