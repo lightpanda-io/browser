@@ -32,9 +32,13 @@ const Allocator = std.mem.Allocator;
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
 
 // max message size
+// 100MB matches Chrome's inbound DevTools ceiling (kReceiveBufferSizeForDevTools
+// in content/browser/devtools/devtools_http_handler.cc). This is only a
+// hostile-input ceiling, not a per-connection allocation: the reader buffer
+// starts at 16KB and grows on demand (see network/WS.zig).
 // +14 for max websocket payload overhead
 // +140 for the max control packet that might be interleaved in a message
-pub const CDP_MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
+pub const CDP_MAX_MESSAGE_SIZE = 100 * 1024 * 1024 + 14 + 140;
 
 // TCP keepalive parameters applied to accepted CDP connections.
 // Detection window ≈ IDLE + CNT * INTVL = 4 + 3*2 = 10s.
