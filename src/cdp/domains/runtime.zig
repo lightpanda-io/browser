@@ -163,3 +163,28 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         .args = args.items,
     }, .{ .session_id = session_id });
 }
+
+const testing = @import("../testing.zig");
+
+test "cdp.runtime: consoleAPICalled type matches the console method" {
+    // Wire types per the CDP protocol: console.log -> "log",
+    // console.warn -> "warning" (not "warn"), console.info -> "info",
+    // console.error -> "error", console.debug -> "debug".
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
+
+    const frame = bc.session.currentFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec("console.log('l'); console.warn('w'); console.info('i'); console.error('e'); console.debug('d');", null);
+
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "log" }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "warning" }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "info" }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "error" }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "debug" }, .{});
+}
