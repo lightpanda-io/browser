@@ -254,10 +254,8 @@ pub const Tool = enum {
         };
     }
 
-    /// Tool exposed to scripts as an async (Promise-returning) builtin, so the
-    /// recorder emits `await tool(...)`. Only `goto` navigates and must be
-    /// awaited before the next primitive reads the page; everything else is
-    /// synchronous.
+    /// Async (Promise-returning) script builtin, so the recorder emits
+    /// `await tool(...)` — only `goto`, which must finish before the next read.
     pub fn isAsync(self: Tool) bool {
         return self == .goto;
     }
@@ -1800,10 +1798,8 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
 /// network from ever fully idling, so it just rides the timeout.
 const default_nav_wait: lp.Config.WaitUntil = .load;
 
-/// Kick off a root navigation without waiting for it to finish. Returns the
-/// new frame so a caller can match its `_frame_id` against a later load
-/// notification. `performGoto` is the blocking counterpart; the async `goto`
-/// script primitive drives the wait itself off this same setup.
+/// Kick off a root navigation without waiting; returns the new frame. The
+/// blocking `performGoto` and the async `goto` primitive share this setup.
 pub fn startGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8) ToolError!*lp.Frame {
     if (session.hasPage()) {
         registry.reset();

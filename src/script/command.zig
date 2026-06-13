@@ -191,8 +191,7 @@ pub const Command = union(enum) {
 
 fn formatJsToolCall(tc: Command.ToolCall, arena: std.mem.Allocator, writer: *std.Io.Writer) (std.Io.Writer.Error || error{OutOfMemory})!void {
     const s = tc.schema();
-    // Async builtins (goto) must be awaited so a replayed script waits for the
-    // navigation before the next primitive reads the page.
+    // Async builtins must be awaited so a replay waits for navigation.
     if (tc.tool.isAsync()) try writer.writeAll("await ");
     const args_val = tc.args orelse {
         try writer.print("{s}();", .{s.tool_name});

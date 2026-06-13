@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const TickResult = lp.Session.Runner.TickResult;
 
 const browser_tools = lp.tools;
 const BrowserTool = browser_tools.Tool;
@@ -43,10 +44,8 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
 
-/// In-flight `goto` navigations awaiting completion. Each holds a persisted
-/// resolver for the Promise handed back to the script; `runSource`'s driver
-/// loop settles them as their frame loads. A list (not a single slot) so the
-/// shape already supports Phase 2 multi-page — Phase 1 just caps it at one.
+/// In-flight `goto` navigations the driver loop settles. A list, not one slot,
+/// so the shape already fits Phase 2 multi-page; Phase 1 caps it at one.
 pending_gotos: std.ArrayListUnmanaged(PendingGoto) = .empty,
 
 /// The runtime installs exactly the recorded browser tools as script
@@ -151,9 +150,7 @@ pub fn deinit(self: *Runtime) void {
     allocator.destroy(self);
 }
 
-/// Reset every persisted goto resolver and empty the list. Called when a run
-/// finishes (settled or not) and at teardown — a leftover `v8.Global` would
-/// leak past the isolate it belongs to.
+/// A leftover `v8.Global` resolver would leak past its isolate.
 fn clearPendingGotos(self: *Runtime) void {
     for (self.pending_gotos.items) |*entry| {
         v8.v8__Global__Reset(&entry.resolver);
@@ -182,11 +179,9 @@ fn createContext(self: *Runtime) InitError!void {
     v8.v8__Context__Enter(context);
     defer v8.v8__Context__Exit(context);
 
-    // The promise-reject callback every `Env` installs reads a browser
-    // `Context` from embedder slot 1; this bare context has none. Pin the slot
-    // to null so `Context.fromC` returns null and the callback no-ops, instead
-    // of aligncasting garbage when a script's promise rejects unhandled (which
-    // now happens routinely — the script body runs inside an async wrapper).
+    // The promise-reject callback aligncasts embedder slot 1 to a browser
+    // `Context`; this bare context has none. Pin it to null so `Context.fromC`
+    // returns null and the callback no-ops instead of crashing on a rejection.
     v8.v8__Context__SetAlignedPointerInEmbedderData(context, 1, null);
 
     const global = v8.v8__Context__Global(context) orelse return error.RuntimeInitFailed;
@@ -285,11 +280,9 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     defer v8.v8__TryCatch__DESTRUCT(&try_catch);
 
     const script_name = self.env.isolate.initStringHandle(name);
-    // Wrap in an async IIFE so the source can use top-level `await` (e.g.
-    // `await goto(...)`). The wrapper evaluates to a Promise; a top-level
-    // `return <expr>` in the source becomes that Promise's value, which is what
-    // we echo. (A bare trailing expression no longer auto-prints — `await` and
-    // a script completion value are mutually exclusive in JS.)
+    // Wrap in an async IIFE so the source can use top-level `await`. A top-level
+    // `return <expr>` becomes the Promise's value, which we echo; a bare trailing
+    // expression can't (`await` and a completion value are mutually exclusive in JS).
     const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
         return try self.dupeError("out of memory");
     const script_source = self.env.isolate.initStringHandle(wrapped);
@@ -311,8 +304,6 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     const completion = v8.v8__Script__Run(script, context) orelse
         return try self.formatCaught(context, &try_catch, "script failed");
 
-    // Any pending goto whose Promise outlives this run (e.g. rejected by the
-    // single-page guard while still navigating) must not leak its resolver.
     defer self.clearPendingGotos();
 
     const root: *const v8.Promise = @ptrCast(completion);
@@ -338,20 +329,18 @@ fn promiseState(promise: *const v8.Promise) c_int {
     return @intCast(v8.v8__Promise__State(promise));
 }
 
-/// Tick the browser event loop and settle pending gotos until the root Promise
-/// leaves the pending state. Returns a message if the run was interrupted
-/// (SIGINT cancel or terminate); otherwise null once it settles — or stalls,
-/// when no in-flight navigation can advance it further.
+/// Drives the browser until the root Promise settles. Returns an interrupt
+/// message (SIGINT/terminate), or null once it settles or stalls.
 fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8.Promise) RunError!?[]const u8 {
     var runner: ?lp.Session.Runner = null;
     while (promiseState(root) == v8.kPending) {
         if (self.session.isCancelled()) return try self.dupeError("cancelled");
         if (self.env.terminatePending()) return try self.dupeError("terminated");
 
-        // `goto` is the only async source we drive. With nothing in flight, the
-        // script is awaiting a value we cannot settle — stop rather than spin.
+        // Nothing in flight → the script awaits something we can't settle.
         if (self.pending_gotos.items.len == 0) break;
 
+        var next_tick_ms: u32 = 0;
         {
             self.session.browser.env.isolate.enter();
             defer self.session.browser.env.isolate.exit();
@@ -359,14 +348,21 @@ fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8
                 runner = self.session.runner(.{}) catch null;
             }
             if (runner) |*r| {
-                // A failed tick (page JS error, etc.) must not abort the wait —
-                // the per-goto deadline still bounds it. Ignore result and error.
-                if (r.tick(.{ .ms = 100 })) |_| {} else |_| {}
+                // A failed tick must not abort the wait; the deadline bounds it.
+                const tick: TickResult = r.tick(.{ .ms = 100 }) catch .{ .done = {} };
+                next_tick_ms = switch (tick) {
+                    .ok => |ms| ms,
+                    .done => 0,
+                };
             }
         }
 
         self.resolveReadyGotos(context);
         self.env.performIsolateMicrotasks();
+
+        // Honor the runner's pacing hint so a timer-only wait (no network I/O,
+        // which `tick` would otherwise block on) doesn't busy-spin.
+        if (next_tick_ms > 0) std.Thread.sleep(next_tick_ms * std.time.ns_per_ms);
     }
     return null;
 }
@@ -422,8 +418,6 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         error.InvalidArguments => return self.throwTypeError("invalid arguments"),
     };
 
-    // `goto` is the one async primitive: it returns a Promise resolved by the
-    // `runSource` driver loop when navigation settles, rather than blocking.
     if (tool == .goto) return self.invokeGoto(arena, context, info, args);
 
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
@@ -445,9 +439,7 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
 }
 
 /// Start a navigation and hand the script a Promise that settles when the page
-/// loads. The resolver is persisted as a `v8.Global` and parked in
-/// `pending_gotos`; the `runSource` driver loop ticks the browser and resolves
-/// it. Phase 1 allows one navigation at a time — a concurrent `goto` rejects.
+/// loads. Phase 1 allows one navigation at a time — a concurrent `goto` rejects.
 fn invokeGoto(
     self: *Runtime,
     arena: std.mem.Allocator,
@@ -466,8 +458,8 @@ fn invokeGoto(
     const url = params.url;
     const timeout = params.timeout orelse 10000;
 
-    // Phase-1 guard: one navigation at a time. Reject before touching the
-    // session so `Session.createPage`'s single-page assert is never reached.
+    // Phase-1: one navigation at a time. Reject before `startGoto` so
+    // `Session.createPage`'s single-page assert is never hit.
     if (self.pending_gotos.items.len != 0) {
         return self.rejectResolver(context, resolver, "a navigation is already in progress");
     }
@@ -501,11 +493,9 @@ fn rejectResolver(self: *Runtime, context: *const v8.Context, resolver: *const v
     v8.v8__Promise__Resolver__Reject(resolver, context, self.env.isolate.createError(message), &out);
 }
 
-/// Settle each pending goto whose frame has finished (or errored, or run past
-/// its deadline). Mirrors the blocking `performGoto`/`execGoto` outcomes: a
-/// reached load resolves, a soft timeout resolves with a notice (the page may
-/// still be usable), only a real navigation error rejects. Runs on the script
-/// isolate (the resolvers live there); the caller drains microtasks after.
+/// Mirrors `execGoto`: a reached load resolves, a soft timeout resolves with a
+/// notice (the page may still be usable), a real error rejects. Runs on the
+/// script isolate where the resolvers live; the caller drains microtasks after.
 fn resolveReadyGotos(self: *Runtime, context: *const v8.Context) void {
     var i: usize = 0;
     while (i < self.pending_gotos.items.len) {
