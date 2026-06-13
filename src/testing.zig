@@ -485,7 +485,7 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Frame {
 const TestHTTPServer = @import("TestHTTPServer.zig");
 const TestWSServer = @import("TestWSServer.zig");
 
-const Server = @import("Server.zig");
+const Server = if (lp.build_config.v8) @import("Server.zig") else struct {};
 var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
@@ -522,7 +522,11 @@ test "tests:beforeAll" {
     var wg: std.Thread.WaitGroup = .{};
     wg.startMany(3);
 
-    test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
+    if (comptime lp.build_config.v8) {
+        test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
+    } else {
+        wg.finish();
+    }
 
     test_http_server = TestHTTPServer.init(testHTTPHandler);
     test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
@@ -540,8 +544,10 @@ test "tests:afterAll" {
     if (test_cdp_server_thread) |thread| {
         thread.join();
     }
-    if (test_cdp_server) |server| {
-        server.deinit();
+    if (comptime lp.build_config.v8) {
+        if (test_cdp_server) |server| {
+            server.deinit();
+        }
     }
 
     if (test_http_server) |*server| {
@@ -561,7 +567,9 @@ test "tests:afterAll" {
         thread.join();
     }
 
-    @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
+    if (comptime lp.build_config.v8) {
+        @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
+    }
 
     // Browser must be deinit'd before the notification — Session/Frame
     // teardown may unregister notification listeners (e.g. CookieStore

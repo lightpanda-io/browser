@@ -71,10 +71,7 @@ value: *anyopaque,
 // which is where we store the subtype.
 subtype: ?bridge.SubType,
 
-pub const PrototypeChainEntry = struct {
-    index: bridge.JsApiLookup.BackingInt,
-    offset: u16, // offset to the _proto field
-};
+pub const PrototypeChainEntry = @import("../registry.zig").PrototypeChainEntry;
 
 // Reverses the mapZigInstanceToJs, making sure that our TaggedOpaque
 // contains a ptr to the correct type.

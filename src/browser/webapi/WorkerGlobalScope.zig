@@ -599,7 +599,7 @@ pub fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
 // `console` and `self` are [Replaceable] assignment redefines them as own data
 // properties on the global rather than throwing through the getter-only accessor
 // in strict mode.
-fn replaceGlobalProperty(value: JS.Value, comptime name: []const u8) void {
+fn replaceGlobalProperty(value: JS.Value, comptime name: [:0]const u8) void {
     const global = value.local.getGlobal();
     _ = global.defineOwnProperty(name, value, 0);
 }

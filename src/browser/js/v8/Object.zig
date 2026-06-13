@@ -62,7 +62,7 @@ pub fn set(self: Object, key: anytype, value: anytype, comptime opts: js.Caller.
     return out.has_value;
 }
 
-pub fn defineOwnProperty(self: Object, name: []const u8, value: js.Value, attr: v8.PropertyAttribute) ?bool {
+pub fn defineOwnProperty(self: Object, name: [:0]const u8, value: js.Value, attr: v8.PropertyAttribute) ?bool {
     const ctx = self.local.ctx;
     const name_handle = ctx.isolate.initStringHandle(name);
 
@@ -195,7 +195,7 @@ pub const NameIterator = struct {
     local: *const js.Local,
     handle: *const v8.Array,
 
-    pub fn next(self: *NameIterator) !?[]const u8 {
+    pub fn next(self: *NameIterator) !?[:0]const u8 {
         const idx = self.idx;
         if (idx == self.count) {
             return null;
@@ -204,6 +204,6 @@ pub const NameIterator = struct {
 
         const local = self.local;
         const js_val_handle = v8.v8__Object__GetIndex(@ptrCast(self.handle), local.handle, idx) orelse return error.JsException;
-        return try js.Value.toStringSlice(.{ .local = local, .handle = js_val_handle });
+        return try js.Value.toStringSliceZ(.{ .local = local, .handle = js_val_handle });
     }
 };

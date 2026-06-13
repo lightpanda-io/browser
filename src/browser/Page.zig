@@ -20,7 +20,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
-const v8 = js.v8;
 
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
@@ -81,11 +80,13 @@ identity: js.Identity = .{},
 // weak-callback safety.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *js.FinalizerCallback) = .empty,
 
-// Tracked global v8 objects that need to be released when the Page tears down.
-globals: std.ArrayList(v8.Global) = .empty,
+// Tracked persisted JS values that need to be released when the Page tears
+// down.
+globals: std.ArrayList(js.PersistentHandle) = .empty,
 
-// Temporary v8 globals that can be released early. Key is global.data_ptr.
-temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+// Temporary persisted JS values that can be released early. Keyed by the
+// handle's unique id (v8: global.data_ptr; qjs: a minted key).
+temps: std.AutoHashMapUnmanaged(usize, js.PersistentHandle) = .empty,
 
 // Double buffered so that, as we process one list of queued navigations, new
 // entries are added to the separate buffer. Prevents endless navigation loops
@@ -184,7 +185,7 @@ pub fn deinit(self: *Page) void {
 
     {
         for (self.globals.items) |*global| {
-            v8.v8__Global__Reset(global);
+            js.resetPersistentHandle(global);
         }
         self.globals = .empty;
     }
@@ -192,7 +193,7 @@ pub fn deinit(self: *Page) void {
     {
         var it = self.temps.valueIterator();
         while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
+            js.resetPersistentHandle(global);
         }
         self.temps = .empty;
     }

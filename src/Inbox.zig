@@ -27,7 +27,7 @@
 
 const std = @import("std");
 
-const CDP = @import("cdp/CDP.zig");
+const CDP = if (@import("lightpanda").build_config.v8) @import("cdp/CDP.zig") else @import("cdp/Disabled.zig");
 
 const ArenaPool = @import("ArenaPool.zig");
 

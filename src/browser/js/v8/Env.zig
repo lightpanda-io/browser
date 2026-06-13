@@ -27,10 +27,10 @@ const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
 
-const App = @import("../../App.zig");
-const Frame = @import("../Frame.zig");
-const Window = @import("../webapi/Window.zig");
-const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
+const App = @import("../../../App.zig");
+const Frame = @import("../../Frame.zig");
+const Window = @import("../../webapi/Window.zig");
+const WorkerGlobalScope = @import("../../webapi/WorkerGlobalScope.zig");
 
 const v8 = js.v8;
 const log = lp.log;
@@ -616,14 +616,14 @@ fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c)
     const location = std.mem.span(c_location);
     const message = std.mem.span(c_message);
     log.fatal(.app, "V8 fatal callback", .{ .location = location, .message = message });
-    @import("../../crash_handler.zig").crash("Fatal V8 Error", .{ .location = location, .message = message }, @returnAddress());
+    @import("../../../crash_handler.zig").crash("Fatal V8 Error", .{ .location = location, .message = message }, @returnAddress());
 }
 
 fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callconv(.c) void {
     const location = std.mem.span(c_location);
     const detail = if (details) |d| std.mem.span(d.detail) else "";
     log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
-    @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
+    @import("../../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }
 
 const PrivateSymbols = struct {
@@ -642,13 +642,13 @@ const PrivateSymbols = struct {
     }
 };
 
-const testing = @import("../../testing.zig");
+const testing = @import("../../../testing.zig");
 test "Env: Worker context " {
     const session = testing.test_session;
     const frame = try session.createPage();
     defer session.removePage();
 
-    const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
+    const worker = try @import("../../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
 
     var ls: js.Local.Scope = undefined;
     worker._worker_scope.js.localScope(&ls);

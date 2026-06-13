@@ -270,7 +270,7 @@ pub const Session = struct {
             return error.ObjectIdIsNotANode;
         }
 
-        const Node = @import("../webapi/Node.zig");
+        const Node = @import("../../webapi/Node.zig");
         // Cast to *const v8.Object for typeTaggedAnyOpaque
         return TaggedOpaque.fromJS(*Node, @ptrCast(js_val)) catch return error.ObjectIdIsNotANode;
     }

@@ -18,11 +18,11 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const string = @import("../../string.zig");
+const string = @import("../../../string.zig");
 
-const Frame = @import("../Frame.zig");
-const Page = @import("../Page.zig");
-const Session = @import("../Session.zig");
+const Frame = @import("../../Frame.zig");
+const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 
 const js = @import("js.zig");
 const Local = @import("Local.zig");
@@ -360,7 +360,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
 
     if (comptime IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
         if (log.enabled(.js, .debug)) {
-            const DOMException = @import("../webapi/DOMException.zig");
+            const DOMException = @import("../../webapi/DOMException.zig");
             if (DOMException.fromError(err) == null) {
                 // This isn't a DOMException, let's log it
                 logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
@@ -378,7 +378,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         error.IllegalConstructor => isolate.createError("Illegal Constructor"),
         else => blk: {
             if (comptime opts.dom_exception) {
-                const DOMException = @import("../webapi/DOMException.zig");
+                const DOMException = @import("../../webapi/DOMException.zig");
                 if (DOMException.fromError(err)) |ex| {
                     const value = local.zigValueToJs(ex, .{}) catch break :blk isolate.createError("internal error");
                     break :blk value.handle;
@@ -878,7 +878,7 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             // type instantiation of jsValueToZig may not include such errors
             // in its inferred error set.
             @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch |err| {
-                const DOMException = @import("../webapi/DOMException.zig");
+                const DOMException = @import("../../webapi/DOMException.zig");
                 if (DOMException.fromError(err) != null) {
                     // I don't love this. But we have [a few] cases when trying to
                     // map a JS Value that we have a specific DOMException to throw.

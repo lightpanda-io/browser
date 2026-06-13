@@ -23,7 +23,7 @@ const builtin = @import("builtin");
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 
-const CDP = @import("../cdp/CDP.zig");
+const CDP = if (@import("lightpanda").build_config.v8) @import("../cdp/CDP.zig") else @import("../cdp/Disabled.zig");
 const libcurl = @import("../sys/libcurl.zig");
 
 const http = @import("http.zig");

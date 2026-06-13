@@ -96,6 +96,10 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
     switch (args.mode) {
         .serve => |opts| {
+            if (comptime !lp.build_config.v8) {
+                unreachable;
+            }
+
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
             const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
@@ -167,16 +171,25 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             log.opts.format = .logfmt;
 
-            var cdp_server: ?*lp.Server = null;
-            if (opts.cdp_port) |port| {
-                const address = std.net.Address.parseIp("127.0.0.1", port) catch |err| {
-                    log.fatal(.mcp, "invalid cdp address", .{ .err = err, .port = port });
-                    return;
-                };
-                cdp_server = try lp.Server.init(app, address);
-                try sighandler.on(lp.Server.shutdown, .{cdp_server.?});
+            var cdp_server: ?*(if (lp.build_config.v8) lp.Server else void) = null;
+            if (comptime lp.build_config.v8) {
+                if (opts.cdp_port) |port| {
+                    const address = std.net.Address.parseIp("127.0.0.1", port) catch |err| {
+                        log.fatal(.mcp, "invalid cdp address", .{ .err = err, .port = port });
+                        return;
+                    };
+                    cdp_server = try lp.Server.init(app, address);
+                    try sighandler.on(lp.Server.shutdown, .{cdp_server.?});
+                }
+            } else if (opts.cdp_port != null) {
+                log.fatal(.mcp, "cdp_port requires v8", .{
+                    .hint = "CDP requires the v8 JavaScript engine; this binary was built with -Djs_engine=qjs",
+                });
+                return error.NotSupported;
             }
-            defer if (cdp_server) |s| s.deinit();
+            defer if (comptime lp.build_config.v8) {
+                if (cdp_server) |s| s.deinit();
+            };
 
             var worker_thread = try std.Thread.spawn(.{}, mcpThread, .{ allocator, app });
             defer worker_thread.join();

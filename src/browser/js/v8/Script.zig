@@ -78,7 +78,7 @@ pub const Unbound = struct {
     };
 };
 
-const testing = @import("../../testing.zig");
+const testing = @import("../../../testing.zig");
 test "Script: persisted unbound script re-binds and re-runs" {
     const session = testing.test_session;
     const frame = try session.createPage();

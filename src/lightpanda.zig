@@ -21,7 +21,9 @@ const std = @import("std");
 pub const log = @import("log.zig");
 pub const App = @import("App.zig");
 pub const Network = @import("network/Network.zig");
-pub const Server = @import("Server.zig");
+// The CDP server only exists with the v8 engine (the inspector and
+// isolated worlds have no quickjs equivalent).
+pub const Server = if (build_config.v8) @import("Server.zig") else struct {};
 pub const Config = @import("Config.zig");
 pub const String = @import("string.zig").String;
 pub const Notification = @import("Notification.zig");

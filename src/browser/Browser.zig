@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const App = @import("../App.zig");
-const CDP = @import("../cdp/CDP.zig");
+const CDP = if (@import("lightpanda").build_config.v8) @import("../cdp/CDP.zig") else @import("../cdp/Disabled.zig");
 const Notification = @import("../Notification.zig");
 
 const js = @import("js/js.zig");

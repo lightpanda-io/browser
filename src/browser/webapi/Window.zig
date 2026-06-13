@@ -872,7 +872,7 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
 // `console` and a handful of other Window attributes are [Replaceable]: assigning
 // to them redefines the attribute as an own data property on the global instead
 // of throwing (which a getter-only accessor does in strict mode / modules).
-fn replaceGlobalProperty(value: js.Value, comptime name: []const u8) void {
+fn replaceGlobalProperty(value: js.Value, comptime name: [:0]const u8) void {
     const global = value.local.getGlobal();
     _ = global.defineOwnProperty(name, value, 0);
 }

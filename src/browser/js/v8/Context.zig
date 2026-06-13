@@ -22,13 +22,13 @@ const lp = @import("lightpanda");
 const js = @import("js.zig");
 const Env = @import("Env.zig");
 const Origin = @import("Origin.zig");
-const Scheduler = @import("Scheduler.zig");
-const Execution = @import("Execution.zig");
+const Scheduler = @import("../Scheduler.zig");
+const Execution = @import("../Execution.zig");
 
-const Frame = @import("../Frame.zig");
-const Page = @import("../Page.zig");
-const ScriptManagerBase = @import("../ScriptManagerBase.zig");
-const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
+const Frame = @import("../../Frame.zig");
+const Page = @import("../../Page.zig");
+const ScriptManagerBase = @import("../../ScriptManagerBase.zig");
+const WorkerGlobalScope = @import("../../webapi/WorkerGlobalScope.zig");
 
 const v8 = js.v8;
 const log = lp.log;

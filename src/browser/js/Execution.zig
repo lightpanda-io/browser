@@ -28,7 +28,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Context = @import("Context.zig");
+const Context = @import("js.zig").Context;
 const Scheduler = @import("Scheduler.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");

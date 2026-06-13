@@ -20,7 +20,7 @@ const lp = @import("lightpanda");
 
 const js = @import("js.zig");
 
-const DOMException = @import("../webapi/DOMException.zig");
+const DOMException = @import("../../webapi/DOMException.zig");
 
 const v8 = js.v8;
 const log = lp.log;

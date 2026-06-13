@@ -30,7 +30,7 @@ const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
 
-const CDP = @import("../cdp/CDP.zig");
+const CDP = if (@import("lightpanda").build_config.v8) @import("../cdp/CDP.zig") else @import("../cdp/Disabled.zig");
 const Inbox = @import("../Inbox.zig");
 
 const log = lp.log;

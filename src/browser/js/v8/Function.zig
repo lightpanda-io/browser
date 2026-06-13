@@ -213,7 +213,7 @@ pub fn src(self: *const Function) ![]const u8 {
     return js.Value.toStringSlice(.{ .local = self.local, .handle = @ptrCast(self.handle) });
 }
 
-pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
+pub fn getPropertyValue(self: *const Function, name: [:0]const u8) !?js.Value {
     const local = self.local;
     const key = local.isolate.initStringHandle(name);
     const handle = v8.v8__Object__Get(self.handle, self.local.handle, key) orelse {

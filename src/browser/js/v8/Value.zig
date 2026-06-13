@@ -182,7 +182,7 @@ pub fn toStringSmart(self: Value) ![]const u8 {
         return try js_str.toSlice();
     }
 
-    const Blob = @import("../webapi/Blob.zig");
+    const Blob = @import("../../webapi/Blob.zig");
     if (self.local.jsValueToZig(*Blob, self)) |blob_obj| {
         return blob_obj._slice;
     } else |_| {}
@@ -507,7 +507,7 @@ fn G(comptime global_type: GlobalType) type {
     };
 }
 
-const testing = @import("../../testing.zig");
+const testing = @import("../../../testing.zig");
 test "Value: jsonStringify maps unserializable JS values to null" {
     const session = testing.test_session;
     const frame = try session.createPage();

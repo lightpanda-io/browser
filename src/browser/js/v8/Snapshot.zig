@@ -197,13 +197,13 @@ pub fn create() !Snapshot {
         }
 
         {
-            const Window = @import("../webapi/Window.zig");
+            const Window = @import("../../webapi/Window.zig");
             const index = try createSnapshotContext(.window, &PageJsApis, Window.JsApi, isolate, snapshot_creator.?, &templates);
             std.debug.assert(index == 0);
         }
 
         {
-            const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
+            const WorkerGlobalScope = @import("../../webapi/WorkerGlobalScope.zig");
             const index = try createSnapshotContext(.worker, &WorkerJsApis, WorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
             std.debug.assert(index == 1);
         }
@@ -251,7 +251,7 @@ fn createSnapshotContext(
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
         v8.v8__ObjectTemplate__SetIndexedHandler(global_template, &.{
-            .getter = @import("../webapi/Window.zig").JsApi.index.getter,
+            .getter = @import("../../webapi/Window.zig").JsApi.index.getter,
             .setter = null,
             .query = null,
             .deleter = null,

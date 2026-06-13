@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Config = @import("Config.zig");
-const Snapshot = @import("browser/js/Snapshot.zig");
-const Platform = @import("browser/js/Platform.zig");
+const Snapshot = @import("browser/js/js.zig").Snapshot;
+const Platform = @import("browser/js/js.zig").Platform;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
 const Storage = @import("storage/Storage.zig");

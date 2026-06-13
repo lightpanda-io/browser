@@ -39,6 +39,7 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const js_engine = b.option(JsEngine, "js_engine", "JavaScript engine to use") orelse .v8;
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
@@ -55,6 +56,7 @@ pub fn build(b: *Build) !void {
     opts.addOption([]const u8, "version_encoded", version_encoded);
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
     opts.addOption(bool, "wpt_extensions", wpt_extensions);
+    opts.addOption(bool, "v8", js_engine == .v8);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
     const enable_asan = b.option(bool, "asan", "Enable Address Sanitizer") orelse false;
@@ -84,7 +86,10 @@ pub fn build(b: *Build) !void {
         // Set default behavior
         b.default_step.dependOn(fmt_step);
 
-        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
+        switch (js_engine) {
+            .v8 => try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path),
+            .qjs => linkQuickJs(b, mod),
+        }
         try linkCurl(b, mod, enable_tsan);
         try linkHtml5Ever(b, mod);
         linkZenai(b, mod);
@@ -146,7 +151,7 @@ pub fn build(b: *Build) !void {
         version_info_step.dependOn(&version_info_run.step);
     }
 
-    {
+    if (js_engine == .v8) {
         // snapshot creator
         const exe = b.addExecutable(.{
             .name = "lightpanda-snapshot-creator",
@@ -187,6 +192,16 @@ pub fn build(b: *Build) !void {
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_tests.step);
     }
+}
+
+const JsEngine = enum { v8, qjs };
+
+fn linkQuickJs(b: *Build, mod: *Build.Module) void {
+    mod.addIncludePath(b.path("vendor/quickjs"));
+    mod.addCSourceFile(.{
+        .file = b.path("vendor/quickjs/quickjs-amalgam.c"),
+        .flags = if (mod.optimize.? == .Debug) &.{} else &.{"-DNDEBUG"},
+    });
 }
 
 fn linkV8(

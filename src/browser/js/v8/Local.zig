@@ -19,15 +19,16 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const string = @import("../../string.zig");
+const string = @import("../../../string.zig");
 
-const Page = @import("../Page.zig");
+const Page = @import("../../Page.zig");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
 const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
+const marshal = @import("../marshal.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
 
 const v8 = js.v8;
@@ -946,30 +947,7 @@ fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
 // Finally, I considered adding this probing directly into jsValueToZig
 // but I decided doing this separately was better. However, the goal is
 // obviously that probing is consistent with jsValueToZig.
-fn ProbeResult(comptime T: type) type {
-    return union(enum) {
-        // The js_value maps directly to T
-        value: T,
-
-        // The value is a T. This is almost the same as returning value: T,
-        // but the caller still has to get T by calling jsValueToZig.
-        // We prefer returning .{.ok => {}}, to avoid reducing duplication
-        // with jsValueToZig, but in some cases where probing has a cost
-        // AND yields the value anyways, we'll use .{.value = T}.
-        ok: void,
-
-        // the js_value is compatible with T (i.e. a int -> float),
-        compatible: void,
-
-        // the js_value can be coerced to T (this is a lower precedence
-        // than compatible)
-        coerce: void,
-
-        // the js_value cannot be turned into T
-        invalid: void,
-    };
-}
-fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !ProbeResult(T) {
+fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !marshal.ProbeResult(T) {
     switch (@typeInfo(T)) {
         .optional => |o| {
             if (js_val.isNullOrUndefined()) {
@@ -1157,21 +1135,21 @@ fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
     const n = @typeInfo(T).int;
     switch (n.signedness) {
         .signed => switch (n.bits) {
-            8 => return jsSignedIntToZig(i8, -128, 127, try js_value.toI32()),
-            16 => return jsSignedIntToZig(i16, -32_768, 32_767, try js_value.toI32()),
-            32 => return jsSignedIntToZig(i32, -2_147_483_648, 2_147_483_647, try js_value.toI32()),
+            8 => return marshal.jsSignedIntToZig(i8, -128, 127, try js_value.toI32()),
+            16 => return marshal.jsSignedIntToZig(i16, -32_768, 32_767, try js_value.toI32()),
+            32 => return marshal.jsSignedIntToZig(i32, -2_147_483_648, 2_147_483_647, try js_value.toI32()),
             64 => {
                 if (js_value.isBigInt()) {
                     const v = js_value.toBigInt();
                     return v.getInt64();
                 }
-                return jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32());
+                return marshal.jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32());
             },
             else => {},
         },
         .unsigned => switch (n.bits) {
-            8 => return jsUnsignedIntToZig(u8, 255, try js_value.toU32()),
-            16 => return jsUnsignedIntToZig(u16, 65_535, try js_value.toU32()),
+            8 => return marshal.jsUnsignedIntToZig(u8, 255, try js_value.toU32()),
+            16 => return marshal.jsUnsignedIntToZig(u16, 65_535, try js_value.toU32()),
             32 => {
                 if (js_value.isBigInt()) {
                     const v = js_value.toBigInt();
@@ -1181,33 +1159,19 @@ fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
                     }
                     return error.InvalidArgument;
                 }
-                return jsUnsignedIntToZig(u32, 4_294_967_295, try js_value.toU32());
+                return marshal.jsUnsignedIntToZig(u32, 4_294_967_295, try js_value.toU32());
             },
             64 => {
                 if (js_value.isBigInt()) {
                     const v = js_value.toBigInt();
                     return v.getUint64();
                 }
-                return jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32());
+                return marshal.jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32());
             },
             else => {},
         },
     }
     @compileError("Only i8, i16, i32, i64, u8, u16, u32 and u64 are supported");
-}
-
-fn jsSignedIntToZig(comptime T: type, comptime min: comptime_int, max: comptime_int, maybe: i32) !T {
-    if (maybe >= min and maybe <= max) {
-        return @intCast(maybe);
-    }
-    return error.InvalidArgument;
-}
-
-fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
-    if (maybe <= max) {
-        return @intCast(maybe);
-    }
-    return error.InvalidArgument;
 }
 
 // Every WebApi type has a class_id as T.JsApi.Meta.class_id. We use this to create
@@ -1264,8 +1228,8 @@ fn resolveT(comptime T: type, value: *T) Resolved {
         .class_id = Meta.class_id,
         .prototype_chain = &Meta.prototype_chain,
         .finalizer = blk: {
-            const FT = (comptime findFinalizerType(T)) orelse break :blk null;
-            const getFinalizerPtr = comptime finalizerPtrGetter(T, FT);
+            const FT = (comptime marshal.findFinalizerType(T)) orelse break :blk null;
+            const getFinalizerPtr = comptime marshal.finalizerPtrGetter(T, FT);
             const finalizer_ptr = getFinalizerPtr(value);
 
             const Wrap = struct {
@@ -1348,44 +1312,6 @@ fn resolveT(comptime T: type, value: *T) Resolved {
             };
         },
     };
-}
-
-// Start at the "resolved" type (the most specific) and work our way up the
-// prototype chain looking for the type that defines acquireRef
-fn findFinalizerType(comptime T: type) ?type {
-    const S = bridge.Struct(T);
-    if (@hasDecl(S, "acquireRef")) {
-        return S;
-    }
-    if (@hasField(S, "_proto")) {
-        const ProtoPtr = std.meta.fieldInfo(S, ._proto).type;
-        const ProtoChild = @typeInfo(ProtoPtr).pointer.child;
-        return findFinalizerType(ProtoChild);
-    }
-    return null;
-}
-
-// Generate a function that follows the _proto pointer chain to get to the finalizer type
-fn finalizerPtrGetter(comptime T: type, comptime FT: type) *const fn (*T) *FT {
-    const S = bridge.Struct(T);
-    if (S == FT) {
-        return struct {
-            fn get(v: *T) *FT {
-                return v;
-            }
-        }.get;
-    }
-    if (@hasField(S, "_proto")) {
-        const ProtoPtr = std.meta.fieldInfo(S, ._proto).type;
-        const ProtoChild = @typeInfo(ProtoPtr).pointer.child;
-        const childGetter = comptime finalizerPtrGetter(ProtoChild, FT);
-        return struct {
-            fn get(v: *T) *FT {
-                return childGetter(v._proto);
-            }
-        }.get;
-    }
-    @compileError("Cannot find path from " ++ @typeName(T) ++ " to " ++ @typeName(FT));
 }
 
 pub fn stackTrace(self: *const Local) !?[]const u8 {
@@ -1557,30 +1483,7 @@ pub fn toLocal(self: *const Local, global: anytype) ToLocalReturnType(@TypeOf(gl
     return global.local(self);
 }
 
-pub fn ToLocalReturnType(comptime T: type) type {
-    if (@typeInfo(T) == .optional) {
-        const GlobalType = @typeInfo(T).optional.child;
-        const struct_info = @typeInfo(GlobalType).@"struct";
-        inline for (struct_info.decls) |decl| {
-            if (std.mem.eql(u8, decl.name, "local")) {
-                const Fn = @TypeOf(@field(GlobalType, "local"));
-                const fn_info = @typeInfo(Fn).@"fn";
-                return ?fn_info.return_type.?;
-            }
-        }
-        @compileError("Type does not have local method");
-    } else {
-        const struct_info = @typeInfo(T).@"struct";
-        inline for (struct_info.decls) |decl| {
-            if (std.mem.eql(u8, decl.name, "local")) {
-                const Fn = @TypeOf(@field(T, "local"));
-                const fn_info = @typeInfo(Fn).@"fn";
-                return fn_info.return_type.?;
-            }
-        }
-        @compileError("Type does not have local method");
-    }
-}
+pub const ToLocalReturnType = marshal.ToLocalReturnType;
 
 pub fn debugContextId(self: *const Local) i32 {
     return v8.v8__Context__DebugContextId(self.handle);

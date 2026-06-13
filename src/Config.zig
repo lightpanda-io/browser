@@ -701,6 +701,12 @@ pub fn parseArgs(allocator: Allocator) !Config {
     if (command == .serve and command.serve.timeout != null) {
         log.warn(.app, "--timeout is deprecated", .{});
     }
+
+    if (@import("lightpanda").build_config.v8 == false and command == .serve) {
+        log.fatal(.app, "v8 required", .{ .hint = "'serve' command requires a version of lightpanda built with v8" });
+        return error.V8Required;
+    }
+
     return .init(allocator, exec_name, command);
 }
 
