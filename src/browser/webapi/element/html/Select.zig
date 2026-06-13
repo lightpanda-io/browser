@@ -129,6 +129,13 @@ pub fn getMultiple(self: *const Select) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
 }
 
+// https://html.spec.whatwg.org/multipage/form-elements.html#dom-select-type
+// The `type` IDL attribute reflects the element's mode: "select-multiple" when
+// the `multiple` attribute is present, "select-one" otherwise.
+pub fn getType(self: *const Select) []const u8 {
+    return if (self.getMultiple()) "select-multiple" else "select-one";
+}
+
 pub fn setMultiple(self: *Select, multiple: bool, frame: *Frame) !void {
     if (multiple) {
         try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), frame);
@@ -318,6 +325,7 @@ pub const JsApi = struct {
     };
 
     pub const value = bridge.accessor(Select.getValue, Select.setValue, .{});
+    pub const @"type" = bridge.accessor(Select.getType, null, .{});
     pub const selectedIndex = bridge.accessor(Select.getSelectedIndex, Select.setSelectedIndex, .{});
     pub const multiple = bridge.accessor(Select.getMultiple, Select.setMultiple, .{ .ce_reactions = true });
     pub const disabled = bridge.accessor(Select.getDisabled, Select.setDisabled, .{ .ce_reactions = true });

@@ -108,6 +108,21 @@ pub fn setName(self: *Option, name: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
+// https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-label
+// On getting, return the `label` content attribute if present and non-empty,
+// otherwise the value of the `text` IDL attribute. On setting, reflect to the
+// `label` content attribute.
+pub fn getLabel(self: *const Option, frame: *Frame) []const u8 {
+    if (self.asConstElement().getAttributeSafe(comptime .wrap("label"))) |label| {
+        if (label.len != 0) return label;
+    }
+    return self.getText(frame);
+}
+
+pub fn setLabel(self: *Option, label: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("label"), .wrap(label), frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Option);
 
@@ -119,6 +134,7 @@ pub const JsApi = struct {
 
     pub const value = bridge.accessor(Option.getValue, Option.setValue, .{ .ce_reactions = true });
     pub const text = bridge.accessor(Option.getText, Option.setText, .{ .ce_reactions = true });
+    pub const label = bridge.accessor(Option.getLabel, Option.setLabel, .{ .ce_reactions = true });
     pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
     pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, null, .{});
     pub const disabled = bridge.accessor(Option.getDisabled, Option.setDisabled, .{ .ce_reactions = true });
