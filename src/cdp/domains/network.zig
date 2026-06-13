@@ -22,10 +22,12 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
+const Config = @import("../../Config.zig");
 const URL = @import("../../browser/URL.zig");
 const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
+const Headers = @import("../../browser/HttpClient.zig").Headers;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
 
@@ -108,17 +110,24 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
     try extra_headers.ensureTotalCapacity(arena, params.headers.map.count());
     var it = params.headers.map.iterator();
     while (it.next()) |header| {
-        // Reject a non-printable User-Agent, but (unlike
-        // Emulation.setUserAgentOverride) allow Mozilla: this is the
-        // intended escape hatch for a real browser-like UA (#2704).
-        if (std.ascii.eqlIgnoreCase(header.key_ptr.*, "user-agent")) {
-            for (header.value_ptr.*) |c| {
-                if (!std.ascii.isPrint(c)) {
-                    return cmd.sendError(-32602, "User agent contains non-printable characters", .{});
-                }
+        const key = header.key_ptr.*;
+        const value = header.value_ptr.*;
+
+        if (std.mem.indexOfAny(u8, key, "\r\n") != null or std.mem.indexOfAny(u8, value, "\r\n") != null) {
+            log.warn(.not_implemented, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name/value must not contain CR or LF" });
+            continue;
+        }
+
+        const header_string = try std.fmt.allocPrintSentinel(arena, "{s}: {s}", .{ key, value }, 0);
+
+        if (Headers.parseHeader(header_string)) |parsed| {
+            if (std.ascii.eqlIgnoreCase(parsed.name, "user-agent")) {
+                Config.validateUserAgent(parsed.value) catch |err| {
+                    log.warn(.not_implemented, "network.setExtraHTTPHeaders", .{ .param = "userAgent", .value = parsed.value, .err = err });
+                    continue;
+                };
             }
         }
-        const header_string = try std.fmt.allocPrintSentinel(arena, "{s}: {s}", .{ header.key_ptr.*, header.value_ptr.* }, 0);
         extra_headers.appendAssumeCapacity(header_string);
     }
 
@@ -565,21 +574,31 @@ test "cdp.network setExtraHTTPHeaders" {
 }
 
 test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA1", .session_id = "NESI-UA1" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "NID-UA1", .session_id = "NESI-UA1" });
 
     try ctx.processMessage(.{
         .id = 3,
         .method = "Network.setExtraHTTPHeaders",
-        .params = .{ .headers = .{ .@"User-Agent" = "Bot/1.0\x01hidden" } },
+        .params = .{ .headers = .{
+            .@"User-Agent" = "Bot/1.0\x01hidden",
+            .@"x-custom" = "hi",
+        } },
     });
 
-    try ctx.expectSentError(-32602, "User agent contains non-printable characters", .{ .id = 3 });
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    try testing.expectEqual("x-custom: hi", std.mem.span(bc.extra_headers.items[0]));
 }
 
-test "cdp.network setExtraHTTPHeaders allows a Mozilla User-Agent" {
+test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -592,7 +611,7 @@ test "cdp.network setExtraHTTPHeaders allows a Mozilla User-Agent" {
     });
 
     const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    try testing.expectEqual(bc.extra_headers.items.len, 0);
 }
 
 test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
@@ -609,6 +628,52 @@ test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
 
     const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual(bc.extra_headers.items.len, 1);
+}
+
+test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via a colon in the key" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA4", .session_id = "NESI-UA4" });
+
+    // A colon in the key desyncs the raw key from the first-colon parse that
+    // req.headers.set/libcurl use: "User-Agent:Mozilla/5.0 (X: Y)" parses to
+    // name="User-Agent", value="Mozilla/5.0 (X: Y)" on the wire.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{ .@"User-Agent:Mozilla/5.0 (X" = "Y)" } },
+    });
+
+    const bc = ctx.cdp().browser_context.?;
+    try testing.expectEqual(bc.extra_headers.items.len, 0);
+}
+
+test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "NID-UA5", .session_id = "NESI-UA5" });
+
+    // The CRLF in the value would inject a second User-Agent line that never
+    // saw validation; the whole header must be dropped.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{
+            .@"x-custom" = "bar\r\nUser-Agent: Mozilla/5.0",
+            .@"x-keep" = "ok",
+        } },
+    });
+
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    try testing.expectEqual("x-keep: ok", std.mem.span(bc.extra_headers.items[0]));
 }
 
 test "cdp.Network: cookies" {
