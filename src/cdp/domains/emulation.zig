@@ -24,6 +24,13 @@ const Config = @import("../../Config.zig");
 
 const log = lp.log;
 
+// go-rod activates device emulation by default (Devices.LaptopWithMDPIScreen)
+// and pushes that device's User-Agent over CDP on every connect. Honoring it
+// would make every go-rod session silently impersonate Chrome, so we ignore
+// this one exact value while accepting any other UA a client deliberately sets.
+// See https://github.com/lightpanda-io/browser/issues/2704.
+const gorod_default_user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36";
+
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         setEmulatedMedia,
@@ -91,11 +98,12 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     const ua = params.userAgent;
     Config.validateUserAgent(ua) catch |err| switch (err) {
         error.NonPrintable => return cmd.sendError(-32602, "User agent contains non-printable characters", .{}),
-        error.Reserved => {
-            log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
-            return cmd.sendResult(null, .{});
-        },
     };
+
+    if (std.mem.eql(u8, ua, gorod_default_user_agent)) {
+        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "ignoring go-rod default user agent" });
+        return cmd.sendResult(null, .{});
+    }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const http_client = &cmd.cdp.browser.http_client;
@@ -121,10 +129,7 @@ test "cdp.Emulation: setUserAgentOverride with valid user agent" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 }
 
-test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
-
+test "cdp.Emulation: setUserAgentOverride honors a deliberate Mozilla user agent" {
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA2" });
@@ -135,11 +140,11 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
         .params = .{ .userAgent = "Mozilla/5.0 (Windows NT 10.0)" },
     });
 
-    try ctx.expectSentResult(null, .{});
-    try testing.expectEqual(false, ctx.cdp().browser_context.?.user_agent_changed);
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(true, ctx.cdp().browser_context.?.user_agent_changed);
 }
 
-test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
+test "cdp.Emulation: setUserAgentOverride ignores the go-rod default user agent" {
     const filter: testing.LogFilter = .init(&.{.not_implemented});
     defer filter.deinit();
 
@@ -150,7 +155,7 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
     try ctx.processMessage(.{
         .id = 3,
         .method = "Emulation.setUserAgentOverride",
-        .params = .{ .userAgent = "MOZILLA/5.0 test" },
+        .params = .{ .userAgent = gorod_default_user_agent },
     });
 
     try ctx.expectSentResult(null, .{});

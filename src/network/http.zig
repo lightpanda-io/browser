@@ -99,6 +99,38 @@ pub const Headers = struct {
         self.headers = updated_headers;
     }
 
+    // Append `header`, first dropping any existing header with the same
+    // (case-insensitive) name. Unlike `add`, this guarantees a single entry
+    // for that name: curl keeps the first of duplicate headers, so a plain
+    // `add` of e.g. "User-Agent: X" on top of the default would be silently
+    // ignored. Used for CDP extra headers, which must override request defaults.
+    pub fn set(self: *Headers, header: [*c]const u8) !void {
+        const header_str = std.mem.span(@as([*:0]const u8, @ptrCast(header)));
+        const parsed = parseHeader(header_str) orelse return self.add(header);
+
+        var new_list: ?*libcurl.CurlSList = null;
+        errdefer if (new_list) |list| libcurl.curl_slist_free_all(list);
+
+        var node = self.headers;
+        while (node) |h| : (node = h.*.next) {
+            const data = h.*.data;
+            if (parseHeader(std.mem.span(@as([*:0]const u8, @ptrCast(data))))) |existing| {
+                if (std.ascii.eqlIgnoreCase(existing.name, parsed.name)) {
+                    // Drop the default we're overriding.
+                    continue;
+                }
+            }
+            new_list = libcurl.curl_slist_append(new_list, data) orelse return error.OutOfMemory;
+        }
+
+        new_list = libcurl.curl_slist_append(new_list, header) orelse return error.OutOfMemory;
+
+        if (self.headers) |old| {
+            libcurl.curl_slist_free_all(old);
+        }
+        self.headers = new_list;
+    }
+
     pub fn parseHeader(header_str: []const u8) ?Header {
         const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
 
@@ -725,4 +757,38 @@ test "opensocketCallback: block_private=false allows private IP" {
     defer posix.close(fd);
 
     try testing.expect(fd >= 0);
+}
+
+test "Headers.set replaces a same-name header instead of duplicating" {
+    var headers = try Headers.init("User-Agent: Lightpanda/1.0");
+    defer headers.deinit();
+
+    // Override the seeded default User-Agent...
+    try headers.set("User-Agent: Custom/2.0");
+    // ...and append a brand-new header (no existing match -> plain append).
+    try headers.set("X-Custom: yes");
+
+    var ua_count: usize = 0;
+    var ua_value: []const u8 = "";
+    var saw_custom = false;
+    var accept_language: []const u8 = "";
+    var it = headers.iterator();
+    while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "User-Agent")) {
+            ua_count += 1;
+            ua_value = h.value;
+        } else if (std.ascii.eqlIgnoreCase(h.name, "X-Custom")) {
+            saw_custom = true;
+        } else if (std.ascii.eqlIgnoreCase(h.name, "Accept-Language")) {
+            accept_language = h.value;
+        }
+    }
+
+    // Exactly one User-Agent, carrying the overriding value (curl keeps the
+    // first of duplicates, so a leftover default would have shadowed it).
+    try testing.expectEqual(@as(usize, 1), ua_count);
+    try testing.expectString("Custom/2.0", ua_value);
+    try testing.expect(saw_custom);
+    // Unrelated defaults seeded by init() are preserved.
+    try testing.expectString("en-US,en;q=0.9", accept_language);
 }

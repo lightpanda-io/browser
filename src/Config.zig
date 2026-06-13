@@ -592,8 +592,4 @@ pub fn validateUserAgent(ua: []const u8) !void {
             return error.NonPrintable;
         }
     }
-
-    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
-        return error.Reserved;
-    }
 }
