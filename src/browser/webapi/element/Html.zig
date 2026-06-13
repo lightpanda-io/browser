@@ -219,13 +219,50 @@ pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
 // innerText represents the **rendered** text content of a node and its
 // descendants.
 pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer) !void {
-    var state = innerTextState{};
+    var state = innerTextState{ .frame = ownerFrame(self.asNode()) };
+    return try self._getInnerText(writer, &state);
+}
+
+fn getInnerTextWithFrame(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !void {
+    var state = innerTextState{ .frame = frame };
     return try self._getInnerText(writer, &state);
 }
 
 const innerTextState = struct {
+    frame: ?*Frame = null,
     pre_w: bool = false,
     trim_left: bool = true,
+    pending_break: bool = false,
+    wrote_output: bool = false,
+    last_was_break: bool = false,
+
+    fn requireBreak(self: *innerTextState) void {
+        self.pending_break = true;
+        self.pre_w = false;
+        self.trim_left = true;
+    }
+
+    fn flushBreak(self: *innerTextState, writer: *std.Io.Writer) !void {
+        if (!self.pending_break) return;
+
+        self.pending_break = false;
+        self.pre_w = false;
+        self.trim_left = true;
+
+        if (self.wrote_output and !self.last_was_break) {
+            try writer.writeByte('\n');
+            self.last_was_break = true;
+        }
+    }
+
+    fn emitLineBreak(self: *innerTextState, writer: *std.Io.Writer) !void {
+        self.pending_break = false;
+        try writer.writeByte('\n');
+        self.pre_w = false;
+        self.trim_left = true;
+        self.wrote_output = true;
+        self.last_was_break = true;
+    }
 };
 
 fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextState) !void {
@@ -235,15 +272,21 @@ fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextSt
             .element => |e| switch (e._type) {
                 .html => |he| switch (he._type) {
                     .br => {
-                        try writer.writeByte('\n');
-                        state.pre_w = false; // prevent a next pre space.
-                        state.trim_left = true;
+                        if (!he.isRendered(state.frame)) continue;
+                        try state.emitLineBreak(writer);
                     },
                     .script, .style, .template => {
                         state.pre_w = false; // prevent a next pre space.
                         state.trim_left = true;
                     },
-                    else => try he._getInnerText(writer, state), // TODO check if elt is hidden.
+                    else => {
+                        if (!he.isRendered(state.frame)) continue;
+
+                        const is_block = he.asElement().getTag().isBlock();
+                        if (is_block) state.requireBreak();
+                        try he._getInnerText(writer, state);
+                        if (is_block) state.requireBreak();
+                    },
                 },
                 .svg => {},
             },
@@ -253,8 +296,18 @@ fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextSt
                     state.trim_left = true;
                 },
                 .text => {
-                    if (state.pre_w) try writer.writeByte(' ');
+                    const text = c.getData().str();
+                    const has_text = hasRenderedText(text);
+                    if (state.pending_break and !has_text) continue;
+                    try state.flushBreak(writer);
+
+                    const wrote_pre_space = state.pre_w;
+                    if (wrote_pre_space) try writer.writeByte(' ');
                     state.pre_w = try c.render(writer, .{ .trim_left = state.trim_left });
+                    if (wrote_pre_space or has_text or state.pre_w) {
+                        state.wrote_output = true;
+                        state.last_was_break = false;
+                    }
                     // if we had a pre space, trim left next one.
                     state.trim_left = state.pre_w;
                 },
@@ -270,6 +323,39 @@ fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextSt
             .attribute => |attr| try writer.writeAll(attr._value.str()),
         }
     }
+}
+
+fn hasRenderedText(text: []const u8) bool {
+    for (text) |c| {
+        if (!std.ascii.isWhitespace(c)) return true;
+    }
+    return false;
+}
+
+fn ownerFrame(node: *const Node) ?*Frame {
+    var current = node;
+    while (current._parent) |parent| {
+        current = parent;
+    }
+
+    return switch (current._type) {
+        .document => |doc| doc._frame,
+        .document_fragment => |df| switch (df._type) {
+            .shadow_root => |shadow_root| ownerFrame(shadow_root._host.asNode()),
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn isRendered(self: *HtmlElement, frame: ?*Frame) bool {
+    const element = self.asElement();
+    if (frame) |f| {
+        return element.checkVisibilityCached(null, f);
+    }
+
+    const tag = element.getTag();
+    return !tag.isHiddenByUaStylesheet() and !element.hasAttributeSafe(comptime .wrap("hidden"));
 }
 
 pub fn setInnerText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
@@ -1359,7 +1445,7 @@ pub const JsApi = struct {
     pub const innerText = bridge.accessor(_innerText, HtmlElement.setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *HtmlElement, frame: *const Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
-        try self.getInnerText(&buf.writer);
+        try self.getInnerTextWithFrame(&buf.writer, @constCast(frame));
         return buf.written();
     }
     pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
@@ -1506,6 +1592,71 @@ pub const Build = struct {
 };
 
 const testing = @import("../../../testing.zig");
+test "WebApi: HTMLElement.innerText rendered text" {
+    const session = testing.test_session;
+    const frame = try session.createPage();
+    defer session.removePage();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const TestCase = struct {
+        name: []const u8,
+        script: []const u8,
+        expected: []const u8,
+    };
+
+    const test_cases = [_]TestCase{
+        .{
+            .name = "block boundaries",
+            .script =
+            \\if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+            \\document.body.innerHTML = '<div id="t"><div>first</div><div>second</div><span>tail</span></div>';
+            \\document.getElementById('t').innerText;
+            ,
+            .expected = "first\nsecond\ntail",
+        },
+        .{
+            .name = "display none",
+            .script =
+            \\document.body.innerHTML = '<div id="t">visible<span style="display:none">secret</span></div>';
+            \\document.getElementById('t').innerText;
+            ,
+            .expected = "visible",
+        },
+        .{
+            .name = "collapsed block breaks",
+            .script =
+            \\document.body.innerHTML = '<div id="t"><div></div><div>first</div><div><div>second</div></div><div></div></div>';
+            \\document.getElementById('t').innerText;
+            ,
+            .expected = "first\nsecond",
+        },
+        .{
+            .name = "br line break",
+            .script =
+            \\document.body.innerHTML = '<div id="t">a<br><div>b</div></div>';
+            \\document.getElementById('t').innerText;
+            ,
+            .expected = "a\nb",
+        },
+        .{
+            .name = "inline content",
+            .script =
+            \\document.body.innerHTML = '<div id="t"><span>a</span><span>b</span></div>';
+            \\document.getElementById('t').innerText;
+            ,
+            .expected = "ab",
+        },
+    };
+
+    for (test_cases) |test_case| {
+        const actual = try (try ls.local.exec(test_case.script, test_case.name)).toStringSlice();
+        try testing.expectEqual(test_case.expected, actual);
+    }
+}
+
 test "WebApi: HTML.event_listeners" {
     try testing.htmlRunner("element/html/event_listeners.html", .{});
 }
