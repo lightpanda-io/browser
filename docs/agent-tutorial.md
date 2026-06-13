@@ -165,13 +165,13 @@ With an LLM, it synthesizes an idiomatic script. The result is
 JavaScript:
 
 ```js
-goto("https://news.ycombinator.com/login");
+await goto("https://news.ycombinator.com/login");
 fill({ selector: "form[action=\"login\"] input[name=\"acct\"]", value: "$LP_HN_USERNAME" });
 fill({ selector: "form[action=\"login\"] input[name=\"pw\"]", value: "$LP_HN_PASSWORD" });
 click({ selector: "form[action=\"login\"] input[type=\"submit\"][value=\"login\"]" });
 waitForSelector("#logout");
-goto("https://news.ycombinator.com");
-extract({ topStories: [{ selector: ".athing", fields: { rank: ".rank", title: ".titleline > a", url: { selector: ".titleline > a", attr: "href" } } }] });
+await goto("https://news.ycombinator.com");
+return extract({ topStories: [{ selector: ".athing", fields: { rank: ".rank", title: ".titleline > a", url: { selector: ".titleline > a", attr: "href" } } }] });
 ```
 
 Only state-mutating commands are recorded; read-only ones (`/tree`,
@@ -223,7 +223,7 @@ Use `extract(...)` to move page data into local logic, then process it
 with normal JavaScript:
 
 ```js
-goto("https://news.ycombinator.com");
+await goto("https://news.ycombinator.com");
 
 const topStories = extract({
   topStories: [{
@@ -237,7 +237,7 @@ const topStories = extract({
   }]
 });
 
-topStories.map((s) => ({ rank: s.rank, title: s.title, url: s.url }));
+return topStories.map((s) => ({ rank: s.rank, title: s.title, url: s.url }));
 ```
 
 Use `evaluate(...)` only when you intentionally want a string to run in
@@ -269,7 +269,7 @@ Drive the browser with the usual tools (`goto`, `fill`, `click`,
   "tool": "save",
   "args": {
     "path": "hn_login.js",
-    "script": "goto(\"...\");\n..."
+    "script": "await goto(\"...\");\n..."
   }
 }
 ```

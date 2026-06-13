@@ -130,7 +130,7 @@ test "record filters state-mutating commands and comments" {
     try recorder.recordComment("search for login");
 
     try std.testing.expectEqualStrings(
-        "goto(\"https://example.com\");\nclick({ selector: \"Login\" });\n// search for login\n",
+        "await goto(\"https://example.com\");\nclick({ selector: \"Login\" });\n// search for login\n",
         recorder.bytes(),
     );
     try std.testing.expectEqual(@as(u32, 3), recorder.lines);

@@ -353,27 +353,29 @@ session).
 ## JavaScript scripts
 
 `./lightpanda agent script.js` runs a script without any LLM call. Scripts
-are plain synchronous JavaScript plus the installed Lightpanda primitives:
+are plain JavaScript plus the installed Lightpanda primitives:
 
 ```js
-goto("https://example.com");
+await goto("https://example.com");
 click({ selector: "a.login" });
-evaluate("document.title");
+return evaluate("document.title");
 ```
 
-The primitives are **synchronous and blocking**: each returns its
-result directly, so write `const data = extract(…)`, not
-`await extract(…)`. (`evaluate(...)` can run async JS inside the page,
-but the `evaluate(...)` call itself still returns synchronously.)
+`goto(url)` is **asynchronous** — always `await goto(...)`. Every other
+primitive is **synchronous**: each returns its result directly, so write
+`const data = extract(…)`, not `await extract(…)`. The script body runs as
+an async function, so top-level `await` is allowed.
 
 It's not Node.js. There's no `require`, `process`, `fs`, npm package
 loading, or Node standard library. The `evaluate(...)` primitive runs its
 string in the current page context; page scripts can't see agent variables
 or agent primitives.
 
-The last expression in the script is printed automatically, so a script
-that ends with `extract({...})` will print the extraction result to stdout.
-Tool errors throw JavaScript exceptions and stop execution.
+A script's output is whatever it `return`s, printed automatically, so a
+script that ends with `return extract({...})` prints the extraction result
+to stdout. A bare trailing expression is not printed. Tool errors throw
+JavaScript exceptions (a `goto` failure rejects, so `await` throws) and stop
+execution.
 
 See [agent-script.md](agent-script.md) for the full script format reference.
 
@@ -404,8 +406,8 @@ no resolved provider) you get the deterministic transcription:
 - **With an LLM** it synthesizes an idiomatic script from the whole
   session. The synthesis prompt asks for JavaScript only ("no commentary"),
   so the result generally has no such comments: the model folds intent
-  into the code and drops dead-ends. Returned data is the last expression,
-  which prints automatically on replay.
+  into the code and drops dead-ends. Output is whatever the script
+  `return`s, which prints automatically on replay.
 
 ## One-shot mode (`--task`)
 

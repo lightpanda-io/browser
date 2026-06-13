@@ -815,13 +815,13 @@ test "MCP - save writes the script to disk" {
     defer std.fs.cwd().deleteFile(path) catch {};
 
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"mcp-save-test-script.js","script":"goto(\"https://example.com\");"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"mcp-save-test-script.js","script":"await goto(\"https://example.com\");"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "saved 1 line") != null);
 
     const written = try std.fs.cwd().readFileAlloc(testing.arena_allocator, path, 4096);
-    try std.testing.expectEqualStrings("goto(\"https://example.com\");\n", written);
+    try std.testing.expectEqualStrings("await goto(\"https://example.com\");\n", written);
 }
 
 test "MCP - tree rejects stale backendNodeId instead of dumping whole document" {
