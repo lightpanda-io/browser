@@ -32,18 +32,17 @@ web page's JavaScript context.
 - Agent variables persist for the lifetime of one script run, across
   navigations and primitive calls. A later `lightpanda agent script.js` run
   starts with a fresh agent context.
-- The installed primitives are synchronous and blocking. Do not write an
-  `async`/`await` automation contract around them. Scripts compile as classic
-  scripts, so top-level `await` is a `SyntaxError`; promise callbacks
-  (`.then`) only run after the script body finishes, never in between
-  primitive calls.
-- Tool failures throw JavaScript `Error` exceptions and stop execution unless
-  you catch them.
-- The script's completion value — its last top-level expression — is printed
-  automatically (objects and arrays as JSON; other values coerced). End a
-  script with the bare expression you want as output, e.g. a final
-  `extract({ ... });` or `results;`. `console.log(...)` is for extra or debug
-  output and does not JSON-format objects.
+- `goto(url)` is asynchronous and returns a Promise — always `await goto(...)`.
+  Every other primitive is synchronous; do not `await` them (`const data =
+  extract({ ... })`, not `await extract(...)`). The script body runs as an
+  async function, so top-level `await` is allowed.
+- Tool failures throw JavaScript `Error` exceptions (a `goto` failure rejects
+  its Promise, so `await` throws) and stop execution unless you catch them.
+- The script's output is whatever it `return`s, printed automatically (objects
+  and arrays as JSON; other values coerced). End a script with `return
+  extract({ ... });` or `return results;`. A bare trailing expression is not
+  printed. `console.log(...)` is for extra or debug output and does not
+  JSON-format objects.
 
 The agent context includes a small `console` object:
 
@@ -64,7 +63,7 @@ your schema — an object schema returns an object keyed by your fields (even wi
 a single field), and a bare array schema returns an array:
 
 ```js
-goto("https://news.ycombinator.com/");
+await goto("https://news.ycombinator.com/");
 
 const data = extract({
   title: "title",
@@ -78,7 +77,7 @@ const data = extract({
   }]
 });
 
-data; // printed automatically as JSON
+return data; // printed automatically as JSON
 ```
 
 Destructure when a single field is all you need:
@@ -113,7 +112,7 @@ Only recorded browser primitives are installed globally:
 
 | Primitive | Arguments | Runs in |
 |-----------|-----------|---------|
-| `goto` | `goto(url[, { timeout }])` | Browser session |
+| `goto` | `await goto(url[, { timeout }])` (async) | Browser session |
 | `extract` | `extract(schema)` or `extract({ schema })` | Browser page via extractor; returns a JS object or array |
 | `evaluate` | `evaluate(script[, { url, timeout, save }])` | Browser page JS context |
 | `click` | `click(selector)` or `click({ selector })` | Browser page |
@@ -154,22 +153,22 @@ script.
 
 ## Navigation
 
-Use `goto(...)` to open a page:
+Use `await goto(...)` to open a page (it is asynchronous):
 
 ```js
-goto("https://example.com");
+await goto("https://example.com");
 
-goto({
+await goto({
   url: "https://example.com/app",
   timeout: 15000
 });
 ```
 
-The call returns a status string and throws if navigation fails. A timeout
-does **not** throw: the call returns `"Navigation started but the page did not
-finish loading before the timeout."` and the page stays in whatever state it
-reached. Check the return value — or follow with `waitForState(...)` /
-`waitForSelector(...)` — when completeness matters.
+The Promise resolves to a status string and rejects if navigation fails. A
+timeout does **not** reject: it resolves to `"Navigation started but the page
+did not finish loading before the timeout."` and the page stays in whatever
+state it reached. Check the resolved value — or follow with `waitForState(...)`
+/ `waitForSelector(...)` — when completeness matters.
 
 ## Structured Extraction
 
@@ -251,7 +250,7 @@ const page = extract({ title: "title" });
 context. Its script string runs where `window` and `document` exist.
 
 ```js
-goto("https://example.com");
+await goto("https://example.com");
 
 const title = evaluate("document.title");
 console.log(title);
@@ -327,7 +326,7 @@ The REPL remains slash-command based:
 `/save` writes JavaScript by default:
 
 ```js
-goto("https://example.com");
+await goto("https://example.com");
 click({ selector: "a.login" });
 ```
 
@@ -378,7 +377,7 @@ the local agent script, not in the page.
 ```js
 const HN = "https://news.ycombinator.com";
 
-goto(HN);
+await goto(HN);
 
 const { stories } = extract({
   stories: [{
@@ -396,7 +395,7 @@ for (const story of stories) {
   story.comments = [];
   if (!story.id) continue;
 
-  goto(`${HN}/item?id=${story.id}`);
+  await goto(`${HN}/item?id=${story.id}`);
   const { comments } = extract({
     comments: [{
       selector: "tr.athing.comtr:has(.commtext)",
@@ -410,5 +409,5 @@ for (const story of stories) {
   story.comments = comments;
 }
 
-stories; // printed automatically as JSON
+return stories; // printed automatically as JSON
 ```

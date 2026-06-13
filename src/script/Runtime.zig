@@ -43,6 +43,12 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
 
+/// In-flight `goto` navigations awaiting completion. Each holds a persisted
+/// resolver for the Promise handed back to the script; `runSource`'s driver
+/// loop settles them as their frame loads. A list (not a single slot) so the
+/// shape already supports Phase 2 multi-page — Phase 1 just caps it at one.
+pending_gotos: std.ArrayListUnmanaged(PendingGoto) = .empty,
+
 /// The runtime installs exactly the recorded browser tools as script
 /// primitives — the same set the recorder writes — so every recorded call
 /// replays. `buildArgs` adapts each tool's JS calling convention to the JSON
@@ -58,6 +64,12 @@ const recorded_tool_count = blk: {
 const PrimitiveData = struct {
     runtime: *Runtime,
     tool: BrowserTool,
+};
+
+const PendingGoto = struct {
+    frame_id: u32,
+    resolver: v8.Global,
+    deadline_ms: i64,
 };
 
 const ConsoleMethod = enum {
@@ -130,11 +142,23 @@ pub fn init(
 }
 
 pub fn deinit(self: *Runtime) void {
+    self.clearPendingGotos();
+    self.pending_gotos.deinit(self.allocator);
     self.resetContext();
     self.env.deinit();
     self.call_arena.deinit();
     const allocator = self.allocator;
     allocator.destroy(self);
+}
+
+/// Reset every persisted goto resolver and empty the list. Called when a run
+/// finishes (settled or not) and at teardown — a leftover `v8.Global` would
+/// leak past the isolate it belongs to.
+fn clearPendingGotos(self: *Runtime) void {
+    for (self.pending_gotos.items) |*entry| {
+        v8.v8__Global__Reset(&entry.resolver);
+    }
+    self.pending_gotos.clearRetainingCapacity();
 }
 
 pub fn terminate(self: *Runtime) void {
@@ -157,6 +181,13 @@ fn createContext(self: *Runtime) InitError!void {
 
     v8.v8__Context__Enter(context);
     defer v8.v8__Context__Exit(context);
+
+    // The promise-reject callback every `Env` installs reads a browser
+    // `Context` from embedder slot 1; this bare context has none. Pin the slot
+    // to null so `Context.fromC` returns null and the callback no-ops, instead
+    // of aligncasting garbage when a script's promise rejects unhandled (which
+    // now happens routinely — the script body runs inside an async wrapper).
+    v8.v8__Context__SetAlignedPointerInEmbedderData(context, 1, null);
 
     const global = v8.v8__Context__Global(context) orelse return error.RuntimeInitFailed;
     var i: usize = 0;
@@ -254,7 +285,14 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     defer v8.v8__TryCatch__DESTRUCT(&try_catch);
 
     const script_name = self.env.isolate.initStringHandle(name);
-    const script_source = self.env.isolate.initStringHandle(source);
+    // Wrap in an async IIFE so the source can use top-level `await` (e.g.
+    // `await goto(...)`). The wrapper evaluates to a Promise; a top-level
+    // `return <expr>` in the source becomes that Promise's value, which is what
+    // we echo. (A bare trailing expression no longer auto-prints — `await` and
+    // a script completion value are mutually exclusive in JS.)
+    const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
+        return try self.dupeError("out of memory");
+    const script_source = self.env.isolate.initStringHandle(wrapped);
 
     var origin: v8.ScriptOrigin = undefined;
     v8.v8__ScriptOrigin__CONSTRUCT(&origin, script_name);
@@ -273,19 +311,76 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     const completion = v8.v8__Script__Run(script, context) orelse
         return try self.formatCaught(context, &try_catch, "script failed");
 
-    // Explicit microtask policy: promise continuations only run once drained.
+    // Any pending goto whose Promise outlives this run (e.g. rejected by the
+    // single-page guard while still navigating) must not leak its resolver.
+    defer self.clearPendingGotos();
+
+    const root: *const v8.Promise = @ptrCast(completion);
     self.env.performIsolateMicrotasks();
+    if (try self.driveToCompletion(context, root)) |interrupted| {
+        return interrupted;
+    }
     if (v8.v8__TryCatch__HasCaught(&try_catch)) {
         return try self.formatCaught(context, &try_catch, "script failed");
     }
 
-    self.printCompletion(context, completion);
+    switch (promiseState(root)) {
+        v8.kFulfilled => self.printCompletion(context, v8.v8__Promise__Result(root) orelse return null),
+        v8.kRejected => return try self.formatRejection(context, v8.v8__Promise__Result(root)),
+        else => {}, // still pending: the script awaited something we can't settle
+    }
     return null;
 }
 
-/// Echo a script's completion value (its last-evaluated expression) so a script
-/// ending in `extract(...)` or a bare `results;` prints without `console.log`.
-/// `undefined` — declarations, assignments, control flow — stays silent.
+/// `v8__Promise__State` returns the `c_uint` `PromiseState`, but the `k*`
+/// constants are `c_int`; normalize so comparisons and switches type-check.
+fn promiseState(promise: *const v8.Promise) c_int {
+    return @intCast(v8.v8__Promise__State(promise));
+}
+
+/// Tick the browser event loop and settle pending gotos until the root Promise
+/// leaves the pending state. Returns a message if the run was interrupted
+/// (SIGINT cancel or terminate); otherwise null once it settles — or stalls,
+/// when no in-flight navigation can advance it further.
+fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8.Promise) RunError!?[]const u8 {
+    var runner: ?lp.Session.Runner = null;
+    while (promiseState(root) == v8.kPending) {
+        if (self.session.isCancelled()) return try self.dupeError("cancelled");
+        if (self.env.terminatePending()) return try self.dupeError("terminated");
+
+        // `goto` is the only async source we drive. With nothing in flight, the
+        // script is awaiting a value we cannot settle — stop rather than spin.
+        if (self.pending_gotos.items.len == 0) break;
+
+        {
+            self.session.browser.env.isolate.enter();
+            defer self.session.browser.env.isolate.exit();
+            if (runner == null) {
+                runner = self.session.runner(.{}) catch null;
+            }
+            if (runner) |*r| {
+                // A failed tick (page JS error, etc.) must not abort the wait —
+                // the per-goto deadline still bounds it. Ignore result and error.
+                if (r.tick(.{ .ms = 100 })) |_| {} else |_| {}
+            }
+        }
+
+        self.resolveReadyGotos(context);
+        self.env.performIsolateMicrotasks();
+    }
+    return null;
+}
+
+fn formatRejection(self: *Runtime, context: *const v8.Context, reason: ?*const v8.Value) RunError![]const u8 {
+    const value = reason orelse return try self.dupeError("script rejected");
+    const text = self.valueToString(self.call_arena.allocator(), context, value) catch
+        return try self.dupeError("script failed");
+    return try self.dupeError(text);
+}
+
+/// Echo a script's output — the value it `return`s from the async wrapper, so a
+/// script ending in `return extract(...)` prints without `console.log`.
+/// `undefined` — no `return`, or a bare trailing expression — stays silent.
 fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) void {
     if (v8.v8__Value__IsUndefined(value)) return;
 
@@ -327,6 +422,10 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         error.InvalidArguments => return self.throwTypeError("invalid arguments"),
     };
 
+    // `goto` is the one async primitive: it returns a Promise resolved by the
+    // `runSource` driver loop when navigation settles, rather than blocking.
+    if (tool == .goto) return self.invokeGoto(arena, context, info, args);
+
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
     };
@@ -342,6 +441,91 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
             else => self.setReturnString(info, text),
         },
         .fail => |message| self.throwError(message),
+    }
+}
+
+/// Start a navigation and hand the script a Promise that settles when the page
+/// loads. The resolver is persisted as a `v8.Global` and parked in
+/// `pending_gotos`; the `runSource` driver loop ticks the browser and resolves
+/// it. Phase 1 allows one navigation at a time — a concurrent `goto` rejects.
+fn invokeGoto(
+    self: *Runtime,
+    arena: std.mem.Allocator,
+    context: *const v8.Context,
+    info: *const v8.FunctionCallbackInfo,
+    args: ?std.json.Value,
+) void {
+    const resolver = v8.v8__Promise__Resolver__New(context) orelse return self.throwError("internal: resolver alloc failed");
+    const promise = v8.v8__Promise__Resolver__GetPromise(resolver) orelse return self.throwError("internal: promise alloc failed");
+    self.setReturnValue(info, @ptrCast(promise));
+
+    const params = browser_tools.parseArgs(browser_tools.GotoParams, arena, args) catch |err| switch (err) {
+        error.OutOfMemory => return self.rejectResolver(context, resolver, "out of memory"),
+        error.InvalidParams => return self.rejectResolver(context, resolver, "goto requires a url"),
+    };
+    const url = params.url;
+    const timeout = params.timeout orelse 10000;
+
+    // Phase-1 guard: one navigation at a time. Reject before touching the
+    // session so `Session.createPage`'s single-page assert is never reached.
+    if (self.pending_gotos.items.len != 0) {
+        return self.rejectResolver(context, resolver, "a navigation is already in progress");
+    }
+
+    const frame = frame: {
+        self.session.browser.env.isolate.enter();
+        defer self.session.browser.env.isolate.exit();
+        break :frame browser_tools.startGoto(self.session, self.registry, url) catch
+            return self.rejectResolver(context, resolver, "navigation failed to start");
+    };
+
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(self.env.isolate.handle, resolver, &global);
+    self.pending_gotos.append(self.allocator, .{
+        .frame_id = frame._frame_id,
+        .resolver = global,
+        .deadline_ms = std.time.milliTimestamp() + @as(i64, timeout),
+    }) catch {
+        v8.v8__Global__Reset(&global);
+        return self.rejectResolver(context, resolver, "out of memory");
+    };
+}
+
+fn resolveResolver(self: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, text: []const u8) void {
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Resolve(resolver, context, @ptrCast(self.env.isolate.initStringHandle(text)), &out);
+}
+
+fn rejectResolver(self: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, message: []const u8) void {
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Reject(resolver, context, self.env.isolate.createError(message), &out);
+}
+
+/// Settle each pending goto whose frame has finished (or errored, or run past
+/// its deadline). Mirrors the blocking `performGoto`/`execGoto` outcomes: a
+/// reached load resolves, a soft timeout resolves with a notice (the page may
+/// still be usable), only a real navigation error rejects. Runs on the script
+/// isolate (the resolvers live there); the caller drains microtasks after.
+fn resolveReadyGotos(self: *Runtime, context: *const v8.Context) void {
+    var i: usize = 0;
+    while (i < self.pending_gotos.items.len) {
+        const entry = &self.pending_gotos.items[i];
+        const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&entry.resolver, self.env.isolate.handle));
+
+        const frame = self.session.findFrameByFrameId(entry.frame_id);
+        if (frame == null or frame.?._last_navigate_error != null) {
+            self.rejectResolver(context, resolver, "navigation failed");
+        } else if (frame.?._load_state == .load or frame.?._load_state == .complete) {
+            self.resolveResolver(context, resolver, "Navigated successfully.");
+        } else if (std.time.milliTimestamp() >= entry.deadline_ms) {
+            self.resolveResolver(context, resolver, "Navigation started but the page did not finish loading before the timeout.");
+        } else {
+            i += 1;
+            continue;
+        }
+
+        var settled = self.pending_gotos.swapRemove(i);
+        v8.v8__Global__Reset(&settled.resolver);
     }
 }
 
@@ -684,7 +868,7 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const nav = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\if (!nav.includes("Navigated")) throw new Error("unexpected goto result: " + nav);
         \\const text = evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("evaluate ran in the wrong context: " + text);
@@ -705,7 +889,7 @@ test "agent script runtime: extract returns a JavaScript object" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\const data = extract({
         \\  button: "#btn",
         \\  options: [{
@@ -759,7 +943,7 @@ test "agent script runtime: extract tolerates list selectors that match nothing"
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\const empty = extract({ comments: [{ selector: ".no-such-element", fields: { text: "" } }] });
         \\if (!Array.isArray(empty.comments) || empty.comments.length !== 0) throw new Error("empty list selector should yield an empty array, not throw");
         \\const bare = extract([".no-such-element"]);
@@ -788,7 +972,7 @@ test "agent script runtime: strict-mode scripts can call primitives" {
 
     try runTestScript(runtime,
         \\"use strict";
-        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const nav = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\if (!nav.includes("Navigated")) throw new Error("strict-mode goto failed: " + nav);
         \\const text = evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("strict-mode evaluate failed: " + text);
@@ -805,13 +989,13 @@ test "agent script runtime: promise microtasks run to completion" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\let microtaskRan = false;
-        \\Promise.resolve().then(() => { microtaskRan = true; });
-        \\if (microtaskRan) throw new Error("microtask ran before the checkpoint");
+        \\globalThis.microtaskRan = false;
+        \\Promise.resolve().then(() => { globalThis.microtaskRan = true; });
+        \\if (globalThis.microtaskRan) throw new Error("microtask ran before the checkpoint");
     );
 
     try runTestScript(runtime,
-        \\if (!microtaskRan) throw new Error("microtask did not run after the script");
+        \\if (!globalThis.microtaskRan) throw new Error("microtask did not run after the script");
     );
 }
 
@@ -826,7 +1010,7 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\// toJSON re-enters evaluate mid-marshal; the outer extract must still see "#btn".
         \\const data = extract({ button: { toJSON() { return evaluate("'#btn'"); } } });
         \\if (data.button !== "Click Me") throw new Error("re-entrant extract corrupted: " + JSON.stringify(data));
@@ -866,17 +1050,17 @@ test "agent script runtime: agent variables persist and page globals are isolate
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\let counter = 1;
+        \\globalThis.counter = 1;
         \\if (typeof window !== "undefined") throw new Error("window leaked into agent runtime");
         \\if (typeof document !== "undefined") throw new Error("document leaked into agent runtime");
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\counter += 1;
-        \\if (counter !== 2) throw new Error("agent global state did not persist");
+        \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\globalThis.counter += 1;
+        \\if (globalThis.counter !== 2) throw new Error("agent global state did not persist");
     );
 
     try runTestScript(runtime,
-        \\counter += 1;
-        \\if (counter !== 3) throw new Error("agent global state was reset between scripts");
+        \\globalThis.counter += 1;
+        \\if (globalThis.counter !== 3) throw new Error("agent global state was reset between scripts");
     );
 }
 
@@ -892,7 +1076,7 @@ test "agent script runtime: page evaluate cannot see agent primitives or binding
 
     try runTestScript(runtime,
         \\const agentOnly = "secret";
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\if (evaluate("typeof goto") !== "undefined") throw new Error("agent primitive leaked to page evaluate");
         \\if (evaluate("typeof agentOnly") !== "undefined") throw new Error("agent binding leaked to page evaluate");
         \\if (evaluate("typeof document") !== "object") throw new Error("page evaluate did not run in the page context");
@@ -926,10 +1110,10 @@ test "agent script runtime: tool errors throw and stop execution" {
     defer runtime.deinit();
 
     const message = (try runtime.runSource(
-        \\let marker = "before";
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\globalThis.marker = "before";
+        \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\click({ selector: "#does-not-exist" });
-        \\marker = "after";
+        \\globalThis.marker = "after";
     , "agent-runtime-failure.js")).?;
 
     try testing.expect(std.mem.indexOf(u8, message, "click") != null or
@@ -937,7 +1121,7 @@ test "agent script runtime: tool errors throw and stop execution" {
         std.mem.indexOf(u8, message, "#does-not-exist") != null);
 
     try runTestScript(runtime,
-        \\if (marker !== "before") throw new Error("script continued after tool failure");
+        \\if (globalThis.marker !== "before") throw new Error("script continued after tool failure");
     );
 }
 
@@ -953,12 +1137,12 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
 
     try runTestScript(runtime,
         \\// The reported bug: Playwright-style goto(url, options) must merge, not throw.
-        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000 });
+        \\const nav = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000 });
         \\if (!nav.includes("Navigated")) throw new Error("two-arg goto failed: " + nav);
         \\// waitForState: single required param, positional like waitForSelector.
         \\if (!waitForState("load").includes("reached")) throw new Error("waitForState positional failed");
         \\// Object form still works.
-        \\goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
+        \\await goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
         \\// Single selector positional.
         \\click("#btn");
         \\if (evaluate("String(window.clicked)") !== "true") throw new Error("click positional failed");
@@ -981,7 +1165,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
     // A field set by both a positional and the options object is a conflict.
     {
         const message = (try runtime.runSource(
-            \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
+            \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
         , "agent-runtime-conflict.js")).?;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
@@ -993,4 +1177,50 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
         , "agent-runtime-arity.js")).?;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
+}
+
+test "agent script runtime: top-level await runs in an async wrapper" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // `await` on a non-goto promise resolves without touching the browser, and
+    // a top-level `return` surfaces as the (otherwise un-echoed) result.
+    try runTestScript(runtime,
+        \\const x = await Promise.resolve(40);
+        \\if (x + 2 !== 42) throw new Error("top-level await did not resolve: " + x);
+        \\return x + 2;
+    );
+}
+
+test "agent script runtime: a second concurrent goto rejects (phase-1 single page)" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // Phase 1 holds one page at a time: firing two navigations at once must
+    // reject the second rather than trip Session.createPage's assert.
+    try runTestScript(runtime,
+        \\let rejected = null;
+        \\try {
+        \\  await Promise.all([
+        \\    goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\    goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  ]);
+        \\} catch (err) {
+        \\  rejected = String(err);
+        \\}
+        \\if (!rejected || !rejected.includes("already in progress")) {
+        \\  throw new Error("expected a concurrent-goto rejection, got: " + rejected);
+        \\}
+    );
 }

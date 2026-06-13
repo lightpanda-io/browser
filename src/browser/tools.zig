@@ -177,9 +177,9 @@ pub const save_synthesis_prompt =
 /// script. The agent's `/save` covers all of this via its skill doc instead.
 pub const save_script_rules =
     \\Script rules:
-    \\- The builtins are synchronous and the file runs as a classic script:
-    \\  `const data = extract({...})` — never async/await/.then. Top-level
-    \\  `await` is a SyntaxError; top-level `return` is illegal.
+    \\- The file runs as an async script, so top-level `await` is allowed.
+    \\  `goto(url)` is async — always `await goto(...)`. Every other builtin
+    \\  is synchronous: `const data = extract({...})`, never `await extract`.
     \\- Read pages with extract(schema); all processing of the returned
     \\  strings (trim, split, parse, merge, loops, cross-page aggregation)
     \\  is plain top-level JavaScript in the script context. evaluate(...)
@@ -187,9 +187,10 @@ pub const save_script_rules =
     \\  never a querySelector-and-parse block. It cannot see script
     \\  variables (interpolate values into its string), and page state is
     \\  wiped by every goto/reload while script variables persist.
-    \\- The last top-level expression is the script's output, printed
-    \\  automatically (objects/arrays as JSON). End with the bare result —
-    \\  `extract({...});` or `results;` — no console.log or JSON.stringify.
+    \\- `return <value>` is the script's output, printed automatically
+    \\  (objects/arrays as JSON). End with `return extract({...});` or
+    \\  `return results;` — a bare trailing expression is not printed, and
+    \\  neither is console.log or JSON.stringify.
     \\- Modern, readable JS: `const`/`let`, `for (const x of xs)`, template
     \\  literals, destructuring, 2-space indent.
 ;
@@ -251,6 +252,14 @@ pub const Tool = enum {
             .goto, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => true,
             .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
+    }
+
+    /// Tool exposed to scripts as an async (Promise-returning) builtin, so the
+    /// recorder emits `await tool(...)`. Only `goto` navigates and must be
+    /// awaited before the next primitive reads the page; everything else is
+    /// synchronous.
+    pub fn isAsync(self: Tool) bool {
+        return self == .goto;
     }
 
     /// Tool requires a target element (selector or backendNodeId) at
@@ -1791,16 +1800,25 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
 /// network from ever fully idling, so it just rides the timeout.
 const default_nav_wait: lp.Config.WaitUntil = .load;
 
-fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
+/// Kick off a root navigation without waiting for it to finish. Returns the
+/// new frame so a caller can match its `_frame_id` against a later load
+/// notification. `performGoto` is the blocking counterpart; the async `goto`
+/// script primitive drives the wait itself off this same setup.
+pub fn startGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8) ToolError!*lp.Frame {
     if (session.hasPage()) {
         registry.reset();
         session.removePage();
     }
-    const page = session.createPage() catch return ToolError.NavigationFailed;
-    _ = page.navigate(url, .{
+    const frame = session.createPage() catch return ToolError.NavigationFailed;
+    _ = frame.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     }) catch return ToolError.NavigationFailed;
+    return frame;
+}
+
+fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
+    _ = try startGoto(session, registry, url);
 
     var runner = session.runner(.{}) catch return ToolError.NavigationFailed;
     const result = runner.waitResult(.{

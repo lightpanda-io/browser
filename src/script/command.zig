@@ -191,6 +191,9 @@ pub const Command = union(enum) {
 
 fn formatJsToolCall(tc: Command.ToolCall, arena: std.mem.Allocator, writer: *std.Io.Writer) (std.Io.Writer.Error || error{OutOfMemory})!void {
     const s = tc.schema();
+    // Async builtins (goto) must be awaited so a replayed script waits for the
+    // navigation before the next primitive reads the page.
+    if (tc.tool.isAsync()) try writer.writeAll("await ");
     const args_val = tc.args orelse {
         try writer.print("{s}();", .{s.tool_name});
         return;
@@ -419,7 +422,7 @@ test "formatJs: positional and object arguments" {
     const aa = arena.allocator();
 
     const cases = [_]struct { input: []const u8, expected: []const u8 }{
-        .{ .input = "/goto https://example.com", .expected = "goto(\"https://example.com\");" },
+        .{ .input = "/goto https://example.com", .expected = "await goto(\"https://example.com\");" },
         .{ .input = "/click selector='Login'", .expected = "click({ selector: \"Login\" });" },
         .{ .input = "/scroll y=200", .expected = "scroll({ y: 200 });" },
         .{ .input = "/setChecked selector='#x' checked=false", .expected = "setChecked({ selector: \"#x\", checked: false });" },
