@@ -71,12 +71,12 @@ pub fn info(_: *const Console, values: []js.Value, exec: *js.Execution) void {
 
 pub fn log(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.info(.js, "console.log", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .info, exec);
+    dispatchConsoleMessage(values, .log, exec);
 }
 
 pub fn warn(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.warn(.js, "console.warn", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .warn, exec);
+    dispatchConsoleMessage(values, .warning, exec);
 }
 
 pub fn clear(_: *const Console) void {}
@@ -86,7 +86,7 @@ pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, exec: 
         return;
     }
     logger.warn(.js, "console.assert", .{ValueWriter{ .values = values }});
-    dispatchConsoleMessage(values, .warn, exec);
+    dispatchConsoleMessage(values, .warning, exec);
 }
 
 pub fn @"error"(_: *const Console, values: []js.Value, exec: *js.Execution) void {

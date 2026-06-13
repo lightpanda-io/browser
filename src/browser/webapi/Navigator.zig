@@ -97,8 +97,13 @@ pub fn getWebdriver(_: *const Navigator) bool {
     return false;
 }
 
+// Default to false: per https://w3c.github.io/gpc/#javascript-property the
+// signal reflects an explicit user preference, and none is configured here.
+// Firefox defaults to false; Chrome doesn't expose the property. Returning
+// true made GPC-compliant consent managers treat every page load as "reject
+// tracking" and skip their consent UI entirely.
 pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
-    return true;
+    return false;
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {

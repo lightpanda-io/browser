@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<source id="s1" src="/video.webm" srcset="/img-1x.png 1x, /img-2x.png 2x" sizes="100vw" media="(min-width: 600px)" type="video/webm" width="640" height="480">
+<source id="s2">
+
+<script id="source-from-html">
+  {
+    const s1 = document.getElementById('s1');
+    testing.expectEqual('HTMLSourceElement', s1.constructor.name);
+    testing.expectEqual(testing.ORIGIN + '/video.webm', s1.src);
+    testing.expectEqual('/img-1x.png 1x, /img-2x.png 2x', s1.srcset);
+    testing.expectEqual('100vw', s1.sizes);
+    testing.expectEqual('(min-width: 600px)', s1.media);
+    testing.expectEqual('video/webm', s1.type);
+    testing.expectEqual(640, s1.width);
+    testing.expectEqual(480, s1.height);
+
+    const s2 = document.getElementById('s2');
+    testing.expectEqual('', s2.src);
+    testing.expectEqual('', s2.srcset);
+    testing.expectEqual('', s2.sizes);
+    testing.expectEqual('', s2.media);
+    testing.expectEqual('', s2.type);
+    testing.expectEqual(0, s2.width);
+    testing.expectEqual(0, s2.height);
+  }
+</script>
+
+<script id="source-reflection">
+  {
+    const s = document.createElement('source');
+
+    s.srcset = '/a.png 1x';
+    testing.expectEqual('/a.png 1x', s.getAttribute('srcset'));
+    s.setAttribute('srcset', '/b.png 2x');
+    testing.expectEqual('/b.png 2x', s.srcset);
+
+    s.sizes = '50vw';
+    testing.expectEqual('50vw', s.getAttribute('sizes'));
+    s.setAttribute('sizes', '25vw');
+    testing.expectEqual('25vw', s.sizes);
+
+    s.media = 'screen';
+    testing.expectEqual('screen', s.getAttribute('media'));
+    s.setAttribute('media', 'print');
+    testing.expectEqual('print', s.media);
+
+    s.type = 'video/mp4';
+    testing.expectEqual('video/mp4', s.getAttribute('type'));
+    s.setAttribute('type', 'image/svg+xml');
+    testing.expectEqual('image/svg+xml', s.type);
+
+    s.width = 320;
+    testing.expectEqual('320', s.getAttribute('width'));
+    s.setAttribute('width', '160');
+    testing.expectEqual(160, s.width);
+    s.setAttribute('width', 'not-a-number');
+    testing.expectEqual(0, s.width);
+
+    s.height = 240;
+    testing.expectEqual('240', s.getAttribute('height'));
+    s.setAttribute('height', '120');
+    testing.expectEqual(120, s.height);
+  }
+</script>
+
+<script id="source-src-url">
+  {
+    const s = document.createElement('source');
+    testing.expectEqual('', s.src);
+
+    s.src = 'https://lightpanda.io/clip.webm';
+    testing.expectEqual('https://lightpanda.io/clip.webm', s.src);
+
+    s.src = '/relative.webm';
+    testing.expectEqual(testing.ORIGIN + '/relative.webm', s.src);
+  }
+</script>

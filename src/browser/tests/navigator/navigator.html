@@ -30,6 +30,12 @@
 
   testing.expectEqual(null, navigator.doNotTrack);
 
+  // GPC must default to false — per https://w3c.github.io/gpc/#javascript-property
+  // the signal reflects an explicit user preference (Firefox defaults to false;
+  // Chrome doesn't expose the property at all). A true default makes
+  // GPC-compliant consent managers reject-all and skip their consent UI.
+  testing.expectEqual(false, navigator.globalPrivacyControl);
+
   // Every Navigator attribute must be a native accessor on the prototype
   for (const name of [
     'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
