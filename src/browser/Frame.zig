@@ -4198,7 +4198,11 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
 
 pub fn triggerKeyboard(self: *Frame, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
-    const element = self.window._document._active_element orelse {
+    // Dispatch to the effective active element. When nothing is explicitly
+    // focused this resolves to <body> (matching `document.activeElement`), so
+    // the keydown still fires and its default action — e.g. sequential focus
+    // navigation on Tab — can run.
+    const element = self.window._document.getActiveElement() orelse {
         event.deinit(self._page);
         return;
     };
@@ -4220,6 +4224,12 @@ pub fn handleKeydown(self: *Frame, target: *Node, event: *Event) !void {
 
     if (key == .Dead) {
         return;
+    }
+
+    if (key == .Tab) {
+        // Sequential focus navigation is the default action of a Tab keydown.
+        // Shift+Tab walks backward.
+        return self.moveFocus(if (keyboard_event.getShiftKey()) .backward else .forward);
     }
 
     if (target.is(Element.Html.Input)) |input| {
@@ -4250,6 +4260,93 @@ pub fn handleKeydown(self: *Frame, target: *Node, event: *Event) !void {
         // zig fmt: on
         return textarea.innerInsert(append, self);
     }
+}
+
+const FocusDirection = enum { forward, backward };
+
+// Sequential focus navigation: move `document.activeElement` to the next (Tab)
+// or previous (Shift+Tab) focusable element, firing the usual blur/focus events
+// via `Element.focus`. The order is fully determined by tabindex + document
+// position, so no layout is needed:
+//   1. elements with a positive tabindex, in ascending tabindex order;
+//   2. then elements with tabindex 0 (or a natively-focusable default), in
+//      document order.
+// Ties within a group break on document order, and Tab wraps around at the ends.
+// https://html.spec.whatwg.org/multipage/interaction.html#sequential-focus-navigation
+fn moveFocus(self: *Frame, direction: FocusDirection) !void {
+    const document = self.document;
+    const current = document._active_element;
+    const forward = direction == .forward;
+
+    // Single document-order pass tracking two candidates:
+    //   chosen — the closest focusable element strictly past `current` in the
+    //            travel direction.
+    //   edge   — the global first (forward) / last (backward) focusable element,
+    //            used to wrap around when `current` is at an end, or as the
+    //            landing spot when nothing is focused yet.
+    var chosen: ?*Element = null;
+    var edge: ?*Element = null;
+
+    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(document.asNode(), .{});
+    while (tw.next()) |el| {
+        if (!sequentiallyFocusable(el)) continue;
+
+        if (edge == null or focusOrderBefore(el, edge.?) == forward) {
+            edge = el;
+        }
+
+        const cur = current orelse continue;
+        if (el == cur) continue;
+        const past = if (forward) focusOrderBefore(cur, el) else focusOrderBefore(el, cur);
+        if (!past) continue;
+        if (chosen == null or focusOrderBefore(el, chosen.?) == forward) {
+            chosen = el;
+        }
+    }
+
+    const next = chosen orelse edge orelse return;
+    try next.focus(self);
+}
+
+// True when `el` participates in sequential focus navigation: enabled, with a
+// non-negative tabindex, and either an explicit tabindex or a natively
+// focusable shape. `getTabIndex` defaults several tags to 0, including
+// href-less anchors and hidden inputs, so the structural conditions are
+// re-checked here.
+fn sequentiallyFocusable(el: *Element) bool {
+    const html_el = el.is(Element.Html) orelse return false;
+    if (el.isDisabled()) return false;
+    if (html_el.getTabIndex() < 0) return false;
+
+    if (el.getAttributeSafe(comptime .wrap("tabindex")) != null) return true;
+
+    return switch (el.getTag()) {
+        .button, .select, .textarea, .iframe => true,
+        .input => if (el.is(Element.Html.Input)) |input| input._input_type != .hidden else false,
+        .anchor, .area => el.getAttributeSafe(comptime .wrap("href")) != null,
+        else => false,
+    };
+}
+
+// Orders two focusable elements by sequential focus navigation order: positive
+// tabindex first (ascending), then tabindex 0, ties broken by document order.
+fn focusOrderBefore(a: *Element, b: *Element) bool {
+    const ta = tabOrderIndex(a);
+    const tb = tabOrderIndex(b);
+    if (ta != tb) {
+        const group_a: u8 = if (ta > 0) 0 else 1;
+        const group_b: u8 = if (tb > 0) 0 else 1;
+        if (group_a != group_b) return group_a < group_b;
+        return ta < tb;
+    }
+    // Equal tabindex → document order: `a` precedes `b` when `b` follows `a`.
+    const FOLLOWING: u16 = 0x04;
+    return (a.asNode().compareDocumentPosition(b.asNode()) & FOLLOWING) != 0;
+}
+
+fn tabOrderIndex(el: *Element) i32 {
+    const html_el = el.is(Element.Html) orelse return 0;
+    return html_el.getTabIndex();
 }
 
 const SubmitFormOpts = struct {
