@@ -380,6 +380,21 @@ fn parseNameValue(str: []const u8) !struct { []const u8, []const u8, []const u8 
     return .{ name, value, rest };
 }
 
+/// True when `host` would be eligible to receive this cookie based on its
+/// `Domain` attribute alone (no path, scheme, or SameSite checks). Leading
+/// `.` in `Cookie.domain` extends the match to all subdomains, matching the
+/// `Set-Cookie: Domain=` semantics.
+pub fn matchesHost(self: *const Cookie, host: []const u8) bool {
+    if (self.domain.len == 0) return false;
+    if (self.domain[0] == '.') {
+        const bare = self.domain[1..];
+        if (std.ascii.eqlIgnoreCase(host, bare)) return true;
+        if (host.len < self.domain.len) return false;
+        return std.ascii.eqlIgnoreCase(host[host.len - self.domain.len ..], self.domain);
+    }
+    return std.ascii.eqlIgnoreCase(host, self.domain);
+}
+
 pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, is_navigation: bool, is_http: bool) bool {
     if (self.http_only and is_http == false) {
         // http only cookies cannot be accessed from Javascript
@@ -404,25 +419,7 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, 
         }
     }
 
-    {
-        if (self.domain.len == 0) {
-            return false;
-        }
-        if (self.domain[0] == '.') {
-            // When a Set-Cookie header has a Domain attribute
-            // Then we will _always_ prefix it with a dot, extending its
-            // availability to all subdomains (yes, setting the Domain
-            // attributes EXPANDS the domains which the cookie will be
-            // sent to, to always include all subdomains).
-            if (std.mem.eql(u8, url.host, self.domain[1..]) == false and std.mem.endsWith(u8, url.host, self.domain) == false) {
-                return false;
-            }
-        } else if (std.mem.eql(u8, url.host, self.domain) == false) {
-            // When the Domain attribute isn't specific, then the cookie
-            // is only sent on an exact match.
-            return false;
-        }
-    }
+    if (!self.matchesHost(url.host)) return false;
 
     {
         if (self.path[self.path.len - 1] == '/') {
@@ -1318,6 +1315,34 @@ test "Cookie: appliesTo with empty domain" {
     };
 
     try testing.expectEqual(false, cookie.appliesTo(&target, true, true, true));
+}
+
+test "Cookie: matchesHost is case-insensitive" {
+    const exact = Cookie{
+        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .name = "n",
+        .value = "v",
+        .domain = "example.com",
+        .path = "/",
+        .expires = null,
+    };
+    defer exact.deinit();
+    try testing.expectEqual(true, exact.matchesHost("Example.com"));
+    try testing.expectEqual(true, exact.matchesHost("EXAMPLE.COM"));
+    try testing.expectEqual(false, exact.matchesHost("other.com"));
+
+    const subdomain = Cookie{
+        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .name = "n",
+        .value = "v",
+        .domain = ".example.com",
+        .path = "/",
+        .expires = null,
+    };
+    defer subdomain.deinit();
+    try testing.expectEqual(true, subdomain.matchesHost("Example.com"));
+    try testing.expectEqual(true, subdomain.matchesHost("API.Example.COM"));
+    try testing.expectEqual(false, subdomain.matchesHost("notexample.com"));
 }
 
 test "Cookie: parse rejects URL with empty host" {

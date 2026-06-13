@@ -311,6 +311,27 @@ pub fn isAllWhitespace(text: []const u8) bool {
     } else true;
 }
 
+/// True when `needle` is byte-equal to one of the strings in `haystack`.
+pub fn isOneOf(needle: []const u8, haystack: []const []const u8) bool {
+    return for (haystack) |s| {
+        if (std.mem.eql(u8, s, needle)) break true;
+    } else false;
+}
+
+/// Largest prefix of `bytes` whose length is at most `max_bytes` and
+/// ends on a UTF-8 codepoint boundary. Invalid sequences count as one
+/// byte each so the function never loops.
+pub fn truncateUtf8(bytes: []const u8, max_bytes: usize) []const u8 {
+    if (bytes.len <= max_bytes) return bytes;
+    var i: usize = 0;
+    while (i < max_bytes) {
+        const seq_len = std.unicode.utf8ByteSequenceLength(bytes[i]) catch 1;
+        if (i + seq_len > max_bytes) break;
+        i += seq_len;
+    }
+    return bytes[0..i];
+}
+
 // Discriminatory type that signals the bridge to use arena instead of call_arena
 // Use this for strings that need to persist beyond the current call
 // The caller can unwrap and store just the underlying .str field
@@ -332,6 +353,31 @@ fn asUint(comptime string: anytype) std.meta.Int(
 }
 
 const testing = @import("testing.zig");
+
+test "truncateUtf8" {
+    try testing.expectEqual("", truncateUtf8("", 10));
+    try testing.expectEqual("abc", truncateUtf8("abc", 10));
+    try testing.expectEqual("abc", truncateUtf8("abcdef", 3));
+
+    // 'é' = 0xC3 0xA9 — cap inside the codepoint walks back to the leader.
+    try testing.expectEqual("", truncateUtf8("é", 1));
+    try testing.expectEqual("é", truncateUtf8("é", 2));
+    try testing.expectEqual("é", truncateUtf8("éé", 3));
+
+    // 3-byte codepoint '世' = 0xE4 0xB8 0x96.
+    try testing.expectEqual("", truncateUtf8("世", 2));
+    try testing.expectEqual("世", truncateUtf8("世界", 3));
+    try testing.expectEqual("世", truncateUtf8("世界", 5));
+
+    // 4-byte codepoint '𝄞' (musical G clef) = 0xF0 0x9D 0x84 0x9E.
+    try testing.expectEqual("", truncateUtf8("𝄞", 3));
+    try testing.expectEqual("𝄞", truncateUtf8("𝄞x", 4));
+
+    // Invalid leader byte counts as one byte so the loop terminates.
+    try testing.expectEqual("\xFF", truncateUtf8("\xFFx", 1));
+    try testing.expectEqual("\xFFx", truncateUtf8("\xFFx", 2));
+}
+
 test "String" {
     const other_short = try String.init(undefined, "other_short", .{});
     const other_long = try String.init(testing.allocator, "other_long" ** 100, .{});

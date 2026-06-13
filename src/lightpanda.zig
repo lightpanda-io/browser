@@ -42,9 +42,15 @@ pub const links = @import("browser/links.zig");
 pub const forms = @import("browser/forms.zig");
 pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
+pub const tools = @import("browser/tools.zig");
 pub const HttpClient = @import("browser/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
+pub const Agent = @import("agent/Agent.zig");
+pub const Command = @import("script/command.zig").Command;
+pub const Recorder = @import("script/Recorder.zig");
+pub const Runtime = @import("script/Runtime.zig");
+pub const Schema = @import("script/Schema.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
@@ -62,11 +68,21 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
+/// Loads `url` in a fresh session and waits per `opts`.
+///
+/// Errors:
+///   - `error.Timeout` if the wait deadline (`opts.wait_ms`) expires.
+///   - `error.Cancelled` if the embedder installed a `Session.cancel_hook`
+///     that returned true during the wait. The hook is opt-in via
+///     `session.cancel_hook = .{...}`; without it, this error never fires.
+///   - Other errors from navigation / parsing / I/O surface as their
+///     underlying tag.
 pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
     defer notification.deinit();
 
     var session = try browser.newSession(notification);
+    // Session.deinit unregisters from notification; close before notification.deinit runs.
     defer browser.closeSession();
 
     if (app.config.cookieFile()) |cookie_path| {
@@ -151,11 +167,11 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
         _ = try runner.waitForSelector(selector, remaining);
     }
 
-    if (opts.wait_script) |script| {
+    if (opts.wait_script) |wait_script| {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) return error.Timeout;
-        try runner.waitForScript(script, remaining);
+        try runner.waitForScript(wait_script, remaining);
     }
 
     const writer = opts.writer orelse return;

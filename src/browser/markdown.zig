@@ -27,8 +27,62 @@ const TreeWalker = @import("webapi/TreeWalker.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
+const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
-pub const Opts = struct {};
+pub const Opts = struct {
+    max_bytes: ?u32 = null,
+};
+
+const truncation_marker = "\n\n[truncated]\n";
+
+const LimitedWriter = struct {
+    inner: *std.Io.Writer,
+    remaining: usize,
+    truncated: bool = false,
+    writer: std.Io.Writer,
+
+    fn init(inner: *std.Io.Writer, max_bytes: u32) LimitedWriter {
+        return .{
+            .inner = inner,
+            .remaining = max_bytes,
+            .writer = .{
+                .vtable = &vtable,
+                .buffer = &.{},
+            },
+        };
+    }
+
+    const vtable = std.Io.Writer.VTable{ .drain = drain };
+
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *LimitedWriter = @alignCast(@fieldParentPtr("writer", w));
+        var total: usize = 0;
+        for (data[0 .. data.len - 1]) |slice| {
+            try self.consume(slice);
+            total += slice.len;
+        }
+        const pattern = data[data.len - 1];
+        for (0..splat) |_| {
+            try self.consume(pattern);
+            total += pattern.len;
+        }
+        return total;
+    }
+
+    fn consume(self: *LimitedWriter, bytes: []const u8) std.Io.Writer.Error!void {
+        if (bytes.len <= self.remaining) {
+            try self.inner.writeAll(bytes);
+            self.remaining -= bytes.len;
+            return;
+        }
+        if (self.remaining > 0) {
+            try self.inner.writeAll(truncateUtf8(bytes, self.remaining));
+            self.remaining = 0;
+        }
+        self.truncated = true;
+        return error.WriteFailed;
+    }
+};
 
 const State = struct {
     const ListType = enum { ordered, unordered };
@@ -504,7 +558,26 @@ const Context = struct {
 };
 
 pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
-    _ = opts;
+    if (opts.max_bytes) |limit| {
+        var lw = LimitedWriter.init(writer, limit);
+        var ctx: Context = .{
+            .state = .{},
+            .writer = &lw.writer,
+            .frame = frame,
+        };
+        ctx.render(node) catch |err| switch (err) {
+            error.WriteFailed => {
+                if (!lw.truncated) return err;
+                try writer.writeAll(truncation_marker);
+                return;
+            },
+        };
+        if (!ctx.state.last_char_was_newline) {
+            try writer.writeByte('\n');
+        }
+        return;
+    }
+
     var ctx: Context = .{
         .state = .{},
         .writer = writer,
@@ -757,6 +830,42 @@ test "browser.markdown: anchor fallback label" {
     try testMarkdownHTML(
         \\<a href="/no-label"><svg></svg></a>
     , "[](http://localhost/no-label)\n");
+}
+
+test "browser.markdown: max_bytes leaves output untouched when under cap" {
+    const testing = @import("../testing.zig");
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(), "<p>Short</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{ .max_bytes = 1024 }, &aw.writer, frame);
+
+    try testing.expectString("\nShort\n", aw.written());
+}
+
+test "browser.markdown: max_bytes truncates with marker" {
+    const testing = @import("../testing.zig");
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(), "<p>" ++ ("AAAA " ** 100) ++ "</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{ .max_bytes = 50 }, &aw.writer, frame);
+
+    const out = aw.written();
+    try testing.expect(std.mem.endsWith(u8, out, "[truncated]\n"));
+    try testing.expect(out.len <= 50 + truncation_marker.len);
 }
 
 // Builds a shadow host <div>, populates its light DOM with `light` and its

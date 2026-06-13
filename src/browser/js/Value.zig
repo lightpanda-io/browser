@@ -56,6 +56,10 @@ pub fn isFunction(self: Value) bool {
     return v8.v8__Value__IsFunction(self.handle);
 }
 
+pub fn isNativeError(self: Value) bool {
+    return v8.v8__Value__IsNativeError(self.handle);
+}
+
 pub fn isNull(self: Value) bool {
     return v8.v8__Value__IsNull(self.handle);
 }

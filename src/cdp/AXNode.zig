@@ -642,7 +642,7 @@ pub const Writer = struct {
         const value: ?[]const u8 = switch (el.getTag()) {
             .input => blk: {
                 const input = el.as(DOMNode.Element.Html.Input);
-                const val = input.getValue();
+                const val = input.getRedactedValue();
                 if (val.len == 0) break :blk null;
                 break :blk val;
             },

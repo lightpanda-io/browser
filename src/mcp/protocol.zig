@@ -37,22 +37,16 @@ pub const ErrorCode = enum(i64) {
     InternalError = -32603,
     FrameNotLoaded = -32604,
     NotFound = -32605,
-};
-
-pub const Notification = struct {
-    jsonrpc: []const u8 = "2.0",
-    method: []const u8,
-    params: ?std.json.Value = null,
+    /// Application-range code: tool call was aborted by the caller (SIGINT,
+    /// session shutdown). Distinct from InternalError so MCP clients don't
+    /// retry into a loop on intentional cancellation.
+    Cancelled = -32001,
+    /// Application-range code: tool call exceeded its deadline. Distinct
+    /// from Cancelled — Timeout is a tool-state outcome, not a caller signal.
+    Timeout = -32002,
 };
 
 // Core MCP Types mapping to official specification
-pub const InitializeRequest = struct {
-    jsonrpc: []const u8 = "2.0",
-    id: std.json.Value,
-    method: []const u8 = "initialize",
-    params: InitializeParams,
-};
-
 pub const InitializeParams = struct {
     protocolVersion: []const u8,
     capabilities: Capabilities,
@@ -80,6 +74,10 @@ pub const InitializeResult = struct {
     protocolVersion: []const u8,
     capabilities: ServerCapabilities,
     serverInfo: Implementation,
+    /// Free-form guidance the client should fold into its system prompt.
+    /// Per the MCP spec, this is how a server tells a driver "here is how
+    /// to use me correctly" without requiring a separate tool call.
+    instructions: ?[]const u8 = null,
 };
 
 pub const ServerCapabilities = struct {
@@ -123,42 +121,18 @@ pub const Tool = struct {
     }
 };
 
-pub fn minify(comptime json: []const u8) []const u8 {
-    @setEvalBranchQuota(100000);
-    return comptime blk: {
-        var res: []const u8 = "";
-        var in_string = false;
-        var escaped = false;
-        for (json) |c| {
-            if (in_string) {
-                res = res ++ [1]u8{c};
-                if (escaped) {
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == '"') {
-                    in_string = false;
-                }
-            } else {
-                switch (c) {
-                    ' ', '\n', '\r', '\t' => continue,
-                    '"' => {
-                        in_string = true;
-                        res = res ++ [1]u8{c};
-                    },
-                    else => res = res ++ [1]u8{c},
-                }
-            }
-        }
-        break :blk res;
-    };
-}
+pub const minify = @import("../browser/tools.zig").minify;
 
 pub const Resource = struct {
     uri: []const u8,
     name: []const u8,
     description: ?[]const u8 = null,
     mimeType: ?[]const u8 = null,
+};
+
+pub const CallParams = struct {
+    name: []const u8,
+    arguments: ?std.json.Value = null,
 };
 
 pub fn TextContent(comptime T: type) type {
@@ -239,7 +213,6 @@ test "MCP.protocol - request parsing" {
     try testing.expectEqual(@as(i64, 1), req.id.?.integer);
     try testing.expect(req.params != null);
 
-    // Test nested parsing of InitializeParams
     const init_params = try std.json.parseFromValue(InitializeParams, testing.arena_allocator, req.params.?, .{ .ignore_unknown_fields = true });
     defer init_params.deinit();
 

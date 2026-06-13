@@ -5,7 +5,10 @@ const lp = @import("lightpanda");
 const App = @import("../App.zig");
 const testing = @import("../testing.zig");
 const protocol = @import("protocol.zig");
+const resources = @import("resources.zig");
 const router = @import("router.zig");
+const tools = @import("tools.zig");
+const Transport = @import("Transport.zig");
 const CDPNode = @import("../cdp/Node.zig");
 
 const Self = @This();
@@ -18,9 +21,7 @@ browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
 
-writer: *std.io.Writer,
-mutex: std.Thread.Mutex = .{},
-aw: std.io.Writer.Allocating,
+transport: Transport,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
     const notification = try lp.Notification.init(allocator);
@@ -32,9 +33,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
     self.* = .{
         .allocator = allocator,
         .app = app,
-        .writer = writer,
         .browser = undefined,
-        .aw = .init(allocator),
+        .transport = .init(allocator, writer),
         .notification = notification,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
@@ -44,6 +44,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
+    try self.session.enableConsoleCapture();
 
     if (app.config.cookieFile()) |cookie_path| {
         lp.cookies.loadFromFile(self.session, cookie_path);
@@ -58,44 +59,52 @@ pub fn deinit(self: *Self) void {
     }
 
     self.node_registry.deinit();
-    self.aw.deinit();
+    self.transport.deinit();
     self.browser.deinit();
     self.notification.deinit();
 
     self.allocator.destroy(self);
 }
 
-pub fn sendResponse(self: *Self, response: anytype) !void {
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
-    self.aw.clearRetainingCapacity();
-    try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &self.aw.writer);
-    try self.aw.writer.writeByte('\n');
-    try self.writer.writeAll(self.aw.writer.buffered());
-    try self.writer.flush();
-}
-
-pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
-    const GenericResponse = struct {
-        jsonrpc: []const u8 = "2.0",
-        id: std.json.Value,
-        result: @TypeOf(result),
-    };
-    try self.sendResponse(GenericResponse{
-        .id = id,
-        .result = result,
-    });
+pub fn idle(self: *Self) u31 {
+    return self.session.idleSlice();
 }
 
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
-    try self.sendResponse(protocol.Response{
-        .id = id,
-        .@"error" = protocol.Error{
-            .code = @intFromEnum(code),
-            .message = message,
+    return self.transport.sendError(id, code, message);
+}
+
+pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
+    return self.transport.sendResult(id, result);
+}
+
+pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
+    const id = req.id orelse return;
+    try self.sendResult(id, protocol.InitializeResult{
+        .protocolVersion = @tagName(protocol.Version.default),
+        .capabilities = .{
+            .resources = .{},
+            .tools = .{},
         },
+        .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
+        .instructions = lp.tools.driver_guidance,
     });
+}
+
+pub fn handleToolList(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    return tools.handleList(self, arena, req);
+}
+
+pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    return tools.handleCall(self, arena, req);
+}
+
+pub fn handleResourceList(self: *Self, req: protocol.Request) !void {
+    return resources.handleList(self, req);
+}
+
+pub fn handleResourceRead(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    return resources.handleRead(self, arena, req);
 }
 
 test "MCP.Server - Integration: synchronous smoke test" {
@@ -114,28 +123,7 @@ test "MCP.Server - Integration: synchronous smoke test" {
     var server = try Self.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
 
-    try router.processRequests(server, &in_reader);
+    try router.processRequests(server, &in_reader, null);
 
     try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1, .result = .{ .protocolVersion = "2024-11-05" } }, out_alloc.writer.buffered());
-}
-
-test "MCP.Server - Integration: ping request returns an empty result" {
-    defer testing.reset();
-    const allocator = testing.allocator;
-    const app = testing.test_app;
-
-    const input =
-        \\{"jsonrpc":"2.0","id":"ping-1","method":"ping"}
-    ;
-
-    var in_reader: std.io.Reader = .fixed(input);
-    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    defer out_alloc.deinit();
-
-    var server = try Self.init(allocator, app, &out_alloc.writer);
-    defer server.deinit();
-
-    try router.processRequests(server, &in_reader);
-
-    try testing.expectJson(.{ .jsonrpc = "2.0", .id = "ping-1", .result = struct {}{} }, out_alloc.writer.buffered());
 }

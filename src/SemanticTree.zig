@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const isAllWhitespace = @import("string.zig").isAllWhitespace;
 const interactive = @import("browser/interactive.zig");
+const SelectorPath = @import("browser/SelectorPath.zig");
 
 const CData = @import("browser/webapi/CData.zig");
 const Element = @import("browser/webapi/Element.zig");
@@ -161,7 +162,7 @@ fn walk(
         tag_name = el.getTagNameLower();
 
         if (el.is(Element.Html.Input)) |input| {
-            value = input.getValue();
+            value = input.getRedactedValue();
             if (input._input_type == .checkbox or input._input_type == .radio) {
                 checked = input.getChecked();
             }
@@ -555,6 +556,7 @@ pub const NodeDetails = struct {
     href: ?[]const u8 = null,
     id: ?[]const u8 = null,
     class: ?[]const u8 = null,
+    selector: ?[]const u8 = null,
     checked: ?bool = null,
     options: ?[]OptionData = null,
 
@@ -613,6 +615,11 @@ pub const NodeDetails = struct {
             try jw.write(v);
         }
 
+        if (self.selector) |v| {
+            try jw.objectField("selector");
+            try jw.write(v);
+        }
+
         if (self.checked) |c| {
             try jw.objectField("checked");
             try jw.write(c);
@@ -660,6 +667,7 @@ pub fn getNodeDetails(
     var href: ?[]const u8 = null;
     var id_attr: ?[]const u8 = null;
     var class_attr: ?[]const u8 = null;
+    var selector: ?[]const u8 = null;
     var checked: ?bool = null;
     var options: ?[]OptionData = null;
 
@@ -668,6 +676,7 @@ pub fn getNodeDetails(
         is_disabled = el.isDisabled();
         id_attr = el.getAttributeSafe(comptime .wrap("id"));
         class_attr = el.getAttributeSafe(comptime .wrap("class"));
+        selector = try SelectorPath.init(arena, frame).build(el);
         placeholder = el.getAttributeSafe(comptime .wrap("placeholder"));
 
         if (el.getAttributeSafe(comptime .wrap("href"))) |h| {
@@ -676,7 +685,7 @@ pub fn getNodeDetails(
         }
 
         if (el.is(Element.Html.Input)) |input| {
-            value = input.getValue();
+            value = input.getRedactedValue();
             input_type = input._input_type.toString();
             if (input._input_type == .checkbox or input._input_type == .radio) {
                 checked = input.getChecked();
@@ -713,6 +722,7 @@ pub fn getNodeDetails(
         .href = href,
         .id = id_attr,
         .class = class_attr,
+        .selector = selector,
         .checked = checked,
         .options = options,
     };

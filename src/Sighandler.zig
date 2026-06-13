@@ -38,6 +38,10 @@ handle_thread: ?std.Thread = null,
 attempt: u32 = 0,
 mutex: std.Thread.Mutex = .{},
 listeners: std.ArrayList(Listener) = .empty,
+/// Set by long-running interactive modes (e.g. the agent REPL) to opt out
+/// of the second-tap hard-exit. Ctrl-C then behaves like Python's REPL:
+/// listeners fire, the process never dies from signals — `/quit` exits.
+no_hard_exit: bool = false,
 
 pub const Listener = struct {
     args: []const u8,
@@ -128,11 +132,14 @@ fn sighandle(self: *SigHandler) noreturn {
         switch (sig) {
             std.posix.SIG.INT, std.posix.SIG.TERM => {
                 self.mutex.lock();
-                if (self.attempt > 1) {
+                if (self.attempt > 1 and !self.no_hard_exit) {
                     self.mutex.unlock();
                     std.process.exit(1);
                 }
-                self.attempt += 1;
+                // While `no_hard_exit` is set, cap the counter so a later
+                // flip back to false (e.g. agent-suspend/resume) doesn't
+                // immediately hard-exit on the next signal.
+                if (self.no_hard_exit) self.attempt = 1 else self.attempt += 1;
 
                 log.info(.app, "Received termination signal...", .{});
                 for (self.listeners.items) |*item| {

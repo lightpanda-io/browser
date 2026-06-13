@@ -22,33 +22,105 @@ const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const Frame = @import("Frame.zig");
 const Selector = @import("webapi/selector/Selector.zig");
+const interactive = @import("interactive.zig");
+const log = @import("../lightpanda.zig").log;
 
 const Allocator = std.mem.Allocator;
 
-/// Collect all links (href attributes from anchor tags) under `root`.
-/// Returns a slice of strings allocated with `arena`.
-pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]const []const u8 {
-    var links: std.ArrayList([]const u8) = .empty;
+pub const Link = struct {
+    backendNodeId: ?u32 = null,
+    node: *Node,
+    text: ?[]const u8,
+    href: []const u8,
+
+    pub fn jsonStringify(self: *const Link, jw: anytype) !void {
+        try jw.beginObject();
+        if (self.backendNodeId) |id| {
+            try jw.objectField("backendNodeId");
+            try jw.write(id);
+        }
+        if (self.text) |t| {
+            try jw.objectField("text");
+            try jw.write(t);
+        }
+        try jw.objectField("href");
+        try jw.write(self.href);
+        try jw.endObject();
+    }
+};
+
+/// Populate backendNodeId on each link by registering its node in the registry.
+pub fn registerNodes(links: []Link, registry: anytype) !void {
+    for (links) |*l| {
+        const registered = try registry.register(l.node);
+        l.backendNodeId = registered.id;
+    }
+}
+
+/// Collect all links (anchor tags with an href) under `root`.
+pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
+    var links: std.ArrayList(Link) = .empty;
 
     if (Selector.querySelectorAll(root, "a[href]", frame)) |list| {
         defer list.deinit(frame._page);
 
         for (list._nodes) |node| {
-            if (node.is(Element.Html.Anchor)) |anchor| {
-                const href = anchor.getHref(frame) catch |err| {
-                    @import("../lightpanda.zig").log.err(.app, "resolve href failed", .{ .err = err });
-                    continue;
-                };
+            const anchor = node.is(Element.Html.Anchor) orelse continue;
+            const href = anchor.getHref(frame) catch |err| {
+                log.err(.app, "resolve href failed", .{ .err = err });
+                continue;
+            };
+            if (href.len == 0) continue;
 
-                if (href.len > 0) {
-                    try links.append(arena, href);
-                }
-            }
+            try links.append(arena, .{
+                .node = node,
+                .text = interactive.getTextContent(node, arena) catch null,
+                .href = href,
+            });
         }
     } else |err| {
-        @import("../lightpanda.zig").log.err(.app, "query links failed", .{ .err = err });
+        log.err(.app, "query links failed", .{ .err = err });
         return err;
     }
 
     return links.items;
+}
+
+const testing = @import("../testing.zig");
+
+// Caller must `defer testing.test_session.removePage()` after a successful
+// call — the returned slices live in the page's call_arena.
+fn testLinks(html: []const u8) ![]Link {
+    const frame = try testing.test_session.createPage();
+    errdefer testing.test_session.removePage();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(), html);
+
+    return collectLinks(frame.call_arena, div.asNode(), frame);
+}
+
+test "links: text and href" {
+    const links = try testLinks(
+        \\<a href="https://example.com/login">Sign in</a>
+        \\<a href="/page/2">  Next page </a>
+        \\<a>no href, skipped</a>
+    );
+    defer testing.test_session.removePage();
+
+    try testing.expectEqual(2, links.len);
+    try testing.expectEqual("Sign in", links[0].text.?);
+    try testing.expectEqual("https://example.com/login", links[0].href);
+    try testing.expectEqual("Next page", links[1].text.?);
+}
+
+test "links: empty text" {
+    const links = try testLinks(
+        \\<a href="/icon"><img src="i.png"></a>
+    );
+    defer testing.test_session.removePage();
+
+    try testing.expectEqual(1, links.len);
+    try testing.expectEqual(null, links[0].text);
 }
