@@ -48,6 +48,7 @@ pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
 pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
 pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 pub const DeferringLayer = @import("../network/layer/DeferringLayer.zig");
+pub const CorsLayer = @import("../network/layer/CorsLayer.zig");
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -166,6 +167,7 @@ blocking_requests: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
 cache_layer: CacheLayer,
 robots_layer: RobotsLayer,
+cors_layer: CorsLayer,
 web_bot_auth_layer: WebBotAuthLayer,
 interception_layer: InterceptionLayer,
 deferring_layer: DeferringLayer,
@@ -221,6 +223,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
         .cache_layer = .{},
         .robots_layer = .{ .allocator = allocator, .network = network },
+        .cors_layer = .{},
         .web_bot_auth_layer = .{},
         .interception_layer = .{},
         .deferring_layer = .{ .allocator = allocator, .network = network },
@@ -245,6 +248,8 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
     if (network.config.webBotAuth() != null) {
         next = layerWith(&self.web_bot_auth_layer, next);
     }
+
+    next = layerWith(&self.cors_layer, next);
 
     next = layerWith(&self.deferring_layer, next);
 
@@ -1296,6 +1301,7 @@ pub const Request = struct {
         script,
         fetch,
         stylesheet,
+        preflight,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -1308,6 +1314,7 @@ pub const Request = struct {
                 .script => "Script",
                 .fetch => "Fetch",
                 .stylesheet => "Stylesheet",
+                .preflight => "Preflight",
             };
         }
     };
@@ -1607,6 +1614,9 @@ pub const Transfer = struct {
 
         // RobotsLayer holds the transfer pending a robots.txt fetch.
         robots,
+
+        // CorsLayer holds the transfer pending a preflight request.
+        cors,
     };
 
     // Layer-facing: park the transfer for an external owner. The caller
@@ -1635,7 +1645,7 @@ pub const Transfer = struct {
             return;
         }
         switch (self.state.parked) {
-            .robots => {},
+            .robots, .cors => {},
             .intercept_request, .intercept_auth => {
                 const intercept_layer = &self.client.interception_layer;
                 lp.assert(intercept_layer.intercepted > 0, "Transfer.leaveIntercept", .{ .value = intercept_layer.intercepted });
@@ -2159,13 +2169,13 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     };
 }
 
-const Noop = struct {
-    fn headerCallback(_: Response) !bool {
+pub const Noop = struct {
+    pub fn headerCallback(_: Response) !bool {
         return true;
     }
-    fn dataCallback(_: Response, _: []const u8) !void {}
-    fn doneCallback(_: *anyopaque) !void {}
-    fn errorCallback(_: *anyopaque, _: anyerror) void {}
+    pub fn dataCallback(_: Response, _: []const u8) !void {}
+    pub fn doneCallback(_: *anyopaque) !void {}
+    pub fn errorCallback(_: *anyopaque, _: anyerror) void {}
 };
 
 // An opaque-from-the-outside handle that Frame / WorkerGlobalScope embed

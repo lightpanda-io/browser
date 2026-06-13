@@ -139,7 +139,7 @@ pub fn drainAll(self: *DeferringLayer) void {
     }
 }
 
-const DeferredContext = struct {
+pub const DeferredContext = struct {
     arena: std.mem.Allocator,
     layer: *DeferringLayer,
     transfer: *Transfer,
