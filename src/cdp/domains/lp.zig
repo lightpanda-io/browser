@@ -23,6 +23,7 @@ const CDP = @import("../CDP.zig");
 
 const Node = @import("../Node.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
+const Robots = @import("../../network/Robots.zig");
 
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;
@@ -36,6 +37,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         getInteractiveElements,
         getNodeDetails,
         getStructuredData,
+        getContentSignal,
         detectForms,
         clickNode,
         fillNode,
@@ -51,6 +53,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .getInteractiveElements => return getInteractiveElements(cmd),
         .getNodeDetails => return getNodeDetails(cmd),
         .getStructuredData => return getStructuredData(cmd),
+        .getContentSignal => return getContentSignal(cmd),
         .detectForms => return detectForms(cmd),
         .clickNode => return clickNode(cmd),
         .fillNode => return fillNode(cmd),
@@ -198,6 +201,27 @@ fn getStructuredData(cmd: anytype) !void {
 
     return cmd.sendResult(.{
         .structuredData = data,
+    }, .{});
+}
+
+// Advisory `Content-Signal` robots.txt preferences for the current document's
+// host (https://contentsignals.org). `available` is false when no robots.txt
+// has been fetched for the host — note this is the case unless `obey_robots`
+// is enabled, since the robots layer is what populates the store.
+fn getContentSignal(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const network = bc.cdp.browser.http_client.network;
+
+    const empty: []const Robots.ContentSignal = &.{};
+    const robots_url = lp.URL.getRobotsUrl(cmd.arena, frame.url) catch {
+        return cmd.sendResult(.{ .available = false, .contentSignals = empty }, .{});
+    };
+
+    const signals = network.robot_store.getContentSignals(robots_url);
+    return cmd.sendResult(.{
+        .available = signals != null,
+        .contentSignals = signals orelse empty,
     }, .{});
 }
 
@@ -408,6 +432,25 @@ test "cdp.lp: getStructuredData" {
 
     const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("structuredData") != null);
+}
+
+test "cdp.lp: getContentSignal" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.getContentSignal",
+    });
+
+    // No robots.txt fetched for the page, so the directive is reported absent
+    // rather than erroring — the command is still wired and returns the shape.
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
+    try testing.expectEqual(false, result.get("available").?.bool);
+    try testing.expect(result.get("contentSignals") != null);
 }
 
 test "cdp.lp: action tools" {
