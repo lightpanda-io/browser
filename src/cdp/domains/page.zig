@@ -551,6 +551,26 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
     }
 }
 
+// A root navigation failed before commit — the pending Page is being
+// discarded and no frameNavigated will ever fire, but the Page.navigate
+// command that initiated it is still awaiting its response. Answer it with
+// an errorText (Chrome semantics: "present if and only if navigation has
+// failed") so the client isn't left waiting on the command id forever.
+pub fn frameNavigateFailed(bc: *CDP.BrowserContext, event: *const Notification.FrameNavigateFailed) !void {
+    const session_id = bc.session_id orelse return;
+
+    const input_id = event.opts.cdp_id orelse return;
+    try bc.cdp.sendJSON(.{
+        .id = input_id,
+        .result = .{
+            .frameId = &id.toFrameId(event.frame_id),
+            .loaderId = &id.toLoaderId(event.loader_id),
+            .errorText = @errorName(event.err),
+        },
+        .sessionId = session_id,
+    });
+}
+
 pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.FrameChildFrameCreated) !void {
     const session_id = bc.session_id orelse return;
 
@@ -1366,6 +1386,37 @@ test "cdp.frame: navigate does not follow Location on a non-redirect 3xx" {
     defer ls.deinit();
     const v = try ls.local.exec("document.title === 'choices' && document.body.innerText.includes('multiple choices body')", null);
     try testing.expect(v.toBool());
+}
+
+test "cdp.frame: navigate answers with errorText when the navigation fails" {
+    // A root navigation that fails before commit (here: connection refused —
+    // nothing listens on port 1) must still answer the Page.navigate command.
+    // Chrome resolves it with an errorText field ("present if and only if
+    // navigation has failed"); leaving the command id unanswered forever
+    // deadlocks clients that await the response.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-NAVF", .url = "hi.html", .target_id = "FID-000000NAVF".* });
+
+    try ctx.processMessage(.{
+        .id = 52,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:1/unreachable" },
+    });
+
+    var runner = try bc.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
+
+    // The pending page was discarded; the active document is untouched.
+    const frame = bc.session.currentFrame() orelse unreachable;
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html", frame.url);
+
+    try ctx.expectSentResult(.{
+        .frameId = "FID-0000000001",
+        .loaderId = "LID-0000000002",
+        .errorText = "CouldntConnect",
+    }, .{ .id = 52 });
 }
 
 test "cdp.frame: navigate to about:blank replaces a non-blank document" {

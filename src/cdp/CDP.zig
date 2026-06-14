@@ -600,6 +600,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_created, self, onFrameCreated);
         try notification.register(.frame_navigate, self, onFrameNavigate);
         try notification.register(.frame_navigated, self, onFrameNavigated);
+        try notification.register(.frame_navigate_failed, self, onFrameNavigateFailed);
         try notification.register(.frame_child_frame_created, self, onFrameChildFrameCreated);
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
@@ -835,6 +836,11 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         return @import("domains/page.zig").frameNavigated(self.notification_arena, self, msg);
+    }
+
+    pub fn onFrameNavigateFailed(ctx: *anyopaque, msg: *const Notification.FrameNavigateFailed) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/page.zig").frameNavigateFailed(self, msg);
     }
 
     pub fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {

@@ -1325,6 +1325,23 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
     log.err(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
 
+    // A navigation that fails before any response headers arrive never
+    // reaches the frame_navigated dispatch in frameHeaderCallback, so the
+    // Page.navigate command that initiated it would stay unanswered forever.
+    // Tell CDP so it can answer with an errorText (Chrome semantics).
+    // _http_status is set as soon as headers are processed; non-null means
+    // frameHeaderCallback already answered the command — don't answer twice.
+    if (self._http_status == null) {
+        self._session.notification.dispatch(.frame_navigate_failed, &.{
+            .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
+            .timestamp = timestamp(.monotonic),
+            .url = self.url,
+            .err = err,
+            .opts = self._navigated_options orelse .{},
+        });
+    }
+
     // A pending root navigation that failed before commit: discard the
     // pending Page; the OLD active Page (and its V8 context) is untouched.
     // We do NOT run frameDoneCallback against the pending frame — the frame

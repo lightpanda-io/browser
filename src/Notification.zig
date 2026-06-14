@@ -76,6 +76,7 @@ const EventListeners = struct {
     frame_created: List = .{},
     frame_navigate: List = .{},
     frame_navigated: List = .{},
+    frame_navigate_failed: List = .{},
     frame_network_idle: List = .{},
     frame_network_almost_idle: List = .{},
     frame_child_frame_created: List = .{},
@@ -102,6 +103,7 @@ const Events = union(enum) {
     frame_created: *Frame,
     frame_navigate: *const FrameNavigate,
     frame_navigated: *const FrameNavigated,
+    frame_navigate_failed: *const FrameNavigateFailed,
     frame_network_idle: *const FrameNetworkIdle,
     frame_network_almost_idle: *const FrameNetworkAlmostIdle,
     frame_child_frame_created: *const FrameChildFrameCreated,
@@ -146,6 +148,19 @@ pub const FrameNavigated = struct {
     loader_id: u32,
     timestamp: u64,
     url: [:0]const u8,
+    opts: Frame.NavigatedOpts,
+};
+
+// A root navigation that failed before commit (DNS failure, connection
+// refused, malformed response, ...). Dispatched so CDP can answer the
+// pending Page.navigate command with an errorText instead of leaving the
+// command id unanswered forever.
+pub const FrameNavigateFailed = struct {
+    frame_id: u32,
+    loader_id: u32,
+    timestamp: u64,
+    url: [:0]const u8,
+    err: anyerror,
     opts: Frame.NavigatedOpts,
 };
 
