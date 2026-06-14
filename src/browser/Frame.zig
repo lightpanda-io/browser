@@ -4196,9 +4196,8 @@ pub fn handleKeydown(self: *Frame, target: *Node, event: *Event) !void {
     }
 
     if (key == .Tab) {
-        // Sequential focus navigation is the default action of a Tab keydown.
-        // Shift+Tab walks backward.
-        return self.moveFocus(if (keyboard_event.getShiftKey()) .backward else .forward);
+        // tab -> forward, shift+tab -> backwards
+        return self.moveFocus(keyboard_event.getShiftKey() == false);
     }
 
     if (target.is(Element.Html.Input)) |input| {
@@ -4231,8 +4230,6 @@ pub fn handleKeydown(self: *Frame, target: *Node, event: *Event) !void {
     }
 }
 
-const FocusDirection = enum { forward, backward };
-
 // Sequential focus navigation: move `document.activeElement` to the next (Tab)
 // or previous (Shift+Tab) focusable element, firing the usual blur/focus events
 // via `Element.focus`. The order is fully determined by tabindex + document
@@ -4242,34 +4239,80 @@ const FocusDirection = enum { forward, backward };
 //      document order.
 // Ties within a group break on document order, and Tab wraps around at the ends.
 // https://html.spec.whatwg.org/multipage/interaction.html#sequential-focus-navigation
-fn moveFocus(self: *Frame, direction: FocusDirection) !void {
+fn moveFocus(self: *Frame, forward: bool) !void {
     const document = self.document;
     const current = document._active_element;
-    const forward = direction == .forward;
+
+    const current_tab_index = blk: {
+        const cur = current orelse break :blk 0;
+        const current_html = cur.is(Element.Html) orelse break :blk 0;
+        break :blk current_html.getTabIndex();
+    };
 
     // Single document-order pass tracking two candidates:
-    //   chosen — the closest focusable element strictly past `current` in the
-    //            travel direction.
     //   edge   — the global first (forward) / last (backward) focusable element,
     //            used to wrap around when `current` is at an end, or as the
     //            landing spot when nothing is focused yet.
-    var chosen: ?*Element = null;
+    //   chosen — the closest focusable element strictly past `current` in the
+    //            travel direction.
     var edge: ?*Element = null;
+    var edge_tab_index: i32 = 0;
+
+    var chosen: ?*Element = null;
+    var chosen_tab_index: i32 = 0;
 
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(document.asNode(), .{});
-    while (tw.next()) |el| {
-        if (!sequentiallyFocusable(el)) continue;
+    while (tw.next()) |candidate| {
+        if (candidate.isDisabled()) {
+            continue;
+        }
+        if (candidate.is(Element.Html) == null) {
+            continue;
+        }
 
-        if (edge == null or focusOrderBefore(el, edge.?) == forward) {
-            edge = el;
+        const candidate_tab_index = blk: {
+            if (candidate.getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
+                if (Element.Html.parseInteger(attr)) |tab_index| {
+                    if (tab_index < 0) {
+                        continue;
+                    }
+                    break :blk tab_index;
+                }
+                break :blk 0;
+            }
+
+            // no tab index, maybe this item isn't focusable..
+            const focusable = switch (candidate.getTag()) {
+                .button, .select, .textarea, .iframe => true,
+                .input => candidate.as(Element.Html.Input)._input_type != .hidden,
+                .anchor, .area => candidate.getAttributeSafe(comptime .wrap("href")) != null,
+                else => false,
+            };
+            if (focusable == false) {
+                continue;
+            }
+
+            break :blk 0;
+        };
+
+        if (edge == null or focusOrderBefore(candidate, candidate_tab_index, edge.?, edge_tab_index) == forward) {
+            edge = candidate;
+            edge_tab_index = candidate_tab_index;
         }
 
         const cur = current orelse continue;
-        if (el == cur) continue;
-        const past = if (forward) focusOrderBefore(cur, el) else focusOrderBefore(el, cur);
-        if (!past) continue;
-        if (chosen == null or focusOrderBefore(el, chosen.?) == forward) {
-            chosen = el;
+
+        if (candidate == cur) {
+            continue;
+        }
+
+        const past = if (forward) focusOrderBefore(cur, current_tab_index, candidate, candidate_tab_index) else focusOrderBefore(candidate, candidate_tab_index, cur, current_tab_index);
+        if (!past) {
+            continue;
+        }
+        if (chosen == null or focusOrderBefore(candidate, candidate_tab_index, chosen.?, chosen_tab_index) == forward) {
+            chosen = candidate;
+            chosen_tab_index = candidate_tab_index;
         }
     }
 
@@ -4277,45 +4320,22 @@ fn moveFocus(self: *Frame, direction: FocusDirection) !void {
     try next.focus(self);
 }
 
-// True when `el` participates in sequential focus navigation: enabled, with a
-// non-negative tabindex, and either an explicit tabindex or a natively
-// focusable shape. `getTabIndex` defaults several tags to 0, including
-// href-less anchors and hidden inputs, so the structural conditions are
-// re-checked here.
-fn sequentiallyFocusable(el: *Element) bool {
-    const html_el = el.is(Element.Html) orelse return false;
-    if (el.isDisabled()) return false;
-    if (html_el.getTabIndex() < 0) return false;
-
-    if (el.getAttributeSafe(comptime .wrap("tabindex")) != null) return true;
-
-    return switch (el.getTag()) {
-        .button, .select, .textarea, .iframe => true,
-        .input => if (el.is(Element.Html.Input)) |input| input._input_type != .hidden else false,
-        .anchor, .area => el.getAttributeSafe(comptime .wrap("href")) != null,
-        else => false,
-    };
-}
-
 // Orders two focusable elements by sequential focus navigation order: positive
 // tabindex first (ascending), then tabindex 0, ties broken by document order.
-fn focusOrderBefore(a: *Element, b: *Element) bool {
-    const ta = tabOrderIndex(a);
-    const tb = tabOrderIndex(b);
-    if (ta != tb) {
-        const group_a: u8 = if (ta > 0) 0 else 1;
-        const group_b: u8 = if (tb > 0) 0 else 1;
-        if (group_a != group_b) return group_a < group_b;
-        return ta < tb;
+fn focusOrderBefore(a: *Element, a_tab_index: i32, b: *Element, b_tab_index: i32) bool {
+    if (a_tab_index == b_tab_index) {
+        // Equal tabindex → document order: `a` precedes `b` when `b` follows `a`.
+        const FOLLOWING: u16 = 0x04;
+        return (a.asNode().compareDocumentPosition(b.asNode()) & FOLLOWING) != 0;
     }
-    // Equal tabindex → document order: `a` precedes `b` when `b` follows `a`.
-    const FOLLOWING: u16 = 0x04;
-    return (a.asNode().compareDocumentPosition(b.asNode()) & FOLLOWING) != 0;
-}
 
-fn tabOrderIndex(el: *Element) i32 {
-    const html_el = el.is(Element.Html) orelse return 0;
-    return html_el.getTabIndex();
+    const group_a: u8 = if (a_tab_index > 0) 0 else 1;
+    const group_b: u8 = if (b_tab_index > 0) 0 else 1;
+    if (group_a != group_b) {
+        return group_a < group_b;
+    }
+
+    return a_tab_index < b_tab_index;
 }
 
 const SubmitFormOpts = struct {
