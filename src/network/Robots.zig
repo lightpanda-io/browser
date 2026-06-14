@@ -72,12 +72,24 @@ pub const Key = enum {
     @"user-agent",
     allow,
     disallow,
+    @"content-signal",
+};
+
+/// A declared content-usage preference from a `Content-Signal:` robots.txt
+/// directive (https://contentsignals.org), e.g. name="ai-train" value="no".
+/// Advisory metadata surfaced to the agent — it never affects crawl gating.
+pub const ContentSignal = struct {
+    name: []const u8,
+    value: []const u8,
 };
 
 /// https://www.rfc-editor.org/rfc/rfc9309.html
 pub const Robots = @This();
-pub const empty: Robots = .{ .rules = &.{} };
+pub const empty: Robots = .{ .rules = &.{}, .content_signals = &.{} };
 
+// Think twice before deleting/freeing any entries from the map. Readers, e.g.
+// get and getContentSignals, receive values from the map, and if another thread
+// was to delete / free those values while in use, UAF.
 pub const RobotStore = struct {
     const RobotsEntry = union(enum) {
         present: Robots,
@@ -156,6 +168,18 @@ pub const RobotStore = struct {
         try self.map.put(self.allocator, duped, .{ .present = robots });
     }
 
+    // The returned slice is owned by the store
+    pub fn getContentSignals(self: *RobotStore, url: []const u8) ?[]const ContentSignal {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const entry = self.map.get(url) orelse return null;
+        return switch (entry) {
+            .present => |robots| robots.content_signals,
+            .absent => null,
+        };
+    }
+
     pub fn putAbsent(self: *RobotStore, url: []const u8) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -166,6 +190,15 @@ pub const RobotStore = struct {
 };
 
 rules: []const Rule,
+content_signals: []const ContentSignal = &.{},
+
+/// Result of parsing a robots.txt for one user-agent: the applicable crawl
+/// rules plus any advisory `Content-Signal` preferences. The two are kept
+/// distinct so content signals can never reach `isAllowed`.
+const ParseResult = struct {
+    rules: []Rule,
+    content_signals: []ContentSignal,
+};
 
 const State = struct {
     entry: enum {
@@ -186,16 +219,58 @@ fn freeRulesInList(allocator: std.mem.Allocator, rules: []const Rule) void {
     }
 }
 
+fn freeContentSignals(allocator: std.mem.Allocator, signals: []const ContentSignal) void {
+    for (signals) |signal| {
+        allocator.free(signal.name);
+        allocator.free(signal.value);
+    }
+}
+
+/// Parse a `Content-Signal:` value — a comma-separated list of `name=value`
+/// pairs (e.g. `ai-train=no, search=yes`) — into the given list. Names and
+/// values are lower-cased and owned by `allocator`.
+fn appendContentSignals(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList(ContentSignal),
+    value: []const u8,
+) !void {
+    var iter = std.mem.splitScalar(u8, value, ',');
+    while (iter.next()) |raw_pair| {
+        const pair = std.mem.trim(u8, raw_pair, &std.ascii.whitespace);
+        const eq = std.mem.indexOfScalarPos(u8, pair, 0, '=') orelse continue;
+
+        const name_raw = std.mem.trim(u8, pair[0..eq], &std.ascii.whitespace);
+        const value_raw = std.mem.trim(u8, pair[eq + 1 ..], &std.ascii.whitespace);
+        if (name_raw.len == 0) {
+            continue;
+        }
+
+        const name = try std.ascii.allocLowerString(allocator, name_raw);
+        errdefer allocator.free(name);
+
+        const val = try std.ascii.allocLowerString(allocator, value_raw);
+        errdefer allocator.free(val);
+
+        try list.append(allocator, .{ .name = name, .value = val });
+    }
+}
+
 fn parseRulesWithUserAgent(
     allocator: std.mem.Allocator,
     user_agent: []const u8,
     raw_bytes: []const u8,
-) ![]Rule {
+) !ParseResult {
     var rules: std.ArrayList(Rule) = .empty;
     defer rules.deinit(allocator);
 
     var wildcard_rules: std.ArrayList(Rule) = .empty;
     defer wildcard_rules.deinit(allocator);
+
+    var content_signals: std.ArrayList(ContentSignal) = .empty;
+    defer content_signals.deinit(allocator);
+
+    var wildcard_content_signals: std.ArrayList(ContentSignal) = .empty;
+    defer wildcard_content_signals.deinit(allocator);
 
     var state: State = .{ .entry = .not_in_entry, .has_rules = false };
 
@@ -308,22 +383,51 @@ fn parseRulesWithUserAgent(
                     },
                 }
             },
+            .@"content-signal" => {
+                // A group member like allow/disallow, so it sets has_rules
+                // (a following `User-agent:` opens a new group), but it is
+                // captured into a separate list and never reaches isAllowed.
+                defer state.has_rules = true;
+
+                switch (state.entry) {
+                    .in_our_entry => try appendContentSignals(allocator, &content_signals, value),
+                    .in_wildcard_entry => try appendContentSignals(allocator, &wildcard_content_signals, value),
+                    .in_other_entry, .not_in_entry => {},
+                }
+            },
         }
     }
 
     // If we have rules for our specific User-Agent, we will use those rules.
     // If we don't have any rules, we fallback to using the wildcard ("*") rules.
-    if (rules.items.len > 0) {
+    const out_rules = if (rules.items.len > 0) blk: {
         freeRulesInList(allocator, wildcard_rules.items);
-        return try rules.toOwnedSlice(allocator);
-    } else {
+        break :blk try rules.toOwnedSlice(allocator);
+    } else blk: {
         freeRulesInList(allocator, rules.items);
-        return try wildcard_rules.toOwnedSlice(allocator);
+        break :blk try wildcard_rules.toOwnedSlice(allocator);
+    };
+    errdefer {
+        freeRulesInList(allocator, out_rules);
+        allocator.free(out_rules);
     }
+
+    // Content signals follow the same specific-else-wildcard precedence,
+    // chosen independently of the rule selection above.
+    const out_signals = if (content_signals.items.len > 0) blk: {
+        freeContentSignals(allocator, wildcard_content_signals.items);
+        break :blk try content_signals.toOwnedSlice(allocator);
+    } else blk: {
+        freeContentSignals(allocator, content_signals.items);
+        break :blk try wildcard_content_signals.toOwnedSlice(allocator);
+    };
+
+    return .{ .rules = out_rules, .content_signals = out_signals };
 }
 
 pub fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
-    const rules = try parseRulesWithUserAgent(allocator, user_agent, bytes);
+    const parsed = try parseRulesWithUserAgent(allocator, user_agent, bytes);
+    const rules = parsed.rules;
 
     // sort by order once.
     std.mem.sort(Rule, rules, {}, struct {
@@ -357,12 +461,14 @@ pub fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []
         }
     }.lessThan);
 
-    return .{ .rules = rules };
+    return .{ .rules = rules, .content_signals = parsed.content_signals };
 }
 
 pub fn deinit(self: *Robots, allocator: std.mem.Allocator) void {
     freeRulesInList(allocator, self.rules);
     allocator.free(self.rules);
+    freeContentSignals(allocator, self.content_signals);
+    allocator.free(self.content_signals);
 }
 
 /// There are rules for how the pattern in robots.txt should be matched.
@@ -476,10 +582,13 @@ test "Robots: simple robots.txt" {
         \\
     ;
 
-    const rules = try parseRulesWithUserAgent(allocator, "GoogleBot", file);
+    const parsed = try parseRulesWithUserAgent(allocator, "GoogleBot", file);
+    const rules = parsed.rules;
     defer {
         freeRulesInList(allocator, rules);
         allocator.free(rules);
+        freeContentSignals(allocator, parsed.content_signals);
+        allocator.free(parsed.content_signals);
     }
 
     try std.testing.expectEqual(1, rules.len);
@@ -1002,4 +1111,102 @@ test "Robots: blank lines don't end entries" {
 
     try std.testing.expect(robots.isAllowed("/admin/") == false);
     try std.testing.expect(robots.isAllowed("/public/") == true);
+}
+
+test "Robots: content-signal captured and gating unaffected" {
+    const allocator = std.testing.allocator;
+
+    var robots = try Robots.fromBytes(allocator, "MyBot",
+        \\User-agent: *
+        \\Content-Signal: ai-train=no, search=yes, ai-input=yes
+        \\Disallow: /private/
+        \\
+    );
+    defer robots.deinit(allocator);
+
+    try std.testing.expectEqual(3, robots.content_signals.len);
+    try std.testing.expectEqualStrings("ai-train", robots.content_signals[0].name);
+    try std.testing.expectEqualStrings("no", robots.content_signals[0].value);
+    try std.testing.expectEqualStrings("search", robots.content_signals[1].name);
+    try std.testing.expectEqualStrings("yes", robots.content_signals[1].value);
+    try std.testing.expectEqualStrings("ai-input", robots.content_signals[2].name);
+
+    // The whole point: Content-Signal is advisory metadata, it must not move
+    // the crawl gate. Disallow/Allow still decide isAllowed.
+    try std.testing.expect(robots.isAllowed("/private/page") == false);
+    try std.testing.expect(robots.isAllowed("/public/page") == true);
+}
+
+test "Robots: content-signal mixed casing is normalized" {
+    const allocator = std.testing.allocator;
+
+    var robots = try Robots.fromBytes(allocator, "MyBot",
+        \\User-agent: *
+        \\Content-Signal: AI-Train=NO
+        \\
+    );
+    defer robots.deinit(allocator);
+
+    try std.testing.expectEqual(1, robots.content_signals.len);
+    try std.testing.expectEqualStrings("ai-train", robots.content_signals[0].name);
+    try std.testing.expectEqualStrings("no", robots.content_signals[0].value);
+}
+
+test "Robots: content-signal absent yields empty list" {
+    const allocator = std.testing.allocator;
+
+    var robots = try Robots.fromBytes(allocator, "MyBot",
+        \\User-agent: *
+        \\Disallow: /admin/
+        \\
+    );
+    defer robots.deinit(allocator);
+
+    try std.testing.expectEqual(0, robots.content_signals.len);
+    try std.testing.expect(robots.isAllowed("/admin/") == false);
+}
+
+test "Robots: content-signal prefers specific user-agent over wildcard" {
+    const allocator = std.testing.allocator;
+
+    const file =
+        \\User-agent: *
+        \\Content-Signal: ai-train=yes
+        \\
+        \\User-agent: MyBot
+        \\Content-Signal: ai-train=no
+        \\
+    ;
+
+    var mine = try Robots.fromBytes(allocator, "MyBot", file);
+    defer mine.deinit(allocator);
+    try std.testing.expectEqual(1, mine.content_signals.len);
+    try std.testing.expectEqualStrings("no", mine.content_signals[0].value);
+
+    var other = try Robots.fromBytes(allocator, "OtherBot", file);
+    defer other.deinit(allocator);
+    try std.testing.expectEqual(1, other.content_signals.len);
+    try std.testing.expectEqualStrings("yes", other.content_signals[0].value);
+}
+
+test "Robots: RobotStore.getContentSignals round-trips" {
+    const allocator = std.testing.allocator;
+
+    var store = RobotStore.init(allocator);
+    defer store.deinit();
+
+    const robots = try store.robotsFromBytes("MyBot",
+        \\User-agent: *
+        \\Content-Signal: ai-train=no
+        \\
+    );
+    try store.put("https://example.com/robots.txt", robots);
+
+    const signals = store.getContentSignals("https://example.com/robots.txt").?;
+    try std.testing.expectEqual(1, signals.len);
+    try std.testing.expectEqualStrings("ai-train", signals[0].name);
+    try std.testing.expectEqualStrings("no", signals[0].value);
+
+    // Unknown host has no stored robots.
+    try std.testing.expectEqual(null, store.getContentSignals("https://other.com/robots.txt"));
 }
