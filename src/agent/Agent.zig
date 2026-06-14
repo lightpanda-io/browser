@@ -94,7 +94,8 @@ const script_skill =
     \\
     \\- No `window`, `document`, DOM, `localStorage` — read pages with `extract(...)`, run page-side JS only via `evaluate("...")`.
     \\- No `require`, `process`, `fs`, npm. Standard ECMAScript built-ins only (`JSON`, `Map`, template literals, …).
-    \\- `goto(...)` is **async — always `await` it**. Every other primitive is **synchronous**: `const data = extract({...})`, never `await extract(...)`. The script body runs as an async function, so top-level `await` is allowed (and required for `goto`).
+    \\- `goto(...)` is **async — always `await` it**; it resolves to a **page handle**. Every other primitive is **synchronous**: `const data = extract({...})`, never `await extract(...)`. The script body runs as an async function, so top-level `await` is allowed.
+    \\- A single page needs no handle — tools act on the latest `goto`'s page. To fetch in **parallel**, `await Promise.all([goto(a), goto(b)])` and pass each handle to read it: `extract(schema, a)`. The handle is the optional last argument of any page tool (`click(sel, a)`, …).
     \\- Page `evaluate("...")` cannot see script variables — interpolate values into the string. Script code cannot see page variables.
     \\- Variables persist across navigations within one run, so cross-page aggregation is plain JS.
     \\- **`return <value>` is the script's output**, printed automatically (objects/arrays as JSON). End with `return extract({...});` or `return results;`. A bare trailing expression is NOT printed; neither is `console.log(JSON.stringify(...))`.
@@ -103,8 +104,8 @@ const script_skill =
     \\
     \\| Call | Notes |
     \\|------|-------|
-    \\| `await goto(url[, { timeout }])` | **Async — must be `await`ed.** Resolves at `load`. Default timeout 10000 ms. Rejects on navigation failure; a **timeout does NOT reject** — it resolves to a "did not finish loading" status string. |
-    \\| `extract(schema)` | The only primitive returning a real JS value (object/array). See schema below. |
+    \\| `await goto(url[, { timeout }])` | **Async — must be `await`ed; resolves to a page handle.** Waits for `load`. Default timeout 10000 ms. Rejects on navigation failure; a **timeout does NOT reject** (the page may still be usable). |
+    \\| `extract(schema[, page])` | The only primitive returning a real JS value (object/array). Optional `page` handle targets a specific page. See schema below. |
     \\| `evaluate(script[, { url, timeout, save }])` | Page-side JS escape hatch; returns text (JSON for objects/arrays). |
     \\| `click(sel)` / `hover(sel)` | |
     \\| `fill(sel, value)` / `selectOption(sel, value)` | |
@@ -146,7 +147,7 @@ const script_skill =
     \\## Best practices
     \\
     \\1. **Navigate, settle, read.** After `await goto` on a dynamic page (feeds, search results, comment threads), call `waitForState("networkidle")` or `waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
-    \\2. **Check the `await goto` result when completeness matters** — it resolves to a status string instead of rejecting on timeout.
+    \\2. **Fetch in parallel when the pages are independent.** `const [a, b] = await Promise.all([goto(x), goto(y)]);` then read each by handle (`extract(schema, a)`). Sequential is fine too — see #3.
     \\3. **Aggregate in the script, not the page.** List-to-detail: extract the list, then loop `await goto`/`extract` per item, assembling plain JS objects.
     \\4. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `evaluate` block is always wrong: lift the raw strings with `extract`, then trim/split/parse them in top-level JS. Reserve `evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every `goto`/reload, while script variables persist.
     \\5. **Credentials via `$LP_*` placeholders** in any string argument (`fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.

@@ -240,6 +240,19 @@ const topStories = extract({
 return topStories.map((s) => ({ rank: s.rank, title: s.title, url: s.url }));
 ```
 
+`await goto(...)` resolves to a **page handle**. You don't need it for one
+page at a time, but to fetch several at once, hand each handle to `extract`:
+
+```js
+const [hn, lobsters] = await Promise.all([
+  goto("https://news.ycombinator.com"),
+  goto("https://lobste.rs"),
+]);
+const a = extract({ top: ".titleline > a" }, hn);       // reads HN
+const b = extract({ top: ".story .u-url" }, lobsters);  // reads Lobsters
+return { hn: a.top, lobsters: b.top };
+```
+
 Use `evaluate(...)` only when you intentionally want a string to run in
 the page's JavaScript context. Page evaluate cannot see agent
 variables or call agent primitives.

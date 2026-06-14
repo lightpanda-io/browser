@@ -75,6 +75,11 @@ _pending: ?*Page = null,
 _page_destruction_queue: std.ArrayList(*Page) = .{},
 _frame_destruction_queue: std.ArrayList(*Frame) = .{},
 
+// When set, page tools act on this frame instead of the active page's root —
+// the script runtime aims them at a popup so concurrent `goto`s are readable by
+// handle. Only `toolFrame()` consults it; CDP/runner use `currentFrame()`.
+_tool_frame_override: ?*Frame = null,
+
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
 // CDP target IDs stay unique across BrowserContext lifecycle on a single
@@ -390,6 +395,11 @@ pub fn pendingOrCurrentFrame(self: *Session) ?*Frame {
 pub fn currentFrame(self: *Session) ?*Frame {
     const page = self.currentPage() orelse return null;
     return &page.frame;
+}
+
+/// Frame page tools act on: the override if set, else the active page's root.
+pub fn toolFrame(self: *Session) ?*Frame {
+    return self._tool_frame_override orelse self.currentFrame();
 }
 
 pub fn findFrameByFrameId(self: *Session, frame_id: u32) ?*Frame {

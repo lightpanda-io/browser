@@ -178,8 +178,12 @@ pub const save_synthesis_prompt =
 pub const save_script_rules =
     \\Script rules:
     \\- The file runs as an async script, so top-level `await` is allowed.
-    \\  `goto(url)` is async — always `await goto(...)`. Every other builtin
-    \\  is synchronous: `const data = extract({...})`, never `await extract`.
+    \\  `goto(url)` is async — always `await goto(...)`; it resolves to a page
+    \\  handle. Every other builtin is synchronous: `const data = extract({...})`,
+    \\  never `await extract`.
+    \\- One page needs no handle (tools act on the latest goto). To fetch in
+    \\  parallel, `await Promise.all([goto(a), goto(b)])` and pass each handle
+    \\  to read it: `extract(schema, a)` — the handle is the optional last arg.
     \\- Read pages with extract(schema); all processing of the returned
     \\  strings (trim, split, parse, merge, loops, cross-page aggregation)
     \\  is plain top-level JavaScript in the script context. evaluate(...)
@@ -1772,7 +1776,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
 }
 
 fn requireFrame(session: *lp.Session) ToolError!*lp.Frame {
-    return session.currentFrame() orelse ToolError.FrameNotLoaded;
+    return session.toolFrame() orelse ToolError.FrameNotLoaded;
 }
 
 fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
@@ -1788,7 +1792,7 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
         }
         _ = try performGoto(session, registry, u, timeout);
     }
-    return session.currentFrame() orelse ToolError.FrameNotLoaded;
+    return session.toolFrame() orelse ToolError.FrameNotLoaded;
 }
 
 /// Navigations wait only for `load` — the fast snapshot. Content rendered by
@@ -1811,6 +1815,17 @@ pub fn startGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]con
         .kind = .{ .push = null },
     }) catch return ToolError.NavigationFailed;
     return frame;
+}
+
+/// `fork` (another goto in flight) opens a popup so navigations coexist;
+/// otherwise replaces the single page, keeping sequential gotos bounded.
+pub fn openGotoFrame(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, fork: bool) ToolError!*lp.Frame {
+    if (fork) {
+        if (session.currentFrame()) |root| {
+            return root.openPopup(.{ .url = url, .name = "", .opener = null }) catch ToolError.NavigationFailed;
+        }
+    }
+    return startGoto(session, registry, url);
 }
 
 fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {

@@ -32,10 +32,12 @@ web page's JavaScript context.
 - Agent variables persist for the lifetime of one script run, across
   navigations and primitive calls. A later `lightpanda agent script.js` run
   starts with a fresh agent context.
-- `goto(url)` is asynchronous and returns a Promise — always `await goto(...)`.
-  Every other primitive is synchronous; do not `await` them (`const data =
-  extract({ ... })`, not `await extract(...)`). The script body runs as an
-  async function, so top-level `await` is allowed.
+- `goto(url)` is asynchronous and resolves to a **page handle** — always
+  `await goto(...)`. Every other primitive is synchronous; do not `await` them
+  (`const data = extract({ ... })`, not `await extract(...)`). The script body
+  runs as an async function, so top-level `await` is allowed. The read tools act
+  on the latest `goto` by default; pass a handle as their optional last argument
+  to target a specific page (needed only for parallel `Promise.all` fetches).
 - Tool failures throw JavaScript `Error` exceptions (a `goto` failure rejects
   its Promise, so `await` throws) and stop execution unless you catch them.
 - The script's output is whatever it `return`s, printed automatically (objects
@@ -112,8 +114,8 @@ Only recorded browser primitives are installed globally:
 
 | Primitive | Arguments | Runs in |
 |-----------|-----------|---------|
-| `goto` | `await goto(url[, { timeout }])` (async) | Browser session |
-| `extract` | `extract(schema)` or `extract({ schema })` | Browser page via extractor; returns a JS object or array |
+| `goto` | `await goto(url[, { timeout }])` (async; resolves a page handle) | Browser session |
+| `extract` | `extract(schema[, page])` or `extract({ schema })` | Browser page via extractor; returns a JS object or array |
 | `evaluate` | `evaluate(script[, { url, timeout, save }])` | Browser page JS context |
 | `click` | `click(selector)` or `click({ selector })` | Browser page |
 | `fill` | `fill(selector, value)` or `fill({ selector, value })` | Browser page |
@@ -164,11 +166,36 @@ await goto({
 });
 ```
 
-The Promise resolves to a status string and rejects if navigation fails. A
-timeout does **not** reject: it resolves to `"Navigation started but the page
-did not finish loading before the timeout."` and the page stays in whatever
-state it reached. Check the resolved value — or follow with `waitForState(...)`
-/ `waitForSelector(...)` — when completeness matters.
+The Promise resolves to a **page handle** and rejects if navigation fails. A
+timeout does **not** reject: the page stays in whatever state it reached, so
+follow with `waitForState(...)` / `waitForSelector(...)` when completeness
+matters.
+
+You only need the handle for **parallel** fetches: a single page at a time is
+implicit (the read tools act on the latest `goto`), but to load several at once
+and read each one, pass its handle as the optional last argument:
+
+```js
+const [a, b] = await Promise.all([
+  goto("https://example.com/a"),
+  goto("https://example.com/b"),
+]);
+const da = extract({ title: "h1" }, a);   // reads page a
+const db = extract({ title: "h1" }, b);   // reads page b
+```
+
+The handle works on any page tool — `click(sel, a)`, `evaluate(js, a)`, etc.
+
+Two limits to know:
+
+- **Handle lifetime.** Pages from a parallel batch stay alive until the next
+  *sequential* `goto` (one with nothing else in flight), which replaces them.
+  So read a batch's handles before your next standalone `goto` — don't stash a
+  handle across one.
+- **Combined navigate-and-read stays single-page.** The `url` option on
+  `markdown`/`html`/`tree`/`evaluate` (e.g. `markdown({ url })`) navigates the
+  one current page, so it does not take part in parallel fetching. Use
+  `await goto(url)` + a handle when you need concurrency.
 
 ## Structured Extraction
 

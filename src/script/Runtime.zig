@@ -44,9 +44,12 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
 
-/// In-flight `goto` navigations the driver loop settles. A list, not one slot,
-/// so the shape already fits Phase 2 multi-page; Phase 1 caps it at one.
+/// In-flight `goto` navigations the driver loop settles. Concurrent gotos open
+/// popup frames so they coexist; a sequential goto replaces the page.
 pending_gotos: std.ArrayListUnmanaged(PendingGoto) = .empty,
+
+/// Most-recent `goto`'s frame — the default target when no handle is passed.
+current_frame_id: ?u32 = null,
 
 /// The runtime installs exactly the recorded browser tools as script
 /// primitives — the same set the recorder writes — so every recorded call
@@ -412,13 +415,25 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         return;
     };
 
-    const args = self.buildArgs(arena, context, tool, info) catch |err| switch (err) {
+    var argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
+
+    // Peel a trailing page handle (from `goto`) out of the args; goto has none.
+    const handle_id = if (tool == .goto) null else self.peelHandle(context, info, argc);
+    if (handle_id != null) argc -= 1;
+
+    const args = self.buildArgs(arena, context, tool, info, argc) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
         error.JsException => return,
         error.InvalidArguments => return self.throwTypeError("invalid arguments"),
     };
 
     if (tool == .goto) return self.invokeGoto(arena, context, info, args);
+
+    // Aim page tools at the handle's frame, else the most-recent goto.
+    if (handle_id orelse self.current_frame_id) |target_id| {
+        self.session._tool_frame_override = self.session.findFrameByFrameId(target_id);
+    }
+    defer self.session._tool_frame_override = null;
 
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
@@ -438,8 +453,8 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     }
 }
 
-/// Start a navigation and hand the script a Promise that settles when the page
-/// loads. Phase 1 allows one navigation at a time — a concurrent `goto` rejects.
+/// Open a navigation; resolves a page handle the read tools accept to target
+/// this page. Concurrent gotos fork popups, so `Promise.all` fetches in parallel.
 fn invokeGoto(
     self: *Runtime,
     arena: std.mem.Allocator,
@@ -458,18 +473,15 @@ fn invokeGoto(
     const url = params.url;
     const timeout = params.timeout orelse 10000;
 
-    // Phase-1: one navigation at a time. Reject before `startGoto` so
-    // `Session.createPage`'s single-page assert is never hit.
-    if (self.pending_gotos.items.len != 0) {
-        return self.rejectResolver(context, resolver, "a navigation is already in progress");
-    }
-
+    // Another goto in flight → fork a popup rather than tear down its page.
+    const fork = self.pending_gotos.items.len != 0;
     const frame = frame: {
         self.session.browser.env.isolate.enter();
         defer self.session.browser.env.isolate.exit();
-        break :frame browser_tools.startGoto(self.session, self.registry, url) catch
+        break :frame browser_tools.openGotoFrame(self.session, self.registry, url, fork) catch
             return self.rejectResolver(context, resolver, "navigation failed to start");
     };
+    self.current_frame_id = frame._frame_id;
 
     var global: v8.Global = undefined;
     v8.v8__Global__New(self.env.isolate.handle, resolver, &global);
@@ -483,9 +495,31 @@ fn invokeGoto(
     };
 }
 
-fn resolveResolver(self: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, text: []const u8) void {
+/// A page handle: `{ __lpFrameId: <id> }`, peeled back by `peelHandle`.
+fn makeHandle(self: *Runtime, context: *const v8.Context, frame_id: u32) ?*const v8.Value {
+    const obj = v8.v8__Object__New(self.env.isolate.handle) orelse return null;
+    const value = v8.v8__Integer__NewFromUnsigned(self.env.isolate.handle, frame_id) orelse return null;
     var out: v8.MaybeBool = undefined;
-    v8.v8__Promise__Resolver__Resolve(resolver, context, @ptrCast(self.env.isolate.initStringHandle(text)), &out);
+    v8.v8__Object__Set(obj, context, @ptrCast(self.env.isolate.initStringHandle("__lpFrameId")), @ptrCast(value), &out);
+    return @ptrCast(obj);
+}
+
+/// Frame id if the last arg is a page handle (`{ __lpFrameId }`), else null —
+/// unambiguous since no real tool arg carries that key.
+fn peelHandle(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo, argc: usize) ?u32 {
+    if (argc == 0) return null;
+    const last = v8.v8__FunctionCallbackInfo__INDEX(info, @intCast(argc - 1)) orelse return null;
+    if (!v8.v8__Value__IsObject(last)) return null;
+    const prop = v8.v8__Object__Get(@ptrCast(last), context, @ptrCast(self.env.isolate.initStringHandle("__lpFrameId"))) orelse return null;
+    if (!v8.v8__Value__IsNumber(prop)) return null;
+    var out: v8.MaybeU32 = undefined;
+    v8.v8__Value__Uint32Value(prop, context, &out);
+    return if (out.has_value) out.value else null;
+}
+
+fn resolveResolver(_: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, value: *const v8.Value) void {
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Resolve(resolver, context, value, &out);
 }
 
 fn rejectResolver(self: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, message: []const u8) void {
@@ -493,9 +527,10 @@ fn rejectResolver(self: *Runtime, context: *const v8.Context, resolver: *const v
     v8.v8__Promise__Resolver__Reject(resolver, context, self.env.isolate.createError(message), &out);
 }
 
-/// Mirrors `execGoto`: a reached load resolves, a soft timeout resolves with a
-/// notice (the page may still be usable), a real error rejects. Runs on the
-/// script isolate where the resolvers live; the caller drains microtasks after.
+/// Settle each pending goto: a reached load — or a soft timeout (the page may
+/// still be usable) — resolves the page handle; a real navigation error
+/// rejects. Runs on the script isolate where the resolvers live; the caller
+/// drains microtasks after.
 fn resolveReadyGotos(self: *Runtime, context: *const v8.Context) void {
     var i: usize = 0;
     while (i < self.pending_gotos.items.len) {
@@ -503,12 +538,15 @@ fn resolveReadyGotos(self: *Runtime, context: *const v8.Context) void {
         const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&entry.resolver, self.env.isolate.handle));
 
         const frame = self.session.findFrameByFrameId(entry.frame_id);
+        const ls = if (frame) |f| f._load_state else .waiting;
         if (frame == null or frame.?._last_navigate_error != null) {
             self.rejectResolver(context, resolver, "navigation failed");
-        } else if (frame.?._load_state == .load or frame.?._load_state == .complete) {
-            self.resolveResolver(context, resolver, "Navigated successfully.");
-        } else if (std.time.milliTimestamp() >= entry.deadline_ms) {
-            self.resolveResolver(context, resolver, "Navigation started but the page did not finish loading before the timeout.");
+        } else if (ls == .load or ls == .complete or std.time.milliTimestamp() >= entry.deadline_ms) {
+            if (self.makeHandle(context, entry.frame_id)) |handle| {
+                self.resolveResolver(context, resolver, handle);
+            } else {
+                self.rejectResolver(context, resolver, "internal: handle alloc failed");
+            }
         } else {
             i += 1;
             continue;
@@ -585,8 +623,8 @@ fn buildArgs(
     context: *const v8.Context,
     tool: BrowserTool,
     info: *const v8.FunctionCallbackInfo,
+    argc: usize,
 ) BuildArgsError!?std.json.Value {
-    const argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
     return switch (tool) {
         .extract => try self.extractArgs(arena, context, info, argc),
         else => try self.marshalArgs(arena, context, info, argc, Schema.positionalFor(tool)),
@@ -859,7 +897,7 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
 
     try runTestScript(runtime,
         \\const nav = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (!nav.includes("Navigated")) throw new Error("unexpected goto result: " + nav);
+        \\if (typeof nav !== "object" || nav === null) throw new Error("goto should resolve a page handle: " + nav);
         \\const text = evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("evaluate ran in the wrong context: " + text);
     );
@@ -963,7 +1001,7 @@ test "agent script runtime: strict-mode scripts can call primitives" {
     try runTestScript(runtime,
         \\"use strict";
         \\const nav = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (!nav.includes("Navigated")) throw new Error("strict-mode goto failed: " + nav);
+        \\if (typeof nav !== "object" || nav === null) throw new Error("strict-mode goto failed: " + nav);
         \\const text = evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("strict-mode evaluate failed: " + text);
     );
@@ -1128,7 +1166,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
     try runTestScript(runtime,
         \\// The reported bug: Playwright-style goto(url, options) must merge, not throw.
         \\const nav = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000 });
-        \\if (!nav.includes("Navigated")) throw new Error("two-arg goto failed: " + nav);
+        \\if (typeof nav !== "object" || nav === null) throw new Error("two-arg goto failed: " + nav);
         \\// waitForState: single required param, positional like waitForSelector.
         \\if (!waitForState("load").includes("reached")) throw new Error("waitForState positional failed");
         \\// Object form still works.
@@ -1187,7 +1225,7 @@ test "agent script runtime: top-level await runs in an async wrapper" {
     );
 }
 
-test "agent script runtime: a second concurrent goto rejects (phase-1 single page)" {
+test "agent script runtime: parallel goto fetches concurrent pages, read by handle" {
     defer testing.reset();
     defer if (testing.test_session.hasPage()) testing.test_session.removePage();
 
@@ -1197,20 +1235,17 @@ test "agent script runtime: a second concurrent goto rejects (phase-1 single pag
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    // Phase 1 holds one page at a time: firing two navigations at once must
-    // reject the second rather than trip Session.createPage's assert.
+    // Two gotos in flight at once open distinct frames (root + popup) that load
+    // concurrently in one Page; each is read back via the handle goto resolved.
     try runTestScript(runtime,
-        \\let rejected = null;
-        \\try {
-        \\  await Promise.all([
-        \\    goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
-        \\    goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
-        \\  ]);
-        \\} catch (err) {
-        \\  rejected = String(err);
-        \\}
-        \\if (!rejected || !rejected.includes("already in progress")) {
-        \\  throw new Error("expected a concurrent-goto rejection, got: " + rejected);
-        \\}
+        \\const [a, b] = await Promise.all([
+        \\  goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
+        \\]);
+        \\if (typeof a !== "object" || typeof b !== "object") throw new Error("goto should resolve page handles");
+        \\const da = extract({ btn: "#btn" }, a);
+        \\if (da.btn !== "Click Me") throw new Error("handle a read wrong: " + JSON.stringify(da));
+        \\const db = extract({ sel: "#sel1" }, b);
+        \\if (db.sel !== "selector-1-content") throw new Error("handle b read wrong: " + JSON.stringify(db));
     );
 }
