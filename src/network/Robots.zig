@@ -87,6 +87,9 @@ pub const ContentSignal = struct {
 pub const Robots = @This();
 pub const empty: Robots = .{ .rules = &.{}, .content_signals = &.{} };
 
+// Think twice before deleting/freeing any entries from the map. Readers, e.g.
+// get and getContentSignals, receive values from the map, and if another thread
+// was to delete / free those values while in use, UAF.
 pub const RobotStore = struct {
     const RobotsEntry = union(enum) {
         present: Robots,
@@ -165,10 +168,7 @@ pub const RobotStore = struct {
         try self.map.put(self.allocator, duped, .{ .present = robots });
     }
 
-    /// Advisory `Content-Signal` preferences declared for `url`'s host, or null
-    /// when no robots.txt has been fetched/stored for it. The returned slice is
-    /// owned by the store; callers must read it synchronously (and dupe to keep
-    /// it) and must never free it.
+    // The returned slice is owned by the store
     pub fn getContentSignals(self: *RobotStore, url: []const u8) ?[]const ContentSignal {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -237,14 +237,17 @@ fn appendContentSignals(
     var iter = std.mem.splitScalar(u8, value, ',');
     while (iter.next()) |raw_pair| {
         const pair = std.mem.trim(u8, raw_pair, &std.ascii.whitespace);
-        const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+        const eq = std.mem.indexOfScalarPos(u8, pair, 0, '=') orelse continue;
 
         const name_raw = std.mem.trim(u8, pair[0..eq], &std.ascii.whitespace);
         const value_raw = std.mem.trim(u8, pair[eq + 1 ..], &std.ascii.whitespace);
-        if (name_raw.len == 0) continue;
+        if (name_raw.len == 0) {
+            continue;
+        }
 
         const name = try std.ascii.allocLowerString(allocator, name_raw);
         errdefer allocator.free(name);
+
         const val = try std.ascii.allocLowerString(allocator, value_raw);
         errdefer allocator.free(val);
 

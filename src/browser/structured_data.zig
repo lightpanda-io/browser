@@ -223,12 +223,6 @@ pub fn collectStructuredData(
     };
 }
 
-/// Registered link relations we surface from the HTTP `Link:` response header
-/// (RFC 8288). `service-doc`/`service-desc` come from RFC 8631; `api` is in the
-/// IANA Link Relations registry. These let an agent discover a site's developer
-/// docs / API description without scraping.
-const header_link_rels = [_][]const u8{ "service-doc", "service-desc", "api" };
-
 /// Parse every `Link:` response header retained on the frame, surfacing only the
 /// registered, agent-useful relations. Relative targets are resolved against the
 /// frame's base URL, mirroring `collectLink`.
@@ -237,8 +231,14 @@ fn collectLinkHeaders(
     frame: *Frame,
     out: *std.ArrayList(LinkRel),
 ) !void {
+    // Registered link relations we surface from the HTTP `Link:` response header
+    // (RFC 8288).
+    const header_link_rels = [_][]const u8{ "service-doc", "service-desc", "api" };
+
     for (frame._http_headers.items) |header| {
-        if (!std.ascii.eqlIgnoreCase(header.name, "link")) continue;
+        if (!std.ascii.eqlIgnoreCase(header.name, "link")) {
+            continue;
+        }
 
         var it: LinkHeaderIterator = .{ .value = header.value };
         while (it.next()) |entry| {
@@ -248,17 +248,21 @@ fn collectLinkHeaders(
             var rel_it = std.mem.tokenizeAny(u8, rel_value, " \t");
             while (rel_it.next()) |rel_token| {
                 const known = for (header_link_rels) |candidate| {
-                    if (std.ascii.eqlIgnoreCase(rel_token, candidate)) break candidate;
+                    if (std.ascii.eqlIgnoreCase(rel_token, candidate)) {
+                        break candidate;
+                    }
                 } else continue;
 
                 const href = URL.resolve(arena, frame.base(), entry.target, .{ .encoding = frame.charset }) catch entry.target;
 
-                // Drop duplicate (rel, href) pairs — a target can legitimately
-                // carry the same relation across repeated headers.
-                const dup = for (out.items) |existing| {
-                    if (std.mem.eql(u8, existing.rel, known) and std.mem.eql(u8, existing.href, href)) break true;
-                } else false;
-                if (!dup) try out.append(arena, .{ .rel = known, .href = href });
+                // Drop duplicate (rel, href) pairs (it happens)
+                for (out.items) |existing| {
+                    if (std.mem.eql(u8, existing.rel, known) and std.mem.eql(u8, existing.href, href)) {
+                        break;
+                    }
+                } else {
+                    try out.append(arena, .{ .rel = known, .href = href });
+                }
             }
         }
     }
@@ -274,25 +278,30 @@ const LinkHeaderEntry = struct {
 /// skipping commas that fall inside the `<...>` target or a `"..."` quoted
 /// parameter value (RFC 8288 §3).
 const LinkHeaderIterator = struct {
-    value: []const u8,
     i: usize = 0,
+    value: []const u8,
 
     fn next(self: *LinkHeaderIterator) ?LinkHeaderEntry {
         const v = self.value;
 
-        // Loop (rather than recurse) over malformed segments so stack usage is
-        // independent of the attacker-controlled header length.
         while (true) {
             // Skip separators and whitespace between link-values. The comma that
             // ended the previous link-value is consumed here.
-            while (self.i < v.len and (std.ascii.isWhitespace(v[self.i]) or v[self.i] == ',')) : (self.i += 1) {}
-            if (self.i >= v.len) return null;
+            for (v[self.i..]) |c| {
+                if (std.ascii.isWhitespace(c) == false and c != ',') {
+                    break;
+                }
+                self.i += 1;
+            } else {
+                return null;
+            }
 
             // A link-value must begin with the angle-bracketed target.
             if (v[self.i] != '<') {
                 self.skipToNextComma();
                 continue;
             }
+
             const target_start = self.i + 1;
             const gt = std.mem.indexOfScalarPos(u8, v, target_start, '>') orelse {
                 self.i = v.len;
@@ -316,13 +325,18 @@ const LinkHeaderIterator = struct {
         var in_quotes = false;
         while (self.i < v.len) : (self.i += 1) {
             const c = v[self.i];
+
+            if (c == ',' and in_quotes == false) {
+                return;
+            }
+
             if (c == '\\' and in_quotes) {
                 // Skip the escaped byte; guard a trailing backslash.
-                if (self.i + 1 < v.len) self.i += 1;
+                if (self.i + 1 < v.len) {
+                    self.i += 1;
+                }
             } else if (c == '"') {
                 in_quotes = !in_quotes;
-            } else if (c == ',' and !in_quotes) {
-                return;
             }
         }
     }
@@ -334,8 +348,11 @@ fn extractRel(params: []const u8) ?[]const u8 {
     var it = std.mem.splitScalar(u8, params, ';');
     while (it.next()) |raw_param| {
         const param = std.mem.trim(u8, raw_param, &std.ascii.whitespace);
-        const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
-        if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, param[0..eq], &std.ascii.whitespace), "rel")) continue;
+        const eq = std.mem.indexOfScalarPos(u8, param, 0, '=') orelse continue;
+        const name = std.mem.trim(u8, param[0..eq], &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(name, "rel") == false) {
+            continue;
+        }
 
         var val = std.mem.trim(u8, param[eq + 1 ..], &std.ascii.whitespace);
         if (val.len >= 2 and val[0] == '"' and val[val.len - 1] == '"') {
