@@ -142,6 +142,20 @@
   }
 </script>
 
+<script id="type_reflects_multiple">
+  {
+    // https://html.spec.whatwg.org/multipage/form-elements.html#dom-select-type
+    testing.expectEqual('select-one', $('#select1').type)
+    testing.expectEqual('select-multiple', $('#select_multi').type)
+
+    // type tracks the multiple attribute, it is not stored independently
+    const sel = document.createElement('select')
+    testing.expectEqual('select-one', sel.type)
+    sel.multiple = true
+    testing.expectEqual('select-multiple', sel.type)
+  }
+</script>
+
 <script id="multiple_setValue">
   {
     const sel = $('#select_multi')
