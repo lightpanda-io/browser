@@ -680,8 +680,6 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(cmd, result);
                 if (!result.is_error) {
-                    // A navigating read tool records as the `goto` it performed;
-                    // every other tool records itself (read-only ones no-op).
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse cmd);
                 }
                 self.recordSlashToolCall(trimmed, tc.name(), tc.args, result) catch |err| {
@@ -1167,11 +1165,9 @@ fn recordSaveCommand(self: *Agent, cmd: Command) void {
     self.save_buffer.record(cmd) catch |err| self.logSaveBufferError(err);
 }
 
-/// A navigating read tool (`markdown {url}`, `tree {url}`, …) loads a page but
-/// isn't itself recorded; the navigation it performed is the replayable part, so
-/// `/save` captures it as a `goto`. Returns that synthetic command, or null when
-/// the call did not navigate (not such a tool, or no `url`). The returned
-/// command borrows `args`/`arena`, so record it before either is freed.
+/// A navigating read tool (`markdown {url}`, …) isn't recorded, but the
+/// navigation it performed is, so capture it as a `goto`; null when it didn't
+/// navigate. The result borrows `args`/`arena` — record it before they're freed.
 fn navigationGoto(arena: std.mem.Allocator, tool: BrowserTool, args: ?std.json.Value) ?Command {
     if (!tool.navigatesToUrl()) return null;
     const a = args orelse return null;
@@ -1514,9 +1510,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 if (tool == .extract and idx != i) continue;
             }
             const args = browser_tools.normalizeArgKeys(self.conversation.arena.allocator(), tool, tc.arguments) catch tc.arguments;
-            // Record the tool itself, or — for a navigating read tool the model
-            // used in place of `goto` — the navigation it performed. Without this
-            // a markdown/tree-driven turn records nothing and `/save` has nothing.
+            // Without this, a turn that navigated via read tools (`markdown {url}`)
+            // instead of `goto` records nothing.
             const cmd = Command.fromToolCall(tool, args);
             const to_record = if (cmd.isRecorded())
                 cmd

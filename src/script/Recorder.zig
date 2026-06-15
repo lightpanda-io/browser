@@ -29,9 +29,8 @@ const Recorder = @This();
 allocator: std.mem.Allocator,
 /// Number of lines appended since the last reset. Bumped only on success.
 lines: u32,
-/// Whether a `page` binding has been emitted yet. `goto` declares it on the
-/// first navigation (`let page = …`) and rebinds it after (`page = …`); every
-/// other tool is recorded as a method on it (`page.click(…)`).
+/// Whether the `page` binding was emitted yet: `goto` declares it (`let page =`),
+/// later gotos rebind it (`page =`).
 page_declared: bool,
 /// Accumulated JavaScript, returned verbatim by `bytes()`.
 content: std.Io.Writer.Allocating,
@@ -73,16 +72,13 @@ pub fn record(self: *Recorder, cmd: Command) !void {
     if (!cmd.isRecorded()) return;
     self.buf.clearRetainingCapacity();
     _ = self.arena.reset(.retain_capacity);
-    // Bind the page on `goto`, call every other tool as a method on it. `goto`
-    // already renders with a leading `await ` (it's the lone async builtin), so
-    // the binding prefix lands before it: `let page = await goto(…)`.
-    if (cmd == .tool_call) {
-        if (cmd.tool_call.tool == .goto) {
-            try self.buf.writer.writeAll(if (self.page_declared) "page = " else "let page = ");
-            self.page_declared = true;
-        } else {
-            try self.buf.writer.writeAll("page.");
-        }
+    // `isRecorded` guarantees `.tool_call`. `goto` renders with a leading
+    // `await `, so the binding prefix lands before it: `let page = await goto(…)`.
+    if (cmd.tool_call.tool == .goto) {
+        try self.buf.writer.writeAll(if (self.page_declared) "page = " else "let page = ");
+        self.page_declared = true;
+    } else {
+        try self.buf.writer.writeAll("page.");
     }
     try cmd.formatJs(self.arena.allocator(), &self.buf.writer);
     try self.buf.writer.writeByte('\n');

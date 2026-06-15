@@ -177,10 +177,8 @@ fn createContext(self: *Runtime) InitError!void {
     const local = &ls.local;
     const global = local.globalObject();
 
-    // `goto` is the only global: it opens a page and resolves a Page object
-    // whose methods (every other recorded tool) `makePage` attaches. The
-    // `primitive_data` entry for each recorded tool is filled here regardless,
-    // so `makePage` can hand the same shared data to its method callbacks.
+    // Only `goto` is a global; the rest become page methods via `makePage`,
+    // which reuses these `primitive_data` entries — so fill them all here.
     var i: usize = 0;
     for (std.enums.values(BrowserTool)) |t| {
         if (!t.isRecorded()) continue;
@@ -362,9 +360,7 @@ fn invoke(self: *Runtime, local: *const lp.js.Local, tool: BrowserTool, fci: Fci
 
     defer self.session._tool_frame_override = null;
 
-    // Every non-goto primitive is a method on the Page object `goto` resolved;
-    // the receiver carries the target frame. A bare call (no page receiver) or a
-    // frame that no longer resolves (page closed or replaced) is a hard error.
+    // Non-goto primitives are page methods; the receiver names the target frame.
     const frame_id = receiverFrameId(local, fci) orelse
         return self.throwError("this must be called as a method on a page returned by goto()");
     self.session._tool_frame_override = self.session.findFrameByFrameId(frame_id) orelse
@@ -427,26 +423,22 @@ fn invokeGoto(
     };
 }
 
-/// The Page object `goto` resolves: `__lpFrameId` plus a method for every recorded
-/// tool except `goto`. Methods share `createContext`'s `primitive_data` entries, so
-/// the tool iteration order here must match it for the indices to line up.
+/// The Page object `goto` resolves: `__lpFrameId` plus a method for every
+/// recorded tool except `goto`.
 fn makePage(self: *Runtime, local: *const lp.js.Local, frame_id: u32) ?lp.js.Value {
     const obj = local.newObject();
     _ = obj.set("__lpFrameId", frame_id, .{}) catch return null;
 
-    var i: usize = 0;
-    for (std.enums.values(BrowserTool)) |t| {
-        if (!t.isRecorded()) continue;
-        defer i += 1;
-        if (t == .goto) continue;
-        const func = local.newRawCallback(primitiveCallback, &self.primitive_data[i]);
-        _ = obj.set(@tagName(t), func.toValue(), .{}) catch return null;
+    for (&self.primitive_data) |*data| {
+        if (data.tool == .goto) continue;
+        const func = local.newRawCallback(primitiveCallback, data);
+        _ = obj.set(@tagName(data.tool), func.toValue(), .{}) catch return null;
     }
     return obj.toValue();
 }
 
-/// Frame id from a method's receiver (`this.__lpFrameId`), else null — a bare
-/// call with no page receiver. Mirrors the old `peelHandle`, reading `getThis()`.
+/// Frame id from a method's receiver (`this.__lpFrameId`), or null for a bare
+/// call with no page receiver.
 fn receiverFrameId(local: *const lp.js.Local, fci: Fci) ?u32 {
     const this: lp.js.Object = .{ .local = local, .handle = fci.getThis() };
     if (this.has("__lpFrameId") == false) return null;

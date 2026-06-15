@@ -268,12 +268,11 @@ pub const Tool = enum {
         return self == .goto;
     }
 
-    /// A read tool that navigates when handed a `url` (via `ensurePage`). The
-    /// read itself isn't recorded, but its navigation is the replayable part, so
-    /// the recorder captures it as a `goto`. Excludes `goto` (the navigation
-    /// itself), `evaluate` (recorded, carries its own `url`), `search` (its goto
-    /// targets a derived engine URL, not a user one), and `getCookies` (whose
-    /// `url` filters, not navigates).
+    /// A read tool that navigates when handed a `url` (via `ensurePage`), so the
+    /// recorder can capture that navigation as a `goto`. Excludes `goto` (the
+    /// navigation itself), `evaluate` (recorded, carries its own `url`), `search`
+    /// (navigates to a derived engine URL, not a user one), and `getCookies`
+    /// (`url` filters, not navigates).
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
             .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
