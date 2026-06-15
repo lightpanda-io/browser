@@ -698,7 +698,7 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
                 self.printCommandResult(cmd, result);
                 if (!result.is_error) {
-                    self.recordSaveCommand(cmd);
+                    self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse cmd);
                 }
                 self.recordSlashToolCall(trimmed, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
@@ -1197,6 +1197,20 @@ fn recordSaveCommand(self: *Agent, cmd: Command) void {
     self.save_buffer.record(cmd) catch |err| self.logSaveBufferError(err);
 }
 
+/// Synthesize the `goto` a navigating read tool performed (`markdown {url}`, …)
+/// so `/save` can replay it; null when it didn't navigate. The result borrows
+/// `args`/`arena` — record it before either is freed.
+fn navigationGoto(arena: std.mem.Allocator, tool: BrowserTool, args: ?std.json.Value) ?Command {
+    if (!tool.navigatesToUrl()) return null;
+    const a = args orelse return null;
+    if (a != .object) return null;
+    const url = a.object.get("url") orelse return null;
+    if (url != .string or url.string.len == 0) return null;
+    var obj: std.json.ObjectMap = .init(arena);
+    obj.put("url", url) catch return null;
+    return Command.fromToolCall(.goto, .{ .object = obj });
+}
+
 fn recordSaveComment(self: *Agent, comment: []const u8) void {
     self.save_buffer.recordComment(comment) catch |err| self.logSaveBufferError(err);
 }
@@ -1528,13 +1542,18 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 if (tool == .extract and idx != i) continue;
             }
             const args = browser_tools.normalizeArgKeys(self.conversation.arena.allocator(), tool, tc.arguments) catch tc.arguments;
+            // Fall back to the navigation a read tool performed, so a
+            // markdown/tree-driven turn isn't lost from `/save`.
             const cmd = Command.fromToolCall(tool, args);
-            if (!cmd.isRecorded()) continue;
+            const to_record = if (cmd.isRecorded())
+                cmd
+            else
+                navigationGoto(self.conversation.arena.allocator(), tool, args) orelse continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| self.recordSaveComment(c);
                 recorded_any = true;
             }
-            self.recordSaveCommand(cmd);
+            self.recordSaveCommand(to_record);
         }
     }
 

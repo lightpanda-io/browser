@@ -264,6 +264,17 @@ pub const Tool = enum {
         };
     }
 
+    /// A read tool that navigates when handed a `url`. The read isn't recorded,
+    /// but the navigation is, so the recorder captures it as a `goto`. Excludes
+    /// `evaluate` (carries its own `url`), `search` (derived engine URL), and
+    /// `getCookies` (`url` filters, not navigates).
+    pub fn navigatesToUrl(self: Tool) bool {
+        return switch (self) {
+            .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
+            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
+    }
+
     /// Tool requires a target element (selector or backendNodeId) at
     /// runtime even though the JSON schema marks both as optional. Used by
     /// the recorder to skip lines that can't be replayed.
