@@ -92,30 +92,36 @@ const script_skill =
     \\
     \\The script runs in its **own V8 context** — neither the page nor Node.js:
     \\
-    \\- No `window`, `document`, DOM, `localStorage` — read pages with `extract(...)`, run page-side JS only via `evaluate("...")`.
+    \\- `Page` is the only global. `new Page()` makes a page and `await page.goto(url)` navigates it; every other primitive is a **method on that page**: `const page = new Page(); await page.goto(url); page.extract({...}); page.click(sel);`.
+    \\- No `window`, `document`, DOM, `localStorage` — read pages with `page.extract(...)`, run page-side JS only via `page.evaluate("...")`.
     \\- No `require`, `process`, `fs`, npm. Standard ECMAScript built-ins only (`JSON`, `Map`, template literals, …).
-    \\- All primitives are **synchronous and blocking**. Never wrap them in `async`/`await`/`.then` — `const data = extract({...})`, not `await extract(...)`. Top-level `await` is a `SyntaxError` (classic script); promise callbacks only run after the script body ends.
+    \\- `page.goto(...)` is **async — always `await` it**. Page methods are **synchronous**: `const data = page.extract({...})`, never `await page.extract(...)`. The script body runs as an async function, so top-level `await` is allowed.
+    \\- **Re-navigating reuses the same page**: `await page.goto(url2)` keeps `page` valid and points it at the new URL. Work through one page at a time and read it before navigating away.
     \\- Page `evaluate("...")` cannot see script variables — interpolate values into the string. Script code cannot see page variables.
     \\- Variables persist across navigations within one run, so cross-page aggregation is plain JS.
-    \\- The **last top-level expression is the script's output**, printed automatically (objects/arrays as JSON). End with the bare result: `extract({...});` or `results;`. No `console.log(JSON.stringify(...))`, no top-level `return` (illegal).
+    \\- **`return <value>` is the script's output**, printed automatically (objects/arrays as JSON). End with `return page.extract({...});` or `return results;`. A bare trailing expression is NOT printed; neither is `console.log(JSON.stringify(...))`.
     \\
     \\## Primitives
     \\
+    \\`Page` is the only global; `new Page()` makes a page and everything else is a method on it.
+    \\
     \\| Call | Notes |
     \\|------|-------|
-    \\| `goto(url[, { timeout }])` | Returns at `load`. Default timeout 10000 ms. Throws on failure; a **timeout does NOT throw** — it returns a "did not finish loading" status string. |
-    \\| `extract(schema)` | The only primitive returning a real JS value (object/array). See schema below. |
-    \\| `evaluate(script[, { url, timeout, save }])` | Page-side JS escape hatch; returns text (JSON for objects/arrays). |
-    \\| `click(sel)` / `hover(sel)` | |
-    \\| `fill(sel, value)` / `selectOption(sel, value)` | |
-    \\| `setChecked(sel[, checked])` | `checked` defaults to `true`. |
-    \\| `press(sel, key)` / `press(null, key)` / `press({ key })` | Selector first! `press("Enter")` binds "Enter" to `selector` and fails. |
-    \\| `scroll()` / `scroll({ x, y })` | |
-    \\| `waitForSelector(sel[, { timeout }])` | `waitFor*` default timeout 5000 ms. |
-    \\| `waitForScript(js[, { timeout }])` | Re-evaluates page JS until truthy. |
-    \\| `waitForState(state[, { timeout }])` | `"load"`, `"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`, `"done"`. |
+    \\| `new Page()` | Makes a page object. No navigation yet — call `page.goto(url)` before any other method. |
+    \\| `await page.goto(url[, { timeout }])` | **Async — must be `await`ed.** Navigates the page (re-navigating reuses the same object). Waits for `load`. Default timeout 10000 ms. Rejects on navigation failure; a **timeout does NOT reject** (the page may still be usable). |
+    \\| `page.close()` | Marks the page done; later method calls on it error. The page is otherwise reclaimed at script end. |
+    \\| `page.extract(schema)` | The only primitive returning a real JS value (object/array). See schema below. |
+    \\| `page.evaluate(script[, { url, timeout, save }])` | Page-side JS escape hatch; returns text (JSON for objects/arrays). |
+    \\| `page.click(sel)` / `page.hover(sel)` | |
+    \\| `page.fill(sel, value)` / `page.selectOption(sel, value)` | |
+    \\| `page.setChecked(sel[, checked])` | `checked` defaults to `true`. |
+    \\| `page.press(sel, key)` / `page.press(null, key)` / `page.press({ key })` | Selector first! `page.press("Enter")` binds "Enter" to `selector` and fails. |
+    \\| `page.scroll()` / `page.scroll({ x, y })` | |
+    \\| `page.waitForSelector(sel[, { timeout }])` | `waitFor*` default timeout 5000 ms. |
+    \\| `page.waitForScript(js[, { timeout }])` | Re-evaluates page JS until truthy. |
+    \\| `page.waitForState(state[, { timeout }])` | `"load"`, `"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`, `"done"`. |
     \\
-    \\Calling convention: leading positionals + optional trailing options object, or one object with everything (`waitForSelector("#row", { timeout: 2000 })` ≡ `waitForSelector({ selector: "#row", timeout: 2000 })`). A bare option positional (`waitForSelector("#row", 2000)`) and a field passed both ways are `invalid arguments`. `null` skips a positional. Arguments must be JSON-serializable.
+    \\Calling convention: leading positionals + optional trailing options object, or one object with everything (`page.waitForSelector("#row", { timeout: 2000 })` ≡ `page.waitForSelector({ selector: "#row", timeout: 2000 })`). A bare option positional (`page.waitForSelector("#row", 2000)`) and a field passed both ways are `invalid arguments`. `null` skips a positional. Arguments must be JSON-serializable.
     \\
     \\CSS selectors only — `backendNodeId`s don't exist here. Standard CSS only: no jQuery `:contains()` or Playwright `:has-text()`.
     \\
@@ -124,7 +130,7 @@ const script_skill =
     \\Keys = output field names; values pick what to lift (not a JSON Schema):
     \\
     \\```js
-    \\const { stories } = extract({
+    \\const { stories } = page.extract({
     \\  stories: [{
     \\    selector: "tr.athing",          // one record per match
     \\    limit: 5,
@@ -145,26 +151,40 @@ const script_skill =
     \\
     \\## Best practices
     \\
-    \\1. **Navigate, settle, read.** After `goto` on a dynamic page (feeds, search results, comment threads), call `waitForState("networkidle")` or `waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
-    \\2. **Check `goto` when completeness matters** — it returns a status string instead of throwing on timeout.
-    \\3. **Aggregate in the script, not the page.** List-to-detail: extract the list, then loop `goto`/`extract` per item, assembling plain JS objects.
-    \\4. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `evaluate` block is always wrong: lift the raw strings with `extract`, then trim/split/parse them in top-level JS. Reserve `evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every `goto`/reload, while script variables persist.
-    \\5. **Credentials via `$LP_*` placeholders** in any string argument (`fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
-    \\6. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
-    \\7. **Let failures fail.** Primitives throw on error and stop the script — only `try/catch` where you have a real fallback (e.g. optional cookie banner: `try { click("#accept") } catch {}`).
-    \\8. **End with the bare result expression.** `console.log` is for debug output only and doesn't JSON-format objects.
-    \\9. Modern, readable JS: `const`/`let`, `for (const x of xs)`, template literals, destructuring, 2-space indent.
+    \\1. **Navigate, settle, read.** After `await page.goto` on a dynamic page (feeds, search results, comment threads), call `page.waitForState("networkidle")` or `page.waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
+    \\2. **List-to-detail: read the list, then walk it.** Extract the list of links, then for each item `await page.goto(item.url)` and `page.extract(...)`, assembling plain JS objects — read each detail page before navigating to the next:
+    \\   ```js
+    \\   const page = new Page();
+    \\   await page.goto(listUrl);
+    \\   const { items } = page.extract({ items: [{ selector: "a.row", fields: { url: { attr: "href" } } }] });
+    \\   const details = [];
+    \\   for (const it of items) {
+    \\     await page.goto(it.url);
+    \\     details.push({ ...it, ...page.extract({ /* schema */ }) });
+    \\   }
+    \\   return details;
+    \\   ```
+    \\3. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `page.evaluate` block is always wrong: lift the raw strings with `page.extract`, then trim/split/parse them in top-level JS. Reserve `page.evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every navigation/reload, while script variables persist.
+    \\4. **Credentials via `$LP_*` placeholders** in any string argument (`page.fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
+    \\5. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
+    \\6. **Let failures fail.** Primitives throw on error and stop the script — only `try/catch` where you have a real fallback (e.g. optional cookie banner: `try { page.click("#accept") } catch {}`).
+    \\7. **End with `return <result>`.** `console.log` is for debug output only and doesn't JSON-format objects.
+    \\8. Modern, readable JS: `const`/`let`, `for (const x of xs)`, template literals, destructuring, 2-space indent.
     \\
     \\## Common errors
     \\
     \\| Error | Cause / fix |
     \\|-------|-------------|
-    \\| `document is not defined` | DOM API in script context → use `extract` or `evaluate` |
+    \\| `extract is not defined` (or click/fill/…) | These are methods on the page object, not globals → `const page = new Page(); await page.goto(url); page.extract(...)` |
+    \\| `Page must be called with new` | `Page(...)` called without `new` → `const page = new Page();` |
+    \\| `page is not navigated or has been closed` | A method on a fresh `new Page()` (or a closed page) → `await page.goto(url)` first |
+    \\| `page handle is no longer valid` | Used a page after a later `goto` replaced it → read a page before navigating away |
+    \\| `document is not defined` | DOM API in script context → use `page.extract` or `page.evaluate` |
     \\| `require is not defined` | Not Node.js |
     \\| `no page loaded - run goto(url) first` | Page primitive before navigation |
     \\| `invalid arguments` | Wrong arity/shape, non-JSON value, or a field set both positionally and in options |
     \\| `extract: no schema selector matched any element` | All schema fields missed → fix selectors |
-    \\| `press` fails with one string arg | Selector-first: use `press(null, "Enter")` or `press({ key: "Enter" })` |
+    \\| `press` fails with one string arg | Selector-first: use `page.press(null, "Enter")` or `page.press({ key: "Enter" })` |
 ;
 
 // Sytem prompt of the `/save` command

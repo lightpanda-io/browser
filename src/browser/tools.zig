@@ -253,6 +253,17 @@ pub const Tool = enum {
         };
     }
 
+    /// Whether the tool's script form returns a Promise and so is recorded with
+    /// `await`. Only `goto` (navigation) is async; every other page method is
+    /// synchronous. Exhaustive like the sibling predicates so adding an async
+    /// tool is a compile error until it makes an explicit choice here.
+    pub fn isAsync(self: Tool) bool {
+        return switch (self) {
+            .goto => true,
+            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
+    }
+
     /// Tool requires a target element (selector or backendNodeId) at
     /// runtime even though the JSON schema marks both as optional. Used by
     /// the recorder to skip lines that can't be replayed.

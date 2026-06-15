@@ -353,27 +353,34 @@ session).
 ## JavaScript scripts
 
 `./lightpanda agent script.js` runs a script without any LLM call. Scripts
-are plain synchronous JavaScript plus the installed Lightpanda primitives:
+are plain JavaScript plus the `Page` object — the only global. `new Page()`
+makes a page, `await page.goto(url)` navigates it, and every other primitive
+is a synchronous method on it:
 
 ```js
-goto("https://example.com");
-click({ selector: "a.login" });
-evaluate("document.title");
+const page = new Page();
+await page.goto("https://example.com");
+page.click({ selector: "a.login" });
+page.evaluate("document.title");
 ```
 
-The primitives are **synchronous and blocking**: each returns its
-result directly, so write `const data = extract(…)`, not
-`await extract(…)`. (`evaluate(...)` can run async JS inside the page,
-but the `evaluate(...)` call itself still returns synchronously.)
+`page.goto(...)` is **async — always `await` it**. Every other page method is
+**synchronous**: write `const data = page.extract(…)`, not
+`await page.extract(…)`. (`page.evaluate(...)` can run async JS inside the
+page, but the call itself still returns synchronously.) The script body runs
+as an async function, so top-level `await` is allowed. Re-navigating reuses
+the same page object: a later `await page.goto(url2)` keeps `page` valid and
+points it at the new URL.
 
 It's not Node.js. There's no `require`, `process`, `fs`, npm package
-loading, or Node standard library. The `evaluate(...)` primitive runs its
+loading, or Node standard library. The `page.evaluate(...)` method runs its
 string in the current page context; page scripts can't see agent variables
 or agent primitives.
 
-The last expression in the script is printed automatically, so a script
-that ends with `extract({...})` will print the extraction result to stdout.
-Tool errors throw JavaScript exceptions and stop execution.
+Whatever the script `return`s is printed automatically, so a script that ends
+with `return page.extract({...})` will print the extraction result to stdout.
+A bare trailing expression is not printed. Tool errors throw JavaScript
+exceptions and stop execution.
 
 See [agent-script.md](agent-script.md) for the full script format reference.
 
@@ -404,8 +411,8 @@ no resolved provider) you get the deterministic transcription:
 - **With an LLM** it synthesizes an idiomatic script from the whole
   session. The synthesis prompt asks for JavaScript only ("no commentary"),
   so the result generally has no such comments: the model folds intent
-  into the code and drops dead-ends. Returned data is the last expression,
-  which prints automatically on replay.
+  into the code and drops dead-ends. Returned data is whatever the script
+  `return`s, which prints automatically on replay.
 
 ## One-shot mode (`--task`)
 
@@ -471,8 +478,9 @@ calling client holds the conversation and synthesizes the script itself.
 | `save` | `{ path: string, script: string }` | Write `script` to `path` (relative, no `..`; created or overwritten) and return the absolute location and line count. |
 
 The tool's description carries the same synthesis guidance the agent's
-`/save` gives its LLM: prefer the builtins (`goto`, `click`, `fill`,
-`extract`, ...) as JavaScript calls, drop dead-ends, keep `$LP_*`
+`/save` gives its LLM: drive a `Page` object (`await page.goto(...)`,
+`page.click(...)`, `page.fill(...)`, `page.extract(...)`, ...) as JavaScript
+calls, drop dead-ends, keep `$LP_*`
 placeholders. Any literal `LP_*` value is scrubbed back to its placeholder
 before the file is written. The result runs without an LLM via
 `./lightpanda agent session.js`.
