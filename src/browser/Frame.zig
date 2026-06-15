@@ -288,10 +288,23 @@ pub const HttpHeader = struct {
     value: []const u8,
 };
 
-pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
+pub const InitOpts = struct {
+    parent: ?*Frame = null,
+
+    // When a frame/popup re-navigates, we should preserve the same window.
+    // There are a couple reasons for this. First, iframe.contentWindow should
+    // maintain the same identity (which we don't correctly do now, but this
+    // is a first step). Secondly, a reference to the window can be acquired
+    // prior to navigation, and then used after. So it should remain valid.
+    reuse_window: ?*Window = null,
+};
+
+pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     if (comptime IS_DEBUG) {
         log.debug(.frame, "frame.init", .{});
     }
+
+    const parent = opts.parent;
 
     const session = page.session;
     const call_arena = try session.getArena(.medium, "call_arena");
@@ -341,7 +354,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         });
     }
 
-    self.window = try factory.eventTarget(Window{
+    const window_template = Window{
         ._frame = self,
         ._proto = undefined,
         ._document = self.document,
@@ -350,7 +363,16 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._screen = screen,
         ._visual_viewport = visual_viewport,
         ._cross_origin_wrapper = undefined,
-    });
+    };
+
+    if (opts.reuse_window) |w| {
+        const proto = w._proto;
+        w.* = window_template;
+        w._proto = proto;
+        self.window = w;
+    } else {
+        self.window = try factory.eventTarget(window_template);
+    }
     self.window._cross_origin_wrapper = .{ .window = self.window };
 
     self._style_manager = try StyleManager.init(self);
@@ -1463,7 +1485,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const new_frame = try self.arena.create(Frame);
     const frame_id = session.nextFrameId();
 
-    try Frame.init(new_frame, frame_id, self._page, self);
+    try Frame.init(new_frame, frame_id, self._page, .{ .parent = self });
     errdefer new_frame.deinit();
 
     self._pending_loads += 1;
@@ -1587,7 +1609,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     errdefer page.frame_arena.destroy(popup);
 
     const frame_id = session.nextFrameId();
-    try Frame.init(popup, frame_id, page, null);
+    try Frame.init(popup, frame_id, page, .{});
     errdefer popup.deinit();
 
     popup.window._opener = opts.opener;

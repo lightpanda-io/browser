@@ -126,7 +126,7 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
     };
     self.queued_navigation = &self.queued_navigation_1;
 
-    try Frame.init(&self.frame, frame_id, self, null);
+    try Frame.init(&self.frame, frame_id, self, .{});
 }
 
 // Tear down the Page and its root Frame. Equivalent to the old
