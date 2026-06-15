@@ -261,6 +261,7 @@ pub fn onToolAdded(
     defer ls.deinit();
 
     const frame_id = switch (global) {
+        .bare => unreachable,
         inline else => |g| g._frame_id,
     };
 
@@ -279,6 +280,7 @@ pub fn onToolRemoved(
     event: *const Notification.ModelContextToolEvent,
 ) !void {
     const frame_id = switch (event.exec.js.global) {
+        .bare => unreachable,
         inline else => |g| g._frame_id,
     };
     try bc.cdp.sendEvent("WebMCP.toolsRemoved", .{

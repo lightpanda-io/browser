@@ -137,6 +137,7 @@ pub const Constructor = struct {
                     const ce_frame: ?*Frame = switch (caller.local.ctx.global) {
                         .frame => |frame| frame,
                         .worker => null,
+                        .bare => null,
                     };
                     const ce_checkpoint: usize = if (ce_frame) |frame| frame._ce_reactions.push() else 0;
                     defer if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
@@ -348,6 +349,7 @@ pub const NamedIndexed = struct {
                 const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (caller.local.ctx.global) {
                     .frame => |frame| frame,
                     .worker => null,
+                    .bare => null,
                 } else null;
                 var ce_checkpoint: usize = undefined;
                 if (comptime opts.ce_reactions) {
@@ -376,6 +378,7 @@ pub const NamedIndexed = struct {
                 const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (caller.local.ctx.global) {
                     .frame => |frame| frame,
                     .worker => null,
+                    .bare => null,
                 } else null;
                 var ce_checkpoint: usize = undefined;
                 if (comptime opts.ce_reactions) {
@@ -515,6 +518,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
             }
         },
         .worker => {}, // no global lookup in a worker
+        .bare => {}, // nor in the agent runtime
     }
 
     if (comptime IS_DEBUG) {

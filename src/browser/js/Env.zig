@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("js.zig");
+const Origin = @import("Origin.zig");
 const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
@@ -236,6 +237,72 @@ pub fn createContext(self: *Env, frame: *Frame, params: ContextParams) !*Context
 
 pub fn createWorkerContext(self: *Env, worker: *WorkerGlobalScope, params: ContextParams) !*Context {
     return self._createContext(worker, params);
+}
+
+/// A page-less, WebAPI-less `Context` for the agent script runtime. Only realm
+/// fields are populated; the page-coupled ones (`page`/`script_manager`/
+/// `execution`) are left `undefined` and never read, because the agent installs
+/// no WebAPI functions — every WebAPI path's `GlobalScope` switch has a
+/// `.bare => unreachable` arm. Microtasks drain via `performIsolateMicrotasks`
+/// (the bare context uses the isolate-default queue, not a per-context one).
+pub fn createAgentContext(self: *Env, call_arena: Allocator) !*Context {
+    const context_arena = try self.app.arena_pool.acquire(.medium, "AgentContext");
+    errdefer self.app.arena_pool.release(context_arena);
+
+    const isolate = self.isolate;
+    var hs: js.HandleScope = undefined;
+    hs.init(isolate);
+    defer hs.deinit();
+
+    // `Context.deinit` deletes `microtask_queue`, so it must not be the shared
+    // isolate-default queue. This dedicated one stays unused (a bare context
+    // created via `v8__Context__New` can't be handed an explicit queue).
+    const microtask_queue = v8.v8__MicrotaskQueue__New(isolate.handle, v8.kExplicit).?;
+    errdefer v8.v8__MicrotaskQueue__DELETE(microtask_queue);
+
+    // Bare v8 context: no snapshot, no WebAPI globals.
+    const v8_context = v8.v8__Context__New(isolate.handle, null, null).?;
+    var context_global: v8.Global = undefined;
+    v8.v8__Global__New(isolate.handle, v8_context, &context_global);
+
+    const context_id = self.context_id;
+    self.context_id = context_id + 1;
+
+    const origin = try Origin.init(self.app, isolate, "agent");
+    errdefer origin.deinit(self.app);
+
+    const identity = try context_arena.create(js.Identity);
+    identity.* = .{};
+
+    if (self.contexts.items.len >= MAX_CONTEXTS) {
+        return error.TooManyContexts;
+    }
+
+    const context = try context_arena.create(Context);
+    context.* = .{
+        .env = self,
+        .global = .{ .bare = context },
+        .origin = origin,
+        .id = context_id,
+        .page = undefined,
+        .isolate = isolate,
+        .arena = context_arena,
+        .handle = context_global,
+        .templates = self.templates,
+        .call_arena = call_arena,
+        .microtask_queue = microtask_queue,
+        .script_manager = undefined,
+        .scheduler = .init(context_arena),
+        .identity = identity,
+        .identity_arena = context_arena,
+        .execution = undefined,
+    };
+
+    // Caller and the promise-reject callback recover the Context from slot 1.
+    v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, 1, @ptrCast(context));
+
+    try self.contexts.append(self.allocator, context);
+    return context;
 }
 
 fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context {
@@ -584,6 +651,9 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
 
     const no_handler = promise_event == v8.kPromiseRejectWithNoHandler;
     switch (ctx.global) {
+        // Agent scripts surface rejections via runSource's own state check; no
+        // window/worker to dispatch to.
+        .bare => {},
         .frame => |frame| {
             frame.window.unhandledPromiseRejection(no_handler, .{
                 .local = &local,

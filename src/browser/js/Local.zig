@@ -386,6 +386,7 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 if (@typeInfo(ptr.child) == .@"struct" and @hasDecl(ptr.child, "runtimeGenericWrap")) {
                     const frame = switch (self.ctx.global) {
                         .frame => |f| f,
+                        .bare => unreachable,
                         .worker => {
                             // No Worker-related API currently uses this, so haven't
                             // added support for it
@@ -473,6 +474,7 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
 
             if (@hasDecl(T, "runtimeGenericWrap")) {
                 const frame = switch (self.ctx.global) {
+                    .bare => unreachable,
                     .frame => |f| f,
                     .worker => {
                         // No Worker-related API currently uses this, so haven't

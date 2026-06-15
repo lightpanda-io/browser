@@ -42,11 +42,15 @@ const Context = @This();
 pub const GlobalScope = union(enum) {
     frame: *Frame,
     worker: *WorkerGlobalScope,
+    // The agent script runtime: a page-less, WebAPI-less context. Carries a
+    // back-pointer to its own Context (frames/workers store theirs in `.js`).
+    bare: *Context,
 
     pub fn base(self: GlobalScope) [:0]const u8 {
         return switch (self) {
             .frame => |frame| frame.base(),
             .worker => |worker| worker.base(),
+            .bare => "about:blank",
         };
     }
 
@@ -54,6 +58,7 @@ pub const GlobalScope = union(enum) {
         return switch (self) {
             .frame => |frame| frame.js,
             .worker => |worker| worker.js,
+            .bare => |ctx| ctx,
         };
     }
 
@@ -61,6 +66,8 @@ pub const GlobalScope = union(enum) {
         switch (self) {
             .frame => |frame| frame.js = ctx,
             .worker => |worker| worker.js = ctx,
+            // The bare context is fixed; nothing to re-point.
+            .bare => {},
         }
     }
 };
@@ -214,7 +221,11 @@ pub fn deinit(self: *Context) void {
         v8.v8__Global__Reset(global);
     }
 
-    self.page.releaseOrigin(self.origin);
+    switch (self.global) {
+        // The bare agent context owns a standalone origin (no page to release to).
+        .bare => self.origin.deinit(env.app),
+        else => self.page.releaseOrigin(self.origin),
+    }
 
     // Clear the embedder data so that if V8 keeps this context alive
     // (because objects created in it are still referenced), we don't
@@ -306,6 +317,7 @@ pub fn getIncumbent(self: *Context) *Frame {
     return switch (ctx.global) {
         .frame => |frame| frame,
         .worker => unreachable,
+        .bare => unreachable,
     };
 }
 
@@ -1036,6 +1048,7 @@ pub fn queueMutationDelivery(self: *Context) !void {
             switch (ctx.global) {
                 .frame => |frame| frame.deliverMutations(),
                 .worker => unreachable,
+                .bare => unreachable,
             }
         }
     }.run);
@@ -1047,6 +1060,7 @@ pub fn queueIntersectionChecks(self: *Context) !void {
             switch (ctx.global) {
                 .frame => |frame| frame.performScheduledIntersectionChecks(),
                 .worker => unreachable,
+                .bare => unreachable,
             }
         }
     }.run);
@@ -1058,6 +1072,7 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
             switch (ctx.global) {
                 .frame => |frame| frame.deliverIntersections(),
                 .worker => unreachable,
+                .bare => unreachable,
             }
         }
     }.run);
@@ -1069,6 +1084,7 @@ pub fn queueSlotchangeDelivery(self: *Context) !void {
             switch (ctx.global) {
                 .frame => |frame| frame.deliverSlotchangeEvents(),
                 .worker => unreachable,
+                .bare => unreachable,
             }
         }
     }.run);
@@ -1080,6 +1096,7 @@ pub fn queueCustomElementBackupDrain(self: *Context) !void {
             switch (ctx.global) {
                 .frame => |frame| frame._ce_reactions.drainBackup(frame),
                 .worker => unreachable,
+                .bare => unreachable,
             }
         }
     }.run);

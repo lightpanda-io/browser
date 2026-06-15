@@ -34,9 +34,12 @@ app: *lp.App,
 session: *lp.Session,
 registry: *CDPNode.Registry,
 env: lp.js.Env,
-context: v8.Global,
+context: *lp.js.Context,
 has_context: bool,
 call_arena: std.heap.ArenaAllocator,
+// Backs the bare context's `call_arena` (reset by `js.Caller` per top-level
+// callback) — kept separate from `call_arena`, which holds run-scoped data.
+ctx_call_arena: std.heap.ArenaAllocator,
 primitive_data: [recorded_tool_count]PrimitiveData,
 console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// Notified before each `console.*` line is written. The REPL uses it to
@@ -127,10 +130,12 @@ pub fn init(
         .context = undefined,
         .has_context = false,
         .call_arena = .init(allocator),
+        .ctx_call_arena = .init(allocator),
         .primitive_data = undefined,
         .console_data = undefined,
     };
     errdefer self.call_arena.deinit();
+    errdefer self.ctx_call_arena.deinit();
 
     // Separate isolate from the page. The full `Env` is used only as an isolate
     // + terminate/microtask carrier; the agent context is bare (no WebAPIs).
@@ -149,6 +154,7 @@ pub fn deinit(self: *Runtime) void {
     self.resetContext();
     self.env.deinit();
     self.call_arena.deinit();
+    self.ctx_call_arena.deinit();
     const allocator = self.allocator;
     allocator.destroy(self);
 }
@@ -170,22 +176,17 @@ pub fn cancelTerminate(self: *Runtime) void {
 }
 
 fn createContext(self: *Runtime) InitError!void {
+    self.context = self.env.createAgentContext(self.ctx_call_arena.allocator()) catch return error.RuntimeInitFailed;
+    self.has_context = true;
+
     var hs: lp.js.HandleScope = undefined;
     hs.init(self.env.isolate);
     defer hs.deinit();
 
-    const context = v8.v8__Context__New(self.env.isolate.handle, null, null) orelse
-        return error.RuntimeInitFailed;
-    v8.v8__Global__New(self.env.isolate.handle, context, &self.context);
-    self.has_context = true;
-
+    const context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.context.handle, self.env.isolate.handle) orelse
+        return error.RuntimeInitFailed);
     v8.v8__Context__Enter(context);
     defer v8.v8__Context__Exit(context);
-
-    // The promise-reject callback aligncasts embedder slot 1 to a browser
-    // `Context`; this bare context has none. Pin it to null so `Context.fromC`
-    // returns null and the callback no-ops instead of crashing on a rejection.
-    v8.v8__Context__SetAlignedPointerInEmbedderData(context, 1, null);
 
     const global = v8.v8__Context__Global(context) orelse return error.RuntimeInitFailed;
     var i: usize = 0;
@@ -200,8 +201,7 @@ fn createContext(self: *Runtime) InitError!void {
 
 fn resetContext(self: *Runtime) void {
     if (!self.has_context) return;
-    v8.v8__Global__Reset(&self.context);
-    self.env.isolate.notifyContextDisposed();
+    self.env.destroyContext(self.context);
     self.has_context = false;
 }
 
@@ -273,7 +273,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     hs.init(self.env.isolate);
     defer hs.deinit();
 
-    const context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.context, self.env.isolate.handle) orelse
+    const context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.context.handle, self.env.isolate.handle) orelse
         return try self.dupeError("agent script context is not available"));
     v8.v8__Context__Enter(context);
     defer v8.v8__Context__Exit(context);

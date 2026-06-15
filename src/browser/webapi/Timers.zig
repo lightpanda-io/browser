@@ -196,6 +196,7 @@ const ScheduleCallback = struct {
                 // requestAnimationFrame is window-only; if a worker ever
                 // schedules with this mode it's a programming error.
                 const window = switch (self.exec.js.global) {
+                    .bare => unreachable,
                     .frame => |frame| frame.window,
                     .worker => unreachable,
                 };

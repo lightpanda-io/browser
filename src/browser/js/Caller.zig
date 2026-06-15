@@ -478,6 +478,7 @@ fn getGlobalArg(comptime T: type, ctx: *Context) T {
         return switch (ctx.global) {
             .frame => |frame| frame,
             .worker => unreachable,
+            .bare => unreachable,
         };
     }
 
@@ -633,6 +634,7 @@ pub const Function = struct {
         const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (ctx.global) {
             .frame => |frame| frame,
             .worker => null,
+            .bare => null,
         } else null;
 
         if (comptime opts.ce_reactions) {

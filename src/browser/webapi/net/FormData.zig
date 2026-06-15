@@ -85,6 +85,7 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
     const form = form_ orelse return form_data;
 
     const frame = switch (exec.js.global) {
+        .bare => unreachable,
         .frame => |f| f,
         .worker => lp.assert(false, "FormData worker form", .{}),
     };

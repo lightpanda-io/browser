@@ -131,6 +131,7 @@ fn dispatchAbortEvent(self: *AbortSignal, exec: *const Execution) !void {
     const target = self.asEventTarget();
     const on_abort = self._on_abort;
     switch (exec.js.global) {
+        .bare => unreachable,
         inline else => |g| {
             if (g._event_manager.hasDirectListeners(target, "abort", on_abort)) {
                 const event = try Event.initTrusted(comptime .wrap("abort"), .{}, g._page);
