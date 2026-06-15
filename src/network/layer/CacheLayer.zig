@@ -115,6 +115,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 
         try installCacheContext(arena, transfer, cached);
     } else {
+        defer cached.data.deinit();
         // If it is expired w/o validators, evict from Cache.
         transfer.client.network.cache.?.evict(req.url);
         try installCacheContext(arena, transfer, null);
