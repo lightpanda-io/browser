@@ -30,7 +30,7 @@ const Terminal = @import("Terminal.zig");
 const string = @import("../string.zig");
 const Credentials = zenai.provider.Credentials;
 
-pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY";
+pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, or HF_TOKEN";
 
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
