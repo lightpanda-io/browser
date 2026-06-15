@@ -85,18 +85,21 @@ pub fn releaseArena(self: *const Execution, allocator: Allocator) void {
 
 pub fn headersForRequest(self: *const Execution, headers: *HttpClient.Headers) !void {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| g.headersForRequest(headers),
     };
 }
 
 pub fn isSameOrigin(self: *const Execution, url: [:0]const u8) bool {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| g.isSameOrigin(url),
     };
 }
 
 pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| g.makeRequest(req),
     };
 }
@@ -107,6 +110,7 @@ pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
 // WebSocket.init appending to `.websockets`.
 pub fn httpOwner(self: *const Execution) *HttpClient.Owner {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| &g._http_owner,
     };
 }
@@ -119,30 +123,35 @@ pub fn dispatch(
     comptime opts: EventManagerBase.DispatchDirectOptions,
 ) !void {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| g.dispatch(target, event, handler, opts),
     };
 }
 
 pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []const u8, handler: anytype) bool {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| g.hasDirectListeners(target, typ, handler),
     };
 }
 
 pub fn performance(self: *const Execution) *Performance {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| g.performance(),
     };
 }
 
 pub fn frameId(self: *const Execution) u32 {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| g._frame_id,
     };
 }
 
 pub fn loaderId(self: *const Execution) u32 {
     return switch (self.js.global) {
+        .bare => unreachable,
         inline else => |g| g._loader_id,
     };
 }

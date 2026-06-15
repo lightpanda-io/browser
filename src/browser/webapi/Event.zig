@@ -341,6 +341,7 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
         if (root_is_document) {
             if (path_len < path_buffer.len) {
                 switch (exec.js.global) {
+                    .bare => unreachable,
                     .worker => {},
                     .frame => |frame| {
                         path_buffer[path_len] = frame.window.asEventTarget();

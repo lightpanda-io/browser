@@ -125,6 +125,15 @@ pub fn persist(self: PromiseResolver) !Global {
     return .{ .handle = global };
 }
 
+/// Like `persist`, but the returned `Global` is owned by the caller (not tracked
+/// by the context) and must be `deinit`ed. For resolvers with a lifetime shorter
+/// than the context that are settled and freed individually.
+pub fn persistOwned(self: PromiseResolver) Global {
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(self.local.isolate.handle, self.handle, &global);
+    return .{ .handle = global };
+}
+
 pub const Global = struct {
     handle: v8.Global,
 

@@ -396,6 +396,7 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
             // otherwise. We only have an HTML parser today, so the body is
             // always parsed as HTML regardless of the override.
             switch (exec.js.global) {
+                .bare => unreachable,
                 .frame => |frame| {
                     const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
                     try frame.parseHtmlAsChildren(document.asNode(), data);
@@ -439,6 +440,7 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
     if (final.content_type != .text_xml) return null;
 
     switch (exec.js.global) {
+        .bare => unreachable,
         .frame => |frame| {
             const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
             try frame.parseHtmlAsChildren(document.asNode(), self._response_data.items);

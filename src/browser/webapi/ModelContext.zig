@@ -122,6 +122,7 @@ pub fn registerTool(
     const event: Notification.ModelContextToolEvent = .{ .exec = exec, .tool = entry };
 
     const session = switch (exec.js.global) {
+        .bare => unreachable,
         inline else => |g| g._session,
     };
 
@@ -148,6 +149,7 @@ pub fn findTool(self: *ModelContext, name: []const u8) ?*Tool {
 /// signals fired (which is the common case).
 fn markAborted(self: *ModelContext, tool: *Tool, exec: *const Execution) !void {
     const session = switch (exec.js.global) {
+        .bare => unreachable,
         inline else => |g| g._session,
     };
 

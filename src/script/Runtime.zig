@@ -25,8 +25,6 @@ const BrowserTool = browser_tools.Tool;
 const CDPNode = @import("../cdp/Node.zig");
 const Schema = @import("Schema.zig");
 
-const v8 = lp.js.v8;
-
 const Runtime = @This();
 
 allocator: std.mem.Allocator,
@@ -34,9 +32,11 @@ app: *lp.App,
 session: *lp.Session,
 registry: *CDPNode.Registry,
 env: lp.js.Env,
-context: v8.Global,
-has_context: bool,
+context: ?*lp.js.Context = null,
 call_arena: std.heap.ArenaAllocator,
+// Backs the bare context's `call_arena` (reset by `js.Caller` per top-level
+// callback) — kept separate from `call_arena`, which holds run-scoped data.
+ctx_call_arena: std.heap.ArenaAllocator,
 primitive_data: [recorded_tool_count]PrimitiveData,
 console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// Notified before each `console.*` line is written. The REPL uses it to
@@ -70,7 +70,7 @@ const PrimitiveData = struct {
 
 const PendingGoto = struct {
     frame_id: u32,
-    resolver: v8.Global,
+    resolver: lp.js.PromiseResolver.Global,
     deadline_ms: i64,
 };
 
@@ -124,13 +124,13 @@ pub fn init(
         .session = session,
         .registry = registry,
         .env = undefined,
-        .context = undefined,
-        .has_context = false,
         .call_arena = .init(allocator),
+        .ctx_call_arena = .init(allocator),
         .primitive_data = undefined,
         .console_data = undefined,
     };
     errdefer self.call_arena.deinit();
+    errdefer self.ctx_call_arena.deinit();
 
     // Separate isolate from the page. The full `Env` is used only as an isolate
     // + terminate/microtask carrier; the agent context is bare (no WebAPIs).
@@ -149,14 +149,15 @@ pub fn deinit(self: *Runtime) void {
     self.resetContext();
     self.env.deinit();
     self.call_arena.deinit();
+    self.ctx_call_arena.deinit();
     const allocator = self.allocator;
     allocator.destroy(self);
 }
 
-/// A leftover `v8.Global` resolver would leak past its isolate.
+/// A leftover persisted resolver handle would leak past its isolate.
 fn clearPendingGotos(self: *Runtime) void {
     for (self.pending_gotos.items) |*entry| {
-        v8.v8__Global__Reset(&entry.resolver);
+        entry.resolver.deinit();
     }
     self.pending_gotos.clearRetainingCapacity();
 }
@@ -170,97 +171,40 @@ pub fn cancelTerminate(self: *Runtime) void {
 }
 
 fn createContext(self: *Runtime) InitError!void {
-    var hs: lp.js.HandleScope = undefined;
-    hs.init(self.env.isolate);
-    defer hs.deinit();
+    const context = self.env.createAgentContext(self.ctx_call_arena.allocator()) catch return error.RuntimeInitFailed;
+    self.context = context;
 
-    const context = v8.v8__Context__New(self.env.isolate.handle, null, null) orelse
-        return error.RuntimeInitFailed;
-    v8.v8__Global__New(self.env.isolate.handle, context, &self.context);
-    self.has_context = true;
+    var ls: lp.js.Local.Scope = undefined;
+    context.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+    const global = local.globalObject();
 
-    v8.v8__Context__Enter(context);
-    defer v8.v8__Context__Exit(context);
-
-    // The promise-reject callback aligncasts embedder slot 1 to a browser
-    // `Context`; this bare context has none. Pin it to null so `Context.fromC`
-    // returns null and the callback no-ops instead of crashing on a rejection.
-    v8.v8__Context__SetAlignedPointerInEmbedderData(context, 1, null);
-
-    const global = v8.v8__Context__Global(context) orelse return error.RuntimeInitFailed;
     var i: usize = 0;
     for (std.enums.values(BrowserTool)) |t| {
         if (!t.isRecorded()) continue;
         self.primitive_data[i] = .{ .runtime = self, .tool = t };
-        try self.installPrimitive(context, global, @tagName(t), &self.primitive_data[i]);
+        const func = local.newRawCallback(primitiveCallback, &self.primitive_data[i]);
+        _ = global.set(@tagName(t), func.toValue(), .{}) catch return error.RuntimeInitFailed;
         i += 1;
     }
-    try self.installConsole(context, global);
+    try self.installConsole(local, global);
 }
 
 fn resetContext(self: *Runtime) void {
-    if (!self.has_context) return;
-    v8.v8__Global__Reset(&self.context);
-    self.env.isolate.notifyContextDisposed();
-    self.has_context = false;
+    const context = self.context orelse return;
+    self.env.destroyContext(context);
+    self.context = null;
 }
 
-fn installPrimitive(
-    self: *Runtime,
-    context: *const v8.Context,
-    global: *const v8.Object,
-    name: []const u8,
-    data: *PrimitiveData,
-) InitError!void {
-    const external = self.env.isolate.createExternal(data);
-    const func = v8.v8__Function__New__DEFAULT2(context, primitiveCallback, external) orelse
-        return error.RuntimeInitFailed;
-    var out: v8.MaybeBool = undefined;
-    v8.v8__Object__Set(
-        global,
-        context,
-        @ptrCast(self.env.isolate.initStringHandle(name)),
-        @ptrCast(func),
-        &out,
-    );
-    if (!out.has_value or !out.value) return error.RuntimeInitFailed;
-}
-
-fn installConsole(
-    self: *Runtime,
-    context: *const v8.Context,
-    global: *const v8.Object,
-) InitError!void {
-    const console = v8.v8__Object__New(self.env.isolate.handle) orelse
-        return error.RuntimeInitFailed;
-
+fn installConsole(self: *Runtime, local: *const lp.js.Local, global: lp.js.Object) InitError!void {
+    const console = local.newObject();
     for (std.enums.values(ConsoleMethod), 0..) |method, i| {
         self.console_data[i] = .{ .runtime = self, .method = method };
-        const external = self.env.isolate.createExternal(&self.console_data[i]);
-        const func = v8.v8__Function__New__DEFAULT2(context, consoleCallback, external) orelse
-            return error.RuntimeInitFailed;
-        try setObjectProperty(self, context, console, @tagName(method), @ptrCast(func));
+        const func = local.newRawCallback(consoleCallback, &self.console_data[i]);
+        _ = console.set(@tagName(method), func.toValue(), .{}) catch return error.RuntimeInitFailed;
     }
-
-    try setObjectProperty(self, context, global, "console", @ptrCast(console));
-}
-
-fn setObjectProperty(
-    self: *Runtime,
-    context: *const v8.Context,
-    object: *const v8.Object,
-    name: []const u8,
-    value: *const v8.Value,
-) InitError!void {
-    var out: v8.MaybeBool = undefined;
-    v8.v8__Object__Set(
-        object,
-        context,
-        @ptrCast(self.env.isolate.initStringHandle(name)),
-        value,
-        &out,
-    );
-    if (!out.has_value or !out.value) return error.RuntimeInitFailed;
+    _ = global.set("console", console.toValue(), .{}) catch return error.RuntimeInitFailed;
 }
 
 /// Run script source in the agent context. Returns null on success; on a JS
@@ -269,73 +213,62 @@ fn setObjectProperty(
 pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
     _ = self.call_arena.reset(.retain_capacity);
 
-    var hs: lp.js.HandleScope = undefined;
-    hs.init(self.env.isolate);
-    defer hs.deinit();
+    var ls: lp.js.Local.Scope = undefined;
+    self.context.?.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
 
-    const context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.context, self.env.isolate.handle) orelse
-        return try self.dupeError("agent script context is not available"));
-    v8.v8__Context__Enter(context);
-    defer v8.v8__Context__Exit(context);
+    var tc: lp.js.TryCatch = undefined;
+    tc.init(local);
+    defer tc.deinit();
 
-    var try_catch: v8.TryCatch = undefined;
-    v8.v8__TryCatch__CONSTRUCT(&try_catch, self.env.isolate.handle);
-    defer v8.v8__TryCatch__DESTRUCT(&try_catch);
-
-    const script_name = self.env.isolate.initStringHandle(name);
     // Wrap in an async IIFE so the source can use top-level `await`. A top-level
     // `return <expr>` becomes the Promise's value, which we echo; a bare trailing
     // expression can't (`await` and a completion value are mutually exclusive in JS).
     const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
         return try self.dupeError("out of memory");
-    const script_source = self.env.isolate.initStringHandle(wrapped);
 
-    var origin: v8.ScriptOrigin = undefined;
-    v8.v8__ScriptOrigin__CONSTRUCT(&origin, script_name);
-
-    var compiler_source: v8.ScriptCompilerSource = undefined;
-    v8.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, null, &compiler_source);
-    defer v8.v8__ScriptCompiler__Source__DESTRUCT(&compiler_source);
-
-    const script = v8.v8__ScriptCompiler__Compile(
-        context,
-        &compiler_source,
-        v8.kNoCompileOptions,
-        v8.kNoCacheNoReason,
-    ) orelse return try self.formatCaught(context, &try_catch, "compile failed");
-
-    const completion = v8.v8__Script__Run(script, context) orelse
-        return try self.formatCaught(context, &try_catch, "script failed");
+    const completion = local.compileAndRun(wrapped, name) catch |err|
+        return try self.formatTryCatch(tc, err);
 
     defer self.clearPendingGotos();
 
-    const root: *const v8.Promise = @ptrCast(completion);
+    const root = completion.toPromise();
     self.env.performIsolateMicrotasks();
-    if (try self.driveToCompletion(context, root)) |interrupted| {
+    if (try self.driveToCompletion(local, root)) |interrupted| {
         return interrupted;
     }
-    if (v8.v8__TryCatch__HasCaught(&try_catch)) {
-        return try self.formatCaught(context, &try_catch, "script failed");
+    if (tc.hasCaught()) {
+        return try self.formatTryCatch(tc, error.JsException);
     }
 
-    switch (promiseState(root)) {
-        v8.kFulfilled => self.printCompletion(context, v8.v8__Promise__Result(root) orelse return null),
-        v8.kRejected => return try self.formatRejection(context, v8.v8__Promise__Result(root)),
-        else => {}, // still pending: the script awaited something we can't settle
+    switch (root.state()) {
+        .fulfilled => self.printCompletion(root.result()),
+        .rejected => return try self.formatRejection(root.result()),
+        .pending => {}, // the script awaited something we can't settle
     }
     return null;
 }
 
-/// `v8__Promise__State` returns the `c_uint` `PromiseState`, but the `k*`
-/// constants are `c_int`; normalize so comparisons and switches type-check.
-fn promiseState(promise: *const v8.Promise) c_int {
-    return @intCast(v8.v8__Promise__State(promise));
+/// Format a caught JS exception (compile or run) into a run-arena message:
+/// prefer the stack, else `line N: msg`.
+fn formatTryCatch(self: *Runtime, tc: lp.js.TryCatch, err: anyerror) RunError![]const u8 {
+    const arena = self.call_arena.allocator();
+    const c = tc.caughtOrError(arena, err);
+    if (c.stack) |stack| {
+        if (stack.len > 0) return try self.dupeError(stack);
+    }
+    const exception = c.exception orelse "script failed";
+    if (c.line) |line| {
+        return std.fmt.allocPrint(arena, "line {d}: {s}", .{ line, exception }) catch return error.OutOfMemory;
+    }
+    return try self.dupeError(exception);
 }
 
 /// Drives the browser until the root Promise settles. Returns an interrupt
 /// message (SIGINT/terminate), or null once it settles or stalls.
-fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8.Promise) RunError!?[]const u8 {
-    while (promiseState(root) == v8.kPending) {
+fn driveToCompletion(self: *Runtime, local: *const lp.js.Local, root: lp.js.Promise) RunError!?[]const u8 {
+    while (root.state() == .pending) {
         if (self.session.isCancelled()) return try self.dupeError("cancelled");
         if (self.env.terminatePending()) return try self.dupeError("terminated");
 
@@ -357,7 +290,7 @@ fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8
             };
         }
 
-        self.resolveReadyGotos(context);
+        self.resolveReadyGotos(local);
         self.env.performIsolateMicrotasks();
 
         // Honor the runner's pacing hint so a timer-only wait (no network I/O,
@@ -367,9 +300,8 @@ fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8
     return null;
 }
 
-fn formatRejection(self: *Runtime, context: *const v8.Context, reason: ?*const v8.Value) RunError![]const u8 {
-    const value = reason orelse return try self.dupeError("script rejected");
-    const text = self.valueToString(self.call_arena.allocator(), context, value) catch
+fn formatRejection(self: *Runtime, value: lp.js.Value) RunError![]const u8 {
+    const text = value.toStringSliceWithAlloc(self.call_arena.allocator()) catch
         return try self.dupeError("script failed");
     return try self.dupeError(text);
 }
@@ -377,54 +309,57 @@ fn formatRejection(self: *Runtime, context: *const v8.Context, reason: ?*const v
 /// Echo a script's output — the value it `return`s from the async wrapper, so a
 /// script ending in `return extract(...)` prints without `console.log`.
 /// `undefined` — no `return`, or a bare trailing expression — stays silent.
-fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) void {
-    if (v8.v8__Value__IsUndefined(value)) return;
+fn printCompletion(self: *Runtime, value: lp.js.Value) void {
+    if (value.isUndefined()) return;
 
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena_state.deinit();
-    const text = self.displayString(arena_state.allocator(), context, value) catch return;
+    const text = displayString(arena_state.allocator(), value) catch return;
     self.writeConsoleLine(.log, text);
 }
 
-fn primitiveCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+fn primitiveCallback(info_handle: ?*const lp.js.Local.RawCallbackInfo) callconv(.c) void {
     const info = info_handle orelse return;
-    const raw_data = v8.v8__FunctionCallbackInfo__Data(info) orelse return;
-    const data: *PrimitiveData = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(raw_data)) orelse return));
-    data.runtime.invoke(data.tool, info);
+    var caller: lp.js.Caller = undefined;
+    if (!caller.initFromHandle(info)) return;
+    defer caller.deinit();
+    const fci = lp.js.Caller.FunctionCallbackInfo{ .handle = info };
+    const data: *PrimitiveData = @ptrCast(@alignCast(fci.getData() orelse return));
+    data.runtime.invoke(&caller.local, data.tool, fci);
 }
 
-fn consoleCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+fn consoleCallback(info_handle: ?*const lp.js.Local.RawCallbackInfo) callconv(.c) void {
     const info = info_handle orelse return;
-    const raw_data = v8.v8__FunctionCallbackInfo__Data(info) orelse return;
-    const data: *ConsoleData = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(raw_data)) orelse return));
-    data.runtime.invokeConsole(data.method, info);
+    var caller: lp.js.Caller = undefined;
+    if (!caller.initFromHandle(info)) return;
+    defer caller.deinit();
+    const fci = lp.js.Caller.FunctionCallbackInfo{ .handle = info };
+    const data: *ConsoleData = @ptrCast(@alignCast(fci.getData() orelse return));
+    data.runtime.invokeConsole(&caller.local, data.method, fci);
 }
 
-fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInfo) void {
+const Fci = lp.js.Caller.FunctionCallbackInfo;
+
+fn invoke(self: *Runtime, local: *const lp.js.Local, tool: BrowserTool, fci: Fci) void {
     // Owned, not shared: marshalling runs JS (`toJSON`) that can re-enter a
     // primitive; a shared arena would let the nested call reset ours mid-flight.
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse {
-        self.throwError("internal: missing callback context");
-        return;
-    };
-
-    var argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
+    var argc: usize = fci.length();
 
     // Peel a trailing page handle (from `goto`) out of the args; goto has none.
-    const handle_id = if (tool == .goto) null else self.peelHandle(context, info, argc);
+    const handle_id = if (tool == .goto) null else peelHandle(local, fci, argc);
     if (handle_id != null) argc -= 1;
 
-    const args = self.buildArgs(arena, context, tool, info, argc) catch |err| switch (err) {
+    const args = self.buildArgs(arena, local, tool, fci, argc) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
         error.JsException => return,
         error.InvalidArguments => return self.throwTypeError("invalid arguments"),
     };
 
-    if (tool == .goto) return self.invokeGoto(arena, context, info, args);
+    if (tool == .goto) return self.invokeGoto(arena, local, fci, args);
 
     // Aim page tools at the handle's frame, else the most-recent goto.
     if (handle_id orelse self.current_frame_id) |target_id| {
@@ -442,9 +377,9 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
                 const normalized = self.normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
                     error.OutOfMemory => return self.throwError("out of memory"),
                 };
-                self.setReturnJson(context, info, normalized);
+                self.setReturnJson(local, fci, normalized);
             },
-            else => self.setReturnString(info, text),
+            else => fci.getReturnValue().set(local.newString(text).toValue()),
         },
         .fail => |message| self.throwError(message),
     }
@@ -455,17 +390,16 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
 fn invokeGoto(
     self: *Runtime,
     arena: std.mem.Allocator,
-    context: *const v8.Context,
-    info: *const v8.FunctionCallbackInfo,
+    local: *const lp.js.Local,
+    fci: Fci,
     args: ?std.json.Value,
 ) void {
-    const resolver = v8.v8__Promise__Resolver__New(context) orelse return self.throwError("internal: resolver alloc failed");
-    const promise = v8.v8__Promise__Resolver__GetPromise(resolver) orelse return self.throwError("internal: promise alloc failed");
-    self.setReturnValue(info, @ptrCast(promise));
+    const resolver = local.createPromiseResolver();
+    fci.getReturnValue().set(resolver.promise().toValue());
 
     const params = browser_tools.parseArgs(browser_tools.GotoParams, arena, args) catch |err| switch (err) {
-        error.OutOfMemory => return self.rejectResolver(context, resolver, "out of memory"),
-        error.InvalidParams => return self.rejectResolver(context, resolver, "goto requires a url"),
+        error.OutOfMemory => return resolver.rejectError("goto", .{ .generic_error = "out of memory" }),
+        error.InvalidParams => return resolver.rejectError("goto", .{ .generic_error = "goto requires a url" }),
     };
     const url = params.url;
     const timeout = params.timeout orelse 10000;
@@ -476,73 +410,60 @@ fn invokeGoto(
         self.session.browser.env.isolate.enter();
         defer self.session.browser.env.isolate.exit();
         break :frame browser_tools.openGotoFrame(self.session, self.registry, url, fork) catch
-            return self.rejectResolver(context, resolver, "navigation failed to start");
+            return resolver.rejectError("goto", .{ .generic_error = "navigation failed to start" });
     };
     self.current_frame_id = frame._frame_id;
 
-    var global: v8.Global = undefined;
-    v8.v8__Global__New(self.env.isolate.handle, resolver, &global);
+    var global = resolver.persistOwned();
     self.pending_gotos.append(self.allocator, .{
         .frame_id = frame._frame_id,
         .resolver = global,
         .deadline_ms = std.time.milliTimestamp() + @as(i64, timeout),
     }) catch {
-        v8.v8__Global__Reset(&global);
-        return self.rejectResolver(context, resolver, "out of memory");
+        global.deinit();
+        return resolver.rejectError("goto", .{ .generic_error = "out of memory" });
     };
 }
 
 /// A page handle: `{ __lpFrameId: <id> }`, peeled back by `peelHandle`.
-fn makeHandle(self: *Runtime, context: *const v8.Context, frame_id: u32) ?*const v8.Value {
-    const obj = v8.v8__Object__New(self.env.isolate.handle) orelse return null;
-    const value = v8.v8__Integer__NewFromUnsigned(self.env.isolate.handle, frame_id) orelse return null;
-    var out: v8.MaybeBool = undefined;
-    v8.v8__Object__Set(obj, context, @ptrCast(self.env.isolate.initStringHandle("__lpFrameId")), @ptrCast(value), &out);
-    return @ptrCast(obj);
+fn makeHandle(local: *const lp.js.Local, frame_id: u32) ?lp.js.Value {
+    const obj = local.newObject();
+    _ = obj.set("__lpFrameId", frame_id, .{}) catch return null;
+    return obj.toValue();
 }
 
 /// Frame id if the last arg is a page handle (`{ __lpFrameId }`), else null —
 /// unambiguous since no real tool arg carries that key.
-fn peelHandle(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo, argc: usize) ?u32 {
+fn peelHandle(local: *const lp.js.Local, fci: Fci, argc: usize) ?u32 {
     if (argc == 0) return null;
-    const last = v8.v8__FunctionCallbackInfo__INDEX(info, @intCast(argc - 1)) orelse return null;
-    if (!v8.v8__Value__IsObject(last)) return null;
-    const prop = v8.v8__Object__Get(@ptrCast(last), context, @ptrCast(self.env.isolate.initStringHandle("__lpFrameId"))) orelse return null;
-    if (!v8.v8__Value__IsNumber(prop)) return null;
-    var out: v8.MaybeU32 = undefined;
-    v8.v8__Value__Uint32Value(prop, context, &out);
-    return if (out.has_value) out.value else null;
-}
-
-fn resolveResolver(_: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, value: *const v8.Value) void {
-    var out: v8.MaybeBool = undefined;
-    v8.v8__Promise__Resolver__Resolve(resolver, context, value, &out);
-}
-
-fn rejectResolver(self: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, message: []const u8) void {
-    var out: v8.MaybeBool = undefined;
-    v8.v8__Promise__Resolver__Reject(resolver, context, self.env.isolate.createError(message), &out);
+    const last = fci.getArg(@intCast(argc - 1), local);
+    if (!last.isObject()) return null;
+    const obj = last.toObject();
+    if (obj.has("__lpFrameId") == false) return null;
+    const prop = obj.get("__lpFrameId") catch return null;
+    if (!prop.isNumber()) return null;
+    return prop.toU32() catch null;
 }
 
 /// Settle each pending goto: a reached load — or a soft timeout (the page may
 /// still be usable) — resolves the page handle; a real navigation error
 /// rejects. Runs on the script isolate where the resolvers live; the caller
 /// drains microtasks after.
-fn resolveReadyGotos(self: *Runtime, context: *const v8.Context) void {
+fn resolveReadyGotos(self: *Runtime, local: *const lp.js.Local) void {
     var i: usize = 0;
     while (i < self.pending_gotos.items.len) {
         const entry = &self.pending_gotos.items[i];
-        const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&entry.resolver, self.env.isolate.handle));
+        const resolver = entry.resolver.local(local);
 
         const frame = self.session.findFrameByFrameId(entry.frame_id);
         const ls = if (frame) |f| f._load_state else .waiting;
         if (frame == null or frame.?._last_navigate_error != null) {
-            self.rejectResolver(context, resolver, "navigation failed");
+            resolver.rejectError("goto", .{ .generic_error = "navigation failed" });
         } else if (ls == .load or ls == .complete or std.time.milliTimestamp() >= entry.deadline_ms) {
-            if (self.makeHandle(context, entry.frame_id)) |handle| {
-                self.resolveResolver(context, resolver, handle);
+            if (makeHandle(local, entry.frame_id)) |handle| {
+                resolver.resolve("goto", handle);
             } else {
-                self.rejectResolver(context, resolver, "internal: handle alloc failed");
+                resolver.rejectError("goto", .{ .generic_error = "internal: handle alloc failed" });
             }
         } else {
             i += 1;
@@ -550,25 +471,21 @@ fn resolveReadyGotos(self: *Runtime, context: *const v8.Context) void {
         }
 
         var settled = self.pending_gotos.swapRemove(i);
-        v8.v8__Global__Reset(&settled.resolver);
+        settled.resolver.deinit();
     }
 }
 
-fn invokeConsole(self: *Runtime, method: ConsoleMethod, info: *const v8.FunctionCallbackInfo) void {
+fn invokeConsole(self: *Runtime, local: *const lp.js.Local, method: ConsoleMethod, fci: Fci) void {
     // Owned arena (see `invoke`): an argument's `toString` can re-enter a
     // primitive mid-loop and must not reset the buffer we're accumulating.
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse return;
-    const argc: usize = @intCast(v8.v8__FunctionCallbackInfo__Length(info));
-
     var aw: std.Io.Writer.Allocating = .init(arena);
-    for (0..argc) |i| {
+    for (0..fci.length()) |i| {
         if (i > 0) aw.writer.writeByte(' ') catch return;
-        const value = v8.v8__FunctionCallbackInfo__INDEX(info, @intCast(i)) orelse continue;
-        const text = self.valueToString(arena, context, value) catch "<unprintable>";
+        const text = fci.getArg(@intCast(i), local).toStringSliceWithAlloc(arena) catch "<unprintable>";
         aw.writer.writeAll(text) catch return;
     }
 
@@ -617,14 +534,14 @@ const BuildArgsError = error{
 fn buildArgs(
     self: *Runtime,
     arena: std.mem.Allocator,
-    context: *const v8.Context,
+    local: *const lp.js.Local,
     tool: BrowserTool,
-    info: *const v8.FunctionCallbackInfo,
+    fci: Fci,
     argc: usize,
 ) BuildArgsError!?std.json.Value {
     return switch (tool) {
-        .extract => try self.extractArgs(arena, context, info, argc),
-        else => try self.marshalArgs(arena, context, info, argc, Schema.positionalFor(tool)),
+        .extract => try self.extractArgs(arena, local, fci, argc),
+        else => try self.marshalArgs(arena, local, fci, argc, Schema.positionalFor(tool)),
     };
 }
 
@@ -635,13 +552,13 @@ fn buildArgs(
 fn marshalArgs(
     self: *Runtime,
     arena: std.mem.Allocator,
-    context: *const v8.Context,
-    info: *const v8.FunctionCallbackInfo,
+    local: *const lp.js.Local,
+    fci: Fci,
     argc: usize,
     positional: []const []const u8,
 ) BuildArgsError!std.json.Value {
     const values = try arena.alloc(std.json.Value, argc);
-    for (values, 0..) |*v, i| v.* = try self.argJson(arena, context, info, @intCast(i));
+    for (values, 0..) |*v, i| v.* = try self.argJson(arena, local, fci, @intCast(i));
 
     if (argc == 1 and values[0] == .object) return values[0];
 
@@ -675,12 +592,12 @@ fn marshalArgs(
 fn extractArgs(
     self: *Runtime,
     arena: std.mem.Allocator,
-    context: *const v8.Context,
-    info: *const v8.FunctionCallbackInfo,
+    local: *const lp.js.Local,
+    fci: Fci,
     argc: usize,
 ) BuildArgsError!std.json.Value {
     if (argc != 1) return error.InvalidArguments;
-    const value = try self.argJson(arena, context, info, 0);
+    const value = try self.argJson(arena, local, fci, 0);
     const schema = switch (value) {
         .string, .array => try extractSchemaString(arena, value),
         .object => |obj| if (obj.get("schema")) |inner| blk: {
@@ -712,22 +629,16 @@ fn normalizeExtractSchemaString(arena: std.mem.Allocator, schema: []const u8) er
 fn argJson(
     self: *Runtime,
     arena: std.mem.Allocator,
-    context: *const v8.Context,
-    info: *const v8.FunctionCallbackInfo,
+    local: *const lp.js.Local,
+    fci: Fci,
     index: u32,
 ) BuildArgsError!std.json.Value {
-    const value = v8.v8__FunctionCallbackInfo__INDEX(info, @intCast(index)) orelse return error.InvalidArguments;
-    return self.valueToJson(arena, context, value);
+    return self.valueToJson(arena, fci.getArg(index, local));
 }
 
-fn valueToJson(
-    self: *Runtime,
-    arena: std.mem.Allocator,
-    context: *const v8.Context,
-    value: *const v8.Value,
-) BuildArgsError!std.json.Value {
-    const json_string = v8.v8__JSON__Stringify(context, value, null) orelse return error.JsException;
-    const json = try self.stringToOwned(arena, json_string);
+fn valueToJson(_: *Runtime, arena: std.mem.Allocator, value: lp.js.Value) BuildArgsError!std.json.Value {
+    const json = value.toJson(arena) catch |err|
+        return if (err == error.OutOfMemory) error.OutOfMemory else error.JsException;
     if (std.mem.eql(u8, json, "undefined")) return error.InvalidArguments;
     return std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{}) catch error.InvalidArguments;
 }
@@ -755,113 +666,32 @@ fn normalizeExtractReturnJson(_: *Runtime, arena: std.mem.Allocator, value: []co
     return try std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{});
 }
 
-fn setReturnString(self: *Runtime, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
-    self.setReturnValue(info, @ptrCast(self.env.isolate.initStringHandle(value)));
-}
-
-fn setReturnJson(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
-    if (value.len == 0) {
-        self.setReturnValue(info, self.env.isolate.initUndefined());
-        return;
-    }
-    const json = self.env.isolate.initStringHandle(value);
-    const parsed = v8.v8__JSON__Parse(context, json) orelse {
-        self.throwError("extract returned invalid JSON");
-        return;
-    };
-    self.setReturnValue(info, parsed);
-}
-
-fn setReturnValue(_: *Runtime, info: *const v8.FunctionCallbackInfo, value: *const v8.Value) void {
-    var rv: v8.ReturnValue = undefined;
-    v8.v8__FunctionCallbackInfo__GetReturnValue(info, &rv);
-    v8.v8__ReturnValue__Set(rv, value);
+fn setReturnJson(self: *Runtime, local: *const lp.js.Local, fci: Fci, value: []const u8) void {
+    if (value.len == 0) return; // leave the return value as undefined
+    const parsed = local.parseJSON(value) catch return self.throwError("extract returned invalid JSON");
+    fci.getReturnValue().set(parsed);
 }
 
 fn throwError(self: *Runtime, message: []const u8) void {
-    _ = v8.v8__Isolate__ThrowException(self.env.isolate.handle, self.env.isolate.createError(message));
+    _ = self.env.isolate.throwException(self.env.isolate.createError(message));
 }
 
 fn throwTypeError(self: *Runtime, message: []const u8) void {
-    _ = v8.v8__Isolate__ThrowException(self.env.isolate.handle, self.env.isolate.createTypeError(message));
-}
-
-fn formatCaught(
-    self: *Runtime,
-    context: *const v8.Context,
-    try_catch: *const v8.TryCatch,
-    fallback: []const u8,
-) RunError![]const u8 {
-    const arena = self.call_arena.allocator();
-    if (v8.v8__TryCatch__StackTrace(try_catch, context)) |stack_value| {
-        const stack = self.valueToString(arena, context, stack_value) catch "";
-        if (stack.len > 0) return stack;
-    }
-
-    const exception = if (v8.v8__TryCatch__Exception(try_catch)) |exception_value|
-        self.valueToString(arena, context, exception_value) catch fallback
-    else
-        fallback;
-
-    const line: ?u32 = blk: {
-        const msg = v8.v8__TryCatch__Message(try_catch) orelse break :blk null;
-        const n = v8.v8__Message__GetLineNumber(msg, context);
-        break :blk if (n < 0) null else @as(u32, @intCast(n));
-    };
-    if (line) |n| {
-        return std.fmt.allocPrint(arena, "line {d}: {s}", .{ n, exception }) catch return error.OutOfMemory;
-    }
-    return try self.dupeError(exception);
-}
-
-fn valueToString(
-    self: *Runtime,
-    arena: std.mem.Allocator,
-    context: *const v8.Context,
-    value: *const v8.Value,
-) error{ OutOfMemory, JsException }![]const u8 {
-    const string = v8.v8__Value__ToString(value, context) orelse return error.JsException;
-    return self.stringToOwned(arena, string);
+    _ = self.env.isolate.throwException(self.env.isolate.createTypeError(message));
 }
 
 /// Display form for the script's completion value: objects and arrays as JSON
-/// (plain coercion gives a useless `[object Object]`), every other value via that
-/// coercion. Falls back to coercion when JSON.stringify yields no string — a
-/// thrown circular reference, or a value (e.g. a function) that stringifies to
-/// `undefined`; the nested TryCatch keeps such a throw from leaking into the
-/// caller's scope.
-fn displayString(
-    self: *Runtime,
-    arena: std.mem.Allocator,
-    context: *const v8.Context,
-    value: *const v8.Value,
-) error{ OutOfMemory, JsException }![]const u8 {
-    if (v8.v8__Value__IsObject(value)) {
-        var try_catch: v8.TryCatch = undefined;
-        v8.v8__TryCatch__CONSTRUCT(&try_catch, self.env.isolate.handle);
-        defer v8.v8__TryCatch__DESTRUCT(&try_catch);
-        if (v8.v8__JSON__Stringify(context, value, null)) |json| {
-            return self.stringToOwned(arena, json);
-        }
+/// (plain coercion gives a useless `[object Object]`), every other value via
+/// `toString`. Falls back to coercion when JSON.stringify fails (e.g. a circular
+/// reference) — the `TryCatch` swallows that throw on `deinit`.
+fn displayString(arena: std.mem.Allocator, value: lp.js.Value) ![]const u8 {
+    if (value.isObject()) {
+        var tc: lp.js.TryCatch = undefined;
+        tc.init(value.local);
+        defer tc.deinit();
+        if (value.toJson(arena)) |json| return json else |_| {}
     }
-    return self.valueToString(arena, context, value);
-}
-
-fn stringToOwned(
-    self: *Runtime,
-    arena: std.mem.Allocator,
-    string: *const v8.String,
-) error{OutOfMemory}![]const u8 {
-    const len: usize = @intCast(v8.v8__String__Utf8Length(string, self.env.isolate.handle));
-    const buf = try arena.alloc(u8, len);
-    const written = v8.v8__String__WriteUtf8(
-        string,
-        self.env.isolate.handle,
-        buf.ptr,
-        buf.len,
-        v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8,
-    );
-    return buf[0..written];
+    return value.toStringSliceWithAlloc(arena);
 }
 
 fn dupeError(self: *Runtime, message: []const u8) RunError![]const u8 {

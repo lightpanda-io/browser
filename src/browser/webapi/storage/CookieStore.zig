@@ -323,6 +323,7 @@ fn resolveQueryUrl(exec: *const Execution, _override: ?[]const u8) ![:0]const u8
     if (!exec.isSameOrigin(resolved)) return error.SecurityError;
 
     switch (exec.js.global) {
+        .bare => unreachable,
         .frame => {
             if (!std.mem.eql(u8, resolved, current)) return error.InvalidUrl;
         },
