@@ -239,12 +239,12 @@ pub fn createWorkerContext(self: *Env, worker: *WorkerGlobalScope, params: Conte
     return self._createContext(worker, params);
 }
 
-/// A page-less, WebAPI-less `Context` for the agent script runtime. Only realm
-/// fields are populated; the page-coupled ones (`page`/`script_manager`/
-/// `execution`) are left `undefined` and never read, because the agent installs
-/// no WebAPI functions — every WebAPI path's `GlobalScope` switch has a
-/// `.bare => unreachable` arm. Microtasks drain via `performIsolateMicrotasks`
-/// (the bare context uses the isolate-default queue, not a per-context one).
+/// A page-less, WebAPI-less `Context` for the agent script runtime. The
+/// page-coupled fields (`page`/`script_manager`/`execution`) are left `undefined`
+/// and never read — the agent installs no WebAPI functions, so every WebAPI
+/// path's `GlobalScope` switch has a `.bare => unreachable` arm. Microtasks drain
+/// via `performIsolateMicrotasks` (the bare context uses the isolate-default
+/// queue, not a per-context one).
 pub fn createAgentContext(self: *Env, call_arena: Allocator) !*Context {
     const context_arena = try self.app.arena_pool.acquire(.medium, "AgentContext");
     errdefer self.app.arena_pool.release(context_arena);
@@ -260,7 +260,6 @@ pub fn createAgentContext(self: *Env, call_arena: Allocator) !*Context {
     const microtask_queue = v8.v8__MicrotaskQueue__New(isolate.handle, v8.kExplicit).?;
     errdefer v8.v8__MicrotaskQueue__DELETE(microtask_queue);
 
-    // Bare v8 context: no snapshot, no WebAPI globals.
     const v8_context = v8.v8__Context__New(isolate.handle, null, null).?;
     var context_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, v8_context, &context_global);

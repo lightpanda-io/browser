@@ -32,8 +32,7 @@ app: *lp.App,
 session: *lp.Session,
 registry: *CDPNode.Registry,
 env: lp.js.Env,
-context: *lp.js.Context,
-has_context: bool,
+context: ?*lp.js.Context = null,
 call_arena: std.heap.ArenaAllocator,
 // Backs the bare context's `call_arena` (reset by `js.Caller` per top-level
 // callback) — kept separate from `call_arena`, which holds run-scoped data.
@@ -125,8 +124,6 @@ pub fn init(
         .session = session,
         .registry = registry,
         .env = undefined,
-        .context = undefined,
-        .has_context = false,
         .call_arena = .init(allocator),
         .ctx_call_arena = .init(allocator),
         .primitive_data = undefined,
@@ -174,11 +171,11 @@ pub fn cancelTerminate(self: *Runtime) void {
 }
 
 fn createContext(self: *Runtime) InitError!void {
-    self.context = self.env.createAgentContext(self.ctx_call_arena.allocator()) catch return error.RuntimeInitFailed;
-    self.has_context = true;
+    const context = self.env.createAgentContext(self.ctx_call_arena.allocator()) catch return error.RuntimeInitFailed;
+    self.context = context;
 
     var ls: lp.js.Local.Scope = undefined;
-    self.context.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
     const local = &ls.local;
     const global = local.globalObject();
@@ -195,9 +192,9 @@ fn createContext(self: *Runtime) InitError!void {
 }
 
 fn resetContext(self: *Runtime) void {
-    if (!self.has_context) return;
-    self.env.destroyContext(self.context);
-    self.has_context = false;
+    const context = self.context orelse return;
+    self.env.destroyContext(context);
+    self.context = null;
 }
 
 fn installConsole(self: *Runtime, local: *const lp.js.Local, global: lp.js.Object) InitError!void {
@@ -217,7 +214,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     _ = self.call_arena.reset(.retain_capacity);
 
     var ls: lp.js.Local.Scope = undefined;
-    self.context.localScope(&ls);
+    self.context.?.localScope(&ls);
     defer ls.deinit();
     const local = &ls.local;
 
@@ -253,8 +250,8 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     return null;
 }
 
-/// Format a caught JS exception (compile or run) into a run-arena message,
-/// mirroring the old raw `formatCaught`: prefer the stack, else `line N: msg`.
+/// Format a caught JS exception (compile or run) into a run-arena message:
+/// prefer the stack, else `line N: msg`.
 fn formatTryCatch(self: *Runtime, tc: lp.js.TryCatch, err: anyerror) RunError![]const u8 {
     const arena = self.call_arena.allocator();
     const c = tc.caughtOrError(arena, err);
@@ -317,7 +314,7 @@ fn printCompletion(self: *Runtime, value: lp.js.Value) void {
 
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena_state.deinit();
-    const text = self.displayString(arena_state.allocator(), value) catch return;
+    const text = displayString(arena_state.allocator(), value) catch return;
     self.writeConsoleLine(.log, text);
 }
 
@@ -353,7 +350,7 @@ fn invoke(self: *Runtime, local: *const lp.js.Local, tool: BrowserTool, fci: Fci
     var argc: usize = fci.length();
 
     // Peel a trailing page handle (from `goto`) out of the args; goto has none.
-    const handle_id = if (tool == .goto) null else self.peelHandle(local, fci, argc);
+    const handle_id = if (tool == .goto) null else peelHandle(local, fci, argc);
     if (handle_id != null) argc -= 1;
 
     const args = self.buildArgs(arena, local, tool, fci, argc) catch |err| switch (err) {
@@ -429,7 +426,7 @@ fn invokeGoto(
 }
 
 /// A page handle: `{ __lpFrameId: <id> }`, peeled back by `peelHandle`.
-fn makeHandle(_: *Runtime, local: *const lp.js.Local, frame_id: u32) ?lp.js.Value {
+fn makeHandle(local: *const lp.js.Local, frame_id: u32) ?lp.js.Value {
     const obj = local.newObject();
     _ = obj.set("__lpFrameId", frame_id, .{}) catch return null;
     return obj.toValue();
@@ -437,7 +434,7 @@ fn makeHandle(_: *Runtime, local: *const lp.js.Local, frame_id: u32) ?lp.js.Valu
 
 /// Frame id if the last arg is a page handle (`{ __lpFrameId }`), else null —
 /// unambiguous since no real tool arg carries that key.
-fn peelHandle(_: *Runtime, local: *const lp.js.Local, fci: Fci, argc: usize) ?u32 {
+fn peelHandle(local: *const lp.js.Local, fci: Fci, argc: usize) ?u32 {
     if (argc == 0) return null;
     const last = fci.getArg(@intCast(argc - 1), local);
     if (!last.isObject()) return null;
@@ -463,7 +460,7 @@ fn resolveReadyGotos(self: *Runtime, local: *const lp.js.Local) void {
         if (frame == null or frame.?._last_navigate_error != null) {
             resolver.rejectError("goto", .{ .generic_error = "navigation failed" });
         } else if (ls == .load or ls == .complete or std.time.milliTimestamp() >= entry.deadline_ms) {
-            if (self.makeHandle(local, entry.frame_id)) |handle| {
+            if (makeHandle(local, entry.frame_id)) |handle| {
                 resolver.resolve("goto", handle);
             } else {
                 resolver.rejectError("goto", .{ .generic_error = "internal: handle alloc failed" });
@@ -687,7 +684,7 @@ fn throwTypeError(self: *Runtime, message: []const u8) void {
 /// (plain coercion gives a useless `[object Object]`), every other value via
 /// `toString`. Falls back to coercion when JSON.stringify fails (e.g. a circular
 /// reference) — the `TryCatch` swallows that throw on `deinit`.
-fn displayString(_: *Runtime, arena: std.mem.Allocator, value: lp.js.Value) ![]const u8 {
+fn displayString(arena: std.mem.Allocator, value: lp.js.Value) ![]const u8 {
     if (value.isObject()) {
         var tc: lp.js.TryCatch = undefined;
         tc.init(value.local);

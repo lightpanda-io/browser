@@ -42,8 +42,7 @@ const Context = @This();
 pub const GlobalScope = union(enum) {
     frame: *Frame,
     worker: *WorkerGlobalScope,
-    // The agent script runtime: a page-less, WebAPI-less context. Carries a
-    // back-pointer to its own Context (frames/workers store theirs in `.js`).
+    // Agent script runtime; back-points to its own Context (frames/workers store theirs in `.js`).
     bare: *Context,
 
     pub fn base(self: GlobalScope) [:0]const u8 {
@@ -66,8 +65,7 @@ pub const GlobalScope = union(enum) {
         switch (self) {
             .frame => |frame| frame.js = ctx,
             .worker => |worker| worker.js = ctx,
-            // The bare context is fixed; nothing to re-point.
-            .bare => {},
+            .bare => {}, // no separate storage to re-point
         }
     }
 };
@@ -222,7 +220,7 @@ pub fn deinit(self: *Context) void {
     }
 
     switch (self.global) {
-        // The bare agent context owns a standalone origin (no page to release to).
+        // Standalone origin; no page to release it back to.
         .bare => self.origin.deinit(env.app),
         else => self.page.releaseOrigin(self.origin),
     }

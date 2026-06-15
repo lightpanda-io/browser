@@ -125,7 +125,7 @@ pub fn newRawCallback(self: *const Local, callback: RawCallback, data: *anyopaqu
     return .{ .local = self, .handle = handle };
 }
 
-/// The context's global object, as a `js.Object` (e.g. to install globals on).
+/// The context's global object, as a `js.Object`.
 pub fn globalObject(self: *const Local) js.Object {
     return .{ .local = self, .handle = v8.v8__Context__Global(self.handle).? };
 }
