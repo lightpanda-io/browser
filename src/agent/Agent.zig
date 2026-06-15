@@ -743,11 +743,13 @@ fn handleUsage(self: *Agent) void {
 }
 
 /// Drop everything tied to the conversation: history (system prompt re-seeds
-/// lazily next turn), cumulative usage, the recorded action buffer, and DOM
-/// node IDs. Shared by `/clear` and `/reset`.
+/// lazily next turn), cumulative usage, the recorded action buffer and its save
+/// destination, and DOM node IDs. Shared by `/clear` and `/reset`.
 fn clearConversation(self: *Agent) void {
     self.conversation.rollback(0);
     self.save_buffer.reset();
+    if (self.save_path) |p| self.allocator.free(p);
+    self.save_path = null;
     self.total_usage = .{};
     self.node_registry.reset();
 }

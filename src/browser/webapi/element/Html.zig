@@ -387,12 +387,16 @@ pub fn togglePopover(self: *HtmlElement, force: ?bool, frame: *Frame) !bool {
 }
 
 pub fn getTabIndex(self: *HtmlElement) i32 {
-    const default: i32 = switch (self._type) {
+    if (self.asElement().getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
+        if (parseInteger(attr)) |tab_index| {
+            return tab_index;
+        }
+    }
+
+    return switch (self._type) {
         .anchor, .area, .button, .input, .select, .textarea, .iframe => 0,
         else => -1,
     };
-    const attr = self.asElement().getAttributeSafe(comptime .wrap("tabindex")) orelse return default;
-    return parseInteger(attr) orelse default;
 }
 
 pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {

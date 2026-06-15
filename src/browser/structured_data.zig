@@ -39,6 +39,13 @@ pub const AlternateLink = struct {
     title: ?[]const u8,
 };
 
+/// A relation discovered in the HTTP `Link:` response header (RFC 8288),
+/// restricted to the registered relations an agent can act on.
+pub const LinkRel = struct {
+    rel: []const u8,
+    href: []const u8,
+};
+
 pub const StructuredData = struct {
     json_ld: []const []const u8,
     open_graph: []const Property,
@@ -46,6 +53,7 @@ pub const StructuredData = struct {
     meta: []const Property,
     links: []const Property,
     alternate: []const AlternateLink,
+    link_headers: []const LinkRel,
 
     pub fn jsonStringify(self: *const StructuredData, jw: anytype) !void {
         try jw.beginObject();
@@ -84,6 +92,23 @@ pub const StructuredData = struct {
                     try jw.objectField("title");
                     try jw.write(v);
                 }
+                try jw.endObject();
+            }
+            try jw.endArray();
+        }
+
+        // Emitted only when present so existing consumers of the CDP/MCP
+        // structured-data shape see no new key on sites without a `Link:`
+        // response header.
+        if (self.link_headers.len > 0) {
+            try jw.objectField("linkHeaders");
+            try jw.beginArray();
+            for (self.link_headers) |lh| {
+                try jw.beginObject();
+                try jw.objectField("rel");
+                try jw.write(lh.rel);
+                try jw.objectField("href");
+                try jw.write(lh.href);
                 try jw.endObject();
             }
             try jw.endArray();
@@ -144,6 +169,7 @@ pub fn collectStructuredData(
     var meta: std.ArrayList(Property) = .empty;
     var links: std.ArrayList(Property) = .empty;
     var alternate: std.ArrayList(AlternateLink) = .empty;
+    var link_headers: std.ArrayList(LinkRel) = .empty;
 
     // Extract language from the root <html> element.
     if (root.is(Element)) |root_el| {
@@ -182,6 +208,10 @@ pub fn collectStructuredData(
         }
     }
 
+    // The `Link:` response header lives on the frame, not in the DOM, so it is
+    // collected separately from the navigation's retained headers.
+    try collectLinkHeaders(arena, frame, &link_headers);
+
     return .{
         .json_ld = json_ld.items,
         .open_graph = open_graph.items,
@@ -189,7 +219,148 @@ pub fn collectStructuredData(
         .meta = meta.items,
         .links = links.items,
         .alternate = alternate.items,
+        .link_headers = link_headers.items,
     };
+}
+
+/// Parse every `Link:` response header retained on the frame, surfacing only the
+/// registered, agent-useful relations. Relative targets are resolved against the
+/// frame's base URL, mirroring `collectLink`.
+fn collectLinkHeaders(
+    arena: Allocator,
+    frame: *Frame,
+    out: *std.ArrayList(LinkRel),
+) !void {
+    // Registered link relations we surface from the HTTP `Link:` response header
+    // (RFC 8288).
+    const header_link_rels = [_][]const u8{ "service-doc", "service-desc", "api" };
+
+    for (frame._http_headers.items) |header| {
+        if (!std.ascii.eqlIgnoreCase(header.name, "link")) {
+            continue;
+        }
+
+        var it: LinkHeaderIterator = .{ .value = header.value };
+        while (it.next()) |entry| {
+            const rel_value = entry.rel orelse continue;
+
+            // The `rel` parameter is a space-separated list of relation types.
+            var rel_it = std.mem.tokenizeAny(u8, rel_value, " \t");
+            while (rel_it.next()) |rel_token| {
+                const known = for (header_link_rels) |candidate| {
+                    if (std.ascii.eqlIgnoreCase(rel_token, candidate)) {
+                        break candidate;
+                    }
+                } else continue;
+
+                const href = URL.resolve(arena, frame.base(), entry.target, .{ .encoding = frame.charset }) catch entry.target;
+
+                // Drop duplicate (rel, href) pairs (it happens)
+                for (out.items) |existing| {
+                    if (std.mem.eql(u8, existing.rel, known) and std.mem.eql(u8, existing.href, href)) {
+                        break;
+                    }
+                } else {
+                    try out.append(arena, .{ .rel = known, .href = href });
+                }
+            }
+        }
+    }
+}
+
+/// One `< target >; param=value; ...` entry of an RFC 8288 `Link` header value.
+const LinkHeaderEntry = struct {
+    target: []const u8,
+    rel: ?[]const u8,
+};
+
+/// Splits a `Link:` header field value into its comma-separated link-values,
+/// skipping commas that fall inside the `<...>` target or a `"..."` quoted
+/// parameter value (RFC 8288 §3).
+const LinkHeaderIterator = struct {
+    i: usize = 0,
+    value: []const u8,
+
+    fn next(self: *LinkHeaderIterator) ?LinkHeaderEntry {
+        const v = self.value;
+
+        while (true) {
+            // Skip separators and whitespace between link-values. The comma that
+            // ended the previous link-value is consumed here.
+            for (v[self.i..]) |c| {
+                if (std.ascii.isWhitespace(c) == false and c != ',') {
+                    break;
+                }
+                self.i += 1;
+            } else {
+                return null;
+            }
+
+            // A link-value must begin with the angle-bracketed target.
+            if (v[self.i] != '<') {
+                self.skipToNextComma();
+                continue;
+            }
+
+            const target_start = self.i + 1;
+            const gt = std.mem.indexOfScalarPos(u8, v, target_start, '>') orelse {
+                self.i = v.len;
+                return null;
+            };
+            const target = v[target_start..gt];
+            self.i = gt + 1;
+
+            // Parameters run to the next top-level comma, left at `self.i`.
+            const params_start = self.i;
+            self.skipToNextComma();
+            return .{ .target = target, .rel = extractRel(v[params_start..self.i]) };
+        }
+    }
+
+    // Advance until `self.i` sits on the next top-level comma (one outside a
+    // `"..."` quoted-string, honouring RFC 7230 backslash escapes) or the end
+    // of the value. The comma itself is left for the leading-separator skip.
+    fn skipToNextComma(self: *LinkHeaderIterator) void {
+        const v = self.value;
+        var in_quotes = false;
+        while (self.i < v.len) : (self.i += 1) {
+            const c = v[self.i];
+
+            if (c == ',' and in_quotes == false) {
+                return;
+            }
+
+            if (c == '\\' and in_quotes) {
+                // Skip the escaped byte; guard a trailing backslash.
+                if (self.i + 1 < v.len) {
+                    self.i += 1;
+                }
+            } else if (c == '"') {
+                in_quotes = !in_quotes;
+            }
+        }
+    }
+};
+
+/// Return the (unquoted) value of the `rel` parameter from a link-value's
+/// parameter list, or null when absent.
+fn extractRel(params: []const u8) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, params, ';');
+    while (it.next()) |raw_param| {
+        const param = std.mem.trim(u8, raw_param, &std.ascii.whitespace);
+        const eq = std.mem.indexOfScalarPos(u8, param, 0, '=') orelse continue;
+        const name = std.mem.trim(u8, param[0..eq], &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(name, "rel") == false) {
+            continue;
+        }
+
+        var val = std.mem.trim(u8, param[eq + 1 ..], &std.ascii.whitespace);
+        if (val.len >= 2 and val[0] == '"' and val[val.len - 1] == '"') {
+            val = val[1 .. val.len - 1];
+        }
+        return val;
+    }
+    return null;
 }
 
 fn collectJsonLd(
@@ -482,6 +653,78 @@ test "structured_data: charset and http-equiv" {
     defer testing.test_session.removePage();
     try testing.expectEqual("utf-8", findProperty(data.meta, "charset").?);
     try testing.expectEqual("text/html; charset=utf-8", findProperty(data.meta, "Content-Type").?);
+}
+
+test "structured_data: parseLinkHeader - single link with quoted rel" {
+    var it: LinkHeaderIterator = .{ .value = 
+        \\<https://api.example.com/openapi.json>; rel="service-desc"
+    };
+    const entry = it.next().?;
+    try testing.expectString("https://api.example.com/openapi.json", entry.target);
+    try testing.expectString("service-desc", entry.rel.?);
+    try testing.expectEqual(null, it.next());
+}
+
+test "structured_data: parseLinkHeader - multiple links and unquoted rel" {
+    var it: LinkHeaderIterator = .{ .value = 
+        \\<https://docs.example.com/>; rel=service-doc, </style.css>; rel="stylesheet"; type="text/css"
+    };
+    const first = it.next().?;
+    try testing.expectString("https://docs.example.com/", first.target);
+    try testing.expectString("service-doc", first.rel.?);
+
+    const second = it.next().?;
+    try testing.expectString("/style.css", second.target);
+    // A comma inside the quoted type param must not split the link-value.
+    try testing.expectString("stylesheet", second.rel.?);
+
+    try testing.expectEqual(null, it.next());
+}
+
+test "structured_data: parseLinkHeader - escaped quote in param does not split link" {
+    // A backslash-escaped quote inside an earlier param must not terminate the
+    // quoted-string, so the comma inside it is not treated as a separator.
+    var it: LinkHeaderIterator = .{ .value = 
+        \\<https://a/>; title="x\",y"; rel="service-doc"
+    };
+    const entry = it.next().?;
+    try testing.expectString("https://a/", entry.target);
+    try testing.expectString("service-doc", entry.rel.?);
+    try testing.expectEqual(null, it.next());
+}
+
+test "structured_data: link headers from response" {
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+
+    // Stand in for what frameHeaderDoneCallback records from the navigation.
+    try frame._http_headers.append(frame.arena, .{ .name = "Link", .value = 
+        \\<https://docs.example.com/>; rel="service-doc"
+    });
+    try frame._http_headers.append(frame.arena, .{ .name = "link", .value = 
+        \\<https://api.example.com/spec>; rel="service-desc", </css/site.css>; rel="stylesheet"
+    });
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(), "<title>Example</title>");
+
+    const data = try collectStructuredData(div.asNode(), frame.call_arena, frame);
+
+    // service-doc + service-desc are surfaced; stylesheet is filtered out.
+    try testing.expectEqual(2, data.link_headers.len);
+    try testing.expectString("service-doc", data.link_headers[0].rel);
+    try testing.expectString("https://docs.example.com/", data.link_headers[0].href);
+    try testing.expectString("service-desc", data.link_headers[1].rel);
+    try testing.expectString("https://api.example.com/spec", data.link_headers[1].href);
+}
+
+test "structured_data: no link header yields empty list" {
+    const data = try testStructuredData(
+        \\<link rel="canonical" href="https://example.com">
+    );
+    defer testing.test_session.removePage();
+    try testing.expectEqual(0, data.link_headers.len);
 }
 
 test "structured_data: mixed content" {

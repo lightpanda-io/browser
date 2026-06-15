@@ -167,6 +167,9 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
 const testing = @import("../testing.zig");
 
 test "cdp.runtime: consoleAPICalled type matches the console method" {
+    const filter: testing.LogFilter = .init(&.{.js});
+    defer filter.deinit();
+
     // Wire types per the CDP protocol: console.log -> "log",
     // console.warn -> "warning" (not "warn"), console.info -> "info",
     // console.error -> "error", console.debug -> "debug".

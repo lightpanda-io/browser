@@ -22,10 +22,12 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
+const Config = @import("../../Config.zig");
 const URL = @import("../../browser/URL.zig");
 const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
+const Headers = @import("../../browser/HttpClient.zig").Headers;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
 
@@ -108,7 +110,24 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
     try extra_headers.ensureTotalCapacity(arena, params.headers.map.count());
     var it = params.headers.map.iterator();
     while (it.next()) |header| {
-        const header_string = try std.fmt.allocPrintSentinel(arena, "{s}: {s}", .{ header.key_ptr.*, header.value_ptr.* }, 0);
+        const key = header.key_ptr.*;
+        const value = header.value_ptr.*;
+
+        if (std.mem.indexOfAny(u8, key, "\r\n") != null or std.mem.indexOfAny(u8, value, "\r\n") != null) {
+            log.warn(.not_implemented, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name/value must not contain CR or LF" });
+            continue;
+        }
+
+        const header_string = try std.fmt.allocPrintSentinel(arena, "{s}: {s}", .{ key, value }, 0);
+
+        if (Headers.parseHeader(header_string)) |parsed| {
+            if (std.ascii.eqlIgnoreCase(parsed.name, "user-agent")) {
+                Config.validateUserAgent(parsed.value) catch |err| {
+                    log.warn(.not_implemented, "network.setExtraHTTPHeaders", .{ .param = "userAgent", .value = parsed.value, .err = err });
+                    continue;
+                };
+            }
+        }
         extra_headers.appendAssumeCapacity(header_string);
     }
 
@@ -307,9 +326,11 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     const frame_id = req.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
-    // Modify request with extra CDP headers
+    // Modify request with extra CDP headers. Use set (replace by name) so a
+    // caller-supplied header overrides a built-in default of the same name
+    // (e.g. User-Agent) instead of producing a duplicate libcurl drops.
     for (bc.extra_headers.items) |extra| {
-        try req.headers.add(extra);
+        try req.headers.set(extra);
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
@@ -550,6 +571,109 @@ test "cdp.network setExtraHTTPHeaders" {
 
     const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual(bc.extra_headers.items.len, 1);
+}
+
+test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "NID-UA1", .session_id = "NESI-UA1" });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{
+            .@"User-Agent" = "Bot/1.0\x01hidden",
+            .@"x-custom" = "hi",
+        } },
+    });
+
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    try testing.expectEqual("x-custom: hi", std.mem.span(bc.extra_headers.items[0]));
+}
+
+test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA2", .session_id = "NESI-UA2" });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{ .@"User-Agent" = "Mozilla/5.0" } },
+    });
+
+    const bc = ctx.cdp().browser_context.?;
+    try testing.expectEqual(bc.extra_headers.items.len, 0);
+}
+
+test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA3", .session_id = "NESI-UA3" });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{ .@"User-Agent" = "CustomBot/2.0" } },
+    });
+
+    const bc = ctx.cdp().browser_context.?;
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+}
+
+test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via a colon in the key" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA4", .session_id = "NESI-UA4" });
+
+    // A colon in the key desyncs the raw key from the first-colon parse that
+    // req.headers.set/libcurl use: "User-Agent:Mozilla/5.0 (X: Y)" parses to
+    // name="User-Agent", value="Mozilla/5.0 (X: Y)" on the wire.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{ .@"User-Agent:Mozilla/5.0 (X" = "Y)" } },
+    });
+
+    const bc = ctx.cdp().browser_context.?;
+    try testing.expectEqual(bc.extra_headers.items.len, 0);
+}
+
+test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "NID-UA5", .session_id = "NESI-UA5" });
+
+    // The CRLF in the value would inject a second User-Agent line that never
+    // saw validation; the whole header must be dropped.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{
+            .@"x-custom" = "bar\r\nUser-Agent: Mozilla/5.0",
+            .@"x-keep" = "ok",
+        } },
+    });
+
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    try testing.expectEqual("x-keep: ok", std.mem.span(bc.extra_headers.items[0]));
 }
 
 test "cdp.Network: cookies" {
