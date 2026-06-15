@@ -335,7 +335,6 @@ fn promiseState(promise: *const v8.Promise) c_int {
 /// Drives the browser until the root Promise settles. Returns an interrupt
 /// message (SIGINT/terminate), or null once it settles or stalls.
 fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8.Promise) RunError!?[]const u8 {
-    var runner: ?lp.Session.Runner = null;
     while (promiseState(root) == v8.kPending) {
         if (self.session.isCancelled()) return try self.dupeError("cancelled");
         if (self.env.terminatePending()) return try self.dupeError("terminated");
@@ -347,17 +346,15 @@ fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8
         {
             self.session.browser.env.isolate.enter();
             defer self.session.browser.env.isolate.exit();
-            if (runner == null) {
-                runner = self.session.runner(.{}) catch null;
-            }
-            if (runner) |*r| {
-                // A failed tick must not abort the wait; the deadline bounds it.
-                const tick: TickResult = r.tick(.{ .ms = 100 }) catch .{ .done = {} };
-                next_tick_ms = switch (tick) {
-                    .ok => |ms| ms,
-                    .done => 0,
-                };
-            }
+            // A goto is in flight, so a page exists; `catch break` only guards
+            // the impossible no-page case against an endless loop.
+            var runner = self.session.runner(.{}) catch break;
+            // A failed tick must not abort the wait; the deadline bounds it.
+            const tick: TickResult = runner.tick(.{ .ms = 100 }) catch .{ .done = {} };
+            next_tick_ms = switch (tick) {
+                .ok => |ms| ms,
+                .done => 0,
+            };
         }
 
         self.resolveReadyGotos(context);

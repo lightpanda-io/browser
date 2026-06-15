@@ -32,12 +32,11 @@ web page's JavaScript context.
 - Agent variables persist for the lifetime of one script run, across
   navigations and primitive calls. A later `lightpanda agent script.js` run
   starts with a fresh agent context.
-- `goto(url)` is asynchronous and resolves to a **page handle** — always
-  `await goto(...)`. Every other primitive is synchronous; do not `await` them
-  (`const data = extract({ ... })`, not `await extract(...)`). The script body
-  runs as an async function, so top-level `await` is allowed. The read tools act
-  on the latest `goto` by default; pass a handle as their optional last argument
-  to target a specific page (needed only for parallel `Promise.all` fetches).
+- `goto(url)` is asynchronous — always use `await goto(...)`. Every other primitive
+  is synchronous; do not `await` them (`const data = extract({ ... })`, not
+  `await extract(...)`). The script body runs as an async function, so top-level
+  `await` is allowed. (`goto` returns a page handle for parallel fetches — see
+  Navigation below.)
 - Tool failures throw JavaScript `Error` exceptions (a `goto` failure rejects
   its Promise, so `await` throws) and stop execution unless you catch them.
 - The script's output is whatever it `return`s, printed automatically (objects

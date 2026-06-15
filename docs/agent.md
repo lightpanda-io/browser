@@ -361,13 +361,14 @@ click({ selector: "a.login" });
 return evaluate("document.title");
 ```
 
-`goto(url)` is **asynchronous** and resolves to a **page handle** — always
-`await goto(...)`. Every other primitive is **synchronous**: each returns its
-result directly, so write `const data = extract(…)`, not `await extract(…)`.
-The script body runs as an async function, so top-level `await` is allowed.
-The read tools act on the latest `goto` by default; to fetch several pages at
-once, `await Promise.all([goto(a), goto(b)])` and pass each handle as the
-optional last argument of a tool — `extract(schema, a)`.
+`goto(url)` is **asynchronous** — always use `await goto(...)`. Every other
+primitive is **synchronous**: each returns its result directly, so write
+`const data = extract(…)`, not `await extract(…)`. The script body runs as an
+async function, so top-level `await` is allowed.
+
+`await goto(...)` resolves to a **page handle**. You don't need it for one page
+at a time, but to fetch several at once, `await Promise.all([goto(a), goto(b)])`
+and pass each handle as a tool's optional last argument — `extract(schema, a)`.
 
 It's not Node.js. There's no `require`, `process`, `fs`, npm package
 loading, or Node standard library. The `evaluate(...)` primitive runs its
