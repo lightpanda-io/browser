@@ -27,7 +27,6 @@ pub const ResolveOptions = struct {
     /// null = don't encode, "UTF-8" = standard percent encoding,
     /// other charset = encode query string using that charset with NCR fallback.
     encoding: ?[]const u8 = null,
-    always_dupe: bool = false,
 };
 
 pub fn resolve(

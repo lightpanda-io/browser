@@ -52,7 +52,7 @@ pub fn setScrollRestoration(self: *History, str: []const u8) void {
 pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
     const arena = frame._session.arena;
     const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena, frame.url, u, .{ .always_dupe = true })
+        try @import("../URL.zig").resolve(arena, frame.url, u, .{})
     else
         try arena.dupeZ(u8, frame.url);
 
@@ -67,7 +67,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
 pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
     const arena = frame._session.arena;
     const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena, frame.url, u, .{ .always_dupe = true })
+        try @import("../URL.zig").resolve(arena, frame.url, u, .{})
     else
         try arena.dupeZ(u8, frame.url);
 

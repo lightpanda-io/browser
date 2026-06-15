@@ -319,7 +319,7 @@ fn resolveQueryUrl(exec: *const Execution, _override: ?[]const u8) ![:0]const u8
     const current = exec.url.*;
     const override = _override orelse return current;
 
-    const resolved = try URL.resolve(exec.call_arena, exec.base(), override, .{ .always_dupe = true });
+    const resolved = try URL.resolve(exec.call_arena, exec.base(), override, .{});
     if (!exec.isSameOrigin(resolved)) return error.SecurityError;
 
     switch (exec.js.global) {
