@@ -46,7 +46,7 @@ console_observer: ?ConsoleObserver = null,
 
 /// In-flight `goto` navigations the driver loop settles. Concurrent gotos open
 /// popup frames so they coexist; a sequential goto replaces the page.
-pending_gotos: std.ArrayListUnmanaged(PendingGoto) = .empty,
+pending_gotos: std.ArrayList(PendingGoto) = .empty,
 
 /// Most-recent `goto`'s frame — the default target when no handle is passed.
 current_frame_id: ?u32 = null,
