@@ -358,11 +358,21 @@ const CacheContext = struct {
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
+        if (self.stale_entry) |entry| {
+            self.stale_entry = null;
+            entry.data.deinit();
+        }
+
         self.forward.forwardShutdown();
     }
 
     fn errorCallback(ctx: *anyopaque, e: anyerror) void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
+        if (self.stale_entry) |entry| {
+            self.stale_entry = null;
+            entry.data.deinit();
+        }
+
         self.forward.forwardErr(e);
     }
 };
