@@ -291,14 +291,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // "No API key detected" for a run that does not need one.
     const resolve = !opts.no_llm and requires_llm;
 
-    // Print the banner before provider resolution so it precedes any
-    // interactive "Select a provider" prompt. On error paths (missing key / no
-    // key detected) resolveCredentials prints its own message; banner skipped.
-    if (will_repl and (!resolve or settings.wouldResolve(allocator, opts, remembered))) {
-        welcome.print(resolve);
-    }
+    // Print the banner before resolution so it precedes the interactive picker.
+    // The Ollama-only path never prompts, so its banner is deferred (below) to
+    // avoid probing the local server a second time just to decide ordering.
+    const banner_before = will_repl and (!resolve or settings.hasDetectableKey(opts, remembered));
+    if (banner_before) welcome.print(resolve);
 
     const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
+
+    if (will_repl and !banner_before and resolved != null) welcome.print(resolve);
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
 
     if (llm == null and requires_llm) {

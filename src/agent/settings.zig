@@ -51,14 +51,14 @@ fn detectOllama(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credenti
     return .{ .provider = .ollama, .key = key };
 }
 
-/// Returns true when resolveCredentials would succeed (no error, non-null).
-/// Used by callers that need to print a banner before calling resolveCredentials.
-pub fn wouldResolve(allocator: std.mem.Allocator, opts: Config.Agent, remembered: ?Remembered) bool {
+/// True when a non-Ollama provider key is available (flag, remembered, or
+/// env-detected). Skips the Ollama probe so it isn't run twice at startup; the
+/// interactive picker only fires on detected keys, which this still catches.
+pub fn hasDetectableKey(opts: Config.Agent, remembered: ?Remembered) bool {
     if (opts.provider) |p| return zenai.provider.envApiKey(p) != null;
     if (remembered) |r| if (r.provider) |p| if (zenai.provider.envApiKey(p)) |_| return true;
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
-    if (zenai.provider.detectKeys(&buf, zenai.provider.default_candidates).len > 0) return true;
-    return detectOllama(allocator, opts.base_url) != null;
+    return zenai.provider.detectKeys(&buf, zenai.provider.default_candidates).len > 0;
 }
 
 /// Precedence: `--provider` > remembered (if its key is still set) > first
