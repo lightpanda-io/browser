@@ -356,22 +356,26 @@ session).
 are plain JavaScript plus the installed Lightpanda primitives:
 
 ```js
-await goto("https://example.com");
-click({ selector: "a.login" });
-return evaluate("document.title");
+const page = new Page();
+await page.goto("https://example.com");
+page.click({ selector: "a.login" });
+return page.evaluate("document.title");
 ```
 
-`goto(url)` is **asynchronous** — always use `await goto(...)`. Every other
-primitive is **synchronous**: each returns its result directly, so write
-`const data = extract(…)`, not `await extract(…)`. The script body runs as an
-async function, so top-level `await` is allowed.
+`Page` is the only global: `new Page()` makes a page and `await page.goto(url)`
+navigates it. `page.goto(url)` is **asynchronous** — always `await` it. Every
+other method is **synchronous**: each returns its result directly, so write
+`const data = page.extract(…)`, not `await page.extract(…)`. The script body
+runs as an async function, so top-level `await` is allowed.
 
-`await goto(...)` resolves to a **page handle**. You don't need it for one page
-at a time, but to fetch several at once, `await Promise.all([goto(a), goto(b)])`
-and pass each handle as a tool's optional last argument — `extract(schema, a)`.
+Re-navigating reuses the same page object (`await page.goto(url2)`). To fetch
+several pages at once, make a page each and navigate them together:
+`const a = new Page(), b = new Page(); await Promise.all([a.goto(x), b.goto(y)])`,
+then read each through its own object (`a.extract(schema)`). Free a page you no
+longer need with `page.close()`.
 
 It's not Node.js. There's no `require`, `process`, `fs`, npm package
-loading, or Node standard library. The `evaluate(...)` primitive runs its
+loading, or Node standard library. The `page.evaluate(...)` primitive runs its
 string in the current page context; page scripts can't see agent variables
 or agent primitives.
 

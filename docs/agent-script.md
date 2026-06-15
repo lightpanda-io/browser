@@ -1,11 +1,12 @@
 # Agent JavaScript scripts
 
 `lightpanda agent <script.js>` runs a JavaScript file that drives a
-Lightpanda browser session. Navigation goes through a global `goto(url)` that
-returns a **page object**; every other browser action is a method on that page
-(`page.extract(...)`, `page.click(...)`, …). The format is intentionally plain
-JavaScript: use normal variables, functions, loops, objects, arrays,
-`JSON.parse`, `JSON.stringify`, and other standard ECMAScript built-ins.
+Lightpanda browser session. Pages are created with the global `Page` class —
+`new Page()` makes a page and `await page.goto(url)` navigates it; every other
+browser action is a method on that page (`page.extract(...)`, `page.click(...)`,
+…). The format is intentionally plain JavaScript: use normal variables,
+functions, loops, objects, arrays, `JSON.parse`, `JSON.stringify`, and other
+standard ECMAScript built-ins.
 
 ```console
 ./lightpanda agent session.js
@@ -33,10 +34,10 @@ web page's JavaScript context.
 - Agent variables persist for the lifetime of one script run, across
   navigations and primitive calls. A later `lightpanda agent script.js` run
   starts with a fresh agent context.
-- `goto(url)` is asynchronous — always use `await goto(...)`. Every page method
-  is synchronous; do not `await` them (`const data = page.extract({ ... })`, not
-  `await page.extract(...)`). The script body runs as an async function, so
-  top-level `await` is allowed.
+- `page.goto(url)` is asynchronous — always use `await page.goto(...)`. Every
+  other page method is synchronous; do not `await` them (`const data =
+  page.extract({ ... })`, not `await page.extract(...)`). The script body runs
+  as an async function, so top-level `await` is allowed.
 - Tool failures throw JavaScript `Error` exceptions (a `goto` failure rejects
   its Promise, so `await` throws) and stop execution unless you catch them.
 - The script's output is whatever it `return`s, printed automatically (objects
@@ -64,7 +65,8 @@ your schema — an object schema returns an object keyed by your fields (even wi
 a single field), and a bare array schema returns an array:
 
 ```js
-const page = await goto("https://news.ycombinator.com/");
+const page = new Page();
+await page.goto("https://news.ycombinator.com/");
 
 const data = page.extract({
   title: "title",
@@ -109,12 +111,15 @@ cyclic objects do not.
 
 ## Installed Primitives
 
-`goto` is the only global; it opens a page and resolves a page object. Every
-other browser primitive is a method on that page object:
+`Page` is the only global. `new Page()` makes a page object; every browser
+primitive is a method on it. `page.goto` navigates; `page.close` frees the
+page; everything else reads or acts on the loaded document:
 
 | Primitive | Arguments | Runs in |
 |-----------|-----------|---------|
-| `goto` | `await goto(url[, { timeout }])` (async; resolves a page object) | Browser session |
+| `Page` | `new Page()` (no navigation yet) | Agent context |
+| `page.goto` | `await page.goto(url[, { timeout }])` (async) | Browser session |
+| `page.close` | `page.close()` | Browser session |
 | `page.extract` | `page.extract(schema)` or `page.extract({ schema })` | Browser page via extractor; returns a JS object or array |
 | `page.evaluate` | `page.evaluate(script[, { url, timeout, save }])` | Browser page JS context |
 | `page.click` | `page.click(selector)` or `page.click({ selector })` | Browser page |
@@ -128,12 +133,12 @@ other browser primitive is a method on that page object:
 | `page.selectOption` | `page.selectOption(selector, value)` or `page.selectOption({ selector, value })` | Browser page |
 | `page.setChecked` | `page.setChecked(selector[, checked])` or `page.setChecked({ selector, checked })` | Browser page |
 
-`goto` returns at the `load` event (a fast snapshot). When a page's content is
-still loading (rendered by post-load JS), call `page.waitForState("networkidle")`
-before reading. `waitForState`'s `state` accepts `"load"`,
-`"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`, or `"done"`.
-`goto`'s `timeout` defaults to 10000 ms; the `waitFor*` timeouts default to
-5000 ms.
+`page.goto` returns at the `load` event (a fast snapshot). When a page's content
+is still loading (rendered by post-load JS), call
+`page.waitForState("networkidle")` before reading. `waitForState`'s `state`
+accepts `"load"`, `"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`,
+or `"done"`. `goto`'s `timeout` defaults to 10000 ms; the `waitFor*` timeouts
+default to 5000 ms.
 
 The `[, { … }]` is an optional trailing options object: leading arguments are
 positional (`page.waitForSelector("#row", { timeout: 2000 })`), and the options
@@ -143,7 +148,7 @@ that's the shape `/save` records into saved scripts. An option can't be a bare
 positional, though: `page.waitForSelector("#row", 2000)` is an error. A `null`
 positional omits that field (`page.press(null, "Enter")` presses on the focused
 element), and setting the same field positionally and in the options object
-(`goto(url, { url: ... })`) is an `invalid arguments` error.
+(`page.goto(url, { url: ... })`) is an `invalid arguments` error.
 
 Page methods address elements by CSS selector only. The tools that hand out
 `backendNodeId`s (`tree`, `findElement`, `nodeDetails`) aren't installed in the
@@ -154,55 +159,69 @@ get a durable CSS `selector`, then paste that into your script.
 
 ## Navigation
 
-Use `await goto(...)` to open a page (it is asynchronous). It returns a page
-object you call every other primitive on:
+Create a page with `new Page()`, then `await page.goto(...)` to navigate it (it
+is asynchronous). A fresh `new Page()` has no document yet — call `page.goto`
+before any other method, or you get `page is not navigated or has been closed`.
 
 ```js
-const page = await goto("https://example.com");
+const page = new Page();
+await page.goto("https://example.com");
 
-const page2 = await goto({
+await page.goto({
   url: "https://example.com/app",
   timeout: 15000
 });
 ```
 
-The Promise resolves to a **page object** and rejects if navigation fails. A
-timeout does **not** reject: the page stays in whatever state it reached, so
-follow with `page.waitForState(...)` / `page.waitForSelector(...)` when
-completeness matters.
+The Promise resolves to the page object (the same one) and rejects if navigation
+fails. A timeout does **not** reject: the page stays in whatever state it
+reached, so follow with `page.waitForState(...)` / `page.waitForSelector(...)`
+when completeness matters.
 
-A page object is bound to one loaded document. Navigating again — calling `goto`
-a second time — opens a fresh page and replaces the old one; re-navigate by
-calling `goto` again and rebinding your variable:
+**Re-navigating reuses the same page object.** Calling `page.goto` again moves
+the page to a new document; the object stays valid, so there's no rebind to
+track:
 
 ```js
-let page = await goto("https://example.com");
+const page = new Page();
+await page.goto("https://example.com");
 page.click("#next");
-page = await goto("https://example.com/step2"); // replaces; rebind `page`
+await page.goto("https://example.com/step2"); // same `page`, now on step2
 const data = page.extract({ title: "h1" });
 ```
 
-After a replacing `goto`, the previous page object is **stale**: calling a method
-on it throws `page handle is no longer valid`. Always read through the page
-object from the most recent `goto`.
-
-For **parallel** fetches, start several `goto`s at once with `Promise.all`. Those
-pages coexist (they open as popup frames) and each is read through its own page
-object:
+For **parallel** fetches, make several pages and navigate them together with
+`Promise.all`. Those pages coexist (they open as popup frames) and each is read
+through its own page object:
 
 ```js
-const [a, b] = await Promise.all([
-  goto("https://example.com/a"),
-  goto("https://example.com/b"),
+const a = new Page();
+const b = new Page();
+await Promise.all([
+  a.goto("https://example.com/a"),
+  b.goto("https://example.com/b"),
 ]);
 const da = a.extract({ title: "h1" }); // reads page a
 const db = b.extract({ title: "h1" }); // reads page b
 a.click("#more");                       // any method works on either
 ```
 
-Pages from a parallel batch stay alive until the next *sequential* `goto` (one
-with nothing else in flight), which replaces them. So read a batch's pages
-before your next standalone `goto` — don't stash one across it.
+A single page that re-navigates always stays valid. But a *new* page navigated
+sequentially (nothing else in flight) replaces the root page, so any earlier
+page goes **stale** — calling a method on it throws `page handle is no longer
+valid`:
+
+```js
+const a = new Page();
+await a.goto("https://example.com/a");
+const b = new Page();
+await b.goto("https://example.com/b"); // replaces the root; `a` is now stale
+a.extract({ title: "h1" });            // throws: page handle is no longer valid
+```
+
+Read a parallel batch's pages before your next standalone navigation, and call
+`page.close()` to free a page (a popup) you're done with mid-script. The root
+page is reclaimed at script end.
 
 ## Structured Extraction
 
@@ -255,9 +274,9 @@ wrong", not "the page is empty".
 
 `page.extract(...)` reads only that page. For list-to-detail scraping — capture
 a list, then visit each row for more — capture the list, then loop in the
-script: `goto` each row's URL and `extract` the detail. The local agent context
-keeps the data across navigations, so the assembly happens in plain JavaScript.
-See the [complete example](#complete-example) below.
+script: `await page.goto(...)` each row's URL and `extract` the detail. The
+local agent context keeps the data across navigations, so the assembly happens
+in plain JavaScript. See the [complete example](#complete-example) below.
 
 When passing an object directly to `page.extract(...)`, the runtime serializes
 it as the extractor schema. These forms are equivalent:
@@ -278,7 +297,8 @@ results in local variables instead.
 context. Its script string runs where `window` and `document` exist.
 
 ```js
-const page = await goto("https://example.com");
+const page = new Page();
+await page.goto("https://example.com");
 
 const title = page.evaluate("document.title");
 console.log(title);
@@ -314,7 +334,8 @@ The action methods operate on the page they're called on. Most take one object
 whose fields match the browser tool schema:
 
 ```js
-const page = await goto("https://example.com/login");
+const page = new Page();
+await page.goto("https://example.com/login");
 
 page.click({ selector: "a.login" });
 page.fill({ selector: "input[name='acct']", value: "$LP_HN_USERNAME" });
@@ -354,23 +375,25 @@ The REPL remains slash-command based:
 > /save
 ```
 
-`/save` writes JavaScript by default — binding `page` on each `goto` and calling
-every other tool as a method on it:
+`/save` writes JavaScript by default — making the page once up front, then
+calling every recorded tool as a method on it (`goto` awaited, the rest
+synchronous):
 
 ```js
-let page = await goto("https://example.com");
+const page = new Page();
+await page.goto("https://example.com");
 page.click({ selector: "a.login" });
 ```
 
-A later `/goto` in the same session reassigns the variable (`page = await
-goto(...)`), matching the REPL's replace-in-place navigation.
+A later `/goto` in the same session records as another `await page.goto(...)` on
+the same page, matching the REPL's replace-in-place navigation.
 
 Only replayable browser actions are recorded:
 
 - Recorded: `goto`, `click`, `fill`, `scroll`, `hover`, `press`,
   `selectOption`, `setChecked`, `waitForSelector`, `waitForScript`,
-  `waitForState`, `evaluate`, and `extract` — the same set installed as script
-  primitives.
+  `waitForState`, `evaluate`, and `extract` — the same set installed as page
+  methods.
 - Not recorded: read-only exploration tools such as `tree`, `markdown`, `html`,
   `links`, `findElement`, `consoleLogs`, `getUrl`, `getCookies`, and `getEnv`.
 - Natural-language prompts are written as `//` comments above the actions they
@@ -399,8 +422,9 @@ Common failures:
 |-------|---------|
 | `ReferenceError: document is not defined` | You tried to use browser DOM APIs in the agent context. Use `page.extract(...)` or `page.evaluate(...)`. |
 | `ReferenceError: require is not defined` | Agent scripts are not Node.js scripts. |
-| `this must be called as a method on a page returned by goto()` | A page primitive was called as a bare function. Call it on the page object: `page.click(...)`. |
-| `page handle is no longer valid` | The page object was used after a later `goto` replaced its page. Read through the most recent `goto`'s page object. |
+| `Page must be called with new` | `Page(...)` was called without `new`. Use `const page = new Page();`. |
+| `page is not navigated or has been closed` | A method ran on a fresh `new Page()` (or one already closed). Call `await page.goto(url)` first. |
+| `page handle is no longer valid` | The page was used after a later sequential navigation replaced the root page. Read through the current page. |
 | `no page loaded - run goto(url) first` | A page-dependent primitive ran before navigation. |
 | `invalid arguments` | A primitive received the wrong number or shape of arguments, or a non-JSON-serializable value. |
 | `extract: no schema selector matched any element` | Every field in the schema missed. Fix the selectors; an empty page section yields `null`/`[]` per field, not this error. |
@@ -414,7 +438,8 @@ the local agent script, not in the page.
 ```js
 const HN = "https://news.ycombinator.com";
 
-let page = await goto(HN);
+const page = new Page();
+await page.goto(HN);
 
 const { stories } = page.extract({
   stories: [{
@@ -432,7 +457,7 @@ for (const story of stories) {
   story.comments = [];
   if (!story.id) continue;
 
-  page = await goto(`${HN}/item?id=${story.id}`);
+  await page.goto(`${HN}/item?id=${story.id}`);
   const { comments } = page.extract({
     comments: [{
       selector: "tr.athing.comtr:has(.commtext)",

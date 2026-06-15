@@ -363,6 +363,54 @@ pub fn removePage(self: *Session) void {
     }
 }
 
+/// Tear down a single script-opened popup: detach it from its page and queue
+/// its frame for destruction. Returns false (tearing nothing down) when `frame`
+/// is not a popup — e.g. the root frame, which has no single-page teardown.
+/// Shared by `Window.close` and the agent script runtime's `page.close()`.
+pub fn closePopup(self: *Session, frame: *Frame) bool {
+    const page = frame._page;
+    const window = frame.window;
+
+    var popup_index: usize = 0;
+    while (popup_index < page.popups.items.len) : (popup_index += 1) {
+        if (page.popups.items[popup_index] == frame) {
+            break;
+        }
+    } else return false;
+
+    // Any live Window holding this one as its opener must drop the reference —
+    // the Frame is about to go away, and a stale `_frame` deref would crash.
+    for (page.popups.items) |popup| {
+        if (popup.window._opener == window) {
+            popup.window._opener = null;
+        }
+    }
+    if (page.frame.window._opener == window) {
+        page.frame.window._opener = null;
+    }
+
+    _ = page.popups.swapRemove(popup_index);
+
+    // Drop any pending queued navigation for this frame; Frame.deinit releases
+    // the QueuedNavigation arena, so a leftover entry would be re-deinited.
+    if (frame._queued_navigation != null) {
+        for (page.queued_navigation.items, 0..) |f, i| {
+            if (f == frame) {
+                _ = page.queued_navigation.swapRemove(i);
+                break;
+            }
+        }
+    }
+
+    frame.js.scheduler.reset();
+
+    // Defer the actual teardown: a popup closed from its own running script sits
+    // on top of the Frame's V8 context, so destroying it now leaves dangling
+    // pointers in the unwinding eval. Page.deinit drains the queue.
+    self.queueFrameDestruction(frame);
+    return true;
+}
+
 pub fn getArena(self: *Session, size_or_bucket: anytype, debug: []const u8) !Allocator {
     return self.arena_pool.acquire(size_or_bucket, debug);
 }

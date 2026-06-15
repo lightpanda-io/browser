@@ -102,6 +102,16 @@ pub fn persist(self: Object) !Global {
     return .{ .handle = global };
 }
 
+/// Like `persist`, but the returned `Global` is owned by the caller (not tracked
+/// by the context) and must be `deinit`ed. For objects with a lifetime shorter
+/// than the context, or contexts (e.g. the bare agent context) that have no
+/// page-scoped global tracking.
+pub fn persistOwned(self: Object) Global {
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(self.local.isolate.handle, self.handle, &global);
+    return .{ .handle = global };
+}
+
 pub fn getFunction(self: Object, name: []const u8) !?js.Function {
     if (self.isNullOrUndefined()) {
         return null;

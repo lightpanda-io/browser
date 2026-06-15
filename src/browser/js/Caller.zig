@@ -520,7 +520,7 @@ pub const FunctionCallbackInfo = struct {
         return .{ .handle = rv };
     }
 
-    fn isConstructCall(self: FunctionCallbackInfo) bool {
+    pub fn isConstructCall(self: FunctionCallbackInfo) bool {
         return v8.v8__FunctionCallbackInfo__IsConstructCall(self.handle);
     }
 };

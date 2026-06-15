@@ -156,14 +156,15 @@ pub const save_synthesis_prompt =
     \\- Reasoning you did between tool calls — comparing, filtering, picking,
     \\  aggregating across pages — becomes plain top-level JavaScript, so the
     \\  script reaches the result without you.
-    \\- `goto(url)` resolves a page object; every other primitive is a method on
-    \\  it (`const page = await goto(url); page.extract({...})`). Read pages with
+    \\- `new Page()` makes a page and `await page.goto(url)` navigates it; every
+    \\  other primitive is a method on the page (`const page = new Page();
+    \\  await page.goto(url); page.extract({...})`). Read pages with
     \\  page.extract(schema): CSS selectors lift text and attributes as strings,
     \\  and every trim/split/regex/parse/merge on those strings is top-level
     \\  JavaScript. Do NOT write a page.evaluate(...) that querySelects the page
     \\  and massages the result — that is page.extract + top-level JS.
     \\  page.evaluate is ONLY for what must execute inside the page and no builtin
-    \\  can do. Top-level variables also persist across goto/reload; everything in
+    \\  can do. Top-level variables also persist across navigations; everything in
     \\  the page context is wiped.
     \\Stay faithful to the calls that worked: same arguments and options each
     \\one actually used. Do NOT add a `timeout` (or any option) the session
@@ -180,14 +181,16 @@ pub const save_synthesis_prompt =
 pub const save_script_rules =
     \\Script rules:
     \\- The file runs as an async script, so top-level `await` is allowed.
-    \\  `goto(url)` is the only global and is async — always `await goto(...)`; it
-    \\  resolves a page object. Every other builtin is a synchronous method on
-    \\  that object: `const page = await goto(url); const data = page.extract({...})`,
-    \\  never `await page.extract`.
-    \\- Re-navigating replaces the page: `page = await goto(url2)` and rebind; the
-    \\  old object is then stale. To fetch in parallel,
-    \\  `const [a, b] = await Promise.all([goto(x), goto(y)])` — these coexist;
-    \\  read each through its own object: `a.extract(schema)`, `b.click(sel)`.
+    \\  Make a page with `new Page()`; `page.goto(url)` is async — always
+    \\  `await page.goto(...)`. Every other builtin is a synchronous method on
+    \\  the page: `const page = new Page(); await page.goto(url);
+    \\  const data = page.extract({...})`, never `await page.extract`.
+    \\- Re-navigating reuses the same page object: `await page.goto(url2)` keeps
+    \\  `page` valid. To fetch in parallel, make several pages and navigate them
+    \\  together: `const a = new Page(), b = new Page();
+    \\  await Promise.all([a.goto(x), b.goto(y)])` — these coexist; read each
+    \\  through its own object: `a.extract(schema)`, `b.click(sel)`. Free a page
+    \\  you no longer need with `page.close()`.
     \\- Read pages with page.extract(schema); all processing of the returned
     \\  strings (trim, split, parse, merge, loops, cross-page aggregation)
     \\  is plain top-level JavaScript in the script context. page.evaluate(...)

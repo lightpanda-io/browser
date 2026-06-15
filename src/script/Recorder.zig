@@ -29,8 +29,8 @@ const Recorder = @This();
 allocator: std.mem.Allocator,
 /// Number of lines appended since the last reset. Bumped only on success.
 lines: u32,
-/// Whether the `page` binding was emitted yet: `goto` declares it (`let page =`),
-/// later gotos rebind it (`page =`).
+/// Whether `const page = new Page();` has been emitted yet. The first recorded
+/// command emits it, then every call is a method on `page`.
 page_declared: bool,
 /// Accumulated JavaScript, returned verbatim by `bytes()`.
 content: std.Io.Writer.Allocating,
@@ -72,14 +72,14 @@ pub fn record(self: *Recorder, cmd: Command) !void {
     if (!cmd.isRecorded()) return;
     self.buf.clearRetainingCapacity();
     _ = self.arena.reset(.retain_capacity);
-    // `isRecorded` guarantees `.tool_call`. `goto` renders with a leading
-    // `await `, so the binding prefix lands before it: `let page = await goto(…)`.
-    if (cmd.tool_call.tool == .goto) {
-        try self.buf.writer.writeAll(if (self.page_declared) "page = " else "let page = ");
+    // `isRecorded` guarantees `.tool_call`. The page is born once, up front; every
+    // recorded call is then a method on it — `goto` async, the rest sync.
+    if (!self.page_declared) {
+        try self.buf.writer.writeAll("const page = new Page();\n");
         self.page_declared = true;
-    } else {
-        try self.buf.writer.writeAll("page.");
     }
+    if (cmd.tool_call.tool.isAsync()) try self.buf.writer.writeAll("await ");
+    try self.buf.writer.writeAll("page.");
     try cmd.formatJs(self.arena.allocator(), &self.buf.writer);
     try self.buf.writer.writeByte('\n');
     try self.appendScrubbed();
@@ -143,18 +143,18 @@ test "record filters state-mutating commands and comments" {
     try recorder.recordComment("search for login");
 
     try std.testing.expectEqualStrings(
-        "let page = await goto(\"https://example.com\");\npage.click({ selector: \"Login\" });\n// search for login\n",
+        "const page = new Page();\nawait page.goto(\"https://example.com\");\npage.click({ selector: \"Login\" });\n// search for login\n",
         recorder.bytes(),
     );
-    try std.testing.expectEqual(@as(u32, 3), recorder.lines);
+    try std.testing.expectEqual(@as(u32, 4), recorder.lines);
 
     recorder.reset();
     try std.testing.expectEqualStrings("", recorder.bytes());
     try std.testing.expectEqual(@as(u32, 0), recorder.lines);
 
     try recorder.record(parseLine(aa, "/scroll y=200"));
-    try std.testing.expectEqualStrings("page.scroll({ y: 200 });\n", recorder.bytes());
-    try std.testing.expectEqual(@as(u32, 1), recorder.lines);
+    try std.testing.expectEqualStrings("const page = new Page();\npage.scroll({ y: 200 });\n", recorder.bytes());
+    try std.testing.expectEqual(@as(u32, 2), recorder.lines);
 }
 
 test "recordRaw writes the JS line verbatim" {
@@ -179,7 +179,7 @@ test "record emits multi-line extract as JavaScript" {
     try recorder.record(parseLine(aa, cmd_str));
 
     try std.testing.expectEqualStrings(
-        "page.extract({ title: \"span.title\", desc: \"p.description\" });\n",
+        "const page = new Page();\npage.extract({ title: \"span.title\", desc: \"p.description\" });\n",
         recorder.bytes(),
     );
 }
@@ -230,7 +230,7 @@ test "record scrubs literal LP_* values in JavaScript calls" {
 
     try recorder.record(parseLine(aa, "/fill selector='#user' value='secret-user'"));
     try std.testing.expectEqualStrings(
-        "page.fill({ selector: \"#user\", value: \"$LP_RECORDER_COMMAND_TEST\" });\n",
+        "const page = new Page();\npage.fill({ selector: \"#user\", value: \"$LP_RECORDER_COMMAND_TEST\" });\n",
         recorder.bytes(),
     );
 }

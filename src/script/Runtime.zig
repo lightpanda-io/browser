@@ -68,6 +68,9 @@ const PrimitiveData = struct {
 const PendingGoto = struct {
     frame_id: u32,
     resolver: lp.js.PromiseResolver.Global,
+    // The receiver `page.goto` was called on, persisted across the async wait so
+    // the settle rebinds `__lpFrameId` on the same object — the page stays valid.
+    page: lp.js.Object.Global,
     deadline_ms: i64,
 };
 
@@ -151,10 +154,11 @@ pub fn deinit(self: *Runtime) void {
     allocator.destroy(self);
 }
 
-/// A leftover persisted resolver handle would leak past its isolate.
+/// Leftover persisted handles (resolver + page) would leak past their isolate.
 fn clearPendingGotos(self: *Runtime) void {
     for (self.pending_gotos.items) |*entry| {
         entry.resolver.deinit();
+        entry.page.deinit();
     }
     self.pending_gotos.clearRetainingCapacity();
 }
@@ -177,18 +181,19 @@ fn createContext(self: *Runtime) InitError!void {
     const local = &ls.local;
     const global = local.globalObject();
 
-    // Only `goto` is a global; the rest become page methods via `makePage`,
-    // which reuses these `primitive_data` entries — so fill them all here.
+    // `Page` is the only global verb; `new Page()` (`pageConstructor`) attaches a
+    // method for each recorded tool, reusing these `primitive_data` entries — so
+    // fill them all here.
     var i: usize = 0;
     for (std.enums.values(BrowserTool)) |t| {
         if (!t.isRecorded()) continue;
         self.primitive_data[i] = .{ .runtime = self, .tool = t };
-        if (t == .goto) {
-            const func = local.newRawCallback(primitiveCallback, &self.primitive_data[i]);
-            _ = global.set(@tagName(t), func.toValue(), .{}) catch return error.RuntimeInitFailed;
-        }
         i += 1;
     }
+
+    const page_ctor = local.newRawCallback(pageConstructor, self);
+    _ = global.set("Page", page_ctor.toValue(), .{}) catch return error.RuntimeInitFailed;
+
     try self.installConsole(local, global);
 }
 
@@ -339,6 +344,26 @@ fn consoleCallback(info_handle: ?*const lp.js.Local.RawCallbackInfo) callconv(.c
     data.runtime.invokeConsole(&caller.local, data.method, fci);
 }
 
+fn pageConstructor(info_handle: ?*const lp.js.Local.RawCallbackInfo) callconv(.c) void {
+    const info = info_handle orelse return;
+    var caller: lp.js.Caller = undefined;
+    if (!caller.initFromHandle(info)) return;
+    defer caller.deinit();
+    const fci = lp.js.Caller.FunctionCallbackInfo{ .handle = info };
+    const self: *Runtime = @ptrCast(@alignCast(fci.getData() orelse return));
+    self.construct(&caller.local, fci);
+}
+
+fn closeCallback(info_handle: ?*const lp.js.Local.RawCallbackInfo) callconv(.c) void {
+    const info = info_handle orelse return;
+    var caller: lp.js.Caller = undefined;
+    if (!caller.initFromHandle(info)) return;
+    defer caller.deinit();
+    const fci = lp.js.Caller.FunctionCallbackInfo{ .handle = info };
+    const self: *Runtime = @ptrCast(@alignCast(fci.getData() orelse return));
+    self.invokeClose(&caller.local, fci);
+}
+
 const Fci = lp.js.Caller.FunctionCallbackInfo;
 
 fn invoke(self: *Runtime, local: *const lp.js.Local, tool: BrowserTool, fci: Fci) void {
@@ -362,7 +387,7 @@ fn invoke(self: *Runtime, local: *const lp.js.Local, tool: BrowserTool, fci: Fci
 
     // Non-goto primitives are page methods; the receiver names the target frame.
     const frame_id = receiverFrameId(local, fci) orelse
-        return self.throwError("this must be called as a method on a page returned by goto()");
+        return self.throwError("page is not navigated or has been closed; call page.goto(url) first");
     self.session._tool_frame_override = self.session.findFrameByFrameId(frame_id) orelse
         return self.throwError("page handle is no longer valid; the page was closed or replaced");
 
@@ -384,8 +409,9 @@ fn invoke(self: *Runtime, local: *const lp.js.Local, tool: BrowserTool, fci: Fci
     }
 }
 
-/// Open a navigation; resolves a Page object whose methods target this page.
-/// Concurrent gotos fork popups, so `Promise.all` fetches in parallel.
+/// Navigate the receiver Page. Settles by rebinding the same object's
+/// `__lpFrameId` (re-navigation keeps the page valid). Concurrent gotos fork
+/// popups, so `Promise.all` fetches in parallel.
 fn invokeGoto(
     self: *Runtime,
     arena: std.mem.Allocator,
@@ -412,29 +438,50 @@ fn invokeGoto(
             return resolver.rejectError("goto", .{ .generic_error = "navigation failed to start" });
     };
 
+    const this: lp.js.Object = .{ .local = local, .handle = fci.getThis() };
+    var page = this.persistOwned();
     var global = resolver.persistOwned();
     self.pending_gotos.append(self.allocator, .{
         .frame_id = frame._frame_id,
         .resolver = global,
+        .page = page,
         .deadline_ms = std.time.milliTimestamp() + @as(i64, timeout),
     }) catch {
+        page.deinit();
         global.deinit();
         return resolver.rejectError("goto", .{ .generic_error = "out of memory" });
     };
 }
 
-/// The Page object `goto` resolves: `__lpFrameId` plus a method for every
-/// recorded tool except `goto`.
-fn makePage(self: *Runtime, local: *const lp.js.Local, frame_id: u32) ?lp.js.Value {
-    const obj = local.newObject();
-    _ = obj.set("__lpFrameId", frame_id, .{}) catch return null;
+/// `new Page()`: attach a method for every recorded tool (including `goto`) plus
+/// `close`. `__lpFrameId` is left unset until the first `goto` navigates the page.
+fn construct(self: *Runtime, local: *const lp.js.Local, fci: Fci) void {
+    if (!fci.isConstructCall()) return self.throwTypeError("Page must be called with new");
 
+    const this: lp.js.Object = .{ .local = local, .handle = fci.getThis() };
     for (&self.primitive_data) |*data| {
-        if (data.tool == .goto) continue;
         const func = local.newRawCallback(primitiveCallback, data);
-        _ = obj.set(@tagName(data.tool), func.toValue(), .{}) catch return null;
+        _ = this.set(@tagName(data.tool), func.toValue(), .{}) catch
+            return self.throwError("failed to construct page");
     }
-    return obj.toValue();
+    const close = local.newRawCallback(closeCallback, self);
+    _ = this.set("close", close.toValue(), .{}) catch
+        return self.throwError("failed to construct page");
+}
+
+/// `page.close()`: free a popup page's resources via `Session.closePopup` (a
+/// no-op on the root, which is reclaimed on the next root goto / at script end),
+/// then stale the wrapper so later method calls error.
+fn invokeClose(self: *Runtime, local: *const lp.js.Local, fci: Fci) void {
+    if (receiverFrameId(local, fci)) |frame_id| {
+        if (self.session.findFrameByFrameId(frame_id)) |frame| {
+            self.session.browser.env.isolate.enter();
+            defer self.session.browser.env.isolate.exit();
+            _ = self.session.closePopup(frame);
+        }
+    }
+    const this: lp.js.Object = .{ .local = local, .handle = fci.getThis() };
+    _ = this.set("__lpFrameId", null, .{}) catch {};
 }
 
 /// Frame id from a method's receiver (`this.__lpFrameId`), or null for a bare
@@ -462,10 +509,11 @@ fn resolveReadyGotos(self: *Runtime, local: *const lp.js.Local) void {
         if (frame == null or frame.?._last_navigate_error != null) {
             resolver.rejectError("goto", .{ .generic_error = "navigation failed" });
         } else if (ls == .load or ls == .complete or std.time.milliTimestamp() >= entry.deadline_ms) {
-            if (self.makePage(local, entry.frame_id)) |page| {
-                resolver.resolve("goto", page);
-            } else {
-                resolver.rejectError("goto", .{ .generic_error = "internal: page alloc failed" });
+            const page = entry.page.local(local);
+            if (page.set("__lpFrameId", entry.frame_id, .{})) |_| {
+                resolver.resolve("goto", page.toValue());
+            } else |_| {
+                resolver.rejectError("goto", .{ .generic_error = "internal: page bind failed" });
             }
         } else {
             i += 1;
@@ -474,6 +522,7 @@ fn resolveReadyGotos(self: *Runtime, local: *const lp.js.Local) void {
 
         var settled = self.pending_gotos.swapRemove(i);
         settled.resolver.deinit();
+        settled.page.deinit();
     }
 }
 
@@ -725,14 +774,44 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\const page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (typeof page !== "object" || page === null) throw new Error("goto should resolve a page object: " + page);
+        \\const page = new Page();
+        \\const same = await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\if (same !== page) throw new Error("page.goto should resolve the same page object");
         \\const text = page.evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("evaluate ran in the wrong context: " + text);
     );
 
     const frame = testing.test_session.currentFrame().?;
     try testing.expect(std.mem.indexOf(u8, frame.url, "/src/browser/tests/mcp_actions.html") != null);
+}
+
+test "agent script runtime: Page must be called with new" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const message = (try runtime.runSource("Page();", "agent-runtime-page-no-new.js")).?;
+    try testing.expect(std.mem.indexOf(u8, message, "must be called with new") != null);
+}
+
+test "agent script runtime: a method on an un-navigated page errors" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const message = (try runtime.runSource(
+        \\const page = new Page();
+        \\page.extract({ btn: "#btn" });
+    , "agent-runtime-not-navigated.js")).?;
+    try testing.expect(std.mem.indexOf(u8, message, "not navigated") != null);
 }
 
 test "agent script runtime: extract returns a JavaScript object" {
@@ -746,7 +825,8 @@ test "agent script runtime: extract returns a JavaScript object" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\const page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\const data = page.extract({
         \\  button: "#btn",
         \\  options: [{
@@ -800,7 +880,8 @@ test "agent script runtime: extract tolerates list selectors that match nothing"
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\const page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\const empty = page.extract({ comments: [{ selector: ".no-such-element", fields: { text: "" } }] });
         \\if (!Array.isArray(empty.comments) || empty.comments.length !== 0) throw new Error("empty list selector should yield an empty array, not throw");
         \\const bare = page.extract([".no-such-element"]);
@@ -829,8 +910,8 @@ test "agent script runtime: strict-mode scripts can call primitives" {
 
     try runTestScript(runtime,
         \\"use strict";
-        \\const page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (typeof page !== "object" || page === null) throw new Error("strict-mode goto failed: " + page);
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\const text = page.evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("strict-mode evaluate failed: " + text);
     );
@@ -867,7 +948,8 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\const page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\// toJSON re-enters evaluate mid-marshal; the outer extract must still see "#btn".
         \\const data = page.extract({ button: { toJSON() { return page.evaluate("'#btn'"); } } });
         \\if (data.button !== "Click Me") throw new Error("re-entrant extract corrupted: " + JSON.stringify(data));
@@ -910,7 +992,7 @@ test "agent script runtime: agent variables persist and page globals are isolate
         \\globalThis.counter = 1;
         \\if (typeof window !== "undefined") throw new Error("window leaked into agent runtime");
         \\if (typeof document !== "undefined") throw new Error("document leaked into agent runtime");
-        \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await new Page().goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\globalThis.counter += 1;
         \\if (globalThis.counter !== 2) throw new Error("agent global state did not persist");
     );
@@ -933,8 +1015,9 @@ test "agent script runtime: page evaluate cannot see agent primitives or binding
 
     try runTestScript(runtime,
         \\const agentOnly = "secret";
-        \\const page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (page.evaluate("typeof goto") !== "undefined") throw new Error("agent primitive leaked to page evaluate");
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\if (page.evaluate("typeof Page") !== "undefined") throw new Error("agent primitive leaked to page evaluate");
         \\if (page.evaluate("typeof agentOnly") !== "undefined") throw new Error("agent binding leaked to page evaluate");
         \\if (page.evaluate("typeof document") !== "object") throw new Error("page evaluate did not run in the page context");
     );
@@ -968,7 +1051,8 @@ test "agent script runtime: tool errors throw and stop execution" {
 
     const message = (try runtime.runSource(
         \\globalThis.marker = "before";
-        \\const page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\page.click({ selector: "#does-not-exist" });
         \\globalThis.marker = "after";
     , "agent-runtime-failure.js")).?;
@@ -994,12 +1078,12 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
 
     try runTestScript(runtime,
         \\// The reported bug: Playwright-style goto(url, options) must merge, not throw.
-        \\let page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000 });
-        \\if (typeof page !== "object" || page === null) throw new Error("two-arg goto failed: " + page);
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000 });
         \\// waitForState: single required param, positional like waitForSelector.
         \\if (!page.waitForState("load").includes("reached")) throw new Error("waitForState positional failed");
-        \\// Object form still works.
-        \\page = await goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
+        \\// Object form still works; re-navigation rebinds the same page object.
+        \\await page.goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
         \\// Single selector positional.
         \\page.click("#btn");
         \\if (page.evaluate("String(window.clicked)") !== "true") throw new Error("click positional failed");
@@ -1022,7 +1106,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
     // A field set by both a positional and the options object is a conflict.
     {
         const message = (try runtime.runSource(
-            \\await goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
+            \\await new Page().goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
         , "agent-runtime-conflict.js")).?;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
@@ -1030,7 +1114,8 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
     // More positionals than the tool has fields throws.
     {
         const message = (try runtime.runSource(
-            \\const page = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+            \\const page = new Page();
+            \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
             \\page.click("#btn", "#extra");
         , "agent-runtime-arity.js")).?;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
@@ -1066,17 +1151,46 @@ test "agent script runtime: parallel goto fetches concurrent pages, read per pag
     defer runtime.deinit();
 
     // Two gotos in flight at once open distinct frames (root + popup) that load
-    // concurrently in one Page; each is read back through the Page object goto resolved.
+    // concurrently in one Page; each is read back through its own Page object.
     try runTestScript(runtime,
-        \\const [a, b] = await Promise.all([
-        \\  goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
-        \\  goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
+        \\const a = new Page();
+        \\const b = new Page();
+        \\await Promise.all([
+        \\  a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  b.goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
         \\]);
-        \\if (typeof a !== "object" || typeof b !== "object") throw new Error("goto should resolve page objects");
         \\const da = a.extract({ btn: "#btn" });
         \\if (da.btn !== "Click Me") throw new Error("page a read wrong: " + JSON.stringify(da));
         \\const db = b.extract({ sel: "#sel1" });
         \\if (db.sel !== "selector-1-content") throw new Error("page b read wrong: " + JSON.stringify(db));
+    );
+}
+
+test "agent script runtime: page.close frees a popup and stales its wrapper" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // b is a popup (second concurrent goto). Closing it stales its wrapper while
+    // the root page a keeps working.
+    try runTestScript(runtime,
+        \\const a = new Page();
+        \\const b = new Page();
+        \\await Promise.all([
+        \\  a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  b.goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
+        \\]);
+        \\b.close();
+        \\let closed = false;
+        \\try { b.extract({ sel: "#sel1" }); } catch (e) { closed = true; }
+        \\if (!closed) throw new Error("a closed page should error on use");
+        \\const da = a.extract({ btn: "#btn" });
+        \\if (da.btn !== "Click Me") throw new Error("root page should survive a popup close");
     );
 }
 
@@ -1093,8 +1207,9 @@ test "agent script runtime: a stale page handle is a hard error" {
     // The first page goes stale once the second (non-forked) goto replaces the
     // page; reading through it must throw, not silently hit the current page.
     const message = (try runtime.runSource(
-        \\const a = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\await goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
+        \\const a = new Page();
+        \\await a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await new Page().goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
         \\a.extract({ btn: "#btn" });
     , "agent-runtime-stale-handle.js")).?;
 
