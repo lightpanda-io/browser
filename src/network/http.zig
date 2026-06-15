@@ -99,6 +99,34 @@ pub const Headers = struct {
         self.headers = updated_headers;
     }
 
+    // Adds `header` ("Name: Value"), replacing any existing header with the
+    // same case-insensitive name. Caller-supplied headers (CDP
+    // Network.setExtraHTTPHeaders) must override built-in defaults like
+    // User-Agent; a plain append produces a duplicate that libcurl silently
+    // collapses to the first occurrence, so the override would be dropped.
+    pub fn set(self: *Headers, header: [*c]const u8) !void {
+        const new = parseHeader(std.mem.span(@as([*:0]const u8, @ptrCast(header)))) orelse {
+            // No colon: nothing to match against, fall back to append.
+            return self.add(header);
+        };
+
+        var rebuilt: ?*libcurl.CurlSList = null;
+        errdefer libcurl.curl_slist_free_all(rebuilt);
+
+        var node = self.headers;
+        while (node) |n| : (node = n.*.next) {
+            const data = @as([*:0]const u8, @ptrCast(n.*.data));
+            if (parseHeader(std.mem.span(data))) |existing| {
+                if (std.ascii.eqlIgnoreCase(existing.name, new.name)) continue;
+            }
+            rebuilt = libcurl.curl_slist_append(rebuilt, data) orelse return error.OutOfMemory;
+        }
+        rebuilt = libcurl.curl_slist_append(rebuilt, header) orelse return error.OutOfMemory;
+
+        libcurl.curl_slist_free_all(self.headers);
+        self.headers = rebuilt;
+    }
+
     pub fn parseHeader(header_str: []const u8) ?Header {
         const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
 
@@ -689,6 +717,53 @@ fn makeSockAddrV4(ip: [4]u8) libcurl.CurlSockAddr {
 }
 
 const testing = @import("../testing.zig");
+
+fn findHeader(headers: Headers, name: []const u8) struct { count: usize, value: []const u8 } {
+    var count: usize = 0;
+    var value: []const u8 = "";
+    var it = headers.iterator();
+    while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, name)) {
+            count += 1;
+            value = h.value;
+        }
+    }
+    return .{ .count = count, .value = value };
+}
+
+test "Headers.set replaces an existing header instead of duplicating it" {
+    var headers = try Headers.init("User-Agent: Lightpanda/1.0");
+    defer headers.deinit();
+
+    try headers.set("User-Agent: Custom/1.0");
+
+    const ua = findHeader(headers, "User-Agent");
+    try testing.expectEqual(@as(usize, 1), ua.count);
+    try testing.expectString("Custom/1.0", ua.value);
+}
+
+test "Headers.set matches header names case-insensitively" {
+    var headers = try Headers.init("User-Agent: Lightpanda/1.0");
+    defer headers.deinit();
+
+    try headers.set("user-agent: Custom/1.0");
+
+    const ua = findHeader(headers, "User-Agent");
+    try testing.expectEqual(@as(usize, 1), ua.count);
+    try testing.expectString("Custom/1.0", ua.value);
+}
+
+test "Headers.set adds a new header and preserves defaults" {
+    var headers = try Headers.init("User-Agent: Lightpanda/1.0");
+    defer headers.deinit();
+
+    try headers.set("X-Custom: yes");
+
+    try testing.expectEqual(@as(usize, 1), findHeader(headers, "X-Custom").count);
+    try testing.expectEqual(@as(usize, 1), findHeader(headers, "User-Agent").count);
+    try testing.expectEqual(@as(usize, 1), findHeader(headers, "Accept-Language").count);
+}
+
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
     const lf: testing.LogFilter = .init(&.{.http});
     defer lf.deinit();
