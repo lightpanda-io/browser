@@ -381,7 +381,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.startSession();
 
-    self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running }) else null;
+    self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider) }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
@@ -885,8 +885,15 @@ fn disableProvider(self: *Agent) void {
     self.reportSaved("provider", provider_off_keyword);
 }
 
+/// `HF_BILL_TO` org for routed requests; null for non-HF providers. Without it,
+/// requests bill the token owner's personal account instead of the org.
+fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
+    if (provider != .huggingface) return null;
+    return std.posix.getenv("HF_BILL_TO");
+}
+
 fn setProvider(self: *Agent, credentials: Credentials) !void {
-    const new_client = try zenai.provider.Client.init(self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running });
+    const new_client = try zenai.provider.Client.init(self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider) });
     errdefer new_client.deinit(self.allocator);
 
     const new_model = try self.allocator.dupe(u8, zenai.provider.defaultModel(credentials.provider));
