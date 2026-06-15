@@ -156,17 +156,19 @@ pub const save_synthesis_prompt =
     \\- Reasoning you did between tool calls — comparing, filtering, picking,
     \\  aggregating across pages — becomes plain top-level JavaScript, so the
     \\  script reaches the result without you.
-    \\- Read pages with extract(schema): CSS selectors lift text and
-    \\  attributes as strings, and every trim/split/regex/parse/merge on
-    \\  those strings is top-level JavaScript. Do NOT write an evaluate(...)
-    \\  that querySelects the page and massages the result — that is
-    \\  extract + top-level JS. evaluate is ONLY for what must execute
-    \\  inside the page and no builtin can do. Top-level variables also
-    \\  persist across goto/reload; everything in the page context is wiped.
+    \\- `goto(url)` resolves a page object; every other primitive is a method on
+    \\  it (`const page = await goto(url); page.extract({...})`). Read pages with
+    \\  page.extract(schema): CSS selectors lift text and attributes as strings,
+    \\  and every trim/split/regex/parse/merge on those strings is top-level
+    \\  JavaScript. Do NOT write a page.evaluate(...) that querySelects the page
+    \\  and massages the result — that is page.extract + top-level JS.
+    \\  page.evaluate is ONLY for what must execute inside the page and no builtin
+    \\  can do. Top-level variables also persist across goto/reload; everything in
+    \\  the page context is wiped.
     \\Stay faithful to the calls that worked: same arguments and options each
     \\one actually used. Do NOT add a `timeout` (or any option) the session
     \\didn't use. Never round-trip a result through `lp.*`, and never append
-    \\no-op extract(...) probes or `evaluate("return lp....")` tails to
+    \\no-op page.extract(...) probes or `page.evaluate("return lp....")` tails to
     \\surface output.
     \\Output ONLY JavaScript source — no markdown fences, no commentary.
 ;
@@ -178,21 +180,23 @@ pub const save_synthesis_prompt =
 pub const save_script_rules =
     \\Script rules:
     \\- The file runs as an async script, so top-level `await` is allowed.
-    \\  `goto(url)` is async — always `await goto(...)`; it resolves to a page
-    \\  handle. Every other builtin is synchronous: `const data = extract({...})`,
-    \\  never `await extract`.
-    \\- One page needs no handle (tools act on the latest goto). To fetch in
-    \\  parallel, `await Promise.all([goto(a), goto(b)])` and pass each handle
-    \\  to read it: `extract(schema, a)` — the handle is the optional last arg.
-    \\- Read pages with extract(schema); all processing of the returned
+    \\  `goto(url)` is the only global and is async — always `await goto(...)`; it
+    \\  resolves a page object. Every other builtin is a synchronous method on
+    \\  that object: `const page = await goto(url); const data = page.extract({...})`,
+    \\  never `await page.extract`.
+    \\- Re-navigating replaces the page: `page = await goto(url2)` and rebind; the
+    \\  old object is then stale. To fetch in parallel,
+    \\  `const [a, b] = await Promise.all([goto(x), goto(y)])` — these coexist;
+    \\  read each through its own object: `a.extract(schema)`, `b.click(sel)`.
+    \\- Read pages with page.extract(schema); all processing of the returned
     \\  strings (trim, split, parse, merge, loops, cross-page aggregation)
-    \\  is plain top-level JavaScript in the script context. evaluate(...)
+    \\  is plain top-level JavaScript in the script context. page.evaluate(...)
     \\  is ONLY for JS that must run inside the page and no builtin covers —
     \\  never a querySelector-and-parse block. It cannot see script
     \\  variables (interpolate values into its string), and page state is
     \\  wiped by every goto/reload while script variables persist.
     \\- `return <value>` is the script's output, printed automatically
-    \\  (objects/arrays as JSON). End with `return extract({...});` or
+    \\  (objects/arrays as JSON). End with `return page.extract({...});` or
     \\  `return results;` — a bare trailing expression is not printed, and
     \\  neither is console.log or JSON.stringify.
     \\- Modern, readable JS: `const`/`let`, `for (const x of xs)`, template
@@ -262,6 +266,18 @@ pub const Tool = enum {
     /// `await tool(...)` — only `goto`, which must finish before the next read.
     pub fn isAsync(self: Tool) bool {
         return self == .goto;
+    }
+
+    /// A read tool that navigates when handed a `url` (via `ensurePage`), so the
+    /// recorder can capture that navigation as a `goto`. Excludes `goto` (the
+    /// navigation itself), `evaluate` (recorded, carries its own `url`), `search`
+    /// (navigates to a derived engine URL, not a user one), and `getCookies`
+    /// (`url` filters, not navigates).
+    pub fn navigatesToUrl(self: Tool) bool {
+        return switch (self) {
+            .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
+            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
     }
 
     /// Tool requires a target element (selector or backendNodeId) at

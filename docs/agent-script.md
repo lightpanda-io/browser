@@ -1,10 +1,11 @@
 # Agent JavaScript scripts
 
 `lightpanda agent <script.js>` runs a JavaScript file that drives a
-Lightpanda browser session through a small set of blocking global functions.
-The format is intentionally plain JavaScript: use normal variables, functions,
-loops, objects, arrays, `JSON.parse`, `JSON.stringify`, and other standard
-ECMAScript built-ins.
+Lightpanda browser session. Navigation goes through a global `goto(url)` that
+returns a **page object**; every other browser action is a method on that page
+(`page.extract(...)`, `page.click(...)`, …). The format is intentionally plain
+JavaScript: use normal variables, functions, loops, objects, arrays,
+`JSON.parse`, `JSON.stringify`, and other standard ECMAScript built-ins.
 
 ```console
 ./lightpanda agent session.js
@@ -21,27 +22,26 @@ web page's JavaScript context.
 
 - It is not the browser page environment. There is no `window`, `document`,
   DOM, `localStorage`, `navigator`, or page global state in the agent script.
-  Read page data with `extract(...)`, or explicitly run page JavaScript with
-  `evaluate(...)` when that is the right tool.
+  Read page data with `page.extract(...)`, or explicitly run page JavaScript
+  with `page.evaluate(...)` when that is the right tool.
 - It is not Node.js. There is no `require`, `process`, `fs`, `path`, npm
   package loading, command-line argument API, or Node network/filesystem API.
 - Page scripts cannot see agent variables or Lightpanda primitives. Agent
   scripts cannot directly see page variables.
-- The global `evaluate(...)` primitive runs JavaScript in the page context,
-  distinct from the agent context's own native `eval`.
+- `page.evaluate(...)` runs JavaScript in the page context, distinct from the
+  agent context's own native `eval`.
 - Agent variables persist for the lifetime of one script run, across
   navigations and primitive calls. A later `lightpanda agent script.js` run
   starts with a fresh agent context.
-- `goto(url)` is asynchronous — always use `await goto(...)`. Every other primitive
-  is synchronous; do not `await` them (`const data = extract({ ... })`, not
-  `await extract(...)`). The script body runs as an async function, so top-level
-  `await` is allowed. (`goto` returns a page handle for parallel fetches — see
-  Navigation below.)
+- `goto(url)` is asynchronous — always use `await goto(...)`. Every page method
+  is synchronous; do not `await` them (`const data = page.extract({ ... })`, not
+  `await page.extract(...)`). The script body runs as an async function, so
+  top-level `await` is allowed.
 - Tool failures throw JavaScript `Error` exceptions (a `goto` failure rejects
   its Promise, so `await` throws) and stop execution unless you catch them.
 - The script's output is whatever it `return`s, printed automatically (objects
   and arrays as JSON; other values coerced). End a script with `return
-  extract({ ... });` or `return results;`. A bare trailing expression is not
+  page.extract({ ... });` or `return results;`. A bare trailing expression is not
   printed. `console.log(...)` is for extra or debug output and does not
   JSON-format objects.
 
@@ -57,16 +57,16 @@ console.error("printed to stderr");
 
 ## Values And Return Types
 
-Most primitives return the browser tool's result text as a JavaScript string.
-`extract(...)` is the exception: it returns extracted data as a normal
+Most page methods return the browser tool's result text as a JavaScript string.
+`page.extract(...)` is the exception: it returns extracted data as a normal
 JavaScript value, so local script logic can use it directly. The result mirrors
 your schema — an object schema returns an object keyed by your fields (even with
 a single field), and a bare array schema returns an array:
 
 ```js
-await goto("https://news.ycombinator.com/");
+const page = await goto("https://news.ycombinator.com/");
 
-const data = extract({
+const data = page.extract({
   title: "title",
   stories: [{
     selector: "tr.athing",
@@ -84,7 +84,7 @@ return data; // printed automatically as JSON
 Destructure when a single field is all you need:
 
 ```js
-const { stories } = extract({
+const { stories } = page.extract({
   stories: [{
     selector: "tr.athing",
     limit: 5,
@@ -100,8 +100,8 @@ for (const story of stories) {
 }
 ```
 
-`evaluate(...)` still returns the page evaluate tool result text. When page `evaluate(...)`
-returns an object or array, that text is JSON.
+`page.evaluate(...)` returns the page evaluate tool result text. When page
+`evaluate(...)` returns an object or array, that text is JSON.
 
 Primitive arguments must be JSON-serializable. Strings, numbers, booleans,
 arrays, plain objects, and `null` work. `undefined`, functions, symbols, and
@@ -109,101 +109,109 @@ cyclic objects do not.
 
 ## Installed Primitives
 
-Only recorded browser primitives are installed globally:
+`goto` is the only global; it opens a page and resolves a page object. Every
+other browser primitive is a method on that page object:
 
 | Primitive | Arguments | Runs in |
 |-----------|-----------|---------|
-| `goto` | `await goto(url[, { timeout }])` (async; resolves a page handle) | Browser session |
-| `extract` | `extract(schema[, page])` or `extract({ schema })` | Browser page via extractor; returns a JS object or array |
-| `evaluate` | `evaluate(script[, { url, timeout, save }])` | Browser page JS context |
-| `click` | `click(selector)` or `click({ selector })` | Browser page |
-| `fill` | `fill(selector, value)` or `fill({ selector, value })` | Browser page |
-| `scroll` | `scroll()` or `scroll({ x, y })` | Browser page |
-| `waitForSelector` | `waitForSelector(selector[, { timeout }])` | Browser page |
-| `waitForScript` | `waitForScript(script[, { timeout }])` | Browser page JS context |
-| `waitForState` | `waitForState(state[, { timeout }])` | Browser page |
-| `hover` | `hover(selector)` or `hover({ selector })` | Browser page |
-| `press` | `press(selector, key)` or `press({ key[, selector] })` | Browser page |
-| `selectOption` | `selectOption(selector, value)` or `selectOption({ selector, value })` | Browser page |
-| `setChecked` | `setChecked(selector[, checked])` or `setChecked({ selector, checked })` | Browser page |
+| `goto` | `await goto(url[, { timeout }])` (async; resolves a page object) | Browser session |
+| `page.extract` | `page.extract(schema)` or `page.extract({ schema })` | Browser page via extractor; returns a JS object or array |
+| `page.evaluate` | `page.evaluate(script[, { url, timeout, save }])` | Browser page JS context |
+| `page.click` | `page.click(selector)` or `page.click({ selector })` | Browser page |
+| `page.fill` | `page.fill(selector, value)` or `page.fill({ selector, value })` | Browser page |
+| `page.scroll` | `page.scroll()` or `page.scroll({ x, y })` | Browser page |
+| `page.waitForSelector` | `page.waitForSelector(selector[, { timeout }])` | Browser page |
+| `page.waitForScript` | `page.waitForScript(script[, { timeout }])` | Browser page JS context |
+| `page.waitForState` | `page.waitForState(state[, { timeout }])` | Browser page |
+| `page.hover` | `page.hover(selector)` or `page.hover({ selector })` | Browser page |
+| `page.press` | `page.press(selector, key)` or `page.press({ key[, selector] })` | Browser page |
+| `page.selectOption` | `page.selectOption(selector, value)` or `page.selectOption({ selector, value })` | Browser page |
+| `page.setChecked` | `page.setChecked(selector[, checked])` or `page.setChecked({ selector, checked })` | Browser page |
 
 `goto` returns at the `load` event (a fast snapshot). When a page's content is
-still loading (rendered by post-load JS), call `waitForState("networkidle")`
+still loading (rendered by post-load JS), call `page.waitForState("networkidle")`
 before reading. `waitForState`'s `state` accepts `"load"`,
 `"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`, or `"done"`.
 `goto`'s `timeout` defaults to 10000 ms; the `waitFor*` timeouts default to
 5000 ms.
 
 The `[, { … }]` is an optional trailing options object: leading arguments are
-positional (`waitForSelector("#row", { timeout: 2000 })`), and the options ride
-in a final object. Passing a single object with everything
-(`waitForSelector({ selector: "#row", timeout: 2000 })`) is equivalent — that's
-the shape `/save` records into saved scripts. An option can't be a bare
-positional, though: `waitForSelector("#row", 2000)` is an error. A `null`
-positional omits that field (`press(null, "Enter")` presses on the focused
+positional (`page.waitForSelector("#row", { timeout: 2000 })`), and the options
+ride in a final object. Passing a single object with everything
+(`page.waitForSelector({ selector: "#row", timeout: 2000 })`) is equivalent —
+that's the shape `/save` records into saved scripts. An option can't be a bare
+positional, though: `page.waitForSelector("#row", 2000)` is an error. A `null`
+positional omits that field (`page.press(null, "Enter")` presses on the focused
 element), and setting the same field positionally and in the options object
 (`goto(url, { url: ... })`) is an `invalid arguments` error.
 
-Script primitives address elements by CSS selector only. The tools that hand
-out `backendNodeId`s (`tree`, `findElement`, `nodeDetails`) aren't installed in
-the script context, and a raw node ID wouldn't survive replay anyway. When
-you're exploring in the REPL and have a `backendNodeId` — e.g. the leading
-number on a `/tree` line, or a `/findElement` hit — run `/nodeDetails
-backendNodeId=<id>` to get a durable CSS `selector`, then paste that into your
-script.
+Page methods address elements by CSS selector only. The tools that hand out
+`backendNodeId`s (`tree`, `findElement`, `nodeDetails`) aren't installed in the
+script context, and a raw node ID wouldn't survive replay anyway. When you're
+exploring in the REPL and have a `backendNodeId` — e.g. the leading number on a
+`/tree` line, or a `/findElement` hit — run `/nodeDetails backendNodeId=<id>` to
+get a durable CSS `selector`, then paste that into your script.
 
 ## Navigation
 
-Use `await goto(...)` to open a page (it is asynchronous):
+Use `await goto(...)` to open a page (it is asynchronous). It returns a page
+object you call every other primitive on:
 
 ```js
-await goto("https://example.com");
+const page = await goto("https://example.com");
 
-await goto({
+const page2 = await goto({
   url: "https://example.com/app",
   timeout: 15000
 });
 ```
 
-The Promise resolves to a **page handle** and rejects if navigation fails. A
+The Promise resolves to a **page object** and rejects if navigation fails. A
 timeout does **not** reject: the page stays in whatever state it reached, so
-follow with `waitForState(...)` / `waitForSelector(...)` when completeness
-matters.
+follow with `page.waitForState(...)` / `page.waitForSelector(...)` when
+completeness matters.
 
-You only need the handle for **parallel** fetches: a single page at a time is
-implicit (the read tools act on the latest `goto`), but to load several at once
-and read each one, pass its handle as the optional last argument:
+A page object is bound to one loaded document. Navigating again — calling `goto`
+a second time — opens a fresh page and replaces the old one; re-navigate by
+calling `goto` again and rebinding your variable:
+
+```js
+let page = await goto("https://example.com");
+page.click("#next");
+page = await goto("https://example.com/step2"); // replaces; rebind `page`
+const data = page.extract({ title: "h1" });
+```
+
+After a replacing `goto`, the previous page object is **stale**: calling a method
+on it throws `page handle is no longer valid`. Always read through the page
+object from the most recent `goto`.
+
+For **parallel** fetches, start several `goto`s at once with `Promise.all`. Those
+pages coexist (they open as popup frames) and each is read through its own page
+object:
 
 ```js
 const [a, b] = await Promise.all([
   goto("https://example.com/a"),
   goto("https://example.com/b"),
 ]);
-const da = extract({ title: "h1" }, a);   // reads page a
-const db = extract({ title: "h1" }, b);   // reads page b
+const da = a.extract({ title: "h1" }); // reads page a
+const db = b.extract({ title: "h1" }); // reads page b
+a.click("#more");                       // any method works on either
 ```
 
-The handle works on any page tool — `click(sel, a)`, `evaluate(js, a)`, etc.
-
-Two limits to know:
-
-- **Handle lifetime.** Pages from a parallel batch stay alive until the next
-  *sequential* `goto` (one with nothing else in flight), which replaces them.
-  So read a batch's handles before your next standalone `goto` — don't stash a
-  handle across one.
-- **Combined navigate-and-read stays single-page.** The `url` option on
-  `markdown`/`html`/`tree`/`evaluate` (e.g. `markdown({ url })`) navigates the
-  one current page, so it does not take part in parallel fetching. Use
-  `await goto(url)` + a handle when you need concurrency.
+Pages from a parallel batch stay alive until the next *sequential* `goto` (one
+with nothing else in flight), which replaces them. So read a batch's pages
+before your next standalone `goto` — don't stash one across it.
 
 ## Structured Extraction
 
-Use `extract(...)` to read data from the current page without writing page-side
+Use `page.extract(...)` to read data from the page without writing page-side
 JavaScript. This is the preferred bridge from page content into local agent
 logic.
 
 ```js
-const result = extract({
+const result = page.extract({
   heading: "h1",
   links: [{
     selector: "a",
@@ -230,55 +238,49 @@ The schema forms are:
 
 Return shape follows the top-level schema:
 
-- `extract({ title: "h1" })` returns `{ title: "..." }`.
-- `extract({ title: "h1", links: [{ selector: "a" }] })` returns an object
+- `page.extract({ title: "h1" })` returns `{ title: "..." }`.
+- `page.extract({ title: "h1", links: [{ selector: "a" }] })` returns an object
   with both fields.
-- `extract({ links: [{ selector: "a" }] })` returns `{ links: [...] }` — an
+- `page.extract({ links: [{ selector: "a" }] })` returns `{ links: [...] }` — an
   object schema always returns an object, even with a single field.
-- `extract([{ selector: "a" }])` is shorthand for a single anonymous array
+- `page.extract([{ selector: "a" }])` is shorthand for a single anonymous array
   extraction and returns the array directly.
 
 Every value is a string (trimmed text or a raw attribute) or `null` — parse
 numbers in script logic. An array field that matches nothing yields `[]`
 without complaint (a page with zero comments is a valid result), but if
-*every* field in the schema misses, `extract(...)` throws
+*every* field in the schema misses, `page.extract(...)` throws
 `no schema selector matched any element` — treat that as "my selectors are
 wrong", not "the page is empty".
 
-`extract(...)` reads only the current page. For list-to-detail scraping —
-capture a list, then visit each row for more — capture the list, then loop in
-the script: `goto` each row's URL and `extract` the detail. The local agent
-context keeps the data across navigations, so the assembly happens in plain
-JavaScript. See the [complete example](#complete-example) below.
+`page.extract(...)` reads only that page. For list-to-detail scraping — capture
+a list, then visit each row for more — capture the list, then loop in the
+script: `goto` each row's URL and `extract` the detail. The local agent context
+keeps the data across navigations, so the assembly happens in plain JavaScript.
+See the [complete example](#complete-example) below.
 
-When passing an object directly to `extract(...)`, the runtime serializes it as
-the extractor schema. These forms are equivalent:
+When passing an object directly to `page.extract(...)`, the runtime serializes
+it as the extractor schema. These forms are equivalent:
 
 ```js
-extract({ title: "h1" });
-extract({ schema: { title: "h1" } });
-extract('{ "title": "h1" }');
+page.extract({ title: "h1" });
+page.extract({ schema: { title: "h1" } });
+page.extract('{ "title": "h1" }');
 ```
 
 The wrapped form accepts only `schema`: the REPL's `save=` option does not
-exist in scripts (`extract({ schema: ..., save: ... })` is rejected). Keep
+exist in scripts (`page.extract({ schema: ..., save: ... })` is rejected). Keep
 results in local variables instead.
-
-Use local variables to keep extracted data available to later script logic:
-
-```js
-const page = extract({ title: "title" });
-```
 
 ## Page JavaScript
 
-`evaluate(...)` is the explicit escape hatch into the current page's JavaScript
+`page.evaluate(...)` is the explicit escape hatch into the page's JavaScript
 context. Its script string runs where `window` and `document` exist.
 
 ```js
-await goto("https://example.com");
+const page = await goto("https://example.com");
 
-const title = evaluate("document.title");
+const title = page.evaluate("document.title");
 console.log(title);
 ```
 
@@ -288,52 +290,55 @@ Keep the boundary clear:
 const selector = "h1";
 
 // Good: local agent logic builds an extract schema.
-const data = extract({ heading: selector });
+const data = page.extract({ heading: selector });
 
 // Bad: page evaluate cannot see local agent variables.
-evaluate("document.querySelector(selector).textContent");
+page.evaluate("document.querySelector(selector).textContent");
 ```
 
 Page `evaluate(...)` cannot call `goto`, `extract`, or other agent primitives.
 Agent scripts cannot access `document` directly. If you need page DOM data,
-prefer `extract(...)`; use `evaluate(...)` only for page behavior that extraction
-cannot express.
+prefer `page.extract(...)`; use `page.evaluate(...)` only for page behavior that
+extraction cannot express.
 
-`waitForScript(...)` also evaluates in the page context, repeatedly, until the
-expression is truthy or the timeout expires:
+`page.waitForScript(...)` also evaluates in the page context, repeatedly, until
+the expression is truthy or the timeout expires:
 
 ```js
-waitForScript("document.querySelectorAll('.row').length >= 5");
+page.waitForScript("document.querySelectorAll('.row').length >= 5");
 ```
 
 ## Interaction Primitives
 
-The action primitives operate on the current page. Most take one object whose
-fields match the browser tool schema:
+The action methods operate on the page they're called on. Most take one object
+whose fields match the browser tool schema:
 
 ```js
-click({ selector: "a.login" });
-fill({ selector: "input[name='acct']", value: "$LP_HN_USERNAME" });
-fill({ selector: "input[name='pw']", value: "$LP_HN_PASSWORD" });
-press({ key: "Enter" });
+const page = await goto("https://example.com/login");
 
-waitForSelector("#logout");
+page.click({ selector: "a.login" });
+page.fill({ selector: "input[name='acct']", value: "$LP_HN_USERNAME" });
+page.fill({ selector: "input[name='pw']", value: "$LP_HN_PASSWORD" });
+page.press({ key: "Enter" });
 
-hover({ selector: "#menu" });
-selectOption({ selector: "select[name='country']", value: "FR" });
-setChecked({ selector: "input[name='terms']", checked: true });
-setChecked({ selector: "input[name='newsletter']", checked: false });
+page.waitForSelector("#logout");
 
-scroll({ y: 600 });
-scroll();
+page.hover({ selector: "#menu" });
+page.selectOption({ selector: "select[name='country']", value: "FR" });
+page.setChecked({ selector: "input[name='terms']", checked: true });
+page.setChecked({ selector: "input[name='newsletter']", checked: false });
+
+page.scroll({ y: 600 });
+page.scroll();
 ```
 
 `setChecked` defaults `checked` to `true` when the field is omitted
-(`setChecked("#chk")` checks the box). `press`'s leading positional is the
-optional `selector`, not `key`: a bare `press("Enter")` binds `"Enter"` to
+(`page.setChecked("#chk")` checks the box). `press`'s leading positional is the
+optional `selector`, not `key`: a bare `page.press("Enter")` binds `"Enter"` to
 `selector` and fails. Press on the focused element with
-`press({ key: "Enter" })` or `press(null, "Enter")`; target an element with
-`press("#search", "Enter")` or `press({ key: "Enter", selector: "#search" })`.
+`page.press({ key: "Enter" })` or `page.press(null, "Enter")`; target an element
+with `page.press("#search", "Enter")` or
+`page.press({ key: "Enter", selector: "#search" })`.
 
 `$LP_*` placeholders in string arguments are resolved inside the Lightpanda
 process. This keeps credentials out of recorded scripts and LLM prompts. In
@@ -349,12 +354,16 @@ The REPL remains slash-command based:
 > /save
 ```
 
-`/save` writes JavaScript by default:
+`/save` writes JavaScript by default — binding `page` on each `goto` and calling
+every other tool as a method on it:
 
 ```js
-await goto("https://example.com");
-click({ selector: "a.login" });
+let page = await goto("https://example.com");
+page.click({ selector: "a.login" });
 ```
+
+A later `/goto` in the same session reassigns the variable (`page = await
+goto(...)`), matching the REPL's replace-in-place navigation.
 
 Only replayable browser actions are recorded:
 
@@ -377,7 +386,7 @@ Primitive failures throw JavaScript exceptions:
 
 ```js
 try {
-  waitForSelector({ selector: "#dashboard", timeout: 1000 });
+  page.waitForSelector({ selector: "#dashboard", timeout: 1000 });
 } catch (err) {
   console.error("dashboard did not appear:", err.message);
   throw err;
@@ -388,8 +397,10 @@ Common failures:
 
 | Error | Meaning |
 |-------|---------|
-| `ReferenceError: document is not defined` | You tried to use browser DOM APIs in the agent context. Use `extract(...)` or page `evaluate(...)`. |
+| `ReferenceError: document is not defined` | You tried to use browser DOM APIs in the agent context. Use `page.extract(...)` or `page.evaluate(...)`. |
 | `ReferenceError: require is not defined` | Agent scripts are not Node.js scripts. |
+| `this must be called as a method on a page returned by goto()` | A page primitive was called as a bare function. Call it on the page object: `page.click(...)`. |
+| `page handle is no longer valid` | The page object was used after a later `goto` replaced its page. Read through the most recent `goto`'s page object. |
 | `no page loaded - run goto(url) first` | A page-dependent primitive ran before navigation. |
 | `invalid arguments` | A primitive received the wrong number or shape of arguments, or a non-JSON-serializable value. |
 | `extract: no schema selector matched any element` | Every field in the schema missed. Fix the selectors; an empty page section yields `null`/`[]` per field, not this error. |
@@ -403,9 +414,9 @@ the local agent script, not in the page.
 ```js
 const HN = "https://news.ycombinator.com";
 
-await goto(HN);
+let page = await goto(HN);
 
-const { stories } = extract({
+const { stories } = page.extract({
   stories: [{
     selector: "tr.athing",
     limit: 5,
@@ -421,8 +432,8 @@ for (const story of stories) {
   story.comments = [];
   if (!story.id) continue;
 
-  await goto(`${HN}/item?id=${story.id}`);
-  const { comments } = extract({
+  page = await goto(`${HN}/item?id=${story.id}`);
+  const { comments } = page.extract({
     comments: [{
       selector: "tr.athing.comtr:has(.commtext)",
       limit: 3,
