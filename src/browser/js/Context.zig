@@ -221,20 +221,6 @@ pub fn deinit(self: *Context) void {
     // have a dangling pointer to our freed Context struct.
     v8.v8__Context__SetAlignedPointerInEmbedderData(entered.handle, 1, null);
 
-    // Evict the window's entry from the identity map. The window pointer is the
-    // identity-map key (see Env.createContext), and an in-place navigation
-    // reuses the same Window address — a lingering entry would make the next
-    // context's getOrPut see `found_existing` and skip registering its global.
-    switch (self.global) {
-        .frame => |frame| {
-            if (self.identity.identity_map.fetchRemove(@intFromPtr(frame.window))) |kv| {
-                var global = kv.value;
-                v8.v8__Global__Reset(&global);
-            }
-        },
-        .worker => {},
-    }
-
     v8.v8__Global__Reset(&self.handle);
     env.isolate.notifyContextDisposed();
     // There can be other tasks associated with this context that we need to

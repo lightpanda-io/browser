@@ -293,9 +293,8 @@ pub const InitOpts = struct {
 
     // When a frame/popup re-navigates, we should preserve the same window.
     // There are a couple reasons for this. First, iframe.contentWindow should
-    // maintain the same identity (which we don't correctly do now, but this
-    // is a first step). Secondly, a reference to the window can be acquired
-    // prior to navigation, and then used after. So it should remain valid.
+    // maintain the same identity. Secondly, a reference to the window can be
+    // acquired prior to navigation, and then used after. So it should remain valid.
     reuse_window: ?*Window = null,
 };
 

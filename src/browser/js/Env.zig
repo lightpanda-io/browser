@@ -254,11 +254,20 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     const microtask_queue = v8.v8__MicrotaskQueue__New(isolate.handle, v8.kExplicit).?;
     errdefer v8.v8__MicrotaskQueue__DELETE(microtask_queue);
 
+    // Reuse the window's existing global proxy across an in-place navigation.
+    // The same *Window keeps its identity_map entry so reattaching it to the
+    // new context preserves WindowProxy identity
+    const reuse_global_object: ?*const v8.Value = blk: {
+        if (comptime !is_frame) break :blk null;
+        const existing = params.identity.identity_map.getPtr(@intFromPtr(global.window)) orelse break :blk null;
+        break :blk @ptrCast(v8.v8__Global__Get(existing, isolate.handle));
+    };
+
     // Restore the context from the snapshot (0 = Page, 1 = Worker)
     const snapshot_index: u32 = if (comptime is_frame) 0 else 1;
     const v8_context = v8.v8__Context__FromSnapshot__Config(isolate.handle, snapshot_index, &.{
         .global_template = null,
-        .global_object = null,
+        .global_object = reuse_global_object,
         .microtask_queue = microtask_queue,
     }).?;
 

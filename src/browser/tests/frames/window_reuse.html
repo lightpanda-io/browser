@@ -38,7 +38,10 @@ reuse and is tracked separately. This test guards the UAF, not the identity.
 
   state.resolve();
   await state.done(() => {
-    // Reading the cached window's location returns the new, valid location
+    // Same Window object across the navigation: the v8 global proxy is reused
+    // (WindowProxy identity).
+    testing.expectEqual(true, w === iframe.contentWindow);
+    // And reading the cached window's location returns the new, valid location
     // (previously a UAF double-free on the freed Location).
     testing.expectEqual(true, w.location.href.endsWith('/support/win_b.html'));
   });
