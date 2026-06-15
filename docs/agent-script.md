@@ -273,10 +273,12 @@ without complaint (a page with zero comments is a valid result), but if
 wrong", not "the page is empty".
 
 `page.extract(...)` reads only that page. For list-to-detail scraping — capture
-a list, then visit each row for more — capture the list, then loop in the
-script: `await page.goto(...)` each row's URL and `extract` the detail. The
-local agent context keeps the data across navigations, so the assembly happens
-in plain JavaScript. See the [complete example](#complete-example) below.
+a list, then visit each row for more — extract the list, then fetch the detail
+pages in parallel: one `new Page()` per row gathered with `Promise.all`. Reuse a
+single page and a sequential `await page.goto(...)` loop instead when the steps
+depend on each other or share login state. Either way the local agent context
+keeps the data, so the assembly happens in plain JavaScript. See the
+[complete example](#complete-example) below.
 
 When passing an object directly to `page.extract(...)`, the runtime serializes
 it as the extractor schema. These forms are equivalent:
@@ -431,17 +433,17 @@ Common failures:
 
 ## Complete Example
 
-This script opens Hacker News, extracts five stories, visits each comments
-page, and prints one JSON object. The looping and object assembly happen in
-the local agent script, not in the page.
+This script opens Hacker News, extracts five stories, fetches each comments
+page **in parallel**, and prints one JSON object. The fan-out and object
+assembly happen in the local agent script, not in the page.
 
 ```js
 const HN = "https://news.ycombinator.com";
 
-const page = new Page();
-await page.goto(HN);
+const index = new Page();
+await index.goto(HN);
 
-const { stories } = page.extract({
+const { stories } = index.extract({
   stories: [{
     selector: "tr.athing",
     limit: 5,
@@ -453,10 +455,11 @@ const { stories } = page.extract({
   }]
 });
 
-for (const story of stories) {
-  story.comments = [];
-  if (!story.id) continue;
+// Each story's comments page loads concurrently.
+const results = await Promise.all(stories.map(async (story) => {
+  if (!story.id) return { ...story, comments: [] };
 
+  const page = new Page();
   await page.goto(`${HN}/item?id=${story.id}`);
   const { comments } = page.extract({
     comments: [{
@@ -468,8 +471,12 @@ for (const story of stories) {
       }
     }]
   });
-  story.comments = comments;
-}
+  page.close();
+  return { ...story, comments };
+}));
 
-return stories; // printed automatically as JSON
+return results; // printed automatically as JSON
 ```
+
+When the detail pages depend on each other or share login state, use a single
+reused `page` with a sequential `await page.goto(...)` loop instead.

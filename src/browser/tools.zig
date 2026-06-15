@@ -166,6 +166,10 @@ pub const save_synthesis_prompt =
     \\  page.evaluate is ONLY for what must execute inside the page and no builtin
     \\  can do. Top-level variables also persist across navigations; everything in
     \\  the page context is wiped.
+    \\- For list-to-detail, fetch independent detail pages in parallel — one
+    \\  `new Page()` per item gathered with `Promise.all`, `page.close()` each
+    \\  when done — rather than a serial goto loop. Reuse one sequential `page`
+    \\  only when steps depend on each other or share login state.
     \\Stay faithful to the calls that worked: same arguments and options each
     \\one actually used. Do NOT add a `timeout` (or any option) the session
     \\didn't use. Never round-trip a result through `lp.*`, and never append

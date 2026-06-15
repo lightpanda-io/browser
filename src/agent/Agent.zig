@@ -152,8 +152,18 @@ const script_skill =
     \\## Best practices
     \\
     \\1. **Navigate, settle, read.** After `await page.goto` on a dynamic page (feeds, search results, comment threads), call `page.waitForState("networkidle")` or `page.waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
-    \\2. **Fetch in parallel when the pages are independent.** `const a = new Page(), b = new Page(); await Promise.all([a.goto(x), b.goto(y)]);` then read each through its object (`a.extract(schema)`). Sequential is fine too — see #3.
-    \\3. **Aggregate in the script, not the page.** List-to-detail: extract the list, then loop `await page.goto(...)`/`page.extract(...)` per item, assembling plain JS objects.
+    \\2. **Fetch in parallel when the pages are independent.** `const a = new Page(), b = new Page(); await Promise.all([a.goto(x), b.goto(y)]);` then read each through its object (`a.extract(schema)`). Parallel pages share one cookie jar and run JS serially, so this speeds up independent, read-only fetches — not login or stateful flows.
+    \\3. **List-to-detail: fan out, don't crawl.** Extract the list, then fetch the detail pages in parallel — one `new Page()` per item, gathered with `Promise.all` — assembling plain JS objects. This is where async `goto` pays off:
+    \\   ```js
+    \\   const details = await Promise.all(items.map(async (it) => {
+    \\     const p = new Page();
+    \\     await p.goto(it.url);
+    \\     const data = p.extract({ /* schema */ });
+    \\     p.close();
+    \\     return { ...it, ...data };
+    \\   }));
+    \\   ```
+    \\   Reuse a single sequential `page` (`await page.goto(...)` per item) instead only when the steps depend on each other or share login state; for long lists, fan out in chunks of ~5–10.
     \\4. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `page.evaluate` block is always wrong: lift the raw strings with `page.extract`, then trim/split/parse them in top-level JS. Reserve `page.evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every navigation/reload, while script variables persist.
     \\5. **Credentials via `$LP_*` placeholders** in any string argument (`page.fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
     \\6. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
