@@ -29,6 +29,12 @@ pub fn registerTypes() []const type {
     return &.{ Permissions, PermissionStatus };
 }
 
+pub const State = enum {
+    granted,
+    prompt,
+    denied,
+};
+
 const Permissions = @This();
 
 // Padding to avoid zero-size struct pointer collisions
@@ -44,12 +50,11 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
     const arena = try exec.getArena(.tiny, "PermissionStatus");
     errdefer exec.releaseArena(arena);
 
-    const state = exec.page.permissions.get(qd.name) orelse "prompt";
-
+    const state = exec.page.permissions.get(qd.name) orelse .prompt;
     const status = try arena.create(PermissionStatus);
     status.* = .{
         ._arena = arena,
-        ._state = try arena.dupe(u8, state),
+        ._state = state,
         ._name = try arena.dupe(u8, qd.name),
     };
     return exec.js.local.?.resolvePromise(status);
@@ -59,7 +64,7 @@ const PermissionStatus = struct {
     _rc: lp.RC(u8) = .{},
     _arena: Allocator,
     _name: []const u8,
-    _state: []const u8,
+    _state: State,
 
     pub fn deinit(self: *PermissionStatus, page: *Page) void {
         page.releaseArena(self._arena);
@@ -78,7 +83,7 @@ const PermissionStatus = struct {
     }
 
     fn getState(self: *const PermissionStatus) []const u8 {
-        return self._state;
+        return @tagName(self._state);
     }
 
     pub const JsApi = struct {

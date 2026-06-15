@@ -25,6 +25,7 @@ const v8 = js.v8;
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
+const PermissionState = @import("webapi/Permissions.zig").State;
 
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -72,9 +73,8 @@ origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
 
 // Permission state set via CDP Browser.grantPermissions / setPermission /
 // resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
-// by navigator.permissions.query(). Keys and values are duped into
-// frame_arena, so they live for (and reset with) the Page.
-permissions: std.StringHashMapUnmanaged([]const u8) = .empty,
+// by navigator.permissions.query().
+permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 
 // Identity tracking for the main world. All main-world contexts in this Page
 // share this, ensuring object identity works across same-origin frames.
@@ -208,14 +208,12 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
     return self.session.releaseArena(allocator);
 }
 
-// Set (or overwrite) the stored state for a permission. Name and state are
-// duped into frame_arena. Used by CDP Browser.grantPermissions / setPermission.
-pub fn setPermission(self: *Page, name: []const u8, state: []const u8) !void {
+pub fn setPermission(self: *Page, name: []const u8, state: PermissionState) !void {
     const gop = try self.permissions.getOrPut(self.frame_arena, name);
     if (!gop.found_existing) {
         gop.key_ptr.* = try self.frame_arena.dupe(u8, name);
     }
-    gop.value_ptr.* = try self.frame_arena.dupe(u8, state);
+    gop.value_ptr.* = state;
 }
 
 pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {

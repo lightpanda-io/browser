@@ -108,7 +108,7 @@ fn grantPermissions(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     for (params.permissions) |name| {
-        try page.setPermission(name, "granted");
+        try page.setPermission(name, .granted);
     }
 
     return cmd.sendResult(null, .{ .include_session_id = false });
@@ -126,8 +126,12 @@ fn setPermission(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    try page.setPermission(params.permission.name, params.setting);
 
+    const PermissionState = @import("../../browser/webapi/Permissions.zig").State;
+    const state = std.meta.stringToEnum(PermissionState, params.setting) orelse {
+        return error.InvalidPermissionSetting;
+    };
+    try page.setPermission(params.permission.name, state);
     return cmd.sendResult(null, .{ .include_session_id = false });
 }
 
@@ -192,8 +196,8 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
         .params = .{ .permissions = &[_][]const u8{ "geolocation", "notifications" } },
     });
     try ctx.expectSentResult(null, .{ .id = 40, .session_id = null });
-    try testing.expectEqualSlices(u8, "granted", page.permissions.get("geolocation").?);
-    try testing.expectEqualSlices(u8, "granted", page.permissions.get("notifications").?);
+    try testing.expectEqual(.granted, page.permissions.get("geolocation").?);
+    try testing.expectEqual(.granted, page.permissions.get("notifications").?);
 
     // setPermission: override a single permission to an explicit state.
     try ctx.processMessage(.{
@@ -202,7 +206,7 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
         .params = .{ .permission = .{ .name = "geolocation" }, .setting = "denied" },
     });
     try ctx.expectSentResult(null, .{ .id = 41, .session_id = null });
-    try testing.expectEqualSlices(u8, "denied", page.permissions.get("geolocation").?);
+    try testing.expectEqual(.denied, page.permissions.get("geolocation").?);
 
     // resetPermissions: clears everything; query falls back to "prompt".
     try ctx.processMessage(.{
