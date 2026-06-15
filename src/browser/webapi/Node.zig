@@ -468,9 +468,7 @@ pub fn isConnected(self: *const Node) bool {
 const GetRootNodeOpts = struct {
     composed: bool = false,
 };
-pub fn getRootNode(self: *Node, opts_: ?GetRootNodeOpts) *Node {
-    const opts = opts_ orelse GetRootNodeOpts{};
-
+pub fn getRootNode(self: *Node, opts: GetRootNodeOpts) *Node {
     var root = self;
     while (root._parent) |parent| {
         root = parent;
@@ -1227,7 +1225,12 @@ pub const JsApi = struct {
     pub const normalize = bridge.function(Node.normalize, .{ .ce_reactions = true });
     pub const cloneNode = bridge.function(Node.cloneNode, .{ .dom_exception = true, .ce_reactions = true });
     pub const compareDocumentPosition = bridge.function(Node.compareDocumentPosition, .{});
-    pub const getRootNode = bridge.function(Node.getRootNode, .{});
+    pub const getRootNode = bridge.function(_getRootNode, .{});
+    // The `options` argument is optional in JS; default it before calling the
+    // (non-optional) Node.getRootNode.
+    fn _getRootNode(self: *Node, opts: ?GetRootNodeOpts) *Node {
+        return self.getRootNode(opts orelse .{});
+    }
     pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
     pub const lookupNamespaceURI = bridge.function(Node.lookupNamespaceURI, .{});
     pub const lookupPrefix = bridge.function(Node.lookupPrefix, .{});

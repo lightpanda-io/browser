@@ -27,7 +27,7 @@ pub fn setHtmlFor(self: *Label, value: []const u8, frame: *Frame) !void {
 
 pub fn getControl(self: *Label, frame: *Frame) ?*Element {
     if (self.asElement().getAttributeSafe(comptime .wrap("for"))) |id| {
-        const el = frame.document.getElementById(id, frame) orelse return null;
+        const el = frame.getElementByIdFromNode(self.asElement().asNode(), id) orelse return null;
         if (!isLabelable(el)) {
             return null;
         }

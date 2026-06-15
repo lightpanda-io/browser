@@ -988,8 +988,9 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     const FocusEvent = @import("event/FocusEvent.zig");
 
     const new_target = self.asEventTarget();
-    const old_active = frame.document._active_element;
-    frame.document._active_element = self;
+    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    const old_active = doc._active_element;
+    doc._active_element = self;
 
     if (old_active) |old| {
         if (old == self) {
@@ -1019,9 +1020,10 @@ pub fn focus(self: *Element, frame: *Frame) !void {
 }
 
 pub fn blur(self: *Element, frame: *Frame) !void {
-    if (frame.document._active_element != self) return;
+    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    if (doc._active_element != self) return;
 
-    frame.document._active_element = null;
+    doc._active_element = null;
 
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = self.asEventTarget();

@@ -601,11 +601,13 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .hover => return false,
         .active => return false,
         .focus => {
-            const active = frame.document._active_element orelse return false;
+            const doc = node.ownerDocument(frame) orelse return false;
+            const active = doc._active_element orelse return false;
             return active == el;
         },
         .focus_within => {
-            const active = frame.document._active_element orelse return false;
+            const doc = node.ownerDocument(frame) orelse return false;
+            const active = doc._active_element orelse return false;
             return node.contains(active.asNode());
         },
         .focus_visible => return false,
@@ -619,7 +621,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .target => {
             const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
-            const location = frame.document.getLocation() orelse return false;
+            const doc = node.ownerDocument(frame) orelse return false;
+            const location = doc.getLocation() orelse return false;
             const hash = location.getHash();
             if (hash.len <= 1) return false;
             return std.mem.eql(u8, element_id, hash[1..]);

@@ -100,7 +100,9 @@ pub fn getForm(self: *Button, frame: *Frame) ?*Form {
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (frame.document.getElementById(form_id, frame)) |form_element| {
+        // form= resolves in the control's own tree (shadow root or document),
+        // not the calling realm's. getElementByIdFromNode walks to that root.
+        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
             return form_element.is(Form);
         }
         // form attribute present but invalid - no form owner
@@ -135,9 +137,10 @@ pub fn getLabels(self: *Button, frame: *Frame) !js.Array {
 
 pub fn getFormAction(self: *Button, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return frame.url;
+    const owner_url = element.asNode().ownerFrame(frame).url;
+    const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return owner_url;
     if (action.len == 0) {
-        return frame.url;
+        return owner_url;
     }
     return element.asNode().resolveURL(action, frame, .{});
 }

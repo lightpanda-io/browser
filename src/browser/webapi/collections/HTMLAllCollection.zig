@@ -100,8 +100,7 @@ pub fn getAtIndex(self: *HTMLAllCollection, index: usize, frame: *const Frame) ?
 }
 
 pub fn getByName(self: *HTMLAllCollection, name: []const u8, frame: *Frame) ?*Element {
-    // First, try fast ID lookup using the document's element map
-    if (frame.document._elements_by_id.get(name)) |el| {
+    if (frame.getElementByIdFromNode(self._tw._root, name)) |el| {
         return el;
     }
 
