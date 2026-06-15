@@ -36,6 +36,13 @@ pub const Result = struct {
     exception: []const u8,
 };
 
+pub fn toValue(self: *const Function) js.Value {
+    return .{
+        .local = self.local,
+        .handle = @ptrCast(self.handle),
+    };
+}
+
 pub fn withThis(self: *const Function, value: anytype) !Function {
     const local = self.local;
     const this_obj = if (@TypeOf(value) == js.Object)

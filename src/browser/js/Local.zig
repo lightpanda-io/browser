@@ -109,6 +109,27 @@ pub fn newCallback(
     return .{ .local = self, .handle = handle };
 }
 
+/// The argument bundle passed to a `RawCallback` by the engine; decode it with
+/// `Caller.FunctionCallbackInfo`.
+pub const RawCallbackInfo = v8.FunctionCallbackInfo;
+
+/// Signature of a raw C callback installed via `newRawCallback`.
+pub const RawCallback = *const fn (?*const RawCallbackInfo) callconv(.c) void;
+
+/// Install a native function backed by a raw C callback — for callers (e.g. the
+/// agent runtime) that decode args themselves via `Caller.FunctionCallbackInfo`
+/// instead of the typed bridge dispatch. `data` becomes the function's External.
+pub fn newRawCallback(self: *const Local, callback: RawCallback, data: *anyopaque) js.Function {
+    const external = self.isolate.createExternal(data);
+    const handle = v8.v8__Function__New__DEFAULT2(self.handle, callback, @ptrCast(external)).?;
+    return .{ .local = self, .handle = handle };
+}
+
+/// The context's global object, as a `js.Object` (e.g. to install globals on).
+pub fn globalObject(self: *const Local) js.Object {
+    return .{ .local = self, .handle = v8.v8__Context__Global(self.handle).? };
+}
+
 pub fn runMacrotasks(self: *const Local) void {
     const env = self.ctx.env;
     env.pumpMessageLoop();
