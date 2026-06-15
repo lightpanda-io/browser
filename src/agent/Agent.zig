@@ -239,6 +239,9 @@ total_usage: zenai.provider.Usage = .{},
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
 available_providers: []const []const u8,
+/// Lazily-probed Ollama reachability for `/provider` completion, cached so the
+/// per-keystroke hinter probes the local server at most once per session.
+ollama_completable: ?bool = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
@@ -870,6 +873,11 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("no API key for {s}; set {s}", .{ @tagName(provider), zenai.provider.envVarName(provider) });
         return;
     };
+    // Ollama's key is a placeholder, so probe the server instead of trusting it.
+    if (provider == .ollama and settings.detectOllama(self.allocator, self.model_base_url) == null) {
+        self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.ollama_default_base_url});
+        return;
+    }
     self.setProvider(.{ .provider = provider, .key = key }) catch |err| {
         self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
     };
@@ -1694,12 +1702,27 @@ const ModelCompletions = struct {
 /// avoid reading environment variables on each autocomplete keypress.
 fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []const u8 {
     const self: *Agent = @ptrCast(@alignCast(context));
-    const names = arena.alloc([]const u8, self.available_providers.len + 1) catch return &.{};
+    const ollama = self.ollamaCompletable();
+    const names = arena.alloc([]const u8, self.available_providers.len + 1 + @as(usize, @intFromBool(ollama))) catch return &.{};
     for (self.available_providers, 0..) |p, i| {
         names[i] = arena.dupe(u8, p) catch return &.{};
     }
-    names[self.available_providers.len] = provider_off_keyword;
+    var n = self.available_providers.len;
+    if (ollama) {
+        names[n] = @tagName(Config.AiProvider.ollama);
+        n += 1;
+    }
+    names[n] = provider_off_keyword;
     return names;
+}
+
+/// Ollama joins `/provider` completions only when a server actually answers,
+/// since its env key is a placeholder. Probed once and cached (see field).
+fn ollamaCompletable(self: *Agent) bool {
+    if (self.ollama_completable) |v| return v;
+    const v = settings.detectOllama(self.allocator, self.model_base_url) != null;
+    self.ollama_completable = v;
+    return v;
 }
 
 /// `CompletionSource.models`. Blocks on a one-time fetch per provider, caching

@@ -41,8 +41,10 @@ pub const ResolvedProvider = struct {
 };
 
 /// Ollama needs no API key, so it's excluded from env detection
-/// (`default_candidates`) and only probed here as a last resort.
-fn detectOllama(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credentials {
+/// (`default_candidates`) and only probed here. Null means no server answered
+/// with a pulled model — the only honest signal of Ollama availability, since
+/// its env key is a constant placeholder.
+pub fn detectOllama(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credentials {
     const key = zenai.provider.envApiKey(.ollama) orelse return null;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -143,8 +145,10 @@ pub fn saveRemembered(remembered: Remembered) !void {
     try std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = w.buffered() });
 }
 
+/// Cloud providers with a key set. Ollama is excluded — its availability needs
+/// a live probe (`detectOllama`), too costly for an unconditional startup scan.
 pub fn availableProviders(buf: []Credentials) []Credentials {
-    return zenai.provider.detectKeys(buf, std.enums.values(Config.AiProvider));
+    return zenai.provider.detectKeys(buf, zenai.provider.default_candidates);
 }
 
 pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembered: ?Remembered) []const u8 {
