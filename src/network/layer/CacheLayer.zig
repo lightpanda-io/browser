@@ -105,7 +105,9 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
             log.debug(.cache, "revalidate with etag", .{ .url = req.url, .etag = etag });
             const header_value = try std.fmt.allocPrintSentinel(arena, "If-None-Match: {s}", .{etag}, 0);
             try req.headers.add(header_value);
-        } else if (cached.metadata.last_modified) |lm| {
+        }
+
+        if (cached.metadata.last_modified) |lm| {
             log.debug(.cache, "revalidate with last-modified", .{ .url = req.url, .last_modified = lm });
             const header_value = try std.fmt.allocPrintSentinel(arena, "If-Modified-Since: {s}", .{lm}, 0);
             try req.headers.add(header_value);
