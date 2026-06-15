@@ -1787,7 +1787,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
 }
 
 fn requireFrame(session: *lp.Session) ToolError!*lp.Frame {
-    return session.currentFrame() orelse ToolError.FrameNotLoaded;
+    return session.toolFrame() orelse ToolError.FrameNotLoaded;
 }
 
 fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
@@ -1803,7 +1803,7 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
         }
         _ = try performGoto(session, registry, u, timeout);
     }
-    return session.currentFrame() orelse ToolError.FrameNotLoaded;
+    return session.toolFrame() orelse ToolError.FrameNotLoaded;
 }
 
 /// Navigations wait only for `load` — the fast snapshot. Content rendered by
@@ -1813,16 +1813,34 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
 /// network from ever fully idling, so it just rides the timeout.
 const default_nav_wait: lp.Config.WaitUntil = .load;
 
-fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
+/// Begin a navigation without waiting: replace the single page and kick off the
+/// load. The blocking `performGoto` and the async script-runtime `goto` share it.
+pub fn startGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8) ToolError!*lp.Frame {
     if (session.hasPage()) {
         registry.reset();
         session.removePage();
     }
-    const page = session.createPage() catch return ToolError.NavigationFailed;
-    _ = page.navigate(url, .{
+    const frame = session.createPage() catch return ToolError.NavigationFailed;
+    _ = frame.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     }) catch return ToolError.NavigationFailed;
+    return frame;
+}
+
+/// `fork` (another goto in flight) opens a popup so navigations coexist;
+/// otherwise replaces the single page, keeping sequential gotos bounded.
+pub fn openGotoFrame(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, fork: bool) ToolError!*lp.Frame {
+    if (fork) {
+        if (session.currentFrame()) |root| {
+            return root.openPopup(.{ .url = url, .name = "", .opener = null }) catch ToolError.NavigationFailed;
+        }
+    }
+    return startGoto(session, registry, url);
+}
+
+fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
+    _ = try startGoto(session, registry, url);
 
     var runner = session.runner(.{}) catch return ToolError.NavigationFailed;
     const result = runner.waitResult(.{

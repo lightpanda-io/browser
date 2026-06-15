@@ -96,7 +96,7 @@ const script_skill =
     \\- No `window`, `document`, DOM, `localStorage` — read pages with `page.extract(...)`, run page-side JS only via `page.evaluate("...")`.
     \\- No `require`, `process`, `fs`, npm. Standard ECMAScript built-ins only (`JSON`, `Map`, template literals, …).
     \\- `page.goto(...)` is **async — always `await` it**. Page methods are **synchronous**: `const data = page.extract({...})`, never `await page.extract(...)`. The script body runs as an async function, so top-level `await` is allowed.
-    \\- **Re-navigating reuses the same page**: `await page.goto(url2)` keeps `page` valid and points it at the new URL. Work through one page at a time and read it before navigating away.
+    \\- **Re-navigating reuses the same page**: `await page.goto(url2)` keeps `page` valid. To fetch in **parallel**, make several pages and navigate them together: `const a = new Page(), b = new Page(); await Promise.all([a.goto(x), b.goto(y)])` — these pages coexist; read each through its own object: `a.extract(schema)`, `b.click(sel)`. Free a page you're done with via `page.close()`.
     \\- Page `evaluate("...")` cannot see script variables — interpolate values into the string. Script code cannot see page variables.
     \\- Variables persist across navigations within one run, so cross-page aggregation is plain JS.
     \\- **`return <value>` is the script's output**, printed automatically (objects/arrays as JSON). End with `return page.extract({...});` or `return results;`. A bare trailing expression is NOT printed; neither is `console.log(JSON.stringify(...))`.
@@ -109,7 +109,7 @@ const script_skill =
     \\|------|-------|
     \\| `new Page()` | Makes a page object. No navigation yet — call `page.goto(url)` before any other method. |
     \\| `await page.goto(url[, { timeout }])` | **Async — must be `await`ed.** Navigates the page (re-navigating reuses the same object). Waits for `load`. Default timeout 10000 ms. Rejects on navigation failure; a **timeout does NOT reject** (the page may still be usable). |
-    \\| `page.close()` | Marks the page done; later method calls on it error. The page is otherwise reclaimed at script end. |
+    \\| `page.close()` | Free a page's resources (parallel/popup pages). The root page is reclaimed at script end. |
     \\| `page.extract(schema)` | The only primitive returning a real JS value (object/array). See schema below. |
     \\| `page.evaluate(script[, { url, timeout, save }])` | Page-side JS escape hatch; returns text (JSON for objects/arrays). |
     \\| `page.click(sel)` / `page.hover(sel)` | |
@@ -152,24 +152,24 @@ const script_skill =
     \\## Best practices
     \\
     \\1. **Navigate, settle, read.** After `await page.goto` on a dynamic page (feeds, search results, comment threads), call `page.waitForState("networkidle")` or `page.waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
-    \\2. **List-to-detail: read the list, then walk it.** Extract the list of links, then for each item `await page.goto(item.url)` and `page.extract(...)`, assembling plain JS objects — read each detail page before navigating to the next:
+    \\2. **Fetch in parallel when the pages are independent.** `const a = new Page(), b = new Page(); await Promise.all([a.goto(x), b.goto(y)]);` then read each through its object (`a.extract(schema)`). Parallel pages share one cookie jar and run JS serially, so this speeds up independent, read-only fetches — not login or stateful flows.
+    \\3. **List-to-detail: fan out, don't crawl.** Extract the list, then fetch the detail pages in parallel — one `new Page()` per item, gathered with `Promise.all` — assembling plain JS objects. This is where async `goto` pays off:
     \\   ```js
-    \\   const page = new Page();
-    \\   await page.goto(listUrl);
-    \\   const { items } = page.extract({ items: [{ selector: "a.row", fields: { url: { attr: "href" } } }] });
-    \\   const details = [];
-    \\   for (const it of items) {
-    \\     await page.goto(it.url);
-    \\     details.push({ ...it, ...page.extract({ /* schema */ }) });
-    \\   }
-    \\   return details;
+    \\   const details = await Promise.all(items.map(async (it) => {
+    \\     const p = new Page();
+    \\     await p.goto(it.url);
+    \\     const data = p.extract({ /* schema */ });
+    \\     p.close();
+    \\     return { ...it, ...data };
+    \\   }));
     \\   ```
-    \\3. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `page.evaluate` block is always wrong: lift the raw strings with `page.extract`, then trim/split/parse them in top-level JS. Reserve `page.evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every navigation/reload, while script variables persist.
-    \\4. **Credentials via `$LP_*` placeholders** in any string argument (`page.fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
-    \\5. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
-    \\6. **Let failures fail.** Primitives throw on error and stop the script — only `try/catch` where you have a real fallback (e.g. optional cookie banner: `try { page.click("#accept") } catch {}`).
-    \\7. **End with `return <result>`.** `console.log` is for debug output only and doesn't JSON-format objects.
-    \\8. Modern, readable JS: `const`/`let`, `for (const x of xs)`, template literals, destructuring, 2-space indent.
+    \\   Reuse a single sequential `page` (`await page.goto(...)` per item) instead only when the steps depend on each other or share login state; for long lists, fan out in chunks of ~5–10.
+    \\4. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `page.evaluate` block is always wrong: lift the raw strings with `page.extract`, then trim/split/parse them in top-level JS. Reserve `page.evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every navigation/reload, while script variables persist.
+    \\5. **Credentials via `$LP_*` placeholders** in any string argument (`page.fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
+    \\6. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
+    \\7. **Let failures fail.** Primitives throw on error and stop the script — only `try/catch` where you have a real fallback (e.g. optional cookie banner: `try { page.click("#accept") } catch {}`).
+    \\8. **End with `return <result>`.** `console.log` is for debug output only and doesn't JSON-format objects.
+    \\9. Modern, readable JS: `const`/`let`, `for (const x of xs)`, template literals, destructuring, 2-space indent.
     \\
     \\## Common errors
     \\
@@ -178,7 +178,7 @@ const script_skill =
     \\| `extract is not defined` (or click/fill/…) | These are methods on the page object, not globals → `const page = new Page(); await page.goto(url); page.extract(...)` |
     \\| `Page must be called with new` | `Page(...)` called without `new` → `const page = new Page();` |
     \\| `page is not navigated or has been closed` | A method on a fresh `new Page()` (or a closed page) → `await page.goto(url)` first |
-    \\| `page handle is no longer valid` | Used a page after a later `goto` replaced it → read a page before navigating away |
+    \\| `page handle is no longer valid` | Used a page after a later `goto` replaced it (a sequential `new Page()`+goto replaces the root) → read through the current page |
     \\| `document is not defined` | DOM API in script context → use `page.extract` or `page.evaluate` |
     \\| `require is not defined` | Not Node.js |
     \\| `no page loaded - run goto(url) first` | Page primitive before navigation |

@@ -573,54 +573,12 @@ pub fn close(self: *Window) void {
         return;
     }
 
-    // Per spec, close() is only honored on script-opened windows. That
-    // maps exactly to membership in page.popups.
+    // Per spec, close() is only honored on script-opened windows — exactly the
+    // popup case `Session.closePopup` tears down (it no-ops on the root frame).
     const frame = self._frame;
-    const page = frame._page;
-
-    var popup_index: usize = 0;
-    while (popup_index < page.popups.items.len) : (popup_index += 1) {
-        if (page.popups.items[popup_index] == frame) {
-            break;
-        }
-    } else return;
-
-    self._closed = true;
-
-    // Any live Window holding us as its opener must drop the reference —
-    // our Frame is about to go away, and a stale _frame deref on their
-    // side would crash.
-    for (page.popups.items) |popup| {
-        if (popup.window._opener == self) {
-            popup.window._opener = null;
-        }
+    if (frame._page.session.closePopup(frame)) {
+        self._closed = true;
     }
-    if (page.frame.window._opener == self) {
-        page.frame.window._opener = null;
-    }
-
-    _ = page.popups.swapRemove(popup_index);
-
-    // Drop any pending queued navigation for this frame. Frame.deinit will
-    // release the QueuedNavigation arena, but the entry in page.queued_navigation
-    // would otherwise have processQueuedNavigation re-deinit the popup.
-    if (frame._queued_navigation != null) {
-        for (page.queued_navigation.items, 0..) |f, i| {
-            if (f == frame) {
-                _ = page.queued_navigation.swapRemove(i);
-                break;
-            }
-        }
-    }
-
-    frame.js.scheduler.reset();
-
-    // We can't tear the Frame down here — close() is invoked from JS still
-    // running on top of this Frame's V8 context, often deep inside a script
-    // eval whose parser is still holding the Frame. Destroying the context
-    // now leaves dangling pointers in the unwinding script eval (load event
-    // dispatch, runMacrotasks, etc.). Defer to Page.deinit instead.
-    page.session.queueFrameDestruction(frame);
 }
 
 pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {

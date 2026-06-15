@@ -353,34 +353,37 @@ session).
 ## JavaScript scripts
 
 `./lightpanda agent script.js` runs a script without any LLM call. Scripts
-are plain JavaScript plus the `Page` object — the only global. `new Page()`
-makes a page, `await page.goto(url)` navigates it, and every other primitive
-is a synchronous method on it:
+are plain JavaScript plus the installed Lightpanda primitives:
 
 ```js
 const page = new Page();
 await page.goto("https://example.com");
 page.click({ selector: "a.login" });
-page.evaluate("document.title");
+return page.evaluate("document.title");
 ```
 
-`page.goto(...)` is **async — always `await` it**. Every other page method is
-**synchronous**: write `const data = page.extract(…)`, not
-`await page.extract(…)`. (`page.evaluate(...)` can run async JS inside the
-page, but the call itself still returns synchronously.) The script body runs
-as an async function, so top-level `await` is allowed. Re-navigating reuses
-the same page object: a later `await page.goto(url2)` keeps `page` valid and
-points it at the new URL.
+`Page` is the only global: `new Page()` makes a page and `await page.goto(url)`
+navigates it. `page.goto(url)` is **asynchronous** — always `await` it. Every
+other method is **synchronous**: each returns its result directly, so write
+`const data = page.extract(…)`, not `await page.extract(…)`. The script body
+runs as an async function, so top-level `await` is allowed.
+
+Re-navigating reuses the same page object (`await page.goto(url2)`). To fetch
+several pages at once, make a page each and navigate them together:
+`const a = new Page(), b = new Page(); await Promise.all([a.goto(x), b.goto(y)])`,
+then read each through its own object (`a.extract(schema)`). Free a page you no
+longer need with `page.close()`.
 
 It's not Node.js. There's no `require`, `process`, `fs`, npm package
-loading, or Node standard library. The `page.evaluate(...)` method runs its
+loading, or Node standard library. The `page.evaluate(...)` primitive runs its
 string in the current page context; page scripts can't see agent variables
 or agent primitives.
 
-Whatever the script `return`s is printed automatically, so a script that ends
-with `return page.extract({...})` will print the extraction result to stdout.
-A bare trailing expression is not printed. Tool errors throw JavaScript
-exceptions and stop execution.
+A script's output is whatever it `return`s, printed automatically, so a
+script that ends with `return extract({...})` prints the extraction result
+to stdout. A bare trailing expression is not printed. Tool errors throw
+JavaScript exceptions (a `goto` failure rejects, so `await` throws) and stop
+execution.
 
 See [agent-script.md](agent-script.md) for the full script format reference.
 
@@ -411,7 +414,7 @@ no resolved provider) you get the deterministic transcription:
 - **With an LLM** it synthesizes an idiomatic script from the whole
   session. The synthesis prompt asks for JavaScript only ("no commentary"),
   so the result generally has no such comments: the model folds intent
-  into the code and drops dead-ends. Returned data is whatever the script
+  into the code and drops dead-ends. Output is whatever the script
   `return`s, which prints automatically on replay.
 
 ## One-shot mode (`--task`)
@@ -478,9 +481,8 @@ calling client holds the conversation and synthesizes the script itself.
 | `save` | `{ path: string, script: string }` | Write `script` to `path` (relative, no `..`; created or overwritten) and return the absolute location and line count. |
 
 The tool's description carries the same synthesis guidance the agent's
-`/save` gives its LLM: drive a `Page` object (`await page.goto(...)`,
-`page.click(...)`, `page.fill(...)`, `page.extract(...)`, ...) as JavaScript
-calls, drop dead-ends, keep `$LP_*`
+`/save` gives its LLM: prefer the builtins (`goto`, `click`, `fill`,
+`extract`, ...) as JavaScript calls, drop dead-ends, keep `$LP_*`
 placeholders. Any literal `LP_*` value is scrubbed back to its placeholder
 before the file is written. The result runs without an LLM via
 `./lightpanda agent session.js`.

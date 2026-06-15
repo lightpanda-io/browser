@@ -185,9 +185,9 @@ what the script returns.
 ./lightpanda agent hn_login.js
 ```
 
-No `--provider`, no API key, no token spend. Whatever the script
-`return`s is printed automatically as JSON. Because the saved script
-ends with `return page.extract(...)`, you get clean JSON on stdout:
+No `--provider`, no API key, no token spend. The script's last
+expression is printed automatically as JSON. Because the saved script
+ends with `page.extract(...)`, you get clean JSON on stdout:
 
 ```console
 ./lightpanda agent hn_login.js > stories.json
@@ -196,13 +196,10 @@ ends with `return page.extract(...)`, you get clean JSON on stdout:
 From inside the REPL, `/load hn_login.js` runs the same script against
 the current session.
 
-To reshape the output, assign the result and end with `return <value>`
-(what you return is what prints):
+To reshape the output, assign the result and end with a bare expression
+(the final value is what prints):
 
 ```js
-const page = new Page();
-await page.goto("https://news.ycombinator.com");
-
 const topStories = page.extract({
   topStories: [{
     selector: ".athing",
@@ -214,19 +211,17 @@ const topStories = page.extract({
   }]
 });
 
-return topStories;
+topStories;
 ```
 
 ## 6. Add your own JavaScript logic
 
 Agent scripts run in a separate JavaScript context from the page. No
 `window`, `document`, DOM API, `require`, or `process`. Browser
-interaction happens through the `Page` object: `new Page()` makes a
-page, `await page.goto(url)` navigates it, and every other primitive is
-a synchronous method on it.
+interaction happens through the installed primitives.
 
-Use `page.extract(...)` to move page data into local logic, then
-process it with normal JavaScript:
+Use `page.extract(...)` to move page data into local logic, then process it
+with normal JavaScript:
 
 ```js
 const page = new Page();
@@ -247,8 +242,24 @@ const topStories = page.extract({
 return topStories.map((s) => ({ rank: s.rank, title: s.title, url: s.url }));
 ```
 
-Use `page.evaluate(...)` only when you intentionally want a string to
-run in the page's JavaScript context. Page evaluate cannot see agent
+`new Page()` makes a page and `await page.goto(...)` navigates it. You don't
+need more than one for a single page, but to fetch several at once, make a page
+each and navigate them together:
+
+```js
+const a = new Page();
+const b = new Page();
+await Promise.all([
+  a.goto("https://news.ycombinator.com"),
+  b.goto("https://lobste.rs"),
+]);
+const hn = a.extract({ top: ".titleline > a" });       // reads HN
+const lobsters = b.extract({ top: ".story .u-url" });  // reads Lobsters
+return { hn: hn.top, lobsters: lobsters.top };
+```
+
+Use `page.evaluate(...)` only when you intentionally want a string to run in
+the page's JavaScript context. Page evaluate cannot see agent
 variables or call agent primitives.
 
 ## 7. Use Lightpanda from another agent (MCP)

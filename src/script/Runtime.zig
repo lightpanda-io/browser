@@ -43,6 +43,10 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
 
+/// In-flight `goto` navigations the driver loop settles. Concurrent gotos open
+/// popup frames so they coexist; a sequential goto replaces the page.
+pending_gotos: std.ArrayListUnmanaged(PendingGoto) = .empty,
+
 /// The runtime installs exactly the recorded browser tools as script
 /// primitives — the same set the recorder writes — so every recorded call
 /// replays. `buildArgs` adapts each tool's JS calling convention to the JSON
@@ -58,6 +62,20 @@ const recorded_tool_count = blk: {
 const PrimitiveData = struct {
     runtime: *Runtime,
     tool: BrowserTool,
+};
+
+const PendingGoto = struct {
+    frame_id: u32,
+    // Both outlive the async wait: the settle rebinds `page`'s `__lpFrameId` to
+    // `frame_id` and resolves the script's Promise with it.
+    resolver: v8.Global,
+    page: v8.Global,
+    deadline_ms: i64,
+
+    fn deinit(self: *PendingGoto) void {
+        v8.v8__Global__Reset(&self.resolver);
+        v8.v8__Global__Reset(&self.page);
+    }
 };
 
 const ConsoleMethod = enum {
@@ -130,11 +148,19 @@ pub fn init(
 }
 
 pub fn deinit(self: *Runtime) void {
+    self.clearPendingGotos();
+    self.pending_gotos.deinit(self.allocator);
     self.resetContext();
     self.env.deinit();
     self.call_arena.deinit();
     const allocator = self.allocator;
     allocator.destroy(self);
+}
+
+/// Release all persisted goto handles and empty the list.
+fn clearPendingGotos(self: *Runtime) void {
+    for (self.pending_gotos.items) |*entry| entry.deinit();
+    self.pending_gotos.clearRetainingCapacity();
 }
 
 pub fn terminate(self: *Runtime) void {
@@ -282,22 +308,62 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     const completion = v8.v8__Script__Run(script, context) orelse
         return try self.formatCaught(context, &try_catch, "script failed");
 
-    // `goto` runs synchronously and resolves its Promise before returning, so a
-    // single microtask drain settles the whole `await` chain — no event-loop
-    // driver. (Truly-async navigation is a later change.)
+    // Any pending goto whose Promise outlives this run must not leak its globals.
+    defer self.clearPendingGotos();
+
     const root: *const v8.Promise = @ptrCast(completion);
     self.env.performIsolateMicrotasks();
+    if (try self.driveToCompletion(context, root)) |interrupted| {
+        return interrupted;
+    }
     if (v8.v8__TryCatch__HasCaught(&try_catch)) {
         return try self.formatCaught(context, &try_catch, "script failed");
     }
 
     // A still-pending root means the script awaited something we can't settle
-    // (no async navigation is in flight) — stay silent.
+    // (no navigation in flight) — stay silent.
     const state = promiseState(root);
     if (state != v8.kFulfilled and state != v8.kRejected) return null;
     const completion_value = v8.v8__Promise__Result(root) orelse return null;
     if (state == v8.kRejected) return try self.formatRejection(context, completion_value);
     self.printCompletion(context, completion_value);
+    return null;
+}
+
+/// Tick the browser and settle pending gotos until the root Promise leaves
+/// pending. Returns an interrupt message (cancel/terminate), else null.
+fn driveToCompletion(self: *Runtime, context: *const v8.Context, root: *const v8.Promise) RunError!?[]const u8 {
+    var runner: ?lp.Session.Runner = null;
+    while (promiseState(root) == v8.kPending) {
+        if (self.session.isCancelled()) return try self.dupeError("cancelled");
+        if (self.env.terminatePending()) return try self.dupeError("terminated");
+
+        // Nothing in flight → the script awaits something we can't settle.
+        if (self.pending_gotos.items.len == 0) break;
+
+        var next_tick_ms: u32 = 0;
+        {
+            self.session.browser.env.isolate.enter();
+            defer self.session.browser.env.isolate.exit();
+            if (runner == null) {
+                runner = self.session.runner(.{}) catch break;
+            }
+            if (runner) |*r| {
+                // A failed tick must not abort the wait; the deadline bounds it.
+                switch (r.tick(.{ .ms = 100 }) catch lp.Session.Runner.TickResult{ .done = {} }) {
+                    .ok => |ms| next_tick_ms = ms,
+                    .done => {},
+                }
+            }
+        }
+
+        self.resolveReadyGotos(context);
+        self.env.performIsolateMicrotasks();
+
+        // Pace a timer-only wait (no network I/O for `tick` to block on) so it
+        // doesn't busy-spin.
+        if (next_tick_ms > 0) std.Thread.sleep(@as(u64, next_tick_ms) * std.time.ns_per_ms);
+    }
     return null;
 }
 
@@ -391,12 +457,18 @@ fn construct(self: *Runtime, info: *const v8.FunctionCallbackInfo) void {
 /// page is navigated; absent/undefined once never-navigated or closed.
 const frame_id_key = "__lpFrameId";
 
-/// `page.close()`: stale the wrapper so later method calls error. A single
-/// synchronous page has no popups to free; the active page is reclaimed on the
-/// next `goto` or at script end.
+/// `page.close()`: free a popup via `Session.closePopup` (a no-op on the root),
+/// then stale the wrapper so later method calls error.
 fn invokeClose(self: *Runtime, info: *const v8.FunctionCallbackInfo) void {
     const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse return;
     const this = v8.v8__FunctionCallbackInfo__This(info) orelse return;
+    if (self.receiverFrameId(context, info)) |frame_id| {
+        if (self.session.findFrameByFrameId(frame_id)) |frame| {
+            self.session.browser.env.isolate.enter();
+            defer self.session.browser.env.isolate.exit();
+            _ = self.session.closePopup(frame);
+        }
+    }
     self.setObjectProperty(context, this, frame_id_key, self.env.isolate.initUndefined()) catch {};
 }
 
@@ -418,20 +490,16 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         error.InvalidArguments => return self.throwTypeError("invalid arguments"),
     };
 
-    // `goto` is the one async-shaped primitive: it returns a Promise (resolved
-    // synchronously once the blocking navigation settles).
     if (tool == .goto) return self.invokeGoto(arena, context, info, args);
 
-    // Other primitives are page methods. The receiver must be navigated, and —
-    // since a single synchronous page has only one live frame — still be the
-    // current one; a later `goto` (on any handle) replaces the page and stales
-    // every other handle.
+    defer self.session._tool_frame_override = null;
+
+    // Aim the tool at the receiver's frame — a popup may not be the active page —
+    // and error if it's gone (closed, or a root replaced by a later goto).
     const frame_id = self.receiverFrameId(context, info) orelse
         return self.throwError("page is not navigated or has been closed; call page.goto(url) first");
-    const live = self.session.currentFrame();
-    if (live == null or live.?._frame_id != frame_id) {
+    self.session._tool_frame_override = self.session.findFrameByFrameId(frame_id) orelse
         return self.throwError("page handle is no longer valid; the page was closed or replaced");
-    }
 
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
@@ -451,10 +519,8 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     }
 }
 
-/// Navigate the receiver Page synchronously and hand back a resolved Promise of
-/// the page object, so `await page.goto(url)` yields the page. The blocking
-/// `goto` tool runs the navigation to completion before this returns; on success
-/// the receiver's `__lpFrameId` is (re)bound to the freshly-loaded frame.
+/// Open a navigation and return a Promise the driver loop settles on load.
+/// Concurrent gotos fork popups, so `Promise.all` fetches in parallel.
 fn invokeGoto(
     self: *Runtime,
     arena: std.mem.Allocator,
@@ -468,21 +534,81 @@ fn invokeGoto(
         return self.throwError("internal: promise alloc failed");
     self.setReturnValue(info, @ptrCast(promise));
 
-    const result = self.callTool(arena, .goto, args) catch |err| switch (err) {
+    const params = browser_tools.parseArgs(browser_tools.GotoParams, arena, args) catch |err| switch (err) {
         error.OutOfMemory => return self.rejectResolver(context, resolver, "out of memory"),
+        error.InvalidParams => return self.rejectResolver(context, resolver, "goto requires a url"),
+    };
+    const timeout = params.timeout orelse 10000;
+
+    const this = v8.v8__FunctionCallbackInfo__This(info) orelse
+        return self.rejectResolver(context, resolver, "internal: missing receiver");
+
+    // Another goto in flight → fork a popup rather than tear down its page.
+    const fork = self.pending_gotos.items.len != 0;
+    const frame = frame: {
+        self.session.browser.env.isolate.enter();
+        defer self.session.browser.env.isolate.exit();
+        break :frame browser_tools.openGotoFrame(self.session, self.registry, params.url, fork) catch
+            return self.rejectResolver(context, resolver, "navigation failed to start");
     };
 
-    switch (result) {
-        .ok => {
-            const this = v8.v8__FunctionCallbackInfo__This(info) orelse
-                return self.rejectResolver(context, resolver, "navigation failed");
-            const frame = self.session.currentFrame() orelse
-                return self.rejectResolver(context, resolver, "navigation failed");
-            self.bindFrameId(context, this, frame._frame_id) catch
-                return self.rejectResolver(context, resolver, "internal: page bind failed");
-            self.resolveResolver(context, resolver, @ptrCast(this));
-        },
-        .fail => |message| self.rejectResolver(context, resolver, message),
+    var entry: PendingGoto = .{
+        .frame_id = frame._frame_id,
+        .resolver = undefined,
+        .page = undefined,
+        .deadline_ms = std.time.milliTimestamp() + @as(i64, timeout),
+    };
+    v8.v8__Global__New(self.env.isolate.handle, resolver, &entry.resolver);
+    v8.v8__Global__New(self.env.isolate.handle, this, &entry.page);
+    self.pending_gotos.append(self.allocator, entry) catch {
+        entry.deinit();
+        return self.rejectResolver(context, resolver, "out of memory");
+    };
+}
+
+/// Settle each pending goto whose frame reached load (or its soft deadline — the
+/// page may still be usable); a navigation error rejects. The caller drains
+/// microtasks after.
+fn resolveReadyGotos(self: *Runtime, context: *const v8.Context) void {
+    const h = self.env.isolate.handle;
+    var i: usize = 0;
+    while (i < self.pending_gotos.items.len) {
+        const entry = &self.pending_gotos.items[i];
+        const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&entry.resolver, h) orelse {
+            // Handle vanished (impossible in practice) — drop it rather than spin.
+            var dead = self.pending_gotos.swapRemove(i);
+            dead.deinit();
+            continue;
+        });
+
+        const frame = self.session.findFrameByFrameId(entry.frame_id);
+        const settled = settled: {
+            if (frame == null or frame.?._last_navigate_error != null) {
+                self.rejectResolver(context, resolver, "navigation failed");
+                break :settled true;
+            }
+            const ls = frame.?._load_state;
+            if (ls != .load and ls != .complete and std.time.milliTimestamp() < entry.deadline_ms) {
+                break :settled false;
+            }
+            const page: *const v8.Object = @ptrCast(v8.v8__Global__Get(&entry.page, h) orelse {
+                self.rejectResolver(context, resolver, "internal: page handle lost");
+                break :settled true;
+            });
+            if (self.bindFrameId(context, page, entry.frame_id)) |_| {
+                self.resolveResolver(context, resolver, @ptrCast(page));
+            } else |_| {
+                self.rejectResolver(context, resolver, "internal: page bind failed");
+            }
+            break :settled true;
+        };
+
+        if (settled) {
+            var removed = self.pending_gotos.swapRemove(i);
+            removed.deinit();
+        } else {
+            i += 1;
+        }
     }
 }
 
@@ -926,8 +1052,8 @@ test "agent script runtime: a stale page handle is a hard error" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    // The first page goes stale once a second goto replaces the page; reading
-    // through it must throw, not silently hit the current page.
+    // The first page goes stale once a second (non-forked) goto replaces the
+    // page; reading through it must throw, not silently hit the current page.
     const message = (try runtime.runSource(
         \\const a = new Page();
         \\await a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
@@ -936,6 +1062,60 @@ test "agent script runtime: a stale page handle is a hard error" {
     , "agent-runtime-stale-handle.js")).?;
 
     try testing.expect(std.mem.indexOf(u8, message, "no longer valid") != null);
+}
+
+test "agent script runtime: parallel goto fetches concurrent pages, read per page object" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // Two gotos in flight at once open distinct frames (root + popup) that load
+    // concurrently in one Page; each is read back through its own Page object.
+    try runTestScript(runtime,
+        \\const a = new Page();
+        \\const b = new Page();
+        \\await Promise.all([
+        \\  a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  b.goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
+        \\]);
+        \\const da = a.extract({ btn: "#btn" });
+        \\if (da.btn !== "Click Me") throw new Error("page a read wrong: " + JSON.stringify(da));
+        \\const db = b.extract({ sel: "#sel1" });
+        \\if (db.sel !== "selector-1-content") throw new Error("page b read wrong: " + JSON.stringify(db));
+    );
+}
+
+test "agent script runtime: page.close frees a popup and stales its wrapper" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // b is a popup (second concurrent goto). Closing it stales its wrapper while
+    // the root page a keeps working.
+    try runTestScript(runtime,
+        \\const a = new Page();
+        \\const b = new Page();
+        \\await Promise.all([
+        \\  a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  b.goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
+        \\]);
+        \\b.close();
+        \\let closed = false;
+        \\try { b.extract({ sel: "#sel1" }); } catch (e) { closed = true; }
+        \\if (!closed) throw new Error("a closed page should error on use");
+        \\const da = a.extract({ btn: "#btn" });
+        \\if (da.btn !== "Click Me") throw new Error("root page should survive a popup close");
+    );
 }
 
 test "agent script runtime: extract returns a JavaScript object" {
