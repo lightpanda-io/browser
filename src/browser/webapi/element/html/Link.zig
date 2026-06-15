@@ -203,33 +203,27 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
 
     // Opt-in fetch for `rel="stylesheet"` — drives `frame.loadExternalStylesheet`,
-    // which fires the load/error event itself. Other rels (preload,
-    // modulepreload) and the disabled case keep the rendering-free stub that
-    // fires a synthetic `load` event without touching the network.
+    // which fires the load/error event itself. preload/modulepreload start a
+    // background fetch (a hint, never evaluated on its own) and fire a
+    // synthetic `load` event regardless of how the fetch goes.
     if (std.mem.eql(u8, rel, "stylesheet")) {
         return frame.loadExternalStylesheet(self, href);
     }
 
-    var queue_load = false;
     if (std.mem.eql(u8, rel, "preload")) {
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (std.ascii.eqlIgnoreCase(as, "script")) {
             frame.preloadScriptHint(href);
         }
-        queue_load = true;
-    }
-
-    {
-        // this block just means we don't need to re-check rel for a type we
-        // already processed, e.g. "preload"
-        const loadable_rels = std.StaticStringMap(void).initComptime(.{
-            .{ "stylesheet", {} },
-            .{ "modulepreload", {} },
-        });
-
-        if (queue_load == false and loadable_rels.has(rel) == false) {
-            return;
+    } else if (std.mem.eql(u8, rel, "modulepreload")) {
+        // "as" default to script in this case
+        const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
+        if (as.len == 0 or std.ascii.eqlIgnoreCase(as, "script")) {
+            frame.preloadModuleHint(href);
         }
+    } else {
+        // remaining rels (icon, canonical, ...): no fetch, no load event
+        return;
     }
 
     try frame.queueLoad(self._proto);

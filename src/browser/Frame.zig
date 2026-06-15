@@ -1762,6 +1762,23 @@ pub fn preloadScriptHint(self: *Frame, href: []const u8) void {
     self._script_manager.preloadScript(resolved) catch {};
 }
 
+// start prefetching <link rel="modulepreload" href=...>
+pub fn preloadModuleHint(self: *Frame, href: []const u8) void {
+    if (self.isGoingAway() or self._parse_mode == .fragment) {
+        return;
+    }
+
+    // The url becomes the imported_modules key, which must outlive the fetch
+    // so it lives on the frame arena
+    const resolved = URL.resolve(self.arena, self.base(), href, .{ .encoding = self.charset }) catch return;
+    if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
+        // data:/blob: are synthesized locally — no round-trip to hide.
+        return;
+    }
+
+    self._script_manager.base.preloadModuleHint(resolved, self.url) catch {};
+}
+
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.
 // href is passed in as an optimization since the [currently] only callsite has
 // it, so why look it up again?

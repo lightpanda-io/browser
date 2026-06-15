@@ -120,11 +120,15 @@
 <script id="refs">
 {
   const rels = ['stylesheet', 'preload', 'modulepreload'];
+  // stylesheet fetching is off by default and a bare preload has no `as`, so
+  // neither touches the network. modulepreload actually fetches, so it needs
+  // a real file — the load event still fires synthetically either way.
+  const hrefs = ['/nope', '/nope', 'script/modulepreload.js'];
   const results = rels.map(() => false);
   rels.forEach((rel, i) => {
     let link = document.createElement('link')
     link.rel = rel;
-    link.href = '/nope';
+    link.href = hrefs[i];
     link.onload = () => results[i] = true;
     document.documentElement.appendChild(link);
   });
