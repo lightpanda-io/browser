@@ -361,11 +361,16 @@ fn invoke(self: *Runtime, local: *const lp.js.Local, tool: BrowserTool, fci: Fci
 
     if (tool == .goto) return self.invokeGoto(arena, local, fci, args);
 
-    // Aim page tools at the handle's frame, else the most-recent goto.
-    if (handle_id orelse self.current_frame_id) |target_id| {
-        self.session._tool_frame_override = self.session.findFrameByFrameId(target_id);
-    }
     defer self.session._tool_frame_override = null;
+
+    // An explicit handle that no longer resolves is a hard error; with no
+    // handle we aim at the most-recent goto (best-effort, may be current).
+    if (handle_id) |id| {
+        self.session._tool_frame_override = self.session.findFrameByFrameId(id) orelse
+            return self.throwError("page handle is no longer valid; the page was closed or replaced");
+    } else if (self.current_frame_id) |id| {
+        self.session._tool_frame_override = self.session.findFrameByFrameId(id);
+    }
 
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
@@ -1075,4 +1080,25 @@ test "agent script runtime: parallel goto fetches concurrent pages, read by hand
         \\const db = extract({ sel: "#sel1" }, b);
         \\if (db.sel !== "selector-1-content") throw new Error("handle b read wrong: " + JSON.stringify(db));
     );
+}
+
+test "agent script runtime: a stale page handle is a hard error" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // The first handle goes stale once the second (non-forked) goto replaces the
+    // page; reading through it must throw, not silently hit the current page.
+    const message = (try runtime.runSource(
+        \\const a = await goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
+        \\extract({ btn: "#btn" }, a);
+    , "agent-runtime-stale-handle.js")).?;
+
+    try testing.expect(std.mem.indexOf(u8, message, "no longer valid") != null);
 }
