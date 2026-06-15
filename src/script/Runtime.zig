@@ -269,61 +269,57 @@ fn setObjectProperty(
 pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
     _ = self.call_arena.reset(.retain_capacity);
 
-    var hs: lp.js.HandleScope = undefined;
-    hs.init(self.env.isolate);
-    defer hs.deinit();
+    var ls: lp.js.Local.Scope = undefined;
+    self.context.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+    const context = local.handle;
 
-    const context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.context.handle, self.env.isolate.handle) orelse
-        return try self.dupeError("agent script context is not available"));
-    v8.v8__Context__Enter(context);
-    defer v8.v8__Context__Exit(context);
+    var tc: lp.js.TryCatch = undefined;
+    tc.init(local);
+    defer tc.deinit();
 
-    var try_catch: v8.TryCatch = undefined;
-    v8.v8__TryCatch__CONSTRUCT(&try_catch, self.env.isolate.handle);
-    defer v8.v8__TryCatch__DESTRUCT(&try_catch);
-
-    const script_name = self.env.isolate.initStringHandle(name);
     // Wrap in an async IIFE so the source can use top-level `await`. A top-level
     // `return <expr>` becomes the Promise's value, which we echo; a bare trailing
     // expression can't (`await` and a completion value are mutually exclusive in JS).
     const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
         return try self.dupeError("out of memory");
-    const script_source = self.env.isolate.initStringHandle(wrapped);
 
-    var origin: v8.ScriptOrigin = undefined;
-    v8.v8__ScriptOrigin__CONSTRUCT(&origin, script_name);
-
-    var compiler_source: v8.ScriptCompilerSource = undefined;
-    v8.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, null, &compiler_source);
-    defer v8.v8__ScriptCompiler__Source__DESTRUCT(&compiler_source);
-
-    const script = v8.v8__ScriptCompiler__Compile(
-        context,
-        &compiler_source,
-        v8.kNoCompileOptions,
-        v8.kNoCacheNoReason,
-    ) orelse return try self.formatCaught(context, &try_catch, "compile failed");
-
-    const completion = v8.v8__Script__Run(script, context) orelse
-        return try self.formatCaught(context, &try_catch, "script failed");
+    const completion = local.compileAndRun(wrapped, name) catch |err|
+        return try self.formatTryCatch(tc, err);
 
     defer self.clearPendingGotos();
 
-    const root: *const v8.Promise = @ptrCast(completion);
+    const root = completion.toPromise();
     self.env.performIsolateMicrotasks();
-    if (try self.driveToCompletion(context, root)) |interrupted| {
+    if (try self.driveToCompletion(context, root.handle)) |interrupted| {
         return interrupted;
     }
-    if (v8.v8__TryCatch__HasCaught(&try_catch)) {
-        return try self.formatCaught(context, &try_catch, "script failed");
+    if (tc.hasCaught()) {
+        return try self.formatTryCatch(tc, error.JsException);
     }
 
-    switch (promiseState(root)) {
-        v8.kFulfilled => self.printCompletion(context, v8.v8__Promise__Result(root) orelse return null),
-        v8.kRejected => return try self.formatRejection(context, v8.v8__Promise__Result(root)),
-        else => {}, // still pending: the script awaited something we can't settle
+    switch (root.state()) {
+        .fulfilled => self.printCompletion(context, root.result().handle),
+        .rejected => return try self.formatRejection(context, root.result().handle),
+        .pending => {}, // the script awaited something we can't settle
     }
     return null;
+}
+
+/// Format a caught JS exception (compile or run) into a run-arena message,
+/// mirroring the old raw `formatCaught`: prefer the stack, else `line N: msg`.
+fn formatTryCatch(self: *Runtime, tc: lp.js.TryCatch, err: anyerror) RunError![]const u8 {
+    const arena = self.call_arena.allocator();
+    const c = tc.caughtOrError(arena, err);
+    if (c.stack) |stack| {
+        if (stack.len > 0) return try self.dupeError(stack);
+    }
+    const exception = c.exception orelse "script failed";
+    if (c.line) |line| {
+        return std.fmt.allocPrint(arena, "line {d}: {s}", .{ line, exception }) catch return error.OutOfMemory;
+    }
+    return try self.dupeError(exception);
 }
 
 /// `v8__Promise__State` returns the `c_uint` `PromiseState`, but the `k*`
@@ -784,34 +780,6 @@ fn throwError(self: *Runtime, message: []const u8) void {
 
 fn throwTypeError(self: *Runtime, message: []const u8) void {
     _ = v8.v8__Isolate__ThrowException(self.env.isolate.handle, self.env.isolate.createTypeError(message));
-}
-
-fn formatCaught(
-    self: *Runtime,
-    context: *const v8.Context,
-    try_catch: *const v8.TryCatch,
-    fallback: []const u8,
-) RunError![]const u8 {
-    const arena = self.call_arena.allocator();
-    if (v8.v8__TryCatch__StackTrace(try_catch, context)) |stack_value| {
-        const stack = self.valueToString(arena, context, stack_value) catch "";
-        if (stack.len > 0) return stack;
-    }
-
-    const exception = if (v8.v8__TryCatch__Exception(try_catch)) |exception_value|
-        self.valueToString(arena, context, exception_value) catch fallback
-    else
-        fallback;
-
-    const line: ?u32 = blk: {
-        const msg = v8.v8__TryCatch__Message(try_catch) orelse break :blk null;
-        const n = v8.v8__Message__GetLineNumber(msg, context);
-        break :blk if (n < 0) null else @as(u32, @intCast(n));
-    };
-    if (line) |n| {
-        return std.fmt.allocPrint(arena, "line {d}: {s}", .{ n, exception }) catch return error.OutOfMemory;
-    }
-    return try self.dupeError(exception);
 }
 
 fn valueToString(
