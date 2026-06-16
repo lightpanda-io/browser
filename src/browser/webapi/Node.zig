@@ -1236,10 +1236,18 @@ pub const JsApi = struct {
     pub const lookupPrefix = bridge.function(Node.lookupPrefix, .{});
     pub const isDefaultNamespace = bridge.function(Node.isDefaultNamespace, .{});
 
-    fn _baseURI(_: *Node, frame: *const Frame) []const u8 {
-        return frame.base();
-    }
     pub const baseURI = bridge.accessor(_baseURI, null, .{});
+    fn _baseURI(self: *Node, frame: *const Frame) []const u8 {
+        const doc = if (self._type == .document)
+            self._type.document
+        else
+            self.ownerDocument(frame) orelse return frame.base();
+
+        if (doc._frame) |doc_frame| {
+            return doc_frame.base();
+        }
+        return doc.getURL(frame);
+    }
 };
 
 pub const Build = struct {
