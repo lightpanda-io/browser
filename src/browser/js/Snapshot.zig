@@ -72,18 +72,18 @@ external_references: [countExternalReferences()]isize,
 owns_data: bool = false,
 
 pub fn load() !Snapshot {
-    if (loadEmbedded()) |snapshot| {
-        return snapshot;
+    if (comptime embedded_snapshot_blob.len > 0) {
+        return loadEmbedded();
     }
     return create();
 }
 
-fn loadEmbedded() ?Snapshot {
+fn loadEmbedded() !Snapshot {
     // Binary format: [data_start: usize][blob data]
     const min_size = @sizeOf(usize) + 1000;
     if (embedded_snapshot_blob.len < min_size) {
         // our blob should be in the MB, this is just a quick sanity check
-        return null;
+        return error.InvalidSnapshot;
     }
 
     const data_start = std.mem.readInt(usize, embedded_snapshot_blob[0..@sizeOf(usize)], .little);
@@ -91,7 +91,7 @@ fn loadEmbedded() ?Snapshot {
 
     const startup_data = v8.StartupData{ .data = blob.ptr, .raw_size = @intCast(blob.len) };
     if (!v8.v8__StartupData__IsValid(startup_data)) {
-        return null;
+        return error.InvalidSnapshot;
     }
 
     return .{
