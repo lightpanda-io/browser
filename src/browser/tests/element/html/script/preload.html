@@ -8,13 +8,21 @@
   fresh syncRequest, then the consumed entry is freed by the caller. Both halves
   of that ownership handover run under the leak detector here.
 -->
-<link rel="preload" as="script" href="preload.js">
+<link rel="preload" as="script" href="preload.js" onload="window.preload_consumed_load = true">
+
+<!--
+  A duplicate hint: no fetch starts, so its load event is the synthetic
+  next-tick one.
+-->
+<link rel="preload" as="script" href="preload.js" onload="window.preload_dup_load = true">
 
 <!--
   A preload with no matching <script> is fetched but never executed. It lingers
   as a `.done` (or still-loading) entry until reset() frees it — exercises
   freePreloads / map cleanup under the leak detector — and it must not run on
-  its own, nor delay the load event.
+  its own, nor delay the load event. No onload assertion: unlike module hints,
+  nothing gates window.load on this fetch, so its load event may fire after
+  testing.onload runs.
 -->
 <link rel="preload" as="script" href="preload_unused.js">
 
@@ -35,4 +43,14 @@
 <script id="unused_check">
     // A preload hint that nothing consumes must never execute.
     testing.expectEqual(undefined, window.unused_preload_ran);
+</script>
+
+<script id="link_events">
+    // The consumed preload's fetch completed (the blocking script above
+    // adopted its body), so its real load event fired; the duplicate's
+    // synthetic load fired next tick. Both before window.load.
+    testing.onload(() => {
+        testing.expectEqual(true, window.preload_consumed_load);
+        testing.expectEqual(true, window.preload_dup_load);
+    });
 </script>

@@ -9,33 +9,46 @@
   exactly as if the hint never existed. Both halves of that handover run under
   the leak detector here.
 -->
-<link rel="modulepreload" href="modulepreload.js">
+<link rel="modulepreload" href="modulepreload.js" onload="window.hint_consumed_load = true">
 
 <!--
   A hinted module that nothing imports is fetched but never evaluated. It
   lingers as a `.done` imported_modules entry until reset() frees it —
   exercises the map cleanup under the leak detector — and it must not run on
-  its own, nor delay the load event.
+  its own. Its fetch holds an async_scripts slot, so window.load waits for it:
+  the link's load event (queued at fetch completion) is deterministically
+  observable in testing.onload.
 -->
-<link rel="modulepreload" href="modulepreload_unused.js">
+<link rel="modulepreload" href="modulepreload_unused.js" onload="window.hint_unused_load = true">
 
-<!-- A duplicate hint must not double-fetch or double-register a waiter. -->
-<link rel="modulepreload" href="modulepreload.js">
+<!--
+  A duplicate hint must not double-fetch or double-register a waiter. No fetch
+  starts for it, so its load event is the synthetic next-tick one.
+-->
+<link rel="modulepreload" href="modulepreload.js" onload="window.hint_dup_load = true">
+
+<!--
+  A hint whose fetch fails must fire error (not load) on the link. The fetch
+  settles before window.load (async_scripts gate), so this is deterministic.
+-->
+<link rel="modulepreload" href="modulepreload_does_not_exist.js"
+      onload="window.hint_404_load = true" onerror="window.hint_404_error = true">
 
 <!--
   The Vite pattern: a runtime-style hint immediately followed by a dynamic
-  import(). The hint's load event is synthetic, so the import fires while the
-  hint's fetch is still in flight — getAsyncImport adopts the loading Script
-  (converts it to .import_async) instead of fetching the module a second time.
+  import(). The import fires while the hint's fetch is still in flight —
+  getAsyncImport adopts the loading Script (converts it to .import_async)
+  instead of fetching the module a second time. The link's load event must
+  survive that adoption: it lives on Script.hint_element, not in extra.
 -->
-<link rel="modulepreload" href="modulepreload_dynamic.js">
+<link rel="modulepreload" href="modulepreload_dynamic.js" onload="window.hint_dynamic_load = true">
 <script id="dynamic_adopt_loading">
   window.dynamic_val = '';
   import('./modulepreload_dynamic.js').then((m) => { window.dynamic_val = m.dval; });
   testing.onload(() => testing.expectEqual('dynamic-preloaded', window.dynamic_val));
 </script>
 
-<link rel="modulepreload" href="modulepreload_dynamic2.js">
+<link rel="modulepreload" href="modulepreload_dynamic2.js" onload="window.hint_dynamic2_load = true">
 
 <script id="consume" type="module">
   import { val } from "./modulepreload.js";
@@ -54,4 +67,17 @@
 <script id="unused_check">
   // A hint that nothing imports must never evaluate.
   testing.expectEqual(undefined, window.modulepreload_unused_ran);
+</script>
+
+<script id="link_events">
+  // Every hint link fires exactly one settle event before window.load.
+  testing.onload(() => {
+    testing.expectEqual(true, window.hint_consumed_load);
+    testing.expectEqual(true, window.hint_unused_load);
+    testing.expectEqual(true, window.hint_dup_load);
+    testing.expectEqual(true, window.hint_dynamic_load);
+    testing.expectEqual(true, window.hint_dynamic2_load);
+    testing.expectEqual(undefined, window.hint_404_load);
+    testing.expectEqual(true, window.hint_404_error);
+  });
 </script>

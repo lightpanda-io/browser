@@ -154,13 +154,14 @@ _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 // File objects (reference counted via their Blob proto); released at teardown.
 _file_lists: std.ArrayList(*FileList) = .{},
 
-/// `load` events that'll be fired before window's `load` event.
+/// Element `load`/`error` events queued to fire on the next scheduler tick,
+/// and flushed before window's `load` event.
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
-/// Double-buffered so that dispatching load events (which may trigger JS that
+/// Double-buffered so that dispatching events (which may trigger JS that
 /// creates new elements) doesn't invalidate the list while iterating.
-_to_load_1: std.ArrayList(*Element.Html) = .{},
-_to_load_2: std.ArrayList(*Element.Html) = .{},
-_to_load: *std.ArrayList(*Element.Html) = undefined,
+_queued_events_1: std.ArrayList(QueuedEvent) = .{},
+_queued_events_2: std.ArrayList(QueuedEvent) = .{},
+_queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
 _style_manager: StyleManager,
 _script_manager: ScriptManager,
@@ -312,7 +313,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._ce_reactions = .{ .allocator = arena },
         ._event_manager = EventManager.init(arena, self),
     };
-    self._to_load = &self._to_load_1;
+    self._queued_events = &self._queued_events_1;
     self._http_owner.blob_urls = &self._blob_urls;
 
     var screen: *Screen = undefined;
@@ -1030,8 +1031,8 @@ fn _documentIsComplete(self: *Frame) !void {
     self.document._ready_state = .complete;
     try self.dispatchReadyStateChange();
 
-    // Run load events before window.load.
-    try self.dispatchLoad();
+    // Run element load/error events before window.load.
+    try self.dispatchQueuedEvents();
 
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
@@ -1732,16 +1733,27 @@ pub fn checkIntersections(self: *Frame) !void {
     }
 }
 
+pub const QueuedEvent = struct {
+    kind: Kind,
+    element: *Element.Html,
+
+    pub const Kind = enum { load, @"error" };
+};
+
 pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
-    try self._to_load.append(self.arena, html);
-    if (self._to_load.items.len == 1) {
+    try self.queueElementEvent(html, .load);
+}
+
+pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent.Kind) !void {
+    try self._queued_events.append(self.arena, .{ .element = element, .kind = kind });
+    if (self._queued_events.items.len == 1) {
         try self.js.scheduler.add(self, struct {
             fn cleanup(ctx: *anyopaque) !?u32 {
                 const f: *Frame = @ptrCast(@alignCast(ctx));
-                try f.dispatchLoad();
+                try f.dispatchQueuedEvents();
                 return null;
             }
-        }.cleanup, 0, .{ .name = "frame.dispatchLoad" });
+        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents" });
     }
 }
 
@@ -1753,37 +1765,37 @@ pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
 const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
 
 // start prefetching <link rel="preload" as="script" href=...>`
-pub fn preloadScriptHint(self: *Frame, href: []const u8) void {
+pub fn preloadScriptHint(self: *Frame, element: *Element.Html, href: []const u8) bool {
     if (self.isGoingAway() or self._parse_mode == .fragment) {
-        return;
+        return false;
     }
 
-    const arena = self.getArena(.small, "Frame.preloadScriptHint") catch return;
+    const arena = self.getArena(.small, "Frame.preloadScriptHint") catch return false;
     defer self.releaseArena(arena);
 
-    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch return;
+    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch return false;
     if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
         // data:/blob: are synthesized locally — no round-trip to hide.
-        return;
+        return false;
     }
-    self._script_manager.preloadScript(resolved) catch {};
+    return self._script_manager.preloadScript(element, resolved) catch false;
 }
 
 // start prefetching <link rel="modulepreload" href=...>
-pub fn preloadModuleHint(self: *Frame, href: []const u8) void {
+pub fn preloadModuleHint(self: *Frame, element: *Element.Html, href: []const u8) bool {
     if (self.isGoingAway() or self._parse_mode == .fragment) {
-        return;
+        return false;
     }
 
     // The url becomes the imported_modules key, which must outlive the fetch
     // so it lives on the frame arena
-    const resolved = URL.resolve(self.arena, self.base(), href, .{ .encoding = self.charset }) catch return;
+    const resolved = URL.resolve(self.arena, self.base(), href, .{ .encoding = self.charset }) catch return false;
     if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
         // data:/blob: are synthesized locally — no round-trip to hide.
-        return;
+        return false;
     }
 
-    self._script_manager.base.preloadModuleHint(resolved, self.url) catch {};
+    return self._script_manager.base.preloadModuleHint(element, resolved, self.url) catch false;
 }
 
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.
@@ -1904,19 +1916,35 @@ fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
     try self._event_manager.dispatch(el.asEventTarget(), event);
 }
 
-fn dispatchLoad(self: *Frame) !void {
+fn dispatchQueuedEvents(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
     // Swap buffers - new additions during dispatch go to the other buffer
-    const to_process = self._to_load;
-    self._to_load = if (self._to_load == &self._to_load_1)
-        &self._to_load_2
+    const to_process = self._queued_events;
+    self._queued_events = if (self._queued_events == &self._queued_events_1)
+        &self._queued_events_2
     else
-        &self._to_load_1;
+        &self._queued_events_1;
 
-    for (to_process.items) |html_element| {
-        if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
-            try self.fireElementEvent(html_element.asElement(), comptime .wrap("load"));
+    for (to_process.items) |queued| {
+        const html_element = queued.element;
+        const element = html_element.asElement();
+        switch (queued.kind) {
+            // hasAttributeFunction only sees handlers compiled via property
+            // access; a parsed `onload="..."` attribute is compiled lazily at
+            // dispatch (EventManager.getInlineHandler), so check it raw too.
+            .load => {
+                if (has_dom_load_listener or
+                    html_element.hasAttributeFunction(.onload, self) or
+                    element.getAttributeSafe(comptime .wrap("onload")) != null)
+                {
+                    try self.fireElementEvent(element, comptime .wrap("load"));
+                }
+            },
+            .@"error" => {
+                // errors are rare; not worth a listener-presence check
+                try self.fireElementEvent(element, comptime .wrap("error"));
+            },
         }
     }
 
