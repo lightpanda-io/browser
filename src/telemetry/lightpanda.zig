@@ -26,16 +26,18 @@ mutex: std.Thread.Mutex = .{},
 
 iid: ?[36]u8 = null,
 run_mode: Config.RunMode = .serve,
+interactive: bool = false,
 
 head: std.atomic.Value(usize) = .init(0),
 tail: std.atomic.Value(usize) = .init(0),
 dropped: std.atomic.Value(u32) = .init(0),
 buffer: [BUFFER_SIZE]telemetry.Event = undefined,
 
-pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode) !void {
+pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode, interactive: bool) !void {
     self.* = .{
         .iid = iid,
         .run_mode = run_mode,
+        .interactive = interactive,
         .allocator = app.allocator,
         .network = &app.network,
         .writer = std.Io.Writer.Allocating.init(app.allocator),
@@ -110,7 +112,12 @@ fn postEvent(self: *LightPanda) !void {
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
     const iid: ?[]const u8 = if (self.iid) |*id| id else null;
-    const wrapped = LightPandaEvent{ .iid = iid, .mode = self.run_mode, .event = event };
+    const wrapped = LightPandaEvent{
+        .iid = iid,
+        .mode = self.run_mode,
+        .event = event,
+        .interactive = self.interactive,
+    };
 
     const checkpoint = self.writer.written().len;
 
@@ -127,6 +134,7 @@ fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
 const LightPandaEvent = struct {
     iid: ?[]const u8,
     mode: Config.RunMode,
+    interactive: bool,
     event: telemetry.Event,
 
     pub fn jsonStringify(self: *const LightPandaEvent, writer: anytype) !void {
@@ -136,7 +144,13 @@ const LightPandaEvent = struct {
         try writer.write(self.iid);
 
         try writer.objectField("mode");
-        try writer.write(self.mode);
+        // Special case: when running agent mode in non-interactive, we send a
+        // special running mode.
+        if (self.mode == .agent and self.interactive == false) {
+            try writer.write("agent_replay");
+        } else {
+            try writer.write(self.mode);
+        }
 
         try writer.objectField("os");
         try writer.write(builtin.os.tag);
