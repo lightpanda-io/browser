@@ -516,7 +516,7 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
             const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
             nested_gop.key_ptr.* = owned_specifier;
             nested_gop.value_ptr.* = .{};
-            try script_manager.preloadImport(owned_specifier, url);
+            try script_manager.preloadImport(owned_specifier, url, .{});
         } else if (nested_gop.value_ptr.module == null) {
             // Entry exists but module failed to compile previously.
             // The imported_modules entry may have been consumed, so
@@ -524,7 +524,7 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
             // Key was stored via dupeZ so it has a sentinel in memory.
             const key = nested_gop.key_ptr.*;
             const key_z: [:0]const u8 = key.ptr[0..key.len :0];
-            try script_manager.preloadImport(key_z, url);
+            try script_manager.preloadImport(key_z, url, .{});
         }
     }
 }
@@ -733,6 +733,11 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
 
     const entry = self.module_cache.getPtr(normalized_specifier).?;
     if (entry.module) |m| {
+        // This import registered a waiter via preloadImport when it was discovered
+        // but the compiled module is already cached so we don't have to call
+        // waitForImport. Release our waiter so we no longer hold on waiter on
+        // the resource.
+        self.script_manager.releaseImport(normalized_specifier);
         return local.toLocal(m).handle;
     }
 
@@ -740,7 +745,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
         error.UnknownModule => blk: {
             // Module is in cache but was consumed from imported_modules
             // (e.g., by a previous failed resolution). Re-preload and retry.
-            try self.script_manager.preloadImport(normalized_specifier, referrer_path);
+            try self.script_manager.preloadImport(normalized_specifier, referrer_path, .{});
             break :blk try self.script_manager.waitForImport(normalized_specifier);
         },
         else => return err,

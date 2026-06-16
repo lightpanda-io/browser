@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<!--
+  The modulepreload hint is declared before the module that imports it, so by
+  the time import resolution asks for modulepreload.js the fetch is already in
+  flight (or done). The hint registers no waiter of its own: the first real
+  preloadImport adopts its slot, so waitForImport transfers buffer ownership
+  exactly as if the hint never existed. Both halves of that handover run under
+  the leak detector here.
+-->
+<link rel="modulepreload" href="modulepreload.js">
+
+<!--
+  A hinted module that nothing imports is fetched but never evaluated. It
+  lingers as a `.done` imported_modules entry until reset() frees it —
+  exercises the map cleanup under the leak detector — and it must not run on
+  its own, nor delay the load event.
+-->
+<link rel="modulepreload" href="modulepreload_unused.js">
+
+<!-- A duplicate hint must not double-fetch or double-register a waiter. -->
+<link rel="modulepreload" href="modulepreload.js">
+
+<!--
+  The Vite pattern: a runtime-style hint immediately followed by a dynamic
+  import(). The hint's load event is synthetic, so the import fires while the
+  hint's fetch is still in flight — getAsyncImport adopts the loading Script
+  (converts it to .import_async) instead of fetching the module a second time.
+-->
+<link rel="modulepreload" href="modulepreload_dynamic.js">
+<script id="dynamic_adopt_loading">
+  window.dynamic_val = '';
+  import('./modulepreload_dynamic.js').then((m) => { window.dynamic_val = m.dval; });
+  testing.onload(() => testing.expectEqual('dynamic-preloaded', window.dynamic_val));
+</script>
+
+<link rel="modulepreload" href="modulepreload_dynamic2.js">
+
+<script id="consume" type="module">
+  import { val } from "./modulepreload.js";
+  testing.expectEqual('preloaded-module', val, {script_id: 'consume'});
+</script>
+
+<script id="dynamic_adopt_done" type="module">
+  // Deferred module: by the time this evaluates, the hint above has usually
+  // finished fetching — the import() adopts a .done entry and the body is
+  // delivered inline. (If the fetch is still in flight it exercises the
+  // loading-adoption path instead; both must produce the same result.)
+  const m = await import("./modulepreload_dynamic2.js");
+  testing.expectEqual('dynamic-preloaded-2', m.dval, {script_id: 'dynamic_adopt_done'});
+</script>
+
+<script id="unused_check">
+  // A hint that nothing imports must never evaluate.
+  testing.expectEqual(undefined, window.modulepreload_unused_ran);
+</script>
