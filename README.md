@@ -149,6 +149,38 @@ await browser.disconnect();
 ```
 </details>
 
+### Agent mode
+
+`lightpanda agent` lets you drive the browser with a native agent. Describe what
+you want in plain English or with slash commands, and it controls the browser:
+navigating pages, clicking through flows, filling forms, extracting structured
+data. Think of it as a robot you're directing to use the web, more than a
+chatbot you're having a conversation with.
+
+Because the agent runs inside the same process as the browser, every tool call
+is a direct operation and you retain Lightpanda's speed and memory advantage.
+
+The output of an agent session is a
+[PandaScript](https://lightpanda.io/docs/usage/pandascript): vanilla JavaScript
+with a small set of native browser primitives built directly into Lightpanda.
+Run `/save` to export one from your current session, then replay it with
+`lightpanda agent <script>.js`. Scripts are deterministic and token-free, so
+you can prototype with the LLM and ship the output to production without a
+model at runtime.
+
+It supports Anthropic, OpenAI, Gemini, Hugging Face, and local models via
+Ollama. You can also run without an LLM using `--no-llm`, which drops you into
+the REPL. See the [agent documentation](https://lightpanda.io/docs/usage/agent)
+for the full reference.
+
+```console
+./lightpanda agent                                    # auto-detects API key from env
+./lightpanda agent --task "top story on news.ycombinator.com?"
+./lightpanda agent --no-llm                           # basic REPL, no LLM
+./lightpanda agent session.js                         # run a recorded script
+./lightpanda agent --provider gemini --task "..."     # force a specific provider
+```
+
 ### Native MCP and skill
 
 The MCP server communicates via MCP JSON-RPC 2.0 over stdio.
@@ -170,6 +202,7 @@ Add to your MCP configuration:
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
 
 ### Telemetry
+
 By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
 
 ## Status

@@ -2,13 +2,18 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const protocol = @import("protocol.zig");
-const resources = @import("resources.zig");
-const Server = @import("Server.zig");
-const tools = @import("tools.zig");
 
 const log = lp.log;
 
-pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
+/// Generic over the server type. The server must expose: `allocator`, a
+/// `transport: Transport` field, and the per-method `handleInitialize`,
+/// `handleToolList`, `handleToolCall` methods. `handleResourceList` /
+/// `handleResourceRead` are optional — servers that don't expose
+/// resources can omit them and the router returns `MethodNotFound`
+/// automatically. When `input` is the file behind `reader`, the server must
+/// also expose `idle`: the router then pumps the browser session between
+/// requests instead of blocking on the read.
+pub fn processRequests(server: anytype, reader: *std.io.Reader, input: ?std.fs.File) !void {
     var arena: std.heap.ArenaAllocator = .init(server.allocator);
     defer arena.deinit();
 
@@ -16,10 +21,16 @@ pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
         _ = arena.reset(.retain_capacity);
         const aa = arena.allocator();
 
+        if (input) |file| idleUntilInput(server, reader, file);
+
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
                 log.err(.mcp, "Message too long", .{});
                 try server.sendError(.null, .InvalidRequest, "Message too long");
+                _ = reader.discardDelimiterInclusive('\n') catch |e| switch (e) {
+                    error.EndOfStream => break,
+                    else => return e,
+                };
                 continue;
             },
             else => return err,
@@ -31,6 +42,20 @@ pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
                 log.err(.mcp, "Failed to handle message", .{ .err = err, .msg = trimmed });
             };
         }
+    }
+}
+
+/// Returns once `reader` holds a delimiter or the fd is readable —
+/// `takeDelimiter` may still block on a partial line, but MCP clients write
+/// whole lines. A full buffer also returns so StreamTooLong surfaces.
+fn idleUntilInput(server: anytype, reader: *std.io.Reader, file: std.fs.File) void {
+    while (std.mem.indexOfScalar(u8, reader.buffered(), '\n') == null and
+        reader.bufferedLen() < reader.buffer.len)
+    {
+        const wait_ms = server.idle();
+        var fds = [_]std.posix.pollfd{.{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+        const ready = std.posix.poll(&fds, wait_ms) catch return;
+        if (ready > 0) return;
     }
 }
 
@@ -54,7 +79,7 @@ const method_map = std.StaticStringMap(Method).initComptime(.{
     .{ "resources/read", .@"resources/read" },
 });
 
-pub fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8) !void {
+pub fn handleMessage(server: anytype, arena: std.mem.Allocator, msg: []const u8) !void {
     const req = std.json.parseFromSliceLeaky(protocol.Request, arena, msg, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
@@ -71,38 +96,30 @@ pub fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8)
     };
 
     switch (method) {
-        .initialize => try handleInitialize(server, req),
+        .initialize => try server.handleInitialize(req),
         .ping => try handlePing(server, req),
         .@"notifications/initialized" => {},
-        .@"tools/list" => try tools.handleList(server, arena, req),
-        .@"tools/call" => try tools.handleCall(server, arena, req),
-        .@"resources/list" => try resources.handleList(server, req),
-        .@"resources/read" => try resources.handleRead(server, arena, req),
+        .@"tools/list" => try server.handleToolList(arena, req),
+        .@"tools/call" => try server.handleToolCall(arena, req),
+        .@"resources/list" => try handleOptional(server, req, "handleResourceList", .{req}),
+        .@"resources/read" => try handleOptional(server, req, "handleResourceRead", .{ arena, req }),
     }
 }
 
-fn handleInitialize(server: *Server, req: protocol.Request) !void {
-    const id = req.id orelse return;
-    const result: protocol.InitializeResult = .{
-        .protocolVersion = @tagName(protocol.Version.default),
-        .capabilities = .{
-            .resources = .{},
-            .tools = .{},
-        },
-        .serverInfo = .{
-            .name = "lightpanda",
-            .version = "0.1.0",
-        },
-    };
-
-    try server.sendResult(id, result);
+fn handleOptional(server: anytype, req: protocol.Request, comptime method: []const u8, args: anytype) !void {
+    if (@hasDecl(@TypeOf(server.*), method)) {
+        try @call(.auto, @field(@TypeOf(server.*), method), .{server} ++ args);
+    } else if (req.id) |id| {
+        try server.sendError(id, .MethodNotFound, "Method not supported");
+    }
 }
 
-fn handlePing(server: *Server, req: protocol.Request) !void {
+fn handlePing(server: anytype, req: protocol.Request) !void {
     const id = req.id orelse return;
     try server.sendResult(id, struct {}{});
 }
 
+const Server = @import("Server.zig");
 const testing = @import("../testing.zig");
 
 test "MCP.router - handleMessage - synchronous unit tests" {

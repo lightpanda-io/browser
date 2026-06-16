@@ -80,16 +80,18 @@ pub fn hover(node: *DOMNode, frame: *Frame) !void {
 }
 
 pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
-    const target = if (node) |n|
-        (n.is(Element) orelse return error.InvalidNodeType).asEventTarget()
+    const target_el: ?*Element = if (node) |n|
+        (n.is(Element) orelse return error.InvalidNodeType)
     else
-        frame.document.asNode().asEventTarget();
+        null;
+    const target = if (target_el) |el| el.asEventTarget() else frame.document.asNode().asEventTarget();
+    const canonical = canonicalKey(key);
 
     const keydown_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keydown"), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .key = key,
+        .key = canonical,
     }, frame);
 
     frame._event_manager.dispatch(target, keydown_event.asEvent()) catch |err| {
@@ -97,17 +99,74 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         return error.ActionFailed;
     };
 
+    if (std.mem.eql(u8, canonical, "Enter") and !keydown_event.asEvent().getDefaultPrevented()) {
+        if (target_el) |el| implicitFormSubmit(el, frame) catch |err| {
+            // Don't skip keyup on a submit-listener throw — UIs that gate
+            // state on keyup (e.g. clearing a "submitting" flag) would hang.
+            lp.log.warn(.app, "implicit form submit failed", .{ .err = err });
+        };
+    }
+
     const keyup_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keyup"), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .key = key,
+        .key = canonical,
     }, frame);
 
     frame._event_manager.dispatch(target, keyup_event.asEvent()) catch |err| {
         lp.log.err(.app, "press keyup failed", .{ .err = err });
         return error.ActionFailed;
     };
+}
+
+/// Map common shorthand to the canonical KeyboardEvent.key string so users
+/// can type "enter" instead of "Enter" without surprises.
+fn canonicalKey(key: []const u8) []const u8 {
+    const aliases = [_]struct { in: []const u8, out: []const u8 }{
+        .{ .in = "enter", .out = "Enter" },
+        .{ .in = "return", .out = "Enter" },
+        .{ .in = "\n", .out = "Enter" },
+        .{ .in = "\\n", .out = "Enter" },
+        .{ .in = "esc", .out = "Escape" },
+        .{ .in = "escape", .out = "Escape" },
+        .{ .in = "tab", .out = "Tab" },
+        .{ .in = "\t", .out = "Tab" },
+        .{ .in = "space", .out = " " },
+        .{ .in = "backspace", .out = "Backspace" },
+        .{ .in = "delete", .out = "Delete" },
+        .{ .in = "del", .out = "Delete" },
+        .{ .in = "up", .out = "ArrowUp" },
+        .{ .in = "down", .out = "ArrowDown" },
+        .{ .in = "left", .out = "ArrowLeft" },
+        .{ .in = "right", .out = "ArrowRight" },
+    };
+    for (aliases) |a| {
+        if (std.ascii.eqlIgnoreCase(key, a.in)) return a.out;
+    }
+    return key;
+}
+
+fn implicitFormSubmit(el: *Element, frame: *Frame) !void {
+    const Input = Element.Html.Input;
+    const Button = Element.Html.Button;
+
+    if (el.is(Input)) |input| {
+        const form = input.getForm(frame) orelse return;
+        const submitter: ?*Element = switch (input._input_type) {
+            .submit, .image => el,
+            // Non-text controls (checkbox, radio, file, ...) don't trigger
+            // implicit submission; only the text-like family does.
+            .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week => null,
+            else => return,
+        };
+        return form.requestSubmit(submitter, frame);
+    }
+    if (el.is(Button)) |button| {
+        if (!std.ascii.eqlIgnoreCase(button.getType(), "submit")) return;
+        const form = button.getForm(frame) orelse return;
+        return form.requestSubmit(el, frame);
+    }
 }
 
 pub fn selectOption(node: *DOMNode, value: []const u8, frame: *Frame) !void {
@@ -207,15 +266,30 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !void {
     }
 }
 
+// Floored to 1 so timeout_ms=0 still gets one check instead of failing outright.
+fn remainingMs(timeout_ms: u32, timer: *std.time.Timer) u32 {
+    const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+    return @max(1, timeout_ms -| elapsed);
+}
+
 pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Session) !*DOMNode {
     var timer = try std.time.Timer.start();
     var runner = try session.runner(.{});
     try runner.wait(.{ .ms = timeout_ms, .until = .load });
 
-    const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-    const remaining = timeout_ms -| elapsed;
-    if (remaining == 0) return error.Timeout;
-
-    const el = try runner.waitForSelector(selector, remaining);
+    const el = try runner.waitForSelector(selector, remainingMs(timeout_ms, &timer));
     return el.asNode();
+}
+
+pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, session: *Session) !void {
+    var timer = try std.time.Timer.start();
+    var runner = try session.runner(.{});
+    try runner.wait(.{ .ms = timeout_ms, .until = .load });
+
+    return runner.waitForScript(script, remainingMs(timeout_ms, &timer));
+}
+
+pub fn waitForState(state: lp.Config.WaitUntil, timeout_ms: u32, session: *Session) !void {
+    var runner = try session.runner(.{});
+    try runner.wait(.{ .ms = timeout_ms, .until = state });
 }

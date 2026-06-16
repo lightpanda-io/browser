@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 const builtin = @import("builtin");
+const zenai = @import("zenai");
 
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
@@ -120,6 +121,28 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
     return .html;
 }
 
+pub const AiProvider = std.meta.Tag(zenai.provider.Client);
+
+/// Per-turn reasoning budget for `agent` mode, mirroring Claude's effort
+/// levels. Maps to each provider's native thinking/reasoning knob. Resolved
+/// in `Agent.init` (explicit flag > remembered > mode default), so there is
+/// no Config-level accessor like `agentVerbosity`.
+pub const Effort = zenai.provider.Effort;
+
+/// Controls how chatty `agent` mode is on stderr.
+pub const AgentVerbosity = enum {
+    /// REPL: spinner + per-turn summary. Non-REPL: final answer + errors only.
+    low,
+    /// + one `● [tool: …]` line per tool call.
+    medium,
+    /// + the matching `[result: …]` body for each call.
+    high,
+
+    pub fn atLeast(self: AgentVerbosity, min: AgentVerbosity) bool {
+        return @intFromEnum(self) >= @intFromEnum(min);
+    }
+};
+
 fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator) !?[:0]const u8 {
     const path = args.next() orelse {
         log.fatal(.app, "missing argument value", .{ .arg = "--wait-script-file" });
@@ -203,15 +226,37 @@ const Commands = cli.Builder(.{
         },
         .shared_options = CommonOptions,
     },
+    .{
+        .name = "agent",
+        .positional = .{ .name = "script_file", .type = ?[:0]const u8 },
+        .options = .{
+            .{ .name = "provider", .type = ?AiProvider },
+            .{ .name = "model", .type = ?[:0]const u8 },
+            .{ .name = "base_url", .type = ?[:0]const u8 },
+            .{ .name = "system_prompt", .type = ?[:0]const u8 },
+            .{ .name = "task", .type = ?[]const u8 },
+            .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
+            .{ .name = "verbosity", .type = ?AgentVerbosity },
+            .{ .name = "effort", .type = ?Effort },
+            .{ .name = "list_models", .type = bool },
+            .{ .name = "no_llm", .type = bool },
+        },
+        .shared_options = CommonOptions,
+    },
     .{ .name = "version", .options = .{} },
 });
 
 pub const RunMode = Commands.Enum;
 pub const Mode = Commands.Union;
+pub const Agent = @FieldType(Mode, "agent");
 
 mode: Mode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
+
+fn modeNeedsHttp(mode: Mode) bool {
+    return mode != .help and mode != .version;
+}
 
 pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
     var config = Config{
@@ -219,87 +264,100 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         .exec_name = exec_name,
         .http_headers = undefined,
     };
-    config.http_headers = try HttpHeaders.init(allocator, &config);
+    if (modeNeedsHttp(mode)) {
+        config.http_headers = try HttpHeaders.init(allocator, &config);
+    }
     return config;
 }
 
 pub fn deinit(self: *const Config, allocator: Allocator) void {
-    self.http_headers.deinit(allocator);
+    if (modeNeedsHttp(self.mode)) {
+        self.http_headers.deinit(allocator);
+    }
+}
+
+pub fn interactive(self: *const Config) bool {
+    return switch (self.mode) {
+        .fetch => false,
+        .serve, .mcp => true,
+        .agent => |opts| opts.script_file == null,
+        else => unreachable,
+    };
 }
 
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| !opts.insecure_disable_tls_host_verification,
+        inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
         else => unreachable,
     };
 }
 
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.obey_robots,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_robots,
         else => unreachable,
     };
 }
 
 pub fn disableSubframes(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.disable_subframes,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_subframes,
         else => unreachable,
     };
 }
 
 pub fn disableWorkers(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.disable_workers,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_workers,
         else => unreachable,
     };
 }
 
 pub fn enableExternalStylesheets(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.enable_external_stylesheets,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.enable_external_stylesheets,
         else => unreachable,
     };
 }
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_proxy,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
         else => unreachable,
     };
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.proxy_bearer_token,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
         .help, .version => null,
     };
 }
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_max_concurrent orelse 10,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 10,
         else => unreachable,
     };
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_max_host_open orelse 4,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 4,
         else => unreachable,
     };
 }
 
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_connect_timeout orelse 0,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_connect_timeout orelse 0,
         else => unreachable,
     };
 }
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_timeout orelse 5000,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_timeout orelse 5000,
         else => unreachable,
     };
 }
@@ -310,70 +368,98 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_max_response_size,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_response_size,
         else => unreachable,
     };
 }
 
 pub fn wsMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.ws_max_concurrent orelse 8,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.ws_max_concurrent orelse 8,
         else => unreachable,
     };
 }
 
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
+        // Agent mode quiets page-driven `console.error` noise unless verbosity=high.
+        .agent => |opts| opts.log_level orelse switch (agentVerbosity(opts)) {
+            .low, .medium => .err,
+            .high => null,
+        },
         inline .serve, .fetch, .mcp => |opts| opts.log_level,
         else => unreachable,
     };
 }
 
+/// Resolve --verbosity. Explicit value wins. Else: --task with stderr
+/// captured (pipe/file) defaults to .high so benchmark harnesses and
+/// other programmatic consumers get the [tool/result] trace; REPL and
+/// --task on a TTY default to .low.
+pub fn agentVerbosity(opts: Agent) AgentVerbosity {
+    if (opts.verbosity) |v| return v;
+    const piped_one_shot = opts.task != null and !stderrIsTty();
+    return if (piped_one_shot) .high else .low;
+}
+
+/// `isatty(STDERR)` is a syscall and `agentVerbosity` is on the log hot
+/// path (every gate check resolves through it). Cache once — the fd
+/// doesn't change after process start.
+var stderr_tty_cached: bool = undefined;
+var stderr_tty_once = std.once(initStderrTty);
+fn initStderrTty() void {
+    stderr_tty_cached = std.posix.isatty(std.posix.STDERR_FILENO);
+}
+fn stderrIsTty() bool {
+    stderr_tty_once.call();
+    return stderr_tty_cached;
+}
+
 pub fn logFormat(self: *const Config) ?log.Format {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.log_format,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_format,
         else => unreachable,
     };
 }
 
 pub fn logFilterScopes(self: *const Config) std.ArrayList(log.Scope) {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.log_filter_scopes,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_filter_scopes,
         else => unreachable,
     };
 }
 
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.user_agent_suffix,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent_suffix,
         .help, .version => null,
     };
 }
 
 pub fn userAgent(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.user_agent,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent,
         .help, .version => null,
     };
 }
 
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_cache_dir,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_dir,
         else => null,
     };
 }
 
 pub fn cookieFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.cookie,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.cookie,
         else => null,
     };
 }
 
 pub fn cookieJarFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .fetch, .mcp => |opts| opts.cookie_jar,
+        inline .fetch, .mcp, .agent => |opts| opts.cookie_jar,
         else => null,
     };
 }
@@ -396,7 +482,7 @@ pub fn advertiseHost(self: *const Config) []const u8 {
 
 pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| WebBotAuthConfig{
+        inline .serve, .fetch, .mcp, .agent => |opts| WebBotAuthConfig{
             .key_file = opts.web_bot_auth_key_file orelse return null,
             .keyid = opts.web_bot_auth_keyid orelse return null,
             .domain = opts.web_bot_auth_domain orelse return null,
@@ -407,14 +493,14 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
 
 pub fn blockPrivateNetworks(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.block_private_networks,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.block_private_networks,
         else => unreachable,
     };
 }
 
 pub fn blockCidrs(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.block_cidrs,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.block_cidrs,
         else => unreachable,
     };
 }
@@ -423,7 +509,7 @@ pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
         .mcp => 16,
-        .fetch => 0,
+        .fetch, .agent => 0,
         else => unreachable,
     };
 }
@@ -438,17 +524,18 @@ pub fn maxPendingConnections(self: *const Config) u31 {
 
 pub fn storageEngine(self: *const Config) ?Storage.EngineType {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.storage_engine,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_engine,
         else => unreachable,
     };
 }
 
 pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.storage_sqlite_path,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_sqlite_path,
         else => unreachable,
     };
 }
+
 pub const DumpFormat = enum {
     html,
     markdown,
@@ -557,7 +644,7 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
             , .{Help.general});
             std.debug.print(template, .{exec_name});
         },
-        inline .fetch, .serve, .mcp => |tag| {
+        inline .fetch, .serve, .mcp, .agent => |tag| {
             const template = comptimePrint(
                 \\{s}
                 \\
@@ -596,4 +683,32 @@ pub fn validateUserAgent(ua: []const u8) !void {
     if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
         return error.Reserved;
     }
+}
+
+/// Tag names of a Zig enum, so a command's allowed values can't drift from the
+/// enum it sets.
+pub fn tagNames(comptime E: type) []const []const u8 {
+    const fields = @typeInfo(E).@"enum".fields;
+    var names: [fields.len][]const u8 = undefined;
+    for (fields, &names) |f, *n| n.* = f.name;
+    const frozen = names;
+    return &frozen;
+}
+
+/// `<a|b|c>` ghost-text hint built from the same enum's tag names.
+pub fn tagHint(comptime E: type) []const u8 {
+    var s: []const u8 = "<";
+    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
+        s = s ++ (if (i == 0) f.name else "|" ++ f.name);
+    }
+    return s ++ ">";
+}
+
+/// JSON array `["a","b","c"]` representation of the enum tag names.
+pub fn tagJsonArray(comptime E: type) []const u8 {
+    var s: []const u8 = "[";
+    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
+        s = s ++ (if (i == 0) "\"" else ",\"") ++ f.name ++ "\"";
+    }
+    return s ++ "]";
 }

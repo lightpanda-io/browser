@@ -54,6 +54,9 @@ arena: Allocator,
 history: History,
 navigation: Navigation,
 storage_shed: storage.Shed,
+// Backs `globalThis.lp.*`; values pre-stringified so the prelude splices
+// them in without re-encoding.
+bridge_store: std.StringHashMapUnmanaged([]const u8) = .empty,
 notification: *Notification,
 cookie_jar: storage.Cookie.Jar,
 /// User-provided scripts to inject into header.
@@ -87,6 +90,12 @@ subframe_loading_enabled: bool = true,
 // session init; the LP.configureLoading CDP method can flip it per-session.
 worker_loading_enabled: bool = true,
 
+// Console.* capture for the `consoleLogs` tool, capped at `max_console_bytes`.
+// Opt-in via `enableConsoleCapture`: plain CDP `serve` never drains it, so
+// leaving the listener off keeps the buffer at zero bytes.
+_console_messages: std.Io.Writer.Allocating,
+_console_capture: bool = false,
+
 // Opt-in fetch of external <link rel=stylesheet> resources. Defaults to
 // false to preserve the current rendering-free fast path: drivers that
 // don't need accurate visibility checks pay nothing. Set from the
@@ -95,6 +104,25 @@ worker_loading_enabled: bool = true,
 // `Link.linkAddedCallback` routes to `Frame.loadExternalStylesheet`
 // (synchronous fetch + parse + register on `document.styleSheets`).
 load_external_stylesheets: bool = false,
+
+/// Caller-supplied cancellation probe. `Runner._wait` polls it between
+/// ticks; once `check` returns true the wait returns `error.Cancelled`.
+/// The agent installs this so SIGINT can abort an in-flight tool call
+/// (goto, search, waitForSelector, …) without sitting through the full
+/// timeout.
+cancel_hook: ?CancelHook = null,
+
+pub const CancelHook = struct {
+    context: *anyopaque,
+    check: *const fn (*anyopaque) bool,
+};
+
+pub fn isCancelled(self: *const Session) bool {
+    const hook = self.cancel_hook orelse return false;
+    return hook.check(hook.context);
+}
+
+const max_console_bytes = 64 * 1024;
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
@@ -116,11 +144,24 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         // CLI defaults; LP.configureLoading can flip these per-session.
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
         .worker_loading_enabled = !browser.app.config.disableWorkers(),
+        ._console_messages = .init(allocator),
         .load_external_stylesheets = browser.app.config.enableExternalStylesheets(),
     };
+    errdefer self._console_messages.deinit();
+}
+
+/// Register the console listener so `drainConsoleMessages` returns output. Idempotent.
+pub fn enableConsoleCapture(self: *Session) !void {
+    if (self._console_capture) return;
+    try self.notification.register(.console_message, self, onConsoleMessage);
+    self._console_capture = true;
 }
 
 pub fn deinit(self: *Session) void {
+    if (self._console_capture) {
+        self.notification.unregister(.console_message, self);
+    }
+
     if (self._pending != null) {
         self.discardPendingPage();
     }
@@ -134,7 +175,52 @@ pub fn deinit(self: *Session) void {
     self.browser.env.memoryPressureNotification(.critical);
 
     self.storage_shed.deinit(self.browser.app.allocator);
+    {
+        const allocator = self.browser.app.allocator;
+        var it = self.bridge_store.iterator();
+        while (it.next()) |kv| {
+            allocator.free(kv.key_ptr.*);
+            allocator.free(kv.value_ptr.*);
+        }
+        self.bridge_store.deinit(allocator);
+    }
+    self._console_messages.deinit();
     self.arena_pool.release(self.arena);
+}
+
+fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+    const self: *Session = @ptrCast(@alignCast(ctx));
+    const aw = &self._console_messages;
+    const start = aw.written().len;
+    if (start >= max_console_bytes) return;
+
+    // Format into a scratch buffer sized to the remaining budget so a single
+    // 10 MB `console.log` can't bust the cap before the post-hoc check fires.
+    const remaining = max_console_bytes - start;
+    var scratch_buf: [max_console_bytes]u8 = undefined;
+    var scratch: std.Io.Writer = .fixed(scratch_buf[0..remaining]);
+    appendConsoleMessageInner(&scratch, msg) catch {};
+    aw.writer.writeAll(scratch.buffered()) catch {
+        aw.shrinkRetainingCapacity(start);
+    };
+}
+
+fn appendConsoleMessageInner(w: *std.Io.Writer, msg: *const Notification.ConsoleMessage) !void {
+    try w.print("[{s}] ", .{@tagName(msg.type)});
+    for (msg.values, 0..) |value, i| {
+        if (i > 0) try w.writeAll(" ");
+        try value.format(w);
+    }
+    try w.writeByte('\n');
+}
+
+/// Drains and clears the buffered console output. The returned slice is valid
+/// until the next dispatched `console_message` reuses the backing storage,
+/// so callers must consume or copy it before that happens.
+pub fn drainConsoleMessages(self: *Session) []const u8 {
+    const text = self._console_messages.written();
+    self._console_messages.clearRetainingCapacity();
+    return text;
 }
 
 pub fn processDestroyQueues(self: *Session) void {
@@ -315,6 +401,20 @@ pub fn runner(self: *Session, opts: Runner.Opts) !Runner {
     return Runner.init(self, opts);
 }
 
+/// Page transfers run on the session thread's curl multi; left unserviced
+/// while the frontend waits on input they die on curl's wall-clock timeout.
+/// Returns how long the caller may block before pumping again.
+pub fn idleSlice(self: *Session) u31 {
+    const quiet_ms = 250;
+    self.processDestroyQueues();
+    var r = self.runner(.{}) catch return quiet_ms;
+    const result = r.tick(.{ .ms = 25 }) catch return quiet_ms;
+    return switch (result) {
+        .done => quiet_ms,
+        .ok => |next_ms| @intCast(@min(next_ms, quiet_ms)),
+    };
+}
+
 pub fn scheduleNavigation(self: *Session, frame: *Frame) !void {
     return self.currentPage().?.scheduleNavigation(frame);
 }
@@ -343,7 +443,12 @@ pub fn processQueuedNavigation(self: *Session) !void {
 
     // First pass: process async navigations (non-about:blank)
     for (navigations.items) |frame| {
-        const qn = frame._queued_navigation.?;
+        const qn = frame._queued_navigation orelse {
+            // Was previously an assert; downgraded so prod can recover, but
+            // kept at warn so the invariant violation isn't silently lost.
+            log.warn(.frame, "skipped null queued nav", .{});
+            continue;
+        };
 
         if (qn.is_about_blank) {
             // Defer about:blank to second pass
@@ -360,11 +465,20 @@ pub fn processQueuedNavigation(self: *Session) !void {
     navigations.clearRetainingCapacity();
 
     // Second pass: process synchronous navigations (about:blank)
-    // These may trigger new navigations which go into queued_navigation
+    // These may trigger new navigations which go into queued_navigation.
+    // Mirror the first pass: a failure on one frame must not orphan the
+    // rest of the queue (the `defer clearRetainingCapacity` would wipe
+    // siblings whose _queued_navigation stays set).
     for (about_blank_queue.items) |frame| {
-        const qn = frame._queued_navigation.?;
-        // qn is invalid after this
-        try self.processFrameNavigation(frame, qn);
+        const qn = frame._queued_navigation orelse {
+            // Was previously an assert; downgraded so prod can recover, but
+            // kept at warn so the invariant violation isn't silently lost.
+            log.warn(.frame, "skipped null queued nav", .{});
+            continue;
+        };
+        self.processFrameNavigation(frame, qn) catch |err| {
+            log.warn(.frame, "frame navigation", .{ .url = qn.url, .err = err });
+        };
     }
 
     // Safety: Remove any about:blank navigations that were queued during

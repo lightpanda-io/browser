@@ -7,6 +7,7 @@
     \\  serve       starts a WebSocket CDP server
     \\  fetch       fetches the specified URL
     \\  mcp         starts an MCP (Model Context Protocol) server over stdio
+    \\  agent       starts an interactive AI agent that can browse the web
     \\  version     displays the version of {0s}
     \\  help        displays this message
     \\
@@ -120,6 +121,118 @@
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
     ,
+    .agent =
+    \\agent command
+    \\Starts an interactive AI agent that can browse the web.
+    \\
+    \\Usage:
+    \\  {0s} agent [SCRIPT] [OPTIONS] [COMMON_OPTIONS]
+    \\
+    \\Examples:
+    \\  {0s} agent                                (auto-detects API key from env)
+    \\  {0s} agent --provider anthropic --model claude-sonnet-4-6
+    \\  {0s} agent --provider huggingface         (HF serverless router, HF_TOKEN)
+    \\  {0s} agent --provider ollama --model qwen3.5:latest
+    \\  {0s} agent --no-llm                       (basic slash-command-only REPL)
+    \\  {0s} agent script.js                      (run a saved script, then exit)
+    \\
+    \\Arguments:
+    \\[SCRIPT]                   Optional path to a .js script. Runs the script
+    \\                           (no LLM calls) and exits. With no script and no
+    \\                           --task, the REPL starts; from there /load runs a
+    \\                           script and /save exports the session to a file.
+    \\                           Caution: .js files can contain evaluate(...) calls
+    \\                           that run arbitrary JavaScript in the page. Only run
+    \\                           scripts you trust, the same way you would a shell
+    \\                           script.
+    \\
+    \\Options:
+    \\--provider <PROVIDER>      The AI provider.
+    \\                           When omitted, lightpanda auto-detects an API key
+    \\                           from your environment (ANTHROPIC_API_KEY,
+    \\                           OPENAI_API_KEY, GOOGLE_API_KEY/GEMINI_API_KEY,
+    \\                           HF_TOKEN).
+    \\                           With exactly one key set: that provider is used.
+    \\                           With multiple keys on a TTY: you'll be prompted
+    \\                           to pick; in non-interactive contexts, pass
+    \\                           --provider explicitly. With no keys set: falls
+    \\                           back to the basic REPL (slash commands only, no
+    \\                           natural-language input, no LOGIN /
+    \\                           ACCEPT_COOKIES keywords).
+    \\
+    \\                           ollama is never auto-detected (it needs no key);
+    \\                           select it explicitly with --provider ollama.
+    \\
+    \\                           Allowed values:
+    \\                             "anthropic", "openai", "gemini",
+    \\                             "huggingface", "ollama".
+    \\                           In the REPL, use /provider to list and change
+    \\                           providers.
+    \\
+    \\--no-llm                   Force the basic REPL even when an API key is
+    \\                           present or --provider is set. Useful for testing
+    \\                           slash commands without burning tokens, or for
+    \\                           disabling the LLM in a saved command without
+    \\                           editing the existing flags. Wins over --provider.
+    \\
+    \\--model <MODEL>            The model name to use.
+    \\                           Defaults to a sensible default per provider.
+    \\                           In the REPL, use /model to list and change
+    \\                           models for the active provider.
+    \\
+    \\--base-url <URL>           Override the API base URL for the provider.
+    \\                           Defaults to the provider's standard endpoint.
+    \\                           Ollama default: http://localhost:11434/v1.
+    \\                           Hugging Face default is the serverless router
+    \\                           (https://router.huggingface.co/v1); point this
+    \\                           at a dedicated Inference Endpoint to use one.
+    \\
+    \\--system-prompt <STRING>   Override the default system prompt.
+    \\
+    \\--task <STRING>            One-shot mode: run a single user turn, print the
+    \\                           final answer to stdout, and exit. Conflicts with
+    \\                           the positional script.
+    \\
+    \\-a, --attach <PATH>        Feed a local file to the model alongside --task.
+    \\                           Repeatable, one file per flag. Text files are
+    \\                           inlined (max 512 KiB each); images/audio/pdf are
+    \\                           base64-encoded (max 20 MiB each). Requires --task.
+    \\
+    \\--list-models              Print the model IDs usable with `agent` for
+    \\                           --provider, one per line, sorted, and exit.
+    \\                           Auto-detects the provider from env when
+    \\                           --provider is omitted.
+    \\
+    \\--verbosity <LEVEL>        Stderr chatter level.
+    \\                           Default: high when --task captures stderr to a
+    \\                           pipe or file; low otherwise. low/medium also
+    \\                           raise --log-level to err (mutes page-side
+    \\                           console.error spam) unless --log-level is set
+    \\                           explicitly.
+    \\
+    \\                           Allowed values:
+    \\                             low     Silent in --task mode (final answer to
+    \\                                     stdout only); spinner + summary in REPL.
+    \\                             medium  + one `● [tool: ...]` line per call.
+    \\                             high    + the matching `[result: ...]` body
+    \\                                     (required by the benchmarks harness).
+    \\
+    \\--effort <LEVEL>           Per-turn reasoning budget, mapped to each
+    \\                           provider's native thinking/reasoning knob.
+    \\                           Default: low in the REPL (snappy turns),
+    \\                           medium in one-shot --task mode. In the REPL,
+    \\                           use /effort to change it.
+    \\
+    \\                           Allowed values:
+    \\                             none, minimal, low, medium, high, xhigh.
+    \\
+    \\The provider, model, effort, and verbosity you choose in the REPL are
+    \\remembered per-directory in .lp-agent.zon and reused on the next run.
+    \\
+    \\API keys are read from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY,
+    \\GOOGLE_API_KEY/GEMINI_API_KEY, or HF_TOKEN. Ollama does not require an API
+    \\key.
+    ,
     .version =
     \\usage:  {0s} version
     \\
@@ -151,7 +264,7 @@
     \\          Fetch external <link rel=stylesheet> resources so their rules
     \\          contribute to computed styles (and therefore to visibility checks like
     \\          display, visibility, opacity, pointer-events).
-    \\          Defaults to false.
+    \\          Defaults to false, except in agent mode with an LLM, where it is on.
     \\  --block-private-networks
     \\          Block HTTP requests to private/internal IP addresses after DNS
     \\          resolution.

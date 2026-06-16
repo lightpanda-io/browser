@@ -54,17 +54,24 @@ pub const WaitOpts = struct {
     until: lp.Config.WaitUntil = .done,
 };
 
+pub const WaitResult = enum { completed, timeout };
+
 pub fn wait(self: *Runner, opts: WaitOpts) !void {
-    return self._wait(false, opts);
+    _ = try self._wait(false, opts);
 }
 
 pub fn waitCDP(self: *Runner, opts: WaitOpts) !void {
-    return self._wait(true, opts);
+    _ = try self._wait(true, opts);
+}
+
+// `wait` that surfaces whether the goal was reached or the timeout fired.
+pub fn waitResult(self: *Runner, opts: WaitOpts) !WaitResult {
+    return self._wait(false, opts);
 }
 
 // Wait until either a parse-state / load goal is reached or `opts.ms`
 // elapses. Returns as soon as _tick reports .done.
-fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
+fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !WaitResult {
     const session = self.session;
     const browser = session.browser;
 
@@ -84,6 +91,10 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
     var gc_hint_timer = std.time.Timer.start() catch unreachable;
 
     while (true) {
+        // Cooperative cancellation. Set by the agent so SIGINT can break
+        // out of a long wait without the user sitting through the timeout.
+        if (session.isCancelled()) return error.Cancelled;
+
         if (gc_hint_timer.read() >= gc_hint_period_ns) {
             gc_hint_timer.reset();
             browser.env.memoryPressureNotification(.moderate);
@@ -106,7 +117,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
             .ok => |next_ms| next_ms,
             .done => done_blk: {
                 if (comptime is_cdp == false) {
-                    return;
+                    return .completed;
                 }
 
                 // is_cdp keeps the loop alive past .done so the worker
@@ -114,7 +125,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
                 // but we can ask the http_client to wait for CDP messages.
                 const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
                 if (elapsed >= opts.ms) {
-                    return;
+                    return .timeout;
                 }
                 try self.http_client.tick(@min(opts.ms - elapsed, 200), .all);
                 break :done_blk 0;
@@ -123,7 +134,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
 
         const ms_elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         if (ms_elapsed >= opts.ms) {
-            return;
+            return .timeout;
         }
         if (next_ms > 0) {
             std.Thread.sleep(std.time.ns_per_ms * next_ms);
@@ -276,6 +287,7 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
     const parsed_selector = try Selector.parseLeaky(arena, selector);
 
     while (true) {
+        if (self.session.isCancelled()) return error.Cancelled;
         // self.frame can change between ticks
         const frame = self.frame;
         if (try parsed_selector.query(frame.document.asNode(), frame)) |el| {
@@ -287,7 +299,8 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
             return error.Timeout;
         }
         switch (try self.tick(.{ .ms = timeout_ms - elapsed })) {
-            .done => return error.Timeout,
+            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
+            .done => std.Thread.sleep(std.time.ns_per_ms * @as(u64, @min(timeout_ms - elapsed, 50))),
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
                     std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
@@ -324,6 +337,7 @@ pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void 
     defer compiled.deinit();
 
     while (true) {
+        if (runner.session.isCancelled()) return error.Cancelled;
         const frame = runner.frame;
 
         var ls: js.Local.Scope = undefined;
@@ -350,7 +364,8 @@ pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void 
             return error.Timeout;
         }
         switch (try runner.tick(.{ .ms = timeout_ms - elapsed })) {
-            .done => return error.Timeout,
+            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
+            .done => std.Thread.sleep(std.time.ns_per_ms * @as(u64, @min(timeout_ms - elapsed, 50))),
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
                     std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
