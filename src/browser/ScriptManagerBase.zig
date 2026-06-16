@@ -218,7 +218,8 @@ pub fn resolveSpecifier(self: *ScriptManagerBase, arena: Allocator, base: [:0]co
 }
 
 const PreloadOpts = struct {
-    hint: bool = false,
+    // set when the preload comes from a <link rel=modulepreload> hint
+    hint_element: ?*Element.Html = null,
 };
 pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []const u8, opts: PreloadOpts) !void {
     const gop = try self.imported_modules.getOrPut(self.allocator, url);
@@ -246,9 +247,10 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .complete = false,
         .source = .{ .remote = .{} },
         .extra = .import,
+        .hint_element = opts.hint_element,
     };
 
-    gop.value_ptr.* = .{ .state = .{ .loading = script }, .hint = opts.hint };
+    gop.value_ptr.* = .{ .state = .{ .loading = script }, .hint = opts.hint_element != null };
 
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
@@ -294,12 +296,14 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
 }
 
 // <link rel=modulepreload href=...> — start fetching a module before import
-// resolution discovers it.
-pub fn preloadModuleHint(self: *ScriptManagerBase, url: [:0]const u8, referrer: []const u8) !void {
+// resolution discovers it. Returns false when no fetch was started (the
+// module is already fetched/fetching): no event will fire on the link.
+pub fn preloadModuleHint(self: *ScriptManagerBase, element: *Element.Html, url: [:0]const u8, referrer: []const u8) !bool {
     if (self.imported_modules.contains(url)) {
-        return;
+        return false;
     }
-    try self.preloadImport(url, referrer, .{ .hint = true });
+    try self.preloadImport(url, referrer, .{ .hint_element = element });
+    return true;
 }
 
 pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource {
@@ -581,6 +585,12 @@ pub const Script = struct {
     node: std.DoublyLinkedList.Node,
     manager: *ScriptManagerBase,
 
+    // Set when this fetch was started by a <link rel=preload as=script> or
+    // <link rel=modulepreload> hint: the link element to fire load/error on
+    // once the fetch settles. Lives outside `extra` so adoption (e.g.
+    // getAsyncImport replacing .import with .import_async) can't lose it.
+    hint_element: ?*Element.Html = null,
+
     // for debugging a rare production issue
     header_callback_called: bool = false,
 
@@ -609,7 +619,8 @@ pub const Script = struct {
     // (script_element, kind, *Frame); workers and dynamic JS imports use
     // `.import` / `.import_async` and never reach the .frame arm.
     pub const Extra = union(enum) {
-        // Static module import — V8 resolution via imported_modules.
+        // Static module import — V8 resolution via imported_modules. Also
+        // <link rel=modulepreload> hints (see Script.hint_element).
         import,
         // Dynamic JS import() — resolved via ready_scripts callback.
         import_async: ImportAsync,
@@ -758,6 +769,7 @@ pub const Script = struct {
             },
             .preload => unreachable, // preloads use ScriptManager.PreloadedScript.doneCallback
         }
+        self.queueHintEvent(.load);
         manager.evaluate();
     }
 
@@ -801,6 +813,7 @@ pub const Script = struct {
             .frame => self.executeCallback(comptime .wrap("error")),
             .preload => unreachable, // preloads use ScriptManager.PreloadedScript.errorCallback
         }
+        self.queueHintEvent(.@"error");
         self.deinit();
         manager.evaluate();
     }
@@ -841,6 +854,10 @@ pub const Script = struct {
         defer ls.deinit();
 
         const local = &ls.local;
+
+        // Per spec, trigger any microtasks BEFORE execution in case the parser
+        // (e.g. via event callbacks) queued anything.
+        local.runMicrotasks();
 
         // Handle importmap special case here: the content is a JSON containing imports.
         // Multiple <script type="importmap"> elements merge with first-wins semantics.
@@ -911,6 +928,8 @@ pub const Script = struct {
         self.executeCallback(comptime .wrap("error"));
     }
 
+    // Frame-only: fires load/error on the <script> element itself,
+    // synchronously. Hint <link> events go through queueHintEvent instead.
     pub fn executeCallback(self: *const Script, typ: String) void {
         const fe = self.extra.frame;
         const frame = fe.frame;
@@ -929,6 +948,21 @@ pub const Script = struct {
                 .type = typ,
                 .err = err,
             });
+        };
+    }
+
+    // Fire the hint <link>'s load/error event, queued on the scheduler rather
+    // than dispatched inline: done/error callbacks run inside HTTP pumps
+    // (possibly mid sync-wait, or inside V8's module-resolve callback for
+    // imports), where dispatching user JS would be a novel re-entrancy point.
+    // Browsers queue these as tasks anyway. The queued entry holds only the
+    // element, so it stays valid even if the script is adopted/freed first.
+    pub fn queueHintEvent(self: *const Script, kind: Frame.QueuedEvent.Kind) void {
+        const element = self.hint_element orelse return;
+        // hints only originate from a <link> in a frame, never from a worker
+        const frame = self.manager.owner.frame;
+        frame.queueElementEvent(element, kind) catch |err| {
+            log.warn(.js, "script hint event", .{ .url = self.url, .kind = kind, .err = err });
         };
     }
 };

@@ -203,9 +203,7 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
 
     // Opt-in fetch for `rel="stylesheet"` — drives `frame.loadExternalStylesheet`,
-    // which fires the load/error event itself. preload/modulepreload start a
-    // background fetch (a hint, never evaluated on its own) and fire a
-    // synthetic `load` event regardless of how the fetch goes.
+    // which fires the load/error event itself.
     if (std.mem.eql(u8, rel, "stylesheet")) {
         return frame.loadExternalStylesheet(self, href);
     }
@@ -213,20 +211,27 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     if (std.mem.eql(u8, rel, "preload")) {
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (std.ascii.eqlIgnoreCase(as, "script")) {
-            frame.preloadScriptHint(href);
+            if (frame.preloadScriptHint(self._proto, href)) {
+                // load/error fires when the fetch settles
+                return;
+            }
         }
-    } else if (std.mem.eql(u8, rel, "modulepreload")) {
-        // "as" default to script in this case
-        const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
-        if (as.len == 0 or std.ascii.eqlIgnoreCase(as, "script")) {
-            frame.preloadModuleHint(href);
-        }
-    } else {
-        // remaining rels (icon, canonical, ...): no fetch, no load event
-        return;
+        // synthetic load, fires next tick
+        return frame.queueLoad(self._proto);
     }
 
-    try frame.queueLoad(self._proto);
+    if (std.mem.eql(u8, rel, "modulepreload")) {
+        // "as" defaults to script in this case
+        const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
+        if (as.len == 0 or std.ascii.eqlIgnoreCase(as, "script")) {
+            if (frame.preloadModuleHint(self._proto, href)) {
+                // load/error fires when the fetch settles
+                return;
+            }
+        }
+        // synthetic load, fires next tick
+        return frame.queueLoad(self._proto);
+    }
 }
 
 pub const JsApi = struct {
