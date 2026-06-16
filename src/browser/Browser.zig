@@ -26,6 +26,7 @@ const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 const Session = @import("Session.zig");
 const HttpClient = @import("HttpClient.zig");
+const PermissionState = @import("webapi/Permissions.zig").State;
 
 const ArenaPool = App.ArenaPool;
 const Allocator = std.mem.Allocator;
@@ -41,6 +42,13 @@ session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: HttpClient,
+
+// Permission state set via CDP Browser.grantPermissions / setPermission /
+// resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
+// by navigator.permissions.query(). Scoped to the Browser so it persists
+// across page navigations, mirroring how Chrome scopes permissions to the
+// browser context. Keys are owned by `allocator`; values are enum tags.
+permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
@@ -104,6 +112,32 @@ pub fn deinit(self: *Browser) void {
     self.fc_identity_pool.deinit();
     self.page_pool.deinit();
     self.http_client.deinit();
+    self.clearPermissions();
+    self.permissions.deinit(self.allocator);
+}
+
+// Set (or overwrite) the stored state for a permission. The name is duped into
+// `allocator`; the state is a plain enum tag. Used by CDP
+// Browser.grantPermissions / setPermission.
+pub fn setPermission(self: *Browser, name: []const u8, state: PermissionState) !void {
+    const gop = try self.permissions.getOrPut(self.allocator, name);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = self.allocator.dupe(u8, name) catch |err| {
+            _ = self.permissions.remove(name);
+            return err;
+        };
+    }
+    gop.value_ptr.* = state;
+}
+
+// Clear all stored permissions, freeing the keys. Used by CDP
+// Browser.resetPermissions and on teardown.
+pub fn clearPermissions(self: *Browser) void {
+    var it = self.permissions.keyIterator();
+    while (it.next()) |key| {
+        self.allocator.free(key.*);
+    }
+    self.permissions.clearRetainingCapacity();
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {

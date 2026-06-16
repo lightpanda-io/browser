@@ -50,7 +50,7 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
     const arena = try exec.getArena(.tiny, "PermissionStatus");
     errdefer exec.releaseArena(arena);
 
-    const state = exec.page.permissions.get(qd.name) orelse .prompt;
+    const state = exec.session.browser.permissions.get(qd.name) orelse .prompt;
     const status = try arena.create(PermissionStatus);
     status.* = .{
         ._arena = arena,

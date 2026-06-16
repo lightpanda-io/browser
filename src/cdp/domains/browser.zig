@@ -17,7 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const CDP = @import("../CDP.zig");
+
+const log = lp.log;
+const PermissionState = @import("../../browser/webapi/Permissions.zig").State;
 
 // TODO: hard coded data
 const PROTOCOL_VERSION = "1.3";
@@ -97,7 +101,8 @@ fn setWindowBounds(cmd: *CDP.Command) !void {
 }
 
 // Grant the listed permissions so navigator.permissions.query() reports them
-// as "granted". State is stored on the active Page and resets on navigation.
+// as "granted". State is stored on the Browser, so it persists across page
+// navigations.
 fn grantPermissions(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         permissions: []const []const u8,
@@ -105,10 +110,16 @@ fn grantPermissions(cmd: *CDP.Command) !void {
         browserContextId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    if (params.origin) |v| {
+        log.warn(.not_implemented, "Browser.grantPermissions", .{ .param = "origin", .value = v });
+    }
+    if (params.browserContextId) |v| {
+        log.warn(.not_implemented, "Browser.grantPermissions", .{ .param = "browserContextId", .value = v });
+    }
+
+    const browser = &cmd.cdp.browser;
     for (params.permissions) |name| {
-        try page.setPermission(name, .granted);
+        try browser.setPermission(name, .granted);
     }
 
     return cmd.sendResult(null, .{ .include_session_id = false });
@@ -124,25 +135,24 @@ fn setPermission(cmd: *CDP.Command) !void {
         browserContextId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    if (params.origin) |v| {
+        log.warn(.not_implemented, "Browser.setPermission", .{ .param = "origin", .value = v });
+    }
+    if (params.browserContextId) |v| {
+        log.warn(.not_implemented, "Browser.setPermission", .{ .param = "browserContextId", .value = v });
+    }
 
-    const PermissionState = @import("../../browser/webapi/Permissions.zig").State;
     const state = std.meta.stringToEnum(PermissionState, params.setting) orelse {
         return error.InvalidPermissionSetting;
     };
-    try page.setPermission(params.permission.name, state);
+    try cmd.cdp.browser.setPermission(params.permission.name, state);
     return cmd.sendResult(null, .{ .include_session_id = false });
 }
 
 // Clear all granted permissions; navigator.permissions.query() falls back to
 // the default "prompt".
 fn resetPermissions(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    if (bc.session.currentPage()) |page| {
-        page.permissions.clearRetainingCapacity();
-    }
-
+    cmd.cdp.browser.clearPermissions();
     return cmd.sendResult(null, .{ .include_session_id = false });
 }
 
@@ -187,17 +197,21 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-PERM", .url = "cdp/dom1.html" });
-    const page = bc.session.currentPage() orelse unreachable;
+    const browser = bc.session.browser;
 
-    // grantPermissions: each listed permission becomes "granted".
+    // grantPermissions: each listed permission becomes "granted". State lives
+    // on the Browser, not the Page.
     try ctx.processMessage(.{
         .id = 40,
         .method = "Browser.grantPermissions",
         .params = .{ .permissions = &[_][]const u8{ "geolocation", "notifications" } },
     });
     try ctx.expectSentResult(null, .{ .id = 40, .session_id = null });
-    try testing.expectEqual(.granted, page.permissions.get("geolocation").?);
-    try testing.expectEqual(.granted, page.permissions.get("notifications").?);
+    // State lives on the Browser, not the Page, so it persists for the whole
+    // CDP connection (across page navigations) rather than being lost when the
+    // page is replaced.
+    try testing.expectEqual(.granted, browser.permissions.get("geolocation").?);
+    try testing.expectEqual(.granted, browser.permissions.get("notifications").?);
 
     // setPermission: override a single permission to an explicit state.
     try ctx.processMessage(.{
@@ -206,7 +220,7 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
         .params = .{ .permission = .{ .name = "geolocation" }, .setting = "denied" },
     });
     try ctx.expectSentResult(null, .{ .id = 41, .session_id = null });
-    try testing.expectEqual(.denied, page.permissions.get("geolocation").?);
+    try testing.expectEqual(.denied, browser.permissions.get("geolocation").?);
 
     // resetPermissions: clears everything; query falls back to "prompt".
     try ctx.processMessage(.{
@@ -214,5 +228,5 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
         .method = "Browser.resetPermissions",
     });
     try ctx.expectSentResult(null, .{ .id = 42, .session_id = null });
-    try testing.expectEqual(@as(usize, 0), page.permissions.count());
+    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
 }
