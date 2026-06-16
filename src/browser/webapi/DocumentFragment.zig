@@ -237,12 +237,16 @@ pub const JsApi = struct {
     pub const append = bridge.function(DocumentFragment.append, .{ .dom_exception = true, .ce_reactions = true });
     pub const prepend = bridge.function(DocumentFragment.prepend, .{ .dom_exception = true, .ce_reactions = true });
     pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
-    pub const innerHTML = bridge.accessor(_innerHTML, DocumentFragment.setInnerHTML, .{ .ce_reactions = true });
 
-    fn _innerHTML(self: *DocumentFragment, frame: *Frame) ![]const u8 {
+    pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
+    fn _getInnerHTML(self: *DocumentFragment, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getInnerHTML(&buf.writer, frame);
         return buf.written();
+    }
+    fn _setInnerHTML(self: *DocumentFragment, value: js.Value, frame: *Frame) !void {
+        // `[LegacyNullToEmptyString] DOMString`: a JS null becomes "", not "null".
+        return self.setInnerHTML(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
 };
 

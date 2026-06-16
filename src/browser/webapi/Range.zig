@@ -554,7 +554,7 @@ pub fn createContextualFragment(self: *const Range, html: []const u8, frame: *Fr
     else
         try frame.createElementNS(.html, "div", null);
 
-    try frame.parseHtmlAsChildren(temp_node, html);
+    try frame.parseContextualFragment(temp_node, html);
 
     // Move all parsed children to the fragment
     // Keep removing first child until temp element is empty

@@ -105,42 +105,49 @@ pub const JsApi = struct {
     };
 
     pub const content = bridge.accessor(Template.getContent, null, .{});
-    pub const innerHTML = bridge.accessor(_getInnerHTML, Template.setInnerHTML, .{ .ce_reactions = true });
-    pub const outerHTML = bridge.accessor(_getOuterHTML, null, .{});
-    pub const shadowRootMode = bridge.accessor(Template.getShadowRootMode, Template.setShadowRootMode, .{ .ce_reactions = true });
-    pub const shadowRootDelegatesFocus = bridge.accessor(_getShadowRootDelegatesFocus, _setShadowRootDelegatesFocus, .{ .ce_reactions = true });
-    pub const shadowRootClonable = bridge.accessor(_getShadowRootClonable, _setShadowRootClonable, .{ .ce_reactions = true });
-    pub const shadowRootSerializable = bridge.accessor(_getShadowRootSerializable, _setShadowRootSerializable, .{ .ce_reactions = true });
-
-    fn _getShadowRootDelegatesFocus(self: *const Template) bool {
-        return self.getBoolAttribute(.wrap("shadowrootdelegatesfocus"));
-    }
-    fn _setShadowRootDelegatesFocus(self: *Template, value: bool, frame: *Frame) !void {
-        try self.setBoolAttribute(.wrap("shadowrootdelegatesfocus"), value, frame);
-    }
-    fn _getShadowRootClonable(self: *const Template) bool {
-        return self.getBoolAttribute(.wrap("shadowrootclonable"));
-    }
-    fn _setShadowRootClonable(self: *Template, value: bool, frame: *Frame) !void {
-        try self.setBoolAttribute(.wrap("shadowrootclonable"), value, frame);
-    }
-    fn _getShadowRootSerializable(self: *const Template) bool {
-        return self.getBoolAttribute(.wrap("shadowrootserializable"));
-    }
-    fn _setShadowRootSerializable(self: *Template, value: bool, frame: *Frame) !void {
-        try self.setBoolAttribute(.wrap("shadowrootserializable"), value, frame);
-    }
+    pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
 
     fn _getInnerHTML(self: *Template, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self._content.getInnerHTML(&buf.writer, frame);
         return buf.written();
     }
+    fn _setInnerHTML(self: *Template, value: js.Value, frame: *Frame) !void {
+        // `[LegacyNullToEmptyString] DOMString`: a JS null becomes "", not "null".
+        return self.setInnerHTML(if (value.isNull()) "" else try value.toZig([]const u8), frame);
+    }
 
+    pub const outerHTML = bridge.accessor(_getOuterHTML, null, .{});
     fn _getOuterHTML(self: *Template, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getOuterHTML(&buf.writer, frame);
         return buf.written();
+    }
+
+    pub const shadowRootMode = bridge.accessor(Template.getShadowRootMode, Template.setShadowRootMode, .{ .ce_reactions = true });
+
+    pub const shadowRootDelegatesFocus = bridge.accessor(_getShadowRootDelegatesFocus, _setShadowRootDelegatesFocus, .{ .ce_reactions = true });
+    fn _getShadowRootDelegatesFocus(self: *const Template) bool {
+        return self.getBoolAttribute(.wrap("shadowrootdelegatesfocus"));
+    }
+    fn _setShadowRootDelegatesFocus(self: *Template, value: bool, frame: *Frame) !void {
+        try self.setBoolAttribute(.wrap("shadowrootdelegatesfocus"), value, frame);
+    }
+
+    pub const shadowRootClonable = bridge.accessor(_getShadowRootClonable, _setShadowRootClonable, .{ .ce_reactions = true });
+    fn _getShadowRootClonable(self: *const Template) bool {
+        return self.getBoolAttribute(.wrap("shadowrootclonable"));
+    }
+    fn _setShadowRootClonable(self: *Template, value: bool, frame: *Frame) !void {
+        try self.setBoolAttribute(.wrap("shadowrootclonable"), value, frame);
+    }
+
+    pub const shadowRootSerializable = bridge.accessor(_getShadowRootSerializable, _setShadowRootSerializable, .{ .ce_reactions = true });
+    fn _getShadowRootSerializable(self: *const Template) bool {
+        return self.getBoolAttribute(.wrap("shadowrootserializable"));
+    }
+    fn _setShadowRootSerializable(self: *Template, value: bool, frame: *Frame) !void {
+        try self.setBoolAttribute(.wrap("shadowrootserializable"), value, frame);
     }
 };
 
