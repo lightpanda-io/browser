@@ -165,13 +165,14 @@ With an LLM, it synthesizes an idiomatic script. The result is
 JavaScript:
 
 ```js
-goto("https://news.ycombinator.com/login");
-fill({ selector: "form[action=\"login\"] input[name=\"acct\"]", value: "$LP_HN_USERNAME" });
-fill({ selector: "form[action=\"login\"] input[name=\"pw\"]", value: "$LP_HN_PASSWORD" });
-click({ selector: "form[action=\"login\"] input[type=\"submit\"][value=\"login\"]" });
-waitForSelector("#logout");
-goto("https://news.ycombinator.com");
-extract({ topStories: [{ selector: ".athing", fields: { rank: ".rank", title: ".titleline > a", url: { selector: ".titleline > a", attr: "href" } } }] });
+const page = new Page();
+await page.goto("https://news.ycombinator.com/login");
+page.fill({ selector: "form[action=\"login\"] input[name=\"acct\"]", value: "$LP_HN_USERNAME" });
+page.fill({ selector: "form[action=\"login\"] input[name=\"pw\"]", value: "$LP_HN_PASSWORD" });
+page.click({ selector: "form[action=\"login\"] input[type=\"submit\"][value=\"login\"]" });
+page.waitForSelector("#logout");
+await page.goto("https://news.ycombinator.com");
+return page.extract({ topStories: [{ selector: ".athing", fields: { rank: ".rank", title: ".titleline > a", url: { selector: ".titleline > a", attr: "href" } } }] });
 ```
 
 Only state-mutating commands are recorded; read-only ones (`/tree`,
@@ -184,9 +185,9 @@ what the script returns.
 ./lightpanda agent hn_login.js
 ```
 
-No `--provider`, no API key, no token spend. The script's last
-expression is printed automatically as JSON. Because the saved script
-ends with `extract(...)`, you get clean JSON on stdout:
+No `--provider`, no API key, no token spend. Whatever the script
+`return`s is printed automatically as JSON. Because the saved script
+ends with `return page.extract(...)`, you get clean JSON on stdout:
 
 ```console
 ./lightpanda agent hn_login.js > stories.json
@@ -195,11 +196,14 @@ ends with `extract(...)`, you get clean JSON on stdout:
 From inside the REPL, `/load hn_login.js` runs the same script against
 the current session.
 
-To reshape the output, assign the result and end with a bare expression
-(the final value is what prints):
+To reshape the output, assign the result and end with `return <value>`
+(what you return is what prints):
 
 ```js
-const topStories = extract({
+const page = new Page();
+await page.goto("https://news.ycombinator.com");
+
+const topStories = page.extract({
   topStories: [{
     selector: ".athing",
     fields: {
@@ -210,22 +214,25 @@ const topStories = extract({
   }]
 });
 
-topStories;
+return topStories;
 ```
 
 ## 6. Add your own JavaScript logic
 
 Agent scripts run in a separate JavaScript context from the page. No
 `window`, `document`, DOM API, `require`, or `process`. Browser
-interaction happens through the installed primitives.
+interaction happens through the `Page` object: `new Page()` makes a
+page, `await page.goto(url)` navigates it, and every other primitive is
+a synchronous method on it.
 
-Use `extract(...)` to move page data into local logic, then process it
-with normal JavaScript:
+Use `page.extract(...)` to move page data into local logic, then
+process it with normal JavaScript:
 
 ```js
-goto("https://news.ycombinator.com");
+const page = new Page();
+await page.goto("https://news.ycombinator.com");
 
-const topStories = extract({
+const topStories = page.extract({
   topStories: [{
     selector: ".athing",
     limit: 5,
@@ -237,11 +244,11 @@ const topStories = extract({
   }]
 });
 
-topStories.map((s) => ({ rank: s.rank, title: s.title, url: s.url }));
+return topStories.map((s) => ({ rank: s.rank, title: s.title, url: s.url }));
 ```
 
-Use `evaluate(...)` only when you intentionally want a string to run in
-the page's JavaScript context. Page evaluate cannot see agent
+Use `page.evaluate(...)` only when you intentionally want a string to
+run in the page's JavaScript context. Page evaluate cannot see agent
 variables or call agent primitives.
 
 ## 7. Use Lightpanda from another agent (MCP)
@@ -269,7 +276,7 @@ Drive the browser with the usual tools (`goto`, `fill`, `click`,
   "tool": "save",
   "args": {
     "path": "hn_login.js",
-    "script": "goto(\"...\");\n..."
+    "script": "const page = new Page();\nawait page.goto(\"...\");\n..."
   }
 }
 ```

@@ -191,6 +191,7 @@ pub const Command = union(enum) {
 
 fn formatJsToolCall(tc: Command.ToolCall, arena: std.mem.Allocator, writer: *std.Io.Writer) (std.Io.Writer.Error || error{OutOfMemory})!void {
     const s = tc.schema();
+    // The bare call only; the recorder adds the `page.` receiver and any `await`.
     const args_val = tc.args orelse {
         try writer.print("{s}();", .{s.tool_name});
         return;

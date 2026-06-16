@@ -158,14 +158,23 @@ fn createContext(self: *Runtime) InitError!void {
     v8.v8__Context__Enter(context);
     defer v8.v8__Context__Exit(context);
 
+    // The promise-reject callback every `Env` installs reads a browser `Context`
+    // from embedder slot 1; this bare context has none. Pin the slot to null so
+    // the callback no-ops instead of aligncasting garbage — the script body runs
+    // inside an async wrapper, so unhandled rejections happen routinely.
+    v8.v8__Context__SetAlignedPointerInEmbedderData(context, 1, null);
+
     const global = v8.v8__Context__Global(context) orelse return error.RuntimeInitFailed;
+
+    // `Page` is the only global verb; `new Page()` attaches a method for each
+    // recorded tool, reusing these `primitive_data` entries — so fill them here.
     var i: usize = 0;
     for (std.enums.values(BrowserTool)) |t| {
         if (!t.isRecorded()) continue;
         self.primitive_data[i] = .{ .runtime = self, .tool = t };
-        try self.installPrimitive(context, global, @tagName(t), &self.primitive_data[i]);
         i += 1;
     }
+    try self.installFunction(context, global, "Page", pageConstructor, self);
     try self.installConsole(context, global);
 }
 
@@ -176,25 +185,21 @@ fn resetContext(self: *Runtime) void {
     self.has_context = false;
 }
 
-fn installPrimitive(
+const Callback = *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void;
+
+/// Install `callback` (carrying `data` as its `External`) under `name` on `object`.
+fn installFunction(
     self: *Runtime,
     context: *const v8.Context,
-    global: *const v8.Object,
+    object: *const v8.Object,
     name: []const u8,
-    data: *PrimitiveData,
+    callback: Callback,
+    data: *anyopaque,
 ) InitError!void {
     const external = self.env.isolate.createExternal(data);
-    const func = v8.v8__Function__New__DEFAULT2(context, primitiveCallback, external) orelse
+    const func = v8.v8__Function__New__DEFAULT2(context, callback, external) orelse
         return error.RuntimeInitFailed;
-    var out: v8.MaybeBool = undefined;
-    v8.v8__Object__Set(
-        global,
-        context,
-        @ptrCast(self.env.isolate.initStringHandle(name)),
-        @ptrCast(func),
-        &out,
-    );
-    if (!out.has_value or !out.value) return error.RuntimeInitFailed;
+    try self.setObjectProperty(context, object, name, @ptrCast(func));
 }
 
 fn installConsole(
@@ -207,10 +212,7 @@ fn installConsole(
 
     for (std.enums.values(ConsoleMethod), 0..) |method, i| {
         self.console_data[i] = .{ .runtime = self, .method = method };
-        const external = self.env.isolate.createExternal(&self.console_data[i]);
-        const func = v8.v8__Function__New__DEFAULT2(context, consoleCallback, external) orelse
-            return error.RuntimeInitFailed;
-        try setObjectProperty(self, context, console, @tagName(method), @ptrCast(func));
+        try self.installFunction(context, console, @tagName(method), consoleCallback, &self.console_data[i]);
     }
 
     try setObjectProperty(self, context, global, "console", @ptrCast(console));
@@ -254,7 +256,14 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     defer v8.v8__TryCatch__DESTRUCT(&try_catch);
 
     const script_name = self.env.isolate.initStringHandle(name);
-    const script_source = self.env.isolate.initStringHandle(source);
+    // Wrap in an async IIFE so the source can use top-level `await` (e.g.
+    // `await page.goto(...)`). The wrapper evaluates to a Promise; a top-level
+    // `return <expr>` becomes that Promise's value, which we echo. (A bare
+    // trailing expression no longer auto-prints — `await` and a script
+    // completion value are mutually exclusive in JS.)
+    const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
+        return try self.dupeError("out of memory");
+    const script_source = self.env.isolate.initStringHandle(wrapped);
 
     var origin: v8.ScriptOrigin = undefined;
     v8.v8__ScriptOrigin__CONSTRUCT(&origin, script_name);
@@ -273,19 +282,53 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     const completion = v8.v8__Script__Run(script, context) orelse
         return try self.formatCaught(context, &try_catch, "script failed");
 
-    // Explicit microtask policy: promise continuations only run once drained.
+    // `goto` runs synchronously and resolves its Promise before returning, so a
+    // single microtask drain settles the whole `await` chain — no event-loop
+    // driver. (Truly-async navigation is a later change.)
+    const root: *const v8.Promise = @ptrCast(completion);
     self.env.performIsolateMicrotasks();
     if (v8.v8__TryCatch__HasCaught(&try_catch)) {
         return try self.formatCaught(context, &try_catch, "script failed");
     }
 
-    self.printCompletion(context, completion);
+    // A still-pending root means the script awaited something we can't settle
+    // (no async navigation is in flight) — stay silent.
+    const state = promiseState(root);
+    if (state != v8.kFulfilled and state != v8.kRejected) return null;
+    const completion_value = v8.v8__Promise__Result(root) orelse return null;
+    if (state == v8.kRejected) return try self.formatRejection(context, completion_value);
+    self.printCompletion(context, completion_value);
     return null;
 }
 
-/// Echo a script's completion value (its last-evaluated expression) so a script
-/// ending in `extract(...)` or a bare `results;` prints without `console.log`.
-/// `undefined` — declarations, assignments, control flow — stays silent.
+/// `v8__Promise__State` returns the `c_uint` `PromiseState`, but the `k*`
+/// constants are `c_int`; normalize so comparisons and switches type-check.
+fn promiseState(promise: *const v8.Promise) c_int {
+    return @intCast(v8.v8__Promise__State(promise));
+}
+
+/// Format a script's rejection reason into a run-arena message. Prefers a thrown
+/// Error's `.message` so the caller's own "Error:" label isn't doubled
+/// (`Value.toString` on an Error yields "Error: <message>").
+fn formatRejection(self: *Runtime, context: *const v8.Context, reason: *const v8.Value) RunError![]const u8 {
+    const value = self.errorMessage(context, reason) orelse reason;
+    const text = self.valueToString(self.call_arena.allocator(), context, value) catch
+        return try self.dupeError("script failed");
+    return try self.dupeError(text);
+}
+
+/// The `.message` of a thrown Error (a string), or null when `reason` is not an
+/// Error-like object — in which case the caller stringifies the value itself.
+fn errorMessage(self: *Runtime, context: *const v8.Context, reason: *const v8.Value) ?*const v8.Value {
+    if (!v8.v8__Value__IsObject(reason)) return null;
+    const key: *const v8.Value = @ptrCast(self.env.isolate.initStringHandle("message"));
+    const message = v8.v8__Object__Get(@ptrCast(reason), context, key) orelse return null;
+    return if (v8.v8__Value__IsString(message)) message else null;
+}
+
+/// Echo a script's output — the value it `return`s from the async wrapper, so a
+/// script ending in `return page.extract(...)` prints without `console.log`.
+/// `undefined` — no `return`, or a bare trailing expression — stays silent.
 fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) void {
     if (v8.v8__Value__IsUndefined(value)) return;
 
@@ -295,18 +338,66 @@ fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.
     self.writeConsoleLine(.log, text);
 }
 
+/// Unwrap a callback's info handle and its `External` payload (the `*T` passed
+/// to `installFunction`). Returns null — so the callback no-ops — if either is
+/// missing.
+fn callbackData(comptime T: type, info_handle: ?*const v8.FunctionCallbackInfo) ?struct { *const v8.FunctionCallbackInfo, *T } {
+    const info = info_handle orelse return null;
+    const raw_data = v8.v8__FunctionCallbackInfo__Data(info) orelse return null;
+    const data: *T = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(raw_data)) orelse return null));
+    return .{ info, data };
+}
+
 fn primitiveCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-    const info = info_handle orelse return;
-    const raw_data = v8.v8__FunctionCallbackInfo__Data(info) orelse return;
-    const data: *PrimitiveData = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(raw_data)) orelse return));
+    const info, const data = callbackData(PrimitiveData, info_handle) orelse return;
     data.runtime.invoke(data.tool, info);
 }
 
 fn consoleCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-    const info = info_handle orelse return;
-    const raw_data = v8.v8__FunctionCallbackInfo__Data(info) orelse return;
-    const data: *ConsoleData = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(raw_data)) orelse return));
+    const info, const data = callbackData(ConsoleData, info_handle) orelse return;
     data.runtime.invokeConsole(data.method, info);
+}
+
+fn pageConstructor(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+    const info, const self = callbackData(Runtime, info_handle) orelse return;
+    self.construct(info);
+}
+
+fn closeCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+    const info, const self = callbackData(Runtime, info_handle) orelse return;
+    self.invokeClose(info);
+}
+
+/// `new Page()`: attach a method for every recorded tool (including `goto`) plus
+/// `close`. `__lpFrameId` is left unset until the first `goto` navigates the page.
+fn construct(self: *Runtime, info: *const v8.FunctionCallbackInfo) void {
+    if (!v8.v8__FunctionCallbackInfo__IsConstructCall(info)) {
+        return self.throwTypeError("Page must be called with new");
+    }
+    const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse
+        return self.throwError("internal: missing callback context");
+    const this = v8.v8__FunctionCallbackInfo__This(info) orelse
+        return self.throwError("internal: missing receiver");
+
+    for (&self.primitive_data) |*data| {
+        self.installFunction(context, this, @tagName(data.tool), primitiveCallback, data) catch
+            return self.throwError("failed to construct page");
+    }
+    self.installFunction(context, this, "close", closeCallback, self) catch
+        return self.throwError("failed to construct page");
+}
+
+/// Property carrying a page handle's claim on a live frame. Numeric while the
+/// page is navigated; absent/undefined once never-navigated or closed.
+const frame_id_key = "__lpFrameId";
+
+/// `page.close()`: stale the wrapper so later method calls error. A single
+/// synchronous page has no popups to free; the active page is reclaimed on the
+/// next `goto` or at script end.
+fn invokeClose(self: *Runtime, info: *const v8.FunctionCallbackInfo) void {
+    const context = v8.v8__Isolate__GetCurrentContext(self.env.isolate.handle) orelse return;
+    const this = v8.v8__FunctionCallbackInfo__This(info) orelse return;
+    self.setObjectProperty(context, this, frame_id_key, self.env.isolate.initUndefined()) catch {};
 }
 
 fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInfo) void {
@@ -327,6 +418,21 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         error.InvalidArguments => return self.throwTypeError("invalid arguments"),
     };
 
+    // `goto` is the one async-shaped primitive: it returns a Promise (resolved
+    // synchronously once the blocking navigation settles).
+    if (tool == .goto) return self.invokeGoto(arena, context, info, args);
+
+    // Other primitives are page methods. The receiver must be navigated, and —
+    // since a single synchronous page has only one live frame — still be the
+    // current one; a later `goto` (on any handle) replaces the page and stales
+    // every other handle.
+    const frame_id = self.receiverFrameId(context, info) orelse
+        return self.throwError("page is not navigated or has been closed; call page.goto(url) first");
+    const live = self.session.currentFrame();
+    if (live == null or live.?._frame_id != frame_id) {
+        return self.throwError("page handle is no longer valid; the page was closed or replaced");
+    }
+
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
     };
@@ -343,6 +449,71 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         },
         .fail => |message| self.throwError(message),
     }
+}
+
+/// Navigate the receiver Page synchronously and hand back a resolved Promise of
+/// the page object, so `await page.goto(url)` yields the page. The blocking
+/// `goto` tool runs the navigation to completion before this returns; on success
+/// the receiver's `__lpFrameId` is (re)bound to the freshly-loaded frame.
+fn invokeGoto(
+    self: *Runtime,
+    arena: std.mem.Allocator,
+    context: *const v8.Context,
+    info: *const v8.FunctionCallbackInfo,
+    args: ?std.json.Value,
+) void {
+    const resolver = v8.v8__Promise__Resolver__New(context) orelse
+        return self.throwError("internal: resolver alloc failed");
+    const promise = v8.v8__Promise__Resolver__GetPromise(resolver) orelse
+        return self.throwError("internal: promise alloc failed");
+    self.setReturnValue(info, @ptrCast(promise));
+
+    const result = self.callTool(arena, .goto, args) catch |err| switch (err) {
+        error.OutOfMemory => return self.rejectResolver(context, resolver, "out of memory"),
+    };
+
+    switch (result) {
+        .ok => {
+            const this = v8.v8__FunctionCallbackInfo__This(info) orelse
+                return self.rejectResolver(context, resolver, "navigation failed");
+            const frame = self.session.currentFrame() orelse
+                return self.rejectResolver(context, resolver, "navigation failed");
+            self.bindFrameId(context, this, frame._frame_id) catch
+                return self.rejectResolver(context, resolver, "internal: page bind failed");
+            self.resolveResolver(context, resolver, @ptrCast(this));
+        },
+        .fail => |message| self.rejectResolver(context, resolver, message),
+    }
+}
+
+fn resolveResolver(_: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, value: *const v8.Value) void {
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Resolve(resolver, context, value, &out);
+}
+
+fn rejectResolver(self: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, message: []const u8) void {
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Reject(resolver, context, self.env.isolate.createError(message), &out);
+}
+
+/// Bind `__lpFrameId` on a page object to `frame_id` — the handle's claim on the
+/// live frame, checked by `invoke` on every later method call.
+fn bindFrameId(self: *Runtime, context: *const v8.Context, this: *const v8.Object, frame_id: u32) InitError!void {
+    const value = v8.v8__Integer__NewFromUnsigned(self.env.isolate.handle, frame_id) orelse
+        return error.RuntimeInitFailed;
+    return self.setObjectProperty(context, this, frame_id_key, @ptrCast(value));
+}
+
+/// Frame id a method's receiver was bound to (`this.__lpFrameId`), or null when
+/// the page was never navigated or has been closed.
+fn receiverFrameId(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo) ?u32 {
+    const this = v8.v8__FunctionCallbackInfo__This(info) orelse return null;
+    const key: *const v8.Value = @ptrCast(self.env.isolate.initStringHandle(frame_id_key));
+    const prop = v8.v8__Object__Get(this, context, key) orelse return null;
+    if (!v8.v8__Value__IsNumber(prop)) return null;
+    var out: v8.MaybeU32 = undefined;
+    v8.v8__Value__Uint32Value(prop, context, &out);
+    return if (out.has_value) out.value else null;
 }
 
 fn invokeConsole(self: *Runtime, method: ConsoleMethod, info: *const v8.FunctionCallbackInfo) void {
@@ -684,14 +855,87 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (!nav.includes("Navigated")) throw new Error("unexpected goto result: " + nav);
-        \\const text = evaluate("document.getElementById('btn').textContent");
+        \\const page = new Page();
+        \\const same = await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\if (same !== page) throw new Error("page.goto should resolve the same page object");
+        \\const text = page.evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("evaluate ran in the wrong context: " + text);
     );
 
     const frame = testing.test_session.currentFrame().?;
     try testing.expect(std.mem.indexOf(u8, frame.url, "/src/browser/tests/mcp_actions.html") != null);
+}
+
+test "agent script runtime: Page must be called with new" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const message = (try runtime.runSource("Page();", "agent-runtime-page-no-new.js")).?;
+    try testing.expect(std.mem.indexOf(u8, message, "must be called with new") != null);
+}
+
+test "agent script runtime: a method on an un-navigated page errors" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const message = (try runtime.runSource(
+        \\const page = new Page();
+        \\page.extract({ btn: "#btn" });
+    , "agent-runtime-not-navigated.js")).?;
+    try testing.expect(std.mem.indexOf(u8, message, "not navigated") != null);
+}
+
+test "agent script runtime: page.close stales the handle" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // After close() the wrapper is stale; a later method call must error rather
+    // than silently hit whatever page happens to be current.
+    const message = (try runtime.runSource(
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\page.close();
+        \\page.extract({ btn: "#btn" });
+    , "agent-runtime-close.js")).?;
+    try testing.expect(std.mem.indexOf(u8, message, "closed") != null);
+}
+
+test "agent script runtime: a stale page handle is a hard error" {
+    defer testing.reset();
+    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // The first page goes stale once a second goto replaces the page; reading
+    // through it must throw, not silently hit the current page.
+    const message = (try runtime.runSource(
+        \\const a = new Page();
+        \\await a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await new Page().goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
+        \\a.extract({ btn: "#btn" });
+    , "agent-runtime-stale-handle.js")).?;
+
+    try testing.expect(std.mem.indexOf(u8, message, "no longer valid") != null);
 }
 
 test "agent script runtime: extract returns a JavaScript object" {
@@ -705,8 +949,9 @@ test "agent script runtime: extract returns a JavaScript object" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\const data = extract({
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const data = page.extract({
         \\  button: "#btn",
         \\  options: [{
         \\    selector: "#sel option",
@@ -721,7 +966,7 @@ test "agent script runtime: extract returns a JavaScript object" {
         \\if (data.button !== "Click Me") throw new Error("unexpected button text: " + data.button);
         \\if (data.options.length !== 2) throw new Error("unexpected option count: " + data.options.length);
         \\if (data.options[1].value !== "opt2") throw new Error("unexpected option value: " + data.options[1].value);
-        \\const options = extract({
+        \\const options = page.extract({
         \\  options: [{
         \\    selector: "#sel option",
         \\    limit: 2,
@@ -733,14 +978,14 @@ test "agent script runtime: extract returns a JavaScript object" {
         \\});
         \\if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("single object field should stay an object");
         \\if (options.options[0].text !== "Option 1") throw new Error("unexpected option text: " + options.options[0].text);
-        \\const direct = extract([{ selector: "#sel option", limit: 1 }]);
+        \\const direct = page.extract([{ selector: "#sel option", limit: 1 }]);
         \\if (!Array.isArray(direct)) throw new Error("array schema should return an array");
         \\if (direct[0] !== "Option 1") throw new Error("unexpected direct array extract: " + direct[0]);
-        \\const saveField = extract({ save: "#btn" });
+        \\const saveField = page.extract({ save: "#btn" });
         \\if (saveField.save !== "Click Me") throw new Error("top-level save field should be schema data");
         \\let rejectedSaveOption = false;
         \\try {
-        \\  extract({ schema: { button: "#btn" }, save: "snap" });
+        \\  page.extract({ schema: { button: "#btn" }, save: "snap" });
         \\} catch (err) {
         \\  rejectedSaveOption = true;
         \\}
@@ -759,16 +1004,17 @@ test "agent script runtime: extract tolerates list selectors that match nothing"
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\const empty = extract({ comments: [{ selector: ".no-such-element", fields: { text: "" } }] });
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const empty = page.extract({ comments: [{ selector: ".no-such-element", fields: { text: "" } }] });
         \\if (!Array.isArray(empty.comments) || empty.comments.length !== 0) throw new Error("empty list selector should yield an empty array, not throw");
-        \\const bare = extract([".no-such-element"]);
+        \\const bare = page.extract([".no-such-element"]);
         \\if (!Array.isArray(bare) || bare.length !== 0) throw new Error("bare empty array schema should yield an empty array");
-        \\const mixed = extract({ button: "#btn", comments: [".no-such-element"] });
+        \\const mixed = page.extract({ button: "#btn", comments: [".no-such-element"] });
         \\if (mixed.button !== "Click Me" || mixed.comments.length !== 0) throw new Error("a matched scalar beside an empty list should still resolve");
         \\let threwOnAllNull = false;
         \\try {
-        \\  extract({ missing: "#does-not-exist" });
+        \\  page.extract({ missing: "#does-not-exist" });
         \\} catch (err) {
         \\  threwOnAllNull = true;
         \\}
@@ -788,9 +1034,9 @@ test "agent script runtime: strict-mode scripts can call primitives" {
 
     try runTestScript(runtime,
         \\"use strict";
-        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (!nav.includes("Navigated")) throw new Error("strict-mode goto failed: " + nav);
-        \\const text = evaluate("document.getElementById('btn').textContent");
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const text = page.evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("strict-mode evaluate failed: " + text);
     );
 }
@@ -805,13 +1051,13 @@ test "agent script runtime: promise microtasks run to completion" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\let microtaskRan = false;
-        \\Promise.resolve().then(() => { microtaskRan = true; });
-        \\if (microtaskRan) throw new Error("microtask ran before the checkpoint");
+        \\globalThis.microtaskRan = false;
+        \\Promise.resolve().then(() => { globalThis.microtaskRan = true; });
+        \\if (globalThis.microtaskRan) throw new Error("microtask ran before the checkpoint");
     );
 
     try runTestScript(runtime,
-        \\if (!microtaskRan) throw new Error("microtask did not run after the script");
+        \\if (!globalThis.microtaskRan) throw new Error("microtask did not run after the script");
     );
 }
 
@@ -826,13 +1072,14 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\// toJSON re-enters evaluate mid-marshal; the outer extract must still see "#btn".
-        \\const data = extract({ button: { toJSON() { return evaluate("'#btn'"); } } });
+        \\const data = page.extract({ button: { toJSON() { return page.evaluate("'#btn'"); } } });
         \\if (data.button !== "Click Me") throw new Error("re-entrant extract corrupted: " + JSON.stringify(data));
         \\// toString re-enters a primitive mid-loop; the console buffer must survive.
         \\let probed = 0;
-        \\console.log("value", { toString() { probed += 1; return evaluate("'ok'"); } }, "tail");
+        \\console.log("value", { toString() { probed += 1; return page.evaluate("'ok'"); } }, "tail");
         \\if (probed !== 1) throw new Error("console toString re-entry not exercised");
     );
 }
@@ -866,17 +1113,17 @@ test "agent script runtime: agent variables persist and page globals are isolate
     defer runtime.deinit();
 
     try runTestScript(runtime,
-        \\let counter = 1;
+        \\globalThis.counter = 1;
         \\if (typeof window !== "undefined") throw new Error("window leaked into agent runtime");
         \\if (typeof document !== "undefined") throw new Error("document leaked into agent runtime");
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\counter += 1;
-        \\if (counter !== 2) throw new Error("agent global state did not persist");
+        \\await new Page().goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\globalThis.counter += 1;
+        \\if (globalThis.counter !== 2) throw new Error("agent global state did not persist");
     );
 
     try runTestScript(runtime,
-        \\counter += 1;
-        \\if (counter !== 3) throw new Error("agent global state was reset between scripts");
+        \\globalThis.counter += 1;
+        \\if (globalThis.counter !== 3) throw new Error("agent global state was reset between scripts");
     );
 }
 
@@ -892,10 +1139,11 @@ test "agent script runtime: page evaluate cannot see agent primitives or binding
 
     try runTestScript(runtime,
         \\const agentOnly = "secret";
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (evaluate("typeof goto") !== "undefined") throw new Error("agent primitive leaked to page evaluate");
-        \\if (evaluate("typeof agentOnly") !== "undefined") throw new Error("agent binding leaked to page evaluate");
-        \\if (evaluate("typeof document") !== "object") throw new Error("page evaluate did not run in the page context");
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\if (page.evaluate("typeof Page") !== "undefined") throw new Error("agent primitive leaked to page evaluate");
+        \\if (page.evaluate("typeof agentOnly") !== "undefined") throw new Error("agent binding leaked to page evaluate");
+        \\if (page.evaluate("typeof document") !== "object") throw new Error("page evaluate did not run in the page context");
     );
 }
 
@@ -926,10 +1174,11 @@ test "agent script runtime: tool errors throw and stop execution" {
     defer runtime.deinit();
 
     const message = (try runtime.runSource(
-        \\let marker = "before";
-        \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\click({ selector: "#does-not-exist" });
-        \\marker = "after";
+        \\globalThis.marker = "before";
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\page.click({ selector: "#does-not-exist" });
+        \\globalThis.marker = "after";
     , "agent-runtime-failure.js")).?;
 
     try testing.expect(std.mem.indexOf(u8, message, "click") != null or
@@ -937,7 +1186,7 @@ test "agent script runtime: tool errors throw and stop execution" {
         std.mem.indexOf(u8, message, "#does-not-exist") != null);
 
     try runTestScript(runtime,
-        \\if (marker !== "before") throw new Error("script continued after tool failure");
+        \\if (globalThis.marker !== "before") throw new Error("script continued after tool failure");
     );
 }
 
@@ -953,35 +1202,35 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
 
     try runTestScript(runtime,
         \\// The reported bug: Playwright-style goto(url, options) must merge, not throw.
-        \\const nav = goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000 });
-        \\if (!nav.includes("Navigated")) throw new Error("two-arg goto failed: " + nav);
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { timeout: 5000 });
         \\// waitForState: single required param, positional like waitForSelector.
-        \\if (!waitForState("load").includes("reached")) throw new Error("waitForState positional failed");
-        \\// Object form still works.
-        \\goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
+        \\if (!page.waitForState("load").includes("reached")) throw new Error("waitForState positional failed");
+        \\// Object form still works; re-navigation rebinds the same page object.
+        \\await page.goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
         \\// Single selector positional.
-        \\click("#btn");
-        \\if (evaluate("String(window.clicked)") !== "true") throw new Error("click positional failed");
+        \\page.click("#btn");
+        \\if (page.evaluate("String(window.clicked)") !== "true") throw new Error("click positional failed");
         \\// Two positionals: selector, value.
-        \\fill("#inp", "hello");
-        \\if (evaluate("window.inputVal") !== "hello") throw new Error("fill two-positional failed");
-        \\selectOption("#sel", "opt2");
-        \\if (evaluate("window.selChanged") !== "opt2") throw new Error("selectOption two-positional failed");
+        \\page.fill("#inp", "hello");
+        \\if (page.evaluate("window.inputVal") !== "hello") throw new Error("fill two-positional failed");
+        \\page.selectOption("#sel", "opt2");
+        \\if (page.evaluate("window.selChanged") !== "opt2") throw new Error("selectOption two-positional failed");
         \\// Bool positional, and the default-true shorthand when omitted. Assert via the
         \\// tool's own report (the synthetic click toggles the DOM state, so .checked is
         \\// not a reliable observation of the `checked` argument).
-        \\if (!setChecked("#chk").includes("to checked")) throw new Error("setChecked default-true failed");
-        \\if (!setChecked("#chk", false).includes("to unchecked")) throw new Error("setChecked bool positional failed");
+        \\if (!page.setChecked("#chk").includes("to checked")) throw new Error("setChecked default-true failed");
+        \\if (!page.setChecked("#chk", false).includes("to unchecked")) throw new Error("setChecked bool positional failed");
         \\// Selector-first press, and a null selector for a page/focused key press.
-        \\press("#keyTarget", "Enter");
-        \\if (evaluate("window.keyPressed") !== "Enter") throw new Error("selector-first press failed");
-        \\press(null, "a");
+        \\page.press("#keyTarget", "Enter");
+        \\if (page.evaluate("window.keyPressed") !== "Enter") throw new Error("selector-first press failed");
+        \\page.press(null, "a");
     );
 
     // A field set by both a positional and the options object is a conflict.
     {
         const message = (try runtime.runSource(
-            \\goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
+            \\await new Page().goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
         , "agent-runtime-conflict.js")).?;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
@@ -989,8 +1238,28 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
     // More positionals than the tool has fields throws.
     {
         const message = (try runtime.runSource(
-            \\click("#btn", "#extra");
+            \\const page = new Page();
+            \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+            \\page.click("#btn", "#extra");
         , "agent-runtime-arity.js")).?;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
+}
+
+test "agent script runtime: top-level await runs in an async wrapper" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // `await` on a non-goto promise resolves without touching the browser, and
+    // a top-level `return` surfaces as the (otherwise un-echoed) result.
+    try runTestScript(runtime,
+        \\const x = await Promise.resolve(40);
+        \\if (x + 2 !== 42) throw new Error("top-level await did not resolve: " + x);
+        \\return x + 2;
+    );
 }
