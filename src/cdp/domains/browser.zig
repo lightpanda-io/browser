@@ -95,7 +95,15 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     else
         return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    // Drivers (notably Playwright) send Browser.setDownloadBehavior at the
+    // browser level during connection setup, before any target/context has
+    // been created. Chromium accepts this; we have nowhere to store the config
+    // yet (it lives on the Session), so treat it as a success no-op rather than
+    // erroring, which would abort the driver's whole connection. The config is
+    // applied once a context exists (drivers re-send it per context).
+    const bc = cmd.browser_context orelse {
+        return cmd.sendResult(null, .{ .include_session_id = false });
+    };
     const session = bc.session;
 
     session.download_behavior = behavior;
@@ -308,6 +316,21 @@ test "cdp.browser: setDownloadBehavior stores config on the session" {
     try testing.expect(bc.session.download_path == null);
     try testing.expect(bc.session.download_events_enabled == false);
     try testing.expect(bc.download_events_registered == false);
+}
+
+test "cdp.browser: setDownloadBehavior is a no-op when no context is loaded" {
+    // Drivers (e.g. Playwright) send this at the browser level during
+    // connection setup, before any target/context exists. It must succeed
+    // rather than error, otherwise the driver aborts the whole connection.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 33,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "deny", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 33, .session_id = null });
 }
 
 test "cdp.browser: setDownloadBehavior rejects an unknown behavior" {
