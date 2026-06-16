@@ -973,6 +973,19 @@ pub fn scriptsCompletedLoading(self: *Frame) void {
 }
 
 pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
+    // When parsing HTML, fire any load event for an iframe on the next tick.
+    const parsing_html = switch (self._parse_state) {
+        .html => true,
+        else => false,
+    };
+    if (parsing_html and iframe._src.len > 0) {
+        self.queueElementEvent(iframe._proto, .load) catch |err| {
+            log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe._src });
+        };
+        self.pendingLoadCompleted();
+        return;
+    }
+
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
