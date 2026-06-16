@@ -95,11 +95,11 @@ The whole value of a saved script is that it keeps working after you walk away.
 - **Ask for the data you want, not the conversation about it.** "Get me the
   top 5 HN story titles and points, print them to stdout" beats "show me
   what's on Hacker News today." The synthesizer captures the data you asked
-  for as an `extract()` call; vague prompts produce vague recordings.
+  for as a `page.extract()` call; vague prompts produce vague recordings.
 - **Be specific about the page.** "Go to news.ycombinator.com" is much
   better than "find me what's on Hacker News".
 - **Check the file with `cat your-script.js` before running it.** The
-  script holds the *calls*, not the data, so look for an `extract(...)`
+  script holds the *calls*, not the data, so look for a `page.extract(...)`
   whose schema covers the fields you asked for. If there isn't one, the
   recording missed something — try rewording your prompt.
 - **When the page changes and a saved script breaks**, re-run with the LLM,

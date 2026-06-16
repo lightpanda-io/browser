@@ -181,7 +181,7 @@ const script_skill =
     \\| `page handle is no longer valid` | Used a page after a later `goto` replaced it → read a page before navigating away |
     \\| `document is not defined` | DOM API in script context → use `page.extract` or `page.evaluate` |
     \\| `require is not defined` | Not Node.js |
-    \\| `no page loaded - run goto(url) first` | Page primitive before navigation |
+    \\| `no page loaded - run page.goto(url) first` | Page method before navigation |
     \\| `invalid arguments` | Wrong arity/shape, non-JSON value, or a field set both positionally and in options |
     \\| `extract: no schema selector matched any element` | All schema fields missed → fix selectors |
     \\| `press` fails with one string arg | Selector-first: use `page.press(null, "Enter")` or `page.press({ key: "Enter" })` |

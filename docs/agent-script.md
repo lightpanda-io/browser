@@ -392,7 +392,7 @@ Common failures:
 | `page handle is no longer valid` | A page was used after a later `goto` replaced it. Read a page before navigating away. |
 | `ReferenceError: document is not defined` | You tried to use browser DOM APIs in the agent context. Use `page.extract(...)` or `page.evaluate(...)`. |
 | `ReferenceError: require is not defined` | Agent scripts are not Node.js scripts. |
-| `no page loaded - run goto(url) first` | A page-dependent primitive ran before navigation. |
+| `no page loaded - run page.goto(url) first` | A page method ran before navigation. |
 | `invalid arguments` | A method received the wrong number or shape of arguments, or a non-JSON-serializable value. |
 | `extract: no schema selector matched any element` | Every field in the schema missed. Fix the selectors; an empty page section yields `null`/`[]` per field, not this error. |
 
