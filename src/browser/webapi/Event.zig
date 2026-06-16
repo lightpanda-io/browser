@@ -292,6 +292,12 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     // Track closed shadow boundaries (position in path and host position)
     var closed_shadow_boundary: ?struct { shadow_end: usize, host_start: usize } = null;
 
+    const frame_ = switch (exec.js.global) {
+        .frame => |frame| frame,
+        else => null,
+    };
+
+    const target_root = target_node.getRootNode(.{});
     var node: ?*Node = target_node;
     while (node) |n| {
         if (path_len >= path_buffer.len) {
@@ -305,8 +311,7 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
             if (n._type.document_fragment._type == .shadow_root) {
                 const shadow = n._type.document_fragment._type.shadow_root;
 
-                // If event is not composed, stop at shadow boundary
-                if (!self._composed) {
+                if (!self._composed and n == target_root) {
                     stopped_at_shadow_boundary = true;
                     break;
                 }
@@ -323,6 +328,15 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
 
                 // Jump to the shadow host and continue
                 node = shadow._host.asNode();
+                continue;
+            }
+        }
+
+        // an assigned slottable's event-path parent is its assigned slot,
+        // routing the event into the slot's shadow tree
+        if (frame_) |frame| {
+            if (frame._assigned_slots.get(n)) |slot| {
+                node = slot.asNode();
                 continue;
             }
         }

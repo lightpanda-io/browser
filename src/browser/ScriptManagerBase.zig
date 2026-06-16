@@ -842,6 +842,10 @@ pub const Script = struct {
 
         const local = &ls.local;
 
+        // Per spec, trigger any microtasks BEFORE execution in case the parser
+        // (e.g. via event callbacks) queued anything.
+        local.runMicrotasks();
+
         // Handle importmap special case here: the content is a JSON containing imports.
         // Multiple <script type="importmap"> elements merge with first-wins semantics.
         if (fe.kind == .importmap) {
