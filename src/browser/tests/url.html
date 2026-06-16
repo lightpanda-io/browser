@@ -330,6 +330,37 @@
   }
 </script>
 
+<script id=parse_static>
+  testing.expectEqual('function', typeof URL.parse);
+
+  // Parseable input returns a URL instance (mirrors the constructor).
+  {
+    const url = URL.parse('https://example.com/path?a=b#h');
+    testing.expectEqual(true, url instanceof URL);
+    testing.expectEqual('https://example.com/path?a=b#h', url.href);
+  }
+
+  // Relative input resolves against a valid base.
+  {
+    const url = URL.parse('/x', 'http://example.com/a/b');
+    testing.expectEqual('http://example.com/x', url.href);
+  }
+
+  // Unlike the constructor, a parse failure returns null instead of throwing.
+  {
+    testing.expectEqual(null, URL.parse('foo.js'));
+    testing.expectEqual(null, URL.parse(''));
+    testing.expectEqual(null, URL.parse('http://example.com', 'invalid base'));
+  }
+
+  // Each call returns a distinct object.
+  {
+    const a = URL.parse('https://example.com/');
+    const b = URL.parse('https://example.com/');
+    testing.expectEqual(false, a === b);
+  }
+</script>
+
 <script id=username>
   // Username is parsed from the userinfo component.
   {
@@ -412,6 +443,14 @@
     url.username = 'a b';
     testing.expectEqual('a%20b', url.username);
   }
+
+  // A URL that cannot have a username silently ignores the setter.
+  {
+    const url = new URL('mailto:foo@bar.com');
+    url.username = 'user';
+    testing.expectEqual('', url.username);
+    testing.expectEqual('mailto:foo@bar.com', url.href);
+  }
 </script>
 
 <script id=hostname>
@@ -464,6 +503,16 @@
     url.hostname = 'newhost.com';
     testing.expectEqual('newhost.com', url.hostname);
     testing.expectEqual('https://newhost.com:8080/path', url.href);
+  }
+
+  // An invalid hostname is silently ignored, leaving it unchanged (the setter
+  // must never throw, per WHATWG).
+  {
+    const url = new URL('https://example.com/path');
+    url.hostname = '';            // empty host is invalid for a special scheme
+    testing.expectEqual('example.com', url.hostname);
+    url.hostname = '[google.com]'; // broken IPv6 literal
+    testing.expectEqual('example.com', url.hostname);
   }
 </script>
 
@@ -529,6 +578,16 @@
     url.host = 'newhost.com:';
     testing.expectEqual('newhost.com', url.host);
     testing.expectEqual('https://newhost.com/path', url.href);
+  }
+
+  // An invalid host is silently ignored, leaving it unchanged (the setter must
+  // never throw, per WHATWG).
+  {
+    const url = new URL('https://example.com/path');
+    url.host = '';                 // empty host is invalid for a special scheme
+    testing.expectEqual('example.com', url.host);
+    url.host = '[::1.2.3.]';       // broken IPv6 literal
+    testing.expectEqual('example.com', url.host);
   }
 </script>
 
@@ -614,6 +673,24 @@
     url.protocol = 'https:';
     testing.expectEqual('https:', url.protocol);
     testing.expectEqual('https://example.com/path', url.href);
+  }
+
+  // An invalid scheme is silently ignored, leaving the protocol unchanged (the
+  // setter must never throw, per WHATWG).
+  {
+    const url = new URL('https://example.com/path');
+    url.protocol = '';      // the empty string is not a valid scheme
+    testing.expectEqual('https:', url.protocol);
+    url.protocol = '0b';    // a scheme cannot start with a digit
+    testing.expectEqual('https:', url.protocol);
+  }
+
+  // Can't switch a special scheme to a non-special one.
+  {
+    const url = new URL('http://example.com/path');
+    url.protocol = 'ssh';
+    testing.expectEqual('http:', url.protocol);
+    testing.expectEqual('http://example.com/path', url.href);
   }
 </script>
 
