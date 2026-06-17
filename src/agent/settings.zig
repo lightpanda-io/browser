@@ -137,7 +137,15 @@ pub const Remembered = struct {
 pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
     const data = std.fs.cwd().readFileAllocOptions(allocator, remembered_path, 1024, null, .of(u8), 0) catch return null;
     defer allocator.free(data);
-    const remembered = std.zon.parse.fromSlice(Remembered, allocator, data, null, .{}) catch return null;
+    return parseRemembered(allocator, data);
+}
+
+fn parseRemembered(allocator: std.mem.Allocator, data: [:0]const u8) ?Remembered {
+    // A real Diagnostics, not null: a type-check failure allocates an owned
+    // error note that leaks unless a Diagnostics owns it to free on deinit.
+    var diag: std.zon.parse.Diagnostics = .{};
+    defer diag.deinit(allocator);
+    const remembered = std.zon.parse.fromSlice(Remembered, allocator, data, &diag, .{}) catch return null;
     // An empty model is corrupt only when a provider is set; a null provider
     // (LLM disabled) legitimately has no model to remember.
     if (remembered.provider != null and remembered.model.len == 0) {
@@ -238,4 +246,19 @@ pub fn reconcileModel(
         );
     }
     return .abort;
+}
+
+const testing = @import("../testing.zig");
+
+test "parseRemembered: invalid enum is rejected without leaking" {
+    // A bad enum builds an owned error note; the leak detector fails here if
+    // the Diagnostics doesn't free it.
+    try testing.expect(parseRemembered(testing.allocator, ".{ .provider = .not_a_provider, .model = \"x\" }") == null);
+}
+
+test "parseRemembered: valid file round-trips" {
+    const remembered = parseRemembered(testing.allocator, ".{ .provider = null, .model = \"some-model\" }").?;
+    defer std.zon.parse.free(testing.allocator, remembered);
+    try testing.expect(remembered.provider == null);
+    try testing.expectString("some-model", remembered.model);
 }

@@ -303,12 +303,12 @@ fn analyzeBody(schema: *const Schema, body: []const u8, ends_ws: bool) BodyAnaly
             a.markUsed(tok[0..eq]);
             continue;
         }
-        // Single-required schemas bind the first arg positionally to their
-        // lone required field (`/goto https://example.com`).
-        if (i == 0 and schema.required.len == 1) {
-            a.markUsed(schema.required[0]);
+        // The first bare arg binds positionally to the schema's positional
+        // field (`/goto https://example.com`, `/getEnv LP_TOKEN`).
+        if (i == 0) if (schema.leadingPositionalField()) |pos| {
+            a.markUsed(pos);
             continue;
-        }
+        };
         if (i == last and !ends_ws) a.partial_key = tok;
     }
     return a;
@@ -354,11 +354,12 @@ fn valueAt(schema: *const Schema, body: []const u8, ends_ws: bool) ?ValueAt {
         const field = schema.findField(active[0..eq]) orelse return null;
         return .{ .field = field, .partial = active[eq + 1 ..], .kv = true };
     }
-    // The leading bare token binds to a single-required schema's lone field.
-    if (active_index == 0 and schema.required.len == 1) {
-        const field = schema.findField(schema.required[0]) orelse return null;
+    // The leading bare token binds to the schema's positional field (lone
+    // required, or sole optional field like getEnv's `name`).
+    if (active_index == 0) if (schema.leadingPositionalField()) |pos| {
+        const field = schema.findField(pos) orelse return null;
         return .{ .field = field, .partial = active, .kv = false };
-    }
+    };
     return null;
 }
 
@@ -372,8 +373,14 @@ fn addValueCompletions(
 ) bool {
     const ends_ws = input[input.len - 1] == ' ';
     const v = valueAt(schema, body, ends_ws) orelse return false;
-    if (v.field.enum_values.len == 0) return false;
     const prefix = input[0 .. input.len - v.partial.len];
+    if (schema.tool == .getEnv) {
+        var name_buf: [2048]u8 = undefined;
+        const names = lpEnvNameList(&name_buf) orelse return true;
+        for (names) |name| addPrefixedCompletion(cenv, buf, input, prefix, name, "", v.partial);
+        return true;
+    }
+    if (v.field.enum_values.len == 0) return false;
     for (v.field.enum_values) |val| addPrefixedCompletion(cenv, buf, input, prefix, val, "", v.partial);
     return true;
 }
@@ -461,6 +468,13 @@ fn addPathCompletions(
     }
 }
 
+/// LP_* env var names (sorted) written into `buf`; null on enumeration failure.
+/// Returned slices borrow `buf`, which must outlive them.
+fn lpEnvNameList(buf: []u8) ?[]const []const u8 {
+    var fba: std.heap.FixedBufferAllocator = .init(buf);
+    return browser_tools.lpEnvNames(fba.allocator()) catch null;
+}
+
 /// Completes `$LP_*` against the live process environment.
 fn addEnvVarCompletions(
     cenv: ?*c.ic_completion_env_t,
@@ -474,8 +488,7 @@ fn addEnvVarCompletions(
     }
 
     var name_buf: [2048]u8 = undefined;
-    var fba: std.heap.FixedBufferAllocator = .init(&name_buf);
-    const names = browser_tools.lpEnvNames(fba.allocator()) catch return;
+    const names = lpEnvNameList(&name_buf) orelse return;
     if (names.len == 0) return;
 
     const head = input[0 .. dollar + 1];
@@ -660,6 +673,14 @@ fn renderSchemaHint(schema: *const Schema, body: []const u8, ends_ws: bool) [*c]
     if (valueAt(schema, body, ends_ws)) |v| {
         if (v.field.enum_values.len > 0 and (v.kv or v.partial.len > 0)) {
             return ghostFirstMatch(v.field.enum_values, v.partial, "");
+        }
+        // getEnv's `name` ghosts a live LP_* var, like /provider ghosts a provider.
+        if (schema.tool == .getEnv) {
+            var name_buf: [2048]u8 = undefined;
+            if (lpEnvNameList(&name_buf)) |names| {
+                const lead: []const u8 = if (v.partial.len == 0 and !ends_ws) " " else "";
+                if (ghostFirstMatch(names, v.partial, lead)) |hint| return hint;
+            }
         }
     }
 
@@ -1268,6 +1289,23 @@ test "valueAt: enum field via positional and kv, partial and empty" {
     {
         const v = valueAt(schema, "networkidle timeout=", false).?;
         try std.testing.expectEqual(@as(usize, 0), v.field.enum_values.len);
+    }
+}
+
+test "valueAt: getEnv binds the leading positional to its optional name field" {
+    const schema = Schema.findByName("getEnv").?;
+    // `/getEnv ` — fresh positional, even though `name` is optional (0 required).
+    {
+        const v = valueAt(schema, "", true).?;
+        try std.testing.expectEqualStrings("name", v.field.name);
+        try std.testing.expectEqualStrings("", v.partial);
+        try std.testing.expect(!v.kv);
+    }
+    // `/getEnv LP_H` — partial value bound to `name`.
+    {
+        const v = valueAt(schema, "LP_H", false).?;
+        try std.testing.expectEqualStrings("name", v.field.name);
+        try std.testing.expectEqualStrings("LP_H", v.partial);
     }
 }
 
