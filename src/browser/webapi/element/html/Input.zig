@@ -305,7 +305,7 @@ pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     return try std.fmt.allocPrint(frame.call_arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
 }
 
-pub fn getValidationMessage(self: *const Input, frame: *Frame) []const u8 {
+pub fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing(frame)) return "Please fill out this field.";
@@ -349,7 +349,7 @@ pub fn hasCustomValidity(self: *const Input) bool {
     return self._custom_validity != null;
 }
 
-pub fn suffersValueMissing(self: *const Input, frame: *Frame) bool {
+pub fn suffersValueMissing(self: *Input, frame: *Frame) bool {
     if (!self.getWillValidate()) return false;
     if (!self.getRequired()) return false;
     return switch (self._input_type) {
@@ -462,7 +462,7 @@ fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overf
     };
 }
 
-fn radioGroupHasChecked(self: *const Input, frame: *Frame) bool {
+fn radioGroupHasChecked(self: *Input, frame: *Frame) bool {
     if (self._checked) return true;
     var iter = self.radioGroupIterator() orelse return false;
     const my_form = self.getForm(frame);
@@ -501,14 +501,14 @@ fn radioGroupIterator(self: *const Input) ?RadioGroupIterator {
     const element = self.asConstElement();
     const name = element.getAttributeSafe(comptime .wrap("name")) orelse return null;
     if (name.len == 0) return null;
-    const root = @constCast(element.asConstNode()).getRootNode(null);
+    const root = @constCast(element.asConstNode()).getRootNode(.{});
     return .{
         .walker = TreeWalker.Full.init(root, .{}),
         .name = name,
     };
 }
 
-fn sameFormOwner(self_form: ?*const Form, other: *const Input, frame: *Frame) bool {
+fn sameFormOwner(self_form: ?*Form, other: *Input, frame: *Frame) bool {
     const other_form = other.getForm(frame);
 
     // Check if same form context
@@ -659,8 +659,7 @@ pub fn setSize(self: *Input, size: i32, frame: *Frame) !void {
 
 pub fn getSrc(self: *const Input, frame: *Frame) ![]const u8 {
     const src = self.asConstElement().getAttributeSafe(comptime .wrap("src")) orelse return "";
-    // If attribute is explicitly set (even if empty), resolve it against the base URL
-    return @import("../../URL.zig").resolve(frame.call_arena, frame.base(), src, .{});
+    return self.asConstElement().asConstNode().resolveURL(src, frame, .{});
 }
 
 pub fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
@@ -890,12 +889,16 @@ pub fn getLabels(self: *Input, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getForm(self: *const Input, frame: *Frame) ?*Form {
-    const element = self.asConstElement();
+pub fn getForm(self: *Input, frame: *Frame) ?*Form {
+    const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (frame.document.getElementById(form_id, frame)) |form_element| {
+        // form= resolves in the control's own tree (shadow root or document),
+        // not the calling realm's. @constCast: getElementByIdFromNode wants a
+        // mutable *Node but doesn't mutate it (same idiom as radioGroupIterator);
+        // keeping getForm const avoids a wide validity-path const cascade.
+        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
             return form_element.is(Form);
         }
         // form attribute present but invalid - no form owner
@@ -920,9 +923,10 @@ pub fn getForm(self: *const Input, frame: *Frame) ?*Form {
 
 pub fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return frame.url;
+    const owner_url = element.asNode().ownerFrame(frame).url;
+    const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return owner_url;
     if (action.len == 0) {
-        return frame.url;
+        return owner_url;
     }
     return element.asNode().resolveURL(action, frame, .{});
 }

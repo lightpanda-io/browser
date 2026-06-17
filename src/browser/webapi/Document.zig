@@ -132,9 +132,10 @@ pub fn getLocation(self: *const Document) ?*Location {
     return doc_frame.window._location;
 }
 
-pub fn setLocation(self: *Document, url: [:0]const u8, frame: *Frame) !void {
+pub fn setLocation(self: *Document, url: [:0]const u8) !void {
     if (self._type != .html) return;
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
+    const frame = self._frame orelse return;
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
 }
 
 pub fn getContentType(self: *const Document) []const u8 {
@@ -145,8 +146,8 @@ pub fn getContentType(self: *const Document) []const u8 {
     };
 }
 
-pub fn getDomain(_: *const Document, frame: *const Frame) []const u8 {
-    return URL.getHostname(frame.url);
+pub fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
+    return URL.getHostname((self._frame orelse frame).url);
 }
 
 const CreateElementOptions = struct {
@@ -1227,7 +1228,8 @@ pub const JsApi = struct {
     pub const hidden = bridge.property(false, .{ .template = false, .readonly = true });
     pub const visibilityState = bridge.property("visible", .{ .template = false, .readonly = true });
     pub const defaultView = bridge.accessor(struct {
-        fn defaultView(_: *const Document, frame: *Frame) *@import("Window.zig") {
+        fn defaultView(self: *const Document) ?*@import("Window.zig") {
+            const frame = self._frame orelse return null;
             return frame.window;
         }
     }.defaultView, null, .{});

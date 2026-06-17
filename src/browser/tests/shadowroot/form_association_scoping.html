@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+<!--
+form= / for= resolve the id in the element's own tree (the shadow root), not the
+document — even when the document has elements with the same id. This guards the
+switch from a document-scoped lookup to the tree-scoped getElementByIdFromNode.
+
+Open in Firefox to cross-check: tree-scoped association is spec behaviour.
+-->
+
+<!-- Document-tree decoys sharing the shadow ids. -->
+<form id="f"></form>
+<input id="i" form="f">
+<form id="ff"></form>
+
+<script id="association_resolves_inside_shadow_tree">
+{
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({ mode: 'open' });
+  shadow.innerHTML =
+    '<form id="f"></form>' +
+    '<input id="i" form="f">' +
+    '<label for="i">L</label>';
+  document.body.appendChild(host);
+
+  const shadowForm = shadow.getElementById('f');
+  const shadowInput = shadow.getElementById('i');
+  const shadowLabel = shadow.querySelector('label');
+
+  // form= / for= resolve to the shadow-tree elements, not the document ones.
+  testing.expectEqual(shadowForm, shadowInput.form);
+  testing.expectFalse(shadowInput.form === document.getElementById('f'));
+  testing.expectEqual(shadowInput, shadowLabel.control);
+
+  host.remove();
+}
+</script>
+
+<script id="association_does_not_cross_shadow_boundary">
+{
+  // A shadow control whose form= has no match inside the shadow tree must NOT
+  // escape to a document form with that id — the owner is null.
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<input id="i2" form="ff">';
+  document.body.appendChild(host);
+
+  const shadowInput = shadow.getElementById('i2');
+  testing.expectEqual(null, shadowInput.form);
+
+  host.remove();
+}
+</script>
+
+<script id="light_dom_association_unchanged">
+{
+  // The document-tree control still resolves against the document tree.
+  testing.expectEqual(document.getElementById('f'), document.getElementById('i').form);
+}
+</script>
+</body>

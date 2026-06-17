@@ -106,7 +106,7 @@ pub fn getElements(self: *Form, frame: *Frame) !*collections.HTMLFormControlsCol
 pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
     const form_id = self.asElement().getAttributeSafe(comptime .wrap("id"));
     const root = if (form_id != null)
-        self.asNode().getRootNode(null) // Has ID: walk entire document to find form=ID controls
+        self.asNode().getRootNode(.{}) // Has ID: walk entire document to find form=ID controls
     else
         self.asNode(); // No ID: walk only form subtree (no external controls possible)
 
@@ -115,9 +115,10 @@ pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
 
 pub fn getAction(self: *Form, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const action = element.getAttributeSafe(comptime .wrap("action")) orelse return frame.url;
+    const owner_url = element.asNode().ownerFrame(frame).url;
+    const action = element.getAttributeSafe(comptime .wrap("action")) orelse return owner_url;
     if (action.len == 0) {
-        return frame.url;
+        return owner_url;
     }
     return element.asNode().resolveURL(action, frame, .{});
 }

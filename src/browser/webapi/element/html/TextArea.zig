@@ -292,7 +292,7 @@ pub fn getForm(self: *TextArea, frame: *Frame) ?*Form {
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (frame.document.getElementById(form_id, frame)) |form_element| {
+        if (frame.getElementByIdFromNode(element.asNode(), form_id)) |form_element| {
             return form_element.is(Form);
         }
         // form attribute present but invalid - no form owner

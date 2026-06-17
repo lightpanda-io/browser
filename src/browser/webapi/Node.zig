@@ -470,9 +470,7 @@ pub fn isConnected(self: *const Node) bool {
 const GetRootNodeOpts = struct {
     composed: bool = false,
 };
-pub fn getRootNode(self: *Node, opts_: ?GetRootNodeOpts) *Node {
-    const opts = opts_ orelse GetRootNodeOpts{};
-
+pub fn getRootNode(self: *Node, opts: GetRootNodeOpts) *Node {
     var root = self;
     while (root._parent) |parent| {
         root = parent;
@@ -1229,16 +1227,29 @@ pub const JsApi = struct {
     pub const normalize = bridge.function(Node.normalize, .{ .ce_reactions = true });
     pub const cloneNode = bridge.function(Node.cloneNode, .{ .dom_exception = true, .ce_reactions = true });
     pub const compareDocumentPosition = bridge.function(Node.compareDocumentPosition, .{});
-    pub const getRootNode = bridge.function(Node.getRootNode, .{});
+    pub const getRootNode = bridge.function(_getRootNode, .{});
+    // The `options` argument is optional in JS; default it before calling the
+    // (non-optional) Node.getRootNode.
+    fn _getRootNode(self: *Node, opts: ?GetRootNodeOpts) *Node {
+        return self.getRootNode(opts orelse .{});
+    }
     pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
     pub const lookupNamespaceURI = bridge.function(Node.lookupNamespaceURI, .{});
     pub const lookupPrefix = bridge.function(Node.lookupPrefix, .{});
     pub const isDefaultNamespace = bridge.function(Node.isDefaultNamespace, .{});
 
-    fn _baseURI(_: *Node, frame: *const Frame) []const u8 {
-        return frame.base();
-    }
     pub const baseURI = bridge.accessor(_baseURI, null, .{});
+    fn _baseURI(self: *Node, frame: *const Frame) []const u8 {
+        const doc = if (self._type == .document)
+            self._type.document
+        else
+            self.ownerDocument(frame) orelse return frame.base();
+
+        if (doc._frame) |doc_frame| {
+            return doc_frame.base();
+        }
+        return doc.getURL(frame);
+    }
 };
 
 pub const Build = struct {

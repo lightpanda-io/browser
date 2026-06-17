@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+Document-identity, association and URL-resolution APIs must reflect the frame
+the object belongs to, not the realm doing the reading. Parent JS reaching into
+iframe.contentDocument used to resolve some of these against the *parent's*
+frame (wrong document URL / id map / base). These guard that regression.
+
+Open this file in Firefox to cross-check: every assertion below holds in a
+spec-compliant engine too.
+-->
+<iframe id="idf" src="support/cross_realm_identity.html"></iframe>
+
+<script id="document_identity">
+  testing.onload(() => {
+    const f = document.getElementById('idf');
+    const idoc = f.contentDocument;
+    const iwin = f.contentWindow;
+
+    // URL / defaultView reflect the iframe's own document, not the parent.
+    testing.expectTrue(idoc.URL.endsWith('frames/support/cross_realm_identity.html'));
+    testing.expectFalse(idoc.URL === document.URL);
+    testing.expectEqual(iwin, idoc.defaultView);
+    testing.expectFalse(idoc.defaultView === window);
+    // Same host, so domain matches the parent's host (regression: must not read
+    // the parent frame's url, but the value coincides here).
+    testing.expectEqual(document.domain, idoc.domain);
+  });
+</script>
+
+<script id="form_and_label_associations">
+  testing.onload(() => {
+    const idoc = document.getElementById('idf').contentDocument;
+    const input = idoc.getElementById('i1');
+    const form = idoc.getElementById('f');
+    const label = idoc.getElementById('lbl');
+
+    // form= / for= resolve the id in the iframe's document, not the parent's.
+    testing.expectEqual(form, input.form);
+    testing.expectEqual(input, label.control);
+  });
+</script>
+
+<script id="named_collections">
+  testing.onload(() => {
+    const idoc = document.getElementById('idf').contentDocument;
+    const input = idoc.getElementById('i1');
+
+    // HTMLCollection named getter (by id) against the iframe document.
+    testing.expectEqual(input, idoc.getElementsByTagName('input').i1);
+    // document.all named getter against the iframe document.
+    testing.expectEqual(idoc.getElementById('f'), idoc.all.f);
+  });
+</script>
+
+<script id="url_resolution">
+  testing.onload(() => {
+    const idoc = document.getElementById('idf').contentDocument;
+
+    // URLs resolve against the iframe document's base (<base href="based/">),
+    // not the parent frame's.
+    testing.expectTrue(idoc.getElementById('f').action.endsWith('/support/based/act'));
+    testing.expectTrue(idoc.getElementById('btn1').formAction.endsWith('/support/based/bact'));
+    testing.expectTrue(idoc.getElementById('q1').cite.endsWith('/support/based/c'));
+    testing.expectTrue(idoc.getElementById('src1').src.endsWith('/support/based/s'));
+    // <base>.href resolves against the document address, not against base() itself.
+    testing.expectTrue(idoc.querySelector('base').href.endsWith('/support/based/'));
+  });
+</script>
+</body>

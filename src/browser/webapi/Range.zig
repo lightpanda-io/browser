@@ -60,8 +60,8 @@ pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
     self._proto._start_offset = offset;
 
     // If start is now after end, or nodes are in different trees, collapse to start
-    const end_root = self._proto._end_container.getRootNode(null);
-    const start_root = node.getRootNode(null);
+    const end_root = self._proto._end_container.getRootNode(.{});
+    const start_root = node.getRootNode(.{});
     if (end_root != start_root or self._proto.isStartAfterEnd()) {
         self._proto._end_container = self._proto._start_container;
         self._proto._end_offset = self._proto._start_offset;
@@ -82,8 +82,8 @@ pub fn setEnd(self: *Range, node: *Node, offset: u32) !void {
     self._proto._end_offset = offset;
 
     // If end is now before start, or nodes are in different trees, collapse to end
-    const start_root = self._proto._start_container.getRootNode(null);
-    const end_root = node.getRootNode(null);
+    const start_root = self._proto._start_container.getRootNode(.{});
+    const end_root = node.getRootNode(.{});
     if (start_root != end_root or self._proto.isStartAfterEnd()) {
         self._proto._start_container = self._proto._end_container;
         self._proto._start_offset = self._proto._end_offset;
@@ -154,8 +154,8 @@ pub fn compareBoundaryPoints(self: *const Range, how_raw: i32, source_range: *co
     }
 
     // If the two ranges' root is different, throw WrongDocumentError
-    const this_root = self._proto._start_container.getRootNode(null);
-    const source_root = source_range._proto._start_container.getRootNode(null);
+    const this_root = self._proto._start_container.getRootNode(.{});
+    const source_root = source_range._proto._start_container.getRootNode(.{});
     if (this_root != source_root) {
         return error.WrongDocument;
     }
@@ -198,8 +198,8 @@ pub fn compareBoundaryPoints(self: *const Range, how_raw: i32, source_range: *co
 
 pub fn comparePoint(self: *const Range, node: *Node, offset: u32) !i16 {
     // Check if node is in a different tree than the range
-    const node_root = node.getRootNode(null);
-    const start_root = self._proto._start_container.getRootNode(null);
+    const node_root = node.getRootNode(.{});
+    const start_root = self._proto._start_container.getRootNode(.{});
     if (node_root != start_root) {
         return error.WrongDocument;
     }
@@ -236,8 +236,8 @@ pub fn comparePoint(self: *const Range, node: *Node, offset: u32) !i16 {
 
 pub fn isPointInRange(self: *const Range, node: *Node, offset: u32) !bool {
     // If node's root is different from the context object's root, return false
-    const node_root = node.getRootNode(null);
-    const start_root = self._proto._start_container.getRootNode(null);
+    const node_root = node.getRootNode(.{});
+    const start_root = self._proto._start_container.getRootNode(.{});
     if (node_root != start_root) {
         return false;
     }
@@ -275,8 +275,8 @@ pub fn isPointInRange(self: *const Range, node: *Node, offset: u32) !bool {
 
 pub fn intersectsNode(self: *const Range, node: *Node) bool {
     // If node's root is different from the context object's root, return false
-    const node_root = node.getRootNode(null);
-    const start_root = self._proto._start_container.getRootNode(null);
+    const node_root = node.getRootNode(.{});
+    const start_root = self._proto._start_container.getRootNode(.{});
     if (node_root != start_root) {
         return false;
     }

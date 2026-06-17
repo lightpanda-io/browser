@@ -1684,24 +1684,17 @@ pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const
 }
 
 pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Element {
-    if (node.isConnected() or node.isInShadowTree()) {
-        var current = node;
-        while (true) {
-            if (current.is(ShadowRoot)) |shadow_root| {
-                return shadow_root.getElementById(id, self);
-            }
-            const parent = current._parent orelse {
-                if (current._type == .document) {
-                    return current._type.document.getElementById(id, self);
-                }
-                if (IS_DEBUG) {
-                    std.debug.assert(false);
-                }
-                return null;
-            };
-            current = parent;
-        }
+    // The id map lives on the node's root: a Document, or a ShadowRoot for
+    // shadow DOM. Walk to the root once and consult the matching map.
+    const root = node.getRootNode(.{});
+    if (root._type == .document) {
+        return root._type.document.getElementById(id, self);
     }
+    if (root.is(ShadowRoot)) |shadow_root| {
+        return shadow_root.getElementById(id, self);
+    }
+    // Detached subtree (root is neither a Document nor a ShadowRoot): no id map
+    // exists, so scan it.
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse continue;

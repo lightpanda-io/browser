@@ -95,7 +95,8 @@ pub fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
     const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), frame);
     self._sheet = sheet;
 
-    const sheets = try frame.document.getStyleSheets(frame);
+    const owner = self.asNode().ownerDocument(frame) orelse frame.document;
+    const sheets = try owner.getStyleSheets(frame);
     try sheets.add(sheet, frame);
 
     return sheet;

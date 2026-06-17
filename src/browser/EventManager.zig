@@ -637,7 +637,7 @@ const ActivationState = struct {
 
         // Walk from the root of the tree containing this element
         // This handles both document-attached and orphaned elements
-        const root = elem.asNode().getRootNode(null);
+        const root = elem.asNode().getRootNode(.{});
 
         const TreeWalker = @import("webapi/TreeWalker.zig");
         var walker = TreeWalker.Full.init(root, .{});

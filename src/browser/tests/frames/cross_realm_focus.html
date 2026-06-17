@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+focus()/blur() and the :focus selector act on the element's own document. Parent
+JS focusing an element inside an iframe must update the iframe document's
+activeElement, not the parent's. Open in Firefox to cross-check.
+
+(Firefox additionally sets the *parent* document.activeElement to the <iframe>
+element; we don't model that, so this file deliberately doesn't assert it.)
+-->
+<iframe id="idf" src="support/cross_realm_focus.html"></iframe>
+
+<script id="focus_targets_own_document">
+  testing.onload(() => {
+    const idoc = document.getElementById('idf').contentDocument;
+    const inp = idoc.getElementById('fin');
+
+    inp.focus();
+    // focus() updates the iframe document's activeElement, and :focus matches
+    // against that document — not the parent's.
+    testing.expectEqual(inp, idoc.activeElement);
+    testing.expectEqual(inp, idoc.querySelector('input:focus'));
+
+    inp.blur();
+    // blur() clears it; activeElement falls back to the iframe body.
+    testing.expectFalse(idoc.activeElement === inp);
+    testing.expectEqual(idoc.body, idoc.activeElement);
+  });
+</script>
+</body>
