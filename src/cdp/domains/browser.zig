@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const Session = @import("../../browser/Session.zig");
 const Notification = @import("../../Notification.zig");
@@ -84,14 +85,18 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
         eventsEnabled: ?bool = null,
     })) orelse return error.InvalidParams;
 
+    if (params.browserContextId != null) {
+        log.warn(.not_implemented, "Browser.setDownloadBehavior", .{ .param = "browserContextId" });
+    }
+
+    // `default` defers the choice to the browser; we map it to `deny` (no
+    // download is written unless a driver explicitly opts in).
     const behavior: Session.DownloadBehavior = if (std.mem.eql(u8, params.behavior, "allow"))
         .allow
     else if (std.mem.eql(u8, params.behavior, "allowAndName"))
         .allow_and_name
-    else if (std.mem.eql(u8, params.behavior, "deny"))
+    else if (std.mem.eql(u8, params.behavior, "deny") or std.mem.eql(u8, params.behavior, "default"))
         .deny
-    else if (std.mem.eql(u8, params.behavior, "default"))
-        .default
     else
         return error.InvalidParams;
 
@@ -119,6 +124,21 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     }
 
     return cmd.sendResult(null, .{ .include_session_id = false });
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Browser/#event-downloadWillBegin
+// Dispatched by Frame when a navigation response is treated as a file download.
+// The opt-in is Browser.setDownloadBehavior, so we emit Browser.* events only
+// (not the deprecated Page.downloadWillBegin / Page.downloadProgress). See #2701.
+pub fn downloadWillBegin(bc: *CDP.BrowserContext, event: *const Notification.DownloadWillBegin) !void {
+    const session_id = bc.session_id orelse return;
+
+    return bc.cdp.sendEvent("Browser.downloadWillBegin", .{
+        .frameId = &id.toFrameId(event.frame_id),
+        .guid = event.guid,
+        .url = event.url,
+        .suggestedFilename = event.suggested_filename,
+    }, .{ .session_id = session_id });
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Browser/#event-downloadProgress
@@ -306,13 +326,13 @@ test "cdp.browser: setDownloadBehavior stores config on the session" {
     try testing.expect(bc.session.download_events_enabled);
     try testing.expect(bc.download_events_registered);
 
-    // Flipping back to default tears the registration down again.
+    // `default` maps to `deny` and tears the registration down again.
     try ctx.processMessage(.{
         .id = 35,
         .method = "Browser.setDownloadBehavior",
         .params = .{ .behavior = "default" },
     });
-    try testing.expectEqual(.default, bc.session.download_behavior);
+    try testing.expectEqual(.deny, bc.session.download_behavior);
     try testing.expect(bc.session.download_path == null);
     try testing.expect(bc.session.download_events_enabled == false);
     try testing.expect(bc.download_events_registered == false);
@@ -378,7 +398,7 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
     try runner.wait(.{ .ms = 2000 });
 
     // The guid is random, so it's omitted from these subset matches.
-    try ctx.expectSentEvent("Page.downloadWillBegin", .{
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
         .url = "http://127.0.0.1:9582/download/report.csv",
         .suggestedFilename = "report.csv",
     }, .{ .session_id = "SID-DL" });

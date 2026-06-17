@@ -54,6 +54,59 @@ pub const Method = enum(u8) {
 pub const Header = struct {
     name: []const u8,
     value: []const u8,
+
+    pub const Param = struct {
+        key: []const u8,
+        value: []const u8,
+    };
+
+    // The header value up to the first ';', trimmed (e.g. "attachment" for a
+    // Content-Disposition, "text/html" for a Content-Type).
+    pub fn firstValue(self: Header) []const u8 {
+        const end = std.mem.indexOfScalar(u8, self.value, ';') orelse self.value.len;
+        return std.mem.trim(u8, self.value[0..end], " \t");
+    }
+
+    // Iterates the `; key=value` parameters that follow the header's first value.
+    pub fn params(self: Header) ParamIterator {
+        const start = std.mem.indexOfScalar(u8, self.value, ';') orelse self.value.len;
+        return .{ .rest = self.value[start..] };
+    }
+
+    // Returns the (unquoted) value of the first non-empty `key=` parameter, if any.
+    pub fn param(self: Header, key: []const u8) ?[]const u8 {
+        var it = self.params();
+        while (it.next()) |p| {
+            if (p.value.len > 0 and std.ascii.eqlIgnoreCase(p.key, key)) {
+                return p.value;
+            }
+        }
+        return null;
+    }
+
+    pub const ParamIterator = struct {
+        rest: []const u8,
+
+        pub fn next(self: *ParamIterator) ?Param {
+            while (self.rest.len > 0 and self.rest[0] == ';') {
+                self.rest = self.rest[1..];
+                const end = std.mem.indexOfScalar(u8, self.rest, ';') orelse self.rest.len;
+                const segment = self.rest[0..end];
+                self.rest = self.rest[end..];
+
+                const eq = std.mem.indexOfScalar(u8, segment, '=') orelse continue;
+                const key = std.mem.trim(u8, segment[0..eq], " \t");
+                if (key.len == 0) continue;
+
+                var value = std.mem.trim(u8, segment[eq + 1 ..], " \t");
+                if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') {
+                    value = value[1 .. value.len - 1];
+                }
+                return .{ .key = key, .value = value };
+            }
+            return null;
+        }
+    };
 };
 
 pub const Headers = struct {
@@ -718,6 +771,26 @@ fn makeSockAddrV4(ip: [4]u8) libcurl.CurlSockAddr {
 }
 
 const testing = @import("../testing.zig");
+
+test "Header.firstValue" {
+    try testing.expectEqualSlices(u8, "attachment", (Header{ .name = "Content-Disposition", .value = "attachment" }).firstValue());
+    // firstValue trims but preserves case (callers compare case-insensitively).
+    try testing.expectEqualSlices(u8, "ATTACHMENT", (Header{ .name = "Content-Disposition", .value = "  ATTACHMENT ; filename=a.csv" }).firstValue());
+    try testing.expectEqualSlices(u8, "text/html", (Header{ .name = "Content-Type", .value = "text/html; charset=utf-8" }).firstValue());
+    try testing.expectEqualSlices(u8, "", (Header{ .name = "X", .value = "" }).firstValue());
+}
+
+test "Header.param" {
+    const h: Header = .{ .name = "Content-Disposition", .value = "attachment; filename=\"r e.csv\"; filename*=UTF-8''e.txt" };
+    try testing.expectEqualSlices(u8, "r e.csv", h.param("filename").?);
+    try testing.expectEqualSlices(u8, "r e.csv", h.param("FILENAME").?);
+    try testing.expectEqualSlices(u8, "UTF-8''e.txt", h.param("filename*").?);
+    try testing.expect(h.param("missing") == null);
+    // A bare value with no parameters has nothing to return.
+    try testing.expect((Header{ .name = "Content-Disposition", .value = "attachment" }).param("filename") == null);
+    // Empty values are skipped.
+    try testing.expect((Header{ .name = "Content-Disposition", .value = "attachment; filename=\"\"" }).param("filename") == null);
+}
 
 fn findHeader(headers: Headers, name: []const u8) struct { count: usize, value: []const u8 } {
     var count: usize = 0;

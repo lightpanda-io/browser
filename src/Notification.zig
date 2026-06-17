@@ -277,8 +277,8 @@ pub const CookieChanged = struct {
 
 // Emitted by Frame when a navigation response is treated as a file download
 // (Content-Disposition: attachment) under an `allow`/`allowAndName`
-// `Browser.setDownloadBehavior`. The CDP page domain turns this into a
-// `Page.downloadWillBegin` event. All fields point at Frame-owned memory that
+// `Browser.setDownloadBehavior`. The CDP browser domain turns this into a
+// `Browser.downloadWillBegin` event. All fields point at Frame-owned memory that
 // outlives the synchronous dispatch.
 pub const DownloadWillBegin = struct {
     frame_id: u32,

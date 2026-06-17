@@ -117,16 +117,17 @@ cancel_hook: ?CancelHook = null,
 // `.allow_and_name`, a navigation whose response carries
 // `Content-Disposition: attachment` is written to `download_path` instead
 // of being parsed as a page, and (when `download_events_enabled` is set)
-// `Page.downloadWillBegin` / `Browser.downloadProgress` events are emitted.
+// `Browser.downloadWillBegin` / `Browser.downloadProgress` events are emitted.
 // `download_path` is duped into the Session arena.
-download_behavior: DownloadBehavior = .default,
+download_behavior: DownloadBehavior = .deny,
 download_path: ?[]const u8 = null,
 download_events_enabled: bool = false,
 
 pub const DownloadBehavior = enum {
-    default,
     allow,
     allow_and_name,
+    // The CDP `default` behavior is mapped to `deny`: we don't write downloads
+    // to disk unless the driver explicitly opts in with `allow`/`allowAndName`.
     deny,
 };
 

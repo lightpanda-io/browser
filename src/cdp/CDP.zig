@@ -823,7 +823,7 @@ pub const BrowserContext = struct {
 
     pub fn onDownloadWillBegin(ctx: *anyopaque, msg: *const Notification.DownloadWillBegin) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/page.zig").downloadWillBegin(self, msg);
+        return @import("domains/browser.zig").downloadWillBegin(self, msg);
     }
 
     pub fn onDownloadProgress(ctx: *anyopaque, msg: *const Notification.DownloadProgress) !void {

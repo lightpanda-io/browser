@@ -67,6 +67,7 @@ const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const WheelEvent = @import("webapi/event/WheelEvent.zig");
 
 const HttpClient = @import("HttpClient.zig");
+const sys_url = @import("../sys/url.zig");
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
@@ -1214,19 +1215,19 @@ fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
     const session = self._session;
     switch (session.download_behavior) {
         .allow, .allow_and_name => {},
-        .default, .deny => return false,
+        .deny => return false,
     }
 
-    const disposition = blk: {
+    const disposition: HttpClient.Header = blk: {
         var it = response.headerIterator();
         while (it.next()) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "content-disposition")) {
-                break :blk hdr.value;
+                break :blk hdr;
             }
         }
         return false;
     };
-    if (isAttachment(disposition) == false) {
+    if (std.ascii.eqlIgnoreCase(disposition.firstValue(), "attachment") == false) {
         return false;
     }
 
@@ -1235,11 +1236,13 @@ fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
         return false;
     };
 
+    // `guid` is the CDP "Global Unique Identifier" that ties the
+    // downloadWillBegin / downloadProgress events to one download.
     var guid_buf: [36]u8 = undefined;
     @import("../id.zig").uuidv4(&guid_buf);
     const guid = try self.arena.dupe(u8, &guid_buf);
 
-    const suggested = dispositionFilename(disposition) orelse urlBasename(self.url) orelse guid;
+    const suggested = dispositionFilename(disposition) orelse (try urlBasename(self.arena, self.url)) orelse guid;
     const suggested_filename = try self.arena.dupe(u8, suggested);
 
     // allowAndName stores the file under its guid; allow uses the suggested name.
@@ -1290,59 +1293,32 @@ fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
     return true;
 }
 
-// True when a Content-Disposition value's type token is "attachment".
-fn isAttachment(disposition: []const u8) bool {
-    const semi = std.mem.indexOfScalar(u8, disposition, ';') orelse disposition.len;
-    const token = std.mem.trim(u8, disposition[0..semi], " \t");
-    return std.ascii.eqlIgnoreCase(token, "attachment");
-}
-
-// Extracts the filename from a Content-Disposition value, handling the quoted,
+// Extracts the filename from a Content-Disposition header, handling the quoted,
 // unquoted, and RFC 5987 (filename*=charset''value) forms. Path components are
 // stripped so the result is always a bare basename.
-fn dispositionFilename(disposition: []const u8) ?[]const u8 {
+fn dispositionFilename(disposition: HttpClient.Header) ?[]const u8 {
     // Prefer the extended filename*= form when present, per RFC 6266.
-    if (paramValue(disposition, "filename*")) |ext| {
+    if (disposition.param("filename*")) |ext| {
         // charset'lang'value — take everything after the second quote.
         if (std.mem.indexOfScalar(u8, ext, '\'')) |first| {
             if (std.mem.indexOfScalarPos(u8, ext, first + 1, '\'')) |second| {
-                return basename(ext[second + 1 ..]);
+                return sanitizeFilename(ext[second + 1 ..]);
             }
         }
-        return basename(ext);
+        return sanitizeFilename(ext);
     }
-    if (paramValue(disposition, "filename")) |name| {
-        return basename(name);
+    if (disposition.param("filename")) |name| {
+        return sanitizeFilename(name);
     }
     return null;
 }
 
-// Returns the (optionally quoted) value of `key=` within a parameter list.
-fn paramValue(disposition: []const u8, key: []const u8) ?[]const u8 {
-    var rest = disposition;
-    while (std.mem.indexOfScalar(u8, rest, ';')) |semi| {
-        const param = std.mem.trim(u8, rest[semi + 1 ..][0 .. (std.mem.indexOfScalarPos(u8, rest, semi + 1, ';') orelse rest.len) - semi - 1], " \t");
-        if (std.mem.indexOfScalar(u8, param, '=')) |eq| {
-            const name = std.mem.trim(u8, param[0..eq], " \t");
-            if (std.ascii.eqlIgnoreCase(name, key)) {
-                var value = std.mem.trim(u8, param[eq + 1 ..], " \t");
-                if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') {
-                    value = value[1 .. value.len - 1];
-                }
-                if (value.len > 0) {
-                    return value;
-                }
-            }
-        }
-        rest = rest[semi + 1 ..];
-    }
-    return null;
-}
-
-// Strips any directory components, guarding against path traversal.
-fn basename(name: []const u8) ?[]const u8 {
-    var out = name;
-    if (std.mem.lastIndexOfAny(u8, out, "/\\")) |i| {
+// Strips any directory components, guarding against path traversal. Content-
+// Disposition can carry Windows separators, so backslashes are stripped too,
+// regardless of the host platform.
+fn sanitizeFilename(name: []const u8) ?[]const u8 {
+    var out = std.fs.path.basename(name);
+    if (std.mem.lastIndexOfScalar(u8, out, '\\')) |i| {
         out = out[i + 1 ..];
     }
     if (out.len == 0 or std.mem.eql(u8, out, ".") or std.mem.eql(u8, out, "..")) {
@@ -1351,12 +1327,21 @@ fn basename(name: []const u8) ?[]const u8 {
     return out;
 }
 
-// Derives a filename from a URL's last path segment, ignoring query/fragment.
-fn urlBasename(url: []const u8) ?[]const u8 {
-    var path = url;
-    if (std.mem.indexOfScalar(u8, path, '?')) |i| path = path[0..i];
-    if (std.mem.indexOfScalar(u8, path, '#')) |i| path = path[0..i];
-    return basename(path);
+// Derives a filename from a URL's last path segment. The path is taken from a
+// real URL parse (rust-url) so query/fragment and percent-encoding are handled
+// the same way the rest of the browser handles URLs. The result is duped into
+// `arena`, since the parsed URL is freed before this returns.
+fn urlBasename(arena: Allocator, url: []const u8) !?[]const u8 {
+    var err: i32 = 0;
+    const u = sys_url.url_parse(url.ptr, url.len, &err) orelse return null;
+    defer sys_url.url_free(u);
+
+    var ptr: [*]const u8 = undefined;
+    var len: usize = undefined;
+    sys_url.url_get_path(u, &ptr, &len);
+
+    const name = sanitizeFilename(ptr[0..len]) orelse return null;
+    return try arena.dupe(u8, name);
 }
 
 fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
@@ -1439,6 +1424,11 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
         .raw, .image => |*buf| try buf.appendSlice(self.arena, data),
         .download => |*download| {
             download.file.writeAll(data) catch |err| {
+                // TODO(#2701 follow-up): surface the write failure properly. We
+                // can't set `_parse_state = .err` here because the next chunk
+                // would then hit the `.err => unreachable` branch below, and we
+                // should also emit a `canceled` downloadProgress and remove the
+                // partial file on disk. For now we just log and keep going.
                 log.err(.frame, "download write", .{ .err = err, .guid = download.guid });
                 return;
             };
@@ -4853,32 +4843,32 @@ fn asUint(comptime string: anytype) std.meta.Int(
 
 const testing = @import("../testing.zig");
 
-test "Frame: isAttachment" {
-    try testing.expectEqual(true, isAttachment("attachment"));
-    try testing.expectEqual(true, isAttachment("attachment; filename=\"a.csv\""));
-    try testing.expectEqual(true, isAttachment("  ATTACHMENT ; filename=a.csv"));
-    try testing.expectEqual(false, isAttachment("inline"));
-    try testing.expectEqual(false, isAttachment("inline; filename=a.csv"));
-    try testing.expectEqual(false, isAttachment(""));
+fn dispositionHeader(value: []const u8) HttpClient.Header {
+    return .{ .name = "content-disposition", .value = value };
 }
 
 test "Frame: dispositionFilename" {
-    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename("attachment; filename=\"report.csv\"").?);
-    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename("attachment; filename=report.csv").?);
-    try testing.expectEqualSlices(u8, "r e.csv", dispositionFilename("attachment; filename=\"r e.csv\"").?);
+    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename(dispositionHeader("attachment; filename=\"report.csv\"")).?);
+    try testing.expectEqualSlices(u8, "report.csv", dispositionFilename(dispositionHeader("attachment; filename=report.csv")).?);
+    try testing.expectEqualSlices(u8, "r e.csv", dispositionFilename(dispositionHeader("attachment; filename=\"r e.csv\"")).?);
     // RFC 5987 extended form is preferred over the plain filename when present
     // (the value is taken verbatim after the charset'lang' prefix).
-    try testing.expectEqualSlices(u8, "extended.txt", dispositionFilename("attachment; filename=\"fallback.txt\"; filename*=UTF-8''extended.txt").?);
-    try testing.expect(dispositionFilename("attachment") == null);
+    try testing.expectEqualSlices(u8, "extended.txt", dispositionFilename(dispositionHeader("attachment; filename=\"fallback.txt\"; filename*=UTF-8''extended.txt")).?);
+    try testing.expect(dispositionFilename(dispositionHeader("attachment")) == null);
     // Path components are stripped to guard against traversal.
-    try testing.expectEqualSlices(u8, "evil.sh", dispositionFilename("attachment; filename=\"../../evil.sh\"").?);
-    try testing.expect(dispositionFilename("attachment; filename=\"..\"") == null);
+    try testing.expectEqualSlices(u8, "evil.sh", dispositionFilename(dispositionHeader("attachment; filename=\"../../evil.sh\"")).?);
+    try testing.expectEqualSlices(u8, "evil.sh", dispositionFilename(dispositionHeader("attachment; filename=\"..\\..\\evil.sh\"")).?);
+    try testing.expect(dispositionFilename(dispositionHeader("attachment; filename=\"..\"")) == null);
 }
 
 test "Frame: urlBasename" {
-    try testing.expectEqualSlices(u8, "report.csv", urlBasename("http://x.com/a/b/report.csv").?);
-    try testing.expectEqualSlices(u8, "report.csv", urlBasename("http://x.com/report.csv?v=1#x").?);
-    try testing.expect(urlBasename("http://x.com/") == null);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    try testing.expectEqualSlices(u8, "report.csv", (try urlBasename(a, "http://x.com/a/b/report.csv")).?);
+    try testing.expectEqualSlices(u8, "report.csv", (try urlBasename(a, "http://x.com/report.csv?v=1#x")).?);
+    try testing.expect((try urlBasename(a, "http://x.com/")) == null);
 }
 
 test "WebApi: Frame" {
