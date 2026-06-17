@@ -40,8 +40,7 @@ pub const ResolvedProvider = struct {
     source: enum { flag, remembered, detected, picked },
 };
 
-/// Probe a keyless local provider (Ollama, llama.cpp). These are excluded from
-/// env detection (`default_candidates`) because their env key is a constant
+/// Probe a keyless local provider (Ollama, llama.cpp): its env key is a
 /// placeholder, so the only honest availability signal is the server answering
 /// `/v1/models` with a loaded model. Null means no server responded.
 pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Credentials {
@@ -202,11 +201,9 @@ pub const ReconciledModel = union(enum) {
 
 /// Validate `desired` against the provider's catalog, mirroring the interactive
 /// `/model` command. Empty list (unreachable server) leaves it unchecked; an
-/// explicit unlisted model is fatal. The local servers' catalogs (Ollama,
-/// llama.cpp) are authoritative, so their default is substituted with the first
-/// served model when it isn't loaded — llama.cpp's default is empty, since the
-/// served model is whatever `llama-server` was launched with; cloud defaults are
-/// hardcoded real models, trusted as-is.
+/// explicit unlisted model is fatal. The local servers (Ollama, llama.cpp) have
+/// authoritative catalogs, so their default is substituted with the first served
+/// model when unloaded; cloud defaults are hardcoded real models, trusted as-is.
 pub fn reconcileModel(
     allocator: std.mem.Allocator,
     llm: Credentials,

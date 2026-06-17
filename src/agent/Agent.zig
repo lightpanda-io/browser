@@ -259,9 +259,8 @@ total_usage: zenai.provider.Usage = .{},
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
 available_providers: []const []const u8,
-/// Lazily-probed reachability of each `local_providers` entry for `/provider`
-/// completion, cached so the per-keystroke hinter probes each local server at
-/// most once per session.
+/// Cached reachability of each `local_providers` entry, so the per-keystroke
+/// `/provider` hinter probes each local server at most once.
 local_completable: [local_providers.len]?bool = @splat(null),
 api_error_buf: [512]u8 = undefined,
 /// Last failure's status+message, surfaced by `runTurn` past `error.ApiError`.
@@ -589,8 +588,6 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
             return false;
         },
         else => {
-            // Detail is set by `processUserMessage`'s catch and cleared at the
-            // start of the next turn; fall back to the raw error name.
             self.terminal.printError("{s} failed: {s}", .{ input.label, self.api_error_detail orelse @errorName(err) });
             return false;
         },
@@ -817,9 +814,8 @@ const llm_setup_hint = "set an API key (" ++ api_keys_hint ++ ") and run /provid
 /// parser, autocomplete, and save report so they can't drift apart.
 const provider_off_keyword = "null";
 
-/// Keyless local providers whose env key is a placeholder, so reachability needs
-/// a live `/v1/models` probe (`settings.detectLocalProvider`). Indexes into
-/// `local_completable`.
+/// Keyless local providers (placeholder key), so reachability needs a live probe.
+/// Parallel to `local_completable`.
 const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp };
 
 fn requireLlm(self: *Agent, name: []const u8) bool {
@@ -909,7 +905,6 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.ollama_default_base_url});
         return;
     }
-    // llama.cpp's key is also a placeholder — probe its server too.
     if (provider == .llama_cpp and settings.detectLlamaCpp(self.allocator, self.model_base_url) == null) {
         self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
         return;
@@ -1475,10 +1470,8 @@ fn recordSlashToolCall(
     });
 }
 
-/// Render the client's last failure into `api_error_buf`. Prefers the server's
-/// HTTP status+message; with no status (transport/parse/empty-response failures)
-/// falls back to the concrete error name, which the caller would otherwise lose
-/// to the blanket `error.ApiError`. Status-only when the message overflows.
+/// Format the client's last failure into `api_error_buf`: HTTP status+message,
+/// or the raw error name when there's no status (transport/parse failures).
 fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []const u8 {
     const e = client.lastError();
     const status = e.status orelse return @errorName(err);
@@ -1772,8 +1765,7 @@ const ModelCompletions = struct {
 /// avoid reading environment variables on each autocomplete keypress.
 fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []const u8 {
     const self: *Agent = @ptrCast(@alignCast(context));
-    // A local server joins `/provider` completions only when it actually answers,
-    // since its env key is a placeholder. Probe each once and cache the result.
+    // A local server joins completions only when it answers (placeholder key).
     var reachable: [local_providers.len]bool = undefined;
     var extra: usize = 0;
     for (local_providers, 0..) |tag, i| {
