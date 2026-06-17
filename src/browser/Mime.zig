@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const Mime = @This();
 content_type: ContentType,
@@ -90,29 +91,6 @@ pub fn charsetString(mime: *const Mime) []const u8 {
     return mime.charset[0..mime.charset_len];
 }
 
-/// Removes quotes of value if quotes are given.
-///
-/// Currently we don't validate the charset.
-/// See section 2.3 Naming Requirements:
-/// https://datatracker.ietf.org/doc/rfc2978/
-fn parseCharset(value: []const u8) error{ CharsetTooBig, Invalid }![]const u8 {
-    // Cannot be larger than 40.
-    // https://datatracker.ietf.org/doc/rfc2978/
-    if (value.len > 40) return error.CharsetTooBig;
-
-    // If the first char is a quote, look for a pair.
-    if (value[0] == '"') {
-        if (value.len < 3 or value[value.len - 1] != '"') {
-            return error.Invalid;
-        }
-
-        return value[1 .. value.len - 1];
-    }
-
-    // No quotes.
-    return value;
-}
-
 pub fn parse(input: []const u8) !Mime {
     if (input.len > 255) {
         return error.TooBig;
@@ -128,40 +106,17 @@ pub fn parse(input: []const u8) !Mime {
         return .{ .content_type = content_type };
     }
 
-    const params = trimLeft(normalized[type_len..]);
-
     var charset: [41]u8 = default_charset;
     var charset_len: usize = default_charset_len;
     var has_explicit_charset = false;
 
-    var it = std.mem.splitScalar(u8, params, ';');
-    while (it.next()) |attr| {
-        const i = std.mem.indexOfScalarPos(u8, attr, 0, '=') orelse continue;
-        const name = trimLeft(attr[0..i]);
-
-        const value = trimRight(attr[i + 1 ..]);
-        if (value.len == 0) {
-            continue;
-        }
-
-        const attribute_name = std.meta.stringToEnum(enum {
-            charset,
-        }, name) orelse continue;
-
-        switch (attribute_name) {
-            .charset => {
-                if (value.len == 0) {
-                    break;
-                }
-
-                const attribute_value = parseCharset(value) catch continue;
-                @memcpy(charset[0..attribute_value.len], attribute_value);
-                // Null-terminate right after attribute value.
-                charset[attribute_value.len] = 0;
-                charset_len = attribute_value.len;
-                has_explicit_charset = true;
-            },
-        }
+    // normalized[type_len - 1] is the ';' that terminated the type.
+    var value_buf: [40]u8 = undefined;
+    if (firstCharsetValue(normalized[type_len - 1 ..], &value_buf)) |value| {
+        @memcpy(charset[0..value.len], value);
+        charset[value.len] = 0;
+        charset_len = value.len;
+        has_explicit_charset = true;
     }
 
     mime.charset = charset;
@@ -466,8 +421,298 @@ fn validType(value: []const u8) bool {
     return true;
 }
 
-fn trimLeft(s: []const u8) []const u8 {
-    return std.mem.trimLeft(u8, s, &std.ascii.whitespace);
+/// Parse `input` as a MIME type and return its serialization, or "" on
+/// failure. Unlike `parse` (which classifies a Content-Type for sniffing
+/// and only tracks charset), this preserves every parameter.
+pub fn serialize(arena: Allocator, input: []const u8) ![]const u8 {
+    const trimmed = std.mem.trim(u8, input, &HTTP_WHITESPACE);
+    if (trimmed.len == 0) {
+        return "";
+    }
+
+    // type "/" subtype
+    const slash = std.mem.indexOfScalarPos(u8, trimmed, 0, '/') orelse return "";
+    const type_name = trimmed[0..slash];
+    if (isHttpToken(type_name) == false) {
+        return "";
+    }
+
+    var rest = trimmed[slash + 1 ..];
+    const subtype_end = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+    const subtype = std.mem.trimRight(u8, rest[0..subtype_end], &HTTP_WHITESPACE);
+    if (isHttpToken(subtype) == false) {
+        return "";
+    }
+
+    var out: std.ArrayList(u8) = try .initCapacity(arena, type_name.len + 1 + subtype.len);
+    for (type_name) |c| {
+        out.appendAssumeCapacity(std.ascii.toLower(c));
+    }
+    out.appendAssumeCapacity('/');
+    for (subtype) |c| {
+        out.appendAssumeCapacity(std.ascii.toLower(c));
+    }
+
+    if (subtype_end >= rest.len) {
+        return out.items;
+    }
+
+    rest = rest[subtype_end..]; // positioned at the first ';'
+
+    // The serialized output is the input length plus quoting overhead; reserve
+    // the input length so the common (no-escape) case appends without growing.
+    try out.ensureTotalCapacity(arena, trimmed.len);
+
+    // Lowercased names already emitted, for first-wins dedupe.
+    var seen: std.ArrayList([]const u8) = .empty;
+    // One scratch buffer, reused to unescape quoted values across iterations.
+    var quoted: std.ArrayList(u8) = .empty;
+
+    var i: usize = 0;
+    while (i < rest.len) {
+        i += 1; // skip ';'
+        while (i < rest.len and isHttpWhitespace(rest[i])) i += 1;
+
+        // parameter name: up to ';' or '='
+        const name_start = i;
+        while (i < rest.len and rest[i] != ';' and rest[i] != '=') i += 1;
+        const name = rest[name_start..i];
+
+        if (i >= rest.len) break;
+        if (rest[i] == ';') continue;
+        i += 1; // skip '='
+
+        // A quoted value is unescaped into `quoted`; an unquoted value is used
+        // in place.
+        var value: []const u8 = undefined;
+        if (i < rest.len and rest[i] == '"') {
+            quoted.clearRetainingCapacity();
+            i += 1; // opening quote
+            while (i < rest.len) : (i += 1) {
+                const c = rest[i];
+                if (c == '\\') {
+                    if (i + 1 < rest.len) {
+                        i += 1;
+                        try quoted.append(arena, rest[i]);
+                    } else {
+                        try quoted.append(arena, '\\');
+                    }
+                } else if (c == '"') {
+                    i += 1; // closing quote
+                    break;
+                } else {
+                    try quoted.append(arena, c);
+                }
+            }
+            // ignore any remaining bytes up to the next ';'
+            while (i < rest.len and rest[i] != ';') i += 1;
+            value = quoted.items;
+        } else {
+            const value_start = i;
+            while (i < rest.len and rest[i] != ';') i += 1;
+            value = std.mem.trimRight(u8, rest[value_start..i], &HTTP_WHITESPACE);
+            if (value.len == 0) continue; // empty unquoted value is dropped
+        }
+
+        if (isHttpToken(name) == false) continue;
+        if (isQuotedStringValue(value) == false) continue;
+
+        const lname = try std.ascii.allocLowerString(arena, name);
+        for (seen.items) |s| {
+            if (std.mem.eql(u8, s, lname)) break;
+        } else {
+            try seen.append(arena, lname);
+            try out.append(arena, ';');
+            try out.appendSlice(arena, lname);
+            try out.append(arena, '=');
+            try appendParameterValue(arena, &out, value);
+        }
+    }
+
+    return out.items;
+}
+
+/// HTTP token code points (RFC 7230 §3.2.6). Note these differ from
+/// `VALID_CODEPOINTS` above (which also allows `\`).
+const HTTP_TOKEN = blk: {
+    var v: [256]bool = undefined;
+    for (0..256) |i| {
+        v[i] = switch (i) {
+            '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~' => true,
+            else => std.ascii.isAlphanumeric(@intCast(i)),
+        };
+    }
+    break :blk v;
+};
+
+/// Whether `s` is a non-empty sequence of HTTP token code points. This is also
+/// the definition of a valid header name, so `Headers` reuses it.
+pub fn isHttpToken(s: []const u8) bool {
+    if (s.len == 0) {
+        return false;
+    }
+    for (s) |b| {
+        if (HTTP_TOKEN[b] == false) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Whether every code point in `value` is an "HTTP quoted-string token code
+/// point" (HT, 0x20-0x7E, or 0x80-0xFF). Decodes UTF-8 so that a code point
+/// above U+00FF (e.g. U+FFFD) is rejected even though its bytes are each >=
+/// 0x80 — the algorithm operates on code points, not bytes.
+/// https://mimesniff.spec.whatwg.org/#http-quoted-string-token-code-point
+fn isQuotedStringValue(value: []const u8) bool {
+    var i: usize = 0;
+    while (i < value.len) {
+        const n = std.unicode.utf8ByteSequenceLength(value[i]) catch return false;
+        if (i + n > value.len) {
+            return false;
+        }
+        const cp = std.unicode.utf8Decode(value[i..][0..n]) catch return false;
+
+        if (!(cp == 0x09 or (cp >= 0x20 and cp <= 0x7E) or (cp >= 0x80 and cp <= 0xFF))) {
+            return false;
+        }
+        i += n;
+    }
+    return true;
+}
+
+/// HTTP whitespace: HT, LF, CR, SP. Deliberately excludes FF (0x0C) and VT
+/// (0x0B), both of which `std.ascii.whitespace` includes — neither is HTTP
+/// whitespace, so `\x0cx/x` must fail rather than strip to `x/x`.
+pub const HTTP_WHITESPACE = [_]u8{ 0x09, 0x0A, 0x0D, 0x20 };
+
+fn isHttpWhitespace(b: u8) bool {
+    inline for (HTTP_WHITESPACE) |whitespace| {
+        if (b == whitespace) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Append a parameter value, quoting (and escaping `"`/`\`) when it is empty
+/// or contains a non-HTTP-token byte.
+fn appendParameterValue(arena: Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+    if (value.len == 0) {
+        return out.appendSlice(arena, "\"\"");
+    }
+
+    // The clean prefix (up to the first non-token byte) needs no quoting; if
+    // the whole value is tokens, it needs no quotes at all. Neither `"` nor `\`
+    // is a token byte, so the prefix can be copied without escaping.
+    const quote_from = for (value, 0..) |b, i| {
+        if (HTTP_TOKEN[b] == false) break i;
+    } else return out.appendSlice(arena, value);
+
+    // Upper bound: two quotes plus, worst case, a '\' escape for every byte.
+    try out.ensureUnusedCapacity(arena, 2 * value.len + 2);
+    out.appendAssumeCapacity('"');
+    out.appendSliceAssumeCapacity(value[0..quote_from]);
+    for (value[quote_from..]) |b| {
+        if (b == '"' or b == '\\') {
+            out.appendAssumeCapacity('\\');
+        }
+        out.appendAssumeCapacity(b);
+    }
+    out.appendAssumeCapacity('"');
+}
+
+/// Find the value of the first valid `charset` parameter, per the WHATWG MIME
+/// parameter algorithm: parameters are scanned in order, quoted strings honor
+/// `\` escapes and may contain `;`, and the first parameter whose name is
+/// `charset` and whose value is non-empty and contains only HTTP
+/// quoted-string token code points wins. The (unescaped) value is written into
+/// `out`; values longer than `out` are treated as no match. `rest` must begin
+/// at the ';' that ends the subtype, and the input must already be lowercased
+/// (names are matched case-sensitively against "charset").
+fn firstCharsetValue(rest: []const u8, out: []u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < rest.len) {
+        i += 1; // skip ';'
+        while (i < rest.len and isHttpWhitespace(rest[i])) {
+            i += 1;
+        }
+
+        const name_start = i;
+        while (i < rest.len and rest[i] != ';' and rest[i] != '=') {
+            i += 1;
+        }
+
+        if (i >= rest.len) {
+            break;
+        }
+        if (rest[i] == ';') {
+            continue;
+        }
+
+        const want = std.mem.eql(u8, rest[name_start..i], "charset");
+        i += 1; // skip '='
+
+        var len: usize = 0;
+        var overflow = false;
+        const put = struct {
+            fn put(o: []u8, l: *usize, of: *bool, b: u8) void {
+                if (l.* < o.len) {
+                    o[l.*] = b;
+                    l.* += 1;
+                } else of.* = true;
+            }
+        }.put;
+
+        if (i < rest.len and rest[i] == '"') {
+            i += 1; // opening quote
+            while (i < rest.len) : (i += 1) {
+                const c = rest[i];
+                if (c == '\\') {
+                    if (i + 1 < rest.len) {
+                        i += 1;
+                        if (want) {
+                            put(out, &len, &overflow, rest[i]);
+                        }
+                    } else if (want) {
+                        put(out, &len, &overflow, '\\');
+                    }
+                } else if (c == '"') {
+                    i += 1; // closing quote
+                    break;
+                } else if (want) {
+                    put(out, &len, &overflow, c);
+                }
+            }
+            while (i < rest.len and rest[i] != ';') {
+                i += 1;
+            }
+        } else {
+            const value_start = i;
+            while (i < rest.len and rest[i] != ';') {
+                i += 1;
+            }
+
+            const v = std.mem.trimRight(u8, rest[value_start..i], &HTTP_WHITESPACE);
+            if (v.len == 0) {
+                // empty unquoted value is dropped
+                continue;
+            }
+
+            if (want) {
+                if (v.len <= out.len) {
+                    @memcpy(out[0..v.len], v);
+                    len = v.len;
+                } else overflow = true;
+            }
+        }
+
+        // First *valid* charset wins; otherwise keep scanning.
+        if (want and overflow == false and isQuotedStringValue(out[0..len])) {
+            return out[0..len];
+        }
+    }
+    return null;
 }
 
 fn trimRight(s: []const u8) []const u8 {
@@ -600,6 +845,29 @@ test "Mime: parse charset" {
     }, "text/html;x=\"");
 }
 
+test "Mime: parse charset (WHATWG parameter semantics)" {
+    defer testing.reset();
+
+    // First charset wins (not last).
+    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "gbk" }, "text/html;charset=gbk;charset=utf-8");
+
+    // Backslash escapes inside a quoted value are unescaped.
+    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "gbk" }, "text/html;charset=\"\\g\\b\\k\"");
+
+    // A ';' inside a quoted value is part of the value, not a separator.
+    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "a;b" }, "text/html;charset=\"a;b\";charset=utf-8");
+
+    // A charset whose value isn't all quoted-string tokens (VT here) is
+    // skipped, so the next valid charset wins.
+    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "utf-8" }, "text/html;charset=\x0bgbk;charset=utf-8");
+
+    // A trailing space makes the name "charset " (not "charset"): no charset.
+    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "UTF-8" }, "text/html;charset =gbk");
+
+    // A long preceding parameter doesn't hide a later charset.
+    try expect(.{ .content_type = .{ .text_html = {} }, .charset = "gbk" }, "text/html;" ++ ("a" ** 130) ++ "=x;charset=gbk");
+}
+
 test "Mime: isHTML" {
     defer testing.reset();
 
@@ -722,6 +990,48 @@ fn expect(expected: Expectation, input: []const u8) !void {
         const m: Mime = .unknown;
         try testing.expectEqual(m.charsetStringZ(), actual.charsetStringZ());
     }
+}
+
+test "Mime: serialize" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    const expectSerialize = struct {
+        fn call(a: Allocator, input: []const u8, expected: []const u8) !void {
+            try testing.expectString(expected, try Mime.serialize(a, input));
+        }
+    }.call;
+
+    // Essence: lowercased, params preserved verbatim where valid.
+    try expectSerialize(arena, "x/x;bonus=x", "x/x;bonus=x");
+    try expectSerialize(arena, "TEXT/HTML;CHARSET=GBK", "text/html;charset=GBK");
+    try expectSerialize(arena, "text/html;charset=gbk;charset=windows-1255", "text/html;charset=gbk"); // first wins
+    try expectSerialize(arena, "text/html;test;charset=gbk", "text/html;charset=gbk"); // valueless param dropped
+
+    // Quoting on serialize.
+    try expectSerialize(arena, "text/html;charset=gbk(", "text/html;charset=\"gbk(\"");
+    try expectSerialize(arena, "text/html;charset= gbk", "text/html;charset=\" gbk\"");
+    try expectSerialize(arena, "text/html;charset=gbk\"", "text/html;charset=\"gbk\\\"\"");
+    try expectSerialize(arena, "text/html;charset=\"\\g\\b\\k\"", "text/html;charset=gbk"); // unescape
+    try expectSerialize(arena, "text/html;charset=\"\";charset=GBK", "text/html;charset=\"\""); // empty quoted kept
+
+    // Leading/trailing HTTP whitespace (TAB LF CR SP) is stripped; FF/VT are not.
+    try expectSerialize(arena, "\n\r\t x/x;x=x \n\r\t ", "x/x;x=x");
+    try expectSerialize(arena, "\x0cx/x", ""); // FF is not HTTP whitespace -> invalid type
+    try expectSerialize(arena, "x/x\x0c", ""); // FF in subtype -> invalid
+    try expectSerialize(arena, "text/html;\x0ccharset=gbk", "text/html"); // FF before name -> dropped
+
+    // A parameter value containing a code point above U+00FF (here U+FFFD) is
+    // dropped, even though its UTF-8 bytes are each >= 0x80.
+    try expectSerialize(arena, "x/x;test=\u{FFFD};x=x", "x/x;x=x");
+    // 0x80-0xFF round-trips (kept, quoted).
+    try expectSerialize(arena, "x/x;x=\u{00A1};bonus=x", "x/x;x=\"\u{00A1}\";bonus=x");
+
+    // Total failures.
+    try expectSerialize(arena, "", "");
+    try expectSerialize(arena, "x", "");
+    try expectSerialize(arena, "/x", "");
+    try expectSerialize(arena, "x/", "");
 }
 
 test "Mime: prescanCharset" {

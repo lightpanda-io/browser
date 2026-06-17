@@ -67,7 +67,7 @@ pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob 
     errdefer session.releaseArena(arena);
 
     const opts: InitOptions = opts_ orelse .{};
-    const mime = try validateMimeType(arena, opts.type, false);
+    const mime = try Mime.serialize(arena, opts.type);
 
     const data = blk: {
         if (parts_) |blob_parts| {
@@ -95,11 +95,11 @@ pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob 
 }
 
 /// Creates a new Blob from raw byte slices (for internal Zig use).
-pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: bool, page: *Page) !*Blob {
+pub fn initFromBytes(data: []const u8, content_type: []const u8, page: *Page) !*Blob {
     const arena = try page.getArena(.large, "Blob");
     errdefer page.releaseArena(arena);
 
-    const mime = try validateMimeType(arena, content_type, validate_mime);
+    const mime = try Mime.serialize(arena, content_type);
 
     const self = try arena.create(Blob);
     self.* = .{
@@ -110,32 +110,6 @@ pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: 
         ._mime = mime,
     };
     return self;
-}
-
-/// Validates and normalizes MIME type according to spec.
-fn validateMimeType(arena: Allocator, mime_type: []const u8, full_validation: bool) ![]const u8 {
-    if (mime_type.len == 0) {
-        return "";
-    }
-
-    const buf = try arena.dupe(u8, mime_type);
-
-    if (full_validation) {
-        // Full MIME parsing per MIME sniff spec (for Content-Type headers)
-        _ = Mime.parse(buf) catch return "";
-    } else {
-        // Simple validation per FileAPI spec (for Blob constructor):
-        // any char outside U+0020-U+007E yields the empty string.
-        for (mime_type) |c| {
-            if (c < 0x20 or c > 0x7E) {
-                return "";
-            }
-        }
-    }
-
-    // FileAPI: Blob.type is the type converted to ASCII lowercase.
-    _ = std.ascii.lowerString(buf, buf);
-    return buf;
 }
 
 pub fn deinit(self: *Blob, page: *Page) void {
@@ -313,7 +287,7 @@ pub fn slice(
         break :blk @min(data.len, @max(start, @as(u31, @intCast(requested_end))));
     };
 
-    return Blob.initFromBytes(data[start..end], content_type_ orelse "", false, page);
+    return Blob.initFromBytes(data[start..end], content_type_ orelse "", page);
 }
 
 /// Returns the size of the Blob in bytes.

@@ -159,6 +159,36 @@
 }
 </script>
 
+<script id=value-validation>
+// The constructor validates names/values and normalizes values per Fetch.
+{
+  // Leading/trailing HTTP whitespace in values is stripped.
+  const headers = new Headers([["Content-Type", "  text/html\t"]]);
+  testing.expectEqual("text/html", headers.get("content-type"));
+}
+
+// An invalid header name throws a TypeError.
+{
+  let threw = false;
+  try { new Headers([["a b", "x"]]); } catch (e) { threw = e instanceof TypeError; }
+  testing.expectEqual(true, threw);
+}
+
+// A value with a forbidden byte (here an interior newline) throws a TypeError.
+{
+  let threw = false;
+  try { new Headers([["x", "a\nb"]]); } catch (e) { threw = e instanceof TypeError; }
+  testing.expectEqual(true, threw);
+}
+
+// A value with a code point above U+00FF cannot be a byte string: TypeError.
+{
+  let threw = false;
+  try { new Headers({ "x": "Ā" }); } catch (e) { threw = e instanceof TypeError; }
+  testing.expectEqual(true, threw);
+}
+</script>
+
 <script id=copy-constructor>
 // Test creating Headers from another Headers object
 {
