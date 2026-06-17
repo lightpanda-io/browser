@@ -202,6 +202,11 @@ pub fn verify(
         resolver.resolve("HMAC.verify", false);
         return resolver.promise();
     };
+    // Check that lengths match; CRYPTO_memcmp can't cover this.
+    if (@as(u32, @intCast(signature.len)) != out_len) {
+        resolver.resolve("HMAC.verify", false);
+        return resolver.promise();
+    }
 
     // CRYPTO_memcmp compare in constant time so prohibits time-based attacks.
     const res = crypto.CRYPTO_memcmp(signed, @ptrCast(signature.ptr), signature.len);
