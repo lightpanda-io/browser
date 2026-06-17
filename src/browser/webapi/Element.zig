@@ -1919,18 +1919,26 @@ pub const JsApi = struct {
         return buf.written();
     }
 
-    pub const outerHTML = bridge.accessor(_outerHTML, Element.setOuterHTML, .{ .ce_reactions = true });
-    fn _outerHTML(self: *Element, frame: *Frame) ![]const u8 {
+    pub const outerHTML = bridge.accessor(_getOuterHTML, _setOuterHTML, .{ .ce_reactions = true });
+    fn _getOuterHTML(self: *Element, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getOuterHTML(&buf.writer, frame);
         return buf.written();
     }
+    fn _setOuterHTML(self: *Element, value: js.Value, frame: *Frame) !void {
+        // `[LegacyNullToEmptyString] DOMString`: a JS null becomes "", not "null".
+        return self.setOuterHTML(if (value.isNull()) "" else try value.toZig([]const u8), frame);
+    }
 
-    pub const innerHTML = bridge.accessor(_innerHTML, Element.setInnerHTML, .{ .ce_reactions = true });
-    fn _innerHTML(self: *Element, frame: *Frame) ![]const u8 {
+    pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
+    fn _getInnerHTML(self: *Element, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getInnerHTML(&buf.writer, frame);
         return buf.written();
+    }
+    fn _setInnerHTML(self: *Element, value: js.Value, frame: *Frame) !void {
+        // `[LegacyNullToEmptyString] DOMString`: a JS null becomes "", not "null".
+        return self.setInnerHTML(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
 
     pub const prefix = bridge.accessor(Element._prefix, null, .{});

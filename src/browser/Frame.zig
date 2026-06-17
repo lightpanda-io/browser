@@ -99,6 +99,12 @@ _event_manager: EventManager,
 
 _parse_mode: enum { document, fragment, document_write } = .document,
 
+// While fragment-parsing (e.g. innerHTML), scripts are normally marked
+// "already started" so they never run. The one exception is
+// Range.createContextualFragment(), whose scripts DO run when the fragment is
+// inserted into a document
+_fragment_scripts_runnable: bool = false,
+
 // See Attribute.List for what this is. TL;DR: proper DOM Attribute Nodes are
 // fat yet rarely needed. We only create them on-demand, but still need proper
 // identity (a given attribute should return the same *Attribute), so we do
@@ -3617,15 +3623,26 @@ pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, chi
 
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
 pub fn parseHtmlAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
-    return self.parseHtmlAsChildrenInner(node, html, false);
+    return self.parseHtmlAsChildrenInner(node, html, .{});
 }
 
 // setHTMLUnsafe variant: parse a fragment that may contain declarative shadow node
 pub fn parseHtmlUnsafeAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
-    return self.parseHtmlAsChildrenInner(node, html, true);
+    return self.parseHtmlAsChildrenInner(node, html, .{ .allow_declarative_shadow = true });
 }
 
-fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, allow_declarative_shadow: bool) !void {
+// Range.createContextualFragment variant: unlike innerHTML et al., its scripts
+// are run when the fragment is inserted into a document.
+pub fn parseContextualFragment(self: *Frame, node: *Node, html: []const u8) !void {
+    return self.parseHtmlAsChildrenInner(node, html, .{ .scripts_runnable = true });
+}
+
+const FragmentParseOpts = struct {
+    scripts_runnable: bool = false,
+    allow_declarative_shadow: bool = false,
+};
+
+fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: FragmentParseOpts) !void {
     const previous_parse_mode = self._parse_mode;
     self._parse_mode = .fragment;
     defer self._parse_mode = previous_parse_mode;
@@ -3645,7 +3662,11 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, allow_d
         }
     };
 
-    var parser = Parser.init(self.call_arena, node, self, .{ .allow_declarative_shadow = allow_declarative_shadow });
+    const previous_scripts_runnable = self._fragment_scripts_runnable;
+    self._fragment_scripts_runnable = opts.scripts_runnable;
+    defer self._fragment_scripts_runnable = previous_scripts_runnable;
+
+    var parser = Parser.init(self.call_arena, node, self, .{ .allow_declarative_shadow = opts.allow_declarative_shadow });
     parser.parseFragment(html);
 
     // html5ever wraps fragment output in an <html> element; unwrap so its
@@ -3680,7 +3701,14 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, allow_d
 
 fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     if ((comptime from_parser) and self._parse_mode == .fragment) {
-        // we don't execute scripts added via innerHTML = '<script...';
+        if (self._fragment_scripts_runnable == false) {
+            // We don't execute scripts added via innerHTML = '<script...'. Mark
+            // them "already started" so they stay inert even after the parsed
+            // nodes are inserted into a connected document.
+            if (node.is(Element.Html.Script)) |script| {
+                script._executed = true;
+            }
+        }
         return;
     }
     // A node's "ready" work (running a <script>, loading an <iframe> / <link> /
