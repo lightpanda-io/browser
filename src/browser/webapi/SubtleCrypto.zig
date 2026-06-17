@@ -414,7 +414,6 @@ fn deriveRaw(
             if (eqlIgnoreCase(params.name, "X25519")) {
                 // null length means "derive the full shared secret" (256 bits).
                 const result = X25519.deriveBits(base_key, params.public, length orelse 256, exec) catch |err| switch (err) {
-                    error.InvalidAccessError => return error.InvalidAccessError,
                     error.OutOfMemory => return error.OutOfMemory,
                     else => return error.OperationError,
                 };
