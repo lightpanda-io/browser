@@ -277,10 +277,16 @@ const CacheContext = struct {
             const stale = self.stale_entry.?;
             self.stale_entry = null;
 
+            var iter = self.req_headers.iterator();
+            const headers = try iter.collect(arena);
+
             transfer.client.network.cache.?.renew(
                 arena,
-                self.req_url,
-                std.time.timestamp(),
+                .{
+                    .url = self.req_url,
+                    .timestamp = std.time.timestamp(),
+                    .headers = headers.items,
+                },
             ) catch |err| {
                 log.warn(.cache, "renew failed", .{ .err = err });
             };

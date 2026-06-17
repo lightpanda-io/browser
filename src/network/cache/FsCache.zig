@@ -23,6 +23,7 @@ const Cache = @import("Cache.zig");
 
 const log = lp.log;
 const CacheRequest = Cache.CacheRequest;
+const RenewRequest = Cache.RenewRequest;
 const CachedMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;
 
@@ -298,8 +299,8 @@ pub fn evict(self: *FsCache, url: []const u8) void {
     };
 }
 
-pub fn renew(self: *FsCache, arena: std.mem.Allocator, url: []const u8, timestamp: i64) !void {
-    const hashed_key = hashKey(url);
+pub fn renew(self: *FsCache, arena: std.mem.Allocator, req: RenewRequest) !void {
+    const hashed_key = hashKey(req.url);
     const cache_p = cachePath(&hashed_key);
 
     const lock = self.getLockPtr(&hashed_key);
@@ -307,7 +308,7 @@ pub fn renew(self: *FsCache, arena: std.mem.Allocator, url: []const u8, timestam
     defer lock.unlock();
 
     const file = self.dir.openFile(&cache_p, .{ .mode = .read_only }) catch |e| {
-        log.warn(.cache, "renew open failed", .{ .url = url, .err = e });
+        log.warn(.cache, "renew open failed", .{ .url = req.url, .err = e });
         return e;
     };
     defer file.close();
@@ -318,7 +319,7 @@ pub fn renew(self: *FsCache, arena: std.mem.Allocator, url: []const u8, timestam
 
     var len_buf: [BODY_LEN_HEADER_LEN]u8 = undefined;
     r.readSliceAll(&len_buf) catch |e| {
-        log.warn(.cache, "renew read len", .{ .url = url, .err = e });
+        log.warn(.cache, "renew read len", .{ .url = req.url, .err = e });
         return e;
     };
     const body_len = std.mem.readInt(u64, &len_buf, .little);
@@ -326,27 +327,25 @@ pub fn renew(self: *FsCache, arena: std.mem.Allocator, url: []const u8, timestam
     try file_reader.seekTo(BODY_LEN_HEADER_LEN + body_len);
 
     var json_reader = std.json.Reader.init(arena, r);
-    var parsed = std.json.parseFromTokenSourceLeaky(
+    var parsed: CacheMetadataJson = std.json.parseFromTokenSourceLeaky(
         CacheMetadataJson,
         arena,
         &json_reader,
         .{ .allocate = .alloc_always },
     ) catch |e| {
-        log.warn(.cache, "renew parse", .{ .url = url, .err = e });
+        log.warn(.cache, "renew parse", .{ .url = req.url, .err = e });
         return e;
     };
 
-    parsed.metadata.stored_at = timestamp;
-    parsed.metadata.age_at_store = 0;
-
+    parsed.metadata.renew(req);
     try file_reader.seekTo(BODY_LEN_HEADER_LEN);
 
     self.writeCacheFile(&hashed_key, r, body_len, parsed.metadata) catch |e| {
-        log.warn(.cache, "renew write", .{ .url = url, .err = e });
+        log.warn(.cache, "renew write", .{ .url = req.url, .err = e });
         return e;
     };
 
-    log.debug(.cache, "renewed", .{ .url = url });
+    log.debug(.cache, "renewed", .{ .url = req.url });
 }
 
 const testing = std.testing;
@@ -916,7 +915,14 @@ test "FsCache: renew refreshes expiry" {
     try cache.put(meta, "hello world");
 
     // renew while still fresh at now+500
-    try cache.renew(arena.allocator(), "https://example.com", now + 500);
+    try cache.renew(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 500,
+            .headers = &.{},
+        },
+    );
 
     // Without revalidation would expire at now+1000, but clock reset to now+500
     // so still fresh at now+1200
@@ -970,7 +976,14 @@ test "FsCache: renew preserves body" {
     const body = "original body";
     try cache.put(meta, body);
 
-    try cache.renew(arena.allocator(), "https://example.com", now + 100);
+    try cache.renew(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 100,
+            .headers = &.{},
+        },
+    );
 
     const result = cache.get(arena.allocator(), .{
         .url = "https://example.com",

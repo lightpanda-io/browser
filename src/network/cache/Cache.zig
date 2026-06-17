@@ -55,9 +55,9 @@ pub fn evict(self: *Cache, url: []const u8) void {
     };
 }
 
-pub fn renew(self: *Cache, arena: std.mem.Allocator, url: []const u8, timestamp: i64) !void {
+pub fn renew(self: *Cache, arena: std.mem.Allocator, req: RenewRequest) !void {
     return switch (self.kind) {
-        inline else => |*c| c.renew(arena, url, timestamp),
+        inline else => |*c| c.renew(arena, req),
     };
 }
 
@@ -173,12 +173,38 @@ pub const CachedMetadata = struct {
     pub fn hasValidators(self: CachedMetadata) bool {
         return self.etag != null or self.last_modified != null;
     }
+
+    pub fn renew(self: *CachedMetadata, req: RenewRequest) void {
+        self.stored_at = req.timestamp;
+        self.age_at_store = 0;
+
+        for (req.headers) |h| {
+            const name = h.name;
+            const value = h.value;
+
+            if (std.ascii.eqlIgnoreCase("Age", name)) {
+                self.age_at_store = std.fmt.parseInt(u64, value, 10) catch 0;
+            } else if (std.ascii.eqlIgnoreCase("Cache-Control", name)) {
+                self.cache_control = CacheControl.parse(value) orelse continue;
+            } else if (std.ascii.eqlIgnoreCase("ETag", name)) {
+                self.etag = value;
+            } else if (std.ascii.eqlIgnoreCase("Last-Modified", name)) {
+                self.last_modified = value;
+            }
+        }
+    }
 };
 
 pub const CacheRequest = struct {
     url: []const u8,
     timestamp: i64,
     request_headers: []const Http.Header,
+};
+
+pub const RenewRequest = struct {
+    url: []const u8,
+    timestamp: i64,
+    headers: []const Http.Header,
 };
 
 pub const CachedData = union(enum) {
