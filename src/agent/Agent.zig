@@ -683,17 +683,12 @@ fn runRepl(self: *Agent) void {
             },
         };
 
-        if (cmd == .llm) {
-            var name_buf: [32]u8 = undefined;
-            const name = std.fmt.bufPrint(&name_buf, "/{s}", .{@tagName(cmd.llm)}) catch "/?";
-            if (!self.requireLlm(name)) continue :repl;
-        }
-
         switch (cmd) {
             .comment => continue :repl,
             .llm => |lc| {
                 var label_buf: [32]u8 = undefined;
                 const label = std.fmt.bufPrint(&label_buf, "/{s}", .{@tagName(lc)}) catch "/?";
+                if (!self.requireLlm(label)) continue :repl;
                 _ = self.runTurn(.{ .prompt = lc.prompt(), .record_comment = line, .capture_for_save = true, .label = label });
             },
             .tool_call => |tc| {
@@ -902,11 +897,11 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         return;
     };
     // Ollama's key is a placeholder, so probe the server instead of trusting it.
-    if (provider == .ollama and settings.detectOllama(self.allocator, self.model_base_url) == null) {
+    if (provider == .ollama and settings.detectLocalProvider(self.allocator, .ollama, self.model_base_url) == null) {
         self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.ollama_default_base_url});
         return;
     }
-    if (provider == .llama_cpp and settings.detectLlamaCpp(self.allocator, self.model_base_url) == null) {
+    if (provider == .llama_cpp and settings.detectLocalProvider(self.allocator, .llama_cpp, self.model_base_url) == null) {
         self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
         return;
     }
@@ -1568,14 +1563,15 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             if (last_extract_idx) |idx| {
                 if (tool == .extract and idx != i) continue;
             }
-            const args = browser_tools.normalizeArgKeys(self.conversation.arena.allocator(), tool, tc.arguments) catch tc.arguments;
+            const ca = self.conversation.arena.allocator();
+            const args = browser_tools.normalizeArgKeys(ca, tool, tc.arguments) catch tc.arguments;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
             const cmd = Command.fromToolCall(tool, args);
             const to_record = if (cmd.isRecorded())
                 cmd
             else
-                navigationGoto(self.conversation.arena.allocator(), tool, args) orelse continue;
+                navigationGoto(ca, tool, args) orelse continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| self.recordSaveComment(c);
                 recorded_any = true;

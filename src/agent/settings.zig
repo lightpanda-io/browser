@@ -52,14 +52,6 @@ pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider,
     return .{ .provider = tag, .key = key };
 }
 
-pub fn detectOllama(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credentials {
-    return detectLocalProvider(allocator, .ollama, base_url);
-}
-
-pub fn detectLlamaCpp(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credentials {
-    return detectLocalProvider(allocator, .llama_cpp, base_url);
-}
-
 /// True when a non-Ollama provider key is available (flag, remembered, or
 /// env-detected). Skips the Ollama probe so it isn't run twice at startup; the
 /// interactive picker only fires on detected keys, which this still catches.
@@ -91,10 +83,10 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
     const found = zenai.provider.detectKeys(&buf, zenai.provider.default_candidates);
     if (found.len == 0) {
-        if (detectOllama(allocator, opts.base_url)) |creds| {
+        if (detectLocalProvider(allocator, .ollama, opts.base_url)) |creds| {
             return .{ .credentials = creds, .source = .detected };
         }
-        if (detectLlamaCpp(allocator, opts.base_url)) |creds| {
+        if (detectLocalProvider(allocator, .llama_cpp, opts.base_url)) |creds| {
             return .{ .credentials = creds, .source = .detected };
         }
         std.debug.print(
@@ -164,7 +156,7 @@ pub fn saveRemembered(remembered: Remembered) !void {
 }
 
 /// Cloud providers with a key set. Ollama is excluded — its availability needs
-/// a live probe (`detectOllama`), too costly for an unconditional startup scan.
+/// a live probe (`detectLocalProvider`), too costly for an unconditional startup scan.
 pub fn availableProviders(buf: []Credentials) []Credentials {
     return zenai.provider.detectKeys(buf, zenai.provider.default_candidates);
 }
