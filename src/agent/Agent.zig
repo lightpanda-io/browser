@@ -259,9 +259,13 @@ total_usage: zenai.provider.Usage = .{},
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
 available_providers: []const []const u8,
-/// Lazily-probed Ollama reachability for `/provider` completion, cached so the
-/// per-keystroke hinter probes the local server at most once per session.
-ollama_completable: ?bool = null,
+/// Lazily-probed reachability of each `local_providers` entry for `/provider`
+/// completion, cached so the per-keystroke hinter probes each local server at
+/// most once per session.
+local_completable: [local_providers.len]?bool = @splat(null),
+api_error_buf: [512]u8 = undefined,
+/// Last failure's status+message, surfaced by `runTurn` past `error.ApiError`.
+api_error_detail: ?[]const u8 = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
@@ -585,7 +589,9 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
             return false;
         },
         else => {
-            self.terminal.printError("{s} failed: {s}", .{ input.label, @errorName(err) });
+            // Detail is set by `processUserMessage`'s catch and cleared at the
+            // start of the next turn; fall back to the raw error name.
+            self.terminal.printError("{s} failed: {s}", .{ input.label, self.api_error_detail orelse @errorName(err) });
             return false;
         },
     };
@@ -811,6 +817,11 @@ const llm_setup_hint = "set an API key (" ++ api_keys_hint ++ ") and run /provid
 /// parser, autocomplete, and save report so they can't drift apart.
 const provider_off_keyword = "null";
 
+/// Keyless local providers whose env key is a placeholder, so reachability needs
+/// a live `/v1/models` probe (`settings.detectLocalProvider`). Indexes into
+/// `local_completable`.
+const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp };
+
 fn requireLlm(self: *Agent, name: []const u8) bool {
     if (self.model_credentials == null) {
         self.terminal.printError("{s} requires an LLM — " ++ llm_setup_hint ++ ".", .{name});
@@ -896,6 +907,11 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     // Ollama's key is a placeholder, so probe the server instead of trusting it.
     if (provider == .ollama and settings.detectOllama(self.allocator, self.model_base_url) == null) {
         self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.ollama_default_base_url});
+        return;
+    }
+    // llama.cpp's key is also a placeholder — probe its server too.
+    if (provider == .llama_cpp and settings.detectLlamaCpp(self.allocator, self.model_base_url) == null) {
+        self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
         return;
     }
     self.setProvider(.{ .provider = provider, .key = key }) catch |err| {
@@ -1459,12 +1475,26 @@ fn recordSlashToolCall(
     });
 }
 
+/// Render the client's last failure into `api_error_buf`. Prefers the server's
+/// HTTP status+message; with no status (transport/parse/empty-response failures)
+/// falls back to the concrete error name, which the caller would otherwise lose
+/// to the blanket `error.ApiError`. Status-only when the message overflows.
+fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []const u8 {
+    const e = client.lastError();
+    const status = e.status orelse return @errorName(err);
+    if (e.message) |m| {
+        if (std.fmt.bufPrint(&self.api_error_buf, "HTTP {d} — {s}", .{ status, m })) |s| return s else |_| {}
+    }
+    return std.fmt.bufPrint(&self.api_error_buf, "HTTP {d}", .{status}) catch @errorName(err);
+}
+
 /// Returned text lives in `conversation.arena`, valid only until the next prune.
 /// Caller must call `conversation.prune()` after consuming it — pruning earlier
 /// frees the arena the slice points into. `null` means the model emitted nothing
 /// even after the synthesis turn.
 fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const ma = self.conversation.arena.allocator();
+    self.api_error_detail = null;
 
     try self.conversation.ensureSystemPrompt();
 
@@ -1516,6 +1546,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         // UserCancelled, not ApiError, so the user sees the outcome they asked for.
         if (self.cancel_requested.load(.acquire)) return self.drainCancellation(msg_baseline);
         log.err(.app, "AI API error", .{ .err = err });
+        self.api_error_detail = self.formatApiError(provider_client, err);
         self.conversation.rollback(msg_baseline);
         return error.ApiError;
     };
@@ -1741,27 +1772,29 @@ const ModelCompletions = struct {
 /// avoid reading environment variables on each autocomplete keypress.
 fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []const u8 {
     const self: *Agent = @ptrCast(@alignCast(context));
-    const ollama = self.ollamaCompletable();
-    const names = arena.alloc([]const u8, self.available_providers.len + 1 + @as(usize, @intFromBool(ollama))) catch return &.{};
+    // A local server joins `/provider` completions only when it actually answers,
+    // since its env key is a placeholder. Probe each once and cache the result.
+    var reachable: [local_providers.len]bool = undefined;
+    var extra: usize = 0;
+    for (local_providers, 0..) |tag, i| {
+        reachable[i] = self.local_completable[i] orelse blk: {
+            const v = settings.detectLocalProvider(self.allocator, tag, self.model_base_url) != null;
+            self.local_completable[i] = v;
+            break :blk v;
+        };
+        if (reachable[i]) extra += 1;
+    }
+    const names = arena.alloc([]const u8, self.available_providers.len + 1 + extra) catch return &.{};
     for (self.available_providers, 0..) |p, i| {
         names[i] = arena.dupe(u8, p) catch return &.{};
     }
     var n = self.available_providers.len;
-    if (ollama) {
-        names[n] = @tagName(Config.AiProvider.ollama);
+    for (local_providers, reachable) |tag, r| if (r) {
+        names[n] = @tagName(tag);
         n += 1;
-    }
+    };
     names[n] = provider_off_keyword;
     return names;
-}
-
-/// Ollama joins `/provider` completions only when a server actually answers,
-/// since its env key is a placeholder. Probed once and cached (see field).
-fn ollamaCompletable(self: *Agent) bool {
-    if (self.ollama_completable) |v| return v;
-    const v = settings.detectOllama(self.allocator, self.model_base_url) != null;
-    self.ollama_completable = v;
-    return v;
 }
 
 /// `CompletionSource.models`. Blocks on a one-time fetch per provider, caching

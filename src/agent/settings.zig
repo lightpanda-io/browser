@@ -40,17 +40,25 @@ pub const ResolvedProvider = struct {
     source: enum { flag, remembered, detected, picked },
 };
 
-/// Ollama needs no API key, so it's excluded from env detection
-/// (`default_candidates`) and only probed here. Null means no server answered
-/// with a pulled model — the only honest signal of Ollama availability, since
-/// its env key is a constant placeholder.
-pub fn detectOllama(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credentials {
-    const key = zenai.provider.envApiKey(.ollama) orelse return null;
+/// Probe a keyless local provider (Ollama, llama.cpp). These are excluded from
+/// env detection (`default_candidates`) because their env key is a constant
+/// placeholder, so the only honest availability signal is the server answering
+/// `/v1/models` with a loaded model. Null means no server responded.
+pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Credentials {
+    const key = zenai.provider.envApiKey(tag) orelse return null;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), .ollama, key, base_url) catch return null;
+    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), tag, key, base_url) catch return null;
     if (ids.len == 0) return null;
-    return .{ .provider = .ollama, .key = key };
+    return .{ .provider = tag, .key = key };
+}
+
+pub fn detectOllama(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credentials {
+    return detectLocalProvider(allocator, .ollama, base_url);
+}
+
+pub fn detectLlamaCpp(allocator: std.mem.Allocator, base_url: ?[:0]const u8) ?Credentials {
+    return detectLocalProvider(allocator, .llama_cpp, base_url);
 }
 
 /// True when a non-Ollama provider key is available (flag, remembered, or
@@ -87,8 +95,11 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
         if (detectOllama(allocator, opts.base_url)) |creds| {
             return .{ .credentials = creds, .source = .detected };
         }
+        if (detectLlamaCpp(allocator, opts.base_url)) |creds| {
+            return .{ .credentials = creds, .source = .detected };
+        }
         std.debug.print(
-            \\No API key detected. Set {s}, or run a local Ollama server with a pulled model.
+            \\No API key detected. Set {s}, or run a local Ollama or llama.cpp server with a loaded model.
             \\To use the basic REPL (without LLM integration), pass the --no-llm option.
             \\
         , .{api_keys_hint});
@@ -191,9 +202,11 @@ pub const ReconciledModel = union(enum) {
 
 /// Validate `desired` against the provider's catalog, mirroring the interactive
 /// `/model` command. Empty list (unreachable server) leaves it unchecked; an
-/// explicit unlisted model is fatal. Ollama's local catalog is authoritative, so
-/// its default is substituted when not pulled; cloud defaults are hardcoded real
-/// models, trusted as-is.
+/// explicit unlisted model is fatal. The local servers' catalogs (Ollama,
+/// llama.cpp) are authoritative, so their default is substituted with the first
+/// served model when it isn't loaded — llama.cpp's default is empty, since the
+/// served model is whatever `llama-server` was launched with; cloud defaults are
+/// hardcoded real models, trusted as-is.
 pub fn reconcileModel(
     allocator: std.mem.Allocator,
     llm: Credentials,
@@ -207,8 +220,11 @@ pub fn reconcileModel(
     if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
 
     if (!explicit) {
-        if (llm.provider != .ollama) return .{ .use = try allocator.dupe(u8, desired) };
-        std.debug.print("Default Ollama model '{s}' is not installed; using '{s}'.\n", .{ desired, ids[0] });
+        switch (llm.provider) {
+            .ollama, .llama_cpp => {},
+            else => return .{ .use = try allocator.dupe(u8, desired) },
+        }
+        std.debug.print("Default {s} model '{s}' is not loaded; using '{s}'.\n", .{ @tagName(llm.provider), desired, ids[0] });
         return .{ .use = try allocator.dupe(u8, ids[0]) };
     }
 
