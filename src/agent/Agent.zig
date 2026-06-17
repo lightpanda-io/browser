@@ -530,6 +530,7 @@ fn resetAfterCancel(self: *Agent, baseline: usize) void {
     self.conversation.rollback(baseline);
     self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
+    self.http_interrupt.reset();
 }
 
 /// One agent turn: the prompt sent to the model, plus optional context — a
@@ -1116,6 +1117,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     const user_msg = self.buildSaveSynthesisMessage(ma, path, previous_script, prompt) catch return self.failSave("out of memory");
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
 
+    self.http_interrupt.reset();
     self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
@@ -1488,6 +1490,7 @@ fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []
 fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const ma = self.conversation.arena.allocator();
     self.api_error_detail = null;
+    self.http_interrupt.reset();
 
     try self.conversation.ensureSystemPrompt();
 
