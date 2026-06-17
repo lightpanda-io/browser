@@ -20,7 +20,7 @@ const builtin = @import("builtin");
 
 const Config = @import("../../Config.zig");
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
+const Execution = js.Execution;
 
 const NavigatorUAData = @This();
 
@@ -55,14 +55,14 @@ pub fn toJSON(_: *const NavigatorUAData) struct {
     };
 }
 
-pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8, frame: *Frame) !js.Promise {
+pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8, exec: *const Execution) !js.Promise {
     // This should always return `brands` + `mobile` + `platform` and then whatever
     // "hints" field is requested (assuming the browser has permission), but it's
     // also valid to just return everything.
 
     _ = hints;
 
-    return frame.js.local.?.resolvePromise(.{
+    return exec.js.local.?.resolvePromise(.{
         .brands = brandList(),
         .mobile = false,
         .platform = uaPlatform(),

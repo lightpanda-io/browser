@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
-const Frame = @import("../Frame.zig");
+const Execution = js.Execution;
 
 const Allocator = std.mem.Allocator;
 
@@ -38,9 +38,9 @@ const QueryDescriptor = struct {
     name: []const u8,
 };
 // We always report 'prompt' (the default safe value — neither granted nor denied).
-pub fn query(_: *const Permissions, qd: QueryDescriptor, frame: *Frame) !js.Promise {
-    const arena = try frame.getArena(.tiny, "PermissionStatus");
-    errdefer frame.releaseArena(arena);
+pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution) !js.Promise {
+    const arena = try exec.getArena(.tiny, "PermissionStatus");
+    errdefer exec.releaseArena(arena);
 
     const status = try arena.create(PermissionStatus);
     status.* = .{
@@ -48,7 +48,7 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, frame: *Frame) !js.Prom
         ._state = "prompt",
         ._name = try arena.dupe(u8, qd.name),
     };
-    return frame.js.local.?.resolvePromise(status);
+    return exec.js.local.?.resolvePromise(status);
 }
 
 const PermissionStatus = struct {

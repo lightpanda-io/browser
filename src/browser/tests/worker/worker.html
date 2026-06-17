@@ -251,6 +251,47 @@
   }
 </script>
 
+<script id="worker_navigator" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./navigator-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    worker.postMessage({ pageUserAgent: navigator.userAgent });
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker navigator error: ' + data.err);
+      const r = data.results;
+
+      testing.expectEqual(true, r.has_navigator);
+      testing.expectEqual(true, r.user_agent_matches_page);
+      testing.expectEqual('Netscape', r.app_name);
+      testing.expectTrue(r.platform.length > 0);
+      testing.expectEqual(true, r.on_line);
+      testing.expectEqual(true, r.identity_stable);
+
+      // Permissions (transitive: Permissions -> PermissionStatus)
+      testing.expectEqual('geolocation', r.permission_name);
+      testing.expectEqual('prompt', r.permission_state);
+
+      // StorageManager (transitive: StorageManager -> StorageEstimate)
+      testing.expectEqual(0, r.storage_usage);
+      testing.expectTrue(r.storage_quota > 0);
+
+      // NavigatorUAData
+      testing.expectEqual(true, r.has_ua_data);
+      testing.expectTrue(typeof r.ua_high_entropy_arch === 'string');
+
+      // [Exposed=Window] members aren't part of WorkerNavigator.
+      testing.expectEqual(true, r.no_plugins);
+      testing.expectEqual(true, r.no_register_protocol_handler);
+      testing.expectEqual(true, r.no_model_context);
+    });
+  }
+</script>
+
 <script id="worker_dynamic_import" type=module>
   {
     const state = await testing.async();
