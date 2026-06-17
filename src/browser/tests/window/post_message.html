@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=postMessageStructuredClone type=module>
+// window.postMessage delivers a structured clone: the receiver gets a fresh,
+// independent copy, not the literal object the sender posted.
+{
+    const state = await testing.async();
+    const payload = { n: 1 };
+    let received = null;
+
+    window.addEventListener('message', (e) => {
+        received = e.data;
+        state.resolve();
+    });
+
+    window.postMessage(payload, '*');
+
+    await state.done(() => {
+        testing.expectEqual(false, received === payload);
+        testing.expectEqual(1, received.n);
+        // Mutating the sender's object after posting doesn't affect the clone.
+        payload.n = 999;
+        testing.expectEqual(1, received.n);
+    });
+}
+</script>
+
+<script id=postMessageDataCloneError>
+// A value that cannot be structured-cloned throws synchronously (DataCloneError).
+{
+    let threw = false;
+    try {
+        window.postMessage(function () {}, '*');
+    } catch (e) {
+        threw = true;
+        testing.expectEqual('DataCloneError', e.name);
+    }
+    testing.expectEqual(true, threw);
+}
+</script>

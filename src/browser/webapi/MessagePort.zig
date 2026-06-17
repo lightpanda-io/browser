@@ -50,7 +50,7 @@ pub fn entangle(port1: *MessagePort, port2: *MessagePort) void {
     port2._entangled_port = port1;
 }
 
-pub fn postMessage(self: *MessagePort, message: js.Value.Temp, frame: *Frame) !void {
+pub fn postMessage(self: *MessagePort, message: js.Value, frame: *Frame) !void {
     if (self._closed) {
         return;
     }
@@ -60,16 +60,39 @@ pub fn postMessage(self: *MessagePort, message: js.Value.Temp, frame: *Frame) !v
         return;
     }
 
+    // StructuredSerialize runs synchronously (per spec): clone the message into a
+    // fresh, self-owned temp now so the receiver gets an independent copy (a
+    // mutation on one side isn't visible to the other) and an unserializable
+    // value throws a DataCloneError to the caller. Mirrors Worker.postMessage.
+    const cloned = blk: {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        // Contain any V8 exception from a failed serialization so it surfaces as
+        // a clean DataCloneError; deinit() (no rethrow) clears it.
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
+        const c = message.structuredCloneTo(&ls.local) catch {
+            return error.DataClone;
+        };
+        break :blk try c.temp();
+    };
+    errdefer cloned.release();
+
     // Create callback to deliver message
     const callback = try frame._factory.create(PostMessageCallback{
         .frame = frame,
         .port = other,
-        .message = message,
+        .message = cloned,
     });
 
     try frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "MessagePort.postMessage",
         .low_priority = false,
+        .finalizer = PostMessageCallback.cancelled,
     });
 }
 
@@ -111,6 +134,14 @@ const PostMessageCallback = struct {
     message: js.Value.Temp,
     frame: *Frame,
 
+    // Called by the scheduler if the task is dropped before it runs. `run` and
+    // `cancelled` are mutually exclusive, so the temp is released exactly once.
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+        self.message.release();
+        self.deinit();
+    }
+
     fn deinit(self: *PostMessageCallback) void {
         self.frame._factory.destroy(self);
     }
@@ -120,25 +151,33 @@ const PostMessageCallback = struct {
         defer self.deinit();
         const frame = self.frame;
 
+        // The MessageEvent takes ownership of the cloned temp and releases it on
+        // teardown; on any path where we don't hand it over, release it here so
+        // it doesn't leak.
         if (self.port._closed) {
+            self.message.release();
             return null;
         }
 
         const target = self.port.asEventTarget();
-        if (frame._event_manager.hasDirectListeners(target, "message", self.port._on_message)) {
-            const event = (MessageEvent.initTrusted(comptime .wrap("message"), .{
-                .data = .{ .value = self.message },
-                .origin = "",
-                .source = null,
-            }, frame._page) catch |err| {
-                log.err(.dom, "MessagePort.postMessage", .{ .err = err });
-                return null;
-            }).asEvent();
-
-            frame._event_manager.dispatchDirect(target, event, self.port._on_message, .{ .context = "MessagePort message" }) catch |err| {
-                log.err(.dom, "MessagePort.postMessage", .{ .err = err });
-            };
+        if (!frame._event_manager.hasDirectListeners(target, "message", self.port._on_message)) {
+            self.message.release();
+            return null;
         }
+
+        const event = (MessageEvent.initTrusted(comptime .wrap("message"), .{
+            .data = .{ .value = self.message },
+            .origin = "",
+            .source = null,
+        }, frame._page) catch |err| {
+            self.message.release();
+            log.err(.dom, "MessagePort.postMessage", .{ .err = err });
+            return null;
+        }).asEvent();
+
+        frame._event_manager.dispatchDirect(target, event, self.port._on_message, .{ .context = "MessagePort message" }) catch |err| {
+            log.err(.dom, "MessagePort.postMessage", .{ .err = err });
+        };
 
         return null;
     }
@@ -153,7 +192,7 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
     };
 
-    pub const postMessage = bridge.function(MessagePort.postMessage, .{});
+    pub const postMessage = bridge.function(MessagePort.postMessage, .{ .dom_exception = true });
     pub const start = bridge.function(MessagePort.start, .{});
     pub const close = bridge.function(MessagePort.close, .{});
 
