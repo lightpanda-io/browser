@@ -300,6 +300,7 @@ pub fn tryCache(
     };
 }
 const testing = @import("../../testing.zig");
+
 test "Cache: CacheControl.parse" {
     try testing.expectEqual(300, CacheControl.parse("max-age=300").?.max_age);
 
@@ -332,4 +333,112 @@ test "Cache: CacheControl.parse" {
 
     try testing.expectEqual(null, CacheControl.parse("max-age=abc"));
     try testing.expectEqual(null, CacheControl.parse("max-age="));
+}
+
+test "Cache: CachedMetadata.renew updates timestamp and age" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 50,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    meta.renew(.{ .url = "https://example.com", .timestamp = 2000, .headers = &.{} });
+
+    try testing.expectEqual(2000, meta.stored_at);
+    try testing.expectEqual(0, meta.age_at_store);
+}
+
+test "Cache: CachedMetadata.renew updates age from Age header" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    meta.renew(.{
+        .url = "https://example.com",
+        .timestamp = 2000,
+        .headers = &.{.{ .name = "Age", .value = "42" }},
+    });
+
+    try testing.expectEqual(42, meta.age_at_store);
+}
+
+test "Cache: CachedMetadata.renew updates cache_control" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    meta.renew(.{
+        .url = "https://example.com",
+        .timestamp = 2000,
+        .headers = &.{.{ .name = "Cache-Control", .value = "max-age=1200" }},
+    });
+
+    try testing.expectEqual(1200, meta.cache_control.max_age);
+}
+
+test "Cache: CachedMetadata.renew preserves cache_control on invalid header" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    meta.renew(.{
+        .url = "https://example.com",
+        .timestamp = 2000,
+        .headers = &.{.{ .name = "Cache-Control", .value = "no-store" }},
+    });
+
+    try testing.expectEqual(600, meta.cache_control.max_age);
+}
+
+test "Cache: CachedMetadata.renew updates etag and last_modified" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+        .etag = "\"old-etag\"",
+        .last_modified = "Mon, 01 Jan 2024 00:00:00 GMT",
+    };
+
+    meta.renew(.{
+        .url = "https://example.com",
+        .timestamp = 2000,
+        .headers = &.{
+            .{ .name = "ETag", .value = "\"new-etag\"" },
+            .{ .name = "Last-Modified", .value = "Tue, 02 Jan 2024 00:00:00 GMT" },
+        },
+    });
+
+    try testing.expectEqualSlices(u8, "\"new-etag\"", meta.etag.?);
+    try testing.expectEqualSlices(u8, "Tue, 02 Jan 2024 00:00:00 GMT", meta.last_modified.?);
 }
