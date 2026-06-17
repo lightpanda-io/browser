@@ -83,6 +83,54 @@ testing.async(async () => {
     receiver.close();
 });
 
+// The message is structured-cloned: receivers get an independent copy, not the
+// sender's literal object, and one receiver mutating it does not affect others.
+testing.async(async () => {
+    const sender = new BroadcastChannel("clone");
+    const r1 = new BroadcastChannel("clone");
+    const r2 = new BroadcastChannel("clone");
+
+    const payload = { n: 1 };
+    let got1 = null;
+    let got2 = null;
+
+    await new Promise((resolve) => {
+        let pending = 2;
+        const done = () => { if (--pending === 0) resolve(); };
+        r1.onmessage = (e) => { got1 = e.data; got1.n = 999; done(); };
+        r2.onmessage = (e) => { got2 = e.data; done(); };
+        sender.postMessage(payload);
+    });
+
+    // Not the same object the sender posted.
+    testing.expectEqual(false, got1 === payload);
+    testing.expectEqual(false, got2 === payload);
+    // Each receiver got its own independent copy.
+    testing.expectEqual(false, got1 === got2);
+    // Sender's object is untouched, and r1's mutation didn't leak into r2.
+    testing.expectEqual(1, payload.n);
+    testing.expectEqual(1, got2.n);
+    testing.expectEqual(999, got1.n);
+
+    sender.close();
+    r1.close();
+    r2.close();
+});
+
+// A value that cannot be structured-cloned throws synchronously (DataCloneError).
+{
+    const bc = new BroadcastChannel("uncloneable");
+    let threw = false;
+    try {
+        bc.postMessage(function () {});
+    } catch (e) {
+        threw = true;
+        testing.expectEqual("DataCloneError", e.name);
+    }
+    testing.expectEqual(true, threw);
+    bc.close();
+}
+
 // After close(), a channel no longer receives messages, and posting on a
 // closed channel throws InvalidStateError.
 testing.async(async () => {

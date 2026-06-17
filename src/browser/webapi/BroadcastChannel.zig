@@ -71,15 +71,42 @@ pub fn postMessage(self: *BroadcastChannel, message: js.Value.Temp, frame: *Fram
         return error.InvalidStateError;
     }
 
+    // StructuredSerialize runs synchronously (per spec): clone the message once
+    // now so an unserializable value throws a DataCloneError to the caller, and
+    // so the async delivery has a self-owned snapshot to copy from. Each receiver
+    // gets its own re-clone of this snapshot in `run()` — that gives every
+    // MessageEvent an independently owned handle (a shared temp would be freed by
+    // the first receiver's event teardown, leaving the rest reading a dead slot)
+    // and honours the spec requirement that receivers don't share one object.
+    const snapshot = blk: {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        // Contain any V8 exception raised by a failed serialization so we can
+        // re-raise it as a clean DataCloneError (per spec) instead of leaking a
+        // stale pending exception into the caller. deinit() (no rethrow) clears it.
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
+        const cloned = message.local(&ls.local).structuredCloneTo(&ls.local) catch {
+            return error.DataClone;
+        };
+        break :blk try cloned.temp();
+    };
+    errdefer snapshot.release();
+
     const callback = try frame._factory.create(PostMessageCallback{
         .frame = frame,
         .sender = self,
-        .message = message,
+        .message = snapshot,
     });
 
     try frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "BroadcastChannel.postMessage",
         .low_priority = false,
+        .finalizer = PostMessageCallback.cancelled,
     });
 }
 
@@ -109,8 +136,19 @@ pub fn setOnMessageError(self: *BroadcastChannel, cb: ?js.Function.Global) !void
 
 const PostMessageCallback = struct {
     sender: *BroadcastChannel,
+    // A self-owned structured-clone snapshot of the posted message. Re-cloned
+    // (never shared) into each receiver's MessageEvent, then released.
     message: js.Value.Temp,
     frame: *Frame,
+
+    // Called by the scheduler if the task is dropped before it runs (e.g. page
+    // teardown). `run` and `cancelled` are mutually exclusive, so the snapshot
+    // is released exactly once.
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+        self.message.release();
+        self.deinit();
+    }
 
     fn deinit(self: *PostMessageCallback) void {
         self.frame._factory.destroy(self);
@@ -118,9 +156,18 @@ const PostMessageCallback = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+        // LIFO: deinit() frees `self`, so it must run last; the snapshot is
+        // released after delivery (no MessageEvent owns it) but before deinit.
         defer self.deinit();
+        defer self.message.release();
+
         const frame = self.frame;
         const sender = self.sender;
+
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const snapshot = self.message.local(&ls.local);
 
         var it = frame._broadcast_channels.first;
         while (it) |node| : (it = node.next) {
@@ -139,13 +186,27 @@ const PostMessageCallback = struct {
                 continue;
             }
 
+            // Independent clone per receiver. The snapshot is already plain,
+            // serializable data, so this cannot raise a DataCloneError. The
+            // resulting temp is owned by the MessageEvent, which releases it on
+            // teardown — so each receiver frees only its own handle.
+            const cloned = snapshot.structuredCloneTo(&ls.local) catch |err| {
+                log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                continue;
+            };
+            const cloned_temp = cloned.temp() catch |err| {
+                log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                continue;
+            };
+
             const event = (MessageEvent.initTrusted(comptime .wrap("message"), .{
-                .data = .{ .value = self.message },
+                .data = .{ .value = cloned_temp },
                 .origin = "",
                 .source = null,
             }, frame._page) catch |err| {
+                cloned_temp.release();
                 log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
-                return null;
+                continue;
             }).asEvent();
 
             frame._event_manager.dispatchDirect(target, event, channel._on_message, .{ .context = "BroadcastChannel message" }) catch |err| {
