@@ -183,6 +183,16 @@ pub fn isBarePositional(self: Schema, args: std.json.ObjectMap) bool {
     return v == .string;
 }
 
+/// The field a single leading positional binds to: the lone required field,
+/// or — when nothing is required — the tool's only field (e.g. getEnv binds to
+/// `name`). Null when there's no required field and more than one optional
+/// field, since the target would be ambiguous (click's selector/backendNodeId).
+pub fn leadingPositionalField(self: Schema) ?[]const u8 {
+    if (self.required.len == 1) return self.required[0];
+    if (self.required.len == 0 and self.fields.len == 1) return self.fields[0].name;
+    return null;
+}
+
 /// Parse `rest` (args portion of a slash command) into a `std.json.Value`.
 /// Returns null when the schema takes no args and `rest` is empty.
 ///
@@ -217,19 +227,20 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
     const tokens = try tokenize(arena, rest);
 
     const leading_positional = tokens.len >= 1 and !looksLikeKv(tokens[0]);
-    if (leading_positional and self.required.len != 1) return error.PositionalNotAllowed;
+    const positional_field = self.leadingPositionalField();
+    if (leading_positional and positional_field == null) return error.PositionalNotAllowed;
 
     var list = try std.ArrayList(KvPair).initCapacity(arena, tokens.len + self.required.len);
     const kv_start: usize = if (leading_positional) 1 else 0;
     if (leading_positional) {
-        list.appendAssumeCapacity(.{ .key = self.required[0], .value = stripQuotes(tokens[0]) });
+        list.appendAssumeCapacity(.{ .key = positional_field.?, .value = stripQuotes(tokens[0]) });
     }
     for (tokens[kv_start..]) |tok| {
         const eq = std.mem.indexOfScalar(u8, tok, '=') orelse {
             // `/extract save=x '{…}'` — the value would have bound fine as a
             // leading positional, so point at the ordering instead of the
             // generic kv complaint.
-            if (self.required.len == 1 and !leading_positional) return error.PositionalMustComeFirst;
+            if (positional_field != null and !leading_positional) return error.PositionalMustComeFirst;
             return error.MalformedKv;
         };
         if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;

@@ -1810,6 +1810,7 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
 
 test {
     _ = save;
+    _ = settings;
 }
 
 test "capToolOutput: passes through when under cap" {

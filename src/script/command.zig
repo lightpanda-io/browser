@@ -385,6 +385,17 @@ test "parse: /click rejects positional (zero required fields)" {
     try testing.expectString("Login", cmd.tool_call.args.?.object.get("selector").?.string);
 }
 
+test "parse: /getEnv positional binds to optional name" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const cmd = try Command.parse(arena.allocator(), "/getEnv LP_HN_USERNAME");
+    try testing.expectString("getEnv", cmd.tool_call.name());
+    try testing.expectString("LP_HN_USERNAME", cmd.tool_call.args.?.object.get("name").?.string);
+    // No arg still lists names (null args).
+    const list = try Command.parse(arena.allocator(), "/getEnv");
+    try testing.expect(list.tool_call.args == null);
+}
+
 test "parse: /extract rejects positional after key=value" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
