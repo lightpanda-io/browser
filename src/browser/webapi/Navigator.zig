@@ -248,7 +248,6 @@ pub const JsApi = struct {
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true, .exposed = .window });
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true, .exposed = .window });
-
 };
 
 const testing = @import("../../testing.zig");
