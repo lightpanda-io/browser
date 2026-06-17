@@ -5,6 +5,7 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.NIGHTLY_BUILD_AWS_SECRET_ACCESS_KEY }}
   AWS_BUCKET: ${{ vars.NIGHTLY_BUILD_AWS_BUCKET }}
   AWS_REGION: ${{ vars.NIGHTLY_BUILD_AWS_REGION }}
+  AWS_CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.AWS_CF_DISTRIBUTION_NIGHTLY }}
 
   RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
   VERSION_FLAG: ${{ github.ref_type == 'tag' && format('-Dversion={0}', github.ref_name) || '-Dversion=nightly' }}
@@ -138,3 +139,12 @@ jobs:
     if: github.ref_type == 'tag'
     needs: build-linux
     uses: ./.github/workflows/package-debian.yml
+
+  invalidate-cloudfront:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: cloudfront cache invalidation
+        run: |
+          aws cloudfront create-invalidation --distribution-id ${{ env.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
