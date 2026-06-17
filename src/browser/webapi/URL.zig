@@ -73,11 +73,8 @@ pub fn getUsername(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setUsername(self: *URL, value: []const u8) !void {
-    const res = U.url_set_username(self._url, value.ptr, value.len);
-    if (res != 0) {
-        return error.SetUsername;
-    }
+pub fn setUsername(self: *URL, value: []const u8) void {
+    _ = U.url_set_username(self._url, value.ptr, value.len);
 }
 
 pub fn getPassword(self: *const URL) []const u8 {
@@ -90,11 +87,8 @@ pub fn getPassword(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setPassword(self: *URL, value: []const u8) !void {
-    const res = U.url_set_password(self._url, value.ptr, value.len);
-    if (res != 0) {
-        return error.SetPassword;
-    }
+pub fn setPassword(self: *URL, value: []const u8) void {
+    _ = U.url_set_password(self._url, value.ptr, value.len);
 }
 
 pub fn getPathname(self: *const URL) []const u8 {
@@ -104,11 +98,8 @@ pub fn getPathname(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setPathname(self: *URL, value: []const u8) !void {
-    const res = U.url_set_path(self._url, value.ptr, value.len);
-    if (res != 0) {
-        return error.SetPathname;
-    }
+pub fn setPathname(self: *URL, value: []const u8) void {
+    _ = U.url_set_path(self._url, value.ptr, value.len);
 }
 
 pub fn getProtocol(self: *const URL) []const u8 {
@@ -120,11 +111,8 @@ pub fn getProtocol(self: *const URL) []const u8 {
     return out[0 .. len + 1];
 }
 
-pub fn setProtocol(self: *URL, value: []const u8) !void {
-    const res = U.url_set_scheme(self._url, value.ptr, value.len);
-    if (res != 0) {
-        return error.SetProtocol;
-    }
+pub fn setProtocol(self: *URL, value: []const u8) void {
+    _ = U.url_set_scheme(self._url, value.ptr, value.len);
 }
 
 pub fn getHostname(self: *const URL) []const u8 {
@@ -136,11 +124,8 @@ pub fn getHostname(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setHostname(self: *URL, value: []const u8) !void {
-    const res = U.url_set_hostname(self._url, value.ptr, value.len);
-    if (res != 0) {
-        return error.SetHostname;
-    }
+pub fn setHostname(self: *URL, value: []const u8) void {
+    _ = U.url_set_hostname(self._url, value.ptr, value.len);
 }
 
 pub fn getHost(self: *const URL) []const u8 {
@@ -152,11 +137,8 @@ pub fn getHost(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setHost(self: *URL, value: []const u8) !void {
-    const res = U.url_set_host(self._url, value.ptr, value.len);
-    if (res != 0) {
-        return error.SetHost;
-    }
+pub fn setHost(self: *URL, value: []const u8) void {
+    _ = U.url_set_host(self._url, value.ptr, value.len);
 }
 
 pub fn getPort(self: *URL) []const u8 {
@@ -219,9 +201,8 @@ pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
     // Strip a single leading '?', then set the query.
     const query = if (value[0] == '?') value[1..] else value;
 
-    const res = U.url_set_query(self._url, query.ptr, query.len);
-    if (res != 0) {
-        return error.SetSearch;
+    if (U.url_set_query(self._url, query.ptr, query.len) != 0) {
+        return;
     }
 
     // If searchParams exists, update it too.
@@ -245,7 +226,7 @@ pub fn getHash(self: *const URL) []const u8 {
     return (out - 1)[0 .. len + 1];
 }
 
-pub fn setHash(self: *URL, value: []const u8) !void {
+pub fn setHash(self: *URL, value: []const u8) void {
     // An empty value clears the fragment entirely (removes the '#').
     if (value.len == 0) {
         U.url_set_fragment_to_null(self._url);
@@ -253,10 +234,7 @@ pub fn setHash(self: *URL, value: []const u8) !void {
     }
     // Strip a single leading '#', then set the fragment.
     const fragment = if (value[0] == '#') value[1..] else value;
-    const res = U.url_set_fragment(self._url, fragment.ptr, fragment.len);
-    if (res != 0) {
-        return error.SetHash;
-    }
+    _ = U.url_set_fragment(self._url, fragment.ptr, fragment.len);
 }
 
 pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
@@ -320,6 +298,14 @@ pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
     return out[0..len];
 }
 
+/// Like the constructor, but returns null instead of throwing when parsing fails.
+pub fn parse(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !?*URL {
+    return URL.init(url, maybe_base, exec) catch |err| switch (err) {
+        error.TypeError => null,
+        else => err,
+    };
+}
+
 pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
     if (maybe_base) |base| {
         return U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len);
@@ -370,6 +356,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(URL.init, .{});
+    pub const parse = bridge.function(URL.parse, .{ .static = true });
     pub const canParse = bridge.function(URL.canParse, .{ .static = true });
     pub const createObjectURL = bridge.function(URL.createObjectURL, .{ .static = true });
     pub const revokeObjectURL = bridge.function(URL.revokeObjectURL, .{ .static = true });
