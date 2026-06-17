@@ -174,23 +174,7 @@ pub fn isEqualNode(self: *Element, other: *Element) bool {
         return false;
     }
 
-    // Compare children.
-    var self_iter = self.asNode().childrenIterator();
-    var other_iter = other.asNode().childrenIterator();
-    var self_count: usize = 0;
-    var other_count: usize = 0;
-    while (self_iter.next()) |self_node| : (self_count += 1) {
-        const other_node = other_iter.next() orelse return false;
-        other_count += 1;
-        if (self_node.isEqualNode(other_node)) {
-            continue;
-        }
-
-        return false;
-    }
-
-    // Make sure both have equal number of children.
-    return self_count == other_count;
+    return self.asNode().isEqualChildren(other.asNode());
 }
 
 pub fn getTagNameLower(self: *const Element) []const u8 {

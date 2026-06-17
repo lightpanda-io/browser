@@ -427,16 +427,30 @@ pub fn isEqualNode(self: *Node, other: *Node) bool {
         .element => self.as(Element).isEqualNode(other.as(Element)),
         .attribute => self.as(Element.Attribute).isEqualNode(other.as(Element.Attribute)),
         .cdata => self.as(CData).isEqualNode(other.as(CData)),
-        .document_fragment => self.as(DocumentFragment).isEqualNode(other.as(DocumentFragment)),
         .document_type => self.as(DocumentType).isEqualNode(other.as(DocumentType)),
-        .document => {
-            // Document comparison is complex and rarely used in practice
-            log.warn(.not_implemented, "Node.isEqualNode", .{
-                .type = "document",
-            });
-            return false;
-        },
+        .document_fragment, .document => self.isEqualChildren(other),
     };
+}
+
+pub fn isEqualChildren(a: *Node, b: *Node) bool {
+    var a_count: usize = 0;
+    var a_iter = a.childrenIterator();
+
+    var b_count: usize = 0;
+    var b_iter = b.childrenIterator();
+
+    while (a_iter.next()) |a_node| : (a_count += 1) {
+        const b_node = b_iter.next() orelse return false;
+        b_count += 1;
+        if (a_node.isEqualNode(b_node)) {
+            continue;
+        }
+
+        return false;
+    }
+
+    // Make sure both have equal number of children.
+    return a_count == b_count;
 }
 
 pub fn isInShadowTree(self: *Node) bool {
