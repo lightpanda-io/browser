@@ -28,7 +28,7 @@ fn TelemetryT(comptime P: type) type {
 
         const Self = @This();
 
-        pub fn init(app: *App, run_mode: Config.RunMode) !Self {
+        pub fn init(app: *App, run_mode: Config.RunMode, interactive: bool) !Self {
             const disabled = isDisabled();
             if (builtin.mode != .Debug and builtin.is_test == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
@@ -39,7 +39,7 @@ fn TelemetryT(comptime P: type) type {
             const provider = try app.allocator.create(P);
             errdefer app.allocator.destroy(provider);
 
-            try P.init(provider, app, iid, run_mode);
+            try P.init(provider, app, iid, run_mode, interactive);
 
             return .{
                 .disabled = disabled,
@@ -59,6 +59,10 @@ fn TelemetryT(comptime P: type) type {
             self.provider.send(event) catch |err| {
                 log.warn(.telemetry, "record error", .{ .err = err, .type = @tagName(std.meta.activeTag(event)) });
             };
+        }
+
+        pub fn llm_init(_: *Self, provider: [:0]const u8, model: ?[]const u8) Event.LLM {
+            return Event.LLM.init(provider, model);
         }
     };
 }
@@ -103,6 +107,7 @@ pub const Event = union(enum) {
     run: void,
     navigate: Navigate,
     buffer_overflow: BufferOverflow,
+    llm: LLM,
 
     const Navigate = struct {
         tls: bool,
@@ -112,6 +117,40 @@ pub const Event = union(enum) {
 
     const BufferOverflow = struct {
         dropped: u32,
+    };
+
+    const LLM = struct {
+        provider: [:0]const u8,
+        model: ?Model,
+
+        const Model = struct {
+            len: u8,
+            buffer: [32]u8,
+
+            pub fn wrap(_s: ?[]const u8) ?Model {
+                if (_s == null) return null;
+
+                const l = @min(_s.?.len, 32);
+                var m: Model = .{
+                    .len = l,
+                    .buffer = undefined,
+                };
+                @memcpy(m.buffer[0..l], _s.?[0..l]);
+
+                return m;
+            }
+
+            pub fn jsonStringify(self: *const Model, writer: anytype) !void {
+                try writer.write(self.buffer[0..self.len]);
+            }
+        };
+
+        pub fn init(provider: [:0]const u8, _model: ?[]const u8) LLM {
+            return .{
+                .provider = provider,
+                .model = Model.wrap(_model),
+            };
+        }
     };
 };
 
@@ -129,14 +168,14 @@ test "telemetry: always disabled in debug builds" {
     try testing.expectEqual(true, isDisabled());
 
     const FailingProvider = struct {
-        fn init(_: *@This(), _: *App, _: ?[36]u8, _: Config.RunMode) !void {}
+        fn init(_: *@This(), _: *App, _: ?[36]u8, _: Config.RunMode, _: bool) !void {}
         fn deinit(_: *@This()) void {}
         pub fn send(_: *@This(), _: Event) !void {
             unreachable;
         }
     };
 
-    var telemetry = try TelemetryT(FailingProvider).init(testing.test_app, .serve);
+    var telemetry = try TelemetryT(FailingProvider).init(testing.test_app, .serve, false);
     defer telemetry.deinit(testing.test_app.allocator);
     telemetry.record(.{ .run = {} });
 }
@@ -160,7 +199,7 @@ test "telemetry: getOrCreateId" {
 }
 
 test "telemetry: sends event to provider" {
-    var telemetry = try TelemetryT(MockProvider).init(testing.test_app, .serve);
+    var telemetry = try TelemetryT(MockProvider).init(testing.test_app, .serve, false);
     defer telemetry.deinit(testing.test_app.allocator);
     telemetry.disabled = false;
     const mock = telemetry.provider;
@@ -179,7 +218,7 @@ const MockProvider = struct {
     allocator: Allocator,
     events: std.ArrayList(Event),
 
-    fn init(self: *MockProvider, app: *App, _: ?[36]u8, _: Config.RunMode) !void {
+    fn init(self: *MockProvider, app: *App, _: ?[36]u8, _: Config.RunMode, _: bool) !void {
         self.* = .{
             .events = .{},
             .allocator = app.allocator,

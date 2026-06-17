@@ -156,17 +156,18 @@ pub const save_synthesis_prompt =
     \\- Reasoning you did between tool calls — comparing, filtering, picking,
     \\  aggregating across pages — becomes plain top-level JavaScript, so the
     \\  script reaches the result without you.
-    \\- Read pages with extract(schema): CSS selectors lift text and
-    \\  attributes as strings, and every trim/split/regex/parse/merge on
-    \\  those strings is top-level JavaScript. Do NOT write an evaluate(...)
-    \\  that querySelects the page and massages the result — that is
-    \\  extract + top-level JS. evaluate is ONLY for what must execute
-    \\  inside the page and no builtin can do. Top-level variables also
-    \\  persist across goto/reload; everything in the page context is wiped.
+    \\- Read pages with page.extract(schema) — `const page = new Page(); await
+    \\  page.goto(url); page.extract({...})`. CSS selectors lift text and
+    \\  attributes as strings, and every trim/split/regex/parse/merge on those
+    \\  strings is top-level JavaScript. Do NOT write a page.evaluate(...) that
+    \\  querySelects the page and massages the result — that is page.extract +
+    \\  top-level JS. page.evaluate is ONLY for what must execute inside the page
+    \\  and no builtin can do. Top-level variables also persist across navigation;
+    \\  everything in the page context is wiped.
     \\Stay faithful to the calls that worked: same arguments and options each
     \\one actually used. Do NOT add a `timeout` (or any option) the session
     \\didn't use. Never round-trip a result through `lp.*`, and never append
-    \\no-op extract(...) probes or `evaluate("return lp....")` tails to
+    \\no-op page.extract(...) probes or `page.evaluate("return lp....")` tails to
     \\surface output.
     \\Output ONLY JavaScript source — no markdown fences, no commentary.
 ;
@@ -177,19 +178,22 @@ pub const save_synthesis_prompt =
 /// script. The agent's `/save` covers all of this via its skill doc instead.
 pub const save_script_rules =
     \\Script rules:
-    \\- The builtins are synchronous and the file runs as a classic script:
-    \\  `const data = extract({...})` — never async/await/.then. Top-level
-    \\  `await` is a SyntaxError; top-level `return` is illegal.
-    \\- Read pages with extract(schema); all processing of the returned
+    \\- `Page` is the only global. `new Page()` makes a page; `await page.goto(url)`
+    \\  navigates it (async — always `await`). Every other builtin is a synchronous
+    \\  method on that page: `const data = page.extract({...})`, never `await
+    \\  page.extract`. The file runs as an async script, so top-level `await` is
+    \\  allowed.
+    \\- Read pages with page.extract(schema); all processing of the returned
     \\  strings (trim, split, parse, merge, loops, cross-page aggregation)
-    \\  is plain top-level JavaScript in the script context. evaluate(...)
+    \\  is plain top-level JavaScript in the script context. page.evaluate(...)
     \\  is ONLY for JS that must run inside the page and no builtin covers —
     \\  never a querySelector-and-parse block. It cannot see script
     \\  variables (interpolate values into its string), and page state is
-    \\  wiped by every goto/reload while script variables persist.
-    \\- The last top-level expression is the script's output, printed
-    \\  automatically (objects/arrays as JSON). End with the bare result —
-    \\  `extract({...});` or `results;` — no console.log or JSON.stringify.
+    \\  wiped by every navigation while script variables persist.
+    \\- `return <value>` is the script's output, printed automatically
+    \\  (objects/arrays as JSON). End with `return page.extract({...});` or
+    \\  `return results;` — a bare trailing expression is not printed, and
+    \\  neither is console.log or JSON.stringify.
     \\- Modern, readable JS: `const`/`let`, `for (const x of xs)`, template
     \\  literals, destructuring, 2-space indent.
 ;

@@ -210,6 +210,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         }
     }
 
+    const target_root = target.getRootNode(.{});
     var node: ?*Node = target;
     while (node) |n| {
         if (path_len >= path_buffer.len) break;
@@ -220,13 +221,20 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         if (n.is(ShadowRoot)) |shadow| {
             event._needs_retargeting = true;
 
-            // If event is not composed, stop at shadow boundary
-            if (!event._composed) {
+            // A non-composed event stops at its own tree's root.
+            if (!event._composed and n == target_root) {
                 break;
             }
 
             // Otherwise, jump to the shadow host and continue
             node = shadow._host.asNode();
+            continue;
+        }
+
+        // an assigned slottable's event-path parent is its assigned slot,
+        // routing the event into the slot's shadow tree
+        if (frame._assigned_slots.get(n)) |slot| {
+            node = slot.asNode();
             continue;
         }
 
@@ -305,6 +313,34 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         event._event_phase = .bubbling_phase;
         for (path[1..]) |current_target| {
             if (event._stop_propagation) break;
+
+            // Inline handlers (e.g. shadowRoot.onslotchange, div.onclick) are
+            // regular non-capture listeners and also fire on ancestors.
+            if (self.getInlineHandler(current_target, event)) |inline_handler| {
+                was_handled = true;
+                event._current_target = current_target;
+
+                const original_target = event._target;
+                if (event._needs_retargeting) {
+                    event._target = getAdjustedTarget(original_target, current_target);
+                }
+
+                ls.toLocal(inline_handler).callWithThis(void, current_target, .{event}) catch |err| {
+                    log.warn(.event, "inline handler", .{ .err = err });
+                };
+
+                if (event._needs_retargeting) {
+                    event._target = original_target;
+                }
+
+                if (event._stop_propagation) {
+                    break;
+                }
+                if (event._stop_immediate_propagation) {
+                    continue;
+                }
+            }
+
             if (self.base.getListeners(current_target, event._type_string)) |list| {
                 try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, comptime .init(false, opts));
             }
@@ -420,6 +456,12 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     const global_event_handlers = @import("webapi/global_event_handlers.zig");
     const handler_type = global_event_handlers.fromEventType(event._type_string.str()) orelse return null;
 
+    // Non-element targets (e.g. ShadowRoot.onslotchange) only ever set their
+    // handler via the property, so the lookup alone covers them.
+    if (self.frame._event_target_attr_listeners.get(.{ .target = target, .handler = handler_type })) |cached| {
+        return cached;
+    }
+
     // Look up the inline handler for this target
     const html_element = switch (target._type) {
         .node => |n| n.is(Element.Html) orelse return null,
@@ -432,9 +474,8 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     };
 }
 
-// Computes the adjusted target for shadow DOM event retargeting
-// Returns the lowest shadow-including ancestor of original_target that is
-// also an ancestor-or-self of current_target
+// DOM spec "retarget": walk original_target out of shadow trees until the
+// node is visible from current_target's tree.
 fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarget) ?*EventTarget {
     const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
@@ -447,24 +488,32 @@ fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarge
         else => return original_target,
     };
 
-    // Walk up from original target, checking if we can reach current target
-    var node: ?*Node = orig_node;
-    while (node) |n| {
-        // Check if current_target is an ancestor of n (or n itself)
-        if (isAncestorOrSelf(curr_node, n)) {
-            return n.asEventTarget();
+    var node = orig_node;
+    while (true) {
+        const root = node.getRootNode(.{});
+        const shadow = root.is(ShadowRoot) orelse return node.asEventTarget();
+        if (isShadowIncludingInclusiveAncestor(root, curr_node)) {
+            return node.asEventTarget();
         }
+        node = shadow._host.asNode();
+    }
+}
 
-        // Cross shadow boundary if needed
-        if (n.is(ShadowRoot)) |shadow| {
-            node = shadow._host.asNode();
+fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
+    const ShadowRoot = @import("webapi/ShadowRoot.zig");
+
+    var n: ?*Node = node;
+    while (n) |cur| {
+        if (cur == ancestor) {
+            return true;
+        }
+        if (cur.is(ShadowRoot)) |shadow| {
+            n = shadow._host.asNode();
             continue;
         }
-
-        node = n._parent;
+        n = cur._parent;
     }
-
-    return original_target;
+    return false;
 }
 
 // Whether the target's tree root (without crossing shadow boundaries) is a

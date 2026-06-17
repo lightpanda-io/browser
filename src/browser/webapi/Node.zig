@@ -40,6 +40,8 @@ const String = lp.String;
 const Allocator = std.mem.Allocator;
 const LinkedList = std.DoublyLinkedList;
 
+pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Node, *Element.Html.Slot);
+
 const Node = @This();
 
 _type: Type,

@@ -102,9 +102,11 @@ fn getHeaders(self: *ScriptManager) !HttpClient.Headers {
     return self.base.getHeaders();
 }
 
-pub fn preloadScript(self: *ScriptManager, url: []const u8) !void {
+// Returns true when a fetch was started: the link's load/error event fires
+// when the fetch settles. false (duplicate hint) = no event will fire.
+pub fn preloadScript(self: *ScriptManager, element: *Element.Html, url: []const u8) !bool {
     if (self.preloaded_scripts.contains(url)) {
-        return;
+        return false;
     }
 
     const frame = self.frame;
@@ -122,6 +124,7 @@ pub fn preloadScript(self: *ScriptManager, url: []const u8) !void {
         .complete = false,
         .source = .{ .remote = .{} },
         .extra = .preload,
+        .hint_element = element,
     };
 
     try self.preloaded_scripts.putNoClobber(self.base.allocator, owned_url, .{ .state = .{ .loading = script } });
@@ -148,6 +151,7 @@ pub fn preloadScript(self: *ScriptManager, url: []const u8) !void {
         .done_callback = PreloadedScript.doneCallback,
         .error_callback = PreloadedScript.errorCallback,
     });
+    return true;
 }
 
 fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
@@ -439,6 +443,7 @@ const PreloadedScript = struct {
 
         const self: *ScriptManager = @fieldParentPtr("base", script.manager);
         self.preloaded_scripts.getPtr(script.url).?.state = .{ .done = script };
+        script.queueHintEvent(.load);
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -451,6 +456,7 @@ const PreloadedScript = struct {
 
         const self: *ScriptManager = @fieldParentPtr("base", script.manager);
         _ = self.preloaded_scripts.remove(script.url);
+        script.queueHintEvent(.@"error");
         script.deinit();
     }
 };

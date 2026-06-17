@@ -24,20 +24,22 @@ const Frame = @import("../Frame.zig");
 const StyleManager = @import("../StyleManager.zig");
 const reflect = @import("../reflect.zig");
 
-const Node = @import("Node.zig");
 const CSS = @import("CSS.zig");
+const Node = @import("Node.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
+pub const DOMRect = @import("DOMRect.zig");
+
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
-const DOMStringMap = @import("element/DOMStringMap.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 
-pub const DOMRect = @import("DOMRect.zig");
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
+const slotting = @import("element/slotting.zig");
 pub const Attribute = @import("element/Attribute.zig");
+const DOMStringMap = @import("element/DOMStringMap.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -49,7 +51,6 @@ pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
-pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
 pub const NamespaceUriLookup = std.AutoHashMapUnmanaged(*Element, []const u8);
 
 pub const ScrollPosition = struct {
@@ -748,7 +749,8 @@ pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
 }
 
 pub fn getAssignedSlot(self: *Element, frame: *Frame) ?*Html.Slot {
-    return frame._element_assigned_slots.get(self);
+    // Hidden by a closed shadow tree
+    return slotting.findSlot(self.asNode(), true, frame);
 }
 
 // Whether this element may host a shadow root
