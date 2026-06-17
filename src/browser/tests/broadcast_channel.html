@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<body>
+<script src="testing.js"></script>
+<script id="basic">
+{
+    const bc = new BroadcastChannel("my-channel");
+    testing.expectEqual(true, bc !== undefined);
+    testing.expectEqual("my-channel", bc.name);
+    bc.close();
+}
+
+// A message is delivered to other channels with the same name, but never to
+// the sender itself.
+testing.async(async () => {
+    const sender = new BroadcastChannel("room");
+    const receiver = new BroadcastChannel("room");
+
+    let received = null;
+    let senderGot = false;
+
+    sender.onmessage = () => { senderGot = true; };
+
+    await new Promise((resolve) => {
+        receiver.onmessage = (e) => {
+            received = e.data;
+            resolve();
+        };
+        sender.postMessage("hello");
+    });
+
+    testing.expectEqual("hello", received);
+    testing.expectEqual(false, senderGot);
+
+    sender.close();
+    receiver.close();
+});
+
+// Channels with different names do not receive each other's messages.
+testing.async(async () => {
+    const a = new BroadcastChannel("chan-a");
+    const b = new BroadcastChannel("chan-b");
+    const a2 = new BroadcastChannel("chan-a");
+
+    let bGot = false;
+    let a2Data = null;
+
+    b.onmessage = () => { bGot = true; };
+
+    await new Promise((resolve) => {
+        a2.onmessage = (e) => {
+            a2Data = e.data;
+            resolve();
+        };
+        a.postMessage("only-for-a");
+    });
+
+    testing.expectEqual("only-for-a", a2Data);
+    testing.expectEqual(false, bGot);
+
+    a.close();
+    b.close();
+    a2.close();
+});
+
+// addEventListener works and structured (object) payloads survive.
+testing.async(async () => {
+    const sender = new BroadcastChannel("objects");
+    const receiver = new BroadcastChannel("objects");
+
+    let data = null;
+    await new Promise((resolve) => {
+        receiver.addEventListener("message", (e) => {
+            data = e.data;
+            resolve();
+        });
+        sender.postMessage({ type: "test", value: 42 });
+    });
+
+    testing.expectEqual("test", data.type);
+    testing.expectEqual(42, data.value);
+
+    sender.close();
+    receiver.close();
+});
+
+// After close(), a channel no longer receives messages, and posting on a
+// closed channel throws InvalidStateError.
+testing.async(async () => {
+    const sender = new BroadcastChannel("closing");
+    const receiver = new BroadcastChannel("closing");
+    const live = new BroadcastChannel("closing");
+
+    let receiverGot = false;
+    receiver.onmessage = () => { receiverGot = true; };
+    receiver.close();
+
+    await new Promise((resolve) => {
+        live.onmessage = () => { resolve(); };
+        sender.postMessage("after-close");
+    });
+
+    testing.expectEqual(false, receiverGot);
+
+    sender.close();
+    let threw = false;
+    try {
+        sender.postMessage("nope");
+    } catch (e) {
+        threw = true;
+        testing.expectEqual("InvalidStateError", e.name);
+    }
+    testing.expectEqual(true, threw);
+
+    live.close();
+});
+</script>
+</body>

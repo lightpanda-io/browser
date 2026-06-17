@@ -171,6 +171,10 @@ _http_owner: HttpClient.Owner = .{},
 // List of active live ranges (for mutation updates per DOM spec)
 _live_ranges: std.DoublyLinkedList = .{},
 
+// List of open BroadcastChannels, used to route postMessage between same-named
+// channels in this frame (registered on construction, removed on close()).
+_broadcast_channels: std.DoublyLinkedList = .{},
+
 // List of active MutationObservers
 _mutation_observers: std.DoublyLinkedList = .{},
 _mutation_delivery_scheduled: bool = false,
