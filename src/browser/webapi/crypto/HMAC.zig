@@ -75,6 +75,10 @@ pub fn init(
         // Prefer block size of the hash function instead.
         break :blk crypto.EVP_MD_block_size(digest);
     };
+    // `block_size` cannot be 0.
+    if (block_size == 0) {
+        return error.OperationError;
+    }
 
     // Should we reject this in promise too?
     const key = try exec.arena.alloc(u8, block_size);
