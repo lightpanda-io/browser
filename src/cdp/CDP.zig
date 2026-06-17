@@ -111,7 +111,7 @@ pub fn init(
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, self);
     const http_client = &self.browser.http_client;
 
-    try self.conn.init(allocator, socket, json_version_response, &http_client.inbox, &app.arena_pool);
+    try self.conn.init(app, socket, json_version_response, &http_client.inbox);
     errdefer self.conn.deinit();
 
     self.link = .{

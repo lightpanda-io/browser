@@ -313,6 +313,9 @@ test "server: buildJSONVersionResponse" {
 }
 
 test "Client: http invalid request" {
+    const filter: testing.LogFilter = .init(&.{.cdp});
+    defer filter.deinit();
+
     var c = try createTestClient();
     defer c.deinit();
 
@@ -427,8 +430,12 @@ test "Client: read invalid websocket message" {
         );
     }
 
-    // length of message is 0000 0810, i.e: 1024 * 512 + 265
-    try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 8, 1, 0, 'm', 'a', 's', 'k' });
+    {
+        const filter: testing.LogFilter = .init(&.{.cdp});
+        defer filter.deinit();
+        // length of message is 0, 0, 0, 0, 0, 16, 0, 1 i.e: 1024 * 1024 + 1
+        try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 16, 0, 1, 'm', 'a', 's', 'k' });
+    }
 
     // continuation type message must come after a normal message
     // even when not a fin frame
@@ -632,6 +639,7 @@ fn createTestClient() !TestClient {
     return .{
         .stream = stream,
         .reader = .{
+            .max_message_size = 1024,
             .allocator = testing.allocator,
             .buf = try testing.allocator.alloc(u8, 1024 * 16),
         },
@@ -641,7 +649,7 @@ fn createTestClient() !TestClient {
 const TestClient = struct {
     stream: std.net.Stream,
     buf: [1024]u8 = undefined,
-    reader: WS.Reader(false, 1024),
+    reader: WS.Reader(false),
 
     const WS = @import("network/WS.zig");
 

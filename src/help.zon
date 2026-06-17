@@ -35,6 +35,12 @@
     \\  --cdp-max-pending-connections <INT>
     \\          Maximum pending connections in the accept queue.
     \\          Defaults to 128.
+    \\  --cdp-max-message-size <INT>
+    \\          Maximum allowed incoming websocket message size.
+    \\          Defaults to 1048576 (1MB)
+    \\  --cdp-max-http-message-size <INT>
+    \\          Maximum allowed HTTP request size
+    \\          Defaults to 4096 (maximum allowed: 16383)
     \\  --cookie <PATH>
     \\          Path to a JSON file to load cookies from (read-only).
     \\          Defaults to no cookie loading.
