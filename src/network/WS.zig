@@ -58,7 +58,7 @@ pub const OpCode = enum(u8) {
 // WebSocket message reader. Given websocket message, acts as an iterator that
 // can return zero or more Messages. When next returns null, any incomplete
 // message will remain in reader.data
-pub fn Reader(comptime EXPECT_MASK: bool, MAX_MESSAGE_SIZE: usize) type {
+pub fn Reader(comptime EXPECT_MASK: bool) type {
     return struct {
         allocator: Allocator,
 
@@ -69,19 +69,20 @@ pub fn Reader(comptime EXPECT_MASK: bool, MAX_MESSAGE_SIZE: usize) type {
         // (any new reads must be placed after this)
         len: usize = 0,
 
-        // we add 140 to allow 1 control message (ping/pong/close) to be
-        // fragmented into a normal message.
+        max_message_size: usize,
+
         buf: []u8,
 
         fragments: ?Fragments = null,
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator) !Self {
+        pub fn init(allocator: Allocator, max_message_size: usize) !Self {
             const buf = try allocator.alloc(u8, 16 * 1024);
             return .{
                 .buf = buf,
                 .allocator = allocator,
+                .max_message_size = max_message_size,
             };
         }
 
@@ -154,7 +155,8 @@ pub fn Reader(comptime EXPECT_MASK: bool, MAX_MESSAGE_SIZE: usize) type {
                     if (message_len > 125) {
                         return error.ControlTooLarge;
                     }
-                } else if (message_len > MAX_MESSAGE_SIZE) {
+                } else if (message_len > self.max_message_size) {
+                    lp.log.warn(.cdp, "CDP message too big", .{ .type = "WS", .len = message_len, .hint = "See the --cdp-max-message-size <bytes>" });
                     return error.TooLarge;
                 } else if (message_len > self.buf.len) {
                     const len = self.buf.len;
@@ -182,7 +184,9 @@ pub fn Reader(comptime EXPECT_MASK: bool, MAX_MESSAGE_SIZE: usize) type {
 
                 if (is_continuation) {
                     const fragments = &(self.fragments orelse return error.InvalidContinuation);
-                    if (fragments.message.items.len + message_len > MAX_MESSAGE_SIZE) {
+                    const full_len = fragments.message.items.len + message_len;
+                    if (full_len > self.max_message_size) {
+                        lp.log.warn(.cdp, "CDP message too big", .{ .type = "WS", .len = full_len, .hint = "See the --cdp-max-message-size <bytes>" });
                         return error.TooLarge;
                     }
 

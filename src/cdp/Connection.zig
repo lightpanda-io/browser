@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 
 const CDP = @import("CDP.zig");
 
+const App = @import("../App.zig");
 const Inbox = @import("../Inbox.zig");
 const Config = @import("../Config.zig");
 const WS = @import("../network/WS.zig");
@@ -42,17 +43,17 @@ arena_pool: *ArenaPool,
 socket: posix.socket_t,
 socket_flags: usize,
 state: State = .handshaking,
-reader: WS.Reader(true, Config.CDP_MAX_MESSAGE_SIZE),
+reader: WS.Reader(true),
 send_arena: ArenaAllocator,
+max_http_message_size: usize,
 json_version_response: []const u8,
 
 pub fn init(
     self: *Connection,
-    allocator: Allocator,
+    app: *App,
     socket: posix.socket_t,
     json_version_response: []const u8,
     inbox: *Inbox,
-    arena_pool: *ArenaPool,
 ) !void {
     const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
     const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
@@ -60,12 +61,16 @@ pub fn init(
         lp.assert(socket_flags & nonblocking == nonblocking, "Connection.init blocking", .{});
     }
 
+    const config = app.config;
+    const allocator = app.allocator;
+
     self.* = .{
         .inbox = inbox,
         .socket = socket,
-        .arena_pool = arena_pool,
+        .arena_pool = &app.arena_pool,
         .socket_flags = socket_flags,
-        .reader = try .init(allocator),
+        .max_http_message_size = config.cdpMaxHTTPMessageSize(),
+        .reader = try .init(allocator, config.cdpMaxMessageSize()),
         .send_arena = ArenaAllocator.init(allocator),
         .json_version_response = json_version_response,
     };
@@ -222,7 +227,8 @@ fn processHttpRequest(self: *Connection) !HttpResult {
     lp.assert(self.reader.pos == 0, "Connection.HTTP pos", .{ .pos = self.reader.pos });
     const request = self.reader.buf[0..self.reader.len];
 
-    if (request.len > Config.CDP_MAX_HTTP_REQUEST_SIZE) {
+    if (request.len > self.max_http_message_size) {
+        log.warn(.cdp, "CDP message too big", .{ .type = "HTTP", .len = request.len, .hint = "See the --cdp-max-http-message-size <bytes>" });
         self.sendHttpError(413, "Request too large");
         return error.RequestTooLarge;
     }
