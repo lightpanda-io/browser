@@ -111,6 +111,10 @@ pub const String = packed struct {
         return .init(allocator, self.str(), .{ .dupe = true });
     }
 
+    pub fn trim(self: *const String, values: []const u8) String {
+        return wrap(std.mem.trim(u8, self.str(), values));
+    }
+
     pub fn concat(allocator: Allocator, parts: []const []const u8) !String {
         var total_len: usize = 0;
         for (parts) |part| {
@@ -398,6 +402,23 @@ test "String" {
         try testing.expectEqual(false, str.eql(other_long));
         try testing.expectEqual(false, str.eqlSlice("other_long" ** 100));
     }
+}
+
+test "String.trim" {
+    const expect = struct {
+        fn expect(expected: []const u8, input: []const u8, values: []const u8) !void {
+            const s = try String.init(testing.allocator, input, .{});
+            defer s.deinit(testing.allocator);
+            const trimmed = s.trim(values);
+            try testing.expectEqual(expected, trimmed.str());
+        }
+    }.expect;
+
+    try expect("hi", "  hi  ", " "); // SSO, both ends
+    try expect("hello", "hello", " "); // nothing to trim (no allocation)
+    try expect("", "   ", " "); // fully trimmed away
+    try expect("x" ** 20, "   " ++ ("x" ** 20) ++ "\t", &.{ ' ', '\t' }); // heap stays heap (view)
+    try expect("abc", "abc" ++ ("  " ** 6), " "); // heap trims down to SSO
 }
 
 test "String.concat" {

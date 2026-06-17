@@ -597,7 +597,7 @@ test "FormData: multipart empty body" {
 const Blob = @import("../Blob.zig");
 
 fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
-    const blob = try Blob.initFromBytes(body, mime, false, page);
+    const blob = try Blob.initFromBytes(body, mime, page);
     blob.acquireRef();
     const file = try arena.create(File);
     file.* = .{

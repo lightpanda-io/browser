@@ -356,7 +356,7 @@ pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
         .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
     };
     const content_type = try self._headers.get("content-type", exec) orelse "";
-    const b = try Blob.initFromBytes(body, content_type, true, exec.page);
+    const b = try Blob.initFromBytes(body, content_type, exec.page);
     return local.resolvePromise(b);
 }
 

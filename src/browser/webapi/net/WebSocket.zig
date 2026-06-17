@@ -505,7 +505,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
             switch (self._binary_type) {
                 .arraybuffer => .{ .arraybuffer = .{ .values = data } },
                 .blob => blk: {
-                    const blob = try Blob.initFromBytes(data, "", false, exec.page);
+                    const blob = try Blob.initFromBytes(data, "", exec.page);
                     blob.acquireRef();
                     break :blk .{ .blob = blob };
                 },

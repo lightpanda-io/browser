@@ -2,6 +2,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const Mime = @import("../../Mime.zig");
 
 const KeyValueList = @import("../KeyValueList.zig");
 
@@ -20,11 +21,22 @@ pub const InitOpts = union(enum) {
 };
 
 pub fn init(opts_: ?InitOpts, exec: *const Execution) !*Headers {
-    const list = if (opts_) |opts| switch (opts) {
-        .obj => |obj| try KeyValueList.copy(exec.arena, obj._list),
-        .js_obj => |js_obj| try KeyValueList.fromJsObject(exec.arena, js_obj, normalizeHeaderName, exec.buf),
-        .strings => |kvs| try KeyValueList.fromArray(exec.arena, kvs, normalizeHeaderName, exec.buf),
-    } else KeyValueList.init();
+    const list = blk: {
+        const opts = opts_ orelse break :blk KeyValueList.init();
+        switch (opts) {
+            .obj => |obj| break :blk try KeyValueList.copy(exec.arena, obj._list),
+            .js_obj => |js_obj| {
+                var list = try KeyValueList.fromJsObject(exec.arena, js_obj, normalizeHeaderName, exec.buf);
+                try validateAndNormalize(&list);
+                break :blk list;
+            },
+            .strings => |kvs| {
+                var list = try KeyValueList.fromArray(exec.arena, kvs, normalizeHeaderName, exec.buf);
+                try validateAndNormalize(&list);
+                break :blk list;
+            },
+        }
+    };
 
     return exec._factory.create(Headers{
         ._list = list,
@@ -101,6 +113,42 @@ fn normalizeHeaderName(name: []const u8, buf: []u8) []const u8 {
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+/// Validate names and normalize/validate values for a script-provided header
+/// init, trimming values in place. The trim is allocation-free (see
+/// `String.trim`), so an untrimmed value keeps its original storage.
+fn validateAndNormalize(list: *KeyValueList) !void {
+    for (list._entries.items) |*entry| {
+        // A valid header name is exactly a non-empty HTTP token.
+        if (Mime.isHttpToken(entry.name.str()) == false) {
+            return error.TypeError;
+        }
+        const trimmed = entry.value.trim(&Mime.HTTP_WHITESPACE);
+        try validateHeaderValue(trimmed.str());
+        entry.value = trimmed;
+    }
+}
+
+/// Validate an already-normalized header value. Returns `error.TypeError` —
+/// surfaced to script as a JS TypeError — when it contains a code point above
+/// U+00FF (not a valid byte string) or a 0x00/0x0A/0x0D byte.
+/// https://fetch.spec.whatwg.org/#headers-class
+fn validateHeaderValue(value: []const u8) error{TypeError}!void {
+    var i: usize = 0;
+    while (i < value.len) {
+        const n = std.unicode.utf8ByteSequenceLength(value[i]) catch return error.TypeError;
+        if (i + n > value.len) {
+            return error.TypeError;
+        }
+
+        const cp = std.unicode.utf8Decode(value[i..][0..n]) catch return error.TypeError;
+
+        if (cp > 0xFF or cp == 0x00 or cp == 0x0A or cp == 0x0D) {
+            return error.TypeError;
+        }
+        i += n;
+    }
 }
 
 pub const JsApi = struct {

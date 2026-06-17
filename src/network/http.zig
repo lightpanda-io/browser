@@ -248,7 +248,8 @@ pub const AuthChallenge = struct {
 };
 
 pub const ResponseHead = struct {
-    pub const MAX_CONTENT_TYPE_LEN = 64;
+    // Matches Mime.parse's 255-byte cap
+    pub const MAX_CONTENT_TYPE_LEN = 255;
 
     status: u16,
     url: [*c]const u8,

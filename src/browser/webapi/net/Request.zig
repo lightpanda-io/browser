@@ -223,7 +223,7 @@ pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse "";
 
-    const b = try Blob.initFromBytes(body, content_type, true, exec.page);
+    const b = try Blob.initFromBytes(body, content_type, exec.page);
     return local.resolvePromise(b);
 }
 
