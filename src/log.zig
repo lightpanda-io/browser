@@ -89,6 +89,7 @@ pub const Level = enum {
     warn,
     err,
     fatal,
+    note,
 };
 
 pub const Format = enum {
@@ -114,6 +115,10 @@ pub fn err(scope: Scope, msg: []const u8, data: anytype) void {
 
 pub fn fatal(scope: Scope, msg: []const u8, data: anytype) void {
     log(scope, .fatal, msg, data);
+}
+
+pub fn note(scope: Scope, msg: []const u8, data: anytype) void {
+    log(scope, .note, msg, data);
 }
 
 pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
@@ -229,6 +234,7 @@ fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.
             .warn => "\x1b[0;33mWARN\x1b[0m  ",
             .err => "\x1b[0;31mERROR ",
             .fatal => "\x1b[0;35mFATAL ",
+            .note => "\x1b[0;32mNOTE\x1b[0m  ",
         });
     }
 

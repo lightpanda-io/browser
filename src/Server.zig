@@ -57,7 +57,7 @@ pub fn init(app: *App, address: net.Address) !*Server {
     // Bind first so /json/version can advertise the OS-assigned port (--port 0).
     var bound_address = address;
     try app.network.bind(&bound_address, self, onAccept);
-    log.info(.app, "server running", .{ .address = bound_address });
+    log.note(.app, "server running", .{ .address = bound_address });
 
     self.json_version_response = try buildJSONVersionResponse(app, bound_address.getPort());
     return self;
