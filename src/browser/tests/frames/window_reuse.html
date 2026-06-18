@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+Navigating a browsing context in place (iframe.src change / popup re-nav) reuses
+the same Window object, so a cached `iframe.contentWindow` / `window.open()`
+return value keeps a VALID `.location` across the navigation. Previously the
+in-place Frame re-init built a brand-new Window and freed the old one's
+Location, so the cached reference dangled — reading `.location` re-wrapped the
+freed Location into a double-free (URL.zig release-overflow).
+
+Note: strict WindowProxy identity (`w === iframe.contentWindow` across the
+navigation) is NOT yet provided — a Window is a v8 context's global object and
+the context is recreated per navigation. Achieving that needs v8 global-proxy
+reuse and is tracked separately. This test guards the UAF, not the identity.
+-->
+
+<script id=iframe_contentwindow_location_survives_navigation type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  const onceLoad = () => new Promise((r) => { iframe.onload = () => r(); });
+
+  let loaded = onceLoad();
+  iframe.src = 'support/win_a.html';
+  document.body.appendChild(iframe);
+  await loaded;
+
+  // Cache the window WITHOUT reading .location first, so its initial Location
+  // never gets a JS wrapper pinning it (the original crash condition).
+  const w = iframe.contentWindow;
+
+  loaded = onceLoad();
+  iframe.src = 'support/win_b.html';   // in-place re-init; Window is reused
+  await loaded;
+
+  state.resolve();
+  await state.done(() => {
+    // Same Window object across the navigation: the v8 global proxy is reused
+    // (WindowProxy identity).
+    testing.expectEqual(true, w === iframe.contentWindow);
+    // And reading the cached window's location returns the new, valid location
+    // (previously a UAF double-free on the freed Location).
+    testing.expectEqual(true, w.location.href.endsWith('/support/win_b.html'));
+  });
+</script>
+
+<!--
+The popup re-navigation path (Session.processPopupNavigation) reuses the Window
+the same way; it's exercised by the manual repro at wpt/_lprepro/opener.html
+(real HTTP popup load + postMessage aren't driven by this htmlRunner harness).
+-->
+</body>

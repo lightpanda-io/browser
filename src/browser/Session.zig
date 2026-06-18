@@ -530,6 +530,7 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
     }
 
     const frame_id = frame._frame_id;
+    const reuse_window = frame.window;
     const page = self.currentPage().?;
     frame.deinit();
     frame.* = undefined;
@@ -546,7 +547,7 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
         }
     }
 
-    try Frame.init(frame, frame_id, page, parent);
+    try Frame.init(frame, frame_id, page, .{ .parent = parent, .reuse_window = reuse_window });
     errdefer {
         if (parent_notified) {
             parent._pending_loads -= 1;
@@ -563,14 +564,16 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
     };
 }
 
-// Re-navigates a popup Frame in place. The Frame pointer stays stable
-// (scripts in the opener may hold a cached Window ref — though the Window
-// object inside is replaced, matching how iframes behave on navigation).
+// Re-navigates a popup Frame in place. Both the Frame pointer and its Window
+// stay stable across the re-init, so a cached `window.open()` return value keeps
+// a valid `.location` instead of dangling against the freed one.
 fn processPopupNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
     // Preserve popup identity fields. _name lives in the Page arena and
     // survives Frame.deinit; _opener is just a pointer.
-    const saved_name = frame.window._name;
-    const saved_opener = frame.window._opener;
+
+    const reuse_window = frame.window;
+    const saved_name = reuse_window._name;
+    const saved_opener = reuse_window._opener;
     const frame_id = frame._frame_id;
     const page = self.currentPage().?;
 
@@ -587,7 +590,7 @@ fn processPopupNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
         }
     }
 
-    try Frame.init(frame, frame_id, page, null);
+    try Frame.init(frame, frame_id, page, .{ .reuse_window = reuse_window });
     errdefer frame.deinit();
 
     frame.window._name = saved_name;
