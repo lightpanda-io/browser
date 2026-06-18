@@ -37,6 +37,7 @@ const Event = @import("Event.zig");
 const Worker = @import("Worker.zig");
 const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
+const Navigator = @import("Navigator.zig");
 const Timers = @import("Timers.zig");
 const EventTarget = @import("EventTarget.zig");
 const Performance = @import("Performance.zig");
@@ -97,6 +98,7 @@ _closed: bool = false,
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
+_navigator: Navigator = .init,
 _performance: Performance,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
@@ -257,6 +259,10 @@ pub fn setSelf(_: *WorkerGlobalScope, value: JS.Value) void {
 
 pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
+}
+
+pub fn getNavigator(self: *WorkerGlobalScope) *Navigator {
+    return &self._navigator;
 }
 
 pub fn performance(self: *WorkerGlobalScope) *Performance {
@@ -667,6 +673,7 @@ pub const JsApi = struct {
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
     pub const console = bridge.accessor(WorkerGlobalScope.getConsole, WorkerGlobalScope.setConsole, .{});
     pub const crypto = bridge.accessor(WorkerGlobalScope.getCrypto, null, .{});
+    pub const navigator = bridge.accessor(WorkerGlobalScope.getNavigator, null, .{});
     pub const performance = bridge.accessor(struct {
         // Unnecessary, But, our WebAPI getters are ALWAYS `fn getPerformance()...`.
         // But for performance, we _need_ to have fn performance() *Performance to

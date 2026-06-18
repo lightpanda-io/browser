@@ -21,6 +21,7 @@ const builtin = @import("builtin");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Execution = js.Execution;
 
 const PluginArray = @import("PluginArray.zig");
 const Permissions = @import("Permissions.zig");
@@ -37,8 +38,8 @@ _ua_data: NavigatorUAData = .{},
 
 pub const init: Navigator = .{};
 
-pub fn getUserAgent(_: *const Navigator, frame: *Frame) []const u8 {
-    return frame._session.browser.http_client.getUserAgent();
+pub fn getUserAgent(_: *const Navigator, exec: *const Execution) []const u8 {
+    return exec.session.browser.http_client.getUserAgent();
 }
 
 pub fn getLanguages(_: *const Navigator) [2][]const u8 {
@@ -219,9 +220,6 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    // Read-only properties. All are accessors (not data properties) so they
-    // present as native getters on Navigator.prototype, matching real browsers
-    // — see the getter definitions above for why.
     pub const userAgent = bridge.accessor(Navigator.getUserAgent, null, .{});
     pub const appName = bridge.accessor(Navigator.getAppName, null, .{});
     pub const appCodeName = bridge.accessor(Navigator.getAppCodeName, null, .{});
@@ -237,18 +235,19 @@ pub const JsApi = struct {
     pub const vendor = bridge.accessor(Navigator.getVendor, null, .{});
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
     pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
-    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
     pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
-    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true });
-    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true });
 
-    // Methods
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
-    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{});
+
+    // window only
+    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
+    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
+    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true, .exposed = .window });
+    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true, .exposed = .window });
 };
 
 const testing = @import("../../testing.zig");

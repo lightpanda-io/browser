@@ -1007,6 +1007,10 @@ pub const PageJsApis = flattenTypes(&.{
 pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/WorkerGlobalScope.zig"),
     @import("../webapi/WorkerLocation.zig"),
+    @import("../webapi/Navigator.zig"),
+    @import("../webapi/NavigatorUAData.zig"),
+    @import("../webapi/Permissions.zig"),
+    @import("../webapi/StorageManager.zig"),
     @import("../webapi/EventTarget.zig"),
     @import("../webapi/Event.zig"),
     @import("../webapi/event/MessageEvent.zig"),
