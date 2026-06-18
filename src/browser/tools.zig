@@ -398,7 +398,7 @@ pub const Tool = enum {
                 \\Extract structured data from the current page (navigate first). `schema` is a JSON object (passed as a string) mapping output field names to CSS-selector specs. It is NOT a JSON Schema — no "type"/"properties" wrappers; the keys ARE your output fields. Value shapes:
                 \\  "<sel>"                                → first match's text (trimmed; null if no match)
                 \\  ["<sel>"]                              → every match's text (string[])
-                \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute value
+                \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute value (href/src resolved to absolute URLs)
                 \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
                 \\  [{"selector":"<sel>","fields":{…}}]    → one object per match; field selectors resolve relative to that match and accept any shape above ("" = the match's own text; nest arrays for per-item sub-lists)
                 \\Add "limit": N inside any array's object spec to cap matches.
@@ -409,7 +409,7 @@ pub const Tool = enum {
                 \\  {"karma": "#karma"} → {"karma":"42"}
                 \\  {"items": [".story .title"]} → {"items":["Title 1","Title 2"]}
                 \\  {"top3": [{"selector":".story .title","limit":3}]} → {"top3":["A","B","C"]}
-                \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
+                \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["https://site/a","https://site/b"]}
                 \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
                 ,
                 .summary = "Extract structured data via a CSS-selector schema",
@@ -884,7 +884,15 @@ const schema_walker_prefix =
     \\      for (const k in inner.fields) r[k] = ext(m, inner.fields[k]);
     \\      return r;
     \\    }
-    \\    if (inner.attr) return m.getAttribute(inner.attr);
+    \\    if (inner.attr) {
+    \\      const raw = m.getAttribute(inner.attr);
+    \\      // Resolve href/src like the DOM .href/.src properties do, so extracted
+    \\      // URLs are usable by goto.
+    \\      if (raw !== null && (inner.attr === 'href' || inner.attr === 'src')) {
+    \\        try { return new URL(raw, document.baseURI).href; } catch (e) { return raw; }
+    \\      }
+    \\      return raw;
+    \\    }
     \\    return m.textContent.trim();
     \\  }
     \\  function ext(el, v){
