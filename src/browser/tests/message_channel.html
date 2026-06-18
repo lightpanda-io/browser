@@ -66,6 +66,43 @@
     testing.expectEqual(42, received4.value);
   });
 </script>
+
+<script id="structured-clone" type=module>
+  const state = await testing.async();
+
+    const channel = new MessageChannel();
+    const payload = { n: 1 };
+    let received = null;
+
+    await new Promise((resolve) => {
+        channel.port2.onmessage = (e) => { received = e.data; resolve(); };
+        channel.port1.postMessage(payload);
+    });
+
+    state.resolve();
+    await state.done(() => {
+        testing.expectEqual(false, received === payload);
+        testing.expectEqual(1, received.n);
+        // Mutating the sender's object after posting doesn't affect the clone.
+        payload.n = 999;
+        testing.expectEqual(1, received.n);
+    });
+</script>
+
+<script id="structured-clone-sync" type=module>
+    {
+        const channel = new MessageChannel();
+        let threw = false;
+        try {
+            channel.port1.postMessage(function () {});
+        } catch (e) {
+            threw = true;
+            testing.expectEqual('DataCloneError', e.name);
+        }
+        testing.expectEqual(true, threw);
+    }
+</script>
+
 </body>
 </content>
 </invoke>

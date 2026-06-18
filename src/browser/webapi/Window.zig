@@ -623,7 +623,7 @@ pub fn close(self: *Window) void {
     page.session.queueFrameDestruction(frame);
 }
 
-pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
+pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
     _ = target_origin;
@@ -634,12 +634,35 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
     const arena = try target_frame.getArena(.medium, "Window.postMessage");
     errdefer target_frame.releaseArena(arena);
 
+    // StructuredSerialize runs synchronously (per spec): clone the message into
+    // the target window's realm now. The receiver gets a fresh, independent copy
+    // minted in its own realm (not the source realm's object), an unserializable
+    // value throws a DataCloneError to the caller, and the source-realm temp
+    // doesn't leak into the destination context. Mirrors Worker.postMessage.
+    const cloned = blk: {
+        var ls: js.Local.Scope = undefined;
+        target_frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        // Contain any V8 exception from a failed serialization so it surfaces as
+        // a clean DataCloneError; deinit() (no rethrow) clears it.
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
+        const c = message.structuredCloneTo(&ls.local) catch {
+            return error.DataClone;
+        };
+        break :blk try c.temp();
+    };
+    errdefer cloned.release();
+
     // Origin should be the source window's origin (where the message came from)
     const origin = try source_window._location.getOrigin(&frame.js.execution);
     const callback = try arena.create(PostMessageCallback);
     callback.* = .{
         .arena = arena,
-        .message = message,
+        .message = cloned,
         .frame = target_frame,
         .source = source_window,
         .origin = try arena.dupe(u8, origin),
@@ -872,8 +895,11 @@ const PostMessageCallback = struct {
         self.frame.releaseArena(self.arena);
     }
 
+    // Called by the scheduler if the task is dropped before it runs. `run` and
+    // `cancelled` are mutually exclusive, so the temp is released exactly once.
     fn cancelled(ctx: *anyopaque) void {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+        self.message.release();
         self.deinit();
     }
 
@@ -885,17 +911,23 @@ const PostMessageCallback = struct {
         const window = frame.window;
 
         const event_target = window.asEventTarget();
-        if (frame._event_manager.hasDirectListeners(event_target, "message", window._on_message)) {
-            const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-                .data = .{ .value = self.message },
-                .origin = self.origin,
-                .source = self.source,
-                .ports = self.ports,
-                .bubbles = false,
-                .cancelable = false,
-            }, frame._page)).asEvent();
-            try frame._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
+
+        // The MessageEvent takes ownership of the cloned temp and releases it on
+        // teardown; if there are no listeners, release it here so it doesn't leak.
+        if (!frame._event_manager.hasDirectListeners(event_target, "message", window._on_message)) {
+            self.message.release();
+            return null;
         }
+
+        const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
+            .data = .{ .value = self.message },
+            .origin = self.origin,
+            .source = self.source,
+            .ports = self.ports,
+            .bubbles = false,
+            .cancelable = false,
+        }, frame._page)).asEvent();
+        try frame._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
 
         return null;
     }
@@ -982,7 +1014,7 @@ pub const JsApi = struct {
     pub const requestIdleCallback = bridge.function(Window.requestIdleCallback, .{});
     pub const cancelIdleCallback = bridge.function(Window.cancelIdleCallback, .{});
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
-    pub const postMessage = bridge.function(Window.postMessage, .{});
+    pub const postMessage = bridge.function(Window.postMessage, .{ .dom_exception = true });
     pub const btoa = bridge.function(Window.btoa, .{ .dom_exception = true });
     pub const atob = bridge.function(Window.atob, .{ .dom_exception = true });
     pub const reportError = bridge.function(Window.reportError, .{});
@@ -1069,7 +1101,7 @@ pub const JsApi = struct {
 const CrossOriginWindow = struct {
     window: *Window,
 
-    pub fn postMessage(self: *CrossOriginWindow, message: js.Value.Temp, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
+    pub fn postMessage(self: *CrossOriginWindow, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
         return self.window.postMessage(message, target_origin, transfer, frame);
     }
 
@@ -1094,7 +1126,7 @@ const CrossOriginWindow = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{});
+        pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{ .dom_exception = true });
         pub const top = bridge.accessor(CrossOriginWindow.getTop, null, .{});
         pub const parent = bridge.accessor(CrossOriginWindow.getParent, null, .{});
         pub const length = bridge.accessor(CrossOriginWindow.getFramesLength, null, .{});
