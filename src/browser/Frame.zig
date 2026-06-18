@@ -172,7 +172,7 @@ _http_owner: HttpClient.Owner = .{},
 _live_ranges: std.DoublyLinkedList = .{},
 
 // List of open BroadcastChannels, used to route postMessage between same-named
-// channels in this frame (registered on construction, removed on close()).
+// channels in this frame's origin
 _broadcast_channels: std.DoublyLinkedList = .{},
 
 // List of active MutationObservers

@@ -54,6 +54,11 @@ session: *Session,
 // a cached lookup on Frame 2. We picked the latter.
 dom_version: usize = 0,
 
+// Monotonic creation counter for BroadcastChannels in this Page. A postMessage
+// captures the current value so delivery targets only channels that existed
+// when it was called
+broadcast_sequence: u64 = 0,
+
 // DOM object factory scoped to this Page's documents.
 factory: Factory,
 
@@ -286,4 +291,34 @@ fn findPopupBy(self: *Page, comptime field: []const u8, id: u32) ?*Frame {
         }
     }
     return null;
+}
+
+// Snapshots the Execution of every same-origin global in this Page — the root
+// frame, descendant iframes, popups (and their descendants), and each frame's
+// worker scopes — into `arena`.
+//
+// The returned set is fixed, so a caller may run user JS (which can create or
+// tear down frames/workers) while walking it without invalidating the slice.
+pub fn executionsForOrigin(self: *Page, arena: Allocator, origin: *js.Origin) ![]*js.Execution {
+    var list: std.ArrayList(*js.Execution) = .empty;
+    try appendFrameExecutions(&self.frame, origin, arena, &list);
+    for (self.popups.items) |popup| {
+        try appendFrameExecutions(popup, origin, arena, &list);
+    }
+    return list.items;
+}
+
+fn appendFrameExecutions(frame: *Frame, origin: *js.Origin, arena: Allocator, list: *std.ArrayList(*js.Execution)) !void {
+    if (frame.js.origin == origin) {
+        try list.append(arena, &frame.js.execution);
+    }
+    for (frame.workers.items) |worker| {
+        const wgs = worker._worker_scope;
+        if (wgs.js.origin == origin) {
+            try list.append(arena, &wgs.js.execution);
+        }
+    }
+    for (frame.child_frames.items) |child| {
+        try appendFrameExecutions(child, origin, arena, list);
+    }
 }

@@ -20,34 +20,38 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 
 const log = lp.log;
+const Execution = js.Execution;
 
 const BroadcastChannel = @This();
 
 _proto: *EventTarget,
-_frame: *Frame,
-_name: []const u8,
+_exec: *Execution,
+_name: lp.String,
+_sequence: u64,
 _closed: bool = false,
 _on_message: ?js.Function.Global = null,
 _on_message_error: ?js.Function.Global = null,
 
-// Intrusive node, registered in `frame._broadcast_channels` for the lifetime
-// of the channel (until close()). The registry is how a postMessage on one
-// channel finds the other same-named channels to deliver to.
+// Intrusive node, registered in `frame._broadcast_channels` (or WGS)
+// for the lifetime of the channel (until close()). The registry is how a
+// postMessage on one channel finds the other same-named channels to deliver to.
 _node: std.DoublyLinkedList.Node = .{},
 
-pub fn init(name: []const u8, frame: *Frame) !*BroadcastChannel {
-    const self = try frame._factory.eventTarget(BroadcastChannel{
+pub fn init(name: lp.String.Global, exec: *Execution) !*BroadcastChannel {
+    const page = exec.page;
+    const self = try exec._factory.eventTarget(BroadcastChannel{
         ._proto = undefined,
-        ._frame = frame,
-        ._name = try frame.arena.dupe(u8, name),
+        ._exec = exec,
+        ._name = name.str,
+        ._sequence = page.broadcast_sequence,
     });
-    frame._broadcast_channels.append(&self._node);
+    page.broadcast_sequence += 1;
+    exec.getBroadcastChannels().append(&self._node);
     return self;
 }
 
@@ -55,32 +59,23 @@ pub fn asEventTarget(self: *BroadcastChannel) *EventTarget {
     return self._proto;
 }
 
-fn fromNode(node: *std.DoublyLinkedList.Node) *BroadcastChannel {
-    return @fieldParentPtr("_node", node);
-}
-
-pub fn getName(self: *const BroadcastChannel) []const u8 {
+pub fn getName(self: *const BroadcastChannel) lp.String {
     return self._name;
 }
 
 // https://html.spec.whatwg.org/multipage/web-messaging.html#dom-broadcastchannel-postmessage
 // The message is delivered asynchronously to every other BroadcastChannel
 // object with the same name in the same agent cluster, never to the sender.
-pub fn postMessage(self: *BroadcastChannel, message: js.Value.Temp, frame: *Frame) !void {
+pub fn postMessage(self: *BroadcastChannel, message: js.Value, exec: *Execution) !void {
     if (self._closed) {
         return error.InvalidStateError;
     }
 
     // StructuredSerialize runs synchronously (per spec): clone the message once
-    // now so an unserializable value throws a DataCloneError to the caller, and
-    // so the async delivery has a self-owned snapshot to copy from. Each receiver
-    // gets its own re-clone of this snapshot in `run()` — that gives every
-    // MessageEvent an independently owned handle (a shared temp would be freed by
-    // the first receiver's event teardown, leaving the rest reading a dead slot)
-    // and honours the spec requirement that receivers don't share one object.
+    // now so an unserializable value throws a DataCloneError to the caller.
     const snapshot = blk: {
         var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
 
         // Contain any V8 exception raised by a failed serialization so we can
@@ -90,20 +85,21 @@ pub fn postMessage(self: *BroadcastChannel, message: js.Value.Temp, frame: *Fram
         try_catch.init(&ls.local);
         defer try_catch.deinit();
 
-        const cloned = message.local(&ls.local).structuredCloneTo(&ls.local) catch {
+        const cloned = message.structuredCloneTo(&ls.local) catch {
             return error.DataClone;
         };
         break :blk try cloned.temp();
     };
     errdefer snapshot.release();
 
-    const callback = try frame._factory.create(PostMessageCallback{
-        .frame = frame,
+    const callback = try exec._factory.create(PostMessageCallback{
+        .exec = exec,
         .sender = self,
         .message = snapshot,
+        .post_sequence = exec.page.broadcast_sequence,
     });
 
-    try frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
+    try exec.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "BroadcastChannel.postMessage",
         .low_priority = false,
         .finalizer = PostMessageCallback.cancelled,
@@ -115,7 +111,7 @@ pub fn close(self: *BroadcastChannel) void {
         return;
     }
     self._closed = true;
-    self._frame._broadcast_channels.remove(&self._node);
+    self._exec.getBroadcastChannels().remove(&self._node);
 }
 
 pub fn getOnMessage(self: *const BroadcastChannel) ?js.Function.Global {
@@ -139,7 +135,8 @@ const PostMessageCallback = struct {
     // A self-owned structured-clone snapshot of the posted message. Re-cloned
     // (never shared) into each receiver's MessageEvent, then released.
     message: js.Value.Temp,
-    frame: *Frame,
+    exec: *Execution,
+    post_sequence: u64,
 
     // Called by the scheduler if the task is dropped before it runs (e.g. page
     // teardown). `run` and `cancelled` are mutually exclusive, so the snapshot
@@ -151,7 +148,7 @@ const PostMessageCallback = struct {
     }
 
     fn deinit(self: *PostMessageCallback) void {
-        self.frame._factory.destroy(self);
+        self.exec._factory.destroy(self);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
@@ -161,57 +158,81 @@ const PostMessageCallback = struct {
         defer self.deinit();
         defer self.message.release();
 
-        const frame = self.frame;
         const sender = self.sender;
+        const page = self.exec.page;
+        const origin = self.exec.js.origin;
 
-        var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
-        defer ls.deinit();
-        const snapshot = self.message.local(&ls.local);
+        // MessageEvent.origin is the serialization of the sender's origin (same
+        // for every receiver); an opaque origin serializes to "null".
+        const sender_origin = self.exec.origin() orelse "null";
 
-        var it = frame._broadcast_channels.first;
-        while (it) |node| : (it = node.next) {
-            const channel = BroadcastChannel.fromNode(node);
+        // Snapshot every same-origin global up front. Dispatch (below) runs user
+        // JS that can create or tear down frames/workers, so we must not hold a
+        // live frame-tree walk across it. Per-global channel lists are intrusive
+        // (never realloc) and teardown is deferred to the next tick, so walking
+        // each channel list live during dispatch is safe.
+        const arena = try page.getArena(.tiny, "BroadcastChannel.postMessage");
+        defer page.releaseArena(arena);
 
-            // Never deliver to the sender, to closed channels, or across names.
-            if (channel == sender or channel._closed) {
-                continue;
+        for (try page.executionsForOrigin(arena, origin)) |exec| {
+            // The MessageEvent and its cloned `data` must live in the receiver's
+            // realm, and its listeners are in the receiver's event manager.
+            // localScope enters the receiver's v8 context, so both happen there.
+            var ls: js.Local.Scope = undefined;
+            exec.js.localScope(&ls);
+            defer ls.deinit();
+            const snapshot = self.message.local(&ls.local);
+
+            var it = exec.getBroadcastChannels().*.first;
+            while (it) |node| : (it = node.next) {
+                const channel: *BroadcastChannel = @alignCast(@fieldParentPtr("_node", node));
+
+                // Never deliver to the sender, to closed channels, to channels
+                // created after this message was posted, or across names.
+                if (channel == sender or channel._closed) {
+                    continue;
+                }
+                if (channel._sequence >= self.post_sequence) {
+                    continue;
+                }
+                if (sender._name.eql(channel._name) == false) {
+                    continue;
+                }
+
+                const target = channel.asEventTarget();
+                if (!exec.hasDirectListeners(target, "message", channel._on_message)) {
+                    continue;
+                }
+
+                // Independent clone per receiver, in the receiver's realm. The
+                // snapshot is already plain, serializable data, so this cannot
+                // raise a DataCloneError. The resulting temp is owned by the
+                // MessageEvent, which releases it on teardown — so each receiver
+                // frees only its own handle.
+                const cloned = snapshot.structuredCloneTo(&ls.local) catch |err| {
+                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    continue;
+                };
+
+                const cloned_temp = cloned.temp() catch |err| {
+                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    continue;
+                };
+
+                const event = (MessageEvent.initTrusted(comptime .wrap("message"), .{
+                    .data = .{ .value = cloned_temp },
+                    .origin = sender_origin,
+                    .source = null,
+                }, exec.page) catch |err| {
+                    cloned_temp.release();
+                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    continue;
+                }).asEvent();
+
+                exec.dispatch(target, event, channel._on_message, .{ .context = "BroadcastChannel message" }) catch |err| {
+                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                };
             }
-            if (!std.mem.eql(u8, channel._name, sender._name)) {
-                continue;
-            }
-
-            const target = channel.asEventTarget();
-            if (!frame._event_manager.hasDirectListeners(target, "message", channel._on_message)) {
-                continue;
-            }
-
-            // Independent clone per receiver. The snapshot is already plain,
-            // serializable data, so this cannot raise a DataCloneError. The
-            // resulting temp is owned by the MessageEvent, which releases it on
-            // teardown — so each receiver frees only its own handle.
-            const cloned = snapshot.structuredCloneTo(&ls.local) catch |err| {
-                log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
-                continue;
-            };
-            const cloned_temp = cloned.temp() catch |err| {
-                log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
-                continue;
-            };
-
-            const event = (MessageEvent.initTrusted(comptime .wrap("message"), .{
-                .data = .{ .value = cloned_temp },
-                .origin = "",
-                .source = null,
-            }, frame._page) catch |err| {
-                cloned_temp.release();
-                log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
-                continue;
-            }).asEvent();
-
-            frame._event_manager.dispatchDirect(target, event, channel._on_message, .{ .context = "BroadcastChannel message" }) catch |err| {
-                log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
-            };
         }
 
         return null;
