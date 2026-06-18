@@ -834,19 +834,21 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
 /// LogFilter provides a scoped way to suppress specific log categories during tests.
 /// This is useful for tests that trigger expected errors or warnings.
 pub const LogFilter = struct {
-    old_filter: []const log.Scope,
+    old_filter: [log.num_scopes]bool,
 
     /// Sets the log filter to suppress the specified scope(s).
     /// Returns a LogFilter that should be deinitialized to restore previous filters.
     pub fn init(comptime scopes: []const log.Scope) LogFilter {
         comptime std.debug.assert(@TypeOf(scopes) == []const log.Scope);
-        const old_filter = log.opts.filter_scopes;
-        log.opts.filter_scopes = scopes;
+        const old_filter = log.opts.scope_enabled;
+        inline for (scopes) |scope| {
+            log.opts.scope_enabled[@intFromEnum(scope)] = false;
+        }
         return .{ .old_filter = old_filter };
     }
 
     /// Restores the log filters to their previous state.
     pub fn deinit(self: LogFilter) void {
-        log.opts.filter_scopes = self.old_filter;
+        log.opts.scope_enabled = self.old_filter;
     }
 };

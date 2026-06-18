@@ -38,17 +38,37 @@ pub const CDP_KEEPALIVE_CNT: c_int = 3;
 
 const Config = @This();
 
-fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator, list: *std.ArrayList(log.Scope)) !void {
+fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator, list: *std.ArrayList(log.FilterRule)) !void {
     const str = args.next() orelse return error.InvalidOption;
 
     var it = std.mem.splitScalar(u8, str, ',');
     while (it.next()) |part| {
-        const v = std.meta.stringToEnum(log.Scope, part) orelse {
+        if (part.len == 0) continue;
+
+        // `+X` filters in, `-X` filters out, bare `X` is an alias for `-X`
+        // (backward compatible). `all` targets every scope.
+        var name = part;
+        var enable = false;
+        switch (part[0]) {
+            '+' => {
+                enable = true;
+                name = part[1..];
+            },
+            '-' => name = part[1..],
+            else => {},
+        }
+
+        if (std.mem.eql(u8, name, "all")) {
+            try list.append(allocator, .{ .scope = null, .enable = enable });
+            continue;
+        }
+
+        const v = std.meta.stringToEnum(log.Scope, name) orelse {
             log.fatal(.app, "invalid option choice", .{ .arg = "--log-filter-scopes", .value = part });
             return error.InvalidOption;
         };
 
-        try list.append(allocator, v);
+        try list.append(allocator, .{ .scope = v, .enable = enable });
     }
 }
 
@@ -78,7 +98,7 @@ const CommonOptions = .{
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
     .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
     .{ .name = "log_format", .type = ?log.Format },
-    .{ .name = "log_filter_scopes", .type = log.Scope, .multiple = true, .validator = logFilterScopesValidator },
+    .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterScopesValidator },
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
     .{ .name = "http_cache_dir", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
@@ -418,7 +438,7 @@ pub fn logFormat(self: *const Config) ?log.Format {
     };
 }
 
-pub fn logFilterScopes(self: *const Config) std.ArrayList(log.Scope) {
+pub fn logFilterScopes(self: *const Config) std.ArrayList(log.FilterRule) {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.log_filter_scopes,
         else => unreachable,

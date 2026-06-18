@@ -44,10 +44,38 @@ pub const Scope = enum {
     storage,
 };
 
+pub const num_scopes = @typeInfo(Scope).@"enum".fields.len;
+
+/// A single `--log-filter-scopes` directive. `scope == null` targets every
+/// scope (the `all` keyword). `enable` is true for `+X` (filter in), false
+/// for `-X` / bare `X` (filter out).
+pub const FilterRule = struct {
+    scope: ?Scope,
+    enable: bool,
+};
+
+/// Resolve an ordered list of filter directives into a per-scope enabled
+/// array. Directives apply left-to-right, so `-all,+cdp` disables every
+/// scope then re-enables `cdp`. Scopes untouched by any directive stay
+/// enabled.
+pub fn resolveFilterScopes(rules: []const FilterRule) [num_scopes]bool {
+    var scope_enabled = [_]bool{true} ** num_scopes;
+    for (rules) |rule| {
+        if (rule.scope) |scope| {
+            scope_enabled[@intFromEnum(scope)] = rule.enable;
+        } else {
+            for (&scope_enabled) |*e| e.* = rule.enable;
+        }
+    }
+    return scope_enabled;
+}
+
 const Opts = struct {
     format: Format = if (is_debug) .pretty else .logfmt,
     level: Level = if (is_debug) .info else .warn,
-    filter_scopes: []const Scope = &.{},
+    // Per-scope enabled flags; a `false` entry suppresses that scope's logs.
+    // Only consulted in Debug builds. Default: everything enabled.
+    scope_enabled: [num_scopes]bool = [_]bool{true} ** num_scopes,
 };
 
 pub var opts = Opts{};
@@ -66,10 +94,8 @@ pub fn enabled(scope: Scope, level: Level) bool {
     }
 
     if (comptime builtin.mode == .Debug) {
-        for (opts.filter_scopes) |fs| {
-            if (fs == scope) {
-                return false;
-            }
+        if (opts.scope_enabled[@intFromEnum(scope)] == false) {
+            return false;
         }
     }
 
@@ -546,5 +572,46 @@ test "log: string escape" {
         aw.clearRetainingCapacity();
         try logTo(.app, .err, "test", .{ .string = "\n \thi  \" \" " }, &aw.writer);
         try testing.expectEqual(prefix ++ "string=\"\\n \thi  \\\" \\\" \"\n", aw.written());
+    }
+}
+
+test "log: resolveFilterScopes" {
+    // No directives: everything enabled.
+    {
+        const se = resolveFilterScopes(&.{});
+        try testing.expectEqual(true, se[@intFromEnum(Scope.cdp)]);
+        try testing.expectEqual(true, se[@intFromEnum(Scope.http)]);
+    }
+
+    // Backward compatible: bare/`-` scope filters that scope out, rest stay in.
+    {
+        const se = resolveFilterScopes(&.{
+            .{ .scope = .cdp, .enable = false },
+            .{ .scope = .http, .enable = false },
+        });
+        try testing.expectEqual(false, se[@intFromEnum(Scope.cdp)]);
+        try testing.expectEqual(false, se[@intFromEnum(Scope.http)]);
+        try testing.expectEqual(true, se[@intFromEnum(Scope.js)]);
+    }
+
+    // `-all,+cdp`: disable everything, then re-enable cdp.
+    {
+        const se = resolveFilterScopes(&.{
+            .{ .scope = null, .enable = false },
+            .{ .scope = .cdp, .enable = true },
+        });
+        try testing.expectEqual(true, se[@intFromEnum(Scope.cdp)]);
+        try testing.expectEqual(false, se[@intFromEnum(Scope.http)]);
+        try testing.expectEqual(false, se[@intFromEnum(Scope.js)]);
+    }
+
+    // `+all,-cdp`: enable everything, then disable cdp. Order matters.
+    {
+        const se = resolveFilterScopes(&.{
+            .{ .scope = null, .enable = true },
+            .{ .scope = .cdp, .enable = false },
+        });
+        try testing.expectEqual(false, se[@intFromEnum(Scope.cdp)]);
+        try testing.expectEqual(true, se[@intFromEnum(Scope.http)]);
     }
 }
