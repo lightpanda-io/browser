@@ -54,6 +54,85 @@ pub fn deinit(self: *Sqlite, allocator: Allocator) void {
     self.pool.deinit(allocator);
 }
 
+pub fn Migrations(comptime migrations: []const [:0]const u8) type {
+    const hashes = comptime blk: {
+        var h: [migrations.len]i64 = undefined;
+        for (migrations, 0..) |sql, i| {
+            const hash = std.hash.Wyhash.hash(0, sql);
+            h[i] = @as(i64, @bitCast(hash));
+        }
+        break :blk h;
+    };
+
+    return struct {
+        pub fn run(conn: Conn) !usize {
+            try conn.exec(
+                \\create table if not exists migrations (
+                \\  id integer primary key,
+                \\  hash integer not null,
+                \\  applied_at integer not null
+                \\)
+            , .{});
+
+            const current = (try conn.scalar(
+                i64,
+                "select max(id) from migrations",
+                .{},
+            )) orelse 0;
+
+            const start: usize = @intCast(current);
+
+            if (start > migrations.len) {
+                log.err(.storage, "migrations removed", .{
+                    .applied = start,
+                    .defined = migrations.len,
+                });
+                return error.MigrationsRemoved;
+            }
+
+            if (start > 0) {
+                var rows = try conn.rows("select id, hash from migrations order by id asc", .{});
+                defer rows.deinit();
+
+                while (try rows.next()) |row| {
+                    const id = row.get(i64, 0);
+                    const hash = row.get(i64, 1);
+                    const idx: usize = @intCast(id - 1);
+                    const stored_hash = hashes[idx];
+
+                    if (hash != stored_hash) {
+                        log.err(.storage, "migration hash mismatch", .{
+                            .id = id,
+                            .expected = stored_hash,
+                            .got = hash,
+                        });
+
+                        return error.MigrationHashMismatch;
+                    }
+                }
+            }
+
+            if (start == migrations.len) {
+                return start;
+            }
+
+            try conn.begin();
+            errdefer conn.rollback() catch {};
+
+            for (migrations[start..], start..) |sql, i| {
+                try conn.exec(sql, .{});
+                try conn.exec(
+                    "insert into migrations (id, hash, applied_at) values ($1, $2, $3)",
+                    .{ @as(i64, @intCast(i + 1)), hashes[i], std.time.timestamp() },
+                );
+            }
+
+            try conn.commit();
+            return migrations.len;
+        }
+    };
+}
+
 pub const Conn = struct {
     conn: *c.sqlite3,
 
@@ -136,6 +215,18 @@ pub const Conn = struct {
         }
 
         return .{ .stmt = stmt.?, .conn = self.conn };
+    }
+
+    pub fn begin(self: Conn) !void {
+        try self.exec("begin", .{});
+    }
+
+    pub fn commit(self: Conn) !void {
+        try self.exec("commit", .{});
+    }
+
+    pub fn rollback(self: Conn) !void {
+        try self.exec("rollback", .{});
     }
 
     pub fn busyTimeout(self: Conn, ms: c_int) !void {
@@ -568,12 +659,58 @@ test "Sqlite: exec, row and scalar" {
     }
 }
 
-test "Sqlite: Migration" {
-    var sqlite = try Sqlite.init(testing.allocator, ":memory:");
-    defer sqlite.deinit(testing.allocator);
+test "Sqlite: Migrations - basic" {
+    var conn = try Sqlite.Conn.open(":memory:");
+    defer conn.close();
 
-    const conn = try sqlite.pool.acquire();
-    defer sqlite.pool.release(conn);
+    const M = Migrations(&.{
+        "create table test (id integer primary key, name text)",
+        "alter table test add column email text",
+    });
 
-    try testing.expectEqual(1, (try conn.scalar(i64, "select max(id) from migrations", .{})).?);
+    const v1 = try M.run(conn);
+    try testing.expectEqual(@as(usize, 2), v1);
+
+    // idempotent - running again should return same version
+    const v2 = try M.run(conn);
+    try testing.expectEqual(@as(usize, 2), v2);
+
+    // verify migrations table has correct entries
+    try testing.expectEqual(
+        @as(i64, 2),
+        (try conn.scalar(i64, "select count(*) from migrations", .{})).?,
+    );
+}
+
+test "Sqlite: Migrations - hash mismatch" {
+    var conn = try Sqlite.Conn.open(":memory:");
+    defer conn.close();
+
+    const M1 = Migrations(&.{
+        "create table test (id integer primary key, name text)",
+    });
+    _ = try M1.run(conn);
+
+    // same migration list but with different sql = hash mismatch
+    const M2 = Migrations(&.{
+        "create table test (id integer primary key, name text, extra text)",
+    });
+    try testing.expectError(error.MigrationHashMismatch, M2.run(conn));
+}
+
+test "Sqlite: Migrations - removed migration" {
+    var conn = try Sqlite.Conn.open(":memory:");
+    defer conn.close();
+
+    const M1 = Migrations(&.{
+        "create table test (id integer primary key, name text)",
+        "alter table test add column email text",
+    });
+    _ = try M1.run(conn);
+
+    // fewer migrations than were applied
+    const M2 = Migrations(&.{
+        "create table test (id integer primary key, name text)",
+    });
+    try testing.expectError(error.MigrationsRemoved, M2.run(conn));
 }
