@@ -6,152 +6,146 @@
 </div>
 
 <script src="../testing.js"></script>
-<script id="attribute_filter_single">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-1');
+<script id="attribute_filter_single" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-1');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(element, {
-      attributes: true,
-      attributeFilter: ['data-status']
-    });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(element, {
+    attributes: true,
+    attributeFilter: ['data-status']
+  });
 
-    element.setAttribute('data-status', 'inactive');
-    element.setAttribute('data-username', 'jane');
-    element.setAttribute('data-role', 'user');
+  element.setAttribute('data-status', 'inactive');
+  element.setAttribute('data-username', 'jane');
+  element.setAttribute('data-role', 'user');
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('attributes', mutations[0].type);
-      testing.expectEqual('data-status', mutations[0].attributeName);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('attributes', mutations[0].type);
+    testing.expectEqual('data-status', mutations[0].attributeName);
   });
 </script>
 
-<script id="attribute_filter_multiple">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-1');
+<script id="attribute_filter_multiple" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-1');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(element, {
-      attributes: true,
-      attributeFilter: ['data-status', 'data-username']
-    });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(element, {
+    attributes: true,
+    attributeFilter: ['data-status', 'data-username']
+  });
 
-    element.setAttribute('data-status', 'active');
-    element.setAttribute('data-username', 'alice');
-    element.setAttribute('data-role', 'moderator');
+  element.setAttribute('data-status', 'active');
+  element.setAttribute('data-username', 'alice');
+  element.setAttribute('data-role', 'moderator');
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(2, mutations.length);
-      testing.expectEqual('data-status', mutations[0].attributeName);
-      testing.expectEqual('data-username', mutations[1].attributeName);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(2, mutations.length);
+    testing.expectEqual('data-status', mutations[0].attributeName);
+    testing.expectEqual('data-username', mutations[1].attributeName);
   });
 </script>
 
-<script id="attribute_filter_with_old_value">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-2');
+<script id="attribute_filter_with_old_value" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-2');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(element, {
-      attributes: true,
-      attributeOldValue: true,
-      attributeFilter: ['class']
-    });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(element, {
+    attributes: true,
+    attributeOldValue: true,
+    attributeFilter: ['class']
+  });
 
-    element.setAttribute('class', 'changed');
-    element.setAttribute('data-ignored', 'value');
+  element.setAttribute('class', 'changed');
+  element.setAttribute('data-ignored', 'value');
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('class', mutations[0].attributeName);
-      testing.expectEqual('initial', mutations[0].oldValue);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('class', mutations[0].attributeName);
+    testing.expectEqual('initial', mutations[0].oldValue);
   });
 </script>
 
-<script id="attribute_filter_no_match">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-2');
+<script id="attribute_filter_no_match" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-2');
 
-    let callbackCalled = false;
-    const observer = new MutationObserver(() => {
-      callbackCalled = true;
-    });
-    observer.observe(element, {
-      attributes: true,
-      attributeFilter: ['data-filtered']
-    });
+  let callbackCalled = false;
+  const observer = new MutationObserver(() => {
+    callbackCalled = true;
+  });
+  observer.observe(element, {
+    attributes: true,
+    attributeFilter: ['data-filtered']
+  });
 
-    element.setAttribute('class', 'another-change');
-    element.setAttribute('data-other', 'value');
+  element.setAttribute('class', 'another-change');
+  element.setAttribute('data-other', 'value');
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(false, callbackCalled);
-      observer.disconnect();
-    });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  observer.disconnect();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, callbackCalled);
   });
 </script>
 
-<script id="attribute_filter_with_subtree">
-  testing.async(async () => {
-    const parent = document.getElementById('test-element-3');
-    const child = document.getElementById('child-element');
+<script id="attribute_filter_with_subtree" type=module>
+  const state = await testing.async();
+  const parent = document.getElementById('test-element-3');
+  const child = document.getElementById('child-element');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(parent, {
-      attributes: true,
-      subtree: true,
-      attributeFilter: ['data-foo']
-    });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(parent, {
+    attributes: true,
+    subtree: true,
+    attributeFilter: ['data-foo']
+  });
 
-    child.setAttribute('data-foo', 'changed');
-    child.setAttribute('data-baz', 'ignored');
+  child.setAttribute('data-foo', 'changed');
+  child.setAttribute('data-baz', 'ignored');
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('data-foo', mutations[0].attributeName);
-      testing.expectEqual(child, mutations[0].target);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('data-foo', mutations[0].attributeName);
+    testing.expectEqual(child, mutations[0].target);
   });
 </script>
 
-<script id="attribute_filter_empty_array">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-2');
+<script id="attribute_filter_empty_array" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-2');
 
-    let callbackCalled = false;
-    const observer = new MutationObserver(() => {
-      callbackCalled = true;
-    });
-    observer.observe(element, {
-      attributes: true,
-      attributeFilter: []
-    });
+  let callbackCalled = false;
+  const observer = new MutationObserver(() => {
+    callbackCalled = true;
+  });
+  observer.observe(element, {
+    attributes: true,
+    attributeFilter: []
+  });
 
-    element.setAttribute('class', 'yet-another-change');
+  element.setAttribute('class', 'yet-another-change');
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(false, callbackCalled);
-      observer.disconnect();
-    });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  observer.disconnect();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, callbackCalled);
   });
 </script>

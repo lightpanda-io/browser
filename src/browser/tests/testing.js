@@ -75,41 +75,35 @@
     });
   }
 
-  async function async(cb) {
+  async function async() {
     const script_id = (IS_TEST_RUNNER) ? document.currentScript.id : 'cannot track module id in FF/Chrome';
 
-    if (cb == undefined) {
-      if (async_seen.has(script_id)) {
-        throw new Error(`testing.async() called more than once for script '${script_id}'. A script may only register one async block (the runner can declare success in the gap between two of them); split the test into separate <script> tags.`);
-      }
-      async_seen.add(script_id);
-
-      let resolve = null
-      const promise = new Promise((r) => { resolve = r});
-      async_pending.add(script_id);
-
-      return {
-        promise: promise,
-        resolve: resolve,
-        capture: {script_id: script_id, stack: new Error().stack},
-        done: async function(cb) {
-          const res = await this.promise;
-          async_pending.delete(script_id);
-          async_capture = this.capture;
-          try {
-            cb(res);
-          } catch (err) {
-          	console.warn(script_id, err);
-          	failed = true;
-          }
-          async_capture = false;
-        }
-      };
+    if (async_seen.has(script_id)) {
+      throw new Error(`testing.async() called more than once for script '${script_id}'. A script may only register one async block (the runner can declare success in the gap between two of them); split the test into separate <script> tags.`);
     }
+    async_seen.add(script_id);
 
-    let capture = {script_id: script_id, stack: new Error().stack};
-    await cb(() => { async_capture = capture; });
-    async_capture = null;
+    let resolve = null
+    const promise = new Promise((r) => { resolve = r});
+    async_pending.add(script_id);
+
+    return {
+      promise: promise,
+      resolve: resolve,
+      capture: {script_id: script_id, stack: new Error().stack},
+      done: async function(cb) {
+        const res = await this.promise;
+        async_pending.delete(script_id);
+        async_capture = this.capture;
+        try {
+          cb(res);
+        } catch (err) {
+          console.warn(script_id, err);
+          failed = true;
+        }
+        async_capture = false;
+      }
+    };
   }
 
   function assertOk() {
@@ -149,7 +143,7 @@
   }
 
   function printTimeoutState() {
-  	console.warn('Pending count:', Array.from(async_pending.keys()));
+    console.warn('Pending count:', Array.from(async_pending.keys()));
   }
 
   const IS_TEST_RUNNER = window.navigator.userAgent.startsWith("Lightpanda/");

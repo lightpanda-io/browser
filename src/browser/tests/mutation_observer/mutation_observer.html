@@ -5,133 +5,133 @@
 <div id="test-element-4">Test</div>
 
 <script src="../testing.js"></script>
-<script id="mutation_observer">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-1');
+<script id="mutation_observer" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-1');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(element, { attributes: true });
-
-    element.setAttribute('data-foo', 'bar');
-    element.setAttribute('class', 'changed');
-    element.removeAttribute('data-foo');
-
-    Promise.resolve().then(() => {
-      testing.expectEqual(3, mutations.length);
-
-      testing.expectEqual('attributes', mutations[0].type);
-      testing.expectEqual(element, mutations[0].target);
-      testing.expectEqual('data-foo', mutations[0].attributeName);
-      testing.expectEqual(null, mutations[0].oldValue);
-
-      testing.expectEqual('attributes', mutations[1].type);
-      testing.expectEqual(element, mutations[1].target);
-      testing.expectEqual('class', mutations[1].attributeName);
-      testing.expectEqual(null, mutations[1].oldValue);
-
-      testing.expectEqual('attributes', mutations[2].type);
-      testing.expectEqual(element, mutations[2].target);
-      testing.expectEqual('data-foo', mutations[2].attributeName);
-      testing.expectEqual(null, mutations[2].oldValue);
-    });
-  });
-</script>
-
-<script id="mutation_observer_old_value">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-2');
-
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(element, { attributes: true, attributeOldValue: true });
-
-    element.setAttribute('data-test', 'value1');
-    element.setAttribute('data-test', 'value2');
-    element.removeAttribute('data-test');
-
-    Promise.resolve().then(() => {
-      testing.expectEqual(3, mutations.length);
-
-      testing.expectEqual('data-test', mutations[0].attributeName);
-      testing.expectEqual(null, mutations[0].oldValue);
-
-      testing.expectEqual('data-test', mutations[1].attributeName);
-      testing.expectEqual('value1', mutations[1].oldValue);
-
-      testing.expectEqual('data-test', mutations[2].attributeName);
-      testing.expectEqual('value2', mutations[2].oldValue);
-    });
-  });
-</script>
-
-<script id="mutation_observer_disconnect">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-3');
-
-    let callbackCalled = false;
-    const observer = new MutationObserver(() => {
-      callbackCalled = true;
-    });
-
-    observer.observe(element, { attributes: true });
+  const observer = new MutationObserver((records) => {
     observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(element, { attributes: true });
 
-    element.setAttribute('data-disconnected', 'test');
+  element.setAttribute('data-foo', 'bar');
+  element.setAttribute('class', 'changed');
+  element.removeAttribute('data-foo');
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(false, callbackCalled);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(3, mutations.length);
+
+    testing.expectEqual('attributes', mutations[0].type);
+    testing.expectEqual(element, mutations[0].target);
+    testing.expectEqual('data-foo', mutations[0].attributeName);
+    testing.expectEqual(null, mutations[0].oldValue);
+
+    testing.expectEqual('attributes', mutations[1].type);
+    testing.expectEqual(element, mutations[1].target);
+    testing.expectEqual('class', mutations[1].attributeName);
+    testing.expectEqual(null, mutations[1].oldValue);
+
+    testing.expectEqual('attributes', mutations[2].type);
+    testing.expectEqual(element, mutations[2].target);
+    testing.expectEqual('data-foo', mutations[2].attributeName);
+    testing.expectEqual(null, mutations[2].oldValue);
   });
 </script>
 
-<script id="mutation_observer_take_records">
-  testing.async(async () => {
-    const element = document.getElementById('test-element-4');
+<script id="mutation_observer_old_value" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-2');
 
-    let callbackCalled = false;
-    const observer = new MutationObserver(() => {
-      callbackCalled = true;
-    });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(element, { attributes: true, attributeOldValue: true });
 
-    observer.observe(element, { attributes: true });
-    element.setAttribute('data-take', 'records');
+  element.setAttribute('data-test', 'value1');
+  element.setAttribute('data-test', 'value2');
+  element.removeAttribute('data-test');
 
-    const taken = observer.takeRecords();
+  await state.done((mutations) => {
+    testing.expectEqual(3, mutations.length);
+
+    testing.expectEqual('data-test', mutations[0].attributeName);
+    testing.expectEqual(null, mutations[0].oldValue);
+
+    testing.expectEqual('data-test', mutations[1].attributeName);
+    testing.expectEqual('value1', mutations[1].oldValue);
+
+    testing.expectEqual('data-test', mutations[2].attributeName);
+    testing.expectEqual('value2', mutations[2].oldValue);
+  });
+</script>
+
+<script id="mutation_observer_disconnect" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-3');
+
+  let callbackCalled = false;
+  const observer = new MutationObserver(() => {
+    callbackCalled = true;
+  });
+
+  observer.observe(element, { attributes: true });
+  observer.disconnect();
+
+  element.setAttribute('data-disconnected', 'test');
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, callbackCalled);
+  });
+</script>
+
+<script id="mutation_observer_take_records" type=module>
+  const state = await testing.async();
+  const element = document.getElementById('test-element-4');
+
+  let callbackCalled = false;
+  const observer = new MutationObserver(() => {
+    callbackCalled = true;
+  });
+
+  observer.observe(element, { attributes: true });
+  element.setAttribute('data-take', 'records');
+
+  const taken = observer.takeRecords();
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(1, taken.length);
     testing.expectEqual('data-take', taken[0].attributeName);
-
-    Promise.resolve().then(() => {
-      testing.expectEqual(false, callbackCalled);
-    });
+    testing.expectEqual(false, callbackCalled);
   });
 </script>
 
-<script id="microtask_access_to_records">
-  testing.async(async () => {
-    let savedRecords;
-    const promise = new Promise((resolve) => {
-      const element = document.createElement('div');
-      const observer = new MutationObserver((records) => {
-        // Save the records array itself
-        savedRecords = records;
-        resolve();
-        observer.disconnect();
-      });
-      observer.observe(element, { attributes: true });
-      element.setAttribute('test', 'value');
+<script id="microtask_access_to_records" type=module>
+  const state = await testing.async();
+  let savedRecords;
+  const promise = new Promise((resolve) => {
+    const element = document.createElement('div');
+    const observer = new MutationObserver((records) => {
+      // Save the records array itself
+      savedRecords = records;
+      resolve();
+      observer.disconnect();
     });
+    observer.observe(element, { attributes: true });
+    element.setAttribute('test', 'value');
+  });
 
-    await promise;
-    // Force arena reset by making a Zig call
-    document.getElementsByTagName('*');
+  await promise;
+  // Force arena reset by making a Zig call
+  document.getElementsByTagName('*');
 
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(1, savedRecords.length);
     testing.expectEqual('attributes', savedRecords[0].type);
     testing.expectEqual('test', savedRecords[0].attributeName);

@@ -1,86 +1,71 @@
 <!DOCTYPE html>
 <body>
 <script src="testing.js"></script>
-<script id="basic">
-{
-    const channel = new MessageChannel();
+<script id="basic" type=module>
+  const state = await testing.async();
 
-    testing.expectEqual(true, channel.port1 !== undefined);
-    testing.expectEqual(true, channel.port2 !== undefined);
-    testing.expectEqual(true, channel.port1 !== channel.port2);
-}
+  // ports are distinct and defined
+  const channel0 = new MessageChannel();
 
-{
-    const channel = new MessageChannel();
-    let received = null;
+  // single message delivered to port2
+  const channel1 = new MessageChannel();
+  let received1 = null;
+  channel1.port2.onmessage = function(e) {
+    received1 = e.data;
+  };
+  channel1.port1.postMessage('hello');
 
-    channel.port2.onmessage = function(e) {
-        received = e.data;
-    };
+  // addEventListener + start() preserves message order
+  let messages = [];
+  const channel2 = new MessageChannel();
+  channel2.port2.addEventListener('message', (e) => {
+    messages.push(e.data);
+  });
+  channel2.port2.start();
+  channel2.port1.postMessage('first');
+  channel2.port1.postMessage('second');
+  channel2.port1.postMessage('third');
 
-    channel.port1.postMessage('hello');
+  // bidirectional delivery, one message each way
+  const channel3 = new MessageChannel();
+  let port1Count = 0;
+  let port2Count = 0;
+  channel3.port1.onmessage = () => { port1Count++; };
+  channel3.port2.onmessage = () => { port2Count++; };
+  channel3.port1.postMessage('to port2');
+  channel3.port2.postMessage('to port1');
 
-    setTimeout(() => {
-        testing.expectEqual('hello', received);
-    }, 10);
-}
+  // structured object message
+  const channel4 = new MessageChannel();
+  let received4 = null;
+  channel4.port2.onmessage = (e) => {
+    received4 = e.data;
+  };
+  channel4.port1.postMessage({ type: 'test', value: 42 });
 
-testing.async(async () => {
-    let messages = [];
+  // let all queued messages be delivered
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
-    let p = new Promise((resolve) => {
-        const channel = new MessageChannel();
-        channel.port2.addEventListener('message', (e) => {
-            messages.push(e.data);
-            if (e.data === 'third') {
-                resolve();
-            }
-        });
-        channel.port2.start();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, channel0.port1 !== undefined);
+    testing.expectEqual(true, channel0.port2 !== undefined);
+    testing.expectEqual(true, channel0.port1 !== channel0.port2);
 
-        channel.port1.postMessage('first');
-        channel.port1.postMessage('second');
-        channel.port1.postMessage('third');
-    });
+    testing.expectEqual('hello', received1);
 
-
-    await p;
     testing.expectEqual(3, messages.length);
     testing.expectEqual('first', messages[0]);
     testing.expectEqual('second', messages[1]);
     testing.expectEqual('third', messages[2]);
-});
 
-{
-    const channel = new MessageChannel();
-    let port1Count = 0;
-    let port2Count = 0;
+    testing.expectEqual(1, port1Count);
+    testing.expectEqual(1, port2Count);
 
-    channel.port1.onmessage = () => { port1Count++; };
-    channel.port2.onmessage = () => { port2Count++; };
-
-    channel.port1.postMessage('to port2');
-    channel.port2.postMessage('to port1');
-
-    setTimeout(() => {
-        testing.expectEqual(1, port1Count);
-        testing.expectEqual(1, port2Count);
-    }, 30);
-}
-
-{
-    const channel = new MessageChannel();
-    let received = null;
-
-    channel.port2.onmessage = (e) => {
-        received = e.data;
-    };
-
-    channel.port1.postMessage({ type: 'test', value: 42 });
-
-    setTimeout(() => {
-        testing.expectEqual('test', received.type);
-        testing.expectEqual(42, received.value);
-    }, 40);
-}
+    testing.expectEqual('test', received4.type);
+    testing.expectEqual(42, received4.value);
+  });
 </script>
+</body>
+</content>
+</invoke>

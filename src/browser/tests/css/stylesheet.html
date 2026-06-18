@@ -520,26 +520,32 @@
 }
 </script>
 
-<script id="CSSStyleSheet_replaceSync">
-{
+<script id="CSSStyleSheet_replaceSync" type=module>
+    const state = await testing.async();
+
     const sheet = new CSSStyleSheet();
-    testing.expectEqual(0, sheet.cssRules.length);
+    const initialLen = sheet.cssRules.length;
 
     sheet.replaceSync('.test { color: blue; }');
-    testing.expectEqual(1, sheet.cssRules.length);
-    testing.expectEqual('.test', sheet.cssRules[0].selectorText);
-    testing.expectEqual('blue', sheet.cssRules[0].style.color);
+    const afterSyncLen = sheet.cssRules.length;
+    const afterSyncSelector = sheet.cssRules[0].selectorText;
+    const afterSyncColor = sheet.cssRules[0].style.color;
 
-    let replacedAsync = false;
-    testing.async(async () => {
-        const result = await sheet.replace('.async-test { margin: 10px; }');
+    const result = await sheet.replace('.async-test { margin: 10px; }');
+    const afterAsyncLen = sheet.cssRules.length;
+    const afterAsyncSelector = sheet.cssRules[0].selectorText;
+
+    state.resolve();
+    await state.done(() => {
+        testing.expectEqual(0, initialLen);
+        testing.expectEqual(1, afterSyncLen);
+        testing.expectEqual('.test', afterSyncSelector);
+        testing.expectEqual('blue', afterSyncColor);
+
         testing.expectTrue(result === sheet);
-        testing.expectEqual(1, sheet.cssRules.length);
-        testing.expectEqual('.async-test', sheet.cssRules[0].selectorText);
-        replacedAsync = true;
+        testing.expectEqual(1, afterAsyncLen);
+        testing.expectEqual('.async-test', afterAsyncSelector);
     });
-    testing.onload(() => testing.expectTrue(replacedAsync));
-}
 </script>
 
 <script id="CSSStyleRule_cssText">

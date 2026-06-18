@@ -6,322 +6,304 @@
 <div id="middle-parent"><div id="first">First</div><div id="middle">Middle</div><div id="last">Last</div></div>
 
 <script src="../testing.js"></script>
-<script id="childlist">
-  testing.async(async () => {
-    const parent = document.getElementById('parent');
-    const child1 = document.getElementById('child1');
+<script id="childlist" type=module>
+  const state = await testing.async();
+  const parent = document.getElementById('parent');
+  const child1 = document.getElementById('child1');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(parent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(parent, { childList: true });
 
-    const child2 = document.createElement('div');
-    child2.textContent = 'Child 2';
-    parent.appendChild(child2);
+  const child2 = document.createElement('div');
+  child2.textContent = 'Child 2';
+  parent.appendChild(child2);
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(parent, mutations[0].target);
-      testing.expectEqual(1, mutations[0].addedNodes.length);
-      testing.expectEqual(child2, mutations[0].addedNodes[0]);
-      testing.expectEqual(0, mutations[0].removedNodes.length);
-      testing.expectEqual(child1, mutations[0].previousSibling);
-      testing.expectEqual(null, mutations[0].nextSibling);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(parent, mutations[0].target);
+    testing.expectEqual(1, mutations[0].addedNodes.length);
+    testing.expectEqual(child2, mutations[0].addedNodes[0]);
+    testing.expectEqual(0, mutations[0].removedNodes.length);
+    testing.expectEqual(child1, mutations[0].previousSibling);
+    testing.expectEqual(null, mutations[0].nextSibling);
   });
 </script>
 
-<script id="childlist_empty_parent">
-  testing.async(async () => {
-    const emptyParent = document.getElementById('empty-parent');
+<script id="childlist_empty_parent" type=module>
+  const state = await testing.async();
+  const emptyParent = document.getElementById('empty-parent');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(emptyParent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(emptyParent, { childList: true });
 
-    const firstChild = document.createElement('div');
-    firstChild.textContent = 'First child';
-    emptyParent.appendChild(firstChild);
+  const firstChild = document.createElement('div');
+  firstChild.textContent = 'First child';
+  emptyParent.appendChild(firstChild);
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(emptyParent, mutations[0].target);
-      testing.expectEqual(1, mutations[0].addedNodes.length);
-      testing.expectEqual(firstChild, mutations[0].addedNodes[0]);
-      testing.expectEqual(0, mutations[0].removedNodes.length);
-      testing.expectEqual(null, mutations[0].previousSibling);
-      testing.expectEqual(null, mutations[0].nextSibling);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(emptyParent, mutations[0].target);
+    testing.expectEqual(1, mutations[0].addedNodes.length);
+    testing.expectEqual(firstChild, mutations[0].addedNodes[0]);
+    testing.expectEqual(0, mutations[0].removedNodes.length);
+    testing.expectEqual(null, mutations[0].previousSibling);
+    testing.expectEqual(null, mutations[0].nextSibling);
   });
 </script>
 
-<script id="childlist_remove_last">
-  testing.async(async () => {
-    const removeParent = document.getElementById('remove-parent');
-    const onlyChild = document.getElementById('only-child');
+<script id="childlist_remove_last" type=module>
+  const state = await testing.async();
+  const removeParent = document.getElementById('remove-parent');
+  const onlyChild = document.getElementById('only-child');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(removeParent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(removeParent, { childList: true });
 
-    removeParent.removeChild(onlyChild);
+  removeParent.removeChild(onlyChild);
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(removeParent, mutations[0].target);
-      testing.expectEqual(0, mutations[0].addedNodes.length);
-      testing.expectEqual(1, mutations[0].removedNodes.length);
-      testing.expectEqual(onlyChild, mutations[0].removedNodes[0]);
-      testing.expectEqual(null, mutations[0].previousSibling);
-      testing.expectEqual(null, mutations[0].nextSibling);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(removeParent, mutations[0].target);
+    testing.expectEqual(0, mutations[0].addedNodes.length);
+    testing.expectEqual(1, mutations[0].removedNodes.length);
+    testing.expectEqual(onlyChild, mutations[0].removedNodes[0]);
+    testing.expectEqual(null, mutations[0].previousSibling);
+    testing.expectEqual(null, mutations[0].nextSibling);
   });
 </script>
 
-<script id="childlist_text_node">
-  testing.async(async () => {
-    const textParent = document.getElementById('text-parent');
+<script id="childlist_text_node" type=module>
+  const state = await testing.async();
+  const textParent = document.getElementById('text-parent');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(textParent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(textParent, { childList: true });
 
-    const textNode = document.createTextNode('Hello world');
-    textParent.appendChild(textNode);
+  const textNode = document.createTextNode('Hello world');
+  textParent.appendChild(textNode);
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(textParent, mutations[0].target);
-      testing.expectEqual(1, mutations[0].addedNodes.length);
-      testing.expectEqual(textNode, mutations[0].addedNodes[0]);
-      testing.expectEqual(null, mutations[0].previousSibling);
-      testing.expectEqual(null, mutations[0].nextSibling);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(textParent, mutations[0].target);
+    testing.expectEqual(1, mutations[0].addedNodes.length);
+    testing.expectEqual(textNode, mutations[0].addedNodes[0]);
+    testing.expectEqual(null, mutations[0].previousSibling);
+    testing.expectEqual(null, mutations[0].nextSibling);
   });
 </script>
 
-<script id="childlist_remove_middle">
-  testing.async(async () => {
-    const middleParent = document.getElementById('middle-parent');
-    const first = document.getElementById('first');
-    const middle = document.getElementById('middle');
-    const last = document.getElementById('last');
+<script id="childlist_remove_middle" type=module>
+  const state = await testing.async();
+  const middleParent = document.getElementById('middle-parent');
+  const first = document.getElementById('first');
+  const middle = document.getElementById('middle');
+  const last = document.getElementById('last');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(middleParent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(middleParent, { childList: true });
 
-    middleParent.removeChild(middle);
+  middleParent.removeChild(middle);
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(middleParent, mutations[0].target);
-      testing.expectEqual(0, mutations[0].addedNodes.length);
-      testing.expectEqual(1, mutations[0].removedNodes.length);
-      testing.expectEqual(middle, mutations[0].removedNodes[0]);
-      testing.expectEqual(first, mutations[0].previousSibling);
-      testing.expectEqual(last, mutations[0].nextSibling);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(middleParent, mutations[0].target);
+    testing.expectEqual(0, mutations[0].addedNodes.length);
+    testing.expectEqual(1, mutations[0].removedNodes.length);
+    testing.expectEqual(middle, mutations[0].removedNodes[0]);
+    testing.expectEqual(first, mutations[0].previousSibling);
+    testing.expectEqual(last, mutations[0].nextSibling);
   });
 </script>
 
 <div id="insert-parent"><div id="insert-first">First</div><div id="insert-last">Last</div></div>
 
-<script id="childlist_insert_before">
-  testing.async(async () => {
-    const insertParent = document.getElementById('insert-parent');
-    const insertFirst = document.getElementById('insert-first');
-    const insertLast = document.getElementById('insert-last');
+<script id="childlist_insert_before" type=module>
+  const state = await testing.async();
+  const insertParent = document.getElementById('insert-parent');
+  const insertFirst = document.getElementById('insert-first');
+  const insertLast = document.getElementById('insert-last');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(insertParent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(insertParent, { childList: true });
 
-    const insertMiddle = document.createElement('div');
-    insertMiddle.textContent = 'Middle';
-    insertParent.insertBefore(insertMiddle, insertLast);
+  const insertMiddle = document.createElement('div');
+  insertMiddle.textContent = 'Middle';
+  insertParent.insertBefore(insertMiddle, insertLast);
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length);
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(insertParent, mutations[0].target);
-      testing.expectEqual(1, mutations[0].addedNodes.length);
-      testing.expectEqual(insertMiddle, mutations[0].addedNodes[0]);
-      testing.expectEqual(0, mutations[0].removedNodes.length);
-      testing.expectEqual(insertFirst, mutations[0].previousSibling);
-      testing.expectEqual(insertLast, mutations[0].nextSibling);
-    });
+  await state.done((mutations) => {
+    testing.expectEqual(1, mutations.length);
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(insertParent, mutations[0].target);
+    testing.expectEqual(1, mutations[0].addedNodes.length);
+    testing.expectEqual(insertMiddle, mutations[0].addedNodes[0]);
+    testing.expectEqual(0, mutations[0].removedNodes.length);
+    testing.expectEqual(insertFirst, mutations[0].previousSibling);
+    testing.expectEqual(insertLast, mutations[0].nextSibling);
   });
 </script>
 
 <div id="replace-parent"><div id="replace-old">Old</div></div>
 
-<script id="childlist_replace_child">
-  testing.async(async () => {
-    const replaceParent = document.getElementById('replace-parent');
-    const replaceOld = document.getElementById('replace-old');
+<script id="childlist_replace_child" type=module>
+  const state = await testing.async();
+  const replaceParent = document.getElementById('replace-parent');
+  const replaceOld = document.getElementById('replace-old');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(replaceParent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(replaceParent, { childList: true });
 
-    const replaceNew = document.createElement('div');
-    replaceNew.textContent = 'New';
-    replaceParent.replaceChild(replaceNew, replaceOld);
+  const replaceNew = document.createElement('div');
+  replaceNew.textContent = 'New';
+  replaceParent.replaceChild(replaceNew, replaceOld);
 
-    Promise.resolve().then(() => {
-      // replaceChild generates two separate mutation records in modern spec:
-      // 1. First record for insertBefore (new node added)
-      // 2. Second record for removeChild (old node removed)
-      testing.expectEqual(2, mutations.length);
+  await state.done((mutations) => {
+    // replaceChild generates two separate mutation records in modern spec:
+    // 1. First record for insertBefore (new node added)
+    // 2. Second record for removeChild (old node removed)
+    testing.expectEqual(2, mutations.length);
 
-      // First mutation: insertion of new node
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(replaceParent, mutations[0].target);
-      testing.expectEqual(1, mutations[0].addedNodes.length);
-      testing.expectEqual(replaceNew, mutations[0].addedNodes[0]);
-      testing.expectEqual(0, mutations[0].removedNodes.length);
-      testing.expectEqual(null, mutations[0].previousSibling);
-      testing.expectEqual(replaceOld, mutations[0].nextSibling);
+    // First mutation: insertion of new node
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(replaceParent, mutations[0].target);
+    testing.expectEqual(1, mutations[0].addedNodes.length);
+    testing.expectEqual(replaceNew, mutations[0].addedNodes[0]);
+    testing.expectEqual(0, mutations[0].removedNodes.length);
+    testing.expectEqual(null, mutations[0].previousSibling);
+    testing.expectEqual(replaceOld, mutations[0].nextSibling);
 
-      // Second mutation: removal of old node
-      testing.expectEqual('childList', mutations[1].type);
-      testing.expectEqual(replaceParent, mutations[1].target);
-      testing.expectEqual(0, mutations[1].addedNodes.length);
-      testing.expectEqual(1, mutations[1].removedNodes.length);
-      testing.expectEqual(replaceOld, mutations[1].removedNodes[0]);
-      testing.expectEqual(replaceNew, mutations[1].previousSibling);
-      testing.expectEqual(null, mutations[1].nextSibling);
-    });
+    // Second mutation: removal of old node
+    testing.expectEqual('childList', mutations[1].type);
+    testing.expectEqual(replaceParent, mutations[1].target);
+    testing.expectEqual(0, mutations[1].addedNodes.length);
+    testing.expectEqual(1, mutations[1].removedNodes.length);
+    testing.expectEqual(replaceOld, mutations[1].removedNodes[0]);
+    testing.expectEqual(replaceNew, mutations[1].previousSibling);
+    testing.expectEqual(null, mutations[1].nextSibling);
   });
 </script>
 
 <div id="multiple-parent"></div>
 
-<script id="childlist_multiple_mutations">
-  testing.async(async () => {
-    const multipleParent = document.getElementById('multiple-parent');
+<script id="childlist_multiple_mutations" type=module>
+  const state = await testing.async();
+  const multipleParent = document.getElementById('multiple-parent');
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(multipleParent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(multipleParent, { childList: true });
 
-    const child1 = document.createElement('div');
-    child1.textContent = 'Child 1';
-    multipleParent.appendChild(child1);
+  const child1 = document.createElement('div');
+  child1.textContent = 'Child 1';
+  multipleParent.appendChild(child1);
 
-    const child2 = document.createElement('div');
-    child2.textContent = 'Child 2';
-    multipleParent.appendChild(child2);
+  const child2 = document.createElement('div');
+  child2.textContent = 'Child 2';
+  multipleParent.appendChild(child2);
 
-    const child3 = document.createElement('div');
-    child3.textContent = 'Child 3';
-    multipleParent.appendChild(child3);
+  const child3 = document.createElement('div');
+  child3.textContent = 'Child 3';
+  multipleParent.appendChild(child3);
 
-    Promise.resolve().then(() => {
-      testing.expectEqual(3, mutations.length);
+  await state.done((mutations) => {
+    testing.expectEqual(3, mutations.length);
 
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(child1, mutations[0].addedNodes[0]);
-      testing.expectEqual(null, mutations[0].previousSibling);
-      testing.expectEqual(null, mutations[0].nextSibling);
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(child1, mutations[0].addedNodes[0]);
+    testing.expectEqual(null, mutations[0].previousSibling);
+    testing.expectEqual(null, mutations[0].nextSibling);
 
-      testing.expectEqual('childList', mutations[1].type);
-      testing.expectEqual(child2, mutations[1].addedNodes[0]);
-      testing.expectEqual(child1, mutations[1].previousSibling);
-      testing.expectEqual(null, mutations[1].nextSibling);
+    testing.expectEqual('childList', mutations[1].type);
+    testing.expectEqual(child2, mutations[1].addedNodes[0]);
+    testing.expectEqual(child1, mutations[1].previousSibling);
+    testing.expectEqual(null, mutations[1].nextSibling);
 
-      testing.expectEqual('childList', mutations[2].type);
-      testing.expectEqual(child3, mutations[2].addedNodes[0]);
-      testing.expectEqual(child2, mutations[2].previousSibling);
-      testing.expectEqual(null, mutations[2].nextSibling);
-    });
+    testing.expectEqual('childList', mutations[2].type);
+    testing.expectEqual(child3, mutations[2].addedNodes[0]);
+    testing.expectEqual(child2, mutations[2].previousSibling);
+    testing.expectEqual(null, mutations[2].nextSibling);
   });
 </script>
 
 <div id="inner-html-parent"><div>Old 1</div><div>Old 2</div><div>Old 3</div></div>
 
-<script id="childlist_inner_html">
-  testing.async(async () => {
-    const innerHtmlParent = document.getElementById('inner-html-parent');
-    const oldChildren = Array.from(innerHtmlParent.children);
+<script id="childlist_inner_html" type=module>
+  const state = await testing.async();
+  const innerHtmlParent = document.getElementById('inner-html-parent');
+  const oldChildren = Array.from(innerHtmlParent.children);
 
-    let mutations = null;
-    const observer = new MutationObserver((records) => {
-      observer.disconnect();
-      mutations = records;
-    });
-    observer.observe(innerHtmlParent, { childList: true });
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(innerHtmlParent, { childList: true });
 
-    // No whitespace between tags to avoid text node mutations
-    innerHtmlParent.innerHTML = '<span>New 1</span><span>New 2</span><span>New 3</span>';
+  // No whitespace between tags to avoid text node mutations
+  innerHtmlParent.innerHTML = '<span>New 1</span><span>New 2</span><span>New 3</span>';
 
-    Promise.resolve().then(() => {
-      // innerHTML triggers mutations for both removals and additions
-      // With tri-state: from_parser=true + parse_mode=fragment -> mutations fire
-      // HTML wrapper element is filtered out, so: 3 removals + 3 additions = 6
-      testing.expectEqual(6, mutations.length);
+  await state.done((mutations) => {
+    // innerHTML triggers mutations for both removals and additions
+    // With tri-state: from_parser=true + parse_mode=fragment -> mutations fire
+    // HTML wrapper element is filtered out, so: 3 removals + 3 additions = 6
+    testing.expectEqual(6, mutations.length);
 
-      // First 3: removals
-      testing.expectEqual('childList', mutations[0].type);
-      testing.expectEqual(1, mutations[0].removedNodes.length);
-      testing.expectEqual(oldChildren[0], mutations[0].removedNodes[0]);
-      testing.expectEqual(0, mutations[0].addedNodes.length);
+    // First 3: removals
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(1, mutations[0].removedNodes.length);
+    testing.expectEqual(oldChildren[0], mutations[0].removedNodes[0]);
+    testing.expectEqual(0, mutations[0].addedNodes.length);
 
-      testing.expectEqual('childList', mutations[1].type);
-      testing.expectEqual(1, mutations[1].removedNodes.length);
-      testing.expectEqual(oldChildren[1], mutations[1].removedNodes[0]);
-      testing.expectEqual(0, mutations[1].addedNodes.length);
+    testing.expectEqual('childList', mutations[1].type);
+    testing.expectEqual(1, mutations[1].removedNodes.length);
+    testing.expectEqual(oldChildren[1], mutations[1].removedNodes[0]);
+    testing.expectEqual(0, mutations[1].addedNodes.length);
 
-      testing.expectEqual('childList', mutations[2].type);
-      testing.expectEqual(1, mutations[2].removedNodes.length);
-      testing.expectEqual(oldChildren[2], mutations[2].removedNodes[0]);
-      testing.expectEqual(0, mutations[2].addedNodes.length);
+    testing.expectEqual('childList', mutations[2].type);
+    testing.expectEqual(1, mutations[2].removedNodes.length);
+    testing.expectEqual(oldChildren[2], mutations[2].removedNodes[0]);
+    testing.expectEqual(0, mutations[2].addedNodes.length);
 
-      // Last 3: additions (unwrapped span elements)
-      testing.expectEqual('childList', mutations[3].type);
-      testing.expectEqual(0, mutations[3].removedNodes.length);
-      testing.expectEqual(1, mutations[3].addedNodes.length);
-      testing.expectEqual('SPAN', mutations[3].addedNodes[0].nodeName);
+    // Last 3: additions (unwrapped span elements)
+    testing.expectEqual('childList', mutations[3].type);
+    testing.expectEqual(0, mutations[3].removedNodes.length);
+    testing.expectEqual(1, mutations[3].addedNodes.length);
+    testing.expectEqual('SPAN', mutations[3].addedNodes[0].nodeName);
 
-      testing.expectEqual('childList', mutations[4].type);
-      testing.expectEqual(0, mutations[4].removedNodes.length);
-      testing.expectEqual(1, mutations[4].addedNodes.length);
-      testing.expectEqual('SPAN', mutations[4].addedNodes[0].nodeName);
+    testing.expectEqual('childList', mutations[4].type);
+    testing.expectEqual(0, mutations[4].removedNodes.length);
+    testing.expectEqual(1, mutations[4].addedNodes.length);
+    testing.expectEqual('SPAN', mutations[4].addedNodes[0].nodeName);
 
-      testing.expectEqual('childList', mutations[5].type);
-      testing.expectEqual(0, mutations[5].removedNodes.length);
-      testing.expectEqual(1, mutations[5].addedNodes.length);
-      testing.expectEqual('SPAN', mutations[5].addedNodes[0].nodeName);
-    });
+    testing.expectEqual('childList', mutations[5].type);
+    testing.expectEqual(0, mutations[5].removedNodes.length);
+    testing.expectEqual(1, mutations[5].addedNodes.length);
+    testing.expectEqual('SPAN', mutations[5].addedNodes[0].nodeName);
   });
 </script>

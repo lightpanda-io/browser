@@ -107,29 +107,24 @@
   }
 </script>
 
-<script id="style-load-event">
-{
+<script id="style-load-event" type=module>
   // A style element fires a load event when appended to the DOM.
+  const state = await testing.async();
   const style = document.createElement("style");
-  let result = false;
-  testing.async(async () => {
-    await new Promise(resolve => {
-      style.addEventListener("load", ({ bubbles, cancelBubble, cancelable, composed, isTrusted, target }) => {
-        testing.expectEqual(false, bubbles);
-        testing.expectEqual(false, cancelBubble);
-        testing.expectEqual(false, cancelable);
-        testing.expectEqual(false, composed);
-        testing.expectEqual(true, isTrusted);
-        testing.expectEqual(style, target);
-        result = true;
-        return resolve();
-      });
-      document.head.appendChild(style);
-    });
-  });
 
-  testing.onload(() => testing.expectEqual(true, result));
-}
+  style.addEventListener("load", (e) => {
+    state.resolve(e);
+  });
+  document.head.appendChild(style);
+
+  await state.done((e) => {
+    testing.expectEqual(false, e.bubbles);
+    testing.expectEqual(false, e.cancelBubble);
+    testing.expectEqual(false, e.cancelable);
+    testing.expectEqual(false, e.composed);
+    testing.expectEqual(true, e.isTrusted);
+    testing.expectEqual(style, e.target);
+  });
 </script>
 
 <script id="style-tag-content-parsing">

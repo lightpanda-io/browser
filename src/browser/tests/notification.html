@@ -9,10 +9,13 @@
 }
 </script>
 
-<script id=Notification#requestPermission>
+<script id=Notification#requestPermission type=module>
 {
-  testing.async(async () => {
-    testing.expectEqual("default", await Notification.requestPermission());
+  const state = await testing.async();
+  const permission = await Notification.requestPermission();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("default", permission);
   });
 }
 </script>

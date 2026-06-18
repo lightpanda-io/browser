@@ -48,183 +48,183 @@
   }
 </script>
 
-<script id=body_methods>
-  testing.async(async () => {
-    const response = new Response('Hello, World!');
-    const text = await response.text();
-    testing.expectEqual('Hello, World!', text);
+<script id=body_methods type=module>
+  const state = await testing.async();
+
+  const response1 = new Response('Hello, World!');
+  const text1 = await response1.text();
+
+  const response2 = new Response('{"name": "test"}');
+  const json2 = await response2.json();
+
+  const response3 = new Response('binary data');
+  const buffer3 = await response3.arrayBuffer();
+
+  const response4 = new Response('blob content', {
+    headers: { 'Content-Type': 'text/plain' }
   });
+  const blob4 = await response4.blob();
 
-  testing.async(async () => {
-    const response = new Response('{"name": "test"}');
-    const json = await response.json();
-    testing.expectEqual('test', json.name);
-  });
+  const response5 = new Response('bytes');
+  const bytes5 = await response5.bytes();
 
-  testing.async(async () => {
-    const response = new Response('binary data');
-    const buffer = await response.arrayBuffer();
-    testing.expectEqual(true, buffer instanceof ArrayBuffer);
-    testing.expectEqual(11, buffer.byteLength);
-  });
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('Hello, World!', text1);
 
-  testing.async(async () => {
-    const response = new Response('blob content', {
-      headers: { 'Content-Type': 'text/plain' }
-    });
-    const blob = await response.blob();
-    testing.expectEqual(true, blob instanceof Blob);
-    testing.expectEqual(12, blob.size);
-    testing.expectEqual('text/plain', blob.type);
-  });
+    testing.expectEqual('test', json2.name);
 
-  testing.async(async () => {
-    const response = new Response('bytes');
-    const bytes = await response.bytes();
-    testing.expectEqual(true, bytes instanceof Uint8Array);
-    testing.expectEqual(5, bytes.length);
-  });
-</script>
+    testing.expectEqual(true, buffer3 instanceof ArrayBuffer);
+    testing.expectEqual(11, buffer3.byteLength);
 
-<script id=clone>
-  {
-    const response1 = new Response('test body', {
-      status: 201,
-      statusText: 'Created',
-      headers: { 'X-Custom': 'value' }
-    });
+    testing.expectEqual(true, blob4 instanceof Blob);
+    testing.expectEqual(12, blob4.size);
+    testing.expectEqual('text/plain', blob4.type);
 
-    const response2 = response1.clone();
-
-    testing.expectEqual(response1.status, response2.status);
-    testing.expectEqual(response1.statusText, response2.statusText);
-    testing.expectEqual('value', response2.headers.get('X-Custom'));
-  }
-
-  testing.async(async () => {
-    const response1 = new Response('cloned body');
-    const response2 = response1.clone();
-
-    const text1 = await response1.text();
-    const text2 = await response2.text();
-
-    testing.expectEqual('cloned body', text1);
-    testing.expectEqual('cloned body', text2);
+    testing.expectEqual(true, bytes5 instanceof Uint8Array);
+    testing.expectEqual(5, bytes5.length);
   });
 </script>
 
-<script id=body_types>
+<script id=clone type=module>
+  const state = await testing.async();
+
+  const syncResponse1 = new Response('test body', {
+    status: 201,
+    statusText: 'Created',
+    headers: { 'X-Custom': 'value' }
+  });
+  const syncResponse2 = syncResponse1.clone();
+
+  const cloneResponse1 = new Response('cloned body');
+  const cloneResponse2 = cloneResponse1.clone();
+
+  const cloneText1 = await cloneResponse1.text();
+  const cloneText2 = await cloneResponse2.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(syncResponse1.status, syncResponse2.status);
+    testing.expectEqual(syncResponse1.statusText, syncResponse2.statusText);
+    testing.expectEqual('value', syncResponse2.headers.get('X-Custom'));
+
+    testing.expectEqual('cloned body', cloneText1);
+    testing.expectEqual('cloned body', cloneText2);
+  });
+</script>
+
+<script id=body_types type=module>
+  const state = await testing.async();
+
   // Test Response with ArrayBuffer body
-  testing.async(async () => {
-    const data = new Uint8Array([72, 101, 108, 108, 111]); // "Hello"
-    const arrayBuffer = data.buffer;
-    const response = new Response(arrayBuffer);
-
-    const result = await response.arrayBuffer();
-    testing.expectEqual(true, result instanceof ArrayBuffer);
-    testing.expectEqual(5, result.byteLength);
-
-    const view = new Uint8Array(result);
-    testing.expectEqual(72, view[0]);  // 'H'
-    testing.expectEqual(111, view[4]); // 'o'
-  });
+  const arrayBufferData = new Uint8Array([72, 101, 108, 108, 111]); // "Hello"
+  const arrayBuffer = arrayBufferData.buffer;
+  const arrayBufferResponse = new Response(arrayBuffer);
+  const arrayBufferResult = await arrayBufferResponse.arrayBuffer();
+  const arrayBufferView = new Uint8Array(arrayBufferResult);
 
   // Test Response with Uint8Array body
-  testing.async(async () => {
-    const data = new Uint8Array([87, 111, 114, 108, 100]); // "World"
-    const response = new Response(data);
-
-    const result = await response.arrayBuffer();
-    testing.expectEqual(true, result instanceof ArrayBuffer);
-    testing.expectEqual(5, result.byteLength);
-
-    const view = new Uint8Array(result);
-    testing.expectEqual(87, view[0]);  // 'W'
-    testing.expectEqual(100, view[4]); // 'd'
-  });
+  const uint8Data = new Uint8Array([87, 111, 114, 108, 100]); // "World"
+  const uint8Response = new Response(uint8Data);
+  const uint8Result = await uint8Response.arrayBuffer();
+  const uint8View = new Uint8Array(uint8Result);
 
   // Test Response with Blob body
-  testing.async(async () => {
-    const blob = new Blob(['Test', 'Data'], { type: 'text/plain' });
-    const response = new Response(blob);
-
-    const text = await response.text();
-    testing.expectEqual('TestData', text);
-  });
+  const blob = new Blob(['Test', 'Data'], { type: 'text/plain' });
+  const blobResponse = new Response(blob);
+  const blobText = await blobResponse.text();
 
   // Test Response with ReadableStream body
-  testing.async(async () => {
-    const chunks = [
-      new Uint8Array([65, 66, 67]), // "ABC"
-      new Uint8Array([68, 69, 70])  // "DEF"
-    ];
-    let chunkIndex = 0;
+  const chunks = [
+    new Uint8Array([65, 66, 67]), // "ABC"
+    new Uint8Array([68, 69, 70])  // "DEF"
+  ];
+  let chunkIndex = 0;
 
-    const stream = new ReadableStream({
-      pull(controller) {
-        if (chunkIndex < chunks.length) {
-          controller.enqueue(chunks[chunkIndex++]);
-        } else {
-          controller.close();
-        }
-      }
-    });
-
-    const response = new Response(stream);
-
-    const result = await response.arrayBuffer();
-    testing.expectEqual(true, result instanceof ArrayBuffer);
-    testing.expectEqual(6, result.byteLength);
-
-    const view = new Uint8Array(result);
-    testing.expectEqual(65, view[0]); // 'A'
-    testing.expectEqual(66, view[1]); // 'B'
-    testing.expectEqual(67, view[2]); // 'C'
-    testing.expectEqual(68, view[3]); // 'D'
-    testing.expectEqual(69, view[4]); // 'E'
-    testing.expectEqual(70, view[5]); // 'F'
-  });
-
-  // Test Response.body returns ReadableStream
-  testing.async(async () => {
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2, 3]));
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (chunkIndex < chunks.length) {
+        controller.enqueue(chunks[chunkIndex++]);
+      } else {
         controller.close();
       }
-    });
+    }
+  });
 
-    const response = new Response(stream);
-    const body = response.body;
+  const streamResponse = new Response(stream);
+  const streamResult = await streamResponse.arrayBuffer();
+  const streamView = new Uint8Array(streamResult);
+
+  // Test Response.body returns ReadableStream
+  const bodyStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+      controller.close();
+    }
+  });
+
+  const bodyStreamResponse = new Response(bodyStream);
+  const body = bodyStreamResponse.body;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, arrayBufferResult instanceof ArrayBuffer);
+    testing.expectEqual(5, arrayBufferResult.byteLength);
+    testing.expectEqual(72, arrayBufferView[0]);  // 'H'
+    testing.expectEqual(111, arrayBufferView[4]); // 'o'
+
+    testing.expectEqual(true, uint8Result instanceof ArrayBuffer);
+    testing.expectEqual(5, uint8Result.byteLength);
+    testing.expectEqual(87, uint8View[0]);  // 'W'
+    testing.expectEqual(100, uint8View[4]); // 'd'
+
+    testing.expectEqual('TestData', blobText);
+
+    testing.expectEqual(true, streamResult instanceof ArrayBuffer);
+    testing.expectEqual(6, streamResult.byteLength);
+    testing.expectEqual(65, streamView[0]); // 'A'
+    testing.expectEqual(66, streamView[1]); // 'B'
+    testing.expectEqual(67, streamView[2]); // 'C'
+    testing.expectEqual(68, streamView[3]); // 'D'
+    testing.expectEqual(69, streamView[4]); // 'E'
+    testing.expectEqual(70, streamView[5]); // 'F'
+
     testing.expectEqual(true, body instanceof ReadableStream);
   });
 </script>
 
-<script id=body_used>
-  testing.async(async () => {
-    const response = new Response('hi');
-    testing.expectFalse(response.bodyUsed);
-    await response.text();
-    testing.expectTrue(response.bodyUsed);
+<script id=body_used type=module>
+  const state = await testing.async();
 
-    // Re-consuming a used body rejects.
-    let rejected = false;
-    try { await response.text(); } catch (e) { rejected = true; }
-    testing.expectTrue(rejected);
-  });
+  const response1 = new Response('hi');
+  const usedBefore1 = response1.bodyUsed;
+  await response1.text();
+  const usedAfter1 = response1.bodyUsed;
 
-  testing.async(async () => {
-    // A bodyless response is never "used".
-    const response = new Response();
-    testing.expectFalse(response.bodyUsed);
-    await response.text();
-    testing.expectFalse(response.bodyUsed);
-  });
+  // Re-consuming a used body rejects.
+  let rejected1 = false;
+  try { await response1.text(); } catch (e) { rejected1 = true; }
 
-  testing.async(async () => {
-    // text() decodes as UTF-8, stripping a leading BOM.
-    const response = new Response('﻿hi');
-    testing.expectEqual('hi', await response.text());
+  // A bodyless response is never "used".
+  const response2 = new Response();
+  const usedBefore2 = response2.bodyUsed;
+  await response2.text();
+  const usedAfter2 = response2.bodyUsed;
+
+  // text() decodes as UTF-8, stripping a leading BOM.
+  const response3 = new Response('﻿hi');
+  const text3 = await response3.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectFalse(usedBefore1);
+    testing.expectTrue(usedAfter1);
+    testing.expectTrue(rejected1);
+
+    testing.expectFalse(usedBefore2);
+    testing.expectFalse(usedAfter2);
+
+    testing.expectEqual('hi', text3);
   });
 </script>
 

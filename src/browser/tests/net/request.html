@@ -141,63 +141,58 @@
   }
 </script>
 
-<script id=body_methods>
-  testing.async(async () => {
-    const req = new Request('https://example.com/api', {
-      method: 'POST',
-      body: 'Hello, World!',
-      headers: { 'Content-Type': 'text/plain' }
-    });
+<script id=body_methods type=module>
+  const state = await testing.async();
 
-    const text = await req.text();
-    testing.expectEqual('Hello, World!', text);
+  const req1 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: 'Hello, World!',
+    headers: { 'Content-Type': 'text/plain' }
   });
+  const text1 = await req1.text();
 
-  testing.async(async () => {
-    const req = new Request('https://example.com/api', {
-      method: 'POST',
-      body: '{"name": "test"}',
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-    const json = await req.json();
-    testing.expectEqual('test', json.name);
+  const req2 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: '{"name": "test"}',
+    headers: { 'Content-Type': 'application/json' }
   });
+  const json2 = await req2.json();
 
-  testing.async(async () => {
-    const req = new Request('https://example.com/api', {
-      method: 'POST',
-      body: 'binary data',
-      headers: { 'Content-Type': 'application/octet-stream' }
-    });
-
-    const buffer = await req.arrayBuffer();
-    testing.expectEqual(true, buffer instanceof ArrayBuffer);
-    testing.expectEqual(11, buffer.byteLength);
+  const req3 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: 'binary data',
+    headers: { 'Content-Type': 'application/octet-stream' }
   });
+  const buffer3 = await req3.arrayBuffer();
 
-  testing.async(async () => {
-    const req = new Request('https://example.com/api', {
-      method: 'POST',
-      body: 'blob content',
-      headers: { 'Content-Type': 'text/plain' }
-    });
-
-    const blob = await req.blob();
-    testing.expectEqual(true, blob instanceof Blob);
-    testing.expectEqual(12, blob.size);
-    testing.expectEqual('text/plain', blob.type);
+  const req4 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: 'blob content',
+    headers: { 'Content-Type': 'text/plain' }
   });
+  const blob4 = await req4.blob();
 
-  testing.async(async () => {
-    const req = new Request('https://example.com/api', {
-      method: 'POST',
-      body: 'bytes'
-    });
+  const req5 = new Request('https://example.com/api', {
+    method: 'POST',
+    body: 'bytes'
+  });
+  const bytes5 = await req5.bytes();
 
-    const bytes = await req.bytes();
-    testing.expectEqual(true, bytes instanceof Uint8Array);
-    testing.expectEqual(5, bytes.length);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('Hello, World!', text1);
+
+    testing.expectEqual('test', json2.name);
+
+    testing.expectEqual(true, buffer3 instanceof ArrayBuffer);
+    testing.expectEqual(11, buffer3.byteLength);
+
+    testing.expectEqual(true, blob4 instanceof Blob);
+    testing.expectEqual(12, blob4.size);
+    testing.expectEqual('text/plain', blob4.type);
+
+    testing.expectEqual(true, bytes5 instanceof Uint8Array);
+    testing.expectEqual(5, bytes5.length);
   });
 </script>
 
@@ -217,31 +212,38 @@
   }
 </script>
 
-<script id=body_used>
-  testing.async(async () => {
-    const req = new Request('https://example.com', { method: 'POST', body: 'hi' });
-    testing.expectFalse(req.bodyUsed);
-    await req.text();
-    testing.expectTrue(req.bodyUsed);
+<script id=body_used type=module>
+  const state = await testing.async();
 
-    // Re-consuming a used body rejects.
-    let rejected = false;
-    try { await req.text(); } catch (e) { rejected = true; }
-    testing.expectTrue(rejected);
-  });
+  const req1 = new Request('https://example.com', { method: 'POST', body: 'hi' });
+  const usedBefore1 = req1.bodyUsed;
+  await req1.text();
+  const usedAfter1 = req1.bodyUsed;
 
-  testing.async(async () => {
-    // A request with no body is never "used".
-    const req = new Request('https://example.com');
-    testing.expectFalse(req.bodyUsed);
-    await req.text();
-    testing.expectFalse(req.bodyUsed);
-  });
+  // Re-consuming a used body rejects.
+  let rejected1 = false;
+  try { await req1.text(); } catch (e) { rejected1 = true; }
 
-  testing.async(async () => {
-    // text() decodes as UTF-8, stripping a leading BOM.
-    const req = new Request('https://example.com', { method: 'POST', body: '﻿hi' });
-    testing.expectEqual('hi', await req.text());
+  // A request with no body is never "used".
+  const req2 = new Request('https://example.com');
+  const usedBefore2 = req2.bodyUsed;
+  await req2.text();
+  const usedAfter2 = req2.bodyUsed;
+
+  // text() decodes as UTF-8, stripping a leading BOM.
+  const req3 = new Request('https://example.com', { method: 'POST', body: '﻿hi' });
+  const text3 = await req3.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectFalse(usedBefore1);
+    testing.expectTrue(usedAfter1);
+    testing.expectTrue(rejected1);
+
+    testing.expectFalse(usedBefore2);
+    testing.expectFalse(usedAfter2);
+
+    testing.expectEqual('hi', text3);
   });
 </script>
 

@@ -31,94 +31,102 @@
   }
   </script>
 
-  <script id="ext_stylesheet_dynamic_load_event">
-  {
+  <script id="ext_stylesheet_dynamic_load_event" type=module>
+    const state = await testing.async();
     // Dynamically-inserted <link> fires `load` after the fetch completes.
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = '/styles/visibility.css';
-    testing.async(async () => {
-      const fired = await new Promise(resolve => {
-        link.addEventListener('load', () => resolve(true));
-        link.addEventListener('error', () => resolve(false));
-        document.head.appendChild(link);
-      });
+
+    const fired = await new Promise(resolve => {
+      link.addEventListener('load', () => resolve(true));
+      link.addEventListener('error', () => resolve(false));
+      document.head.appendChild(link);
+    });
+
+    state.resolve();
+    await state.done(() => {
       testing.expectEqual(true, fired);
     });
-    testing.expectEqual(true, true);
-  }
   </script>
 
-  <script id="ext_stylesheet_404_fires_error">
-  {
+  <script id="ext_stylesheet_404_fires_error" type=module>
+    const state = await testing.async();
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = '/styles/404.css';
-    testing.async(async () => {
-      const evt = await new Promise(resolve => {
-        link.addEventListener('load', () => resolve('load'));
-        link.addEventListener('error', () => resolve('error'));
-        document.head.appendChild(link);
-      });
+
+    const evt = await new Promise(resolve => {
+      link.addEventListener('load', () => resolve('load'));
+      link.addEventListener('error', () => resolve('error'));
+      document.head.appendChild(link);
+    });
+
+    state.resolve();
+    await state.done(() => {
       testing.expectEqual('error', evt);
     });
-    testing.expectEqual(true, true);
-  }
   </script>
 
-  <script id="ext_stylesheet_oversize_fires_error">
-  {
+  <script id="ext_stylesheet_oversize_fires_error" type=module>
+    const state = await testing.async();
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = '/styles/oversize.css';
-    testing.async(async () => {
-      const evt = await new Promise(resolve => {
-        link.addEventListener('load', () => resolve('load'));
-        link.addEventListener('error', () => resolve('error'));
-        document.head.appendChild(link);
-      });
+
+    const evt = await new Promise(resolve => {
+      link.addEventListener('load', () => resolve('load'));
+      link.addEventListener('error', () => resolve('error'));
+      document.head.appendChild(link);
+    });
+
+    state.resolve();
+    await state.done(() => {
       testing.expectEqual('error', evt);
     });
-    testing.expectEqual(true, true);
-  }
   </script>
 
-  <script id="ext_stylesheet_href_change_replaces">
-  {
+  <script id="ext_stylesheet_href_change_replaces" type=module>
     // Mutating link.href on a connected stylesheet link must REPLACE the
     // cached sheet's rules, not append a second entry to
     // document.styleSheets. Regression test for the stale-sheet
     // accumulation bug caught in code review.
+    const state = await testing.async();
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = '/styles/visibility.css';
-    testing.async(async () => {
-      const baseline = document.styleSheets.length;
 
-      await new Promise(resolve => {
-        link.addEventListener('load', () => resolve(), { once: true });
-        document.head.appendChild(link);
-      });
-      const afterFirst = document.styleSheets.length;
-      testing.expectEqual(baseline + 1, afterFirst);
+    const baseline = document.styleSheets.length;
 
-      const second = await new Promise(resolve => {
-        link.addEventListener('load', () => resolve('load'), { once: true });
-        link.addEventListener('error', () => resolve('error'), { once: true });
-        link.href = '/styles/visibility2.css';
-      });
-      testing.expectEqual('load', second);
-      testing.expectEqual(afterFirst, document.styleSheets.length);
-
-      // New rules must be in effect after the swap. The reused sheet is
-      // the last registered one (the static head link registered first).
-      const sheet = document.styleSheets[afterFirst - 1];
-      testing.expectEqual(testing.ORIGIN + '/styles/visibility2.css', sheet.href);
-      testing.expectEqual(1, sheet.cssRules.length);
-      testing.expectEqual('.ext-hide-2', sheet.cssRules[0].selectorText);
+    await new Promise(resolve => {
+      link.addEventListener('load', () => resolve(), { once: true });
+      document.head.appendChild(link);
     });
-    testing.expectEqual(true, true);
-  }
+    const afterFirst = document.styleSheets.length;
+
+    const second = await new Promise(resolve => {
+      link.addEventListener('load', () => resolve('load'), { once: true });
+      link.addEventListener('error', () => resolve('error'), { once: true });
+      link.href = '/styles/visibility2.css';
+    });
+    const afterSecond = document.styleSheets.length;
+
+    // New rules must be in effect after the swap. The reused sheet is
+    // the last registered one (the static head link registered first).
+    const sheet = document.styleSheets[afterFirst - 1];
+    const sheetHref = sheet.href;
+    const sheetRulesLen = sheet.cssRules.length;
+    const sheetSelector = sheet.cssRules[0].selectorText;
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(baseline + 1, afterFirst);
+      testing.expectEqual('load', second);
+      testing.expectEqual(afterFirst, afterSecond);
+      testing.expectEqual(testing.ORIGIN + '/styles/visibility2.css', sheetHref);
+      testing.expectEqual(1, sheetRulesLen);
+      testing.expectEqual('.ext-hide-2', sheetSelector);
+    });
   </script>
 
   <script id="ext_stylesheet_fragment_parse_skipped">
@@ -150,36 +158,40 @@
   }
   </script>
 
-  <script id="ext_stylesheet_disconnect_removes">
-  {
+  <script id="ext_stylesheet_disconnect_removes" type=module>
     // Removing a connected stylesheet link must drop its sheet from
     // document.styleSheets. Without symmetric deregistration the SPA
     // theme-switch pattern (append new, remove old) would accumulate
     // phantom entries and stale cascade rules.
+    const state = await testing.async();
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = '/styles/visibility2.css';
-    testing.async(async () => {
-      const baseline = document.styleSheets.length;
 
-      await new Promise(resolve => {
-        link.addEventListener('load', () => resolve(), { once: true });
-        document.head.appendChild(link);
-      });
-      testing.expectEqual(baseline + 1, document.styleSheets.length);
+    const baseline = document.styleSheets.length;
 
-      link.remove();
-      testing.expectEqual(baseline, document.styleSheets.length);
-
-      // Re-appending must register fresh — the disconnect cleanup
-      // cleared link._sheet so the cached short-circuit doesn't apply.
-      await new Promise(resolve => {
-        link.addEventListener('load', () => resolve(), { once: true });
-        document.head.appendChild(link);
-      });
-      testing.expectEqual(baseline + 1, document.styleSheets.length);
+    await new Promise(resolve => {
+      link.addEventListener('load', () => resolve(), { once: true });
+      document.head.appendChild(link);
     });
-    testing.expectEqual(true, true);
-  }
+    const afterAppend = document.styleSheets.length;
+
+    link.remove();
+    const afterRemove = document.styleSheets.length;
+
+    // Re-appending must register fresh — the disconnect cleanup
+    // cleared link._sheet so the cached short-circuit doesn't apply.
+    await new Promise(resolve => {
+      link.addEventListener('load', () => resolve(), { once: true });
+      document.head.appendChild(link);
+    });
+    const afterReappend = document.styleSheets.length;
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(baseline + 1, afterAppend);
+      testing.expectEqual(baseline, afterRemove);
+      testing.expectEqual(baseline + 1, afterReappend);
+    });
   </script>
 </body>
