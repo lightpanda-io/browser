@@ -53,6 +53,11 @@ pub fn init(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !*
     return exec._factory.create(URL{ ._url = u });
 }
 
+/// Like the constructor, but returns null instead of throwing when parsing fails.
+pub fn parse(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) ?*URL {
+    return URL.init(url, maybe_base, exec) catch null;
+}
+
 pub fn deinit(self: *URL, _: *Page) void {
     // Not tracked by arena.
     U.url_free(self._url);
@@ -296,14 +301,6 @@ pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
     var len: usize = 0;
     U.url_to_string(self._url, &out, &len);
     return out[0..len];
-}
-
-/// Like the constructor, but returns null instead of throwing when parsing fails.
-pub fn parse(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !?*URL {
-    return URL.init(url, maybe_base, exec) catch |err| switch (err) {
-        error.TypeError => null,
-        else => err,
-    };
 }
 
 pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
