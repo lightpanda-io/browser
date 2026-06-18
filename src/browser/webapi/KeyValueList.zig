@@ -195,14 +195,12 @@ pub fn urlEncode(self: *const KeyValueList, comptime mode: URLEncodeMode, alloca
 
 fn urlEncodeEntry(entry: Entry, comptime mode: URLEncodeMode, allocator_: ?Allocator, charset: []const u8, writer: *std.Io.Writer) !void {
     try urlEncodeValue(entry.name.str(), mode, allocator_, charset, writer);
+    try writer.writeByte('=');
 
-    // for a form, for an empty value, we'll do "spice="
-    // but for a query, we do "spice"
-    if ((comptime mode == .query) and entry.value.len == 0) {
+    if (entry.value.len == 0) {
         return;
     }
 
-    try writer.writeByte('=');
     try urlEncodeValue(entry.value.str(), mode, allocator_, charset, writer);
 }
 
