@@ -50,7 +50,7 @@ pub fn resolve(
     return allocator.dupeZ(u8, href.slice());
 }
 
-const EncodeSet = enum { path, query, query_legacy, userinfo, fragment };
+const EncodeSet = enum { path, query, query_legacy, userinfo, fragment, component };
 
 pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
     // Check if encoding is needed
