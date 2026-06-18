@@ -426,21 +426,24 @@ pub unsafe extern "C" fn url_set_host(url: *mut Url, ptr: *const c_uchar, len: u
 
     let (host, port_str) = (&input[..i], &input[i + 1..]);
 
+    // A trailing colon with no digits ("host:") supplies an empty port, which
+    // the WHATWG host setter ignores: set the host only, leaving any existing
+    // port untouched (matches Chrome and Firefox).
+    if port_str.is_empty() {
+        return if url.set_host(Some(host)).is_ok() { 0 } else { -1 };
+    }
+
     // Validate the port up-front so we never apply the host and then fail.
-    let new_port: Option<u16> = if port_str.is_empty() {
-        None // "host:" clears the port
-    } else {
-        match port_str.parse::<u16>() {
-            Ok(p) => Some(p),
-            Err(_) => return -1,
-        }
+    let new_port: u16 = match port_str.parse::<u16>() {
+        Ok(p) => p,
+        Err(_) => return -1,
     };
 
     if url.set_host(Some(host)).is_err() {
         return -1;
     }
     // set_port only errors on cannot-be-a-base, already ruled out by set_host.
-    let _ = url.set_port(new_port);
+    let _ = url.set_port(Some(new_port));
     0
 }
 
