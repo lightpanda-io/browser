@@ -214,7 +214,7 @@ pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
     const search_params = self._search_params orelse return;
     var out: [*]const u8 = undefined;
     var len: usize = 0;
-    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) out[0..len] else "";
+    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
     try search_params.updateFromString(search_value, exec);
 }
 
@@ -247,10 +247,11 @@ pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
         return sp;
     }
 
-    // Get current search string (omitting '?').
+    // Get current search string; rust-url always skips '?' so we have to
+    // go a byte back to include it.
     var out: [*]const u8 = undefined;
     var len: usize = 0;
-    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) out[0..len] else "";
+    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
 
     const params = try URLSearchParams.init(.{ .query_string = search_value }, exec);
     self._search_params = params;
@@ -278,7 +279,7 @@ pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
     const search_params = self._search_params orelse return;
     var out: [*]const u8 = undefined;
     var len: usize = 0;
-    const search_value = if (U.url_get_query(url, &out, &len) == 0) out[0..len] else "";
+    const search_value = if (U.url_get_query(url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
     try search_params.updateFromString(search_value, exec);
 }
 
