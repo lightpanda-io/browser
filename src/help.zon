@@ -157,7 +157,7 @@
     \\                           When omitted, lightpanda auto-detects an API key
     \\                           from your environment (ANTHROPIC_API_KEY,
     \\                           OPENAI_API_KEY, GOOGLE_API_KEY/GEMINI_API_KEY,
-    \\                           HF_TOKEN).
+    \\                           HF_TOKEN, AI_GATEWAY_API_KEY, MISTRAL_API_KEY).
     \\                           With exactly one key set: that provider is used.
     \\                           With multiple keys on a TTY: you'll be prompted
     \\                           to pick; in non-interactive contexts, pass
@@ -166,12 +166,15 @@
     \\                           natural-language input, no LOGIN /
     \\                           ACCEPT_COOKIES keywords).
     \\
-    \\                           ollama is never auto-detected (it needs no key);
-    \\                           select it explicitly with --provider ollama.
+    \\                           Local servers (ollama, llama_cpp) are never
+    \\                           auto-detected (they need no key); select them
+    \\                           explicitly with --provider ollama / --provider
+    \\                           llama_cpp.
     \\
     \\                           Allowed values:
     \\                             "anthropic", "openai", "gemini",
-    \\                             "huggingface", "ollama".
+    \\                             "huggingface", "vercel", "mistral",
+    \\                             "ollama", "llama_cpp".
     \\                           In the REPL, use /provider to list and change
     \\                           providers.
     \\
@@ -189,6 +192,7 @@
     \\--base-url <URL>           Override the API base URL for the provider.
     \\                           Defaults to the provider's standard endpoint.
     \\                           Ollama default: http://localhost:11434/v1.
+    \\                           llama.cpp default: http://localhost:8080/v1.
     \\                           Hugging Face default is the serverless router
     \\                           (https://router.huggingface.co/v1); point this
     \\                           at a dedicated Inference Endpoint to use one.
@@ -226,8 +230,10 @@
     \\--effort <LEVEL>           Per-turn reasoning budget, mapped to each
     \\                           provider's native thinking/reasoning knob.
     \\                           Default: low in the REPL (snappy turns),
-    \\                           medium in one-shot --task mode. In the REPL,
-    \\                           use /effort to change it.
+    \\                           medium in one-shot --task mode, unless the
+    \\                           provider sets its own default (Mistral defaults
+    \\                           to none, as its default model rejects effort).
+    \\                           In the REPL, use /effort to change it.
     \\
     \\                           Allowed values:
     \\                             none, minimal, low, medium, high, xhigh.
@@ -236,8 +242,9 @@
     \\remembered per-directory in .lp-agent.zon and reused on the next run.
     \\
     \\API keys are read from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY,
-    \\GOOGLE_API_KEY/GEMINI_API_KEY, or HF_TOKEN. Ollama does not require an API
-    \\key.
+    \\GOOGLE_API_KEY/GEMINI_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or
+    \\MISTRAL_API_KEY. The local servers (Ollama, llama.cpp) do not require an
+    \\API key.
     ,
     .version =
     \\usage:  {0s} version
