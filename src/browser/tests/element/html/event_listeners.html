@@ -514,24 +514,16 @@
 
 <img src="https://cdn.lightpanda.io/website/assets/images/docs/hn.png" />
 
-<script id="document-element-load">
-{
-  let asyncBlockDispatched = false;
+<script id="document-element-load" type=module>
+  const state = await testing.async();
   const docElement = document.documentElement;
 
-  testing.async(async () => {
-    const result = await new Promise(resolve => {
-    // We should get this fired at capturing phase when a resource loaded.
-      docElement.addEventListener("load", e => {
-        testing.expectEqual(e.eventPhase, Event.CAPTURING_PHASE);
-        return resolve(true);
-      }, true);
-    });
+  // We should get this fired at capturing phase when a resource loaded.
+  docElement.addEventListener("load", e => {
+    state.resolve(e.eventPhase);
+  }, true);
 
-    asyncBlockDispatched = true;
-    testing.expectEqual(true, result);
+  await state.done((eventPhase) => {
+    testing.expectEqual(Event.CAPTURING_PHASE, eventPhase);
   });
-
-  testing.onload(() => testing.expectEqual(true, asyncBlockDispatched));
-}
 </script>

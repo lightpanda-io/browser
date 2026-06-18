@@ -118,29 +118,24 @@
 
 <body></body>
 
-<script id="img-load-event">
-{
+<script id="img-load-event" type=module>
   // An img fires a load event when src is set.
+  const state = await testing.async();
   const img = document.createElement("img");
-  let result = false;
-  testing.async(async () => {
-    await new Promise(resolve => {
-      img.addEventListener("load", ({ bubbles, cancelBubble, cancelable, composed, isTrusted, target }) => {
-        testing.expectEqual(false, bubbles);
-        testing.expectEqual(false, cancelBubble);
-        testing.expectEqual(false, cancelable);
-        testing.expectEqual(false, composed);
-        testing.expectEqual(true, isTrusted);
-        testing.expectEqual(img, target);
-        result = true;
-        return resolve();
-      });
-      img.src = "https://cdn.lightpanda.io/website/assets/images/docs/hn.png";
-    });
-  });
 
-  testing.onload(() => testing.expectEqual(true, result));
-}
+  img.addEventListener("load", (e) => {
+    state.resolve(e);
+  });
+  img.src = "https://cdn.lightpanda.io/website/assets/images/docs/hn.png";
+
+  await state.done((e) => {
+    testing.expectEqual(false, e.bubbles);
+    testing.expectEqual(false, e.cancelBubble);
+    testing.expectEqual(false, e.cancelable);
+    testing.expectEqual(false, e.composed);
+    testing.expectEqual(true, e.isTrusted);
+    testing.expectEqual(img, e.target);
+  });
 </script>
 
 <script id="img-no-load-without-src">

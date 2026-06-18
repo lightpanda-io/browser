@@ -63,267 +63,316 @@
   testing.expectEqual(true, crypto.subtle instanceof SubtleCrypto);
 </script>
 
-<script id=sign-and-verify-hmac>
-  testing.async(async () => {
-    let key = await crypto.subtle.generateKey(
-      {
-        name: "HMAC",
-        hash: { name: "SHA-512" },
-      },
-      true,
-      ["sign", "verify"],
-    );
+<script id=sign-and-verify-hmac type=module>
+  const state = await testing.async();
+  let key = await crypto.subtle.generateKey(
+    {
+      name: "HMAC",
+      hash: { name: "SHA-512" },
+    },
+    true,
+    ["sign", "verify"],
+  );
 
+  const raw = await crypto.subtle.exportKey("raw", key);
+
+  const encoder = new TextEncoder();
+
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode("Hello, world!")
+  );
+
+  const result = await window.crypto.subtle.verify(
+    { name: "HMAC" },
+    key,
+    signature,
+    encoder.encode("Hello, world!")
+  );
+
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(true, key instanceof CryptoKey);
-
-    const raw = await crypto.subtle.exportKey("raw", key);
     testing.expectEqual(128, raw.byteLength);
-
-    const encoder = new TextEncoder();
-
-    const signature = await crypto.subtle.sign(
-      "HMAC",
-      key,
-      encoder.encode("Hello, world!")
-    );
-
     testing.expectEqual(true, signature instanceof ArrayBuffer);
-
-    const result = await window.crypto.subtle.verify(
-      { name: "HMAC" },
-      key,
-      signature,
-      encoder.encode("Hello, world!")
-    );
-
     testing.expectEqual(true, result);
   });
 </script>
 
-<script id=derive-shared-key-x25519>
-  testing.async(async () => {
-    const { privateKey, publicKey } = await crypto.subtle.generateKey(
-      { name: "X25519" },
-      true,
-      ["deriveBits"],
-    );
+<script id=derive-shared-key-x25519 type=module>
+  const state = await testing.async();
+  const { privateKey, publicKey } = await crypto.subtle.generateKey(
+    { name: "X25519" },
+    true,
+    ["deriveBits"],
+  );
 
+  const sharedKey = await crypto.subtle.deriveBits(
+    {
+      name: "X25519",
+      public: publicKey,
+    },
+    privateKey,
+    128,
+  );
+
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(true, privateKey instanceof CryptoKey);
     testing.expectEqual(true, publicKey instanceof CryptoKey);
-
-    const sharedKey = await crypto.subtle.deriveBits(
-      {
-        name: "X25519",
-        public: publicKey,
-      },
-      privateKey,
-      128,
-    );
-
     testing.expectEqual(16, sharedKey.byteLength);
   });
 </script>
 
-<script id=aes-ctr-counter-wrap>
-  testing.async(async () => {
-    // AES-CTR must increment only the rightmost `length` bits of the counter
-    // block and leave the nonce bits fixed when that sub-counter wraps. Use a
-    // 1-bit counter so it wraps after two blocks, and check each block's
-    // keystream against an independent single-block encryption (the
-    // non-wrapping path, used here as the oracle).
-    const key = await crypto.subtle.importKey(
-      "raw", new Uint8Array(16), { name: "AES-CTR" }, false, ["encrypt", "decrypt"],
-    );
+<script id=aes-ctr-counter-wrap type=module>
+  const state = await testing.async();
+  // AES-CTR must increment only the rightmost `length` bits of the counter
+  // block and leave the nonce bits fixed when that sub-counter wraps. Use a
+  // 1-bit counter so it wraps after two blocks, and check each block's
+  // keystream against an independent single-block encryption (the
+  // non-wrapping path, used here as the oracle).
+  const key = await crypto.subtle.importKey(
+    "raw", new Uint8Array(16), { name: "AES-CTR" }, false, ["encrypt", "decrypt"],
+  );
 
-    // Counter with the low bit set; the wrap target is the same block with the
-    // low bit cleared (which differs from a naive +1 carry).
-    const counter = new Uint8Array(16); counter[15] = 0x01;
-    const counter0 = new Uint8Array(16);
+  // Counter with the low bit set; the wrap target is the same block with the
+  // low bit cleared (which differs from a naive +1 carry).
+  const counter = new Uint8Array(16); counter[15] = 0x01;
+  const counter0 = new Uint8Array(16);
 
-    const enc = (ctr, bits, data) =>
-      crypto.subtle.encrypt({ name: "AES-CTR", counter: ctr, length: bits }, key, data);
+  const enc = (ctr, bits, data) =>
+    crypto.subtle.encrypt({ name: "AES-CTR", counter: ctr, length: bits }, key, data);
 
-    const ks1 = new Uint8Array(await enc(counter, 128, new Uint8Array(16)));
-    const ks2 = new Uint8Array(await enc(counter0, 128, new Uint8Array(16)));
-    const full = new Uint8Array(await enc(counter, 1, new Uint8Array(32)));
+  const ks1 = new Uint8Array(await enc(counter, 128, new Uint8Array(16)));
+  const ks2 = new Uint8Array(await enc(counter0, 128, new Uint8Array(16)));
+  const full = new Uint8Array(await enc(counter, 1, new Uint8Array(32)));
 
+  // A message longer than the counter space (here 2 blocks for a 1-bit
+  // counter) must reject rather than reuse counter values.
+  let overLengthError = null;
+  try {
+    await enc(counter0, 1, new Uint8Array(48));
+  } catch (err) {
+    overLengthError = err;
+  }
+
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(ks1.join(","), full.slice(0, 16).join(","));
     testing.expectEqual(ks2.join(","), full.slice(16).join(","));
 
-    // A message longer than the counter space (here 2 blocks for a 1-bit
-    // counter) must reject rather than reuse counter values.
-    try {
-      await enc(counter0, 1, new Uint8Array(48));
-      testing.fail("expected AES-CTR over-length to reject");
-    } catch (err) {
-      testing.expectEqual("OperationError", err.name);
-    }
+    testing.expectEqual(true, overLengthError !== null);
+    testing.expectEqual("OperationError", overLengthError.name);
   });
 </script>
 
-<script id=hmac-verify-length-mismatch>
-  testing.async(async () => {
-    // A signature whose length differs from the MAC resolves to false rather
-    // than rejecting (and a truncated-but-matching prefix must not pass).
-    const key = await crypto.subtle.generateKey(
-      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"],
-    );
-    const data = new TextEncoder().encode("over 9000");
-    const sig = await crypto.subtle.sign("HMAC", key, data);
+<script id=hmac-verify-length-mismatch type=module>
+  const state = await testing.async();
+  // A signature whose length differs from the MAC resolves to false rather
+  // than rejecting (and a truncated-but-matching prefix must not pass).
+  const key = await crypto.subtle.generateKey(
+    { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"],
+  );
+  const data = new TextEncoder().encode("over 9000");
+  const sig = await crypto.subtle.sign("HMAC", key, data);
 
-    testing.expectEqual(true, await crypto.subtle.verify("HMAC", key, sig, data));
-    testing.expectEqual(false, await crypto.subtle.verify("HMAC", key, sig.slice(0, 16), data));
+  const verifyFull = await crypto.subtle.verify("HMAC", key, sig, data);
+  const verifyTruncated = await crypto.subtle.verify("HMAC", key, sig.slice(0, 16), data);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, verifyFull);
+    testing.expectEqual(false, verifyTruncated);
   });
 </script>
 
 <script>
-  // helper
-  window.expectGenKeyRejects = async function(algo, extractable, usages, expected) {
+  // helper: runs generateKey and captures the rejection's error name (or null
+  // if it unexpectedly resolved). Returns { algo, expected, actual } so the
+  // caller can assert synchronously inside state.done.
+  window.captureGenKeyReject = async function(algo, extractable, usages, expected) {
     try {
       await crypto.subtle.generateKey(algo, extractable, usages);
-      testing.fail(`expected ${expected}, but generateKey resolved for ${JSON.stringify(algo)}`);
+      return { algo, expected, actual: null };
     } catch (err) {
-      testing.expectEqual(expected, err.name);
+      return { algo, expected, actual: err.name };
+    }
+  };
+
+  // assert a list of capture results synchronously.
+  window.assertGenKeyRejects = function(results) {
+    for (const r of results) {
+      testing.expectEqual(r.expected, r.actual);
     }
   };
 </script>
 
-<script id=generateKey-unrecognized-algorithm>
-  testing.async(async () => {
-    // Unknown name (string and object form) -> NotSupportedError.
-    await expectGenKeyRejects("AES", true, ["encrypt"], "NotSupportedError");
-    await expectGenKeyRejects({ name: "AES" }, true, ["encrypt"], "NotSupportedError");
-    await expectGenKeyRejects({ name: "AES-CMAC", length: 128 }, true, ["encrypt"], "NotSupportedError");
-    await expectGenKeyRejects({ name: "EC", namedCurve: "P-256" }, true, ["sign"], "NotSupportedError");
-    // Empty algorithm dictionary -> TypeError (missing required `name`).
-    await expectGenKeyRejects({}, true, ["encrypt"], "TypeError");
+<script id=generateKey-unrecognized-algorithm type=module>
+  const state = await testing.async();
+  // Unknown name (string and object form) -> NotSupportedError.
+  // Empty algorithm dictionary -> TypeError (missing required `name`).
+  const results = [
+    await captureGenKeyReject("AES", true, ["encrypt"], "NotSupportedError"),
+    await captureGenKeyReject({ name: "AES" }, true, ["encrypt"], "NotSupportedError"),
+    await captureGenKeyReject({ name: "AES-CMAC", length: 128 }, true, ["encrypt"], "NotSupportedError"),
+    await captureGenKeyReject({ name: "EC", namedCurve: "P-256" }, true, ["sign"], "NotSupportedError"),
+    await captureGenKeyReject({}, true, ["encrypt"], "TypeError"),
+  ];
+  state.resolve();
+  await state.done(() => {
+    assertGenKeyRejects(results);
   });
 </script>
 
-<script id=generateKey-aes-validation>
-  testing.async(async () => {
-    // Bad usages: SyntaxError.
-    await expectGenKeyRejects({ name: "AES-CBC", length: 128 }, true, ["sign"], "SyntaxError");
-    await expectGenKeyRejects({ name: "AES-GCM", length: 128 }, true, ["encrypt", "deriveBits"], "SyntaxError");
-    // AES-KW only allows wrapKey / unwrapKey.
-    await expectGenKeyRejects({ name: "AES-KW", length: 128 }, true, ["encrypt"], "SyntaxError");
+<script id=generateKey-aes-validation type=module>
+  const state = await testing.async();
+  const results = [];
+  // Bad usages: SyntaxError.
+  results.push(await captureGenKeyReject({ name: "AES-CBC", length: 128 }, true, ["sign"], "SyntaxError"));
+  results.push(await captureGenKeyReject({ name: "AES-GCM", length: 128 }, true, ["encrypt", "deriveBits"], "SyntaxError"));
+  // AES-KW only allows wrapKey / unwrapKey.
+  results.push(await captureGenKeyReject({ name: "AES-KW", length: 128 }, true, ["encrypt"], "SyntaxError"));
 
-    // Bad length: OperationError.
-    for (const length of [64, 127, 129, 255, 257, 512]) {
-      await expectGenKeyRejects({ name: "AES-CBC", length }, true, ["encrypt"], "OperationError");
-    }
+  // Bad length: OperationError.
+  for (const length of [64, 127, 129, 255, 257, 512]) {
+    results.push(await captureGenKeyReject({ name: "AES-CBC", length }, true, ["encrypt"], "OperationError"));
+  }
 
-    // Empty usages on a secret key: SyntaxError.
-    await expectGenKeyRejects({ name: "AES-CBC", length: 128 }, true, [], "SyntaxError");
-    await expectGenKeyRejects({ name: "AES-KW", length: 256 }, true, [], "SyntaxError");
+  // Empty usages on a secret key: SyntaxError.
+  results.push(await captureGenKeyReject({ name: "AES-CBC", length: 128 }, true, [], "SyntaxError"));
+  results.push(await captureGenKeyReject({ name: "AES-KW", length: 256 }, true, [], "SyntaxError"));
+
+  state.resolve();
+  await state.done(() => {
+    assertGenKeyRejects(results);
   });
 </script>
 
-<script id=generateKey-ec-validation>
-  testing.async(async () => {
-    // Bad usages: SyntaxError.
-    await expectGenKeyRejects({ name: "ECDSA", namedCurve: "P-256" }, true, ["encrypt"], "SyntaxError");
-    await expectGenKeyRejects({ name: "ECDH", namedCurve: "P-256" }, true, ["sign"], "SyntaxError");
-
-    // Unknown curve: NotSupportedError (not OperationError, per spec).
-    await expectGenKeyRejects({ name: "ECDSA", namedCurve: "P-512" }, true, ["sign"], "NotSupportedError");
-    await expectGenKeyRejects({ name: "ECDH", namedCurve: "Curve25519" }, true, ["deriveBits"], "NotSupportedError");
-
-    // Empty usages: SyntaxError (mandatoryUsages aside, the spec rejects empty for private keys).
-    await expectGenKeyRejects({ name: "ECDSA", namedCurve: "P-256" }, true, [], "SyntaxError");
+<script id=generateKey-ec-validation type=module>
+  const state = await testing.async();
+  // Bad usages: SyntaxError.
+  // Unknown curve: NotSupportedError (not OperationError, per spec).
+  // Empty usages: SyntaxError (mandatoryUsages aside, the spec rejects empty for private keys).
+  const results = [
+    await captureGenKeyReject({ name: "ECDSA", namedCurve: "P-256" }, true, ["encrypt"], "SyntaxError"),
+    await captureGenKeyReject({ name: "ECDH", namedCurve: "P-256" }, true, ["sign"], "SyntaxError"),
+    await captureGenKeyReject({ name: "ECDSA", namedCurve: "P-512" }, true, ["sign"], "NotSupportedError"),
+    await captureGenKeyReject({ name: "ECDH", namedCurve: "Curve25519" }, true, ["deriveBits"], "NotSupportedError"),
+    await captureGenKeyReject({ name: "ECDSA", namedCurve: "P-256" }, true, [], "SyntaxError"),
+  ];
+  state.resolve();
+  await state.done(() => {
+    assertGenKeyRejects(results);
   });
 </script>
 
-<script id=generateKey-rsa-validation>
-  testing.async(async () => {
-    const goodExp = new Uint8Array([1, 0, 1]); // 65537
+<script id=generateKey-rsa-validation type=module>
+  const state = await testing.async();
+  const goodExp = new Uint8Array([1, 0, 1]); // 65537
 
+  const results = [
     // Bad name: NotSupportedError.
-    await expectGenKeyRejects(
+    await captureGenKeyReject(
       { name: "RSA", hash: "SHA-256", modulusLength: 2048, publicExponent: goodExp },
       true, ["sign"], "NotSupportedError",
-    );
-
+    ),
     // Bad hash: NotSupportedError.
-    await expectGenKeyRejects(
+    await captureGenKeyReject(
       { name: "RSA-PSS", hash: "SHA", modulusLength: 2048, publicExponent: goodExp },
       true, ["sign"], "NotSupportedError",
-    );
-
+    ),
     // Bad usages: SyntaxError. RSASSA only allows sign/verify.
-    await expectGenKeyRejects(
+    await captureGenKeyReject(
       { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256", modulusLength: 2048, publicExponent: goodExp },
       true, ["encrypt"], "SyntaxError",
-    );
+    ),
     // RSA-OAEP only allows encrypt/decrypt/wrapKey/unwrapKey.
-    await expectGenKeyRejects(
+    await captureGenKeyReject(
       { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 2048, publicExponent: goodExp },
       true, ["sign"], "SyntaxError",
-    );
-
+    ),
     // Bad publicExponent: OperationError.
-    await expectGenKeyRejects(
+    await captureGenKeyReject(
       { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 2048, publicExponent: new Uint8Array([1]) },
       true, ["encrypt"], "OperationError",
-    );
-    await expectGenKeyRejects(
+    ),
+    await captureGenKeyReject(
       { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 0]) },
       true, ["encrypt"], "OperationError",
-    );
-
+    ),
     // Empty usages: SyntaxError.
-    await expectGenKeyRejects(
+    await captureGenKeyReject(
       { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 2048, publicExponent: goodExp },
       true, [], "SyntaxError",
-    );
+    ),
+  ];
+  state.resolve();
+  await state.done(() => {
+    assertGenKeyRejects(results);
   });
 </script>
 
-<script id=generateKey-hmac-validation>
-  testing.async(async () => {
-    // Unknown hash: NotSupportedError.
-    await expectGenKeyRejects({ name: "HMAC", hash: "MD5" }, true, ["sign"], "NotSupportedError");
+<script id=generateKey-hmac-validation type=module>
+  const state = await testing.async();
+  // Unknown hash: NotSupportedError.
+  // Bad usages: SyntaxError. HMAC only allows sign/verify.
+  // Empty usages: SyntaxError.
+  // A present, zero length is an OperationError (not a zero-byte key).
+  const results = [
+    await captureGenKeyReject({ name: "HMAC", hash: "MD5" }, true, ["sign"], "NotSupportedError"),
+    await captureGenKeyReject({ name: "HMAC", hash: "SHA-256" }, true, ["encrypt"], "SyntaxError"),
+    await captureGenKeyReject({ name: "HMAC", hash: "SHA-256" }, true, ["sign", "deriveBits"], "SyntaxError"),
+    await captureGenKeyReject({ name: "HMAC", hash: "SHA-256" }, true, [], "SyntaxError"),
+    await captureGenKeyReject({ name: "HMAC", hash: "SHA-256", length: 0 }, true, ["sign"], "OperationError"),
+  ];
 
-    // Bad usages: SyntaxError. HMAC only allows sign/verify.
-    await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256" }, true, ["encrypt"], "SyntaxError");
-    await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256" }, true, ["sign", "deriveBits"], "SyntaxError");
+  // An explicit length overrides the hash block size (256 bits -> 32 bytes).
+  const sized = await crypto.subtle.generateKey(
+    { name: "HMAC", hash: "SHA-256", length: 256 }, true, ["sign", "verify"],
+  );
+  const sizedRaw = await crypto.subtle.exportKey("raw", sized);
 
-    // Empty usages: SyntaxError.
-    await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256" }, true, [], "SyntaxError");
-
-    // A present, zero length is an OperationError (not a zero-byte key).
-    await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256", length: 0 }, true, ["sign"], "OperationError");
-
-    // An explicit length overrides the hash block size (256 bits -> 32 bytes).
-    const sized = await crypto.subtle.generateKey(
-      { name: "HMAC", hash: "SHA-256", length: 256 }, true, ["sign", "verify"],
-    );
-    testing.expectEqual(32, (await crypto.subtle.exportKey("raw", sized)).byteLength);
+  state.resolve();
+  await state.done(() => {
+    assertGenKeyRejects(results);
+    testing.expectEqual(32, sizedRaw.byteLength);
   });
 </script>
 
-<script id=generateKey-edxxx-validation>
-  testing.async(async () => {
-    // Ed25519 / Ed448 only allow sign/verify; X448 only allows deriveKey/deriveBits.
-    await expectGenKeyRejects("Ed25519", true, ["encrypt"], "SyntaxError");
-    await expectGenKeyRejects({ name: "Ed448" }, true, ["deriveBits"], "SyntaxError");
-    await expectGenKeyRejects("X448", true, ["sign"], "SyntaxError");
-
-    // Empty usages: SyntaxError.
-    await expectGenKeyRejects("Ed25519", true, [], "SyntaxError");
+<script id=generateKey-edxxx-validation type=module>
+  const state = await testing.async();
+  // Ed25519 / Ed448 only allow sign/verify; X448 only allows deriveKey/deriveBits.
+  // Empty usages: SyntaxError.
+  const results = [
+    await captureGenKeyReject("Ed25519", true, ["encrypt"], "SyntaxError"),
+    await captureGenKeyReject({ name: "Ed448" }, true, ["deriveBits"], "SyntaxError"),
+    await captureGenKeyReject("X448", true, ["sign"], "SyntaxError"),
+    await captureGenKeyReject("Ed25519", true, [], "SyntaxError"),
+  ];
+  state.resolve();
+  await state.done(() => {
+    assertGenKeyRejects(results);
   });
 </script>
 
-<script id="digest">
-  testing.async(async () => {
-    async function hash(algo, data) {
-      const buffer = await window.crypto.subtle.digest(algo, new TextEncoder().encode(data));
-      return [...new Uint8Array(buffer)].map(x => x.toString(16).padStart(2, '0')).join('');
-    }
-    testing.expectEqual("a6a1e3375239f215f09a156df29c17c7d1ac6722", await hash('sha-1', 'over 9000'));
-    testing.expectEqual("1bc375bb92459685194dda18a4b835f4e2972ec1bde6d9ab3db53fcc584a6580", await hash('sha-256', 'over 9000'));
-    testing.expectEqual("a4260d64c2eea9fd30c1f895c5e48a26d817e19d3a700b61b3ce665864ff4b8e012bd357d345aa614c5f642dab865ea1", await hash('sha-384', 'over 9000'));
-    testing.expectEqual("6cad17e6f3f76680d6dd18ed043b75b4f6e1aa1d08b917294942e882fb6466c3510948c34af8b903ed0725b582b3b39c0e485ae2c1b7dfdb192ee38b79c782b6", await hash('sha-512', 'over 9000'));
+<script id="digest" type=module>
+  const state = await testing.async();
+  async function hash(algo, data) {
+    const buffer = await window.crypto.subtle.digest(algo, new TextEncoder().encode(data));
+    return [...new Uint8Array(buffer)].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+  const sha1 = await hash('sha-1', 'over 9000');
+  const sha256 = await hash('sha-256', 'over 9000');
+  const sha384 = await hash('sha-384', 'over 9000');
+  const sha512 = await hash('sha-512', 'over 9000');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("a6a1e3375239f215f09a156df29c17c7d1ac6722", sha1);
+    testing.expectEqual("1bc375bb92459685194dda18a4b835f4e2972ec1bde6d9ab3db53fcc584a6580", sha256);
+    testing.expectEqual("a4260d64c2eea9fd30c1f895c5e48a26d817e19d3a700b61b3ce665864ff4b8e012bd357d345aa614c5f642dab865ea1", sha384);
+    testing.expectEqual("6cad17e6f3f76680d6dd18ed043b75b4f6e1aa1d08b917294942e882fb6466c3510948c34af8b903ed0725b582b3b39c0e485ae2c1b7dfdb192ee38b79c782b6", sha512);
   });
 </script>
 

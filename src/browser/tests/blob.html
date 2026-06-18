@@ -2,194 +2,181 @@
 <meta charset="UTF-8">
 <script src="./testing.js"></script>
 
-<script id=basic>
-  {
-    const parts = ["\r\nthe quick brown\rfo\rx\r", "\njumps over\r\nthe\nlazy\r", "\ndog"];
-    // "transparent" ending should not modify the final buffer.
-    const blob = new Blob(parts, { type: "text/html" });
+<script id=basic type=module>
+  const state = await testing.async();
 
-    const expected = parts.join("");
-    testing.expectEqual(expected.length, blob.size);
-    testing.expectEqual("text/html", blob.type);
-    testing.async(async () => { testing.expectEqual(expected, await blob.text()) });
-  }
+  const parts1 = ["\r\nthe quick brown\rfo\rx\r", "\njumps over\r\nthe\nlazy\r", "\ndog"];
+  // "transparent" ending should not modify the final buffer.
+  const blob1 = new Blob(parts1, { type: "text/html" });
+  const expected1 = parts1.join("");
+  const text1 = await blob1.text();
 
-  {
-    const parts = ["\rhello\r", "\nwor\r\nld"];
-    // "native" ending should modify the final buffer.
-    const blob = new Blob(parts, { endings: "native" });
+  const parts2 = ["\rhello\r", "\nwor\r\nld"];
+  // "native" ending should modify the final buffer.
+  const blob2 = new Blob(parts2, { endings: "native" });
+  const expected2 = "\nhello\n\nwor\nld";
+  const text2 = await blob2.text();
 
-    const expected = "\nhello\n\nwor\nld";
-    testing.expectEqual(expected.length, blob.size);
-    testing.async(async () => { testing.expectEqual(expected, await blob.text()) });
-  }
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(expected1.length, blob1.size);
+    testing.expectEqual("text/html", blob1.type);
+    testing.expectEqual(expected1, text1);
+
+    testing.expectEqual(expected2.length, blob2.size);
+    testing.expectEqual(expected2, text2);
+  });
 </script>
 
 <!-- Firefox and Safari only -->
-<script id=bytes>
-  {
-    const parts = ["light ", "panda ", "rocks ", "!"];
-    const blob = new Blob(parts);
+<script id=bytes type=module>
+  const state = await testing.async();
 
-    testing.async(async() => {
-      const expected = new Uint8Array([108, 105, 103, 104, 116, 32, 112, 97,
-                                       110, 100, 97, 32, 114, 111, 99, 107, 115,
-                                       32, 33]);
-      const result = await blob.bytes();
-      testing.expectEqual(true, result instanceof Uint8Array);
-      testing.expectEqual(expected, result);
-    });
-  }
+  const parts1 = ["light ", "panda ", "rocks ", "!"];
+  const blob1 = new Blob(parts1);
+  const result1 = await blob1.bytes();
 
   // Test for SIMD.
-  {
-    const parts = [
-      "\rThe opened package\r\nof potato\nchi\rps",
-      "held the\r\nanswer to the\r mystery. Both det\rectives looke\r\rd\r",
-      "\rat it but failed to realize\nit was\r\nthe\rkey\r\n",
-      "\r\nto solve the \rcrime.\r"
-    ];
+  const parts2 = [
+    "\rThe opened package\r\nof potato\nchi\rps",
+    "held the\r\nanswer to the\r mystery. Both det\rectives looke\r\rd\r",
+    "\rat it but failed to realize\nit was\r\nthe\rkey\r\n",
+    "\r\nto solve the \rcrime.\r"
+  ];
+  const blob2 = new Blob(parts2, { type: "text/html", endings: "native" });
+  const result2 = await blob2.bytes();
 
-    const blob = new Blob(parts, { type: "text/html", endings: "native" });
-    testing.expectEqual(161, blob.size);
-    testing.expectEqual("text/html", blob.type);
-    testing.async(async() => {
-      const expected = new Uint8Array([10, 84, 104, 101, 32, 111, 112, 101, 110,
-                                       101, 100, 32, 112, 97, 99, 107, 97, 103,
-                                       101, 10, 111, 102, 32, 112, 111, 116, 97,
-                                       116, 111, 10, 99, 104, 105, 10, 112, 115,
-                                       104, 101, 108, 100, 32, 116, 104, 101, 10,
-                                       97, 110, 115, 119, 101, 114, 32, 116, 111,
-                                       32, 116, 104, 101, 10, 32, 109, 121, 115,
-                                       116, 101, 114, 121, 46, 32, 66, 111, 116,
-                                       104, 32, 100, 101, 116, 10, 101, 99, 116,
-                                       105, 118, 101, 115, 32, 108, 111, 111, 107,
-                                       101, 10, 10, 100, 10, 10, 97, 116, 32, 105,
-                                       116, 32, 98, 117, 116, 32, 102, 97, 105, 108,
-                                       101, 100, 32, 116, 111, 32, 114, 101, 97,
-                                       108, 105, 122, 101, 10, 105, 116, 32, 119, 97,
-                                       115, 10, 116, 104, 101, 10, 107, 101, 121,
-                                       10, 10, 116, 111, 32, 115, 111, 108, 118, 101,
-                                       32, 116, 104, 101, 32, 10, 99, 114, 105, 109,
-                                       101, 46, 10]);
-      const result = await blob.bytes();
-      testing.expectEqual(true, result instanceof Uint8Array);
-      testing.expectEqual(expected, result);
-    });
-  }
+  state.resolve();
+  await state.done(() => {
+    const expected1 = new Uint8Array([108, 105, 103, 104, 116, 32, 112, 97,
+                                      110, 100, 97, 32, 114, 111, 99, 107, 115,
+                                      32, 33]);
+    testing.expectEqual(true, result1 instanceof Uint8Array);
+    testing.expectEqual(expected1, result1);
+
+    testing.expectEqual(161, blob2.size);
+    testing.expectEqual("text/html", blob2.type);
+    const expected2 = new Uint8Array([10, 84, 104, 101, 32, 111, 112, 101, 110,
+                                      101, 100, 32, 112, 97, 99, 107, 97, 103,
+                                      101, 10, 111, 102, 32, 112, 111, 116, 97,
+                                      116, 111, 10, 99, 104, 105, 10, 112, 115,
+                                      104, 101, 108, 100, 32, 116, 104, 101, 10,
+                                      97, 110, 115, 119, 101, 114, 32, 116, 111,
+                                      32, 116, 104, 101, 10, 32, 109, 121, 115,
+                                      116, 101, 114, 121, 46, 32, 66, 111, 116,
+                                      104, 32, 100, 101, 116, 10, 101, 99, 116,
+                                      105, 118, 101, 115, 32, 108, 111, 111, 107,
+                                      101, 10, 10, 100, 10, 10, 97, 116, 32, 105,
+                                      116, 32, 98, 117, 116, 32, 102, 97, 105, 108,
+                                      101, 100, 32, 116, 111, 32, 114, 101, 97,
+                                      108, 105, 122, 101, 10, 105, 116, 32, 119, 97,
+                                      115, 10, 116, 104, 101, 10, 107, 101, 121,
+                                      10, 10, 116, 111, 32, 115, 111, 108, 118, 101,
+                                      32, 116, 104, 101, 32, 10, 99, 114, 105, 109,
+                                      101, 46, 10]);
+    testing.expectEqual(true, result2 instanceof Uint8Array);
+    testing.expectEqual(expected2, result2);
+  });
 </script>
 
-<script id=parts>
+<script id=parts type=module>
+  const state = await testing.async();
+
   // Blob as a blob part - contents are copied in, not stringified.
-  {
-    const inner = new Blob(["hello "], { type: "text/plain" });
-    const blob = new Blob([inner, "world"]);
-    testing.expectEqual(11, blob.size);
-    testing.async(async () => {
-      testing.expectEqual("hello world", await blob.text());
-    });
-  }
+  const inner = new Blob(["hello "], { type: "text/plain" });
+  const blobInner = new Blob([inner, "world"]);
+  const textInner = await blobInner.text();
 
   // Uint8Array as a blob part.
-  {
-    const bytes = new Uint8Array([104, 101, 108, 108, 111]); // "hello"
-    const blob = new Blob([bytes, " ", "world"]);
-    testing.expectEqual(11, blob.size);
-    testing.async(async () => {
-      testing.expectEqual("hello world", await blob.text());
-    });
-  }
+  const bytesPart = new Uint8Array([104, 101, 108, 108, 111]); // "hello"
+  const blobBytes = new Blob([bytesPart, " ", "world"]);
+  const textBytes = await blobBytes.text();
 
   // Non-byte TypedArrays contribute their raw backing bytes.
-  {
-    // Uint16Array of one element (0x0041 = 'A' little-endian) produces 2 bytes.
-    const u16 = new Uint16Array([0x0041]);
-    const blob = new Blob([u16]);
-    testing.expectEqual(2, blob.size);
-  }
+  // Uint16Array of one element (0x0041 = 'A' little-endian) produces 2 bytes.
+  const u16 = new Uint16Array([0x0041]);
+  const blobU16 = new Blob([u16]);
 
-  {
-    // Float32Array: 4 bytes per element.
-    const f32 = new Float32Array([1.0, 2.0, 3.0]);
-    const blob = new Blob([f32]);
-    testing.expectEqual(12, blob.size);
-  }
+  // Float32Array: 4 bytes per element.
+  const f32 = new Float32Array([1.0, 2.0, 3.0]);
+  const blobF32 = new Blob([f32]);
 
   // ArrayBuffer as a blob part.
-  {
-    const buf = new Uint8Array([1, 2, 3, 4]).buffer;
-    const blob = new Blob([buf]);
-    testing.expectEqual(4, blob.size);
-    testing.async(async () => {
-      const result = await blob.bytes();
-      testing.expectEqual(new Uint8Array([1, 2, 3, 4]), result);
-    });
-  }
+  const abBuf = new Uint8Array([1, 2, 3, 4]).buffer;
+  const blobAb = new Blob([abBuf]);
+  const resultAb = await blobAb.bytes();
 
   // DataView (ArrayBufferView) as a blob part.
-  {
-    const buf = new Uint8Array([10, 20, 30, 40, 50]).buffer;
-    const view = new DataView(buf, 1, 3); // bytes [20, 30, 40]
-    const blob = new Blob([view]);
-    testing.expectEqual(3, blob.size);
-    testing.async(async () => {
-      const result = await blob.bytes();
-      testing.expectEqual(new Uint8Array([20, 30, 40]), result);
-    });
-  }
+  const dvBuf = new Uint8Array([10, 20, 30, 40, 50]).buffer;
+  const dvView = new DataView(dvBuf, 1, 3); // bytes [20, 30, 40]
+  const blobDv = new Blob([dvView]);
+  const resultDv = await blobDv.bytes();
 
   // Mixed types in a single parts array.
-  {
-    const inner = new Blob(["bb"]);
-    const bytes = new Uint8Array([99, 99]); // "cc"
-    const buf = new Uint8Array([100, 100]).buffer; // "dd"
-    const blob = new Blob(["aa", inner, bytes, buf, "ee"]);
-    testing.expectEqual(10, blob.size);
-    testing.async(async () => {
-      testing.expectEqual("aabbccddee", await blob.text());
-    });
-  }
+  const mixedInner = new Blob(["bb"]);
+  const mixedBytes = new Uint8Array([99, 99]); // "cc"
+  const mixedBuf = new Uint8Array([100, 100]).buffer; // "dd"
+  const blobMixed = new Blob(["aa", mixedInner, mixedBytes, mixedBuf, "ee"]);
+  const textMixed = await blobMixed.text();
 
   // Number coerces to string.
-  {
-    const blob = new Blob([42]);
-    testing.expectEqual(2, blob.size);
-    testing.async(async () => {
-      testing.expectEqual("42", await blob.text());
-    });
-  }
+  const blobNum = new Blob([42]);
+  const textNum = await blobNum.text();
 
   // Empty parts array.
-  {
-    const blob = new Blob([]);
-    testing.expectEqual(0, blob.size);
-    testing.expectEqual("", blob.type);
-  }
+  const blobEmpty = new Blob([]);
 
   // No arguments.
-  {
-    const blob = new Blob();
-    testing.expectEqual(0, blob.size);
-  }
+  const blobNone = new Blob();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(11, blobInner.size);
+    testing.expectEqual("hello world", textInner);
+
+    testing.expectEqual(11, blobBytes.size);
+    testing.expectEqual("hello world", textBytes);
+
+    testing.expectEqual(2, blobU16.size);
+    testing.expectEqual(12, blobF32.size);
+
+    testing.expectEqual(4, blobAb.size);
+    testing.expectEqual(new Uint8Array([1, 2, 3, 4]), resultAb);
+
+    testing.expectEqual(3, blobDv.size);
+    testing.expectEqual(new Uint8Array([20, 30, 40]), resultDv);
+
+    testing.expectEqual(10, blobMixed.size);
+    testing.expectEqual("aabbccddee", textMixed);
+
+    testing.expectEqual(2, blobNum.size);
+    testing.expectEqual("42", textNum);
+
+    testing.expectEqual(0, blobEmpty.size);
+    testing.expectEqual("", blobEmpty.type);
+
+    testing.expectEqual(0, blobNone.size);
+  });
 </script>
 
-<script id=stream>
-  {
-    const parts = ["may", "thy", "knife", "chip", "and", "shatter"];
-    const blob = new Blob(parts);
-    const reader = blob.stream().getReader();
+<script id=stream type=module>
+  const state = await testing.async();
 
-    testing.async(async () => {
-      const {done: done, value: value} = await reader.read()
-      const expected = new Uint8Array([109, 97, 121, 116, 104, 121, 107, 110,
-                                       105, 102, 101, 99, 104, 105, 112, 97,
-                                       110, 100, 115, 104, 97, 116, 116, 101,
-                                       114]);
-      testing.expectEqual(false, done);
-      testing.expectEqual(true, value instanceof Uint8Array);
-      testing.expectEqual(expected, value);
-    });
-  }
+  const parts = ["may", "thy", "knife", "chip", "and", "shatter"];
+  const blob = new Blob(parts);
+  const reader = blob.stream().getReader();
+  const { done: done, value: value } = await reader.read();
+
+  state.resolve();
+  await state.done(() => {
+    const expected = new Uint8Array([109, 97, 121, 116, 104, 121, 107, 110,
+                                     105, 102, 101, 99, 104, 105, 112, 97,
+                                     110, 100, 115, 104, 97, 116, 116, 101,
+                                     114]);
+    testing.expectEqual(false, done);
+    testing.expectEqual(true, value instanceof Uint8Array);
+    testing.expectEqual(expected, value);
+  });
 </script>
 
 <script id=mime_parsing>
@@ -251,40 +238,44 @@
   }
 </script>
 
-<script id=slice>
-  {
-    const parts = ["la", "symphonie", "des", "éclairs"];
-    const blob = new Blob(parts);
-    testing.async(async () => {
-      const result = await blob.arrayBuffer();
-      testing.expectEqual(true, result instanceof ArrayBuffer)
-    });
+<script id=slice type=module>
+  const state = await testing.async();
 
-    let temp = blob.slice(0);
-    testing.expectEqual(blob.size, temp.size);
-    testing.async(async () => {
-      testing.expectEqual("lasymphoniedeséclairs", await temp.text());
-    });
+  const parts = ["la", "symphonie", "des", "éclairs"];
+  const blob = new Blob(parts);
+  const arrayBufferResult = await blob.arrayBuffer();
 
-    temp = blob.slice(-4, -2, "custom");
-    testing.expectEqual(2, temp.size);
+  const sliceAll = blob.slice(0);
+  const sliceAllText = await sliceAll.text();
+
+  const sliceCustom = blob.slice(-4, -2, "custom");
+  const sliceCustomText = await sliceCustom.text();
+
+  const sliceTail = blob.slice(14);
+  const sliceTailText = await sliceTail.text();
+
+  const sliceMid = blob.slice(6, -10, "text/eclair");
+  const sliceMidText = await sliceMid.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, arrayBufferResult instanceof ArrayBuffer);
+
+    testing.expectEqual(blob.size, sliceAll.size);
+    testing.expectEqual("lasymphoniedeséclairs", sliceAllText);
+
+    testing.expectEqual(2, sliceCustom.size);
     // "custom" is not a valid MIME type (no "/"), so the type is empty.
-    testing.expectEqual("", temp.type);
-    testing.async(async () => {
-      testing.expectEqual("ai", await temp.text());
-    });
+    testing.expectEqual("", sliceCustom.type);
+    testing.expectEqual("ai", sliceCustomText);
 
-    temp = blob.slice(14);
-    testing.expectEqual(8, temp.size);
-    testing.async(async () => {
-      testing.expectEqual("éclairs", await temp.text());
-    });
+    testing.expectEqual(8, sliceTail.size);
+    testing.expectEqual("éclairs", sliceTailText);
 
-    temp = blob.slice(6, -10, "text/eclair");
-    testing.expectEqual(6, temp.size);
-    testing.expectEqual("text/eclair", temp.type);
-    testing.async(async () => {
-      testing.expectEqual("honied", await temp.text());
-    });
-  }
+    testing.expectEqual(6, sliceMid.size);
+    testing.expectEqual("text/eclair", sliceMid.type);
+    testing.expectEqual("honied", sliceMidText);
+  });
 </script>
+</content>
+</invoke>
