@@ -60,7 +60,7 @@ pub fn parseCommand(arena: std.mem.Allocator, rest: []const u8) !Command {
     return .{ .filename = name, .prompt = if (prompt.len == 0) null else prompt };
 }
 
-fn validateFilename(name: []const u8) !void {
+pub fn validateFilename(name: []const u8) !void {
     if (name.len == 0) return error.EmptyFilename;
     if (std.fs.path.isAbsolute(name)) return error.InvalidFilename;
     if (std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidFilename;
