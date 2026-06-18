@@ -258,7 +258,7 @@ fn urlEncodeValue(value: []const u8, comptime mode: URLEncodeMode, allocator_: ?
 
 /// Percent-encode a UTF-8 value - bytes >= 0x80 are percent-encoded directly.
 fn urlEncodeValueUtf8(value: []const u8, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
-    if (!urlEncodeShouldEscape(value, mode)) {
+    if (!urlEncodeShouldEscape(value)) {
         return writer.writeAll(value);
     }
 
@@ -268,7 +268,7 @@ fn urlEncodeValueUtf8(value: []const u8, comptime mode: URLEncodeMode, writer: *
         if (comptime mode == .form) {
             if (try writeFormLineEnd(value, &i, b, writer)) continue;
         }
-        if (urlEncodeUnreserved(b, mode)) {
+        if (urlEncodeUnreserved(b)) {
             try writer.writeByte(b);
         } else if (b == ' ') {
             try writer.writeByte('+');
@@ -286,7 +286,7 @@ fn urlEncodeValueLegacy(value: []const u8, comptime mode: URLEncodeMode, writer:
         if (comptime mode == .form) {
             if (try writeFormLineEnd(value, &i, b, writer)) continue;
         }
-        if (urlEncodeUnreserved(b, mode)) {
+        if (urlEncodeUnreserved(b)) {
             try writer.writeByte(b);
         } else if (b == ' ') {
             try writer.writeByte('+');
@@ -318,19 +318,18 @@ fn writeFormLineEnd(value: []const u8, i: *usize, b: u8, writer: *std.Io.Writer)
     return false;
 }
 
-fn urlEncodeShouldEscape(value: []const u8, comptime mode: URLEncodeMode) bool {
+fn urlEncodeShouldEscape(value: []const u8) bool {
     for (value) |b| {
-        if (!urlEncodeUnreserved(b, mode)) {
+        if (!urlEncodeUnreserved(b)) {
             return true;
         }
     }
     return false;
 }
 
-fn urlEncodeUnreserved(b: u8, comptime mode: URLEncodeMode) bool {
+fn urlEncodeUnreserved(b: u8) bool {
     return switch (b) {
         'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '*' => true,
-        '~' => comptime mode == .form,
         else => false,
     };
 }
