@@ -208,7 +208,7 @@ pub fn crypt(
             // be in 1..128.
             const len = params.length orelse return error.OperationError;
             if (len == 0 or len > 128) return error.OperationError;
-            break :blk cbcOrCtr(cipher, key._key, ivOf(params.counter) orelse return error.OperationError, data, encrypting, false, exec);
+            break :blk ctr(cipher, key._key, ivOf(params.counter) orelse return error.OperationError, len, data, encrypting, exec);
         },
         .gcm => gcm(cipher, key._key, params, data, encrypting, exec),
     };
@@ -217,6 +217,57 @@ pub fn crypt(
 fn ivOf(opt: anytype) ?[]const u8 {
     const v = opt orelse return null;
     return v.values;
+}
+
+/// Reads a 16-byte counter block as a big-endian 128-bit integer.
+fn readBlock(b: []const u8) u128 {
+    var tmp: [16]u8 = undefined;
+    @memcpy(&tmp, b[0..16]);
+    return std.mem.readInt(u128, &tmp, .big);
+}
+
+/// OpenSSL's CTR increments the whole 128-bit block, but the spec only
+/// increments the rightmost `counter_bits` (the nonce occupies the rest). They
+/// agree until that sub-counter overflows, so split the message at the wrap
+/// point and restart the second part with the sub-counter reset to zero.
+fn ctr(
+    cipher: *const crypto.EVP_CIPHER,
+    key: []const u8,
+    counter: []const u8,
+    counter_bits: u32,
+    data: []const u8,
+    encrypting: bool,
+    exec: *const Execution,
+) CipherError![]const u8 {
+    if (counter.len != 16) return error.OperationError;
+
+    if (counter_bits < 128) {
+        const num_blocks: u128 = (data.len + 15) / 16;
+        const counter_range = @as(u128, 1) << @intCast(counter_bits);
+        // More blocks than the counter can represent would reuse counter values.
+        if (num_blocks > counter_range) return error.OperationError;
+
+        const mask = counter_range - 1;
+        const counter_value = readBlock(counter) & mask;
+        const before_wrap = counter_range - counter_value; // >= 1
+
+        if (num_blocks > before_wrap) {
+            const split = @as(usize, @intCast(before_wrap)) * 16;
+            const first = try cbcOrCtr(cipher, key, counter, data[0..split], encrypting, false, exec);
+
+            // Second part: keep the nonce bits, zero the sub-counter.
+            var wrapped: [16]u8 = undefined;
+            std.mem.writeInt(u128, &wrapped, readBlock(counter) & ~mask, .big);
+            const second = try cbcOrCtr(cipher, key, &wrapped, data[split..], encrypting, false, exec);
+
+            const out = try exec.call_arena.alloc(u8, data.len);
+            @memcpy(out[0..split], first);
+            @memcpy(out[split..], second);
+            return out;
+        }
+    }
+
+    return cbcOrCtr(cipher, key, counter, data, encrypting, false, exec);
 }
 
 // libcrypto's EVP_*Init/Update/Final are distinct functions for encrypt vs

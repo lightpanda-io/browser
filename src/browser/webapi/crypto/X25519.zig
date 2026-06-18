@@ -123,10 +123,6 @@ pub fn deriveBits(
     length_in_bits: usize,
     exec: *const Execution,
 ) !js.ArrayBuffer {
-    if (!private.canDeriveBits()) {
-        return error.InvalidAccessError;
-    }
-
     const ctx = crypto.EVP_PKEY_CTX_new(private.getKeyObject(), null) orelse {
         // Failed on our end.
         return error.Internal;

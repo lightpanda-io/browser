@@ -75,6 +75,10 @@ pub fn init(
         // Prefer block size of the hash function instead.
         break :blk crypto.EVP_MD_block_size(digest);
     };
+    // `block_size` cannot be 0.
+    if (block_size == 0) {
+        return error.OperationError;
+    }
 
     // Should we reject this in promise too?
     const key = try exec.arena.alloc(u8, block_size);
@@ -198,6 +202,11 @@ pub fn verify(
         resolver.resolve("HMAC.verify", false);
         return resolver.promise();
     };
+    // Check that lengths match; CRYPTO_memcmp can't cover this.
+    if (@as(u32, @intCast(signature.len)) != out_len) {
+        resolver.resolve("HMAC.verify", false);
+        return resolver.promise();
+    }
 
     // CRYPTO_memcmp compare in constant time so prohibits time-based attacks.
     const res = crypto.CRYPTO_memcmp(signed, @ptrCast(signature.ptr), signature.len);

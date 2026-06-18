@@ -14,6 +14,10 @@
     let ti8a = new Int8Array(100)
     testing.expectEqual(ti8a, crypto.getRandomValues(ti8a))
     isRandom(ti8a)
+
+    let tu8ca = new Uint8ClampedArray(100)
+    testing.expectEqual(tu8ca, crypto.getRandomValues(tu8ca))
+    isRandom(tu8ca)
   }
 
   {
@@ -117,6 +121,58 @@
     );
 
     testing.expectEqual(16, sharedKey.byteLength);
+  });
+</script>
+
+<script id=aes-ctr-counter-wrap>
+  testing.async(async () => {
+    // AES-CTR must increment only the rightmost `length` bits of the counter
+    // block and leave the nonce bits fixed when that sub-counter wraps. Use a
+    // 1-bit counter so it wraps after two blocks, and check each block's
+    // keystream against an independent single-block encryption (the
+    // non-wrapping path, used here as the oracle).
+    const key = await crypto.subtle.importKey(
+      "raw", new Uint8Array(16), { name: "AES-CTR" }, false, ["encrypt", "decrypt"],
+    );
+
+    // Counter with the low bit set; the wrap target is the same block with the
+    // low bit cleared (which differs from a naive +1 carry).
+    const counter = new Uint8Array(16); counter[15] = 0x01;
+    const counter0 = new Uint8Array(16);
+
+    const enc = (ctr, bits, data) =>
+      crypto.subtle.encrypt({ name: "AES-CTR", counter: ctr, length: bits }, key, data);
+
+    const ks1 = new Uint8Array(await enc(counter, 128, new Uint8Array(16)));
+    const ks2 = new Uint8Array(await enc(counter0, 128, new Uint8Array(16)));
+    const full = new Uint8Array(await enc(counter, 1, new Uint8Array(32)));
+
+    testing.expectEqual(ks1.join(","), full.slice(0, 16).join(","));
+    testing.expectEqual(ks2.join(","), full.slice(16).join(","));
+
+    // A message longer than the counter space (here 2 blocks for a 1-bit
+    // counter) must reject rather than reuse counter values.
+    try {
+      await enc(counter0, 1, new Uint8Array(48));
+      testing.fail("expected AES-CTR over-length to reject");
+    } catch (err) {
+      testing.expectEqual("OperationError", err.name);
+    }
+  });
+</script>
+
+<script id=hmac-verify-length-mismatch>
+  testing.async(async () => {
+    // A signature whose length differs from the MAC resolves to false rather
+    // than rejecting (and a truncated-but-matching prefix must not pass).
+    const key = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"],
+    );
+    const data = new TextEncoder().encode("over 9000");
+    const sig = await crypto.subtle.sign("HMAC", key, data);
+
+    testing.expectEqual(true, await crypto.subtle.verify("HMAC", key, sig, data));
+    testing.expectEqual(false, await crypto.subtle.verify("HMAC", key, sig.slice(0, 16), data));
   });
 </script>
 
@@ -234,6 +290,15 @@
 
     // Empty usages: SyntaxError.
     await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256" }, true, [], "SyntaxError");
+
+    // A present, zero length is an OperationError (not a zero-byte key).
+    await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256", length: 0 }, true, ["sign"], "OperationError");
+
+    // An explicit length overrides the hash block size (256 bits -> 32 bytes).
+    const sized = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256", length: 256 }, true, ["sign", "verify"],
+    );
+    testing.expectEqual(32, (await crypto.subtle.exportKey("raw", sized)).byteLength);
   });
 </script>
 
