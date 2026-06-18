@@ -101,6 +101,20 @@ pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
     };
 }
 
+pub fn getBroadcastChannels(self: *const Execution) *std.DoublyLinkedList {
+    return switch (self.js.global) {
+        inline else => |g| &g._broadcast_channels,
+    };
+}
+
+// The global's serialized origin (e.g. "https://example.com"), or null for an
+// opaque origin.
+pub fn origin(self: *const Execution) ?[]const u8 {
+    return switch (self.js.global) {
+        inline else => |g| g.origin,
+    };
+}
+
 // HttpClient.Owner of the current global (Frame or WGS). Used by code
 // that needs to register an in-flight network operation against the
 // owning scope without caring whether it's a Frame or a Worker — e.g.

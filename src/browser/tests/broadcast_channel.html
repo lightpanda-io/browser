@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<body>
+<script src="testing.js"></script>
+
+<script id="basic" type=module>
+{
+    const bc = new BroadcastChannel("my-channel");
+    testing.expectEqual(true, bc !== undefined);
+    testing.expectEqual("my-channel", bc.name);
+    bc.close();
+}
+</script>
+
+<!-- A message is delivered to other channels with the same name, but never to
+     the sender itself. -->
+<script id="deliver_same_name" type=module>
+{
+    const state = await testing.async();
+    const sender = new BroadcastChannel("room");
+    const receiver = new BroadcastChannel("room");
+
+    let senderGot = false;
+    sender.onmessage = () => { senderGot = true; };
+    receiver.onmessage = (e) => state.resolve({ data: e.data, origin: e.origin });
+    sender.postMessage("hello");
+
+    await state.done((got) => {
+        testing.expectEqual("hello", got.data);
+        testing.expectEqual(false, senderGot);
+        // MessageEvent.origin is the sender's serialized origin.
+        testing.expectEqual(location.origin, got.origin);
+        sender.close();
+        receiver.close();
+    });
+}
+</script>
+
+<!-- Channels with different names do not receive each other's messages. -->
+<script id="name_isolation" type=module>
+{
+    const state = await testing.async();
+    const a = new BroadcastChannel("chan-a");
+    const b = new BroadcastChannel("chan-b");
+    const a2 = new BroadcastChannel("chan-a");
+
+    let bGot = false;
+    b.onmessage = () => { bGot = true; };
+    a2.onmessage = (e) => state.resolve(e.data);
+    a.postMessage("only-for-a");
+
+    await state.done((a2Data) => {
+        testing.expectEqual("only-for-a", a2Data);
+        testing.expectEqual(false, bGot);
+        a.close();
+        b.close();
+        a2.close();
+    });
+}
+</script>
+
+<!-- addEventListener works and structured (object) payloads survive. -->
+<script id="add_event_listener" type=module>
+{
+    const state = await testing.async();
+    const sender = new BroadcastChannel("objects");
+    const receiver = new BroadcastChannel("objects");
+
+    receiver.addEventListener("message", (e) => state.resolve(e.data));
+    sender.postMessage({ type: "test", value: 42 });
+
+    await state.done((data) => {
+        testing.expectEqual("test", data.type);
+        testing.expectEqual(42, data.value);
+        sender.close();
+        receiver.close();
+    });
+}
+</script>
+
+<!-- The message is structured-cloned: receivers get an independent copy, not the
+     sender's literal object, and one receiver mutating it does not affect others. -->
+<script id="structured_clone" type=module>
+{
+    const state = await testing.async();
+    const sender = new BroadcastChannel("clone");
+    const r1 = new BroadcastChannel("clone");
+    const r2 = new BroadcastChannel("clone");
+
+    const payload = { n: 1 };
+    let got1 = null, got2 = null, pending = 2;
+    const maybeDone = () => { if (--pending === 0) state.resolve(); };
+    r1.onmessage = (e) => { got1 = e.data; got1.n = 999; maybeDone(); };
+    r2.onmessage = (e) => { got2 = e.data; maybeDone(); };
+    sender.postMessage(payload);
+
+    await state.done(() => {
+        // Not the same object the sender posted.
+        testing.expectEqual(false, got1 === payload);
+        testing.expectEqual(false, got2 === payload);
+        // Each receiver got its own independent copy.
+        testing.expectEqual(false, got1 === got2);
+        // Sender's object is untouched, and r1's mutation didn't leak into r2.
+        testing.expectEqual(1, payload.n);
+        testing.expectEqual(1, got2.n);
+        testing.expectEqual(999, got1.n);
+        sender.close();
+        r1.close();
+        r2.close();
+    });
+}
+</script>
+
+<!-- A value that cannot be structured-cloned throws synchronously (DataCloneError). -->
+<script id="uncloneable" type=module>
+{
+    const bc = new BroadcastChannel("uncloneable");
+    let threw = false;
+    try {
+        bc.postMessage(function () {});
+    } catch (e) {
+        threw = true;
+        testing.expectEqual("DataCloneError", e.name);
+    }
+    testing.expectEqual(true, threw);
+    bc.close();
+}
+</script>
+
+<!-- After close(), a channel no longer receives messages, and posting on a
+     closed channel throws InvalidStateError. -->
+<script id="after_close" type=module>
+{
+    const state = await testing.async();
+    const sender = new BroadcastChannel("closing");
+    const receiver = new BroadcastChannel("closing");
+    const live = new BroadcastChannel("closing");
+
+    let receiverGot = false;
+    receiver.onmessage = () => { receiverGot = true; };
+    receiver.close();
+
+    live.onmessage = () => state.resolve();
+    sender.postMessage("after-close");
+
+    await state.done(() => {
+        testing.expectEqual(false, receiverGot);
+
+        sender.close();
+        let threw = false;
+        try {
+            sender.postMessage("nope");
+        } catch (e) {
+            threw = true;
+            testing.expectEqual("InvalidStateError", e.name);
+        }
+        testing.expectEqual(true, threw);
+
+        live.close();
+    });
+}
+</script>
+
+<!-- A channel created while a message is being delivered must not receive a
+     message that was posted before it existed (destinations are fixed at post
+     time). c3, created inside c2's handler, only ever sees "done". -->
+<script id="create_during_delivery" type=module>
+{
+    const state = await testing.async();
+    const c1 = new BroadcastChannel("create-during");
+    const c2 = new BroadcastChannel("create-during");
+
+    let c3got = null;
+    c2.onmessage = () => {
+        c2.close();
+        const c3 = new BroadcastChannel("create-during");
+        c3.onmessage = (ev) => { c3got = ev.data; state.resolve(); };
+        c1.postMessage("done");
+    };
+    c1.postMessage("first");
+    c2.postMessage("second"); // must NOT reach c3, which doesn't exist yet
+
+    await state.done(() => {
+        testing.expectEqual("done", c3got);
+        c1.close();
+    });
+}
+</script>
+
+<!--
+  Cross-context delivery: a message reaches same-named channels in *other*
+  same-origin globals in the page — iframes and dedicated workers — never just
+  the sender's own context. A same-origin iframe (about:blank inherits the
+  parent origin) and a dedicated worker (inherits its creator's origin) both
+  share the page's origin, so delivery crosses the boundary both ways.
+-->
+
+<!-- iframe -> page -->
+<script id="iframe_to_page" type=module>
+{
+    const state = await testing.async();
+    const bc = new BroadcastChannel("x-i2p");
+    bc.onmessage = (e) => state.resolve(e.data);
+
+    const iframe = document.createElement("iframe");
+    document.documentElement.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    doc.write(
+        '<!DOCTYPE html><body><script>' +
+        'const c = new BroadcastChannel("x-i2p");' +
+        'setTimeout(() => c.postMessage("hi-from-iframe"), 10);' +
+        '<\/script></body>'
+    );
+    doc.close();
+
+    await state.done((data) => {
+        testing.expectEqual("hi-from-iframe", data);
+        bc.close();
+    });
+}
+</script>
+
+<!-- page -> iframe -->
+<script id="page_to_iframe" type=module>
+{
+    const state = await testing.async();
+
+    const iframe = document.createElement("iframe");
+    document.documentElement.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    doc.write(
+        '<!DOCTYPE html><body><script>' +
+        'const c = new BroadcastChannel("x-p2i");' +
+        'c.onmessage = (e) => { window.__got = e.data; };' +
+        '<\/script></body>'
+    );
+    doc.close();
+
+    // The iframe's channel is registered synchronously by document.close(), so
+    // the listener is ready before we post.
+    const bc = new BroadcastChannel("x-p2i");
+    bc.postMessage("hi-from-page");
+
+    setTimeout(() => state.resolve(), 100);
+    await state.done(() => {
+        testing.expectEqual("hi-from-page", iframe.contentWindow.__got);
+        bc.close();
+    });
+}
+</script>
+
+<!-- worker -> page -->
+<script id="worker_to_page" type=module>
+{
+    const state = await testing.async();
+    const bc = new BroadcastChannel("x-w2p");
+    bc.onmessage = (e) => state.resolve(e.data);
+
+    const blob = new Blob([
+        'const c = new BroadcastChannel("x-w2p");' +
+        'setTimeout(() => c.postMessage("hi-from-worker"), 10);'
+    ], { type: "text/javascript" });
+    new Worker(URL.createObjectURL(blob));
+
+    await state.done((data) => {
+        testing.expectEqual("hi-from-worker", data);
+        bc.close();
+    });
+}
+</script>
+
+<!-- page -> worker (worker relays receipt back over Worker.postMessage) -->
+<script id="page_to_worker" type=module>
+{
+    const state = await testing.async();
+    const bc = new BroadcastChannel("x-p2w");
+
+    const blob = new Blob([
+        'const c = new BroadcastChannel("x-p2w");' +
+        'c.onmessage = (e) => postMessage({ got: e.data });' +
+        'postMessage({ ready: true });'
+    ], { type: "text/javascript" });
+    const worker = new Worker(URL.createObjectURL(blob));
+
+    // Post only once the worker's channel exists, to avoid a race.
+    worker.onmessage = (e) => {
+        if (e.data.ready) {
+            bc.postMessage("hi-to-worker");
+        } else {
+            state.resolve(e.data.got);
+        }
+    };
+
+    await state.done((got) => {
+        testing.expectEqual("hi-to-worker", got);
+        bc.close();
+    });
+}
+</script>
+
+<!-- name isolation across contexts: a different-named channel in another
+     same-origin context does NOT receive, while a same-named one does -->
+<script id="name_isolation_across_frames" type=module>
+{
+    const state = await testing.async();
+
+    const iframe = document.createElement("iframe");
+    document.documentElement.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    doc.write(
+        '<!DOCTYPE html><body><script>' +
+        'const other = new BroadcastChannel("x-iso-other");' +
+        'other.onmessage = () => { window.__leaked = true; };' +
+        '<\/script></body>'
+    );
+    doc.close();
+
+    // Same-page control on the matching name proves the post was delivered.
+    const sender = new BroadcastChannel("x-iso");
+    const control = new BroadcastChannel("x-iso");
+    let controlGot = false;
+    control.onmessage = () => { controlGot = true; };
+
+    sender.postMessage("only-x-iso");
+
+    setTimeout(() => state.resolve(), 100);
+    await state.done(() => {
+        testing.expectEqual(true, controlGot);
+        testing.expectEqual(undefined, iframe.contentWindow.__leaked);
+        sender.close();
+        control.close();
+    });
+}
+</script>
+</body>

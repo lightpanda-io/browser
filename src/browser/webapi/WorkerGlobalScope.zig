@@ -93,6 +93,10 @@ _event_manager: EventManagerBase,
 // workers don't have <script> tags.
 _script_manager: ScriptManagerBase,
 
+// List of open BroadcastChannels, used to route postMessage between same-named
+// channels in this worker's origin
+_broadcast_channels: std.DoublyLinkedList = .{},
+
 // These fields represent the "Window"-like component of the WGS
 _closed: bool = false,
 _proto: *EventTarget,
@@ -161,6 +165,12 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         .identity_arena = arena,
         .identity = &self._identity,
     });
+
+    // A dedicated worker is in the same agent cluster and inherits its creator's
+    // origin. Adopt the parent frame's origin (shared *Origin + v8 security
+    // token) in place of the context's initial opaque one, so same-origin
+    // features like BroadcastChannel can reach across the page/worker boundary.
+    try self.js.setOrigin(self.origin);
 
     return self;
 }
