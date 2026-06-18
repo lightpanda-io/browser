@@ -1324,7 +1324,10 @@ pub const Request = struct {
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
     timeout_ms: u32 = 0,
-    skip_robots: bool = false,
+
+    // Requests that are internal to the browser and skip various layers,
+    // these do not need to be deferred and do not obey robots.txt.
+    internal: bool = false,
 
     // When false, the caller does not guarantee that the body outlives the
     // transfer, and thus we'll need to dupe it.
