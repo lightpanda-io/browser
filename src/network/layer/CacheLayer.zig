@@ -277,7 +277,7 @@ const CacheContext = struct {
             const stale = self.stale_entry.?;
             self.stale_entry = null;
 
-            var iter = self.req_headers.iterator();
+            var iter = response.headerIterator();
             const headers = try iter.collect(arena);
 
             transfer.client.network.cache.?.renew(
