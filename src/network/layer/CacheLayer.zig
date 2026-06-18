@@ -61,7 +61,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     var iter = req.headers.iterator();
     const req_header_list = try iter.collect(arena);
 
-    const cached = transfer.client.network.cache.?.get(arena, .{
+    const cached = try transfer.client.network.cache.?.get(arena, .{
         .url = req.url,
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
