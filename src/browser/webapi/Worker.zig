@@ -139,16 +139,16 @@ pub fn asEventTarget(self: *Worker) *EventTarget {
     return self._proto;
 }
 
-fn httpHeaderCallback(response: HttpClient.Response) !bool {
+fn httpHeaderCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
     const self: *Worker = @ptrCast(@alignCast(response.ctx));
 
-    const status = response.status() orelse return false;
+    const status = response.status() orelse return .abort;
     if (status < 200 or status >= 300) {
         log.warn(.browser, "Worker status", .{
             .url = self._url,
             .status = status,
         });
-        return false;
+        return .abort;
     }
 
     self._http_response = response;
@@ -156,7 +156,7 @@ fn httpHeaderCallback(response: HttpClient.Response) !bool {
         try self._script_buffer.ensureTotalCapacity(self._arena, cl);
     }
 
-    return true;
+    return .proceed;
 }
 
 fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {

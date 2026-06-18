@@ -664,7 +664,7 @@ pub const Script = struct {
         log.debug(.http, "script fetch start", .{ .req = response });
     }
 
-    pub fn headerCallback(response: HttpClient.Response) !bool {
+    pub fn headerCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
         const self: *Script = @ptrCast(@alignCast(response.ctx));
 
         self.status = response.status().?;
@@ -674,7 +674,8 @@ pub const Script = struct {
                 .status = response.status(),
                 .content_type = response.contentType(),
             });
-            return false;
+
+            return .abort;
         }
 
         if (comptime IS_DEBUG) {
@@ -725,7 +726,7 @@ pub const Script = struct {
             try buffer.ensureTotalCapacity(self.arena, cl);
         }
         self.source = .{ .remote = buffer };
-        return true;
+        return .proceed;
     }
 
     pub fn dataCallback(response: HttpClient.Response, data: []const u8) !void {

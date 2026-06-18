@@ -711,10 +711,12 @@ const Synthetic = struct {
         if (req.start_callback) |cb| {
             try cb(response);
         }
-        const proceed = try req.header_callback(response);
-        if (!proceed) {
+
+        const result = try req.header_callback(response);
+        if (result == .abort) {
             return error.Abort;
         }
+
         if (fulfilled.body) |b| {
             if (b.len > 0) {
                 try req.data_callback(response, b);
@@ -736,14 +738,14 @@ const SyncContext = struct {
     status: u16 = 0,
     body: std.ArrayList(u8),
 
-    fn headerCallback(response: Response) anyerror!bool {
+    fn headerCallback(response: Response) anyerror!HeaderResult {
         const self: *SyncContext = @ptrCast(@alignCast(response.ctx));
         lp.assert(response.status() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = response.status() });
         self.status = response.status().?;
         if (response.contentLength()) |cl| {
             try self.body.ensureTotalCapacity(self.allocator, cl);
         }
-        return true;
+        return .proceed;
     }
 
     fn dataCallback(response: Response, data: []const u8) anyerror!void {
@@ -1143,10 +1145,14 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     if (!transfer.res.header_done_called) {
         // In case of request w/o data, we need to call the header done
         // callback now.
-        const proceed = try transfer.headerDoneCallback(msg.conn);
-        if (!proceed) {
-            transfer.requestFailed(error.Abort, true);
-            return true;
+        const result = try transfer.headerDoneCallback(msg.conn);
+        switch (result) {
+            .proceed => {},
+            .handled => return true,
+            .abort => {
+                transfer.requestFailed(error.Abort, true);
+                return true;
+            },
         }
     }
 
@@ -1282,9 +1288,18 @@ fn ensureNoActiveConnection(self: *const Client) !void {
     }
 }
 
+pub const HeaderResult = enum {
+    /// Continue processing normally.
+    proceed,
+    /// Caller took ownership of the response; stop w/o error or abort.
+    handled,
+    /// Abort the Transfer,
+    abort,
+};
+
 pub const Request = struct {
     pub const StartCallback = *const fn (response: Response) anyerror!void;
-    pub const HeaderCallback = *const fn (response: Response) anyerror!bool;
+    pub const HeaderCallback = *const fn (response: Response) anyerror!HeaderResult;
     pub const DataCallback = *const fn (response: Response, data: []const u8) anyerror!void;
     pub const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
     pub const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
@@ -1989,7 +2004,7 @@ pub const Transfer = struct {
     // headerDoneCallback is called once the headers have been read.
     // It can be called either on dataCallback or once the request for those
     // w/o body.
-    fn headerDoneCallback(transfer: *Transfer, conn: *const http.Connection) !bool {
+    fn headerDoneCallback(transfer: *Transfer, conn: *const http.Connection) !HeaderResult {
         lp.assert(transfer.res.header_done_called == false, "Transfer.headerDoneCallback", .{});
         defer transfer.res.header_done_called = true;
 
@@ -2015,12 +2030,13 @@ pub const Transfer = struct {
             }
         }
 
-        const proceed = transfer.req.header_callback(Client.Response.fromTransfer(transfer)) catch |err| {
+        const result = transfer.req.header_callback(Client.Response.fromTransfer(transfer)) catch |err| {
             log.err(.http, "header_callback", .{ .err = err, .req = transfer });
             return err;
         };
 
-        return proceed and transfer.state != .aborted;
+        if (result == .proceed and transfer.state == .aborted) return .abort;
+        return result;
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
@@ -2160,8 +2176,8 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
 }
 
 const Noop = struct {
-    fn headerCallback(_: Response) !bool {
-        return true;
+    fn headerCallback(_: Response) !HeaderResult {
+        return .proceed;
     }
     fn dataCallback(_: Response, _: []const u8) !void {}
     fn doneCallback(_: *anyopaque) !void {}

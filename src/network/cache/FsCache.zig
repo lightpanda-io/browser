@@ -23,6 +23,7 @@ const Cache = @import("Cache.zig");
 
 const log = lp.log;
 const CacheRequest = Cache.CacheRequest;
+const RenewResponse = Cache.RenewResponse;
 const CachedMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;
 
@@ -70,6 +71,54 @@ fn cacheTmpPath(hashed_key: *const [HASHED_KEY_LEN]u8) [HASHED_TMP_PATH_LEN]u8 {
     var path: [HASHED_TMP_PATH_LEN]u8 = undefined;
     _ = std.fmt.bufPrint(&path, "{s}.cache.tmp", .{hashed_key}) catch unreachable;
     return path;
+}
+
+fn writeCacheFile(
+    self: *FsCache,
+    hashed_key: *const [HASHED_KEY_LEN]u8,
+    body_reader: *std.io.Reader,
+    body_len: u64,
+    meta: CachedMetadata,
+) !void {
+    const cache_p = cachePath(hashed_key);
+    const cache_tmp_p = cacheTmpPath(hashed_key);
+
+    const file = self.dir.createFile(&cache_tmp_p, .{ .truncate = true }) catch |e| {
+        log.err(.cache, "create file", .{ .url = meta.url, .file = &cache_tmp_p, .err = e });
+        return e;
+    };
+    errdefer self.dir.deleteFile(&cache_tmp_p) catch {};
+    defer file.close();
+
+    var writer_buf: [1024]u8 = undefined;
+    var file_writer = file.writer(&writer_buf);
+    const w = &file_writer.interface;
+
+    var len_buf: [BODY_LEN_HEADER_LEN]u8 = undefined;
+    std.mem.writeInt(u64, &len_buf, body_len, .little);
+    try w.writeAll(&len_buf);
+
+    var copy_buf: [4096]u8 = undefined;
+    var remaining = body_len;
+    while (remaining > 0) {
+        const to_read = @min(copy_buf.len, remaining);
+        const n = try body_reader.readSliceShort(copy_buf[0..to_read]);
+        if (n == 0) break;
+        try w.writeAll(copy_buf[0..n]);
+        remaining -= n;
+    }
+
+    try std.json.Stringify.value(
+        CacheMetadataJson{ .version = CACHE_VERSION, .metadata = meta },
+        .{ .whitespace = .minified },
+        w,
+    );
+    try w.flush();
+
+    self.dir.rename(&cache_tmp_p, &cache_p) catch |e| {
+        log.err(.cache, "rename", .{ .url = meta.url, .from = &cache_tmp_p, .to = &cache_p, .err = e });
+        return e;
+    };
 }
 
 pub fn init(path: []const u8) !FsCache {
@@ -162,15 +211,6 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?CachedR
 
     const metadata = cache_file.metadata;
 
-    // Check entry expiration.
-    const now = req.timestamp;
-    const age = (now - metadata.stored_at) + @as(i64, @intCast(metadata.age_at_store));
-    if (age < 0 or @as(u64, @intCast(age)) >= metadata.cache_control.max_age) {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "expired" });
-        cleanup = true;
-        return null;
-    }
-
     // If we have Vary headers, ensure they are present & matching.
     for (metadata.vary_headers) |vary_hdr| {
         const name = vary_hdr.name;
@@ -199,7 +239,9 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?CachedR
         return null;
     }
 
-    log.debug(.cache, "hit", .{ .url = req.url, .hash = &hashed_key });
+    // Check entry expiration.
+    const expired = metadata.isStale(req.timestamp);
+    log.debug(.cache, "hit", .{ .url = req.url, .hash = &hashed_key, .expired = expired });
 
     return .{
         .metadata = metadata,
@@ -210,56 +252,19 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?CachedR
                 .len = body_len,
             },
         },
+        .expired = expired,
     };
 }
 
 pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
     const hashed_key = hashKey(meta.url);
-    const cache_p = cachePath(&hashed_key);
-    const cache_tmp_p = cacheTmpPath(&hashed_key);
 
     const lock = self.getLockPtr(&hashed_key);
     lock.lock();
     defer lock.unlock();
 
-    const file = self.dir.createFile(&cache_tmp_p, .{ .truncate = true }) catch |e| {
-        log.err(.cache, "create file", .{ .url = meta.url, .file = &cache_tmp_p, .err = e });
-        return e;
-    };
-    errdefer self.dir.deleteFile(&cache_tmp_p) catch {};
-    defer file.close();
-
-    var writer_buf: [1024]u8 = undefined;
-    var file_writer = file.writer(&writer_buf);
-    var file_writer_iface = &file_writer.interface;
-
-    var len_buf: [8]u8 = undefined;
-    std.mem.writeInt(u64, &len_buf, body.len, .little);
-
-    file_writer_iface.writeAll(&len_buf) catch |e| {
-        log.err(.cache, "write body len", .{ .url = meta.url, .err = e });
-        return e;
-    };
-    file_writer_iface.writeAll(body) catch |e| {
-        log.err(.cache, "write body", .{ .url = meta.url, .err = e });
-        return e;
-    };
-    std.json.Stringify.value(
-        CacheMetadataJson{ .version = CACHE_VERSION, .metadata = meta },
-        .{ .whitespace = .minified },
-        file_writer_iface,
-    ) catch |e| {
-        log.err(.cache, "write metadata", .{ .url = meta.url, .err = e });
-        return e;
-    };
-    file_writer_iface.flush() catch |e| {
-        log.err(.cache, "flush", .{ .url = meta.url, .err = e });
-        return e;
-    };
-    self.dir.rename(&cache_tmp_p, &cache_p) catch |e| {
-        log.err(.cache, "rename", .{ .url = meta.url, .from = &cache_tmp_p, .to = &cache_p, .err = e });
-        return e;
-    };
+    var body_reader = std.io.Reader.fixed(body);
+    try self.writeCacheFile(&hashed_key, &body_reader, body.len, meta);
 
     log.debug(.cache, "put", .{ .url = meta.url, .hash = &hashed_key, .body_len = body.len });
 }
@@ -292,6 +297,55 @@ pub fn evict(self: *FsCache, url: []const u8) void {
         error.FileNotFound => {},
         else => log.warn(.cache, "evict failed", .{ .url = url, .err = e }),
     };
+}
+
+pub fn renew(self: *FsCache, arena: std.mem.Allocator, req: RenewResponse) !void {
+    const hashed_key = hashKey(req.url);
+    const cache_p = cachePath(&hashed_key);
+
+    const lock = self.getLockPtr(&hashed_key);
+    lock.lock();
+    defer lock.unlock();
+
+    const file = self.dir.openFile(&cache_p, .{ .mode = .read_only }) catch |e| {
+        log.warn(.cache, "renew open failed", .{ .url = req.url, .err = e });
+        return e;
+    };
+    defer file.close();
+
+    var file_buf: [1024]u8 = undefined;
+    var file_reader = file.reader(&file_buf);
+    const r = &file_reader.interface;
+
+    var len_buf: [BODY_LEN_HEADER_LEN]u8 = undefined;
+    r.readSliceAll(&len_buf) catch |e| {
+        log.warn(.cache, "renew read len", .{ .url = req.url, .err = e });
+        return e;
+    };
+    const body_len = std.mem.readInt(u64, &len_buf, .little);
+
+    try file_reader.seekTo(BODY_LEN_HEADER_LEN + body_len);
+
+    var json_reader = std.json.Reader.init(arena, r);
+    var parsed: CacheMetadataJson = std.json.parseFromTokenSourceLeaky(
+        CacheMetadataJson,
+        arena,
+        &json_reader,
+        .{ .allocate = .alloc_always },
+    ) catch |e| {
+        log.warn(.cache, "renew parse", .{ .url = req.url, .err = e });
+        return e;
+    };
+
+    parsed.metadata.renew(req);
+    try file_reader.seekTo(BODY_LEN_HEADER_LEN);
+
+    self.writeCacheFile(&hashed_key, r, body_len, parsed.metadata) catch |e| {
+        log.warn(.cache, "renew write", .{ .url = req.url, .err = e });
+        return e;
+    };
+
+    log.debug(.cache, "renewed", .{ .url = req.url });
 }
 
 const testing = std.testing;
@@ -396,23 +450,17 @@ test "FsCache: get expiration" {
     ) orelse return error.CacheMiss;
     result.data.file.file.close();
 
-    try testing.expectEqual(null, cache.get(
+    // Expired: age = 200 + 900 = 1100 >= 1000
+    const stale = cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
             .timestamp = now + 200,
             .request_headers = &.{},
         },
-    ));
-
-    try testing.expectEqual(null, cache.get(
-        arena.allocator(),
-        .{
-            .url = "https://example.com",
-            .timestamp = now,
-            .request_headers = &.{},
-        },
-    ));
+    ) orelse return error.CacheMiss;
+    defer stale.data.file.file.close();
+    try testing.expectEqual(true, stale.expired);
 }
 
 test "FsCache: put override" {
@@ -836,4 +884,120 @@ test "FsCache: evict removes entry" {
             .request_headers = &.{},
         },
     ));
+}
+
+test "FsCache: renew refreshes expiry" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now: i64 = 5000;
+    const max_age: u64 = 1000;
+
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = max_age },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    try cache.put(meta, "hello world");
+
+    // renew while still fresh at now+500
+    try cache.renew(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 500,
+            .headers = &.{},
+        },
+    );
+
+    // Without revalidation would expire at now+1000, but clock reset to now+500
+    // so still fresh at now+1200
+    const r1 = cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 1200,
+            .request_headers = &.{},
+        },
+    ) orelse return error.CacheMiss;
+    r1.data.file.file.close();
+
+    // Expires at now+500+1000 = now+1500
+    const stale1 = cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 1500,
+            .request_headers = &.{},
+        },
+    ) orelse return error.CacheMiss;
+    stale1.data.file.file.close();
+    try testing.expectEqual(true, stale1.expired);
+}
+
+test "FsCache: renew preserves body" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = std.time.timestamp();
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    const body = "original body";
+    try cache.put(meta, body);
+
+    try cache.renew(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 100,
+            .headers = &.{},
+        },
+    );
+
+    const result = cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now + 100,
+        .request_headers = &.{},
+    }) orelse return error.CacheMiss;
+
+    const f = result.data.file;
+    defer f.file.close();
+
+    var buf: [64]u8 = undefined;
+    var file_reader = f.file.reader(&buf);
+    try file_reader.seekTo(f.offset);
+    const read_buf = try file_reader.interface.readAlloc(testing.allocator, f.len);
+    defer testing.allocator.free(read_buf);
+    try testing.expectEqualStrings(body, read_buf);
 }

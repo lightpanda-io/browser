@@ -55,6 +55,12 @@ pub fn evict(self: *Cache, url: []const u8) void {
     };
 }
 
+pub fn renew(self: *Cache, arena: std.mem.Allocator, req: RenewResponse) !void {
+    return switch (self.kind) {
+        inline else => |*c| c.renew(arena, req),
+    };
+}
+
 pub fn clear(self: *Cache) !void {
     return switch (self.kind) {
         inline else => |*c| c.clear(),
@@ -63,6 +69,7 @@ pub fn clear(self: *Cache) !void {
 
 pub const CacheControl = struct {
     max_age: u64,
+    must_revalidate: bool = false,
 
     pub fn parse(value: []const u8) ?CacheControl {
         var cc: CacheControl = .{ .max_age = undefined };
@@ -82,7 +89,13 @@ pub const CacheControl = struct {
                 return null;
             }
             if (std.mem.eql(u8, directive, "no-cache")) {
-                return null;
+                if (!max_age_set) {
+                    cc.max_age = 0;
+                    max_age_set = true;
+                }
+
+                cc.must_revalidate = true;
+                continue;
             }
             if (std.mem.eql(u8, directive, "private")) {
                 return null;
@@ -105,7 +118,7 @@ pub const CacheControl = struct {
         }
 
         if (!max_age_set) return null;
-        if (cc.max_age == 0) return null;
+        if (cc.max_age == 0 and !cc.must_revalidate) return null;
 
         return cc;
     }
@@ -122,16 +135,21 @@ pub const CachedMetadata = struct {
     cache_control: CacheControl,
     /// Response Headers
     headers: []const Http.Header,
-
     /// These are Request Headers used by Vary.
     vary_headers: []const Http.Header,
 
+    // Validators for conditional requests.
+    etag: ?[]const u8 = null,
+    last_modified: ?[]const u8 = null,
+
     pub fn format(self: CachedMetadata, writer: *std.Io.Writer) !void {
-        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | vary=[", .{
+        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | etag={s} | last-modified={s} | vary=[", .{
             self.url,
             self.status,
             self.content_type,
             self.cache_control.max_age,
+            self.etag orelse "null",
+            self.last_modified orelse "null",
         });
 
         // Logging all headers gets pretty verbose...
@@ -145,12 +163,48 @@ pub const CachedMetadata = struct {
         }
         try writer.print("]", .{});
     }
+
+    pub fn isStale(self: CachedMetadata, timestamp: i64) bool {
+        if (self.cache_control.must_revalidate) return true;
+        const age = (timestamp - self.stored_at) + @as(i64, @intCast(self.age_at_store));
+        return age >= @as(i64, @intCast(self.cache_control.max_age));
+    }
+
+    pub fn hasValidators(self: CachedMetadata) bool {
+        return self.etag != null or self.last_modified != null;
+    }
+
+    pub fn renew(self: *CachedMetadata, req: RenewResponse) void {
+        self.stored_at = req.timestamp;
+        self.age_at_store = 0;
+
+        for (req.headers) |h| {
+            const name = h.name;
+            const value = h.value;
+
+            if (std.ascii.eqlIgnoreCase("Age", name)) {
+                self.age_at_store = std.fmt.parseInt(u64, value, 10) catch 0;
+            } else if (std.ascii.eqlIgnoreCase("Cache-Control", name)) {
+                self.cache_control = CacheControl.parse(value) orelse continue;
+            } else if (std.ascii.eqlIgnoreCase("ETag", name)) {
+                self.etag = value;
+            } else if (std.ascii.eqlIgnoreCase("Last-Modified", name)) {
+                self.last_modified = value;
+            }
+        }
+    }
 };
 
 pub const CacheRequest = struct {
     url: []const u8,
     timestamp: i64,
     request_headers: []const Http.Header,
+};
+
+pub const RenewResponse = struct {
+    url: []const u8,
+    timestamp: i64,
+    headers: []const Http.Header,
 };
 
 pub const CachedData = union(enum) {
@@ -160,6 +214,13 @@ pub const CachedData = union(enum) {
         offset: usize,
         len: usize,
     },
+
+    pub fn deinit(self: CachedData) void {
+        switch (self) {
+            .buffer => {},
+            .file => |*f| f.file.close(),
+        }
+    }
 
     pub fn format(self: CachedData, writer: *std.Io.Writer) !void {
         switch (self) {
@@ -172,8 +233,10 @@ pub const CachedData = union(enum) {
 pub const CachedResponse = struct {
     metadata: CachedMetadata,
     data: CachedData,
+    expired: bool,
 
     pub fn format(self: *const CachedResponse, writer: *std.Io.Writer) !void {
+        try writer.print("expired={}, ", .{self.expired});
         try writer.print("metadata=(", .{});
         try self.metadata.format(writer);
         try writer.print("), data=", .{});
@@ -190,6 +253,8 @@ pub fn tryCache(
     cache_control: ?[]const u8,
     vary: ?[]const u8,
     age: ?[]const u8,
+    etag: ?[]const u8,
+    last_modified: ?[]const u8,
     has_set_cookie: bool,
     has_authorization: bool,
 ) !?CachedMetadata {
@@ -230,9 +295,12 @@ pub fn tryCache(
         .cache_control = cc,
         .headers = &.{},
         .vary_headers = &.{},
+        .etag = if (etag) |e| try arena.dupe(u8, e) else null,
+        .last_modified = if (last_modified) |lm| try arena.dupe(u8, lm) else null,
     };
 }
 const testing = @import("../../testing.zig");
+
 test "Cache: CacheControl.parse" {
     try testing.expectEqual(300, CacheControl.parse("max-age=300").?.max_age);
 
@@ -246,10 +314,16 @@ test "Cache: CacheControl.parse" {
     try testing.expectEqual(600, CacheControl.parse("s-maxage=600, max-age=300").?.max_age);
 
     try testing.expectEqual(null, CacheControl.parse("no-store"));
-    try testing.expectEqual(null, CacheControl.parse("no-cache"));
+    try testing.expectEqual(
+        CacheControl{ .max_age = 0, .must_revalidate = true },
+        CacheControl.parse("no-cache"),
+    );
     try testing.expectEqual(null, CacheControl.parse("private"));
     try testing.expectEqual(null, CacheControl.parse("max-age=300, no-store"));
-    try testing.expectEqual(null, CacheControl.parse("no-cache, max-age=300"));
+    try testing.expectEqual(
+        CacheControl{ .max_age = 300, .must_revalidate = true },
+        CacheControl.parse("no-cache, max-age=300"),
+    );
     try testing.expectEqual(null, CacheControl.parse("Private, max-age=300"));
 
     try testing.expectEqual(null, CacheControl.parse("max-age=0"));
@@ -259,4 +333,112 @@ test "Cache: CacheControl.parse" {
 
     try testing.expectEqual(null, CacheControl.parse("max-age=abc"));
     try testing.expectEqual(null, CacheControl.parse("max-age="));
+}
+
+test "Cache: CachedMetadata.renew updates timestamp and age" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 50,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    meta.renew(.{ .url = "https://example.com", .timestamp = 2000, .headers = &.{} });
+
+    try testing.expectEqual(2000, meta.stored_at);
+    try testing.expectEqual(0, meta.age_at_store);
+}
+
+test "Cache: CachedMetadata.renew updates age from Age header" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    meta.renew(.{
+        .url = "https://example.com",
+        .timestamp = 2000,
+        .headers = &.{.{ .name = "Age", .value = "42" }},
+    });
+
+    try testing.expectEqual(42, meta.age_at_store);
+}
+
+test "Cache: CachedMetadata.renew updates cache_control" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    meta.renew(.{
+        .url = "https://example.com",
+        .timestamp = 2000,
+        .headers = &.{.{ .name = "Cache-Control", .value = "max-age=1200" }},
+    });
+
+    try testing.expectEqual(1200, meta.cache_control.max_age);
+}
+
+test "Cache: CachedMetadata.renew preserves cache_control on invalid header" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    meta.renew(.{
+        .url = "https://example.com",
+        .timestamp = 2000,
+        .headers = &.{.{ .name = "Cache-Control", .value = "no-store" }},
+    });
+
+    try testing.expectEqual(600, meta.cache_control.max_age);
+}
+
+test "Cache: CachedMetadata.renew updates etag and last_modified" {
+    var meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 1000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+        .etag = "\"old-etag\"",
+        .last_modified = "Mon, 01 Jan 2024 00:00:00 GMT",
+    };
+
+    meta.renew(.{
+        .url = "https://example.com",
+        .timestamp = 2000,
+        .headers = &.{
+            .{ .name = "ETag", .value = "\"new-etag\"" },
+            .{ .name = "Last-Modified", .value = "Tue, 02 Jan 2024 00:00:00 GMT" },
+        },
+    });
+
+    try testing.expectEqualSlices(u8, "\"new-etag\"", meta.etag.?);
+    try testing.expectEqualSlices(u8, "Tue, 02 Jan 2024 00:00:00 GMT", meta.last_modified.?);
 }
