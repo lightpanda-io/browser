@@ -323,8 +323,10 @@
     \\          Defaults to {2s}.
     \\          Allowed values: "pretty", "logfmt".
     \\  --log-filter-scopes <SCOPES>
-    \\          Filter out too-verbose logs per scope, comma-separated.
-    \\          e.g. http, unknown_prop, event.
+    \\          Filter logs per scope, comma-separated, applied left-to-right.
+    \\          "-X" (or bare "X") filters out a scope, "+X" filters it in, and
+    \\          "all" targets every scope. e.g. "http,unknown_prop" hides those
+    \\          two; "-all,+cdp" hides everything except cdp.
     \\  --user-agent <STRING>
     \\          Override the User-Agent header entirely. Must not impersonate other
     \\          browsers; any value containing "Mozilla" is forbidden. The browser
