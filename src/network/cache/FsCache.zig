@@ -23,7 +23,7 @@ const Cache = @import("Cache.zig");
 
 const log = lp.log;
 const CacheRequest = Cache.CacheRequest;
-const RenewRequest = Cache.RenewRequest;
+const RenewResponse = Cache.RenewResponse;
 const CachedMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;
 
@@ -299,7 +299,7 @@ pub fn evict(self: *FsCache, url: []const u8) void {
     };
 }
 
-pub fn renew(self: *FsCache, arena: std.mem.Allocator, req: RenewRequest) !void {
+pub fn renew(self: *FsCache, arena: std.mem.Allocator, req: RenewResponse) !void {
     const hashed_key = hashKey(req.url);
     const cache_p = cachePath(&hashed_key);
 

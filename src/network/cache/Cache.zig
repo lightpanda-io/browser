@@ -55,7 +55,7 @@ pub fn evict(self: *Cache, url: []const u8) void {
     };
 }
 
-pub fn renew(self: *Cache, arena: std.mem.Allocator, req: RenewRequest) !void {
+pub fn renew(self: *Cache, arena: std.mem.Allocator, req: RenewResponse) !void {
     return switch (self.kind) {
         inline else => |*c| c.renew(arena, req),
     };
@@ -174,7 +174,7 @@ pub const CachedMetadata = struct {
         return self.etag != null or self.last_modified != null;
     }
 
-    pub fn renew(self: *CachedMetadata, req: RenewRequest) void {
+    pub fn renew(self: *CachedMetadata, req: RenewResponse) void {
         self.stored_at = req.timestamp;
         self.age_at_store = 0;
 
@@ -201,7 +201,7 @@ pub const CacheRequest = struct {
     request_headers: []const Http.Header,
 };
 
-pub const RenewRequest = struct {
+pub const RenewResponse = struct {
     url: []const u8,
     timestamp: i64,
     headers: []const Http.Header,
