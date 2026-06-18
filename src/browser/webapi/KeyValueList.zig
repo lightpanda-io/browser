@@ -388,6 +388,19 @@ test "KeyValueList: urlEncode UTF-8" {
     try testing.expectString("cafe=caf%C3%A9", buf.written());
 }
 
+test "KeyValueList: urlEncode .form percent-encodes ~" {
+    // '~' is in the application/x-www-form-urlencoded percent-encode set, so it
+    // must become %7E in both .form and .query modes (not left literal).
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "q", "a~b");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("q=a%7Eb", buf.written());
+}
+
 test "KeyValueList: urlEncode UTF-8 CJK" {
     // Test 3-byte UTF-8 characters (Chinese/Japanese)
     const allocator = testing.arena_allocator;
