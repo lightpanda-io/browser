@@ -216,80 +216,55 @@ pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
     return self._proto._proto._proto;
 }
 
-// innerText represents the **rendered** text content of a node and its
-// descendants.
 pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer) !void {
-    var state = innerTextState{};
-    return try self._getInnerText(writer, &state);
-}
-
-const innerTextState = struct {
-    pre_w: bool = false,
-    trim_left: bool = true,
-};
-
-fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextState) !void {
-    var it = self.asElement().asNode().childrenIterator();
-    while (it.next()) |child| {
-        switch (child._type) {
-            .element => |e| switch (e._type) {
-                .html => |he| switch (he._type) {
-                    .br => {
-                        try writer.writeByte('\n');
-                        state.pre_w = false; // prevent a next pre space.
-                        state.trim_left = true;
-                    },
-                    .script, .style, .template => {
-                        state.pre_w = false; // prevent a next pre space.
-                        state.trim_left = true;
-                    },
-                    else => try he._getInnerText(writer, state), // TODO check if elt is hidden.
-                },
-                .svg => {},
-            },
-            .cdata => |c| switch (c._type) {
-                .comment => {
-                    state.pre_w = false; // prevent a next pre space.
-                    state.trim_left = true;
-                },
-                .text => {
-                    if (state.pre_w) try writer.writeByte(' ');
-                    state.pre_w = try c.render(writer, .{ .trim_left = state.trim_left });
-                    // if we had a pre space, trim left next one.
-                    state.trim_left = state.pre_w;
-                },
-                // CDATA sections should not be used within HTML. They are
-                // considered comments and are not displayed.
-                .cdata_section => {},
-                // Processing instructions are not displayed in innerText
-                .processing_instruction => {},
-            },
-            .document => {},
-            .document_type => {},
-            .document_fragment => {},
-            .attribute => |attr| try writer.writeAll(attr._value.str()),
-        }
+    const tag = self.asElement().getTag();
+    switch (innerTextDisplay(self, tag)) {
+        .skip, .replaced => return,
+        else => {},
     }
+    var state = InnerTextState{ .writer = writer, .preserve = tag == .pre };
+    try self.collectInnerText(&state);
 }
 
 pub fn setInnerText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
-    const parent = self.asElement().asNode();
+    const items = try renderedTextFragment(text, frame);
+    try self.asElement().replaceChildren(items, frame);
+}
 
-    // Remove all existing children
-    frame.domChanged();
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        frame.removeNode(parent, child, .{ .will_be_reconnected = false });
+pub fn setOuterText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
+    const el = self.asElement();
+    const node = el.asNode();
+    const parent = node.parentNode() orelse return error.NoModificationAllowed;
+
+    const prev = node.previousSibling();
+    const next = node.nextSibling();
+
+    var items: []const Node.NodeOrText = try renderedTextFragment(text, frame);
+    if (items.len == 0) {
+        // A fragment with no node still replaces the element with an empty Text
+        // node so surrounding text can merge with it.
+        items = &.{.{ .text = "" }};
+    }
+    try el.replaceWith(items, frame);
+
+    // Merge with the immediately neighbouring Text nodes (only those two; the
+    // tree is not fully normalised, per spec).
+    const first = if (prev) |p| p.nextSibling() else parent.firstChild();
+    var last = if (next) |n| n.previousSibling() else parent.lastChild();
+
+    if (prev) |p| {
+        if (first) |f| {
+            if (mergeTextNodes(p, f, frame) catch false) {
+                if (f == last) last = p;
+            }
+        }
     }
 
-    // Fast path: skip if text is empty
-    if (text.len == 0) {
-        return;
+    if (next) |n| {
+        if (last) |l| {
+            _ = mergeTextNodes(l, n, frame) catch false;
+        }
     }
-
-    // Create and append text node
-    const text_node = try Frame.node_factory.createTextNode(frame, text);
-    try frame.appendNode(parent, text_node, .{ .child_already_connected = false });
 }
 
 pub fn insertAdjacentHTML(
@@ -1349,6 +1324,302 @@ pub fn reflectEnumerated(
     return invalid;
 }
 
+const InnerTextState = struct {
+    writer: *std.Io.Writer,
+    // number of line breaks we've accumulated for the block. Emitted lazily that
+    // leading/trailing breaks aren't written and so that we can emit the max
+    // requested, which can change as we render children.
+    pending_breaks: u8 = 0,
+
+    // suppresses leading line breaks if nothing has been written yet
+    wrote_any: bool = false,
+
+    // A collapsible space is pending from a previous text run, it should only
+    // be written if there's more to write
+    pre_w: bool = false,
+
+    // Trim leading whitespace of the next text run.
+    trim_left: bool = true,
+
+    // preserve whitespace (pre tag, in the future white-space: pre)
+    preserve: bool = false,
+
+    fn requireBreaks(self: *InnerTextState, n: u8) void {
+        if (n > self.pending_breaks) {
+            self.pending_breaks = n;
+        }
+    }
+
+    fn flushBreaks(self: *InnerTextState) !void {
+        if (self.pending_breaks == 0) {
+            return;
+        }
+        if (self.wrote_any) {
+            for (0..self.pending_breaks) |_| {
+                try self.writer.writeByte('\n');
+            }
+        }
+        self.pending_breaks = 0;
+        // A block boundary trims the whitespace on either side of it.
+        self.pre_w = false;
+        self.trim_left = true;
+    }
+
+    // Emit a literal separator (table cell tab / row newline).
+    fn writeSeparator(self: *InnerTextState, ch: u8) !void {
+        try self.flushBreaks();
+        try self.writer.writeByte(ch);
+        self.wrote_any = true;
+        self.pre_w = false;
+        self.trim_left = true;
+    }
+};
+
+const ChildFilter = enum { none, select, optgroup };
+
+fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Error!void {
+    const el = self.asElement();
+    const self_tag = el.getTag();
+
+    // special filtering type applied to children based on the tag
+    const child_filter: ChildFilter = switch (self_tag) {
+        .select => .select,
+        .optgroup => .optgroup,
+        else => .none,
+    };
+
+    // Inside table containers, inter-cell/row whitespace text is not rendered.
+    const table_ctx = switch (self_tag) {
+        .table, .tbody, .thead, .tfoot, .tr => true,
+        else => false,
+    };
+
+    // Track whether we've already emitted a cell/row in this parent so we can
+    // insert tab/newline separators *between* them.
+    var saw_row = false;
+    var saw_cell = false;
+
+    var it = el.asNode().childrenIterator();
+    while (it.next()) |child| {
+        switch (child._type) {
+            .element => |e| switch (e._type) {
+                .svg => {},
+                .html => |he| {
+                    const tag = e.getTag();
+                    switch (child_filter) {
+                        .none => {},
+                        .select => if (tag != .option and tag != .optgroup) continue,
+                        .optgroup => if (tag != .option) continue,
+                    }
+                    try handleChildElement(he, tag, state, &saw_cell, &saw_row);
+                },
+            },
+            .cdata => |c| switch (c._type) {
+                .text => {
+                    if (child_filter != .none) {
+                        // Text directly inside <select>/<optgroup> is skipped
+                        continue;
+                    }
+                    if (table_ctx and isAllAsciiWhitespace(c.getData().str())) {
+                        continue;
+                    }
+                    try writeText(c, state);
+                },
+                .comment, .cdata_section, .processing_instruction => {},
+            },
+            else => {},
+        }
+    }
+}
+
+const Display = enum { skip, replaced, @"inline", block, block_p, transparent, table_cell, table_row };
+
+fn handleChildElement(
+    he: *HtmlElement,
+    tag: Element.Tag,
+    state: *InnerTextState,
+    saw_cell: *bool,
+    saw_row: *bool,
+) !void {
+    if (he._type == .br) {
+        try state.flushBreaks();
+        try state.writer.writeByte('\n');
+        state.wrote_any = true;
+        state.pre_w = false;
+        state.trim_left = true;
+        return;
+    }
+
+    switch (innerTextDisplay(he, tag)) {
+        // Not rendered: skip the subtree entirely (script/style/metadata/...).
+        .skip => {},
+        // Replaced/embedded content: the subtree is not rendered.
+        .replaced => {},
+        .@"inline", .transparent => try he.collectInnerText(state),
+        .block => {
+            state.requireBreaks(1);
+            try enterBlock(he, tag, state);
+            state.requireBreaks(1);
+        },
+        .block_p => {
+            state.requireBreaks(2);
+            try he.collectInnerText(state);
+            state.requireBreaks(2);
+        },
+        .table_cell => {
+            if (saw_cell.*) {
+                try state.writeSeparator('\t');
+            }
+            saw_cell.* = true;
+            try he.collectInnerText(state);
+        },
+        .table_row => {
+            if (saw_row.*) {
+                try state.writeSeparator('\n');
+            }
+            saw_row.* = true;
+            try he.collectInnerText(state);
+        },
+    }
+}
+
+// Recurse into a block, enabling whitespace preservation for <pre> subtrees.
+fn enterBlock(he: *HtmlElement, tag: Element.Tag, state: *InnerTextState) std.Io.Writer.Error!void {
+    if (tag == .pre and !state.preserve) {
+        state.preserve = true;
+        defer state.preserve = false;
+        return he.collectInnerText(state);
+    }
+    return he.collectInnerText(state);
+}
+
+fn innerTextDisplay(he: *HtmlElement, tag: Element.Tag) Display {
+    return switch (he._type) {
+        .br => .@"inline", // handled before this point
+        .p => .block_p,
+        .table_cell => .table_cell,
+        .table_row => .table_row,
+        .table_caption => .block,
+        // Row groups / column groups are transparent: no break of their own.
+        .table_section => .transparent,
+        .table_col => .skip,
+        .option, .optgroup => .block,
+        // Replaced / embedded content whose subtree is not part of innerText.
+        .img, .canvas, .iframe, .embed, .object, .media, .input, .textarea => .replaced,
+        // Never-rendered elements (UA display:none / not parsed as content).
+        .script, .style, .template, .head, .base, .link, .meta, .title, .source, .track, .param, .area, .datalist => .skip,
+        else => if (tag.isHiddenByUaStylesheet())
+            .skip
+        else if (isInnerTextBlockTag(tag))
+            .block
+        else
+            .@"inline",
+    };
+}
+
+fn isInnerTextBlockTag(tag: Element.Tag) bool {
+    if (tag.isBlock()) {
+        return true;
+    }
+    return switch (tag) {
+        .summary, .details, .dialog, .menu, .dd, .dt, .form, .li => true,
+        else => false,
+    };
+}
+
+fn isAllAsciiWhitespace(s: []const u8) bool {
+    for (s) |c| {
+        if (!std.ascii.isWhitespace(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn writeText(c: *Node.CData, state: *InnerTextState) !void {
+    const writer = state.writer;
+
+    const s = c.getData().str();
+    if (state.preserve) {
+        if (s.len == 0) {
+            return;
+        }
+        try state.flushBreaks();
+        // Preserve whitespace verbatim, normalising CR / CRLF to LF.
+        var i: usize = 0;
+        while (i < s.len) : (i += 1) {
+            const ch = s[i];
+            if (ch == '\r') {
+                try writer.writeByte('\n');
+                if (i + 1 < s.len and s[i + 1] == '\n') {
+                    i += 1;
+                }
+            } else {
+                try writer.writeByte(ch);
+            }
+        }
+        state.wrote_any = true;
+        state.pre_w = false;
+        state.trim_left = false;
+        return;
+    }
+
+    if (isAllAsciiWhitespace(s)) {
+        state.pre_w = state.wrote_any and state.trim_left == false;
+        return;
+    }
+
+    try state.flushBreaks();
+    if (state.pre_w) {
+        try writer.writeByte(' ');
+    }
+    state.pre_w = try c.render(writer, .{ .trim_left = state.trim_left });
+    state.wrote_any = true;
+    state.trim_left = state.pre_w;
+}
+
+fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
+    const left = left_node.is(Node.CData) orelse return false;
+    const right = right_node.is(Node.CData) orelse return false;
+    if (left._type != .text or right._type != .text) return false;
+
+    // both nodes are Text nodes
+
+    const merged = try std.mem.concat(frame.call_arena, u8, &.{ left.getData().str(), right.getData().str() });
+    // set the left node to the merged value
+    try left.setData(merged, frame);
+
+    if (right_node.parentNode()) |p| {
+        // remove right node
+        frame.removeNode(p, right_node, .{ .will_be_reconnected = false });
+    }
+    return true;
+}
+
+fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
+    const arena = frame.call_arena;
+    var nodes: std.ArrayList(Node.NodeOrText) = .empty;
+
+    var rest = value;
+    while (true) {
+        const text_end = std.mem.indexOfAny(u8, rest, "\r\n") orelse rest.len;
+        if (text_end > 0) {
+            try nodes.append(arena, .{ .text = rest[0..text_end] });
+        }
+        rest = rest[text_end..];
+        if (rest.len == 0) {
+            return nodes.items;
+        }
+
+        // Each line break becomes one <br>; a CR/LF pair counts as a single
+        // break (so "\r\n" is one <br> but "\n\n" is two).
+        const break_len: usize = if (rest[0] == '\r' and rest.len > 1 and rest[1] == '\n') 2 else 1;
+
+        try nodes.append(arena, .{ .node = try Frame.node_factory.createElementNS(frame, .html, "br", null) });
+        rest = rest[break_len..];
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HtmlElement);
 
@@ -1360,11 +1631,19 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
 
-    pub const innerText = bridge.accessor(_innerText, HtmlElement.setInnerText, .{ .ce_reactions = true });
+    pub const innerText = bridge.accessor(_innerText, _setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *HtmlElement, frame: *const Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getInnerText(&buf.writer);
         return buf.written();
+    }
+    fn _setInnerText(self: *HtmlElement, value: js.Value, frame: *Frame) !void {
+        // `[LegacyNullToEmptyString]`: a JS null becomes "", not "null".
+        return self.setInnerText(if (value.isNull()) "" else try value.toZig([]const u8), frame);
+    }
+    pub const outerText = bridge.accessor(_innerText, _setOuterText, .{ .ce_reactions = true, .dom_exception = true });
+    fn _setOuterText(self: *HtmlElement, value: js.Value, frame: *Frame) !void {
+        return self.setOuterText(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
     pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
     pub const click = bridge.function(HtmlElement.click, .{});
