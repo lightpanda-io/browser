@@ -1287,10 +1287,10 @@ test "MCP - press Enter on form input triggers submit (lowercase alias)" {
 test "MCP - getCookies: defaults to current page, url filter, all flag" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage("http://example.com/", &out.writer);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.htm", &out.writer);
     defer server.deinit();
 
-    try server.session.cookie_jar.populateFromResponse("http://example.com/", "session=abc; Path=/");
+    try server.session.cookie_jar.populateFromResponse("http://localhost:9582", "session=abc; Path=/");
     try server.session.cookie_jar.populateFromResponse("http://other.test/", "tracking=xyz; Path=/");
 
     const default_msg =
