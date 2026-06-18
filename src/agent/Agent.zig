@@ -352,7 +352,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         }
     };
 
-    const effort = settings.resolveEffort(opts, remembered, will_repl);
+    const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credentials.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
 
     if (resolved) |r| {
@@ -942,6 +942,10 @@ fn setProvider(self: *Agent, credentials: Credentials) !void {
     self.allocator.free(self.model);
     self.model = new_model;
     self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
+    if (zenai.provider.defaultEffort(credentials.provider)) |e| if (e != self.effort) {
+        self.effort = e;
+        self.terminal.printInfo("effort: {s} ({s} default)", .{ @tagName(e), @tagName(credentials.provider) });
+    };
     self.reportSaved("model", self.model);
     _ = completionModels(self, self.allocator);
 }
