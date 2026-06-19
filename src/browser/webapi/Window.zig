@@ -603,8 +603,7 @@ pub fn close(self: *Window) void {
 
     _ = page.popups.swapRemove(popup_index);
 
-    // Drop any pending queued navigation for this frame, otherwise
-    // processQueuedNavigation would try to re-navigate the closed popup.
+    // Drop any pending queued navigation for this frame.
     if (frame._queued_navigation != null) {
         for (page.queued_navigation.items, 0..) |f, i| {
             if (f == frame) {

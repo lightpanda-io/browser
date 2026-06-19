@@ -487,6 +487,16 @@ pub fn processQueuedNavigation(self: *Session) !void {
 fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
     frame._queued_navigation = null;
     defer self.releaseArena(qn.arena);
+
+    // A popup whose window was close()'d is parked in page.closed_frames and
+    // torn down at Page.deinit. It must never be navigated. This navigation
+    // can happen _after_ window.close() has been called (because JS can do
+    // anything with that window), so the safest place to prevent navigation
+    // from happening is here.
+    if (frame.window._closed) {
+        return;
+    }
+
     self._processFrameNavigation(frame, qn) catch |err| {
         log.warn(.frame, "frame navigation", .{ .url = qn.url, .err = err });
         return err;
