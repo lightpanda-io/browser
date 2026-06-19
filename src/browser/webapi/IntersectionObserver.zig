@@ -139,7 +139,7 @@ pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !vo
 
     try self._observing.append(self._arena, target);
     if (self._observing.items.len == 1) {
-        try frame.registerIntersectionObserver(self);
+        try Frame.observers.registerIntersectionObserver(frame, self);
     }
 
     try self._tracked.put(self._arena, target, {});
@@ -147,7 +147,7 @@ pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !vo
     // Check intersection for this new target and schedule delivery
     try self.checkIntersection(target, frame);
     if (self._pending_entries.items.len > 0) {
-        try frame.scheduleIntersectionDelivery();
+        try Frame.observers.scheduleIntersectionDelivery(frame);
     }
 }
 
@@ -174,7 +174,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
     }
 
     if (original_length > 0 and self._observing.items.len == 0) {
-        frame.unregisterIntersectionObserver(self);
+        Frame.observers.unregisterIntersectionObserver(frame, self);
     }
 }
 
@@ -186,7 +186,7 @@ pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
     self._tracked.clearRetainingCapacity();
 
     if (self._observing.items.len > 0) {
-        frame.unregisterIntersectionObserver(self);
+        Frame.observers.unregisterIntersectionObserver(frame, self);
     }
     self._observing.clearRetainingCapacity();
 }
@@ -298,7 +298,7 @@ pub fn checkIntersections(self: *IntersectionObserver, frame: *Frame) !void {
     }
 
     if (self._pending_entries.items.len > 0) {
-        try frame.scheduleIntersectionDelivery();
+        try Frame.observers.scheduleIntersectionDelivery(frame);
     }
 }
 

@@ -142,7 +142,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
 
     // Fresh text run: the first chunk lives on _data only. buf stays empty
     // until (and unless) a second chunk arrives.
-    const new_text = try self.frame.createTextNode(txt);
+    const new_text = try Frame.node_factory.createTextNode(self.frame, txt);
     try self.frame.appendNew(parent, new_text);
     self.pending_text = .{
         .parent = parent,
@@ -446,7 +446,7 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
     const name = qname.local.slice();
     const namespace_string = qname.ns.slice();
     const namespace = if (namespace_string.len == 0) default_namespace else Element.Namespace.parse(namespace_string);
-    const node = try frame.createElementNS(namespace, name, attributes);
+    const node = try Frame.node_factory.createElementNS(frame, namespace, name, attributes);
 
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
@@ -467,7 +467,7 @@ fn createCommentCallback(ctx: *anyopaque, str: h5e.StringSlice) callconv(.c) ?*a
 }
 fn _createCommentCallback(self: *Parser, str: []const u8) !*anyopaque {
     const frame = self.frame;
-    const node = try frame.createComment(str);
+    const node = try Frame.node_factory.createComment(frame, str);
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
         .data = null,
@@ -487,7 +487,7 @@ fn createProcessingInstruction(ctx: *anyopaque, target: h5e.StringSlice, data: h
 }
 fn _createProcessingInstruction(self: *Parser, target: []const u8, data: []const u8) !*anyopaque {
     const frame = self.frame;
-    const node = try frame.createProcessingInstruction(target, data);
+    const node = try Frame.node_factory.createProcessingInstruction(frame, target, data);
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
         .data = null,
@@ -697,7 +697,7 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e
             }
             break :blk child;
         },
-        .text => |txt| try self.frame.createTextNode(txt),
+        .text => |txt| try Frame.node_factory.createTextNode(self.frame, txt),
     };
     try self.frame.insertNodeRelative(parent, node, .{ .before = sibling }, .{});
 }

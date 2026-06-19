@@ -165,7 +165,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     };
     // HTML documents are case-insensitive - lowercase the tag name
 
-    const node = try frame.createElementNS(ns, normalized_name, null);
+    const node = try Frame.node_factory.createElementNS(frame, ns, normalized_name, null);
     const element = node.as(Element);
 
     // Track owner document if it's not the main document
@@ -186,7 +186,7 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     try validateElementName(name);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
-    const node = try frame.createElementNS(ns, name, null);
+    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
 
     // Store original URI for unknown namespaces so lookupNamespaceURI can return it
     if (ns == .unknown) {
@@ -317,7 +317,7 @@ pub fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFra
 }
 
 pub fn createComment(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = try frame.createComment(data);
+    const node = try Frame.node_factory.createComment(frame, data);
     // Track owner document if it's not the main document
     if (self != frame.document) {
         try frame.setNodeOwnerDocument(node, self);
@@ -326,7 +326,7 @@ pub fn createComment(self: *Document, data: []const u8, frame: *Frame) !*Node {
 }
 
 pub fn createTextNode(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = try frame.createTextNode(data);
+    const node = try Frame.node_factory.createTextNode(frame, data);
     // Track owner document if it's not the main document
     if (self != frame.document) {
         try frame.setNodeOwnerDocument(node, self);
@@ -337,8 +337,8 @@ pub fn createTextNode(self: *Document, data: []const u8, frame: *Frame) !*Node {
 pub fn createCDATASection(self: *Document, data: []const u8, frame: *Frame) !*Node {
     const node = switch (self._type) {
         .html => return error.NotSupported, // cannot create a CDataSection in an HTMLDocument
-        .xml => try frame.createCDATASection(data),
-        .generic => try frame.createCDATASection(data),
+        .xml => try Frame.node_factory.createCDATASection(frame, data),
+        .generic => try Frame.node_factory.createCDATASection(frame, data),
     };
     // Track owner document if it's not the main document
     if (self != frame.document) {
@@ -348,7 +348,7 @@ pub fn createCDATASection(self: *Document, data: []const u8, frame: *Frame) !*No
 }
 
 pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []const u8, frame: *Frame) !*Node {
-    const node = try frame.createProcessingInstruction(target, data);
+    const node = try Frame.node_factory.createProcessingInstruction(frame, target, data);
     // Track owner document if it's not the main document
     if (self != frame.document) {
         try frame.setNodeOwnerDocument(node, self);
@@ -1129,9 +1129,9 @@ fn _injectBlank(self: *Document, frame: *Frame) !void {
         std.debug.assert(self.asNode()._children == null);
     }
 
-    const html = try frame.createElementNS(.html, "html", null);
-    const head = try frame.createElementNS(.html, "head", null);
-    const body = try frame.createElementNS(.html, "body", null);
+    const html = try Frame.node_factory.createElementNS(frame, .html, "html", null);
+    const head = try Frame.node_factory.createElementNS(frame, .html, "head", null);
+    const body = try Frame.node_factory.createElementNS(frame, .html, "body", null);
     try frame.appendNode(html, head, .{});
     try frame.appendNode(html, body, .{});
     try frame.appendNode(self.asNode(), html, .{});

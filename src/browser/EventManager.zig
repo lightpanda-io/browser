@@ -200,11 +200,11 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         if (event._prevent_default) {
             // can't return in a defer (╯°□°)╯︵ ┻━┻
         } else if (event._type_string.eql(comptime .wrap("click"))) {
-            frame.handleClick(target) catch |err| {
+            Frame.user_input.handleClick(frame, target) catch |err| {
                 log.warn(.event, "frame.click", .{ .err = err });
             };
         } else if (event._type_string.eql(comptime .wrap("keydown"))) {
-            frame.handleKeydown(target, event) catch |err| {
+            Frame.user_input.handleKeydown(frame, target, event) catch |err| {
                 log.warn(.event, "frame.keydown", .{ .err = err });
             };
         }

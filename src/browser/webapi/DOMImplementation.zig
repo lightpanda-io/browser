@@ -44,20 +44,20 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString
         _ = try document.asNode().appendChild(doctype.asNode(), frame);
     }
 
-    const html_node = try frame.createElementNS(.html, "html", null);
+    const html_node = try Frame.node_factory.createElementNS(frame, .html, "html", null);
     _ = try document.asNode().appendChild(html_node, frame);
 
-    const head_node = try frame.createElementNS(.html, "head", null);
+    const head_node = try Frame.node_factory.createElementNS(frame, .html, "head", null);
     _ = try html_node.appendChild(head_node, frame);
 
     if (title) |t| {
-        const title_node = try frame.createElementNS(.html, "title", null);
+        const title_node = try Frame.node_factory.createElementNS(frame, .html, "title", null);
         _ = try head_node.appendChild(title_node, frame);
-        const text_node = try frame.createTextNode(t.value);
+        const text_node = try Frame.node_factory.createTextNode(frame, t.value);
         _ = try title_node.appendChild(text_node, frame);
     }
 
-    const body_node = try frame.createElementNS(.html, "body", null);
+    const body_node = try Frame.node_factory.createElementNS(frame, .html, "body", null);
     _ = try html_node.appendChild(body_node, frame);
 
     return document;
@@ -77,7 +77,7 @@ pub fn createDocument(_: *const DOMImplementation, namespace_: ?[]const u8, qual
     if (qualified_name) |qname| {
         if (qname.len > 0) {
             const namespace = Node.Element.Namespace.parse(namespace_);
-            const root = try frame.createElementNS(namespace, qname, null);
+            const root = try Frame.node_factory.createElementNS(frame, namespace, qname, null);
             _ = try document.asNode().appendChild(root, frame);
         }
     }

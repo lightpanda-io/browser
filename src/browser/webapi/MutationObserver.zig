@@ -171,7 +171,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
     });
 
     if (self._observing.items.len == 1) {
-        try frame.registerMutationObserver(self);
+        try Frame.observers.registerMutationObserver(frame, self);
     }
 }
 
@@ -182,7 +182,7 @@ pub fn disconnect(self: *MutationObserver, frame: *Frame) void {
     self._pending_records.clearRetainingCapacity();
 
     if (self._observing.items.len > 0) {
-        frame.unregisterMutationObserver(self);
+        Frame.observers.unregisterMutationObserver(frame, self);
     }
     self._observing.clearRetainingCapacity();
 }
@@ -244,7 +244,7 @@ pub fn notifyAttributeChange(
 
         try self._pending_records.append(self._arena, record);
 
-        try frame.scheduleMutationDelivery();
+        try Frame.observers.scheduleMutationDelivery(frame);
         break;
     }
 }
@@ -288,7 +288,7 @@ pub fn notifyCharacterDataChange(
 
         try self._pending_records.append(self._arena, record);
 
-        try frame.scheduleMutationDelivery();
+        try Frame.observers.scheduleMutationDelivery(frame);
         break;
     }
 }
@@ -332,7 +332,7 @@ pub fn notifyChildListChange(
 
         try self._pending_records.append(self._arena, record);
 
-        try frame.scheduleMutationDelivery();
+        try Frame.observers.scheduleMutationDelivery(frame);
         break;
     }
 }

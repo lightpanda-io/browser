@@ -622,12 +622,12 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
     if (new_node == ref_node_) {
         frame.domChanged();
 
-        if (frame.hasMutationObservers()) {
+        if (Frame.observers.hasMutationObservers(frame)) {
             const parent = new_node._parent.?;
             const previous_sibling = new_node.previousSibling();
             const next_sibling = new_node.nextSibling();
             const replaced = [_]*Node{new_node};
-            frame.childListChange(parent, &replaced, &replaced, previous_sibling, next_sibling);
+            Frame.observers.notifyChildListChange(frame, parent, &replaced, &replaced, previous_sibling, next_sibling);
         }
 
         return new_node;
@@ -832,10 +832,10 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
         .cdata => |cd| {
             const data = cd.getData().str();
             return switch (cd._type) {
-                .text => frame.createTextNode(data),
-                .cdata_section => frame.createCDATASection(data),
-                .comment => frame.createComment(data),
-                .processing_instruction => |pi| frame.createProcessingInstruction(pi._target, data),
+                .text => Frame.node_factory.createTextNode(frame, data),
+                .cdata_section => Frame.node_factory.createCDATASection(frame, data),
+                .comment => Frame.node_factory.createComment(frame, data),
+                .processing_instruction => |pi| Frame.node_factory.createProcessingInstruction(frame, pi._target, data),
             };
         },
         .element => |el| return el.clone(deep, frame),
@@ -1314,7 +1314,7 @@ pub const NodeOrText = union(enum) {
     pub fn toNode(self: *const NodeOrText, frame: *Frame) !*Node {
         return switch (self.*) {
             .node => |n| n,
-            .text => |txt| frame.createTextNode(txt),
+            .text => |txt| Frame.node_factory.createTextNode(frame, txt),
         };
     }
 
