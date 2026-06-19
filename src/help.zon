@@ -208,8 +208,8 @@
     \\--save <PATH>              Synthesize a replayable .js script from the --task
     \\                           run and write it to PATH, instead of printing the
     \\                           answer. Replay it later with `agent PATH` (no LLM
-    \\                           calls). Overwrites PATH if it exists. PATH must be a
-    \\                           local file name, not a path. Requires --task.
+    \\                           calls). Overwrites PATH if it exists. Requires
+    \\                           --task.
     \\
     \\-a, --attach <PATH>        Feed a local file to the model alongside --task.
     \\                           Repeatable, one file per flag. Text files are

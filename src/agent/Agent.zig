@@ -294,12 +294,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             });
             return error.ConflictingFlags;
         }
-        save.validateFilename(save_path) catch {
+        if (save_path.len == 0) {
             log.fatal(.app, "invalid --save filename", .{
-                .hint = "--save takes a local file name, not a path (e.g. script.js)",
+                .hint = "--save needs a non-empty file name",
             });
             return error.InvalidFilename;
-        };
+        }
     }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
@@ -1013,7 +1013,6 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         const msg: []const u8 = switch (err) {
             error.UnterminatedQuote => "unterminated filename quote",
             error.EmptyFilename => "filename cannot be empty",
-            error.InvalidFilename => "filename must be a local file name, not a path",
             error.OutOfMemory => "out of memory",
         };
         self.terminal.printError("{s}", .{msg});
