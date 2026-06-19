@@ -526,6 +526,10 @@ pub const BrowserContext = struct {
     http_proxy_changed: bool = false,
     user_agent_changed: bool = false,
 
+    // True once we've registered for the download notifications, so repeated
+    // Browser.setDownloadBehavior calls don't add duplicate listeners.
+    download_events_registered: bool = false,
+
     // Extra headers to add to all requests.
     extra_headers: std.ArrayList([*c]const u8) = .empty,
 
@@ -795,6 +799,36 @@ pub const BrowserContext = struct {
 
     pub fn runtimeDisable(self: *BrowserContext) void {
         self.notification.unregister(.runtime_console_message, self);
+    }
+
+    // Registers for the download notifications dispatched by Frame when a
+    // navigation is treated as a file download. Idempotent. See issue #2701.
+    pub fn downloadEventsEnable(self: *BrowserContext) !void {
+        if (self.download_events_registered) {
+            return;
+        }
+        try self.notification.register(.download_will_begin, self, onDownloadWillBegin);
+        try self.notification.register(.download_progress, self, onDownloadProgress);
+        self.download_events_registered = true;
+    }
+
+    pub fn downloadEventsDisable(self: *BrowserContext) void {
+        if (self.download_events_registered == false) {
+            return;
+        }
+        self.notification.unregister(.download_will_begin, self);
+        self.notification.unregister(.download_progress, self);
+        self.download_events_registered = false;
+    }
+
+    pub fn onDownloadWillBegin(ctx: *anyopaque, msg: *const Notification.DownloadWillBegin) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/browser.zig").downloadWillBegin(self, msg);
+    }
+
+    pub fn onDownloadProgress(ctx: *anyopaque, msg: *const Notification.DownloadProgress) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/browser.zig").downloadProgress(self, msg);
     }
 
     pub fn webmcpEnable(self: *BrowserContext) !void {

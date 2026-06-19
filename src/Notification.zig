@@ -96,6 +96,8 @@ const EventListeners = struct {
     model_context_tool_added: List = .{},
     model_context_tool_removed: List = .{},
     cookie_changed: List = .{},
+    download_will_begin: List = .{},
+    download_progress: List = .{},
 };
 
 const Events = union(enum) {
@@ -123,6 +125,8 @@ const Events = union(enum) {
     model_context_tool_added: *const ModelContextToolEvent,
     model_context_tool_removed: *const ModelContextToolEvent,
     cookie_changed: *const CookieChanged,
+    download_will_begin: *const DownloadWillBegin,
+    download_progress: *const DownloadProgress,
 };
 const EventType = std.meta.FieldEnum(Events);
 
@@ -269,6 +273,34 @@ pub const CookieChanged = struct {
     same_site: Cookie.SameSite,
 
     pub const Kind = enum { changed, deleted };
+};
+
+// Emitted by Frame when a navigation response is treated as a file download
+// (Content-Disposition: attachment) under an `allow`/`allowAndName`
+// `Browser.setDownloadBehavior`. The CDP browser domain turns this into a
+// `Browser.downloadWillBegin` event. All fields point at Frame-owned memory that
+// outlives the synchronous dispatch.
+pub const DownloadWillBegin = struct {
+    frame_id: u32,
+    guid: []const u8,
+    url: []const u8,
+    suggested_filename: []const u8,
+};
+
+// Emitted by Frame as a download is written to disk: once when it starts
+// (`.in_progress`) and once when the body is fully written (`.completed`).
+// The CDP browser domain turns this into a `Browser.downloadProgress` event.
+pub const DownloadProgress = struct {
+    guid: []const u8,
+    total_bytes: u64,
+    received_bytes: u64,
+    state: State,
+
+    pub const State = enum {
+        in_progress,
+        completed,
+        canceled,
+    };
 };
 
 pub const DialogResponse = struct {

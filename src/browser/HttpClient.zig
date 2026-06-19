@@ -38,6 +38,7 @@ const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
 pub const Method = http.Method;
+pub const Header = http.Header;
 pub const Headers = http.Headers;
 pub const ResponseHead = http.ResponseHead;
 pub const HeaderIterator = http.HeaderIterator;
