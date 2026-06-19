@@ -73,7 +73,6 @@ _active: ?*Page = null,
 _pending: ?*Page = null,
 
 _page_destruction_queue: std.ArrayList(*Page) = .{},
-_frame_destruction_queue: std.ArrayList(*Frame) = .{},
 
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
@@ -225,16 +224,6 @@ pub fn drainConsoleMessages(self: *Session) []const u8 {
 
 pub fn processDestroyQueues(self: *Session) void {
     {
-        const queue = self._frame_destruction_queue.items;
-        if (queue.len > 0) {
-            for (queue) |frame| {
-                frame.deinit();
-            }
-            self._frame_destruction_queue.clearRetainingCapacity();
-        }
-    }
-
-    {
         const queue = self._page_destruction_queue.items;
         if (queue.len > 0) {
             for (queue) |page| {
@@ -264,10 +253,6 @@ fn allocatePage(self: *Session, frame_id: u32) !*Page {
 // Tear down and free a Page allocated via allocatePage.
 fn queuePageDestruction(self: *Session, page: *Page) void {
     self._page_destruction_queue.append(self.arena, page) catch @panic("OOM");
-}
-
-pub fn queueFrameDestruction(self: *Session, frame: *Frame) void {
-    self._frame_destruction_queue.append(self.arena, frame) catch @panic("OOM");
 }
 
 // Tear down the currently-active Page. Dispatches `frame_remove` first

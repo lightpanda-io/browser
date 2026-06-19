@@ -108,6 +108,32 @@
 }
 </script>
 
+<script id=stale_window_after_close>
+{
+  // A closed popup's Window is often still referenced by JS. We must NOT tear
+  // the Frame down (free its V8 context / arena / refcounted Location URL)
+  // while that reference is live, or a later access is a use-after-free. The
+  // Frame is kept alive (neutered) until Page.deinit instead.
+  //
+  // Crash condition: do NOT read .location before close(), so the popup's URL
+  // holds only the single internal ref. Pre-fix, the deferred Frame.deinit
+  // released it (refcount -> 0, URL freed) and reading .location afterwards
+  // re-wrapped the dangling Location into a double-free (release overflow).
+  const w = window.open('about:blank');
+  const doc = w.document;
+  const node = doc.createElement('section');
+
+  w.close();
+  testing.expectEqual(true, w.closed);
+
+  // Everything reachable through the stale Window stays valid and inert.
+  testing.expectEqual('about:blank', w.location.href);
+  testing.expectEqual('BODY', doc.body.tagName);
+  testing.expectEqual('SECTION', node.tagName);
+  testing.expectEqual('P', doc.createElement('p').tagName);
+}
+</script>
+
 <script id=popup_self_close type=module>
 {
   // Popup navigates to a real URL (not about:blank, which takes a synchronous

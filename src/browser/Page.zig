@@ -110,6 +110,11 @@ frame: Frame,
 // to the original page like this.
 popups: std.ArrayList(*Frame) = .empty,
 
+// Popup Frames that have been closed. The window can still be referenced / used
+// from JS, so we defer shutting them down until page tear down (which isn't
+// ideal from a memory point of view).
+closed_frames: std.ArrayList(*Frame) = .empty,
+
 // Lifecycle state. A Page is `.pending` while we hold it as the in-flight
 // destination of a root navigation — its V8 context exists but is not yet the
 // session's active context. Flipped to `.active` by Session.commitPendingPage
@@ -141,6 +146,11 @@ pub fn deinit(self: *Page) void {
         popup.deinit();
     }
     self.popups = .empty;
+
+    for (self.closed_frames.items) |frame| {
+        frame.deinit();
+    }
+    self.closed_frames = .empty;
 
     self.frame.deinit();
 
