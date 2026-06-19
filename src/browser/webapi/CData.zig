@@ -235,7 +235,7 @@ pub fn setData(self: *CData, value: ?[]const u8, frame: *Frame) !void {
         self._data = .empty;
     }
 
-    frame.characterDataChange(self.asNode(), old_value);
+    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old_value);
 }
 
 /// JS bridge wrapper for `data` setter.
@@ -305,7 +305,7 @@ pub fn deleteData(self: *CData, offset: usize, count: usize, frame: *Frame) !voi
             old_value[range.end..],
         });
     }
-    frame.characterDataChange(self.asNode(), old_data);
+    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old_data);
 }
 
 pub fn insertData(self: *CData, offset: usize, data: []const u8, frame: *Frame) !void {
@@ -321,7 +321,7 @@ pub fn insertData(self: *CData, offset: usize, data: []const u8, frame: *Frame) 
         data,
         existing[byte_offset..],
     });
-    frame.characterDataChange(self.asNode(), old_value);
+    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old_value);
 }
 
 pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, frame: *Frame) !void {
@@ -340,7 +340,7 @@ pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, 
         data,
         existing[range.end..],
     });
-    frame.characterDataChange(self.asNode(), old_value);
+    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old_value);
 }
 
 pub fn substringData(self: *const CData, offset: usize, count: usize) ![]const u8 {

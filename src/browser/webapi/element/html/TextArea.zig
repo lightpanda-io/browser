@@ -106,7 +106,7 @@ pub fn setDefaultValue(self: *TextArea, value: []const u8, frame: *Frame) !void 
     }
 
     // No text child exists, create one
-    const text_node = try frame.createTextNode(value);
+    const text_node = try Frame.node_factory.createTextNode(frame, value);
     _ = try node.appendChild(text_node, frame);
 }
 

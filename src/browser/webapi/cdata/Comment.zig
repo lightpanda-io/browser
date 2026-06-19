@@ -26,7 +26,7 @@ const Comment = @This();
 _proto: *CData,
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Comment {
-    const node = try frame.createComment(if (str) |s| s.value else "");
+    const node = try Frame.node_factory.createComment(frame, if (str) |s| s.value else "");
     return node.as(Comment);
 }
 

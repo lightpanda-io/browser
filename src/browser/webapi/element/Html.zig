@@ -116,7 +116,7 @@ pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
     if (frame._upgrading_element) |node| {
         return node.is(Element) orelse return error.IllegalConstructor;
     }
-    return frame.constructCustomElement(new_target);
+    return Frame.node_factory.constructCustomElement(frame, new_target);
 }
 
 pub const Type = union(enum) {
@@ -288,7 +288,7 @@ pub fn setInnerText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
     }
 
     // Create and append text node
-    const text_node = try frame.createTextNode(text);
+    const text_node = try Frame.node_factory.createTextNode(frame, text);
     try frame.appendNode(parent, text_node, .{ .child_already_connected = false });
 }
 

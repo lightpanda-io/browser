@@ -353,8 +353,8 @@ pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
                 const before_text = text_data[0..offset];
                 const after_text = text_data[offset..];
 
-                const before = try frame.createTextNode(before_text);
-                const after = try frame.createTextNode(after_text);
+                const before = try Frame.node_factory.createTextNode(frame, before_text);
+                const after = try Frame.node_factory.createTextNode(frame, after_text);
 
                 _ = try parent.replaceChild(before, container, frame);
                 _ = try parent.insertBefore(node, before.nextSibling(), frame);
@@ -390,7 +390,7 @@ pub fn deleteContents(self: *Range, frame: *Frame) !void {
                 frame.arena,
                 &.{ text_data[0..self._proto._start_offset], text_data[self._proto._end_offset..] },
             );
-            frame.characterDataChange(self._proto._start_container, old_value);
+            Frame.observers.notifyCharacterDataChange(frame, self._proto._start_container, old_value);
         } else {
             // Delete child nodes in range.
             // Capture count before the loop: removeChild triggers live range
@@ -459,7 +459,7 @@ pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
             const text_data = self._proto._start_container.getData().str();
             if (self._proto._start_offset < text_data.len and self._proto._end_offset <= text_data.len) {
                 const cloned_text = text_data[self._proto._start_offset..self._proto._end_offset];
-                const text_node = try frame.createTextNode(cloned_text);
+                const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
                 _ = try fragment.asNode().appendChild(text_node, frame);
             }
         } else {
@@ -481,7 +481,7 @@ pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
             if (self._proto._start_offset < text_data.len) {
                 // Clone from start_offset to end of text
                 const cloned_text = text_data[self._proto._start_offset..];
-                const text_node = try frame.createTextNode(cloned_text);
+                const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
                 _ = try fragment.asNode().appendChild(text_node, frame);
             }
         }
@@ -504,7 +504,7 @@ pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
             if (self._proto._end_offset > 0 and self._proto._end_offset <= text_data.len) {
                 // Clone from start to end_offset
                 const cloned_text = text_data[0..self._proto._end_offset];
-                const text_node = try frame.createTextNode(cloned_text);
+                const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
                 _ = try fragment.asNode().appendChild(text_node, frame);
             }
         }
@@ -550,9 +550,9 @@ pub fn createContextualFragment(self: *const Range, html: []const u8, frame: *Fr
     // Create a temporary element of the same type as the context for parsing
     // This preserves the parsing context without modifying the original node
     const temp_node = if (context_node.is(Node.Element)) |el|
-        try frame.createElementNS(el._namespace, el.getTagNameLower(), null)
+        try Frame.node_factory.createElementNS(frame, el._namespace, el.getTagNameLower(), null)
     else
-        try frame.createElementNS(.html, "div", null);
+        try Frame.node_factory.createElementNS(frame, .html, "div", null);
 
     try frame.parseContextualFragment(temp_node, html);
 

@@ -797,7 +797,7 @@ pub fn insertAdjacentText(
     data: []const u8,
     frame: *Frame,
 ) !void {
-    const text_node = try frame.createTextNode(data);
+    const text_node = try Frame.node_factory.createTextNode(frame, data);
     const target_node, const prev_node = try self.asNode().findAdjacentNodes(where);
     _ = try target_node.insertBefore(text_node, prev_node, frame);
 }
@@ -1494,7 +1494,7 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, frame: *Fr
 
 pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     const tag_name = self.getTagNameDump();
-    const node = try frame.createElementNS(self._namespace, tag_name, self._attributes);
+    const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, self._attributes);
 
     // Allow element-specific types to copy their runtime state
     _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), deep, frame }) catch |err| {

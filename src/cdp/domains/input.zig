@@ -18,8 +18,9 @@
 
 const std = @import("std");
 const CDP = @import("../CDP.zig");
+const Frame = @import("../../browser/Frame.zig");
 
-const dom_button = @import("../../browser/Frame.zig").mouse_button;
+const dom_button = Frame.user_input.mouse_button;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
@@ -74,7 +75,7 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
         .metaKey = params.modifiers & 4 == 4,
         .shiftKey = params.modifiers & 8 == 8,
     }, frame);
-    try frame.triggerKeyboard(keyboard_event);
+    try Frame.user_input.triggerKeyboard(frame, keyboard_event);
     // result already sent
 }
 
@@ -124,10 +125,10 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
     };
 
     switch (params.type) {
-        .mousePressed => try frame.triggerMousePress(params.x, params.y, button),
-        .mouseReleased => try frame.triggerMouseRelease(params.x, params.y, button, params.clickCount),
-        .mouseMoved => try frame.triggerMouseMove(params.x, params.y),
-        .mouseWheel => try frame.triggerMouseWheel(params.x, params.y, params.deltaX, params.deltaY),
+        .mousePressed => try Frame.user_input.triggerMousePress(frame, params.x, params.y, button),
+        .mouseReleased => try Frame.user_input.triggerMouseRelease(frame, params.x, params.y, button, params.clickCount),
+        .mouseMoved => try Frame.user_input.triggerMouseMove(frame, params.x, params.y),
+        .mouseWheel => try Frame.user_input.triggerMouseWheel(frame, params.x, params.y, params.deltaX, params.deltaY),
     }
     // result already sent
 }
@@ -141,7 +142,7 @@ fn insertText(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return;
     const frame = bc.session.currentFrame() orelse return;
 
-    try frame.insertText(params.text);
+    try Frame.user_input.insertText(frame, params.text);
 
     try cmd.sendResult(null, .{});
 }

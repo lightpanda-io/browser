@@ -32,7 +32,7 @@ const Audio = @This();
 _proto: *Media,
 
 pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {
-    const node = try frame.createElementNS(.html, "audio", null);
+    const node = try Frame.node_factory.createElementNS(frame, .html, "audio", null);
     const el = node.as(Element);
 
     const list = try el.getOrCreateAttributeList(frame);
