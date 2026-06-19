@@ -131,21 +131,17 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
 // The opt-in is Browser.setDownloadBehavior, so we emit Browser.* events only
 // (not the deprecated Page.downloadWillBegin / Page.downloadProgress). See #2701.
 pub fn downloadWillBegin(bc: *CDP.BrowserContext, event: *const Notification.DownloadWillBegin) !void {
-    const session_id = bc.session_id orelse return;
-
     return bc.cdp.sendEvent("Browser.downloadWillBegin", .{
         .frameId = &id.toFrameId(event.frame_id),
         .guid = event.guid,
         .url = event.url,
         .suggestedFilename = event.suggested_filename,
-    }, .{ .session_id = session_id });
+    }, .{});
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Browser/#event-downloadProgress
 // Dispatched by Frame as a download is written to disk (see issue #2701).
 pub fn downloadProgress(bc: *CDP.BrowserContext, msg: *const Notification.DownloadProgress) !void {
-    const session_id = bc.session_id orelse return;
-
     return bc.cdp.sendEvent("Browser.downloadProgress", .{
         .guid = msg.guid,
         .totalBytes = msg.total_bytes,
@@ -155,7 +151,7 @@ pub fn downloadProgress(bc: *CDP.BrowserContext, msg: *const Notification.Downlo
             .completed => "completed",
             .canceled => "canceled",
         },
-    }, .{ .session_id = session_id });
+    }, .{});
 }
 
 fn getWindowForTarget(cmd: *CDP.Command) !void {
