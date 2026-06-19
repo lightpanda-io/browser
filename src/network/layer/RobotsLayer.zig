@@ -58,7 +58,7 @@ pub fn deinit(self: *RobotsLayer, allocator: Allocator) void {
 fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *RobotsLayer = @ptrCast(@alignCast(ptr));
 
-    if (transfer.req.skip_robots) {
+    if (transfer.req.internal) {
         return self.next.request(transfer);
     }
 
@@ -133,7 +133,7 @@ fn fetchRobotsThenRequest(
         errdefer new_req.headers.deinit();
         new_req.method = .GET;
         new_req.url = robots_url;
-        new_req.skip_robots = true;
+        new_req.internal = true;
         new_req.resource_type = .fetch;
         new_req.body = null;
         new_req.ctx = robots_ctx;

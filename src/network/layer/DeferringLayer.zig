@@ -51,6 +51,10 @@ pub fn deinit(self: *DeferringLayer) void {
 fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *DeferringLayer = @ptrCast(@alignCast(ptr));
 
+    if (transfer.req.internal) {
+        return self.next.request(transfer);
+    }
+
     const arena = try self.network.app.arena_pool.acquire(.small, "DeferringContext");
     errdefer self.network.app.arena_pool.release(arena);
 
