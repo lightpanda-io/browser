@@ -107,7 +107,7 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     // erroring, which would abort the driver's whole connection. The config is
     // applied once a context exists (drivers re-send it per context).
     const bc = cmd.browser_context orelse {
-        return cmd.sendResult(null, .{ .include_session_id = false });
+        return cmd.sendResult(null, .{});
     };
     const session = bc.session;
 
@@ -123,7 +123,7 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
         bc.downloadEventsDisable();
     }
 
-    return cmd.sendResult(null, .{ .include_session_id = false });
+    return cmd.sendResult(null, .{});
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Browser/#event-downloadWillBegin
