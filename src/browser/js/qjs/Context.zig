@@ -346,7 +346,7 @@ pub fn moduleLoad(qctx: ?*q.JSContext, name: [*c]const u8, _: ?*anyopaque) callc
         error.UnknownModule => blk: {
             // Nothing prefetched this module yet (quickjs resolves imports
             // lazily); start the fetch and wait for it.
-            self.script_manager.preloadImport(sliceZ(zname), zname) catch |perr| {
+            self.script_manager.preloadImport(sliceZ(zname), zname, .{}) catch |perr| {
                 return throwModuleError(qctx.?, zname, perr);
             };
             break :blk self.script_manager.waitForImport(sliceZ(zname)) catch |werr| {

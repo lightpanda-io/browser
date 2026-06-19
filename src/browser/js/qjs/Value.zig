@@ -57,6 +57,10 @@ pub fn isFunction(self: Value) bool {
     return q.JS_IsFunction(self.qctx(), self.handle);
 }
 
+pub fn isNativeError(self: Value) bool {
+    return q.JS_IsError(self.handle);
+}
+
 pub fn isNull(self: Value) bool {
     return q.JS_IsNull(self.handle);
 }

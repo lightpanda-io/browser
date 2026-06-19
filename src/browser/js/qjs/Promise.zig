@@ -58,6 +58,32 @@ pub fn thenAndCatch(self: Promise, on_fulfilled: js.Function, on_rejected: js.Fu
     return .{ .local = self.local, .handle = ret };
 }
 
+pub const State = enum(c_int) {
+    pending = q.JS_PROMISE_PENDING,
+    fulfilled = q.JS_PROMISE_FULFILLED,
+    rejected = q.JS_PROMISE_REJECTED,
+};
+
+pub fn state(self: Promise) State {
+    return @enumFromInt(q.JS_PromiseState(self.local.ctx.ctx, self.handle));
+}
+
+/// Settled value (fulfillment or rejection). Caller must check `state` first.
+pub fn result(self: Promise) js.Value {
+    const ctx = self.local.ctx.ctx;
+    const value = q.JS_PromiseResult(ctx, self.handle);
+    self.local.track(value);
+    return .{ .local = self.local, .handle = value };
+}
+
+/// Suppress the global unhandled-rejection callback when handling the rejection
+/// inline. QuickJS exposes no equivalent of V8's `MarkAsHandled`: its host
+/// rejection tracker is driven purely by whether the promise has a reaction, so
+/// there is nothing to flip here. Callers that poll a promise to settlement
+/// without attaching a `.then`/`.catch` may still see a spurious unhandled
+/// rejection on this backend.
+pub fn markAsHandled(_: Promise) void {}
+
 pub fn persist(self: Promise) !Global {
     return self._persist(true);
 }
