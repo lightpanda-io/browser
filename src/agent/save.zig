@@ -52,20 +52,12 @@ pub fn parseCommand(arena: std.mem.Allocator, rest: []const u8) !Command {
         name = trimmed[0..tok_end];
         after = trimmed[tok_end..];
     }
-    try validateFilename(name);
+    if (name.len == 0) return error.EmptyFilename;
     if (!std.mem.endsWith(u8, name, ".js")) {
         name = try std.mem.concat(arena, u8, &.{ name, ".js" });
     }
     const prompt = std.mem.trim(u8, after, &std.ascii.whitespace);
     return .{ .filename = name, .prompt = if (prompt.len == 0) null else prompt };
-}
-
-fn validateFilename(name: []const u8) !void {
-    if (name.len == 0) return error.EmptyFilename;
-    if (std.fs.path.isAbsolute(name)) return error.InvalidFilename;
-    if (std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidFilename;
-    if (std.mem.indexOfScalar(u8, name, '\\') != null) return error.InvalidFilename;
-    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.InvalidFilename;
 }
 
 pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
@@ -175,12 +167,13 @@ test "parseCommand: empty is all null" {
     try std.testing.expect(r.prompt == null);
 }
 
-test "parseCommand: rejects path-like filenames" {
+test "parseCommand: accepts path-like filenames" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
-    try std.testing.expectError(error.InvalidFilename, parseCommand(aa, "../evil.js"));
-    try std.testing.expectError(error.InvalidFilename, parseCommand(aa, "/tmp/x.js"));
+    try std.testing.expectEqualStrings("../evil.js", (try parseCommand(aa, "../evil.js")).filename.?);
+    try std.testing.expectEqualStrings("/tmp/x.js", (try parseCommand(aa, "/tmp/x.js")).filename.?);
+    try std.testing.expectEqualStrings("out/run.js", (try parseCommand(aa, "out/run")).filename.?);
     try std.testing.expectError(error.UnterminatedQuote, parseCommand(aa, "\"unclosed.js"));
 }
 

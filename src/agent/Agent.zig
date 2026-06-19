@@ -246,6 +246,7 @@ model: []u8,
 effort: Config.Effort,
 script_file: ?[]const u8,
 one_shot_task: ?[]const u8,
+one_shot_save: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
 cancel_requested: std.atomic.Value(bool) = .init(false),
 /// Shuts down the in-flight LLM socket on Ctrl-C so an agent turn aborts
@@ -285,6 +286,20 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             .hint = "--task runs a one-shot turn; drop the positional script or drop --task",
         });
         return error.ConflictingFlags;
+    }
+    if (opts.save) |save_path| {
+        if (opts.task == null) {
+            log.fatal(.app, "conflicting flags", .{
+                .hint = "--save synthesizes a script from the --task run; pass --task too",
+            });
+            return error.ConflictingFlags;
+        }
+        if (save_path.len == 0) {
+            log.fatal(.app, "invalid --save filename", .{
+                .hint = "--save needs a non-empty file name",
+            });
+            return error.InvalidFilename;
+        }
     }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
@@ -394,6 +409,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .effort = effort,
         .script_file = opts.script_file,
         .one_shot_task = opts.task,
+        .one_shot_save = opts.save,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
         .available_providers = available_providers,
     };
@@ -540,6 +556,7 @@ pub const TurnInput = struct {
     prompt: []const u8,
     record_comment: ?[]const u8 = null,
     capture_for_save: bool = false,
+    suppress_answer: bool = false,
     attachments: ?[]const []const u8 = null,
     label: []const u8 = "Request",
 };
@@ -547,10 +564,17 @@ pub const TurnInput = struct {
 /// Returns true on success.
 pub fn run(self: *Agent) bool {
     if (self.one_shot_task) |task| {
+        const saving = self.one_shot_save != null;
         const ok = self.runTurn(.{
             .prompt = task,
             .attachments = self.one_shot_attachments,
+            .capture_for_save = saving,
+            .record_comment = if (saving) task else null,
+            .suppress_answer = saving,
         });
+        // Synthesis is a second LLM call that adds to total_usage, so save
+        // before printing the cumulative summary.
+        if (ok and saving) self.saveOneShot();
         self.printUsageSummary();
         return ok;
     }
@@ -593,12 +617,14 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
             return false;
         },
     };
-    if (text) |t|
-        self.terminal.printAssistant(t)
-    else if (self.last_turn_refused)
-        self.terminal.printInfo("(model declined to respond — safety refusal)", .{})
-    else
-        self.terminal.printInfo("(no response from model)", .{});
+    if (!input.suppress_answer) {
+        if (text) |t|
+            self.terminal.printAssistant(t)
+        else if (self.last_turn_refused)
+            self.terminal.printInfo("(model declined to respond — safety refusal)", .{})
+        else
+            self.terminal.printInfo("(no response from model)", .{});
+    }
     self.conversation.prune();
     return true;
 }
@@ -987,7 +1013,6 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         const msg: []const u8 = switch (err) {
             error.UnterminatedQuote => "unterminated filename quote",
             error.EmptyFilename => "filename cannot be empty",
-            error.InvalidFilename => "filename must be a local file name, not a path",
             error.OutOfMemory => "out of memory",
         };
         self.terminal.printError("{s}", .{msg});
@@ -1086,8 +1111,6 @@ fn bumpedEffort(effort: Config.Effort) Config.Effort {
 /// conversation, and the deterministic record of what ran, then write the
 /// idiomatic script it returns.
 fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8) void {
-    const provider_client = self.ai_client.?;
-
     // With nothing recorded and no prompt, a re-synthesis has nothing to act
     // on — it would just re-roll the previous output.
     if (self.save_buffer.bytes().len == 0 and prompt == null) {
@@ -1100,12 +1123,27 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     }
 
     const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
-    const path = resolved.path;
+    self.synthesizeSaveTo(arena, resolved.path, resolved.mode, prompt);
+}
+
+/// One-shot `--task ... --save`: overwrites the destination without the REPL's
+/// interactive file-exists prompt. The task doubles as the synthesis prompt so
+/// the empty-buffer guard in `synthesizeSaveTo` never trips.
+fn saveOneShot(self: *Agent) void {
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+    self.synthesizeSaveTo(arena.allocator(), self.one_shot_save.?, .replace, self.one_shot_task.?);
+}
+
+/// LLM synthesis + write for an already-resolved destination. Shared by the
+/// interactive `/save` and one-shot `--save`.
+fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mode: save.Mode, prompt: ?[]const u8) void {
+    const provider_client = self.ai_client.?;
 
     // Only update feeds the saved script back to the model; append stays
     // blind — the script is synthesized from this session alone and written
     // after the existing content.
-    const previous_script: ?[]const u8 = if (resolved.mode == .update)
+    const previous_script: ?[]const u8 = if (mode == .update)
         save.readScript(arena, path) catch |err| {
             self.terminal.printError("failed to read {s}: {s}", .{ path, @errorName(err) });
             return;
@@ -1173,7 +1211,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
 
-    save.writeContentFile(path, script, resolved.mode) catch |err| {
+    save.writeContentFile(path, script, mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };

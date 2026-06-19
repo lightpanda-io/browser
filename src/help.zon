@@ -141,6 +141,7 @@
     \\  {0s} agent --provider ollama --model qwen3.5:latest
     \\  {0s} agent --no-llm                       (basic slash-command-only REPL)
     \\  {0s} agent script.js                      (run a saved script, then exit)
+    \\  {0s} agent --task "..." --save out.js      (synthesize a replayable script)
     \\
     \\Arguments:
     \\[SCRIPT]                   Optional path to a .js script. Runs the script
@@ -201,7 +202,14 @@
     \\
     \\--task <STRING>            One-shot mode: run a single user turn, print the
     \\                           final answer to stdout, and exit. Conflicts with
-    \\                           the positional script.
+    \\                           the positional script. With --save, the answer is
+    \\                           suppressed and a script is written instead.
+    \\
+    \\--save <PATH>              Synthesize a replayable .js script from the --task
+    \\                           run and write it to PATH, instead of printing the
+    \\                           answer. Replay it later with `agent PATH` (no LLM
+    \\                           calls). Overwrites PATH if it exists. Requires
+    \\                           --task.
     \\
     \\-a, --attach <PATH>        Feed a local file to the model alongside --task.
     \\                           Repeatable, one file per flag. Text files are
