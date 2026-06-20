@@ -22,7 +22,6 @@ const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const Viewport = @import("../Viewport.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -208,13 +207,15 @@ fn calculateIntersection(
     // Use root element's rect or the faux-layout viewport.
     const root_rect = if (self._root) |root|
         root.getBoundingClientRect(frame)
-    else
-        DOMRect{
+    else blk: {
+        const viewport = frame._page.getViewport();
+        break :blk DOMRect{
             ._x = 0.0,
             ._y = 0.0,
-            ._width = @floatFromInt(Viewport.default.width),
-            ._height = @floatFromInt(Viewport.default.height),
+            ._width = @floatFromInt(viewport.width),
+            ._height = @floatFromInt(viewport.height),
         };
+    };
 
     // For a headless browser without real layout, we treat all elements as fully visible.
     // This avoids fingerprinting issues (massive viewports) and matches the behavior

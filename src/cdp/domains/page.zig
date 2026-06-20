@@ -926,7 +926,11 @@ fn printToPDF(cmd: *CDP.Command) !void {
 }
 
 fn getLayoutMetrics(cmd: *CDP.Command) !void {
-    const viewport = @import("../../browser/Viewport.zig").default;
+    const BrowserViewport = @import("../../browser/Viewport.zig");
+    const viewport = if (cmd.browser_context) |bc|
+        if (bc.session.currentPage()) |page| page.getViewport() else BrowserViewport.default
+    else
+        BrowserViewport.default;
     const width = viewport.width;
     const height = viewport.height;
 
