@@ -108,8 +108,10 @@ _cross_origin_wrapper: CrossOriginWindow,
 // we're still alive. Only valid if `!_opener.?._closed`.
 _opener: ?*Window = null,
 
-// True after our Frame has been deinit'd by window.close. Many things on the
-// window become invalid once this is true.
+// True after window.close. The Frame itself stays alive (parked in
+// page.closed_frames until Page.deinit) so cached references to this Window
+// don't dangle, but the popup is neutered: dropped from page.popups, its
+// transfers aborted, scheduler reset, and unreachable for events / name lookup.
 _closed: bool = false,
 
 // Popup name (owned by page.arena)
@@ -601,9 +603,7 @@ pub fn close(self: *Window) void {
 
     _ = page.popups.swapRemove(popup_index);
 
-    // Drop any pending queued navigation for this frame. Frame.deinit will
-    // release the QueuedNavigation arena, but the entry in page.queued_navigation
-    // would otherwise have processQueuedNavigation re-deinit the popup.
+    // Drop any pending queued navigation for this frame.
     if (frame._queued_navigation != null) {
         for (page.queued_navigation.items, 0..) |f, i| {
             if (f == frame) {
@@ -614,13 +614,15 @@ pub fn close(self: *Window) void {
     }
 
     frame.js.scheduler.reset();
+    frame.abortTransfers();
 
-    // We can't tear the Frame down here — close() is invoked from JS still
-    // running on top of this Frame's V8 context, often deep inside a script
-    // eval whose parser is still holding the Frame. Destroying the context
-    // now leaves dangling pointers in the unwinding script eval (load event
-    // dispatch, runMacrotasks, etc.). Defer to Page.deinit instead.
-    page.session.queueFrameDestruction(frame);
+    // Do not teardown the frame. The Window can still be referenced in JS
+    // (window.open(...) returns the window). It would be nice to be able to
+    // free this now (just like it would be nice to be more pro-active about
+    // freeing workers and iframes), but, for now, we don't have the
+    // infrastructure to do this safely so doing it on page tear down is our
+    // only option.
+    page.closed_frames.append(page.frame_arena, frame) catch @panic("OOM");
 }
 
 pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
