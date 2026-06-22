@@ -920,6 +920,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/NavigationCurrentEntryChangeEvent.zig"),
     @import("../webapi/event/PageTransitionEvent.zig"),
     @import("../webapi/event/PopStateEvent.zig"),
+    @import("../webapi/event/HashChangeEvent.zig"),
     @import("../webapi/event/UIEvent.zig"),
     @import("../webapi/event/MouseEvent.zig"),
     @import("../webapi/event/PointerEvent.zig"),

@@ -19,6 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
+const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
 
@@ -97,6 +98,13 @@ fn goInner(delta: i32, frame: *Frame) !void {
             if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
                 const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
                 try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
+            }
+
+            // Queue hashchange when traversing between entries that share a
+            // document but differ only by fragment.
+            const is_fragment_change = !std.mem.eql(u8, frame.url, url) and URL.eqlDocument(frame.url, url);
+            if (is_fragment_change) {
+                try frame.queueHashChange(frame.url, url);
             }
         }
     }
