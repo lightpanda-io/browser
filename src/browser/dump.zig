@@ -30,10 +30,11 @@ pub const Opts = struct {
     strip: Opts.Strip = .{},
     shadow: Opts.Shadow = .rendered,
 
-    pub const Strip = packed struct(u3) {
+    pub const Strip = packed struct(u4) {
         js: bool = false,
         ui: bool = false,
         css: bool = false,
+        invisible: bool = false,
     };
 
     pub const Shadow = enum {
@@ -99,7 +100,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             }
         },
         .element => |el| {
-            if (shouldStripElement(el, opts)) {
+            if (shouldStripElement(el, opts, frame)) {
                 return;
             }
 
@@ -265,7 +266,12 @@ fn isVoidElement(el: *const Node.Element) bool {
     };
 }
 
-fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
+fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
+    // Fast path: with no strip flags set (every innerHTML/outerHTML call)
+    if (@as(u4, @bitCast(opts.strip)) == 0) {
+        return false;
+    }
+
     const tag_name = el.getTagNameDump();
 
     if (opts.strip.js) {
@@ -304,6 +310,10 @@ fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
         if (std.mem.eql(u8, tag_name, "svg")) return true;
         if (std.mem.eql(u8, tag_name, "canvas")) return true;
         if (std.mem.eql(u8, tag_name, "iframe")) return true;
+    }
+
+    if (opts.strip.invisible and frame._style_manager.hasAuthorDisplayNone(el)) {
+        return true;
     }
 
     return false;
