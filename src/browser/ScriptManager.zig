@@ -150,6 +150,7 @@ pub fn preloadScript(self: *ScriptManager, element: *Element.Html, url: []const 
         .data_callback = Script.dataCallback,
         .done_callback = PreloadedScript.doneCallback,
         .error_callback = PreloadedScript.errorCallback,
+        .shutdown_callback = PreloadedScript.shutdownCallback,
     });
     return true;
 }
@@ -459,4 +460,49 @@ const PreloadedScript = struct {
         script.queueHintEvent(.@"error");
         script.deinit();
     }
+
+    // Owner-driven teardown killed this preload fetch via Transfer.kill, which
+    // fires shutdown_callback — not error_callback. Drop the entry (so a
+    // synchronous waitForPreload's getPtr returns null and it falls back to a
+    // normal fetch) and free the Script. No JS / hint events here, unlike
+    // errorCallback, since the owner is being torn down.
+    fn shutdownCallback(ctx: *anyopaque) void {
+        const script: *Script = @ptrCast(@alignCast(ctx));
+        const self: *ScriptManager = @fieldParentPtr("base", script.manager);
+        _ = self.preloaded_scripts.remove(script.url);
+        script.deinit();
+    }
 };
+
+const testing = @import("../testing.zig");
+
+test "ScriptManager: PreloadedScript.shutdownCallback drops a .loading preload" {
+    defer testing.reset();
+    const frame = try testing.pageTest("mcp_nav.html", .{});
+    defer frame._session.removePage();
+
+    const sm = &frame._script_manager;
+    const url: [:0]const u8 = "http://127.0.0.1:9582/killed-preload.js";
+
+    // Build a `.loading` preload entry directly (mirroring preloadScript) so the
+    // test doesn't depend on the network. shutdownCallback frees the Script.
+    const arena = try frame.getArena(.large, "test.shutdown");
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = url,
+        .node = .{},
+        .manager = &sm.base,
+        .complete = false,
+        .source = .{ .remote = .{} },
+        .extra = .preload,
+        .hint_element = null,
+    };
+    try sm.preloaded_scripts.put(sm.base.allocator, url, .{ .state = .{ .loading = script } });
+
+    // Transfer.kill fires this on owner teardown. The entry must be dropped so a
+    // synchronous waitForPreload's getPtr returns null and it falls back.
+    PreloadedScript.shutdownCallback(script);
+
+    try testing.expect(sm.preloaded_scripts.getPtr(url) == null);
+}

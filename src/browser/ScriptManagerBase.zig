@@ -289,6 +289,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .data_callback = Script.dataCallback,
         .done_callback = Script.doneCallback,
         .error_callback = Script.errorCallback,
+        .shutdown_callback = Script.shutdownCallback,
     }) catch |err| {
         self.async_scripts.remove(&script.node);
         return err;
@@ -819,6 +820,23 @@ pub const Script = struct {
         manager.evaluate();
     }
 
+    // Owner-driven teardown (Frame / WorkerGlobalScope) killed this module
+    // fetch via Transfer.kill, which fires shutdown_callback — NOT
+    // error_callback (error_callback runs JS via manager.evaluate(), unsafe
+    // mid-teardown). Registered only on `.import` requests (preloadImport).
+    // Move the imported_modules entry off `.loading` to `.err` so a
+    // synchronous waitForImport returns error.Failed instead of spinning
+    // forever. We must not run JS or touch lists here; the orphaned Script is
+    // reaped by manager.reset()'s clearList over async_scripts.
+    pub fn shutdownCallback(ctx: *anyopaque) void {
+        const self: *Script = @ptrCast(@alignCast(ctx));
+        const entry = self.manager.imported_modules.getPtr(self.url) orelse return;
+        switch (entry.state) {
+            .loading => entry.state = .err,
+            .done, .err => {},
+        }
+    }
+
     // Frame-only. Asserts extra == .frame; callers from the worker path never
     // reach here (workers only produce .import / .import_async).
     pub fn eval(self: *Script) void {
@@ -1007,3 +1025,39 @@ pub const ImportedModule = struct {
         done: *Script,
     };
 };
+
+const testing = @import("../testing.zig");
+
+test "ScriptManagerBase: shutdownCallback fails a .loading module" {
+    defer testing.reset();
+    const frame = try testing.pageTest("mcp_nav.html", .{});
+    defer frame._session.removePage();
+
+    const sm = &frame._script_manager.base;
+    const url: [:0]const u8 = "http://127.0.0.1:9582/killed-module.js";
+
+    // Build a `.loading` import entry directly (mirroring preloadImport) so the
+    // test doesn't depend on the network. The orphaned Script is reaped by
+    // reset()'s clearList over async_scripts.
+    const arena = try sm.acquireArena(.large, "test.shutdown");
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = url,
+        .node = .{},
+        .manager = sm,
+        .complete = false,
+        .source = .{ .remote = .{} },
+        .extra = .import,
+        .hint_element = null,
+    };
+    try sm.imported_modules.put(sm.allocator, url, .{ .state = .{ .loading = script } });
+    sm.async_scripts.append(&script.node);
+
+    // Transfer.kill fires this on owner teardown. It must move the entry off
+    // `.loading` so a synchronous waitForImport returns instead of hanging.
+    Script.shutdownCallback(script);
+
+    try testing.expect(sm.imported_modules.getPtr(url).?.state == .err);
+    try testing.expectError(error.Failed, sm.waitForImport(url));
+}
