@@ -79,19 +79,39 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     // Not-yet-emulated parameters: accept them but warn so the caller knows
     // they are ignored.
     if (params.deviceScaleFactor) |v| {
-        if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "deviceScaleFactor", .value = v });
+        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
+            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
+            .param = "deviceScaleFactor",
+            .value = v,
+        });
     }
     if (params.mobile) |v| {
-        if (v) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "mobile", .value = v });
+        if (v) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
+            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
+            .param = "mobile",
+            .value = v,
+        });
     }
     if (params.scale) |v| {
-        if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "scale", .value = v });
+        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
+            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
+            .param = "scale",
+            .value = v,
+        });
     }
     if (params.screenWidth) |v| {
-        if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "screenWidth", .value = v });
+        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
+            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
+            .param = "screenWidth",
+            .value = v,
+        });
     }
     if (params.screenHeight) |v| {
-        if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "screenHeight", .value = v });
+        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
+            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
+            .param = "screenHeight",
+            .value = v,
+        });
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
