@@ -239,7 +239,6 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     else
         null;
 
-    var cache_buf: [512]u8 = undefined;
     const cache = if (config.httpCacheDir()) |cache_dir_path| blk: {
         const trimmed_dir = std.mem.trimEnd(u8, cache_dir_path, &.{'/'});
 
@@ -251,11 +250,13 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
             return e;
         };
 
-        const cache_path = try std.fmt.bufPrintZ(
-            &cache_buf,
+        const cache_path = try std.fmt.allocPrintSentinel(
+            allocator,
             "{s}/cache.db",
             .{trimmed_dir},
+            0,
         );
+        defer allocator.free(cache_path);
 
         break :blk Cache{
             .kind = .{
