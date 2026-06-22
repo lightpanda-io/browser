@@ -93,7 +93,8 @@ pub fn deinit(self: *SqliteCache) void {
 
 fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedMetadata {
     var entry = try conn.row(
-        \\ select status, stored_at, age_at_store, max_age, must_revalidate, etag, last_modified,
+        \\ select status, stored_at, age_at_store,
+        \\      max_age, must_revalidate, etag, last_modified
         \\ from metadata
         \\ where url = $1
     , .{url}) orelse return null;
