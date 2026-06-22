@@ -94,14 +94,14 @@ const TestContext = struct {
             if (bc.target_id == null) {
                 bc.target_id = "TID-000000000Z".*;
             }
-            const frame = try bc.session.createPage();
+            const page = try bc.session.createPage();
             const full_url = try std.fmt.allocPrintSentinel(
                 base.arena_allocator,
                 "http://127.0.0.1:9582/src/browser/tests/{s}",
                 .{url},
                 0,
             );
-            try frame.navigate(full_url, .{});
+            try page.navigate(full_url, .{});
             var runner = try bc.session.runner(.{});
             try runner.wait(.{ .ms = 2000 });
         }

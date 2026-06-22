@@ -496,8 +496,8 @@ fn getListenerTypes(target: *EventTarget, listener_targets: ListenerTargetMap) [
 const testing = @import("../testing.zig");
 
 fn testInteractive(html: []const u8) ![]InteractiveElement {
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);

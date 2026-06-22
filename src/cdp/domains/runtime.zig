@@ -129,7 +129,7 @@ const ConsoleMessage = struct {
 
 pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
     const session_id = bc.session_id orelse return;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -179,7 +179,7 @@ test "cdp.runtime: consoleAPICalled type matches the console method" {
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
 
-    const frame = bc.session.currentFrame() orelse unreachable;
+    const frame = bc.mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();

@@ -55,7 +55,7 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
 
     const frame = blk: {
         const frame_id = params.frameId orelse {
-            break :blk session.currentFrame() orelse return error.FrameNotLoaded;
+            break :blk bc.mainFrame() orelse return error.FrameNotLoaded;
         };
         break :blk session.findFrameByFrameId(try id.parseFrameId(frame_id)) orelse {
             return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
@@ -84,7 +84,7 @@ fn queryAXTree(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const node = try dom.getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer frame.releaseArena(temp_arena);
 

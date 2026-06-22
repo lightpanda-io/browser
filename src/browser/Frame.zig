@@ -725,7 +725,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     // and the in-flight transfer survives the OLD page's frame.deinit which
     // calls http_client.abortList() on the shared frame_id during
     // commitPendingPage.
-    const is_pending_root = self._page._state == .pending;
+    const is_pending_root = self._page.replaces != null;
 
     // We dispatch frame_navigate event before sending the request.
     // It ensures the event frame_navigated is not dispatched before this one.
@@ -1120,8 +1120,8 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
     // frame_remove (clears OLD V8 context group + CDP node_registry),
     // tears down the OLD page, flips the pointer, and dispatches
     // frame_created against the new (now active) frame.
-    if (self._page._state == .pending) {
-        try self._session.commitPendingPage();
+    if (self._page.replaces != null) {
+        try self._session.commitPendingPage(self._page);
     }
 
     const response_url = response.url();
@@ -1566,8 +1566,8 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // pending Page; the OLD active Page (and its V8 context) is untouched.
     // We do NOT run frameDoneCallback against the pending frame — the frame
     // is about to be freed.
-    if (self._page._state == .pending) {
-        self._session.discardPendingPage();
+    if (self._page.replaces != null) {
+        self._session.discardPendingPage(self._page);
         return;
     }
 
@@ -3274,9 +3274,10 @@ test "Page: isSameOrigin" {
 }
 
 test "Frame: httpMetadata after navigation" {
-    const frame = try testing.pageTest("page/meta.html", .{});
-    defer testing.test_session.removePage();
-    const meta = frame.httpMetadata();
+    const page = try testing.pageTest("page/meta.html", .{});
+    defer page.close();
+
+    const meta = page.frame().?.httpMetadata();
     try testing.expect(meta.status != null);
     try std.testing.expectEqual(@as(u16, 200), meta.status.?);
     try testing.expect(meta.headers.len > 0);
@@ -3284,17 +3285,21 @@ test "Frame: httpMetadata after navigation" {
 }
 
 test "Frame: httpMetadata 404" {
-    const frame = try testing.pageTest("nonexistent_page_xyz.html", .{});
-    defer testing.test_session.removePage();
-    const meta = frame.httpMetadata();
+    const page = try testing.pageTest("nonexistent_page_xyz.html", .{});
+    defer page.close();
+
+    const meta = page.frame().?.httpMetadata();
     try testing.expect(meta.status != null);
     try testing.expectEqual(404, meta.status.?);
 }
 
 test "Frame: 401" {
-    var frame = try testing.pageTest("401", .{});
     defer testing.reset();
-    defer frame._session.removePage();
+
+    var page = try testing.pageTest("401", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
 
     var buf = std.Io.Writer.Allocating.init(testing.allocator);
     defer buf.deinit();

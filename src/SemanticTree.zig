@@ -731,12 +731,14 @@ pub fn getNodeDetails(
 const testing = @import("testing.zig");
 
 test "SemanticTree backendDOMNodeId" {
+    defer testing.reset();
+
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/registry1.html", .{});
-    defer testing.reset();
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/registry1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
 
     const st: Self = .{
         .dom_node = frame.window._document.asNode(),
@@ -755,12 +757,13 @@ test "SemanticTree backendDOMNodeId" {
 }
 
 test "SemanticTree max_depth" {
+    defer testing.reset();
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/registry1.html", .{});
-    defer testing.reset();
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/registry1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
 
     const st: Self = .{
         .dom_node = frame.window._document.asNode(),

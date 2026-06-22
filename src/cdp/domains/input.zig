@@ -59,7 +59,7 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     if (params.type == .rawKeyDown) return;
 
     const bc = cmd.browser_context orelse return;
-    const frame = bc.session.currentFrame() orelse return;
+    const frame = bc.mainFrame() orelse return;
 
     const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
     const keyboard_event = try KeyboardEvent.initTrusted(switch (params.type) {
@@ -112,7 +112,7 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
     try cmd.sendResult(null, .{});
 
     const bc = cmd.browser_context orelse return;
-    const frame = bc.session.currentFrame() orelse return;
+    const frame = bc.mainFrame() orelse return;
 
     // Map the CDP button name to the DOM MouseEvent.button value.
     // https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button
@@ -140,7 +140,7 @@ fn insertText(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return;
-    const frame = bc.session.currentFrame() orelse return;
+    const frame = bc.mainFrame() orelse return;
 
     try Frame.user_input.insertText(frame, params.text);
 
@@ -155,7 +155,9 @@ test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
@@ -195,7 +197,9 @@ test "cdp.input: dispatchMouseEvent mouseReleased fires mouseup" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
@@ -232,7 +236,9 @@ test "cdp.input: dispatchMouseEvent mouseWheel fires wheel event" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
@@ -269,7 +275,9 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
@@ -321,7 +329,9 @@ test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});

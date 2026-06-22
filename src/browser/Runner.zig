@@ -33,20 +33,34 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const Runner = @This();
 
+// The "main" or "primary" frame which is used against our `until` checks. This
+// is, hopefully, temporary during our transition to multi-page sessions. It
+// helps preserve existing behavior for single-page sessions (which CDP and
+// fetch use exclusively). But once we start adding multi-page to Agent, and
+// maybe CDP and fetch, then "completeness" should gain a clearer meaning.
 frame: *Frame,
+
 session: *Session,
 http_client: *HttpClient,
 
 pub const Opts = struct {};
 
 pub fn init(session: *Session, _: Opts) !Runner {
-    const frame = session.currentFrame() orelse return error.NoPage;
+    const frame = firstFrame(session) orelse return error.NoPage;
 
     return .{
         .frame = frame,
         .session = session,
         .http_client = &session.browser.http_client,
     };
+}
+
+// See the `frame` field. Hopefully this goes away and we make Runner truly
+// multi-page aware.
+fn firstFrame(session: *Session) ?*Frame {
+    const page = (session.primaryPage() orelse return null).page().?;
+    const target = session.replacementOf(page) orelse page;
+    return &target.frame;
 }
 
 pub const WaitOpts = struct {
@@ -156,12 +170,22 @@ pub fn tick(self: *Runner, opts: TickOpts) !TickResult {
 }
 
 fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
+    const session = self.session;
+    const http_client = self.http_client;
+
+    // Drain queued navigations across every live page (one page per call)
+    // A navigation can swap a frame pointer or the page set,
+    // so restart the tick to re-resolve cleanly.
+    if (try session.processQueuedNavigation()) {
+        self.frame = firstFrame(session) orelse return .done;
+        return .{ .ok = 0 };
+    }
+
     // Refresh self.frame from session. In case of pending page, we want to
     // take its state while loading. If we use only the current frame, we will
     // return a .done result immediately.
-    self.frame = self.session.pendingOrCurrentFrame() orelse return .done;
-    const frame = self.frame;
-    const http_client = self.http_client;
+    const frame = firstFrame(session) orelse return .done;
+    self.frame = frame;
 
     switch (frame._parse_state) {
         .pre, .raw, .text, .image, .download => {
@@ -177,14 +201,6 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
             return .{ .ok = 0 };
         },
         .html, .complete => {
-            const session = self.session;
-            if (session.currentPage()) |page| {
-                if (page.queued_navigation.items.len != 0) {
-                    try session.processQueuedNavigation();
-                    self.frame = session.currentFrame().?; // might have changed
-                    return .{ .ok = 0 };
-                }
-            }
             const browser = session.browser;
 
             // The HTML page was parsed. We now either have JS scripts to
@@ -381,35 +397,34 @@ test "Runner: no page" {
 }
 
 test "Runner: waitForSelector timeout" {
-    const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removePage();
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
 
-    var runner = try frame._session.runner(.{});
+    var runner = try page.session.runner(.{});
     try testing.expectError(error.Timeout, runner.waitForSelector("#nope", 10));
 }
 
 test "Runner: waitForSelector" {
     defer testing.reset();
-    const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removePage();
+    const page = try testing.pageTest("runner/runner1.html", .{});
 
-    var runner = try frame._session.runner(.{});
+    var runner = try page.session.runner(.{});
     const el = try runner.waitForSelector("#sel1", 10);
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
 }
 
 test "Runner: waitForScript timeout" {
-    const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removePage();
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
 
-    var runner = try frame._session.runner(.{});
+    var runner = try page.session.runner(.{});
     try testing.expectError(error.Timeout, runner.waitForScript("document.querySelector('#nope')", 10));
 }
 
 test "Runner: waitForScript" {
-    const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removePage();
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
 
-    var runner = try frame._session.runner(.{});
+    var runner = try page.session.runner(.{});
     try runner.waitForScript("document.querySelector('#sel1')", 10);
 }

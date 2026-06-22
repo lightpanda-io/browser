@@ -846,7 +846,7 @@ fn terminateRuntimeSoon(runtime: *Runtime) void {
 
 test "agent script runtime: goto and evaluate dispatch through browser tools" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -897,7 +897,7 @@ test "agent script runtime: a method on an un-navigated page errors" {
 
 test "agent script runtime: page.close stales the handle" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -918,7 +918,7 @@ test "agent script runtime: page.close stales the handle" {
 
 test "agent script runtime: a stale page handle is a hard error" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -940,7 +940,7 @@ test "agent script runtime: a stale page handle is a hard error" {
 
 test "agent script runtime: extract returns a JavaScript object" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -995,7 +995,7 @@ test "agent script runtime: extract returns a JavaScript object" {
 
 test "agent script runtime: extract tolerates list selectors that match nothing" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1024,7 +1024,7 @@ test "agent script runtime: extract tolerates list selectors that match nothing"
 
 test "agent script runtime: strict-mode scripts can call primitives" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1063,7 +1063,7 @@ test "agent script runtime: promise microtasks run to completion" {
 
 test "agent script runtime: primitives re-entered from argument callbacks stay isolated" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1086,7 +1086,7 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
 
 test "agent script runtime: terminate interrupts local JavaScript" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1104,7 +1104,7 @@ test "agent script runtime: terminate interrupts local JavaScript" {
 
 test "agent script runtime: agent variables persist and page globals are isolated" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1129,7 +1129,7 @@ test "agent script runtime: agent variables persist and page globals are isolate
 
 test "agent script runtime: page evaluate cannot see agent primitives or bindings" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1165,7 +1165,7 @@ test "agent script runtime: console is available in agent context" {
 
 test "agent script runtime: tool errors throw and stop execution" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1192,7 +1192,7 @@ test "agent script runtime: tool errors throw and stop execution" {
 
 test "agent script runtime: builtin argument marshalling (positional + options)" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();

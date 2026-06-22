@@ -375,9 +375,11 @@ const testing = @import("../testing.zig");
 // <base> element), so reusing one frame across opts would leak that mutation
 // into later dumps.
 fn expectDump(opts: Opts, expected: []const u8) !void {
-    var frame = try testing.pageTest("dump.html", .{});
     defer testing.reset();
-    defer frame._session.removePage();
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     try root(frame.window._document, opts, &aw.writer, frame);

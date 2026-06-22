@@ -1030,8 +1030,9 @@ const testing = @import("../testing.zig");
 
 test "ScriptManagerBase: shutdownCallback fails a .loading module" {
     defer testing.reset();
-    const frame = try testing.pageTest("mcp_nav.html", .{});
-    defer frame._session.removePage();
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
 
     const sm = &frame._script_manager.base;
     const url: [:0]const u8 = "http://127.0.0.1:9582/killed-module.js";

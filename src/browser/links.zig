@@ -88,12 +88,8 @@ pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
 
 const testing = @import("../testing.zig");
 
-// Caller must `defer testing.test_session.removePage()` after a successful
-// call — the returned slices live in the page's call_arena.
 fn testLinks(html: []const u8) ![]Link {
-    const frame = try testing.test_session.createPage();
-    errdefer testing.test_session.removePage();
-
+    const frame = try testing.createFrame();
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
     try frame.parseHtmlAsChildren(div.asNode(), html);
@@ -102,12 +98,12 @@ fn testLinks(html: []const u8) ![]Link {
 }
 
 test "links: text and href" {
+    defer testing.test_session.closeAllPages();
     const links = try testLinks(
         \\<a href="https://example.com/login">Sign in</a>
         \\<a href="/page/2">  Next page </a>
         \\<a>no href, skipped</a>
     );
-    defer testing.test_session.removePage();
 
     try testing.expectEqual(2, links.len);
     try testing.expectEqual("Sign in", links[0].text.?);
@@ -116,10 +112,10 @@ test "links: text and href" {
 }
 
 test "links: empty text" {
+    defer testing.test_session.closeAllPages();
     const links = try testLinks(
         \\<a href="/icon"><img src="i.png"></a>
     );
-    defer testing.test_session.removePage();
 
     try testing.expectEqual(1, links.len);
     try testing.expectEqual(null, links[0].text);

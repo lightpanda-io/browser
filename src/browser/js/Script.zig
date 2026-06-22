@@ -80,9 +80,8 @@ pub const Unbound = struct {
 
 const testing = @import("../../testing.zig");
 test "Script: persisted unbound script re-binds and re-runs" {
-    const session = testing.test_session;
-    const frame = try session.createPage();
-    defer session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -99,9 +98,8 @@ test "Script: persisted unbound script re-binds and re-runs" {
 }
 
 test "Script: code cache round-trips and rejects a source mismatch" {
-    const session = testing.test_session;
-    const frame = try session.createPage();
-    defer session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

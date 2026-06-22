@@ -1025,7 +1025,8 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    const page = server.session.currentPage().?;
+    // Single-page test: reach straight into the live page.
+    const page = server.session.pages.items[0];
 
     {
         const msg =
@@ -1361,8 +1362,8 @@ fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     var server = try Server.init(testing.allocator, testing.test_app, writer);
     errdefer server.deinit();
 
-    const frame = try server.session.createPage();
-    try frame.navigate(url, .{});
+    const page = try server.session.createPage();
+    try page.navigate(url, .{});
 
     var runner = try server.session.runner(.{});
     try runner.wait(.{ .ms = 2000 });

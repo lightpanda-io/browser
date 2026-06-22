@@ -336,6 +336,13 @@ pub var test_browser: Browser = undefined;
 pub var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
 
+// Create a fresh page on `test_session` and return its root frame — for tests
+// that just need a frame to build a DOM in. The page lives on the session;
+// release it with `defer testing.test_session.closeAllPages()`.
+pub fn createFrame() !*Frame {
+    return (try test_session.createPage()).frame().?;
+}
+
 const WEB_API_TEST_ROOT = "src/browser/tests/";
 const HtmlRunnerOpts = struct {
     timeout_ms: u32 = 2000,
@@ -405,8 +412,8 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
 }
 
 fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
-    const frame = try test_session.createPage();
-    defer test_session.removePage();
+    const page = try test_session.createPage();
+    defer page.close();
 
     const url = try std.fmt.allocPrintSentinel(
         arena_allocator,
@@ -414,6 +421,8 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         .{test_file},
         0,
     );
+
+    const frame = page.frame().?;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -463,9 +472,9 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
 const PageTestOpts = struct {
     wait_until_done: bool = true,
 };
-pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Frame {
-    const frame = try test_session.createPage();
-    errdefer test_session.removePage();
+pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.PageHandle {
+    const page = try test_session.createPage();
+    errdefer page.close();
 
     const url = try std.fmt.allocPrintSentinel(
         arena_allocator,
@@ -474,12 +483,12 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Frame {
         0,
     );
 
-    try frame.navigate(url, .{});
+    try page.navigate(url, .{});
     var runner = try test_session.runner(.{});
     if (opts.wait_until_done) {
         try runner.wait(.{ .ms = 2000 });
     }
-    return frame;
+    return page;
 }
 
 const TestHTTPServer = @import("TestHTTPServer.zig");

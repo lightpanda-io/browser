@@ -213,9 +213,11 @@ fn isFirstMatch(self: SelectorPath, target: *Element, candidate: []const u8) boo
 const testing = @import("../testing.zig");
 
 fn expectSelector(comptime selector: []const u8, comptime expected: []const u8) !void {
-    var frame = try testing.pageTest("selector_path.html", .{});
     defer testing.reset();
-    defer frame._session.removePage();
+
+    var page = try testing.pageTest("selector_path.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
 
     const root = frame.window._document.asNode();
     const target = (try Selector.querySelector(root, selector, frame)) orelse return error.TargetNotFound;
