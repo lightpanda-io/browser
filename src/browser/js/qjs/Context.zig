@@ -459,7 +459,7 @@ pub fn queueMutationDelivery(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {
             switch (ctx.global) {
-                .frame => |frame| frame.deliverMutations(),
+                .frame => |frame| Frame.observers.deliverMutations(frame),
                 .worker => unreachable,
             }
         }
@@ -470,7 +470,7 @@ pub fn queueIntersectionChecks(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {
             switch (ctx.global) {
-                .frame => |frame| frame.performScheduledIntersectionChecks(),
+                .frame => |frame| Frame.observers.performScheduledIntersectionChecks(frame),
                 .worker => unreachable,
             }
         }
@@ -481,7 +481,7 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {
             switch (ctx.global) {
-                .frame => |frame| frame.deliverIntersections(),
+                .frame => |frame| Frame.observers.deliverIntersections(frame),
                 .worker => unreachable,
             }
         }

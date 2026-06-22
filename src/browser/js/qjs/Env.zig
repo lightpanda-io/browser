@@ -95,8 +95,15 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     const rt = q.JS_NewRuntime() orelse return error.FailedToCreateRuntime;
     errdefer q.JS_FreeRuntime(rt);
 
-    // TODO: configurable
-    q.JS_SetMaxStackSize(rt, 30 * 1024 * 1024);
+    // This MUST stay safely below the OS thread stack of whatever thread runs
+    // JS (fetchThread, serve connections, etc.), which is std.Thread's default
+    // of 16MiB. QuickJS only trips its (catchable) stack-overflow guard once
+    // usage exceeds this limit; if the limit is larger than the real OS stack,
+    // the thread stack is exhausted first and the process dies with a bus
+    // error instead. 8MiB leaves a generous margin for the native C frames
+    // between guard checks.
+    // TODO: configurable / derive from the actual thread stack size.
+    q.JS_SetMaxStackSize(rt, 8 * 1024 * 1024);
 
     if (comptime IS_DEBUG) {
         q.JS_SetDumpFlags(rt, q.JS_DUMP_LEAKS | q.JS_DUMP_ATOM_LEAKS);
