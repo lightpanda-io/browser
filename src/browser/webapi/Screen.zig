@@ -18,7 +18,6 @@
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
-const Viewport = @import("../Viewport.zig");
 const EventTarget = @import("EventTarget.zig");
 
 pub fn registerTypes() []const type {
@@ -46,6 +45,14 @@ pub fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
     return orientation;
 }
 
+pub fn getWidth(_: *const Screen, frame: *Frame) u32 {
+    return frame._page.getViewport().width;
+}
+
+pub fn getHeight(_: *const Screen, frame: *Frame) u32 {
+    return frame._page.getViewport().height;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Screen);
 
@@ -55,9 +62,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.property(Viewport.default.width, .{ .template = false });
-    pub const height = bridge.property(Viewport.default.height, .{ .template = false });
-    pub const availWidth = bridge.property(Viewport.default.width, .{ .template = false });
+    pub const width = bridge.accessor(Screen.getWidth, null, .{});
+    pub const height = bridge.accessor(Screen.getHeight, null, .{});
+    pub const availWidth = bridge.accessor(Screen.getWidth, null, .{});
     pub const availHeight = bridge.property(1040, .{ .template = false });
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });

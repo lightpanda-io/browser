@@ -25,6 +25,7 @@ const v8 = js.v8;
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
+const Viewport = @import("Viewport.zig");
 
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -122,6 +123,18 @@ closed_frames: std.ArrayList(*Frame) = .empty,
 // branch on this to stamp `is_pending_root` on the frame_navigate
 // notification (so CDP doesn't reset its node registry yet) and
 _state: enum { active, pending } = .active,
+
+// Runtime viewport override set via Emulation.setDeviceMetricsOverride and
+// cleared via Emulation.clearDeviceMetricsOverride. Null means use the
+// compile-time Viewport.default. Read every viewport consumer through
+// getViewport so they all observe the same (possibly overridden) value.
+viewport_override: ?Viewport = null,
+
+// The viewport every consumer should read: the runtime override if set,
+// otherwise the compile-time default.
+pub fn getViewport(self: *const Page) Viewport {
+    return self.viewport_override orelse Viewport.default;
+}
 
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {

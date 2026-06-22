@@ -1543,7 +1543,7 @@ pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *F
     _ = center_if_needed;
     const y = calculateDocumentPosition(self.asNode());
     const scroll_y: f64 = @floatFromInt(frame.window.getScrollY());
-    const viewport_height: f64 = @floatFromInt(frame.window.getInnerHeight());
+    const viewport_height: f64 = @floatFromInt(frame.window.getInnerHeight(frame));
     if (y >= scroll_y and y <= scroll_y + viewport_height) {
         return;
     }

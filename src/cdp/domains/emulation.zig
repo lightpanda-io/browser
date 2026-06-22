@@ -29,6 +29,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setEmulatedMedia,
         setFocusEmulationEnabled,
         setDeviceMetricsOverride,
+        clearDeviceMetricsOverride,
         setTouchEmulationEnabled,
         setUserAgentOverride,
     }, cmd.input.action) orelse return error.UnknownMethod;
@@ -37,6 +38,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .setEmulatedMedia => return setEmulatedMedia(cmd),
         .setFocusEmulationEnabled => return setFocusEmulationEnabled(cmd),
         .setDeviceMetricsOverride => return setDeviceMetricsOverride(cmd),
+        .clearDeviceMetricsOverride => return clearDeviceMetricsOverride(cmd),
         .setTouchEmulationEnabled => return setTouchEmulationEnabled(cmd),
         .setUserAgentOverride => return setUserAgentOverride(cmd),
     }
@@ -63,8 +65,53 @@ fn setFocusEmulationEnabled(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// TODO: noop method
 fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        width: u32,
+        height: u32,
+        deviceScaleFactor: ?f64 = null,
+        mobile: ?bool = null,
+        scale: ?f64 = null,
+        screenWidth: ?u32 = null,
+        screenHeight: ?u32 = null,
+    })) orelse return error.InvalidParams;
+
+    // Not-yet-emulated parameters: accept them but warn so the caller knows
+    // they are ignored.
+    if (params.deviceScaleFactor) |v| {
+        if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "deviceScaleFactor", .value = v });
+    }
+    if (params.mobile) |v| {
+        if (v) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "mobile", .value = v });
+    }
+    if (params.scale) |v| {
+        if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "scale", .value = v });
+    }
+    if (params.screenWidth) |v| {
+        if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "screenWidth", .value = v });
+    }
+    if (params.screenHeight) |v| {
+        if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "screenHeight", .value = v });
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.FrameNotLoaded;
+
+    // CDP convention: a 0 width/height means "don't override that dimension",
+    // so keep the current value for any dimension passed as 0.
+    const current = page.getViewport();
+    page.viewport_override = .{
+        .width = if (params.width > 0) params.width else current.width,
+        .height = if (params.height > 0) params.height else current.height,
+    };
+
+    return cmd.sendResult(null, .{});
+}
+
+fn clearDeviceMetricsOverride(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.FrameNotLoaded;
+    page.viewport_override = null;
     return cmd.sendResult(null, .{});
 }
 
@@ -215,4 +262,36 @@ test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
     });
 
     try ctx.expectSentResult(null, .{ .id = 7 });
+}
+
+test "cdp.Emulation: setDeviceMetricsOverride and clear" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-DM1" });
+    _ = try bc.session.createPage();
+    const page = bc.session.currentPage().?;
+
+    // Defaults to the compile-time viewport before any override.
+    try testing.expectEqual(1920, page.getViewport().width);
+    try testing.expectEqual(1080, page.getViewport().height);
+
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 375, .height = 812 },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 8 });
+    try testing.expectEqual(375, page.getViewport().width);
+    try testing.expectEqual(812, page.getViewport().height);
+
+    try ctx.processMessage(.{
+        .id = 9,
+        .method = "Emulation.clearDeviceMetricsOverride",
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 9 });
+    try testing.expectEqual(1920, page.getViewport().width);
+    try testing.expectEqual(1080, page.getViewport().height);
 }

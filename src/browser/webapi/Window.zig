@@ -23,7 +23,6 @@ const builtin = @import("builtin");
 const js = @import("../js/js.zig");
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
-const Viewport = @import("../Viewport.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
@@ -193,6 +192,14 @@ pub fn setParent(_: *Window, value: js.Value) void {
 
 pub fn setLength(_: *Window, value: js.Value) void {
     replaceGlobalProperty(value, "length");
+}
+
+pub fn setInnerWidth(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "innerWidth");
+}
+
+pub fn setInnerHeight(_: *Window, value: js.Value) void {
+    replaceGlobalProperty(value, "innerHeight");
 }
 
 pub fn setScrollX(_: *Window, value: js.Value) void {
@@ -727,10 +734,14 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
+pub fn getInnerWidth(_: *const Window, frame: *Frame) u32 {
+    return frame._page.getViewport().width;
+}
+
 // Faux-layout viewport height, used to decide whether an element is already
 // within view (e.g. scrollIntoViewIfNeeded).
-pub fn getInnerHeight(_: *const Window) u32 {
-    return Viewport.default.height;
+pub fn getInnerHeight(_: *const Window, frame: *Frame) u32 {
+    return frame._page.getViewport().height;
 }
 
 const ScrollToOpts = union(enum) {
@@ -1042,9 +1053,11 @@ pub const JsApi = struct {
     // sites not to try to access those features
     pub const isSecureContext = bridge.property(false, .{ .template = false });
 
-    // [Replaceable] (CSSOM-View): writable so assignment overwrites rather than throws.
-    pub const innerWidth = bridge.property(Viewport.default.width, .{ .template = false, .readonly = false });
-    pub const innerHeight = bridge.property(Viewport.default.height, .{ .template = false, .readonly = false });
+    // [Replaceable] (CSSOM-View): the getter reads the page's runtime viewport
+    // (overridable via Emulation.setDeviceMetricsOverride); the setter overwrites
+    // the attribute rather than throwing.
+    pub const innerWidth = bridge.accessor(Window.getInnerWidth, Window.setInnerWidth, .{});
+    pub const innerHeight = bridge.accessor(Window.getInnerHeight, Window.setInnerHeight, .{});
     pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
 
     pub const opener = bridge.accessor(Window.getOpener, null, .{});

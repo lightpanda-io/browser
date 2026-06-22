@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
-const Viewport = @import("Viewport.zig");
 
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
@@ -148,7 +147,7 @@ fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) !void {
     const query = std.mem.trim(u8, rest[0..open], &std.ascii.whitespace);
     const inner = rest[open + 1 .. close];
 
-    if (!MediaQuery.matches(query, Viewport.default)) return;
+    if (!MediaQuery.matches(query, self.frame._page.getViewport())) return;
 
     var it = CssParser.parseStylesheet(inner);
     while (it.next()) |nested_rule| {

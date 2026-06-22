@@ -18,9 +18,9 @@
 
 // zlint-disable unused-decls
 const js = @import("../../js/js.zig");
+const Frame = @import("../../Frame.zig");
 const EventTarget = @import("../EventTarget.zig");
 const MediaQuery = @import("../../css/MediaQuery.zig");
-const Viewport = @import("../../Viewport.zig");
 
 const MediaQueryList = @This();
 
@@ -40,18 +40,17 @@ pub fn getMedia(self: *const MediaQueryList) []const u8 {
 }
 
 /// Re-evaluates the stored query against the current viewport on every call
-/// so the result stays in sync if viewport emulation later lands. The
-/// viewport currently comes from `Viewport.default` (1920×1080), matching
-/// `Window.innerWidth` / `innerHeight`.
-pub fn getMatches(self: *const MediaQueryList) bool {
-    return MediaQuery.matches(self._media, Viewport.default);
+/// so the result stays in sync with viewport emulation. The viewport comes
+/// from the page (overridable via Emulation.setDeviceMetricsOverride),
+/// matching `Window.innerWidth` / `innerHeight`.
+pub fn getMatches(self: *const MediaQueryList, frame: *Frame) bool {
+    return MediaQuery.matches(self._media, frame._page.getViewport());
 }
 
-// TODO: once viewport emulation lands, `change` events need to fire on
-// every listener registered here (and via `addEventListener("change", ...)`
-// through the EventTarget proto) when the viewport crosses the breakpoint
-// that flips `matches`. Today the viewport is a constant, so no event can
-// ever fire — the registrations are no-ops rather than stored hooks.
+// TODO: `change` events need to fire on every listener registered here (and
+// via `addEventListener("change", ...)` through the EventTarget proto) when a
+// viewport override crosses the breakpoint that flips `matches`. Today these
+// registrations are no-ops rather than stored hooks.
 pub fn addListener(_: *const MediaQueryList, _: js.Function) void {}
 pub fn removeListener(_: *const MediaQueryList, _: js.Function) void {}
 
