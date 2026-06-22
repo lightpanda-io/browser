@@ -35,6 +35,7 @@ const CurlDebugAllocator = @import("CurlDebugAllocator.zig");
 
 const Cache = @import("cache/Cache.zig");
 const FsCache = @import("cache/FsCache.zig");
+const SqliteCache = @import("cache/SqliteCache.zig");
 
 const log = lp.log;
 const net = std.net;
@@ -220,21 +221,37 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     else
         null;
 
-    const cache = if (config.httpCacheDir()) |cache_dir_path|
-        Cache{
+    var cache_buf: [512]u8 = undefined;
+    const cache = if (config.httpCacheDir()) |cache_dir_path| blk: {
+        const trimmed_dir = std.mem.trimEnd(u8, cache_dir_path, &.{'/'});
+
+        std.fs.cwd().makePath(trimmed_dir) catch |e| {
+            log.err(.cache, "failed to create cache directory", .{
+                .path = trimmed_dir,
+                .err = e,
+            });
+            return e;
+        };
+
+        const cache_path = try std.fmt.bufPrintZ(
+            &cache_buf,
+            "{s}/cache.db",
+            .{trimmed_dir},
+        );
+
+        break :blk Cache{
             .kind = .{
-                .fs = FsCache.init(cache_dir_path) catch |e| {
+                .sqlite = SqliteCache.init(allocator, cache_path) catch |e| {
                     log.err(.cache, "failed to init", .{
-                        .kind = "FsCache",
-                        .path = cache_dir_path,
+                        .kind = "SqliteCache",
+                        .path = cache_path,
                         .err = e,
                     });
                     return e;
                 },
             },
-        }
-    else
-        null;
+        };
+    } else null;
 
     return .{
         .allocator = allocator,
