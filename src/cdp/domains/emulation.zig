@@ -94,13 +94,14 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
         if (v != 0) log.warn(.not_implemented, "Emulation.setDeviceMetricsOverride", .{ .param = "screenHeight", .value = v });
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.FrameNotLoaded;
+    // The override is stored on the Browser so it persists across page
+    // navigations for the whole CDP connection.
+    const browser = &cmd.cdp.browser;
 
     // CDP convention: a 0 width/height means "don't override that dimension",
     // so keep the current value for any dimension passed as 0.
-    const current = page.getViewport();
-    page.viewport_override = .{
+    const current = browser.getViewport();
+    browser.viewport_override = .{
         .width = if (params.width > 0) params.width else current.width,
         .height = if (params.height > 0) params.height else current.height,
     };
@@ -109,9 +110,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
 }
 
 fn clearDeviceMetricsOverride(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.FrameNotLoaded;
-    page.viewport_override = null;
+    cmd.cdp.browser.viewport_override = null;
     return cmd.sendResult(null, .{});
 }
 
@@ -285,6 +284,11 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 8 });
     try testing.expectEqual(375, page.getViewport().width);
     try testing.expectEqual(812, page.getViewport().height);
+
+    // The override lives on the Browser, so it persists across page
+    // navigations rather than being lost with the page.
+    try testing.expectEqual(375, bc.session.browser.getViewport().width);
+    try testing.expectEqual(812, bc.session.browser.getViewport().height);
 
     try ctx.processMessage(.{
         .id = 9,

@@ -25,6 +25,7 @@ const Notification = @import("../Notification.zig");
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 const Session = @import("Session.zig");
+const Viewport = @import("Viewport.zig");
 const HttpClient = @import("HttpClient.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
 
@@ -49,6 +50,14 @@ http_client: HttpClient,
 // across page navigations, mirroring how Chrome scopes permissions to the
 // browser context. Keys are owned by `allocator`; values are enum tags.
 permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
+
+// Runtime viewport override set via Emulation.setDeviceMetricsOverride and
+// cleared via clearDeviceMetricsOverride. Null means use the compile-time
+// Viewport.default. Scoped to the Browser so it persists across page
+// navigations (matching how Chrome scopes the override to the connection).
+// Every viewport consumer reads it through Page.getViewport so they all
+// observe the same (possibly overridden) value.
+viewport_override: ?Viewport = null,
 
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
@@ -138,6 +147,12 @@ pub fn clearPermissions(self: *Browser) void {
         self.allocator.free(key.*);
     }
     self.permissions.clearRetainingCapacity();
+}
+
+// The viewport every consumer should read: the runtime override if set,
+// otherwise the compile-time default.
+pub fn getViewport(self: *const Browser) Viewport {
+    return self.viewport_override orelse Viewport.default;
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {
