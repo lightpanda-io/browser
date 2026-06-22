@@ -29,6 +29,7 @@ const CachedResponse = Cache.CachedResponse;
 
 const Http = @import("../http.zig");
 const Pool = @import("../../storage/sqlite/Pool.zig");
+const Conn = @import("../../storage/sqlite/Sqlite.zig").Conn;
 const Migrations = @import("../../storage/sqlite/Sqlite.zig").Migrations;
 
 pub const SqliteCache = @This();
@@ -37,25 +38,33 @@ allocator: std.mem.Allocator,
 pool: Pool,
 
 const SqliteCacheMigrations = Migrations(&.{
-    \\ create table if not exists cache (
+    \\ create table metadata (
     \\      url               text not null primary key,
     \\      status            integer not null,
     \\      stored_at         integer not null,
     \\      age_at_store      integer not null,
     \\      max_age           integer not null,
     \\      must_revalidate   bool not null,
-    \\      body              blob not null
+    \\      etag              text,
+    \\      last_modified     text
     \\ )
     ,
-    \\ create table if not exists header (
-    \\      cache_url         text not null,
+    \\ create table body (
+    \\      url               text not null primary key,
+    \\      data              blob not null,
+    \\      foreign key (url) references metadata(url) on delete cascade
+    \\ )
+    ,
+    \\ create table header (
+    \\      url               text not null,
     \\      name              text not null,
     \\      value             text not null,
     \\      vary              bool not null,
-    \\      foreign key (cache_url) references cache(url) on delete cascade
+    \\      primary key (url, name),
+    \\      foreign key (url) references metadata(url) on delete cascade
     \\ )
     ,
-    "create index if not exists header_cache_url on header(cache_url)",
+    "create index header_url on header(url)",
 });
 
 pub fn init(allocator: std.mem.Allocator, path: [:0]const u8) !SqliteCache {
@@ -82,20 +91,12 @@ pub fn deinit(self: *SqliteCache) void {
     self.pool.deinit(self.allocator);
 }
 
-pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
-    const conn = try self.pool.acquire();
-    defer self.pool.release(conn);
-
+fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedMetadata {
     var entry = try conn.row(
-        \\ select status, stored_at, age_at_store, max_age, must_revalidate, body
-        \\ from cache
+        \\ select status, stored_at, age_at_store, max_age, must_revalidate, etag, last_modified,
+        \\ from metadata
         \\ where url = $1
-    ,
-        .{req.url},
-    ) orelse {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
-        return null;
-    };
+    , .{url}) orelse return null;
     defer entry.deinit();
 
     const status: u16 = @intCast(entry.get(i64, 0));
@@ -103,11 +104,12 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
     const age_at_store = entry.get(i64, 2);
     const max_age: u64 = @intCast(entry.get(i64, 3));
     const must_revalidate = entry.get(bool, 4);
-    const body = try arena.dupe(u8, entry.get([]const u8, 5));
+    const etag = if (entry.get(?[]const u8, 5)) |opt| try arena.dupe(u8, opt) else null;
+    const last_modified = if (entry.get(?[]const u8, 6)) |opt| try arena.dupe(u8, opt) else null;
 
     var header_rows = try conn.rows(
-        "select name, value, vary from header where cache_url = $1",
-        .{req.url},
+        "select name, value, vary from header where url = $1",
+        .{url},
     );
     defer header_rows.deinit();
 
@@ -118,6 +120,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         const name = try arena.dupe(u8, row.get([]const u8, 0));
         const value = try arena.dupe(u8, row.get([]const u8, 1));
         const vary = row.get(bool, 2);
+
         const h = Http.Header{ .name = name, .value = value };
         if (vary) {
             try vary_headers.append(arena, h);
@@ -126,26 +129,8 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         }
     }
 
-    // Vary matching.
-    for (vary_headers.items) |vary_hdr| {
-        const incoming = for (req.request_headers) |h| {
-            if (std.ascii.eqlIgnoreCase(h.name, vary_hdr.name)) break h.value;
-        } else "";
-
-        if (!std.ascii.eqlIgnoreCase(vary_hdr.value, incoming)) {
-            log.debug(.cache, "miss", .{
-                .url = req.url,
-                .reason = "vary mismatch",
-                .header = vary_hdr.name,
-                .expected = vary_hdr.value,
-                .got = incoming,
-            });
-            return null;
-        }
-    }
-
-    const metadata = CachedMetadata{
-        .url = try arena.dupeZ(u8, req.url),
+    return CachedMetadata{
+        .url = try arena.dupeZ(u8, url),
         .content_type = blk: {
             for (headers.items) |h| {
                 if (std.ascii.eqlIgnoreCase(h.name, "content-type")) break :blk h.value;
@@ -161,7 +146,118 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         },
         .headers = headers.items,
         .vary_headers = vary_headers.items,
+        .etag = etag,
+        .last_modified = last_modified,
     };
+}
+
+fn loadBody(conn: Conn, arena: std.mem.Allocator, url: []const u8) ![]const u8 {
+    const body_entry = try conn.row(
+        "select data from body where url = $1",
+        .{url},
+    ) orelse @panic("valid metadata must have a body");
+    defer body_entry.deinit();
+
+    return try arena.dupe(u8, body_entry.get([]const u8, 0));
+}
+
+fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
+    try conn.exec(
+        \\ insert or replace into metadata
+        \\     (url, status, stored_at, age_at_store, max_age, must_revalidate, etag, last_modified)
+        \\ values ($1, $2, $3, $4, $5, $6, $7, $8)
+    , .{
+        meta.url,
+        @as(i64, @intCast(meta.status)),
+        meta.stored_at,
+        @as(i64, @intCast(meta.age_at_store)),
+        @as(i64, @intCast(meta.cache_control.max_age)),
+        meta.cache_control.must_revalidate,
+        meta.etag,
+        meta.last_modified,
+    });
+
+    try conn.exec(
+        "insert into body (url, data) values ($1, $2)",
+        .{ meta.url, body },
+    );
+
+    var lower_name: [256]u8 = undefined;
+    for (meta.headers) |h| {
+        const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
+        try conn.exec(
+            "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
+            .{ meta.url, name, h.value },
+        );
+    }
+    for (meta.vary_headers) |h| {
+        const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
+        try conn.exec(
+            "insert into header (url, name, value, vary) values ($1, $2, $3, true)",
+            .{ meta.url, name, h.value },
+        );
+    }
+}
+
+fn updateMetadata(conn: Conn, meta: CachedMetadata) !void {
+    try conn.exec(
+        \\ update metadata
+        \\ set status = $1, stored_at = $2, age_at_store = $3, max_age = $4, must_revalidate = $5, etag = $6, last_modified = $7
+        \\ where url = $8
+    , .{
+        @as(i64, @intCast(meta.status)),
+        meta.stored_at,
+        @as(i64, @intCast(meta.age_at_store)),
+        @as(i64, @intCast(meta.cache_control.max_age)),
+        meta.cache_control.must_revalidate,
+        meta.etag,
+        meta.last_modified,
+        meta.url,
+    });
+
+    try conn.exec("delete from header where url = $1 and vary = false", .{meta.url});
+
+    var lower_name: [256]u8 = undefined;
+    for (meta.headers) |h| {
+        const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
+        try conn.exec(
+            "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
+            .{ meta.url, name, h.value },
+        );
+    }
+}
+
+pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
+    const conn = try self.pool.acquire();
+    defer self.pool.release(conn);
+
+    try conn.begin();
+    defer conn.rollback() catch {};
+
+    const metadata = try loadMetadata(conn, arena, req.url) orelse {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
+        return null;
+    };
+
+    const body = try loadBody(conn, arena, req.url);
+
+    // Vary matching.
+    for (metadata.vary_headers) |vary_hdr| {
+        const incoming = for (req.request_headers) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, vary_hdr.name)) break h.value;
+        } else "";
+
+        if (!std.ascii.eqlIgnoreCase(vary_hdr.value, incoming)) {
+            log.debug(.cache, "miss", .{
+                .url = req.url,
+                .reason = "vary mismatch",
+                .header = vary_hdr.name,
+                .expected = vary_hdr.value,
+                .got = incoming,
+            });
+            return null;
+        }
+    }
 
     const expired = metadata.isStale(req.timestamp);
     log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
@@ -180,39 +276,9 @@ pub fn put(self: *SqliteCache, meta: CachedMetadata, body: []const u8) !void {
     try conn.begin();
     errdefer conn.rollback() catch {};
 
-    try conn.exec(
-        \\ insert or replace into cache
-        \\     (url, status, stored_at, age_at_store, max_age, must_revalidate, body)
-        \\ values ($1, $2, $3, $4, $5, $6, $7)
-    , .{
-        meta.url,
-        @as(i64, @intCast(meta.status)),
-        meta.stored_at,
-        @as(i64, @intCast(meta.age_at_store)),
-        @as(i64, @intCast(meta.cache_control.max_age)),
-        meta.cache_control.must_revalidate,
-        body,
-    });
-
-    var lower_name: [256]u8 = undefined;
-
-    for (meta.headers) |h| {
-        const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
-
-        try conn.exec(
-            \\ insert into header (cache_url, name, value, vary) values ($1, $2, $3, false)
-        , .{ meta.url, name, h.value });
-    }
-
-    for (meta.vary_headers) |h| {
-        const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
-
-        try conn.exec(
-            \\ insert into header (cache_url, name, value, vary) values ($1, $2, $3, true)
-        , .{ meta.url, name, h.value });
-    }
-
+    try insertMetadata(conn, meta, body);
     try conn.commit();
+
     log.debug(.cache, "put", .{ .url = meta.url, .body_len = body.len });
 }
 
@@ -220,7 +286,7 @@ pub fn clear(self: *SqliteCache) !void {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    try conn.exec("delete from cache", .{});
+    try conn.exec("delete from metadata", .{});
     log.debug(.cache, "clear", .{});
 }
 
@@ -231,7 +297,7 @@ pub fn evict(self: *SqliteCache, url: []const u8) void {
     };
     defer self.pool.release(conn);
 
-    conn.exec("delete from cache where url = $1", .{url}) catch |err| {
+    conn.exec("delete from metadata where url = $1", .{url}) catch |err| {
         log.err(.cache, "delete from cache", .{ .url = url, .err = err });
         return;
     };
@@ -239,35 +305,23 @@ pub fn evict(self: *SqliteCache, url: []const u8) void {
     log.debug(.cache, "evict", .{ .url = url });
 }
 
-pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void {
+pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !void {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
     try conn.begin();
     errdefer conn.rollback() catch {};
 
-    try conn.exec(
-        "update cache set stored_at = $1, age_at_store = 0 where url = $2",
-        .{ req.timestamp, req.url },
-    );
+    var metadata = try loadMetadata(conn, arena, req.url) orelse {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
+        return error.CacheEntryNotFound;
+    };
 
-    if (req.headers.len > 0) {
-        try conn.exec(
-            "delete from header where cache_url = $1 and vary = false",
-            .{req.url},
-        );
+    metadata.renew(req);
 
-        var lower_name: [256]u8 = undefined;
-        for (req.headers) |h| {
-            const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
-            try conn.exec(
-                "insert into header (cache_url, name, value, vary) values ($1, $2, $3, false)",
-                .{ req.url, name, h.value },
-            );
-        }
-    }
-
+    try updateMetadata(conn, metadata);
     try conn.commit();
+
     log.debug(.cache, "renewed", .{
         .url = req.url,
         .timestamp = req.timestamp,
