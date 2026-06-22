@@ -200,7 +200,7 @@ pub fn put(self: *SqliteCache, meta: CachedMetadata, body: []const u8) !void {
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
 
         try conn.exec(
-            \\ insert into header (cache_url, name, value, vary) values ($1, $2, $3, 0)
+            \\ insert into header (cache_url, name, value, vary) values ($1, $2, $3, false)
         , .{ meta.url, name, h.value });
     }
 
@@ -208,7 +208,7 @@ pub fn put(self: *SqliteCache, meta: CachedMetadata, body: []const u8) !void {
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
 
         try conn.exec(
-            \\ insert into header (cache_url, name, value, vary) values ($1, $2, $3, 1)
+            \\ insert into header (cache_url, name, value, vary) values ($1, $2, $3, true)
         , .{ meta.url, name, h.value });
     }
 
@@ -243,11 +243,35 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
+    try conn.begin();
+    errdefer conn.rollback() catch {};
+
     try conn.exec(
         "update cache set stored_at = $1, age_at_store = 0 where url = $2",
         .{ req.timestamp, req.url },
     );
-    log.debug(.cache, "renewed", .{ .url = req.url, .timestamp = req.timestamp });
+
+    if (req.headers.len > 0) {
+        try conn.exec(
+            "delete from header where cache_url = $1 and vary = false",
+            .{req.url},
+        );
+
+        var lower_name: [256]u8 = undefined;
+        for (req.headers) |h| {
+            const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
+            try conn.exec(
+                "insert into header (cache_url, name, value, vary) values ($1, $2, $3, false)",
+                .{ req.url, name, h.value },
+            );
+        }
+    }
+
+    try conn.commit();
+    log.debug(.cache, "renewed", .{
+        .url = req.url,
+        .timestamp = req.timestamp,
+    });
 }
 
 const testing = std.testing;
