@@ -150,3 +150,24 @@ jobs:
       - name: cloudfront cache invalidation
         run: |
           aws cloudfront create-invalidation --distribution-id ${{ env.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+
+  build-docker-image:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate token for browser-docker
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: browser-docker
+
+      - name: Trigger docker image build
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+            gh workflow run ci \
+              --repo lightpanda-io/browser-docker \
+              --field tag="${{ env.RELEASE }}"
