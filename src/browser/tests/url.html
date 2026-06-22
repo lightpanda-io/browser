@@ -1321,3 +1321,43 @@
     testing.expectEqual('?a=%7E&b=%7E&c=foo', url.search);
   }
 </script>
+
+<script id=wpt_searchparams_appends_equals>
+  // url-constructor: a query key with no value serializes back with a
+  // trailing '=' via URLSearchParams.
+  {
+    const url = new URL('http://foo.bar/baz?qux');
+    testing.expectEqual('qux=', url.searchParams.toString());
+  }
+</script>
+
+<script id=wpt_searchparams_encodes_question_mark>
+  // url-constructor: '?' inside a key must be percent-encoded as %3F when
+  // re-serialized through searchParams.
+  {
+    const url = new URL('??a=b&c=d', 'http://example.org/foo/bar');
+    testing.expectEqual('%3Fa=b&c=d', url.searchParams.toString());
+  }
+</script>
+
+<script id=wpt_setter_host_with_slash>
+  // url-setters: setting host to a value containing a '/' takes only the part
+  // before the delimiter as the host (the rest is ignored).
+  {
+    const url = new URL('http://example.net/path');
+    url.host = 'example.com/stuff';
+    testing.expectEqual('example.com', url.host);
+    testing.expectEqual('http://example.com/path', url.href);
+  }
+</script>
+
+<script id=wpt_setter_hostname_strips_tab>
+  // url-setters: a tab in a hostname is stripped (here clearing the host),
+  // the setter must not throw.
+  {
+    const url = new URL('sc://x/');
+    url.hostname = '\t';
+    testing.expectEqual('', url.hostname);
+    testing.expectEqual('sc:///', url.href);
+  }
+</script>
