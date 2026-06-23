@@ -926,11 +926,9 @@ fn printToPDF(cmd: *CDP.Command) !void {
 }
 
 fn getLayoutMetrics(cmd: *CDP.Command) !void {
-    const BrowserViewport = @import("../../browser/Viewport.zig");
-    const viewport = if (cmd.browser_context) |bc|
-        if (bc.session.currentPage()) |page| page.getViewport() else BrowserViewport.default
-    else
-        BrowserViewport.default;
+    // The viewport override lives on the Browser, so read it there directly:
+    // it stays correct even when no page is currently loaded.
+    const viewport = cmd.cdp.browser.getViewport();
     const width = viewport.width;
     const height = viewport.height;
 
