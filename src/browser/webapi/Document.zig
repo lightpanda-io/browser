@@ -619,6 +619,10 @@ pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, frame: *
     return self.asNode().replaceChildren(nodes, frame);
 }
 
+pub fn moveBefore(self: *Document, node: js.Value, child: js.Value, frame: *Frame) !void {
+    return self.asNode().moveBefore(node, child, frame);
+}
+
 pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
     // DFS in document order; topmost = last visited element whose rect contains (x, y).
     //
@@ -1213,6 +1217,7 @@ pub const JsApi = struct {
     pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true, .ce_reactions = true });
     pub const append = bridge.function(Document.append, .{ .dom_exception = true, .ce_reactions = true });
     pub const prepend = bridge.function(Document.prepend, .{ .dom_exception = true, .ce_reactions = true });
+    pub const moveBefore = bridge.function(Document.moveBefore, .{ .dom_exception = true, .ce_reactions = true });
     pub const replaceChildren = bridge.function(Document.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
     pub const elementFromPoint = bridge.function(Document.elementFromPoint, .{});
     pub const elementsFromPoint = bridge.function(Document.elementsFromPoint, .{});
