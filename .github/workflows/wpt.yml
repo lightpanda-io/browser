@@ -116,6 +116,47 @@ jobs:
           ./wptrunner -lpd-path ./lightpanda -json -concurrency 5 -pool 5 --mem-limit 400 > wpt.json
           kill `cat WPT.pid`
 
+      - name: summarize results by area
+        if: always()
+        run: |
+          test -s wpt.json || { echo "No wpt.json produced; nothing to summarize." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          python3 - wpt.json >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import collections, json, sys
+          try:
+              with open(sys.argv[1]) as fh:
+                  results = json.load(fh)
+          except Exception as e:
+              print(f"Could not parse {sys.argv[1]}: {e}")
+              sys.exit(0)
+          total = len(results)
+          passed = sum(1 for t in results if t.get("pass"))
+          # area = first path segment of the test name, e.g. /FileAPI/x.html -> FileAPI
+          stats = collections.defaultdict(lambda: [0, 0, 0, 0])  # [tests, passed, subtests, sub_passed]
+          for t in results:
+              seg = (t.get("name") or "").lstrip("/").split("/", 1)
+              s = stats[seg[0] if seg and seg[0] else "(root)"]
+              s[0] += 1
+              s[1] += 1 if t.get("pass") else 0
+              for c in t.get("cases") or []:
+                  s[2] += 1
+                  s[3] += 1 if c.get("pass") else 0
+          pct = lambda p, n: f"{(100.0 * p / n):.1f}%" if n else "-"
+          rows = [(a, n, p, n - p, cp, ct) for a, (n, p, ct, cp) in stats.items()]
+          rows.sort(key=lambda r: (-r[3], r[0]))  # most failing tests first
+          row = lambda a, n, p, f, cp, ct: f"| `/{a}/` | {n:,} | {p:,} | {f:,} | {pct(p, n)} | {cp:,}/{ct:,} |"
+          head = ["| Area | Tests | Passed | Failed | Pass rate | Subtests |",
+                  "|------|------:|-------:|-------:|----------:|---------:|"]
+          out = ["## WPT results by area", "",
+                 f"**{passed:,} / {total:,} tests passing ({pct(passed, total)})**, "
+                 f"{total - passed:,} failing across {len(rows)} areas.", "",
+                 "Sorted by failing tests, so the areas with the most to gain sit on top:", ""]
+          out += head + [row(*r) for r in rows[:25]]
+          if len(rows) > 25:
+              out += ["", f"<details><summary>{len(rows) - 25} more areas</summary>", ""] + head
+              out += [row(*r) for r in rows[25:]] + ["", "</details>"]
+          print("\n".join(out))
+          PY
+
       - name: write commit
         run: |
           echo "${{github.sha}}" > commit.txt
