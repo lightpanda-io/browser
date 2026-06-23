@@ -284,7 +284,7 @@ zig build snapshot_creator -- src/snapshot.bin
 
 Build using the snapshot binary.
 ```
-zig build -Dsnapshot_path=../../snapshot.bin
+zig build -Dsnapshot_path=../../../snapshot.bin
 ```
 
 See [#1279](https://github.com/lightpanda-io/browser/pull/1279) for more details.

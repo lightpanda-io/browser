@@ -93,7 +93,7 @@ build-v8-snapshot:
 ## Build in release-fast mode
 build: build-v8-snapshot
 	@printf "\033[36mBuilding (release fast)...\033[0m\n"
-	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast -Dsnapshot_path=../../../snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build in debug mode
