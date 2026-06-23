@@ -116,11 +116,16 @@ fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedM
 
     var headers: std.ArrayList(Http.Header) = .empty;
     var vary_headers: std.ArrayList(Http.Header) = .empty;
+    var content_type: []const u8 = "application/octet-stream";
 
     while (try header_rows.next()) |row| {
         const name = try arena.dupe(u8, row.get([]const u8, 0));
         const value = try arena.dupe(u8, row.get([]const u8, 1));
         const vary = row.get(bool, 2);
+
+        if (std.ascii.eqlIgnoreCase(name, "content-type")) {
+            content_type = value;
+        }
 
         const h = Http.Header{ .name = name, .value = value };
         if (vary) {
@@ -132,12 +137,7 @@ fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedM
 
     return CachedMetadata{
         .url = try arena.dupeZ(u8, url),
-        .content_type = blk: {
-            for (headers.items) |h| {
-                if (std.ascii.eqlIgnoreCase(h.name, "content-type")) break :blk h.value;
-            }
-            break :blk "application/octet-stream";
-        },
+        .content_type = content_type,
         .status = status,
         .stored_at = stored_at,
         .age_at_store = @intCast(age_at_store),
