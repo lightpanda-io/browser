@@ -66,7 +66,7 @@
     \\              js        Script and link[as=script, rel=preload].
     \\              ui        Includes img, picture, video, CSS and SVG.
     \\              css       Includes style and link[rel=stylesheet].
-    \\              invisible Invisible (via CSS) elements.
+    \\              invisible Best-effort (e.g. display:none) hidden elements
     \\              full      Strip everything.
     \\  --json
     \\          Capture and print the status of the fetch in a JSON string and output
