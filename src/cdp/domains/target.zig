@@ -306,9 +306,9 @@ fn closeTarget(cmd: *CDP.Command) !void {
         bc.session_id = null;
     }
 
-    if (bc.frame_id) |frame_id| {
-        bc.session.closePage(frame_id);
-        bc.frame_id = null;
+    if (bc.page_handle) |handle| {
+        handle.close();
+        bc.page_handle = null;
     }
     for (bc.isolated_worlds.items) |world| {
         world.deinit();

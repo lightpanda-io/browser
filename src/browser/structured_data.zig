@@ -490,6 +490,7 @@ const testing = @import("../testing.zig");
 
 fn testStructuredData(html: []const u8) !StructuredData {
     const frame = try testing.createFrame();
+    errdefer testing.test_session.closeAllPages();
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);

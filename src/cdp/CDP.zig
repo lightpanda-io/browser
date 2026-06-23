@@ -500,11 +500,12 @@ pub const BrowserContext = struct {
     // time, we only have 1 target_id.
     target_id: ?[14]u8,
 
-    // Root frame_id of this context's page, captured when `frameCreated`
-    // fires. A BrowserContext is single-target by protocol, so it can resolve
-    // its (live) page/frame from the Session by this id — see `mainFrame` /
-    // `mainPage`. Stable across navigations (the replacement reuses it).
-    frame_id: ?u32 = null,
+    // Navigation-safe handle to this context's page, set when `frameCreated`
+    // fires. A BrowserContext is single-target by protocol, so it resolves its
+    // (live) page/frame through this handle — see `mainFrame` / `mainPage`. The
+    // handle's frame_id is stable across navigations (the replacement reuses
+    // it). null until the first page is created.
+    page_handle: ?Session.PageHandle = null,
 
     // The CDP session_id. After the target/page is created, the client
     // "attaches" to it (either explicitly or automatically). We return a
@@ -743,14 +744,13 @@ pub const BrowserContext = struct {
     // True while this context's page is mid-commit (a root navigation's
     // replacement is being promoted).
     pub fn inCommit(self: *const BrowserContext) bool {
-        const page = self.mainPage() orelse return false;
-        return self.session.replacementOf(page) != null;
+        return (self.page_handle orelse return false).inCommit();
     }
 
-    // The live Page for this single-target context (resolved by frame_id),
-    // or null if no page is loaded.
+    // The live Page for this single-target context, or null if no page is
+    // loaded.
     pub fn mainPage(self: *const BrowserContext) ?*Page {
-        return self.session.livePage(self.frame_id orelse return null);
+        return (self.page_handle orelse return null).page();
     }
 
     pub fn getURL(self: *const BrowserContext) ?[:0]const u8 {

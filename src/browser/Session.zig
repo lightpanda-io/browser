@@ -270,14 +270,20 @@ fn retire(self: *Session, page: *Page) void {
         live.replacement = null;
     }
 
-    page.frame.abortTransfers();
-    for (self.pages.items, 0..) |p, i| {
-        if (p == page) {
-            _ = self.pages.swapRemove(i);
-            break;
-        }
+    if (page.replacement) |replacement| {
+        // page is being destroyed, also detroy its replacement
+        self.discardPendingPage(replacement);
     }
+
+    page.frame.abortTransfers();
+    self.removePageFromList(page);
     self.queuePageDestruction(page);
+}
+
+fn removePageFromList(self: *Session, page: *Page) void {
+    if (std.mem.indexOfScalar(*Page, self.pages.items, page)) |i| {
+        _ = self.pages.swapRemove(i);
+    }
 }
 
 // Tear down the currently-active Page. Dispatches `frame_remove` first
@@ -438,11 +444,13 @@ pub fn currentFrame(self: *Session) ?*Frame {
     return &page.frame;
 }
 
-// Multi-page aware: frame ids are globally unique (monotonic on `Browser`), so
-// search every live page's frame tree. During a root navigation the old and
-// replacement pages share the root frame_id; the old page sits at index 0 and
-// is matched first — the addressable page until commit.
+// Multi-page aware: frame ids are globally unique (monotonic on `Browser`).
+// First we find the "live" page for a frame, then we search every nested
+// frame within that page.
 pub fn findFrameByFrameId(self: *Session, frame_id: u32) ?*Frame {
+    if (self.livePage(frame_id)) |page| {
+        return &page.frame;
+    }
     for (self.pages.items) |page| {
         if (page.findFrameByFrameId(frame_id)) |frame| {
             return frame;
@@ -846,12 +854,7 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
 
     old.replacement = null;
     replacement.replaces = null;
-    for (self.pages.items, 0..) |p, i| {
-        if (p == old) {
-            _ = self.pages.swapRemove(i);
-            break;
-        }
-    }
+    self.removePageFromList(old);
 
     // Step 4: tear down the OLD page LAST. Anything in steps 1-3 that needed to
     // walk the OLD page's state has already done so. Kill any remaining
@@ -901,6 +904,11 @@ pub const PageHandle = struct {
 
     pub fn page(self: PageHandle) ?*Page {
         return self.session.livePage(self.frame_id);
+    }
+
+    pub fn inCommit(self: PageHandle) bool {
+        const live = self.page() orelse return false;
+        return self.session.replacementOf(live) != null;
     }
 
     pub fn close(self: PageHandle) void {

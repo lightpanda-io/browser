@@ -240,8 +240,10 @@ fn close(cmd: *CDP.Command) !void {
         bc.session_id = null;
     }
 
-    if (bc.frame_id) |frame_id| bc.session.closePage(frame_id);
-    bc.frame_id = null;
+    if (bc.page_handle) |handle| {
+        handle.close();
+    }
+    bc.page_handle = null;
     for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
@@ -528,9 +530,9 @@ pub fn frameRemove(bc: *CDP.BrowserContext) void {
 }
 
 pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
-    // Record the root frame_id so the context can resolve its live page/frame
-    // (mainFrame / mainPage) without a session-wide "current" shim.
-    bc.frame_id = frame._frame_id;
+    // Record a handle to the new page so the context can resolve its live
+    // page/frame (mainFrame / mainPage) without a session-wide "current" shim.
+    bc.page_handle = .{ .session = bc.session, .frame_id = frame._frame_id };
 
     // Detect "in commit" mode: Session.commitPendingPage dispatches frame_
     // created BEFORE clearing `replaces` (deliberate ordering — see

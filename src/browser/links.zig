@@ -90,6 +90,8 @@ const testing = @import("../testing.zig");
 
 fn testLinks(html: []const u8) ![]Link {
     const frame = try testing.createFrame();
+    errdefer testing.test_session.closeAllPages();
+
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
     try frame.parseHtmlAsChildren(div.asNode(), html);
