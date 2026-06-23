@@ -1045,6 +1045,10 @@ pub fn prepend(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !v
     }
 }
 
+pub fn moveBefore(self: *Element, node: js.Value, child: js.Value, frame: *Frame) !void {
+    return self.asNode().moveBefore(node, child, frame);
+}
+
 pub fn before(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
@@ -2014,6 +2018,7 @@ pub const JsApi = struct {
     pub const remove = bridge.function(Element.remove, .{ .ce_reactions = true });
     pub const append = bridge.function(Element.append, .{ .dom_exception = true, .ce_reactions = true });
     pub const prepend = bridge.function(Element.prepend, .{ .dom_exception = true, .ce_reactions = true });
+    pub const moveBefore = bridge.function(Element.moveBefore, .{ .dom_exception = true, .ce_reactions = true });
     pub const before = bridge.function(Element.before, .{ .dom_exception = true, .ce_reactions = true });
     pub const after = bridge.function(Element.after, .{ .dom_exception = true, .ce_reactions = true });
     pub const firstElementChild = bridge.accessor(Element.firstElementChild, null, .{});

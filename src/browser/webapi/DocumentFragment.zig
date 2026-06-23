@@ -146,6 +146,10 @@ pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, 
     return self.asNode().replaceChildren(nodes, frame);
 }
 
+pub fn moveBefore(self: *DocumentFragment, node: js.Value, child: js.Value, frame: *Frame) !void {
+    return self.asNode().moveBefore(node, child, frame);
+}
+
 pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Frame) !void {
     const dump = @import("../dump.zig");
     return dump.children(self.asNode(), .{ .shadow = .complete }, writer, frame);
@@ -213,6 +217,7 @@ pub const JsApi = struct {
     pub const lastElementChild = bridge.accessor(DocumentFragment.lastElementChild, null, .{});
     pub const append = bridge.function(DocumentFragment.append, .{ .dom_exception = true, .ce_reactions = true });
     pub const prepend = bridge.function(DocumentFragment.prepend, .{ .dom_exception = true, .ce_reactions = true });
+    pub const moveBefore = bridge.function(DocumentFragment.moveBefore, .{ .dom_exception = true, .ce_reactions = true });
     pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
 
     pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });

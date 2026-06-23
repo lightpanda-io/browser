@@ -110,6 +110,10 @@ pub fn enqueueConnected(self: *Self, frame: *Frame, element: *Element) !void {
     try self.route(frame, .{ .connected = element });
 }
 
+pub fn enqueueMove(self: *Self, frame: *Frame, element: *Element) !void {
+    try self.route(frame, .{ .move = element });
+}
+
 pub fn enqueueDisconnected(self: *Self, frame: *Frame, element: *Element) !void {
     try self.route(frame, .{ .disconnected = element });
 }
@@ -143,6 +147,7 @@ pub fn enqueueAttributeChanged(
 pub const Reaction = union(enum) {
     connected: *Element,
     disconnected: *Element,
+    move: *Element,
     adopted: Adopted,
     attribute_changed: AttributeChanged,
 

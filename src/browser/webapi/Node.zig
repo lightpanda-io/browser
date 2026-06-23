@@ -692,6 +692,99 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
     return old_child;
 }
 
+// `node` and `child` are taken as raw js.Values rather than `*Node`/`?*Node`
+// because both must be present, and `child` is nullable.
+pub fn moveBefore(self: *Node, node_val: js.Value, child_val: js.Value, frame: *Frame) !void {
+    const node = try node_val.toZig(*Node);
+    const child: ?*Node = if (child_val.isNullOrUndefined()) null else try child_val.toZig(*Node);
+
+    // parent must be a Document, DocumentFragment, or Element node.
+    switch (self._type) {
+        .document, .document_fragment, .element => {},
+        else => return error.HierarchyError,
+    }
+
+    if (node.contains(self)) {
+        return error.HierarchyError;
+    }
+
+    if (self.getRootNode(.{ .composed = true }) != node.getRootNode(.{ .composed = true })) {
+        return error.HierarchyError;
+    }
+
+    // node must be an Element or a CharacterData node.
+    switch (node._type) {
+        .element, .cdata => {},
+        else => return error.HierarchyError,
+    }
+
+    if (self._type == .document) {
+        switch (node._type) {
+            .cdata => |cd| {
+                if (cd._type == .text) {
+                    // A Text node cannot be a child of a document.
+                    return error.HierarchyError;
+                }
+            },
+            .element => {
+                var it = self.childrenIterator();
+                while (it.next()) |existing| {
+                    if (existing._type == .element and existing != node) {
+                        // A document can have at most one element child.
+                        return error.HierarchyError;
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (child) |c| {
+        if (c._parent != self) {
+            // If child is non-null, its parent must be parent.
+            return error.NotFound;
+        }
+    }
+
+    // Moving a node before itself is a relative no-op: the reference child
+    // becomes the node's own next sibling.
+    var ref = child;
+    if (ref) |r| {
+        if (r == node) {
+            ref = node.nextSibling();
+        }
+    }
+
+    frame.domChanged();
+
+    // selfand node share a root, so the connectedness won't change. This API
+    // should appear atomic as much as possible. We can skip the id-map
+    // management (because it won't change) and custom elements shouldn't fire
+    // disconnect/connected callbacks. But MutationObservers and ranges still
+    // fire
+    const connected = node.isConnected();
+
+    if (node._parent) |old_parent| {
+        frame.removeNode(old_parent, node, .{ .will_be_reconnected = connected });
+    }
+
+    if (ref) |r| {
+        try frame.insertNodeRelative(self, node, .{ .before = r }, .{ .child_already_connected = connected });
+    } else {
+        try frame.appendNode(self, node, .{ .child_already_connected = connected });
+    }
+
+    if (connected) {
+        // Enqueue on a move callback (if we're connected) for any nested
+        // custom element
+        const TreeWalker = @import("TreeWalker.zig");
+        var tw = TreeWalker.Full.Elements.init(node, .{});
+        while (tw.next()) |el| {
+            Element.Html.Custom.enqueueMoveCallbackOnElement(el, frame);
+        }
+    }
+}
+
 pub fn getNodeValue(self: *const Node) ?String {
     return switch (self._type) {
         .cdata => |c| c.getData(),
