@@ -62,8 +62,8 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
         typ,
         HashChangeEvent{
             ._proto = undefined,
-            ._old_url = opts.oldURL,
-            ._new_url = opts.newURL,
+            ._old_url = try arena.dupe(u8, opts.oldURL),
+            ._new_url = try arena.dupe(u8, opts.newURL),
         },
     );
 
