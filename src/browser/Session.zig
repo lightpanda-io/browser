@@ -334,8 +334,6 @@ fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     return frame;
 }
 
-// NOTE: the caller is not the owner of the returned value,
-// the pointer on Frame is just returned as a convenience
 pub fn createPage(self: *Session) !PageHandle {
     // Drain any pending Page deinits now, while we're at a known-safe point
     self.processDestroyQueues();
