@@ -63,10 +63,11 @@
     \\          Comma-separated list of tag groups to remove from dump.
     \\          Defaults to no-strip.
     \\          Allowed values:
-    \\              js   script and link[as=script, rel=preload].
-    \\              ui   Includes img, picture, video, CSS and SVG.
-    \\              css  Includes style and link[rel=stylesheet].
-    \\              full Strip everything.
+    \\              js        Script and link[as=script, rel=preload].
+    \\              ui        Includes img, picture, video, CSS and SVG.
+    \\              css       Includes style and link[rel=stylesheet].
+    \\              invisible Best-effort (e.g. display:none) hidden elements
+    \\              full      Strip everything.
     \\  --json
     \\          Capture and print the status of the fetch in a JSON string and output
     \\          it. When used with --dump <MODE> this will wrap the dumped content
