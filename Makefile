@@ -5,6 +5,8 @@ ZIG := zig
 BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 # option test filter make test F="server"
 F=
+# single-test filter for `make wpt` (e.g. make wpt T=Node-childNodes.html)
+T=
 
 # Extra flags forwarded to every `$(ZIG) build` invocation. Most commonly used
 # to point at a prebuilt V8 archive and skip the multi-minute source rebuild:
@@ -72,7 +74,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end wpt clean
 
 ## Download the prebuilt V8 archive (skips the 10+ min source build)
 download-v8:
@@ -127,6 +129,27 @@ endif
 end2end:
 	@test -d ../demo
 	cd ../demo && go run runner/main.go
+
+# Web Platform Tests, run locally. Needs the WPT fork in ../wpt and the demo
+# runner in ../demo (same convention as `end2end`). See the README for setup.
+WPT_BIN  := $(BC)zig-out/bin/lightpanda
+WPT_DIR  := $(abspath $(BC)../wpt)
+DEMO_DIR := $(abspath $(BC)../demo)
+
+## Run the Web Platform Tests locally (whole suite, or one test with T=Foo.html)
+wpt:
+	@test -d $(WPT_DIR) || { printf "\033[33mMissing $(WPT_DIR). Clone the fork:\n  git clone -b fork --depth=1 git@github.com:lightpanda-io/wpt.git $(WPT_DIR)\033[0m\n"; exit 1; }
+	@test -d $(DEMO_DIR)/wptrunner || { printf "\033[33mMissing $(DEMO_DIR). Clone the runner:\n  git clone --depth=1 git@github.com:lightpanda-io/demo.git $(DEMO_DIR)\033[0m\n"; exit 1; }
+	@grep -q web-platform.test /etc/hosts || { printf "\033[33mWPT custom hosts not installed (one-time, needs sudo):\n  cd $(WPT_DIR) && ./wpt make-hosts-file | sudo tee -a /etc/hosts\033[0m\n"; exit 1; }
+	@test -f $(WPT_DIR)/MANIFEST.json || ( printf "\033[36mGenerating MANIFEST.json...\033[0m\n"; cd $(WPT_DIR) && ./wpt manifest )
+	@printf "\033[36mBuilding lightpanda (-Dwpt_extensions, release fast)...\033[0m\n"
+	@$(ZIG) build $(ZIGFLAGS) -Dwpt_extensions -Doptimize=ReleaseFast || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[36mServing WPT and running the suite (Ctrl-C to stop)...\033[0m\n"
+	@cd $(WPT_DIR) && ./wpt serve 2>/dev/null & \
+		WPT_PID=$$!; \
+		trap 'kill $$WPT_PID 2>/dev/null' EXIT INT TERM; \
+		sleep 20; \
+		cd $(DEMO_DIR)/wptrunner && go run . -lpd-path $(WPT_BIN) $(if $(T),$(T),-summary)
 
 ## Remove build artifacts (keeps .lp-cache/ and zig-pkg/ — slow to re-fetch)
 clean:

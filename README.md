@@ -356,6 +356,26 @@ details.
 
 #### Run WPT test suite
 
+##### Quick local run
+
+If the WPT fork is cloned in `../wpt` and the [demo
+repository](https://github.com/lightpanda-io/demo) (which holds the runner) in
+`../demo` — both siblings of this repo, the same convention as `make end2end` —
+a single target builds Lightpanda with `-Dwpt_extensions`, starts `./wpt serve`,
+runs the suite and tears the server down:
+
+```
+make wpt                          # whole suite (summary output)
+make wpt T=Node-childNodes.html   # one test
+```
+
+It checks the prerequisites first (the two clones, the custom hosts entry, the
+`MANIFEST.json`) and prints the exact command to fix whichever is missing. The
+custom hosts still need a one-time `sudo` (see below); `make wpt` won't do that
+for you. The manual flow below is the same thing, step by step.
+
+##### Manual run
+
 An external [Go](https://go.dev) runner is provided by
 [github.com/lightpanda-io/demo/](https://github.com/lightpanda-io/demo/)
 repository, located into `wptrunner/` dir.
