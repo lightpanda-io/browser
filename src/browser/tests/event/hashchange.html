@@ -81,3 +81,36 @@
   });
 }
 </script>
+
+<script id=hashChangeFiresOnHistoryTraversal type=module>
+{
+  // Traversing history (history.back) between entries that share a document
+  // but differ only by fragment must also fire hashchange. The decision is
+  // owned by Navigation.navigateInner (single resolved-URL source of truth),
+  // not re-derived in History.goInner.
+  const state = await testing.async();
+
+  const events = [];
+  window.onhashchange = (e) => {
+    events.push([e.oldURL, e.newURL]);
+    if (events.length === 2) state.resolve();
+  };
+
+  // Relative to the document's current URL (a prior block leaves a fragment
+  // here): pushState creates a fragment-only entry without firing hashchange,
+  // then back/forward traverse between the two entries.
+  const before = location.href;
+  history.pushState(null, '', '#section');  // entry .../#section; no hashchange
+  const after = location.href;
+  history.back();                           // traverse: after -> before
+  history.forward();                        // traverse: before -> after
+
+  await state.done(() => {
+    testing.expectEqual([
+      [after, before],
+      [before, after],
+    ], events);
+    window.onhashchange = null;
+  });
+}
+</script>

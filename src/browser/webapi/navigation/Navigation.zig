@@ -298,6 +298,10 @@ pub fn navigateInner(
         new_url = try arena.dupeZ(u8, new_url);
     }
 
+    // Captured before the switch overwrites frame.url in the same_document
+    // branches; used to queue the hashchange once below.
+    const old_url = frame.url;
+
     const previous = self.getCurrentEntry();
 
     switch (kind) {
@@ -343,6 +347,10 @@ pub fn navigateInner(
         .reload => {
             try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
         },
+    }
+
+    if (is_same_document and !std.mem.eql(u8, old_url, new_url)) {
+        try frame.queueHashChange(old_url, new_url);
     }
 
     if (self._on_currententrychange) |cec| {
