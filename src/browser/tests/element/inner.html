@@ -185,4 +185,19 @@
   // hidden via a CSS class). A hidden block does not contribute a line break.
   testing.expectEqual("abc", $('#d5').innerText);
   testing.expectEqual("beforeafter", $('#d6').innerText);
+
+  // .innerText read ON a display:none root equals textContent. The own-element
+  // check must keep visible child elements (an ancestor-walk would prune the
+  // <span> while keeping its sibling text nodes, yielding "ac").
+  d1.innerHTML = '<div id=dn style="display:none">a<span>b</span>c</div>';
+  testing.expectEqual("abc", $('#dn').innerText);
+
+  // A display:none <br> contributes no line break.
+  d1.innerHTML = 'a<br style="display:none">b';
+  testing.expectEqual("ab", d1.innerText);
+
+  // Guard: visibility:hidden text stays INCLUDED (the check is display-only),
+  // so a future switch to a visibility-aware check can't silently over-exclude.
+  d1.innerHTML = '<span style="visibility:hidden">X</span>Y';
+  testing.expectEqual("XY", d1.innerText);
 </script>

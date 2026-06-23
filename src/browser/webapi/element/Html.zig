@@ -1331,9 +1331,6 @@ const InnerTextState = struct {
     // Needed to reach the StyleManager for CSS-driven visibility (display:none).
     frame: *Frame,
 
-    // Tree-local visibility cache shared across the whole walk (see getInnerText).
-    cache: Element.VisibilityCache = .{},
-
     // number of line breaks we've accumulated for the block. Emitted lazily that
     // leading/trailing breaks aren't written and so that we can emit the max
     // requested, which can change as we render children.
@@ -1449,16 +1446,20 @@ fn handleChildElement(
     saw_cell: *bool,
     saw_row: *bool,
 ) !void {
+    // doesn't use StyleManger's isHidden, because we don't care if the element
+    // is hidden through its parent. If you can el.innerText on an element, the
+    // visibility of el.parent doesn't matter. So we only care about visibility
+    // on the element itself and then on each child. This is much simpler too.
+    if (state.frame._style_manager.hasDisplayNone(he.asElement())) {
+        return;
+    }
+
     if (he._type == .br) {
         try state.flushBreaks();
         try state.writer.writeByte('\n');
         state.wrote_any = true;
         state.pre_w = false;
         state.trim_left = true;
-        return;
-    }
-
-    if (state.frame._style_manager.isHidden(he.asElement(), &state.cache, .{})) {
         return;
     }
 
