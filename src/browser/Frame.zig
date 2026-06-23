@@ -1936,12 +1936,6 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
     }
 }
 
-// Per spec, `hashchange` is fired by queuing a task rather than synchronously,
-// so a listener registered after the fragment change still observes it. The
-// old/new URLs are captured by slice: both already point to arena memory that
-// outlives the task, and arena allocations are never freed individually, so a
-// synchronous reassignment of the frame's URL before the task runs leaves the
-// captured blocks intact. Mirrors the async-dispatch pattern of MessagePort etc.
 const HashChangeCallback = struct {
     frame: *Frame,
     old_url: []const u8,
