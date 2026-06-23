@@ -644,9 +644,8 @@ const PrivateSymbols = struct {
 
 const testing = @import("../../testing.zig");
 test "Env: Worker context " {
-    const session = testing.test_session;
-    const frame = try session.createPage();
-    defer session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
 
@@ -659,9 +658,8 @@ test "Env: Worker context " {
 }
 
 test "Env: Frame context" {
-    const session = testing.test_session;
-    const frame = try session.createPage();
-    defer session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     // Frame already has a context created, use it directly
     const ctx = frame.js;

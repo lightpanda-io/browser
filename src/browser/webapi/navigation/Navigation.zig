@@ -494,8 +494,8 @@ pub const JsApi = struct {
 const testing = @import("../../../testing.zig");
 
 test "Navigation: about:blank commits entry" {
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     // The test_session is shared; prior tests leak entries into it via
     // session.navigation. Reset it so we exercise a fresh session-style state.
@@ -523,8 +523,8 @@ test "Navigation: about:blank commits entry" {
 }
 
 test "Navigation: reload on empty stack seeds an entry" {
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     testing.test_session.navigation._entries.clearRetainingCapacity();
     testing.test_session.navigation._index = 0;

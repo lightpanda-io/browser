@@ -388,7 +388,7 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
     });
     try ctx.expectSentResult(null, .{ .id = 37, .session_id = null });
 
-    const frame = try bc.session.createPage();
+    const frame = (try bc.session.createPage()).frame().?;
     try frame.navigate("http://127.0.0.1:9582/download/report.csv", .{});
     var runner = try bc.session.runner(.{});
     try runner.wait(.{ .ms = 2000 });

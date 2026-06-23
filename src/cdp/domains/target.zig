@@ -176,10 +176,11 @@ fn createTarget(cmd: *CDP.Command) !void {
     // if target_id is null, we should never have a session_id
     lp.assert(bc.session_id == null, "CDP.target.createTarget not null session_id", .{});
 
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
 
     // the target_id == the frame_id of the "root" frame
-    const frame_id = id.toFrameId(frame._frame_id);
+    const frame_id = id.toFrameId(page.frame_id);
     bc.target_id = frame_id;
     const target_id = &bc.target_id.?;
     {
@@ -305,7 +306,10 @@ fn closeTarget(cmd: *CDP.Command) !void {
         bc.session_id = null;
     }
 
-    bc.session.removePage();
+    if (bc.page_handle) |handle| {
+        handle.close();
+        bc.page_handle = null;
+    }
     for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
@@ -426,7 +430,7 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // autoAttach is set to true, we must attach to all existing targets.
     if (cmd.browser_context) |bc| {
         if (bc.target_id == null) {
-            if (bc.session.currentFrame()) |frame| {
+            if (bc.mainFrame()) |frame| {
                 // the target_id == the frame_id of the "root" frame
                 bc.target_id = id.toFrameId(frame._frame_id);
                 try doAttachtoTarget(cmd, &bc.target_id.?);

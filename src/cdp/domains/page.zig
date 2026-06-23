@@ -137,7 +137,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
 
     // When we enable lifecycle events, we must dispatch events for all
     // attached targets.
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     if (frame._load_state == .complete) {
         const frame_id = &id.toFrameId(frame._frame_id);
@@ -240,7 +240,10 @@ fn close(cmd: *CDP.Command) !void {
         bc.session_id = null;
     }
 
-    bc.session.removePage();
+    if (bc.page_handle) |handle| {
+        handle.close();
+    }
+    bc.page_handle = null;
     for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
@@ -262,7 +265,7 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const js_context = try world.createContext(frame);
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
@@ -303,7 +306,7 @@ fn navigate(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
 
@@ -340,7 +343,7 @@ fn doReload(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     // Capture URL plus the prior navigation's method/body/header before
     // we free the old frame's arena. Replaying the same HTTP
@@ -432,7 +435,7 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     const idx = target_index orelse return error.InvalidParams;
     const url = target_url orelse return error.InvalidParams;
 
-    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const opts = Frame.NavigateOpts{
         .reason = .history,
@@ -527,12 +530,17 @@ pub fn frameRemove(bc: *CDP.BrowserContext) void {
 }
 
 pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
+    // Record a handle to the new page so the context can resolve its live
+    // page/frame (mainFrame / mainPage) without a session-wide "current" shim.
+    bc.page_handle = .{ .session = bc.session, .frame_id = frame._frame_id };
+
     // Detect "in commit" mode: Session.commitPendingPage dispatches frame_
-    // created BEFORE clearing pending_page (deliberate ordering — see
-    // Session.commitPendingPage). The captured_response for the request we
-    // just committed was inserted by onHttpResponseHeadersDone moments ago
-    // and lives in cdp.frame_arena; resetting either would lose it.
-    const in_commit = bc.session.pendingPage() != null;
+    // created BEFORE clearing `replaces` (deliberate ordering — see
+    // Session.commitPendingPage), so the replacement still reports as in-flight.
+    // The captured_response for the request we just committed was inserted by
+    // onHttpResponseHeadersDone moments ago and lives in cdp.frame_arena;
+    // resetting either would lose it.
+    const in_commit = bc.inCommit();
 
     if (!in_commit) {
         bc.cdp.browser.arena_pool.reset(bc.frame_arena, 1024 * 512);
@@ -645,7 +653,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         }, .{ .session_id = session_id });
     }
 
-    const root_frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const root_frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const is_root_frame = event.frame_id == root_frame._frame_id;
 
     // When we actually recreated the context we should have the inspector send
@@ -1183,8 +1191,8 @@ test "cdp.frame: reload replays POST navigation" {
 
     // First navigation: POST a form-style payload to /echo_method.
     {
-        const f = try bc.session.createPage();
-        try f.navigate("http://127.0.0.1:9582/echo_method", .{
+        const page = try bc.session.createPage();
+        try page.navigate("http://127.0.0.1:9582/echo_method", .{
             .method = .POST,
             .body = "key=value",
             .header = "Content-Type: application/x-www-form-urlencoded",
@@ -1195,7 +1203,7 @@ test "cdp.frame: reload replays POST navigation" {
 
     // Sanity: the body confirms a POST round-tripped.
     {
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         f.js.localScope(&ls);
         defer ls.deinit();
@@ -1214,7 +1222,7 @@ test "cdp.frame: reload replays POST navigation" {
     }
 
     {
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         f.js.localScope(&ls);
         defer ls.deinit();
@@ -1240,8 +1248,8 @@ test "cdp.frame: reload after POST→redirect drops the POST" {
 
     // First navigation: POST /redirect_to_echo → 302 → GET /echo_method.
     {
-        const f = try bc.session.createPage();
-        try f.navigate("http://127.0.0.1:9582/redirect_to_echo", .{
+        const page = try bc.session.createPage();
+        try page.navigate("http://127.0.0.1:9582/redirect_to_echo", .{
             .method = .POST,
             .body = "key=value",
             .header = "Content-Type: application/x-www-form-urlencoded",
@@ -1252,7 +1260,7 @@ test "cdp.frame: reload after POST→redirect drops the POST" {
 
     // Sanity: after the redirect, the loaded page is /echo_method via GET.
     {
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         f.js.localScope(&ls);
         defer ls.deinit();
@@ -1270,7 +1278,7 @@ test "cdp.frame: reload after POST→redirect drops the POST" {
     }
 
     {
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         f.js.localScope(&ls);
         defer ls.deinit();
@@ -1298,7 +1306,7 @@ test "cdp.frame: navigate inherits original fragment across redirect" {
         var runner = try bc.session.runner(.{});
         try runner.wait(.{ .ms = 2000 });
 
-        const frame = bc.session.currentFrame() orelse unreachable;
+        const frame = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target#myfrag", frame.url);
     }
 
@@ -1313,7 +1321,7 @@ test "cdp.frame: navigate inherits original fragment across redirect" {
         var runner = try bc.session.runner(.{});
         try runner.wait(.{ .ms = 2000 });
 
-        const frame = bc.session.currentFrame() orelse unreachable;
+        const frame = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target#target_fragment", frame.url);
     }
 
@@ -1328,7 +1336,7 @@ test "cdp.frame: navigate inherits original fragment across redirect" {
         var runner = try bc.session.runner(.{});
         try runner.wait(.{ .ms = 2000 });
 
-        const frame = bc.session.currentFrame() orelse unreachable;
+        const frame = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target", frame.url);
     }
 }
@@ -1351,7 +1359,7 @@ test "cdp.frame: navigate renders body of 3xx response without Location" {
     var runner = try bc.session.runner(.{});
     try runner.wait(.{ .ms = 2000 });
 
-    const frame = bc.session.currentFrame() orelse unreachable;
+    const frame = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/303-no-location", frame.url);
 
     var ls: js.Local.Scope = undefined;
@@ -1380,7 +1388,7 @@ test "cdp.frame: navigate does not follow Location on a non-redirect 3xx" {
     var runner = try bc.session.runner(.{});
     try runner.wait(.{ .ms = 2000 });
 
-    const frame = bc.session.currentFrame() orelse unreachable;
+    const frame = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/300-with-location", frame.url);
 
     var ls: js.Local.Scope = undefined;
@@ -1411,7 +1419,7 @@ test "cdp.frame: navigate answers with errorText when the navigation fails" {
     try runner.wait(.{ .ms = 2000 });
 
     // The pending page was discarded; the active document is untouched.
-    const frame = bc.session.currentFrame() orelse unreachable;
+    const frame = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html", frame.url);
 
     try ctx.expectSentResult(.{
@@ -1434,7 +1442,7 @@ test "cdp.frame: navigate to about:blank replaces a non-blank document" {
 
     // Precondition: the tab is on a non-blank document.
     {
-        const frame = bc.session.currentFrame() orelse unreachable;
+        const frame = bc.mainFrame() orelse unreachable;
         try testing.expect(std.mem.endsWith(u8, frame.url, "/hi.html"));
     }
 
@@ -1445,7 +1453,7 @@ test "cdp.frame: navigate to about:blank replaces a non-blank document" {
     }
 
     // The active frame must now point at the replaced about:blank document.
-    const frame = bc.session.currentFrame() orelse unreachable;
+    const frame = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "about:blank", frame.url);
 
     // ...and the active page's JS context must agree — the exact symptom in the
@@ -1475,8 +1483,8 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
     // Initial navigation to the page hosting the anchor — driven directly via
     // Frame.navigate(.address_bar), so this request itself has no Referer.
     {
-        const f = try bc.session.createPage();
-        try f.navigate("http://127.0.0.1:9582/referer_link.html", .{});
+        const page = try bc.session.createPage();
+        try page.navigate("http://127.0.0.1:9582/referer_link.html", .{});
         var runner = try bc.session.runner(.{});
         try runner.wait(.{ .ms = 2000 });
     }
@@ -1485,7 +1493,7 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
     // (.reason = .script), which must capture the originating frame's URL as
     // the Referer for the queued navigation.
     {
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         f.js.localScope(&ls);
         defer ls.deinit();
@@ -1497,7 +1505,7 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
     // After the click navigation completes, the loaded page is /echo_referer
     // and its body echoes the Referer header the server actually saw.
     {
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         f.js.localScope(&ls);
         defer ls.deinit();
@@ -1524,14 +1532,14 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
     bc.target_id = "TID-A18B-00000".*;
 
     {
-        const f = try bc.session.createPage();
-        try f.navigate("http://127.0.0.1:9582/echo_referer", .{});
+        const page = try bc.session.createPage();
+        try page.navigate("http://127.0.0.1:9582/echo_referer", .{});
         var runner = try bc.session.runner(.{});
         try runner.wait(.{ .ms = 2000 });
     }
 
     {
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         f.js.localScope(&ls);
         defer ls.deinit();
@@ -1581,7 +1589,7 @@ test "cdp.frame: addScriptToEvaluateOnNewDocument" {
             .frame = .{ .loaderId = "LID-0000000002" },
         }, .{});
 
-        const frame = bc.session.currentFrame() orelse unreachable;
+        const frame = bc.mainFrame() orelse unreachable;
 
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
@@ -1669,7 +1677,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         var runner = try bc.session.runner(.{});
         try runner.wait(.{ .ms = 2000 });
 
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html", f.url);
     }
 
@@ -1683,7 +1691,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         var runner = try bc.session.runner(.{});
         try runner.wait(.{ .ms = 2000 });
 
-        const f = bc.session.currentFrame() orelse unreachable;
+        const f = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", f.url);
     }
 

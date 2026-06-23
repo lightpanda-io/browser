@@ -244,7 +244,7 @@ fn getCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
-    const frame_url = if (bc.session.currentFrame()) |frame| frame.url else null;
+    const frame_url = if (bc.mainFrame()) |frame| frame.url else null;
     const param_urls = params.urls orelse &[_][:0]const u8{frame_url orelse return error.InvalidParams};
 
     var urls = try std.ArrayList(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);

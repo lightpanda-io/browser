@@ -509,9 +509,8 @@ fn G(comptime global_type: GlobalType) type {
 
 const testing = @import("../../testing.zig");
 test "Value: jsonStringify maps unserializable JS values to null" {
-    const session = testing.test_session;
-    const frame = try session.createPage();
-    defer session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

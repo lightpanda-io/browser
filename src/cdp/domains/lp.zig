@@ -92,7 +92,7 @@ fn getSemanticTree(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.backendNodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
@@ -133,7 +133,7 @@ fn getMarkdown(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.nodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
@@ -156,7 +156,7 @@ fn getInteractiveElements(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const root = if (params.nodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
@@ -178,7 +178,7 @@ fn getNodeDetails(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
 
@@ -191,7 +191,7 @@ fn getNodeDetails(cmd: anytype) !void {
 
 fn getStructuredData(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const data = try structured_data.collectStructuredData(
         frame.document.asNode(),
@@ -210,7 +210,7 @@ fn getStructuredData(cmd: anytype) !void {
 // is enabled, since the robots layer is what populates the store.
 fn getContentSignal(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const network = bc.cdp.browser.http_client.network;
 
     const empty: []const Robots.ContentSignal = &.{};
@@ -227,7 +227,7 @@ fn getContentSignal(cmd: anytype) !void {
 
 fn detectForms(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const forms_data = try lp.forms.collectForms(
         cmd.arena,
@@ -250,7 +250,7 @@ fn clickNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
@@ -272,7 +272,7 @@ fn fillNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
@@ -295,7 +295,7 @@ fn scrollNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const maybe_node_id = params.nodeId orelse params.backendNodeId;
 
@@ -321,7 +321,7 @@ fn waitForSelector(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    _ = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    _ = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const timeout_ms = params.timeout orelse 5000;
     const selector_z = try cmd.arena.dupeZ(u8, params.selector);
@@ -458,7 +458,9 @@ test "cdp.lp: action tools" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
@@ -519,7 +521,9 @@ test "cdp.lp: waitForSelector" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
@@ -594,7 +598,7 @@ test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values
 
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-D2", .url = "cdp/dialog.html", .target_id = "FID-000000000X".* });
 
-    const frame = bc.session.currentFrame() orelse unreachable;
+    const frame = bc.mainFrame() orelse unreachable;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();

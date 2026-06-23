@@ -589,10 +589,11 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !voi
     }
 }
 
+const testing = @import("../testing.zig");
+
 fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
-    const testing = @import("../testing.zig");
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
     frame.url = "http://localhost/";
 
     const doc = frame.window._document;
@@ -793,9 +794,8 @@ test "browser.markdown: skip empty links" {
 }
 
 test "browser.markdown: resolve links" {
-    const testing = @import("../testing.zig");
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
     frame.url = "https://example.com/a/index.html";
 
     const doc = frame.window._document;
@@ -833,9 +833,8 @@ test "browser.markdown: anchor fallback label" {
 }
 
 test "browser.markdown: max_bytes leaves output untouched when under cap" {
-    const testing = @import("../testing.zig");
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
     frame.url = "http://localhost/";
 
     const doc = frame.window._document;
@@ -850,9 +849,8 @@ test "browser.markdown: max_bytes leaves output untouched when under cap" {
 }
 
 test "browser.markdown: max_bytes truncates with marker" {
-    const testing = @import("../testing.zig");
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
     frame.url = "http://localhost/";
 
     const doc = frame.window._document;
@@ -872,9 +870,8 @@ test "browser.markdown: max_bytes truncates with marker" {
 // (open) shadow tree with `shadow`, then dumps the host. Declarative shadow DOM
 // parsing isn't implemented, so the shadow tree is attached imperatively.
 fn testMarkdownShadow(light: []const u8, shadow: []const u8, expected: []const u8) !void {
-    const testing = @import("../testing.zig");
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
     frame.url = "http://localhost/";
 
     const doc = frame.window._document;
@@ -927,9 +924,8 @@ test "browser.markdown: slot fallback content when nothing assigned" {
 // End-to-end: a declarative shadow root (parsed via setHTMLUnsafe) is attached
 // as a real shadow tree, and markdown's composed-tree piercing then renders it.
 test "browser.markdown: declarative shadow DOM renders through piercing" {
-    const testing = @import("../testing.zig");
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
     frame.url = "http://localhost/";
 
     const doc = frame.window._document;

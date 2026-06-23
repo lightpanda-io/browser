@@ -1423,8 +1423,10 @@ fn mapActionError(err: anytype) ToolError {
 /// If the previous action queued a navigation (form submit, link click,
 /// Enter on an input), drive the runner until it completes or times out.
 fn awaitQueuedNavigation(session: *lp.Session) ToolError!void {
-    const page = session.currentPage() orelse return;
-    if (page.queued_navigation.items.len == 0) return;
+    const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
+    if (navigated == false) {
+        return;
+    }
     var runner = session.runner(.{}) catch return ToolError.InternalError;
     runner.wait(.{ .ms = 10000, .until = .done }) catch |err|
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
@@ -1826,12 +1828,14 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
 const default_nav_wait: lp.Config.WaitUntil = .load;
 
 fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
-    if (session.hasPage()) {
+    if (session.primaryPage()) |old_page| {
         registry.reset();
-        session.removePage();
+        old_page.close();
     }
     const page = session.createPage() catch return ToolError.NavigationFailed;
-    _ = page.navigate(url, .{
+    // frame cannot be null immediately after createPage, but don't cache it
+    // since navigate can change/null it.
+    _ = page.frame().?.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     }) catch return ToolError.NavigationFailed;
@@ -1842,7 +1846,8 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
         .until = default_nav_wait,
     }) catch |err| return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 
-    const frame = session.currentFrame() orelse return ToolError.NavigationFailed;
+    // re-fetch frame, navigate might have changed it.
+    const frame = page.frame() orelse return ToolError.NavigationFailed;
     if (frame._last_navigate_error != null) return ToolError.NavigationFailed;
     return result;
 }

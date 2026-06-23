@@ -610,8 +610,8 @@ fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []con
 
 test "FormData: multipart with file" {
     const allocator = testing.arena_allocator;
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
     defer file._proto.releaseRef(frame._page);
@@ -648,8 +648,8 @@ test "FormData: multipart with file" {
 
 test "FormData: multipart with empty file defaults to octet-stream" {
     const allocator = testing.arena_allocator;
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const file = try buildTestFile(allocator, frame._page, "", "", "");
     defer file._proto.releaseRef(frame._page);
@@ -682,8 +682,8 @@ test "FormData: multipart with empty file defaults to octet-stream" {
 
 test "FormData: multipart escapes file name and filename" {
     const allocator = testing.arena_allocator;
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const file = try buildTestFile(allocator, frame._page, "a\"b\r\nc.txt", "text/plain", "x");
     defer file._proto.releaseRef(frame._page);
@@ -716,8 +716,8 @@ test "FormData: multipart escapes file name and filename" {
 
 test "FormData: file entry collapses to filename in urlencode" {
     const allocator = testing.arena_allocator;
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
     defer file._proto.releaseRef(frame._page);

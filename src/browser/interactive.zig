@@ -496,8 +496,8 @@ fn getListenerTypes(target: *EventTarget, listener_targets: ListenerTargetMap) [
 const testing = @import("../testing.zig");
 
 fn testInteractive(html: []const u8) ![]InteractiveElement {
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    errdefer testing.test_session.closeAllPages();
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
@@ -508,6 +508,7 @@ fn testInteractive(html: []const u8) ![]InteractiveElement {
 
 test "browser.interactive: button" {
     const elements = try testInteractive("<button>Click me</button>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual("button", elements[0].tag_name);
     try testing.expectEqual("button", elements[0].role.?);
@@ -517,6 +518,7 @@ test "browser.interactive: button" {
 
 test "browser.interactive: anchor with href" {
     const elements = try testInteractive("<a href=\"/page\">Link</a>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual("a", elements[0].tag_name);
     try testing.expectEqual("link", elements[0].role.?);
@@ -525,6 +527,7 @@ test "browser.interactive: anchor with href" {
 
 test "browser.interactive: anchor without href" {
     const elements = try testInteractive("<a>Not a link</a>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(0, elements.len);
 }
 
@@ -533,6 +536,7 @@ test "browser.interactive: input types" {
         \\<input type="text" placeholder="Search">
         \\<input type="hidden" name="csrf">
     );
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual("input", elements[0].tag_name);
     try testing.expectEqual("text", elements[0].input_type.?);
@@ -544,6 +548,7 @@ test "browser.interactive: select and textarea" {
         \\<select name="color"><option>Red</option></select>
         \\<textarea name="msg"></textarea>
     );
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(2, elements.len);
     try testing.expectEqual("select", elements[0].tag_name);
     try testing.expectEqual("textarea", elements[1].tag_name);
@@ -551,6 +556,7 @@ test "browser.interactive: select and textarea" {
 
 test "browser.interactive: aria role" {
     const elements = try testInteractive("<div role=\"button\">Custom</div>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual("div", elements[0].tag_name);
     try testing.expectEqual("button", elements[0].role.?);
@@ -559,12 +565,14 @@ test "browser.interactive: aria role" {
 
 test "browser.interactive: contenteditable" {
     const elements = try testInteractive("<div contenteditable=\"true\">Edit me</div>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual(InteractivityType.contenteditable, elements[0].interactivity_type);
 }
 
 test "browser.interactive: tabindex" {
     const elements = try testInteractive("<div tabindex=\"0\">Focusable</div>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual(InteractivityType.focusable, elements[0].interactivity_type);
     try testing.expectEqual(@as(i32, 0), elements[0].tab_index);
@@ -572,6 +580,7 @@ test "browser.interactive: tabindex" {
 
 test "browser.interactive: disabled" {
     const elements = try testInteractive("<button disabled>Off</button>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(1, elements.len);
     try testing.expect(elements[0].disabled);
 }
@@ -583,6 +592,7 @@ test "browser.interactive: disabled by fieldset" {
         \\  <legend><button>In legend</button></legend>
         \\</fieldset>
     );
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(2, elements.len);
     // Button outside legend is disabled by fieldset
     try testing.expect(elements[0].disabled);
@@ -592,16 +602,19 @@ test "browser.interactive: disabled by fieldset" {
 
 test "browser.interactive: pointer-events none" {
     const elements = try testInteractive("<button style=\"pointer-events: none;\">Click me</button>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(0, elements.len);
 }
 
 test "browser.interactive: non-interactive div" {
     const elements = try testInteractive("<div>Just text</div>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(0, elements.len);
 }
 
 test "browser.interactive: details and summary" {
     const elements = try testInteractive("<details><summary>More</summary><p>Content</p></details>");
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(2, elements.len);
     try testing.expectEqual("details", elements[0].tag_name);
     try testing.expectEqual("summary", elements[1].tag_name);
@@ -618,5 +631,6 @@ test "browser.interactive: mixed elements" {
         \\  <div role="tab">Tab</div>
         \\</div>
     );
+    defer testing.test_session.closeAllPages();
     try testing.expectEqual(4, elements.len);
 }

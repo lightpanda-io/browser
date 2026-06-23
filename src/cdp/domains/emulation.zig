@@ -289,7 +289,7 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-DM1" });
     _ = try bc.session.createPage();
-    const page = bc.session.currentPage().?;
+    const page = bc.mainPage().?;
 
     // Defaults to the compile-time viewport before any override.
     try testing.expectEqual(1920, page.getViewport().width);

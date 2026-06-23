@@ -28,6 +28,7 @@ const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
 const Frame = @import("../browser/Frame.zig");
+const Page = @import("../browser/Page.zig");
 const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
@@ -262,8 +263,8 @@ pub fn tick(self: *CDP) !bool {
 }
 
 fn pageWait(self: *CDP, ms: u32) !void {
-    const session = &(self.browser.session orelse return error.NoPage);
-    var runner = try session.runner(.{});
+    const bc = &(self.browser_context orelse return error.NoPage);
+    var runner = try bc.session.runner(.{});
     return runner.waitCDP(.{ .ms = ms });
 }
 
@@ -499,6 +500,13 @@ pub const BrowserContext = struct {
     // time, we only have 1 target_id.
     target_id: ?[14]u8,
 
+    // Navigation-safe handle to this context's page, set when `frameCreated`
+    // fires. A BrowserContext is single-target by protocol, so it resolves its
+    // (live) page/frame through this handle — see `mainFrame` / `mainPage`. The
+    // handle's frame_id is stable across navigations (the replacement reuses
+    // it). null until the first page is created.
+    page_handle: ?Session.PageHandle = null,
+
     // The CDP session_id. After the target/page is created, the client
     // "attaches" to it (either explicitly or automatically). We return a
     // "sessionId" which identifies this link. `sessionId` is the how
@@ -707,12 +715,11 @@ pub const BrowserContext = struct {
     }
 
     pub fn axnodeWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
-        // Bind the writer to the frame that owns the root node, not whatever
-        // happens to be `currentFrame`. Name resolution (`Label.findLabelByFor`
-        // against `ownerDocument`) and visibility checks (`frame._style_manager`)
-        // are per-frame; getting this wrong on cross-frame queries produces
-        // names/visibility from the wrong document.
-        const fallback = self.session.currentFrame() orelse return error.FrameNotLoaded;
+        // Bind the writer to the frame that owns the root node. Name resolution
+        // (`Label.findLabelByFor` against `ownerDocument`) and visibility
+        // checks (`frame._style_manager`) are per-frame; getting this wrong on
+        // cross-frame queries produces names/visibility from the wrong document.
+        const fallback = self.mainFrame() orelse return error.FrameNotLoaded;
         const frame = root.dom.ownerFrame(fallback);
         const cache = try frame.call_arena.create(Element.VisibilityCache);
         cache.* = .empty;
@@ -729,14 +736,31 @@ pub const BrowserContext = struct {
         };
     }
 
+    // The root frame of this context's live Page.
+    pub fn mainFrame(self: *const BrowserContext) ?*Frame {
+        return &(self.mainPage() orelse return null).frame;
+    }
+
+    // True while this context's page is mid-commit (a root navigation's
+    // replacement is being promoted).
+    pub fn inCommit(self: *const BrowserContext) bool {
+        return (self.page_handle orelse return false).inCommit();
+    }
+
+    // The live Page for this single-target context, or null if no page is
+    // loaded.
+    pub fn mainPage(self: *const BrowserContext) ?*Page {
+        return (self.page_handle orelse return null).page();
+    }
+
     pub fn getURL(self: *const BrowserContext) ?[:0]const u8 {
-        const frame = self.session.currentFrame() orelse return null;
+        const frame = self.mainFrame() orelse return null;
         const url = frame.url;
         return if (url.len == 0) null else url;
     }
 
     pub fn getTitle(self: *const BrowserContext) ?[]const u8 {
-        const frame = self.session.currentFrame() orelse return null;
+        const frame = self.mainFrame() orelse return null;
         return frame.getTitle() catch |err| {
             log.err(.cdp, "page title", .{ .err = err });
             return null;
