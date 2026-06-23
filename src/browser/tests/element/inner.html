@@ -11,6 +11,10 @@
 <p id=d4><span>Hello</span>
   <span>World</span></p>
 
+<style>.ihide { display: none }</style>
+<div id=d5>a<span class=ihide>X</span>b<span style="display:none">Y</span>c</div>
+<div id=d6>before<div class=ihide>deep <span>nested</span></div>after</div>
+
 <script id=innerHTML>
   const d1 = $('#d1');
   testing.expectEqual('hello <em>world</em>', d1.innerHTML);
@@ -175,4 +179,25 @@
   testing.expectEqual("This is a\ntext", d2.innerText);
   testing.expectEqual("Hello World", $('#d3').innerText);
   testing.expectEqual("Hello World", $('#d4').innerText);
+
+  // display:none subtrees are excluded from innerText, whether the rule comes
+  // from an inline style or a stylesheet (the common real-world case: content
+  // hidden via a CSS class). A hidden block does not contribute a line break.
+  testing.expectEqual("abc", $('#d5').innerText);
+  testing.expectEqual("beforeafter", $('#d6').innerText);
+
+  // .innerText read ON a display:none root equals textContent. The own-element
+  // check must keep visible child elements (an ancestor-walk would prune the
+  // <span> while keeping its sibling text nodes, yielding "ac").
+  d1.innerHTML = '<div id=dn style="display:none">a<span>b</span>c</div>';
+  testing.expectEqual("abc", $('#dn').innerText);
+
+  // A display:none <br> contributes no line break.
+  d1.innerHTML = 'a<br style="display:none">b';
+  testing.expectEqual("ab", d1.innerText);
+
+  // Guard: visibility:hidden text stays INCLUDED (the check is display-only),
+  // so a future switch to a visibility-aware check can't silently over-exclude.
+  d1.innerHTML = '<span style="visibility:hidden">X</span>Y';
+  testing.expectEqual("XY", d1.innerText);
 </script>

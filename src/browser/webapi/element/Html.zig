@@ -216,13 +216,14 @@ pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
     return self._proto._proto._proto;
 }
 
-pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer) !void {
+pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !void {
     const tag = self.asElement().getTag();
     switch (innerTextDisplay(self, tag)) {
         .skip, .replaced => return,
         else => {},
     }
-    var state = InnerTextState{ .writer = writer, .preserve = tag == .pre };
+
+    var state = InnerTextState{ .writer = writer, .frame = frame, .preserve = tag == .pre };
     try self.collectInnerText(&state);
 }
 
@@ -1326,6 +1327,10 @@ pub fn reflectEnumerated(
 
 const InnerTextState = struct {
     writer: *std.Io.Writer,
+
+    // Needed to reach the StyleManager for CSS-driven visibility (display:none).
+    frame: *Frame,
+
     // number of line breaks we've accumulated for the block. Emitted lazily that
     // leading/trailing breaks aren't written and so that we can emit the max
     // requested, which can change as we render children.
@@ -1441,6 +1446,14 @@ fn handleChildElement(
     saw_cell: *bool,
     saw_row: *bool,
 ) !void {
+    // doesn't use StyleManger's isHidden, because we don't care if the element
+    // is hidden through its parent. If you can el.innerText on an element, the
+    // visibility of el.parent doesn't matter. So we only care about visibility
+    // on the element itself and then on each child. This is much simpler too.
+    if (state.frame._style_manager.hasDisplayNone(he.asElement())) {
+        return;
+    }
+
     if (he._type == .br) {
         try state.flushBreaks();
         try state.writer.writeByte('\n');
@@ -1632,9 +1645,9 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
 
     pub const innerText = bridge.accessor(_innerText, _setInnerText, .{ .ce_reactions = true });
-    fn _innerText(self: *HtmlElement, frame: *const Frame) ![]const u8 {
+    fn _innerText(self: *HtmlElement, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
-        try self.getInnerText(&buf.writer);
+        try self.getInnerText(&buf.writer, frame);
         return buf.written();
     }
     fn _setInnerText(self: *HtmlElement, value: js.Value, frame: *Frame) !void {

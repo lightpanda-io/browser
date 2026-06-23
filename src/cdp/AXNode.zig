@@ -1011,7 +1011,7 @@ fn writeName(
 
                     if (doc.getElementById(trimmed_id, frame)) |referenced_el| {
                         // Get the text content of the referenced element
-                        try referenced_el.getInnerText(&buf.writer);
+                        try referenced_el.getInnerText(&buf.writer, frame);
                         try buf.writer.writeByte(' ');
                         has_content = true;
                     }
@@ -1262,7 +1262,7 @@ fn writeLabelInnerText(
     w: anytype,
 ) !bool {
     var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
-    try label_el.getInnerText(&buf.writer);
+    try label_el.getInnerText(&buf.writer, frame);
     const text = std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
     if (text.len == 0) return false;
     try writeString(text, w);
