@@ -30,6 +30,7 @@ const CachedResponse = Cache.CachedResponse;
 const Http = @import("../http.zig");
 const Pool = @import("../../storage/sqlite/Pool.zig");
 const Conn = @import("../../storage/sqlite/Sqlite.zig").Conn;
+const Migration = @import("../../storage/sqlite/Sqlite.zig").Migration;
 const Migrations = @import("../../storage/sqlite/Sqlite.zig").Migrations;
 
 pub const SqliteCache = @This();
@@ -37,7 +38,8 @@ pub const SqliteCache = @This();
 allocator: std.mem.Allocator,
 pool: Pool,
 
-const SqliteCacheMigrations = Migrations(&.{
+const cache_migrations: []const Migration = &.{
+    .{ .sql = 
     \\ create table metadata (
     \\      url               text not null primary key,
     \\      status            integer not null,
@@ -48,13 +50,15 @@ const SqliteCacheMigrations = Migrations(&.{
     \\      etag              text,
     \\      last_modified     text
     \\ )
-    ,
+    },
+    .{ .sql = 
     \\ create table body (
     \\      url               text not null primary key,
     \\      data              blob not null,
     \\      foreign key (url) references metadata(url) on delete cascade
     \\ )
-    ,
+    },
+    .{ .sql = 
     \\ create table header (
     \\      url               text not null,
     \\      name              text not null,
@@ -63,9 +67,9 @@ const SqliteCacheMigrations = Migrations(&.{
     \\      primary key (url, name),
     \\      foreign key (url) references metadata(url) on delete cascade
     \\ )
-    ,
-    "create index header_url on header(url)",
-});
+    },
+    .{ .sql = "create index header_url on header(url)" },
+};
 
 pub fn init(allocator: std.mem.Allocator, path: [:0]const u8) !SqliteCache {
     var pool = try Pool.init(allocator, path);
@@ -76,7 +80,7 @@ pub fn init(allocator: std.mem.Allocator, path: [:0]const u8) !SqliteCache {
         defer pool.release(conn);
 
         try conn.exec("pragma journal_mode=wal", .{});
-        version = try SqliteCacheMigrations.run(conn);
+        version = try Migrations.run(conn, cache_migrations);
     }
 
     for (pool.conns) |conn| {
@@ -343,7 +347,7 @@ test "SqliteCache: Migrations" {
     const conn = try pool.acquire();
     defer pool.release(conn);
 
-    _ = try SqliteCacheMigrations.run(conn);
+    _ = try Migrations.run(conn, cache_migrations);
 }
 
 test "SqliteCache: basic put and get" {

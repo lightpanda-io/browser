@@ -54,84 +54,60 @@ pub fn deinit(self: *Sqlite, allocator: Allocator) void {
     self.pool.deinit(allocator);
 }
 
-pub fn Migrations(comptime migrations: []const [:0]const u8) type {
-    const hashes = comptime blk: {
-        var h: [migrations.len]i64 = undefined;
-        for (migrations, 0..) |sql, i| {
-            const hash = std.hash.Wyhash.hash(0, sql);
-            h[i] = @as(i64, @bitCast(hash));
-        }
-        break :blk h;
-    };
+pub const Migration = union(enum) {
+    sql: [:0]const u8,
+    func: struct {
+        ctx: *anyopaque,
+        func: *const fn (conn: Conn, ctx: *anyopaque) anyerror!void,
+    },
+};
 
-    return struct {
-        pub fn run(conn: Conn) !usize {
+pub const Migrations = struct {
+    pub fn run(conn: Conn, migrations: []const Migration) !usize {
+        try conn.exec(
+            \\create table if not exists migrations (
+            \\  id integer primary key,
+            \\  applied_at integer not null
+            \\) strict
+        , .{});
+
+        const current = (try conn.scalar(
+            i64,
+            "select max(id) from migrations",
+            .{},
+        )) orelse 0;
+        const start: usize = @intCast(current);
+
+        if (start > migrations.len) {
+            log.err(.storage, "migrations removed", .{
+                .applied = start,
+                .defined = migrations.len,
+            });
+            return error.MigrationsRemoved;
+        }
+
+        if (start == migrations.len) {
+            return start;
+        }
+
+        try conn.begin();
+        errdefer conn.rollback() catch {};
+
+        for (migrations[start..], start..) |migration, i| {
+            switch (migration) {
+                .sql => |sql| try conn.exec(sql, .{}),
+                .func => |f| try f.func(conn, f.ctx),
+            }
             try conn.exec(
-                \\create table if not exists migrations (
-                \\  id integer primary key,
-                \\  hash integer not null,
-                \\  applied_at integer not null
-                \\)
-            , .{});
-
-            const current = (try conn.scalar(
-                i64,
-                "select max(id) from migrations",
-                .{},
-            )) orelse 0;
-
-            const start: usize = @intCast(current);
-
-            if (start > migrations.len) {
-                log.err(.storage, "migrations removed", .{
-                    .applied = start,
-                    .defined = migrations.len,
-                });
-                return error.MigrationsRemoved;
-            }
-
-            if (start > 0) {
-                var rows = try conn.rows("select id, hash from migrations order by id asc", .{});
-                defer rows.deinit();
-
-                while (try rows.next()) |row| {
-                    const id = row.get(i64, 0);
-                    const hash = row.get(i64, 1);
-                    const idx: usize = @intCast(id - 1);
-                    const stored_hash = hashes[idx];
-
-                    if (hash != stored_hash) {
-                        log.err(.storage, "migration hash mismatch", .{
-                            .id = id,
-                            .expected = stored_hash,
-                            .got = hash,
-                        });
-
-                        return error.MigrationHashMismatch;
-                    }
-                }
-            }
-
-            if (start == migrations.len) {
-                return start;
-            }
-
-            try conn.begin();
-            errdefer conn.rollback() catch {};
-
-            for (migrations[start..], start..) |sql, i| {
-                try conn.exec(sql, .{});
-                try conn.exec(
-                    "insert into migrations (id, hash, applied_at) values ($1, $2, $3)",
-                    .{ @as(i64, @intCast(i + 1)), hashes[i], std.time.timestamp() },
-                );
-            }
-
-            try conn.commit();
-            return migrations.len;
+                "insert into migrations (id, applied_at) values ($1, $2)",
+                .{ @as(i64, @intCast(i + 1)), std.time.timestamp() },
+            );
         }
-    };
-}
+
+        try conn.commit();
+        return migrations.len;
+    }
+};
 
 pub const Conn = struct {
     conn: *c.sqlite3,
@@ -663,16 +639,16 @@ test "Sqlite: Migrations - basic" {
     var conn = try Sqlite.Conn.open(":memory:");
     defer conn.close();
 
-    const M = Migrations(&.{
-        "create table test (id integer primary key, name text)",
-        "alter table test add column email text",
-    });
+    const migrations: []const Migration = &.{
+        .{ .sql = "create table test (id integer primary key, name text)" },
+        .{ .sql = "alter table test add column email text" },
+    };
 
-    const v1 = try M.run(conn);
+    const v1 = try Migrations.run(conn, migrations);
     try testing.expectEqual(@as(usize, 2), v1);
 
     // idempotent - running again should return same version
-    const v2 = try M.run(conn);
+    const v2 = try Migrations.run(conn, migrations);
     try testing.expectEqual(@as(usize, 2), v2);
 
     // verify migrations table has correct entries
@@ -682,35 +658,19 @@ test "Sqlite: Migrations - basic" {
     );
 }
 
-test "Sqlite: Migrations - hash mismatch" {
-    var conn = try Sqlite.Conn.open(":memory:");
-    defer conn.close();
-
-    const M1 = Migrations(&.{
-        "create table test (id integer primary key, name text)",
-    });
-    _ = try M1.run(conn);
-
-    // same migration list but with different sql = hash mismatch
-    const M2 = Migrations(&.{
-        "create table test (id integer primary key, name text, extra text)",
-    });
-    try testing.expectError(error.MigrationHashMismatch, M2.run(conn));
-}
-
 test "Sqlite: Migrations - removed migration" {
     var conn = try Sqlite.Conn.open(":memory:");
     defer conn.close();
 
-    const M1 = Migrations(&.{
-        "create table test (id integer primary key, name text)",
-        "alter table test add column email text",
-    });
-    _ = try M1.run(conn);
+    const m1: []const Migration = &.{
+        .{ .sql = "create table test (id integer primary key, name text)" },
+        .{ .sql = "alter table test add column email text" },
+    };
+    _ = try Migrations.run(conn, m1);
 
     // fewer migrations than were applied
-    const M2 = Migrations(&.{
-        "create table test (id integer primary key, name text)",
-    });
-    try testing.expectError(error.MigrationsRemoved, M2.run(conn));
+    const m2: []const Migration = &.{
+        .{ .sql = "create table test (id integer primary key, name text)" },
+    };
+    try testing.expectError(error.MigrationsRemoved, Migrations.run(conn, m2));
 }
