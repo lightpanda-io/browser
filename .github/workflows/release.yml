@@ -189,6 +189,6 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-            gh workflow run ci \
+            gh workflow run "Update Formula" \
               --repo lightpanda-io/homebrew-browser \
               --field tag="${{ env.RELEASE }}"
