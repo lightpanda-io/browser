@@ -68,7 +68,7 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
-/// Loads `url` in a fresh session and waits per `opts`.
+/// Loads each url in `urls` in a fresh session and waits per `opts`.
 ///
 /// Errors:
 ///   - `error.Timeout` if the wait deadline (`opts.wait_ms`) expires.
@@ -77,7 +77,7 @@ pub const FetchOpts = struct {
 ///     `session.cancel_hook = .{...}`; without it, this error never fires.
 ///   - Other errors from navigation / parsing / I/O surface as their
 ///     underlying tag.
-pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !void {
+pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
     defer notification.deinit();
 
@@ -98,10 +98,12 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     // Stash scripts user want to inject.
     session.inject_scripts = opts.inject_script.items;
 
-    // A navigation-safe handle: `page.frame()` always re-resolves the live
-    // frame, so there's no stale-*Frame footgun across navigate / wait.
-    const page = try session.createPage();
-    {
+    // One page per url. `PageHandle.frame()` always re-resolves the live frame,
+    // so the handles stay valid across navigate / wait. The Runner's wait paths
+    // already operate over every live page in the session.
+    var pages: std.ArrayList(Session.PageHandle) = try .initCapacity(session.arena, urls.len);
+    for (urls) |url| {
+        const page = try session.createPage();
         const frame = page.frame().?;
         // not guaranteed to be valid after navigate
         const encoded_url = try URL.ensureEncoded(frame.call_arena, url, "UTF-8");
@@ -109,7 +111,9 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
             .reason = .address_bar,
             .kind = .{ .push = null },
         });
+        pages.appendAssumeCapacity(page);
     }
+
     var runner = session.runner(.{});
 
     var timer = try std.time.Timer.start();
@@ -152,16 +156,37 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     const writer = opts.writer orelse return;
 
     if (opts.json) {
-        var aw: std.Io.Writer.Allocating = .init(app.allocator);
-        defer aw.deinit();
-
-        if (opts.dump_mode) |mode| blk: {
-            const frame = page.frame() orelse break :blk;
-            try dumpContent(app, mode, opts.dump, frame, &aw.writer);
+        // A single url keeps the original bare-object output. Multiple urls are
+        // wrapped in an extensible `{"results": [...]}` envelope: a bare
+        // top-level array is hard to evolve (consumers index it directly),
+        // whereas an object lets us add sibling fields later without breaking
+        // anyone reading `results`.
+        const wrap = pages.items.len > 1;
+        if (wrap) {
+            try writer.writeAll("{\"results\":[");
         }
+        for (pages.items, 0..) |page, i| {
+            if (i != 0) {
+                try writer.writeByte(',');
+            }
 
-        try writeJsonEnvelope(writer, page.frame(), opts.dump_mode, aw.written());
+            var aw: std.Io.Writer.Allocating = .init(app.allocator);
+            defer aw.deinit();
+
+            if (opts.dump_mode) |mode| blk: {
+                const frame = page.frame() orelse break :blk;
+                try dumpContent(app, mode, opts.dump, frame, &aw.writer);
+            }
+
+            try writeJsonEnvelope(writer, page.frame(), opts.dump_mode, aw.written());
+        }
+        if (wrap) {
+            try writer.writeAll("]}");
+        }
+        try writer.writeByte('\n');
     } else {
+        // main validates that non-JSON dump is only reached with a single url.
+        const page = pages.items[0];
         if (opts.dump_mode) |mode| blk: {
             const frame = page.frame() orelse {
                 try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
@@ -199,6 +224,8 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
     }
 }
 
+// Writes a single page's result object. Framing (the enclosing array and any
+// separators / trailing newline) is the caller's responsibility.
 fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: []const u8) !void {
     const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
     try std.json.Stringify.value(.{
@@ -208,7 +235,6 @@ fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.
         .dump = if (dump_mode) |mode| @tagName(mode) else "",
         .content = content,
     }, .{}, writer);
-    try writer.writeByte('\n');
 }
 
 fn dumpWPT(frame: *Frame, writer: *std.Io.Writer) !void {

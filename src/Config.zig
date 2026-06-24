@@ -205,8 +205,8 @@ const Commands = cli.Builder(.{
     },
     .{
         .name = "fetch",
-        // This argument can be given out of order.
-        .positional = .{ .name = "url", .type = ?[:0]const u8 },
+        // One or more URLs; can be given out of order, interleaved with options.
+        .positional = .{ .name = "url", .type = [:0]const u8, .multiple = true },
         .options = .{
             .{ .name = "dump", .type = ?DumpFormat, .validator = dumpValidator },
             .{ .name = "with_base", .type = bool },

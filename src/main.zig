@@ -122,8 +122,34 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             app.network.run();
         },
         .fetch => |opts| {
-            const url = opts.url;
-            log.debug(.app, "startup", .{ .mode = "fetch", .dump_mode = opts.dump, .url = url, .snapshot = app.snapshot.fromEmbedded() });
+            const urls = opts.url.items;
+
+            if (urls.len == 0) {
+                log.fatal(.app, "missing URL", .{});
+                return error.MissingArgument;
+            }
+
+            // Plain (non-JSON) dump writes one document to stdout with no
+            // framing, so it can't disambiguate more than one page.
+            if (urls.len == 1) {
+                log.debug(.app, "startup", .{
+                    .mode = "fetch",
+                    .dump_mode = opts.dump,
+                    .url = urls[0],
+                    .snapshot = app.snapshot.fromEmbedded(),
+                });
+            } else {
+                if (opts.json == false) {
+                    log.fatal(.app, "multiple URLs require --json", .{});
+                    return error.InvalidArgument;
+                }
+                log.debug(.app, "startup", .{
+                    .mode = "fetch",
+                    .dump_mode = opts.dump,
+                    .url_count = urls.len,
+                    .snapshot = app.snapshot.fromEmbedded(),
+                });
+            }
 
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
@@ -157,7 +183,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 try sighandler.deadline(ms);
             }
 
-            var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, &ft, url.?, fetch_opts });
+            var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, &ft, urls, fetch_opts });
             defer worker_thread.join();
 
             app.network.run();
@@ -282,7 +308,7 @@ const FetchTerminator = struct {
     }
 };
 
-fn fetchThread(app: *App, ft: *FetchTerminator, url: [:0]const u8, fetch_opts: lp.FetchOpts) void {
+fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetch_opts: lp.FetchOpts) void {
     defer app.network.stop();
 
     var browser: lp.Browser = undefined;
@@ -298,8 +324,8 @@ fn fetchThread(app: *App, ft: *FetchTerminator, url: [:0]const u8, fetch_opts: l
     // process-of) shutting down browser/env
     defer ft.releaseBrowser();
 
-    lp.fetch(app, &browser, url, fetch_opts) catch |err| {
-        log.fatal(.app, "fetch error", .{ .err = err, .url = url });
+    lp.fetch(app, &browser, urls, fetch_opts) catch |err| {
+        log.fatal(.app, "fetch error", .{ .err = err, .url_count = urls.len });
     };
 }
 

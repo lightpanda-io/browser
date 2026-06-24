@@ -46,9 +46,10 @@
     \\          Defaults to no cookie loading.
     ,
     .fetch =
-    \\usage: {0s} fetch <url> [OPTIONS] [COMMON_OPTIONS]
+    \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
     \\
-    \\Fetches the specified URL.
+    \\Fetches one or more URLs. Each URL is loaded in its own page. Passing more
+    \\than one URL requires --json.
     \\
     \\options:
     \\  --dump <DUMP>
@@ -69,9 +70,10 @@
     \\              invisible Best-effort (e.g. display:none) hidden elements
     \\              full      Strip everything.
     \\  --json
-    \\          Capture and print the status of the fetch in a JSON string and output
-    \\          it. When used with --dump <MODE> this will wrap the dumped content
-    \\          within the JSON value.
+    \\          Capture and print the status of the fetch as JSON. A single URL
+    \\          prints one object; multiple URLs print {{"results": [ ... ]}} with
+    \\          one object per URL. When used with --dump <MODE> the dumped
+    \\          content is wrapped within each object.
     \\  --with-base
     \\          Add a <base> tag in dump.
     \\          Defaults to false.
