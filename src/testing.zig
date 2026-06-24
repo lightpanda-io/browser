@@ -336,6 +336,13 @@ pub var test_browser: Browser = undefined;
 pub var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
 
+const WEB_API_TEST_ROOT = "src/browser/tests/";
+const HtmlRunnerOpts = struct {
+    timeout_ms: u32 = 2000,
+    inject_script: ?[]const u8 = null,
+    load_external_stylesheets: bool = false,
+};
+
 // Create a fresh page on `test_session` and return its root frame — for tests
 // that just need a frame to build a DOM in. The page lives on the session;
 // release it with `defer testing.test_session.closeAllPages()`.
@@ -343,12 +350,11 @@ pub fn createFrame() !*Frame {
     return (try test_session.createPage()).frame().?;
 }
 
-const WEB_API_TEST_ROOT = "src/browser/tests/";
-const HtmlRunnerOpts = struct {
-    timeout_ms: u32 = 2000,
-    inject_script: ?[]const u8 = null,
-    load_external_stylesheets: bool = false,
-};
+pub fn waitForFrame() !void {
+    var runner = test_session.runner(.{});
+    const frame_id = test_session.pages.items[0].frame._frame_id;
+    return runner.waitForFrame(frame_id, 2000, .{ .until = .done });
+}
 
 pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
     defer reset();
@@ -436,8 +442,8 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         try frame.navigate(url, .{});
     }
 
-    var runner = try test_session.runner(.{});
-    try runner.wait(.{ .ms = 2000, .until = .load });
+    var runner = test_session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
 
     var wait_ms: u32 = timeout_ms;
     var timer = try std.time.Timer.start();
@@ -454,7 +460,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         if (js_val.isTrue()) {
             return;
         }
-        const sleep_ms: usize = switch (try runner.tick(.{ .ms = 20 })) {
+        const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
             .done => 20,
             .ok => |next_ms| @min(next_ms, 20),
         };
@@ -484,9 +490,9 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.Pag
     );
 
     try page.navigate(url, .{});
-    var runner = try test_session.runner(.{});
     if (opts.wait_until_done) {
-        try runner.wait(.{ .ms = 2000 });
+        var runner = test_session.runner(.{});
+        try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
     }
     return page;
 }

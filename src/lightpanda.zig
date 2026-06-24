@@ -110,31 +110,43 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
             .kind = .{ .push = null },
         });
     }
-    var runner = try session.runner(.{});
+    var runner = session.runner(.{});
 
     var timer = try std.time.Timer.start();
 
     if (opts.wait_until) |wu| {
-        try runner.wait(.{ .ms = opts.wait_ms, .until = wu });
+        try runner.waitForAll(opts.wait_ms, .{ .until = wu });
     } else if (opts.wait_selector == null and opts.wait_script == null) {
         // We default to .done if both wait_selector and wait_script are null
         // This allows the caller to ONLY --wait-selector or ONLY --wait-script
         // or combine --wait-until WITH --wait-selector/script
-        try runner.wait(.{ .ms = opts.wait_ms, .until = .done });
+        try runner.waitForAll(opts.wait_ms, .{ .until = .done });
     }
 
     if (opts.wait_selector) |selector| {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
-        if (remaining == 0) return error.Timeout;
-        _ = try runner.waitForSelector(selector, remaining);
+        if (remaining == 0) {
+            return error.Timeout;
+        }
+        for (session.pages.items) |p| {
+            if (p.replacement == null) {
+                _ = try runner.waitForSelector(p.frame._frame_id, selector, remaining);
+            }
+        }
     }
 
     if (opts.wait_script) |wait_script| {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
-        if (remaining == 0) return error.Timeout;
-        try runner.waitForScript(wait_script, remaining);
+        if (remaining == 0) {
+            return error.Timeout;
+        }
+        for (session.pages.items) |p| {
+            if (p.replacement == null) {
+                try runner.waitForScript(p.frame._frame_id, wait_script, remaining);
+            }
+        }
     }
 
     const writer = opts.writer orelse return;

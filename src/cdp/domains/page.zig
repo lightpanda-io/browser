@@ -1164,15 +1164,13 @@ test "cdp.frame: reload" {
         // reload with no params — should not error (navigation is async,
         // so no result is sent synchronously; we just verify no error)
         try ctx.processMessage(.{ .id = 31, .method = "Page.reload" });
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
 
     {
         // reload with ignoreCache param
         try ctx.processMessage(.{ .id = 32, .method = "Page.reload", .params = .{ .ignoreCache = true } });
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
 }
 
@@ -1197,8 +1195,7 @@ test "cdp.frame: reload replays POST navigation" {
             .body = "key=value",
             .header = "Content-Type: application/x-www-form-urlencoded",
         });
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
 
     // Sanity: the body confirms a POST round-tripped.
@@ -1215,11 +1212,7 @@ test "cdp.frame: reload replays POST navigation" {
     // prior POST method/body/header and replays them. Without it (regression
     // guard), the second request would silently fall back to GET.
     try ctx.processMessage(.{ .id = 50, .method = "Page.reload" });
-
-    {
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
-    }
+    try testing.waitForPage(bc);
 
     {
         const f = bc.mainFrame() orelse unreachable;
@@ -1254,8 +1247,7 @@ test "cdp.frame: reload after POST→redirect drops the POST" {
             .body = "key=value",
             .header = "Content-Type: application/x-www-form-urlencoded",
         });
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
 
     // Sanity: after the redirect, the loaded page is /echo_method via GET.
@@ -1271,11 +1263,7 @@ test "cdp.frame: reload after POST→redirect drops the POST" {
     // Reload. The request that produced the current page was GET, so the
     // reload must also be GET — not a re-POST of the original form data.
     try ctx.processMessage(.{ .id = 60, .method = "Page.reload" });
-
-    {
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
-    }
+    try testing.waitForPage(bc);
 
     {
         const f = bc.mainFrame() orelse unreachable;
@@ -1302,9 +1290,7 @@ test "cdp.frame: navigate inherits original fragment across redirect" {
             .method = "Page.navigate",
             .params = .{ .url = "http://127.0.0.1:9582/redirect-no-fragment#myfrag" },
         });
-
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
 
         const frame = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target#myfrag", frame.url);
@@ -1317,9 +1303,7 @@ test "cdp.frame: navigate inherits original fragment across redirect" {
             .method = "Page.navigate",
             .params = .{ .url = "http://127.0.0.1:9582/redirect-with-fragment#requested" },
         });
-
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
 
         const frame = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target#target_fragment", frame.url);
@@ -1332,9 +1316,7 @@ test "cdp.frame: navigate inherits original fragment across redirect" {
             .method = "Page.navigate",
             .params = .{ .url = "http://127.0.0.1:9582/redirect-no-fragment" },
         });
-
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
 
         const frame = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target", frame.url);
@@ -1355,9 +1337,7 @@ test "cdp.frame: navigate renders body of 3xx response without Location" {
         .method = "Page.navigate",
         .params = .{ .url = "http://127.0.0.1:9582/303-no-location" },
     });
-
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     const frame = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/303-no-location", frame.url);
@@ -1384,9 +1364,7 @@ test "cdp.frame: navigate does not follow Location on a non-redirect 3xx" {
         .method = "Page.navigate",
         .params = .{ .url = "http://127.0.0.1:9582/300-with-location" },
     });
-
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     const frame = bc.mainFrame() orelse unreachable;
     try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/300-with-location", frame.url);
@@ -1414,9 +1392,7 @@ test "cdp.frame: navigate answers with errorText when the navigation fails" {
         .method = "Page.navigate",
         .params = .{ .url = "http://127.0.0.1:1/unreachable" },
     });
-
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     // The pending page was discarded; the active document is untouched.
     const frame = bc.mainFrame() orelse unreachable;
@@ -1447,10 +1423,7 @@ test "cdp.frame: navigate to about:blank replaces a non-blank document" {
     }
 
     try ctx.processMessage(.{ .id = 70, .method = "Page.navigate", .params = .{ .url = "about:blank" } });
-    {
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
-    }
+    try testing.waitForPage(bc);
 
     // The active frame must now point at the replaced about:blank document.
     const frame = bc.mainFrame() orelse unreachable;
@@ -1485,8 +1458,7 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
     {
         const page = try bc.session.createPage();
         try page.navigate("http://127.0.0.1:9582/referer_link.html", .{});
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
 
     // Click the anchor via JS. The click goes through Frame.scheduleNavigation
@@ -1498,8 +1470,7 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
         f.js.localScope(&ls);
         defer ls.deinit();
         _ = try ls.local.exec("document.getElementById('link').click()", null);
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
 
     // After the click navigation completes, the loaded page is /echo_referer
@@ -1534,8 +1505,7 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
     {
         const page = try bc.session.createPage();
         try page.navigate("http://127.0.0.1:9582/echo_referer", .{});
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
 
     {
@@ -1623,8 +1593,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
             .method = "Page.navigate",
             .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html" },
         });
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
     {
         try ctx.processMessage(.{
@@ -1632,8 +1601,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
             .method = "Page.navigate",
             .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html" },
         });
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
     }
 
     // Three entries (ids 0, 1, 2), currentIndex points at the most-recent.
@@ -1674,8 +1642,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
             .method = "Page.navigateToHistoryEntry",
             .params = .{ .entryId = 0 },
         });
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
 
         const f = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html", f.url);
@@ -1688,8 +1655,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
             .method = "Page.navigateToHistoryEntry",
             .params = .{ .entryId = 1 },
         });
-        var runner = try bc.session.runner(.{});
-        try runner.wait(.{ .ms = 2000 });
+        try testing.waitForPage(bc);
 
         const f = bc.mainFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", f.url);

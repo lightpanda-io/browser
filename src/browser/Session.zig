@@ -396,6 +396,15 @@ pub fn livePage(self: *Session, frame_id: u32) ?*Page {
     return null;
 }
 
+pub fn pendingOrLivePage(self: *Session, frame_id: u32) ?*Page {
+    for (self.pages.items) |page| {
+        if (page.frame._frame_id == frame_id) {
+            return page.replacement orelse page;
+        }
+    }
+    return null;
+}
+
 // The in-flight replacement for `page`
 pub fn replacementOf(self: *Session, page: *Page) ?*Page {
     const replacement = page.replacement;
@@ -457,7 +466,7 @@ pub fn findFrameByFrameId(self: *Session, frame_id: u32) ?*Frame {
     return null;
 }
 
-pub fn runner(self: *Session, opts: Runner.Opts) !Runner {
+pub fn runner(self: *Session, opts: Runner.Opts) Runner {
     return Runner.init(self, opts);
 }
 
@@ -467,8 +476,14 @@ pub fn runner(self: *Session, opts: Runner.Opts) !Runner {
 pub fn idleSlice(self: *Session) u31 {
     const quiet_ms = 250;
     self.processDestroyQueues();
-    var r = self.runner(.{}) catch return quiet_ms; // error.NoPage when pageless
-    const result = r.tick(.{ .ms = 25 }) catch return quiet_ms;
+
+    if (self.pages.items.len == 0) {
+        return quiet_ms;
+    }
+    const page = self.pages.items[0];
+
+    var r = self.runner(.{});
+    const result = r.tickForFrame(page.frame._frame_id, 25, .{ .until = .done }) catch return quiet_ms;
     return switch (result) {
         .done => quiet_ms,
         .ok => |next_ms| @intCast(@min(next_ms, quiet_ms)),

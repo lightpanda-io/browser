@@ -264,8 +264,9 @@ pub fn tick(self: *CDP) !bool {
 
 fn pageWait(self: *CDP, ms: u32) !void {
     const bc = &(self.browser_context orelse return error.NoPage);
-    var runner = try bc.session.runner(.{});
-    return runner.waitCDP(.{ .ms = ms });
+    const page = bc.page_handle orelse return error.NoPage;
+    var runner = bc.session.runner(.{});
+    return runner.waitForFrameCDP(page.frame_id, ms, .done);
 }
 
 // Parse-then-dispatch entry point. Used by:

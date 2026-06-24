@@ -160,8 +160,7 @@ test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {
 
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -202,8 +201,7 @@ test "cdp.input: dispatchMouseEvent mouseReleased fires mouseup" {
 
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -241,8 +239,7 @@ test "cdp.input: dispatchMouseEvent mouseWheel fires wheel event" {
 
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -280,8 +277,7 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
 
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -334,8 +330,7 @@ test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
 
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);

@@ -1365,7 +1365,7 @@ fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     const page = try server.session.createPage();
     try page.navigate(url, .{});
 
-    var runner = try server.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    var runner = server.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
     return server;
 }
