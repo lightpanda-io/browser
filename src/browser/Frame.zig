@@ -58,6 +58,7 @@ const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
+const HashChangeEvent = @import("webapi/event/HashChangeEvent.zig");
 const popover = @import("webapi/element/popover.zig");
 const slotting = @import("webapi/element/slotting.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
@@ -832,6 +833,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     // fragment). Identical URLs fall through and trigger a real reload.
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
+        const old_url = target.url;
         target.url = try target.arena.dupeZ(u8, resolved_url);
 
         const location = try Location.init(target.url, target);
@@ -842,6 +844,9 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
+
+        try target.queueHashChange(old_url, target.url);
+
         // don't defer this, the caller is responsible for freeing it on error
         session.releaseArena(arena);
         return;
@@ -1929,6 +1934,49 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
             }
         }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents" });
     }
+}
+
+const HashChangeCallback = struct {
+    frame: *Frame,
+    old_url: []const u8,
+    new_url: []const u8,
+
+    // Called by the scheduler if the task is dropped before it runs (e.g. the
+    // page is torn down).
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *HashChangeCallback = @ptrCast(@alignCast(ctx));
+        self.frame._factory.destroy(self);
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *HashChangeCallback = @ptrCast(@alignCast(ctx));
+        defer self.frame._factory.destroy(self);
+
+        const frame = self.frame;
+        const target = frame.window.asEventTarget();
+        if (!frame._event_manager.hasDirectListeners(target, "hashchange", frame.window._on_hashchange)) {
+            return null;
+        }
+
+        const event = (try HashChangeEvent.initTrusted(comptime .wrap("hashchange"), .{
+            .oldURL = self.old_url,
+            .newURL = self.new_url,
+        }, frame)).asEvent();
+        try frame._event_manager.dispatchDirect(target, event, frame.window._on_hashchange, .{ .context = "Hash Change" });
+        return null;
+    }
+};
+
+pub fn queueHashChange(self: *Frame, old_url: []const u8, new_url: []const u8) !void {
+    const callback = try self._factory.create(HashChangeCallback{
+        .frame = self,
+        .old_url = old_url,
+        .new_url = new_url,
+    });
+    try self.js.scheduler.add(callback, HashChangeCallback.run, 0, .{
+        .name = "frame.hashChange",
+        .finalizer = HashChangeCallback.cancelled,
+    });
 }
 
 // Hard cap on a single external stylesheet body. CSS rule storage is per-

@@ -98,6 +98,7 @@ fn goInner(delta: i32, frame: *Frame) !void {
                 const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
                 try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
             }
+            // hashchange is queued by navigateInner.
         }
     }
 

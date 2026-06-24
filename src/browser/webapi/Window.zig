@@ -78,6 +78,7 @@ _cookie_store: ?*CookieStore = null,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
+_on_hashchange: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_rejection_handled: ?js.Function.Global = null,
@@ -323,6 +324,14 @@ pub fn getOnPopState(self: *const Window) ?js.Function.Global {
 
 pub fn setOnPopState(self: *Window, setter: ?FunctionSetter) void {
     self._on_popstate = getFunctionFromSetter(setter);
+}
+
+pub fn getOnHashChange(self: *const Window) ?js.Function.Global {
+    return self._on_hashchange;
+}
+
+pub fn setOnHashChange(self: *Window, setter: ?FunctionSetter) void {
+    self._on_hashchange = getFunctionFromSetter(setter);
 }
 
 pub fn getOnError(self: *const Window) ?js.Function.Global {
@@ -1009,6 +1018,7 @@ pub const JsApi = struct {
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
+    pub const onhashchange = bridge.accessor(Window.getOnHashChange, Window.setOnHashChange, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
     pub const onmessage = bridge.accessor(Window.getOnMessage, Window.setOnMessage, .{});
     pub const onrejectionhandled = bridge.accessor(Window.getOnRejectionHandled, Window.setOnRejectionHandled, .{});
