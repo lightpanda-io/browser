@@ -81,8 +81,6 @@ pub const CdpLink = struct {
 // Number of fixed pollfds entries (wakeup pipe + listener).
 const PSEUDO_POLLFDS = 2;
 
-const MAX_TICK_CALLBACKS = 16;
-
 allocator: Allocator,
 
 app: *App,
@@ -109,17 +107,6 @@ accept: std.atomic.Value(bool) = .init(true),
 wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
 
 shutdown: std.atomic.Value(bool) = .init(false),
-
-// Multi is a heavy structure that can consume up to 2MB of RAM.
-// Currently, Network is used sparingly, and we only create it on demand.
-// When Network becomes truly shared, it should become a regular field.
-multi: ?*libcurl.CurlM = null,
-submission_mutex: std.Thread.Mutex = .{},
-submission_queue: DoublyLinkedList = .{},
-
-callbacks: [MAX_TICK_CALLBACKS]TickCallback = undefined,
-callbacks_len: usize = 0,
-callbacks_mutex: std.Thread.Mutex = .{},
 
 // Registered CDP read endpoints. Producer-side (the worker doing
 // register/unregister) and consumer-side (this thread's run loop) are
@@ -149,11 +136,6 @@ cdp_start: usize,
 /// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
 ip_filter: ?*IpFilter = null,
 
-const TickCallback = struct {
-    ctx: *anyopaque,
-    fun: *const fn (*anyopaque) void,
-};
-
 fn globalInit(allocator: Allocator) void {
     // Only route curl's own allocations through our allocator in Debug, so the
     // leak detector sees them. In Release it'd just wrap c_allocator (curl's
@@ -178,19 +160,12 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     const pipe = try posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
 
-    // IMPORTANT: This is a bit messy, and it exists specifically because
-    // self.multi is optional. self.multi is optional so that, when telemetry is
-    // disabled, we don't need the overhead of a multi. If self.multi wasn't
-    // optional, then we wouldn't need to use posix.poll, we could use
-    // curl_multi_poll. This is to do in a follow up.
-
-    // The structure is: 0 is wakeup, 1 is listener, rest for curl fds:
-    //   [0]                                          wakeup pipe
-    //   [1]                                          listener
-    //   [PSEUDO_POLLFDS .. + httpMaxConcurrent]      curl multi fds
-    //   [.. + maxConnections]                        CDP socket fds
+    // pollfds layout:
+    //   [0]                                  wakeup pipe
+    //   [1]                                  listener
+    //   [PSEUDO_POLLFDS .. + max_cdp]        CDP socket fds
     const max_cdp = config.maxConnections();
-    const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + config.httpMaxConcurrent() + max_cdp);
+    const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + max_cdp);
     errdefer allocator.free(pollfds);
 
     const cdp_poll_snapshot = try allocator.alloc(?*CdpLink, max_cdp);
@@ -262,7 +237,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
         .cdp_poll_snapshot = cdp_poll_snapshot,
-        .cdp_start = PSEUDO_POLLFDS + config.httpMaxConcurrent(),
+        .cdp_start = PSEUDO_POLLFDS,
 
         .available = available,
         .connections = connections,
@@ -281,10 +256,6 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 }
 
 pub fn deinit(self: *Network) void {
-    if (self.multi) |multi| {
-        libcurl.curl_multi_cleanup(multi) catch {};
-    }
-
     for (&self.wakeup_pipe) |*fd| {
         if (fd.* >= 0) {
             posix.close(fd.*);
@@ -366,30 +337,6 @@ pub fn bind(
 pub fn unbind(self: *Network) void {
     self.accept.store(false, .release);
     self.wakeupPoll();
-}
-
-pub fn onTick(self: *Network, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
-    self.callbacks_mutex.lock();
-    defer self.callbacks_mutex.unlock();
-
-    lp.assert(self.callbacks_len < MAX_TICK_CALLBACKS, "too many ticks", .{});
-
-    self.callbacks[self.callbacks_len] = .{
-        .ctx = ctx,
-        .fun = callback,
-    };
-    self.callbacks_len += 1;
-
-    self.wakeupPoll();
-}
-
-pub fn fireTicks(self: *Network) void {
-    self.callbacks_mutex.lock();
-    defer self.callbacks_mutex.unlock();
-
-    for (self.callbacks[0..self.callbacks_len]) |*callback| {
-        callback.fun(callback.ctx);
-    }
 }
 
 // Hand a CDP WebSocket's read side over to the main network thread. The caller
@@ -609,15 +556,15 @@ fn shutdownCdpLinks(self: *Network) void {
 
 pub fn run(self: *Network) void {
     var drain_buf: [64]u8 = undefined;
-    var running_handles: c_int = 0;
 
     const poll_fd = &self.pollfds[0];
     const listen_fd = &self.pollfds[1];
 
-    // Please note that receiving a shutdown command does not terminate all connections.
-    // When gracefully shutting down a server, we at least want to send the remaining
-    // telemetry, but we stop accepting new connections. It is the responsibility
-    // of external code to terminate its requests upon shutdown.
+    // Receiving a shutdown command does not terminate existing connections: we
+    // stop accepting new ones but leave in-flight requests to external code to
+    // terminate. This loop only services the listener and the CDP read sockets;
+    // page fetches run on per-worker HttpClient multis and telemetry on its own
+    // thread, so nothing here drives libcurl.
     while (true) {
         if (self.listener != null and !self.accept.load(.acquire)) {
             posix.close(self.listener.?.socket);
@@ -625,43 +572,10 @@ pub fn run(self: *Network) void {
             self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
         }
 
-        self.drainQueue();
-
-        if (self.multi) |multi| {
-            // Kickstart newly added handles (DNS/connect) so that
-            // curl registers its sockets before we poll.
-            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
-                lp.log.err(.app, "curl perform", .{ .err = err });
-            };
-
-            self.preparePollFds(multi);
-        }
-
         self.prepareCdpPollFds();
 
-        // for ontick to work, you need to wake up periodically
-        const timeout = blk: {
-            const min_timeout = 250; // 250ms
-            if (self.multi == null) {
-                break :blk min_timeout;
-            }
-
-            // curl_multi_timeout reports -1 when curl has no timeout
-            // preference (idle) and 0 when it wants to be serviced
-            // immediately. Treat both as "no curl-imposed deadline" and
-            // fall back to min_timeout — otherwise @min(min_timeout, -1)
-            // would be -1, i.e. poll() blocks forever, starving onTick
-            // (telemetry's periodic flush) and removing the safety net
-            // that bounds any missed wakeup to min_timeout.
-            const curl_timeout = self.getCurlTimeout();
-            if (curl_timeout <= 0) {
-                break :blk min_timeout;
-            }
-
-            break :blk @min(min_timeout, curl_timeout);
-        };
-
-        _ = posix.poll(self.pollfds, timeout) catch |err| {
+        // wait until we get a CDP message or a signal on the wakeup pipe
+        _ = posix.poll(self.pollfds, -1) catch |err| {
             lp.log.err(.app, "poll", .{ .err = err });
             continue;
         };
@@ -679,35 +593,14 @@ pub fn run(self: *Network) void {
             self.acceptConnections();
         }
 
-        if (self.multi) |multi| {
-            // Drive transfers and process completions.
-            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
-                lp.log.err(.app, "curl perform", .{ .err = err });
-            };
-            self.processCompletions(multi);
-        }
-
         self.processCdpEvents();
 
-        self.fireTicks();
-
         if (self.shutdown.load(.acquire)) {
-            // Drain any live CDP links so their workers can exit (issue #2510).
-            // Idempotent — no-op once drained, safe to call every iteration
+            // Drain any live CDP links so their workers can exit (issue #2510),
+            // then stop. Page fetches and telemetry don't run on this loop, so
+            // there is nothing else to flush here.
             self.shutdownCdpLinks();
-
-            if (running_handles == 0) {
-                // Check if fireTicks submitted new requests (e.g. telemetry
-                // flush). If so, continue the loop to drain and send them
-                // before exiting.
-                self.submission_mutex.lock();
-                const has_pending = self.submission_queue.first != null;
-                self.submission_mutex.unlock();
-
-                if (!has_pending) {
-                    break;
-                }
-            }
+            break;
         }
     }
 
@@ -725,44 +618,8 @@ pub fn run(self: *Network) void {
     }
 }
 
-pub fn submitRequest(self: *Network, conn: *http.Connection) void {
-    self.submission_mutex.lock();
-    self.submission_queue.append(&conn.node);
-    self.submission_mutex.unlock();
-    self.wakeupPoll();
-}
-
 fn wakeupPoll(self: *Network) void {
     _ = posix.write(self.wakeup_pipe[1], &.{1}) catch {};
-}
-
-fn drainQueue(self: *Network) void {
-    self.submission_mutex.lock();
-    defer self.submission_mutex.unlock();
-
-    if (self.submission_queue.first == null) return;
-
-    const multi = self.multi orelse blk: {
-        const m = libcurl.curl_multi_init() orelse {
-            lp.assert(false, "curl multi init failed", .{});
-            unreachable;
-        };
-        self.multi = m;
-        break :blk m;
-    };
-
-    while (self.submission_queue.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        conn.setPrivate(conn) catch |err| {
-            lp.log.err(.app, "curl set private", .{ .err = err });
-            self.releaseConnection(conn);
-            continue;
-        };
-        libcurl.curl_multi_add_handle(multi, conn._easy) catch |err| {
-            lp.log.err(.app, "curl multi add", .{ .err = err });
-            self.releaseConnection(conn);
-        };
-    }
 }
 
 pub fn stop(self: *Network) void {
@@ -797,68 +654,6 @@ fn acceptConnections(self: *Network) void {
         };
 
         listener.onAccept(listener.ctx, socket);
-    }
-}
-
-fn preparePollFds(self: *Network, multi: *libcurl.CurlM) void {
-    // Only the curl slice — NOT through to the end of pollfds. The CDP
-    // socket fds live in [cdp_start..] and are owned by
-    // prepareCdpPollFds, which only rebuilds them when cdp_dirty is set
-    // (a steady-state optimization). Slicing to the end here would
-    // @memset those fds to -1 every iteration once a multi exists (which
-    // happens as soon as telemetry sends its first request), silently
-    // dropping every live CDP socket from the poll set — Network then
-    // never reads another CDP message (#2508) nor observes peer
-    // EOF/shutdown (#2507).
-    const curl_fds = self.pollfds[PSEUDO_POLLFDS..self.cdp_start];
-    @memset(curl_fds, .{ .fd = -1, .events = 0, .revents = 0 });
-
-    var fd_count: c_uint = 0;
-    const wait_fds: []libcurl.CurlWaitFd = @ptrCast(curl_fds);
-    libcurl.curl_multi_waitfds(multi, wait_fds, &fd_count) catch |err| {
-        lp.log.err(.app, "curl waitfds", .{ .err = err });
-    };
-}
-
-fn getCurlTimeout(self: *Network) i32 {
-    const multi = self.multi orelse return -1;
-    var timeout_ms: c_long = -1;
-    libcurl.curl_multi_timeout(multi, &timeout_ms) catch return -1;
-    return @intCast(@min(timeout_ms, std.math.maxInt(i32)));
-}
-
-fn processCompletions(self: *Network, multi: *libcurl.CurlM) void {
-    var msgs_in_queue: c_int = 0;
-    while (libcurl.curl_multi_info_read(multi, &msgs_in_queue)) |msg| {
-        switch (msg.data) {
-            .done => |maybe_err| {
-                if (maybe_err) |err| {
-                    lp.log.warn(.app, "curl transfer error", .{ .err = err });
-                }
-            },
-            else => continue,
-        }
-
-        const easy: *libcurl.Curl = msg.easy_handle;
-        var ptr: *anyopaque = undefined;
-        libcurl.curl_easy_getinfo(easy, .private, &ptr) catch
-            lp.assert(false, "curl getinfo private", .{});
-        const conn: *http.Connection = @ptrCast(@alignCast(ptr));
-
-        libcurl.curl_multi_remove_handle(multi, easy) catch {};
-        self.releaseConnection(conn);
-    }
-}
-
-comptime {
-    if (@sizeOf(posix.pollfd) != @sizeOf(libcurl.CurlWaitFd)) {
-        @compileError("pollfd and CurlWaitFd size mismatch");
-    }
-    if (@offsetOf(posix.pollfd, "fd") != @offsetOf(libcurl.CurlWaitFd, "fd") or
-        @offsetOf(posix.pollfd, "events") != @offsetOf(libcurl.CurlWaitFd, "events") or
-        @offsetOf(posix.pollfd, "revents") != @offsetOf(libcurl.CurlWaitFd, "revents"))
-    {
-        @compileError("pollfd and CurlWaitFd layout mismatch");
     }
 }
 
@@ -1002,41 +797,4 @@ fn loadCerts(allocator: Allocator) !libcurl.CurlBlob {
         .data = result.ptr,
         .flags = 0,
     };
-}
-
-const testing = @import("../testing.zig");
-
-test "Network: preparePollFds leaves the CDP fd region untouched" {
-    // Regression for #2507 / #2508. Once a multi exists (telemetry creates
-    // one in optimized builds), preparePollFds runs every loop iteration.
-    // It rebuilds only the curl slice [PSEUDO_POLLFDS..cdp_start]; the CDP
-    // region [cdp_start..] is owned by prepareCdpPollFds, which keeps its
-    // entries across iterations and only rebuilds when cdp_dirty is set.
-    // A slice that ran to the end of pollfds @memset those CDP sockets to
-    // -1, silently dropping every live CDP connection from the poll set —
-    // so Network stopped reading CDP messages (#2508) and never observed
-    // peer EOF/shutdown (#2507). curl global is initialized by the test
-    // harness (App.init -> Network.init).
-    const multi = libcurl.curl_multi_init() orelse return error.FailedToInitMulti;
-    defer libcurl.curl_multi_cleanup(multi) catch {};
-
-    const curl_slots = 4;
-    const cdp_slots = 3;
-    var pollfds: [PSEUDO_POLLFDS + curl_slots + cdp_slots]posix.pollfd = undefined;
-    @memset(&pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
-
-    // preparePollFds only reads self.pollfds and self.cdp_start.
-    var nw: Network = undefined;
-    nw.pollfds = &pollfds;
-    nw.cdp_start = PSEUDO_POLLFDS + curl_slots;
-
-    // Two live CDP sockets parked in the CDP region, mimicking the steady
-    // state between cdp_dirty rebuilds.
-    pollfds[nw.cdp_start] = .{ .fd = 4242, .events = posix.POLL.IN, .revents = 0 };
-    pollfds[nw.cdp_start + 1] = .{ .fd = 4243, .events = posix.POLL.IN, .revents = 0 };
-
-    nw.preparePollFds(multi);
-
-    try testing.expectEqual(@as(posix.fd_t, 4242), pollfds[nw.cdp_start].fd);
-    try testing.expectEqual(@as(posix.fd_t, 4243), pollfds[nw.cdp_start + 1].fd);
 }
