@@ -586,6 +586,15 @@ pub fn resolveURL(self: *const Node, url: anytype, frame: *Frame, opts: ResolveU
     return URL.resolve(allocator, owner_frame.base(), url, .{ .encoding = owner_frame.charset });
 }
 
+// Same as `resolveURL` but can't return `TypeError`, this is needed for multiple
+// getters throught codebase. Returns back passed `url` for `TypeError`s.
+pub fn resolveURLReflect(self: *const Node, url: []const u8, frame: *Frame, opts: ResolveURLOpts) ![]const u8 {
+    return self.resolveURL(url, frame, opts) catch |err| switch (err) {
+        error.TypeError => url,
+        else => err,
+    };
+}
+
 pub fn isSameDocumentAs(self: *const Node, other: *const Node, frame: *const Frame) bool {
     // Get the root document for each node
     const self_doc = if (self._type == .document) self._type.document else self.ownerDocument(frame);
