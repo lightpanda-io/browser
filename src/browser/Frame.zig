@@ -1011,11 +1011,8 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
         return;
     }
 
-    var ls: JS.Local.Scope = undefined;
-    self.js.localScope(&ls);
-    defer ls.deinit();
-
-    const entered = self.js.enter(&ls.handle_scope);
+    var hs: JS.HandleScope = undefined;
+    const entered = self.js.enter(&hs);
     defer entered.exit();
 
     blk: {
