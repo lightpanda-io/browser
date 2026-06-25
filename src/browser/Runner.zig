@@ -215,7 +215,9 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         return .{ .ok = 0 };
     }
 
-    try browser.runMacrotasks();
+    if (hasRunnablePage(session)) {
+        try browser.runMacrotasks();
+    }
 
     const http_active = http_client.http_active;
     const http_next_tick = http_client.next_tick_count;
@@ -429,6 +431,17 @@ fn firstConditionError(conditions: []const WaitCondition) !void {
             else => {},
         }
     }
+}
+
+fn hasRunnablePage(session: *Session) bool {
+    for (session.pages.items) |page| {
+        const target = page.replacement orelse page;
+        switch (target.frame._parse_state) {
+            .html, .complete => return true,
+            else => {},
+        }
+    }
+    return false;
 }
 
 const testing = @import("../testing.zig");
