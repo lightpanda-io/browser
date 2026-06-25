@@ -67,11 +67,14 @@ pub fn waitForFrame(self: *Runner, frame_id: u32, timeout_ms: u32, opts: WaitFor
     const condition = WaitCondition{ .frame_id = frame_id, .until = opts.until };
     var conditions = [_]WaitCondition{condition};
     _ = try self._wait(false, timeout_ms, &conditions);
+    try firstConditionError(&conditions);
 }
 
 pub fn waitForFrameCDP(self: *Runner, frame_id: u32, timeout_ms: u32, until: lp.Config.WaitUntil) !void {
     const condition = WaitCondition{ .frame_id = frame_id, .until = until };
     var conditions = [_]WaitCondition{condition};
+    // Unlike waitForFrame, we deliberately don't surface a per-frame error here.
+    // The frame we're waiting on can legitimately disappear mid-wait.
     _ = try self._wait(true, timeout_ms, &conditions);
 }
 
@@ -97,6 +100,7 @@ pub fn waitForAll(self: *Runner, timeout_ms: u32, opts: WaitForFrameOpts) !void 
         }
     }
     _ = try self._wait(false, timeout_ms, conditions);
+    try firstConditionError(conditions);
 }
 
 pub fn wait(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !void {
@@ -191,7 +195,9 @@ pub const TickResult = union(enum) {
 pub fn tickForFrame(self: *Runner, frame_id: u32, timeout_ms: u32, opts: WaitForFrameOpts) !TickResult {
     const condition = WaitCondition{ .frame_id = frame_id, .until = opts.until };
     var conditions = [_]WaitCondition{condition};
-    return self.tick(timeout_ms, &conditions);
+    const result = try self.tick(timeout_ms, &conditions);
+    try firstConditionError(&conditions);
+    return result;
 }
 pub fn tick(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !TickResult {
     return self._tick(false, timeout_ms, conditions);
@@ -216,14 +222,23 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const total_http_activity = http_active + http_next_tick + http_client.interception_layer.intercepted;
     const total_network_activity = total_http_activity + http_client.ws_active;
 
-    const ms_to_next_microtask = browser.msToNextMacrotask();
-    const is_done = ms_to_next_microtask == null and total_network_activity == 0 and http_client.queue.first == null and http_client.ready_queue.first == null;
+    const ms_to_next_macrotask = browser.msToNextMacrotask();
+    const network_idle = total_network_activity == 0 and http_client.queue.first == null and http_client.ready_queue.first == null;
+    const is_done = ms_to_next_macrotask == null and network_idle;
+
+    // _we_ have nothing to run, but v8 is working on background tasks. We'll
+    // wait for them. Don't do this for CDP, since new CDP messages can always
+    // come in at any time.
+    if ((comptime is_cdp) == false and network_idle and browser.hasBackgroundTasks()) {
+        browser.waitForBackgroundTasks();
+        return .{ .ok = 0 };
+    }
 
     var want_http_tick = false;
 
     for (conditions) |*condition| {
         if (condition.status != .pending) {
-            // this condition is at a termianl state
+            // this condition is at a terminal state
             continue;
         }
 
@@ -279,7 +294,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 
     if ((comptime is_cdp) or want_http_tick) {
-        var ms_to_wait = @min(timeout_ms, ms_to_next_microtask orelse 200);
+        var ms_to_wait = @min(timeout_ms, ms_to_next_macrotask orelse 200);
         if (browser.hasBackgroundTasks()) {
             // background work will queue more to do soon — don't block long
             // for a client message; loop back and run macrotasks instead.
@@ -403,6 +418,15 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
                     std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
                 }
             },
+        }
+    }
+}
+
+fn firstConditionError(conditions: []const WaitCondition) !void {
+    for (conditions) |condition| {
+        switch (condition.status) {
+            .err => |err| return err,
+            else => {},
         }
     }
 }
