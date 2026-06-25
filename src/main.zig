@@ -68,6 +68,10 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             try lp.Agent.listModels(allocator, opts);
             return std.process.cleanExit();
         },
+        .update => |options| {
+            try lp.update(allocator, &args, options);
+            return std.process.cleanExit();
+        },
         else => {},
     }
 

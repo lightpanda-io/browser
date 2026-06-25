@@ -55,6 +55,8 @@ pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
+pub const Updater = @import("Updater.zig");
+
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
@@ -220,6 +222,16 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
         },
         .wpt => try dumpWPT(frame, writer),
     }
+}
+
+/// Check `Config.zig` for `options`.
+pub fn update(allocator: std.mem.Allocator, config: *const Config, options: anytype) !void {
+    if (options.channel == .nightly) @panic("TODO");
+
+    var client = try Updater.init(allocator, config);
+    defer client.deinit();
+
+    try client.getVersions();
 }
 
 // Writes a single page's result object. Framing (the enclosing array and any
