@@ -11,6 +11,7 @@ const Request = HttpClient.Request;
 const Response = HttpClient.Response;
 const URL = @import("../../browser/URL.zig");
 const Fetch = @import("../../browser/webapi/net/Fetch.zig");
+const XMLHttpRequest = @import("../../browser/webapi/net/XMLHttpRequest.zig");
 const Cors = @import("../Cors.zig");
 const CorsMode = Cors.CorsMode;
 const DeferringContext = @import("DeferringLayer.zig").DeferredContext;
@@ -34,6 +35,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const req = &transfer.req;
     const def_ctx: *DeferringContext = @ptrCast(@alignCast(req.ctx));
     const fetch_ctx: *Fetch = @ptrCast(@alignCast(def_ctx.forward.ctx));
+    const xhr_ctx: *XMLHttpRequest = @ptrCast(@alignCast(def_ctx.forward.ctx));
 
     const arena = transfer.arena;
 
@@ -56,7 +58,20 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 
             break :blk if (std.mem.eql(u8, from_origin, to_origin)) .same_origin else .cross_site;
         },
-        // TODO: xhr
+        .xhr => blk: {
+            from_url = xhr_ctx._exec.url.*;
+            from_origin = try URL.getOrigin(
+                arena,
+                from_url,
+            ) orelse break :blk .none;
+
+            to_origin = try URL.getOrigin(
+                arena,
+                req.url,
+            ) orelse break :blk .none; // not http or https
+
+            break :blk if (std.mem.eql(u8, from_origin, to_origin)) .same_origin else .cross_site;
+        },
         else => .none,
     };
 
