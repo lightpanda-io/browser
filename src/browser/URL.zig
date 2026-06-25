@@ -1667,3 +1667,28 @@ test "URL: resolve path scheme" {
         }
     }
 }
+
+test "URL: resolveNavigation defaults a schemeless host to http (curl-like)" {
+    defer testing.reset();
+
+    const Case = struct {
+        url: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        // Schemeless input (the regression): assume http://, like curl.
+        .{ .url = "lightpanda.io", .expected = "http://lightpanda.io/" },
+        .{ .url = "example.com/path?q=1", .expected = "http://example.com/path?q=1" },
+        // An explicit scheme is preserved, not double-prefixed.
+        .{ .url = "https://example.com/x", .expected = "https://example.com/x" },
+        .{ .url = "http://example.com/", .expected = "http://example.com/" },
+        // Non-http absolute URLs still parse as-is.
+        .{ .url = "about:blank", .expected = "about:blank" },
+    };
+
+    for (cases) |case| {
+        const result = try resolveNavigation(testing.arena_allocator, case.url, .{});
+        try testing.expectString(case.expected, result);
+    }
+}
