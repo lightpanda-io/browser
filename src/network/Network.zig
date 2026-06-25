@@ -747,11 +747,12 @@ const LineWriter = struct {
     }
 };
 
+// TODO: BoringSSL has a function for loading certs, we might consider switching to it.
 // TODO: on BSD / Linux, we could just read the PEM file directly.
 // This whole rescan + decode is really just needed for MacOS. On Linux
 // bundle.rescan does find the .pem file(s) which could be in a few different
 // places, so it's still useful, just not efficient.
-fn loadCerts(allocator: Allocator) !libcurl.CurlBlob {
+pub fn loadCerts(allocator: Allocator) !libcurl.CurlBlob {
     var bundle: std.crypto.Certificate.Bundle = .{};
     try bundle.rescan(allocator);
     defer bundle.deinit(allocator);
