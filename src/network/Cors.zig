@@ -4,11 +4,13 @@ const Allocator = std.mem.Allocator;
 const lp = @import("lightpanda");
 const log = lp.log;
 
+const http = @import("http.zig");
 const HttpClient = @import("../browser/HttpClient.zig");
 const Response = HttpClient.Response;
 const CorsContext = @import("./layer/CorsLayer.zig").CorsContext;
 
 // relevant docs:
+// https://fetch.spec.whatwg.org/#http-cors-protocol
 // https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
 // - https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS#simple_requests
 // - https://developer.mozilla.org/en-US/docs/Glossary/CORS-safelisted_request_header#additional_restrictions
@@ -17,17 +19,28 @@ const CorsContext = @import("./layer/CorsLayer.zig").CorsContext;
 /// Determine if a request is simple or not using CorsContext.
 /// If not, any unsafe headers will be stored in ctx.
 pub fn determineSimpleRequestCtx(ctx: *CorsContext, req: *const HttpClient.Request) !bool {
-    return determineSimpleRequest(ctx.arena, &ctx.unsafe_headers, req);
+    return determineSimple(
+        ctx.arena,
+        req.method,
+        req.headers.iterator(),
+        &ctx.unsafe_headers,
+    );
 }
 
-fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.ArrayList([]const u8), req: *const HttpClient.Request) !bool {
-    var simple = switch (req.method) {
+fn determineSimple(
+    arena: std.mem.Allocator,
+    method: http.Method,
+    headers: http.HeaderIterator,
+    unsafe_headers: *std.ArrayList([]const u8),
+) !bool {
+    var simple = switch (method) {
         .GET, .HEAD, .POST => true,
         else => false,
     };
 
-    var header_iter = req.headers.iterator();
-    outer: while (header_iter.next()) |h| {
+    var header_it = headers;
+
+    outer: while (header_it.next()) |h| {
         if (h.value.len > 128) {
             simple = false;
         }
@@ -69,7 +82,7 @@ fn determineSimpleRequest(arena: std.mem.Allocator, unsafe_headers: *std.ArrayLi
 /// Dertermine if a response passes CORS checks using an existing CorsContext
 pub fn responsePassesCorsCtx(ctx: *CorsContext, response: Response) !bool {
     const arena = ctx.arena;
-    var res_store: ResponseHeaderStore = undefined;
+    var res_store: ResponseHeaderStore = .empty;
 
     var header_it = response.headerIterator();
     const headers = try header_it.collect(arena);
@@ -99,7 +112,7 @@ pub fn responsePassesCorsCtx(ctx: *CorsContext, response: Response) !bool {
 fn passesCors(
     req_from_origin: []const u8,
     req_method: []const u8,
-    req_unsafe_headers: [][]const u8,
+    req_unsafe_headers: []const []const u8,
     req_credentials: bool,
     preflight: bool,
     store: ResponseHeaderStore,
@@ -114,7 +127,7 @@ fn passesCors(
     if (!preflight) {
         // non-preflight:
         // no wildcards if credentials
-        return !req_credentials or (store.res_credentials and !origin_wildcard);
+        return !req_credentials or (store.res_credentials and origin_match);
     }
 
     // this is a preflight request;
@@ -153,8 +166,9 @@ fn passesCors(
     // no wildcards if credentials
     if (req_credentials) {
         if (store.res_credentials and
-            !(origin_wildcard or method_wildcard or headers_wildcard) and
-            (origin_match and method_match and headers_match))
+            origin_match and
+            method_match and
+            headers_match)
         {
             return true;
         }
@@ -170,12 +184,12 @@ fn passesCors(
 
 fn safeLanguageValue(header_value: []const u8) bool {
     return for (header_value) |byte| {
-        if (std.ascii.isHex(byte) or
-            std.mem.containsAtLeastScalar(u8, " *,-.;=", 1, byte))
+        if (!std.ascii.isAlphanumeric(byte) and
+            !std.mem.containsAtLeastScalar(u8, " *,-.;=", 1, byte))
         {
-            break true;
+            break false;
         }
-    } else false;
+    } else true;
 }
 
 fn safeHeaderBytes(header_value: []const u8) bool {
@@ -190,57 +204,59 @@ fn safeHeaderBytes(header_value: []const u8) bool {
 
 fn safeContentType(header_value: []const u8) bool {
     var it = std.mem.tokenizeAny(u8, header_value, "; ");
-    const content_type = it.next() orelse return true;
-    return for (safe_content_types) |sct| {
-        if (std.ascii.eqlIgnoreCase(sct, content_type)) break true;
-    } else false;
+    while (it.next()) |ct| {
+        if (std.mem.containsAtLeast(u8, ct, 1, "=")) continue;
+        for (safe_content_types) |sct| {
+            if (std.ascii.eqlIgnoreCase(sct, ct)) break;
+        } else return false;
+    } else return true;
 }
 
 // https://fetch.spec.whatwg.org/#simple-range-header-value
 fn safeRange(range: []const u8) bool {
     if (!std.mem.startsWith(u8, range, "bytes")) return false;
-    if (std.mem.containsAtLeastScalar(u8, range[5..], 1, ',')) return false;
+    if (std.mem.containsAtLeastScalar(u8, range, 1, ',')) return false;
 
     var rem = range[5..];
     var pos: usize = 0;
 
-    while (std.ascii.isWhitespace(range[pos])) {
+    while (pos < rem.len and std.ascii.isWhitespace(rem[pos])) {
         pos += 1;
     }
-    if (rem[pos] != '=') return false;
+    if (pos >= rem.len or rem[pos] != '=') return false;
     pos += 1;
 
-    while (std.ascii.isWhitespace(range[pos])) {
+    while (pos < rem.len and std.ascii.isWhitespace(rem[pos])) {
         pos += 1;
     }
     rem = rem[pos..];
     pos = 0;
 
-    while (std.ascii.isDigit(rem[pos])) {
+    while (pos < rem.len and std.ascii.isDigit(rem[pos])) {
         pos += 1;
     }
 
     const range_start = std.fmt.parseInt(u32, rem[0..pos], 10) catch null;
 
-    while (std.ascii.isWhitespace(range[pos])) {
+    while (pos < rem.len and std.ascii.isWhitespace(rem[pos])) {
         pos += 1;
     }
-    if (rem[pos] != '-') return false;
+    if (pos >= rem.len or rem[pos] != '-') return false;
     pos += 1;
 
-    while (std.ascii.isWhitespace(range[pos])) {
+    while (pos < rem.len and std.ascii.isWhitespace(rem[pos])) {
         pos += 1;
     }
     rem = rem[pos..];
     pos = 0;
 
-    while (std.ascii.isDigit(rem[pos])) {
+    while (pos < rem.len and std.ascii.isDigit(rem[pos])) {
         pos += 1;
     }
 
     const range_end = std.fmt.parseInt(u32, rem[0..pos], 10) catch null;
 
-    if (pos < range.len) return false;
+    if (pos < rem.len) return false;
     if (range_start == null and range_end == null) return false;
 
     return true;
@@ -256,7 +272,14 @@ const ResponseHeaderStore = struct {
     res_origin: []const u8,
     res_methods: []const u8,
     res_headers: []const u8,
-    res_credentials: bool = false,
+    res_credentials: bool,
+
+    const empty: ResponseHeaderStore = .{
+        .res_origin = "",
+        .res_methods = "",
+        .res_headers = "",
+        .res_credentials = false,
+    };
 };
 
 const safe_headers = [_][]const u8{
@@ -297,23 +320,178 @@ const forbidden_methods = [_][]const u8{
 
 const unsafe_bytes = "():<>?@[\\]{}\x7f";
 
-test "safe-range" {
-    // safe
-    // "bytes=0-499"
-    // "bytes=100-"
-    // "bytes=-500"
-    // "bytes=0-0"
+test "CORS: safe-range" {
+    try std.testing.expect(safeRange("bytes=0-499"));
+    try std.testing.expect(safeRange("bytes=100-"));
+    try std.testing.expect(safeRange("bytes  =  100-  "));
+    try std.testing.expect(safeRange("bytes=  -500"));
+    try std.testing.expect(safeRange("bytes  =0-0"));
 
-    // unsafe
-    // "bytes=0-100, 200-300"
-    // "bytes=100-200, 500-600"
-    // "bits=0-1024"
-    // "items=0-10"
-    // "bytes=0-100-200"
-    // "0-100"
-    // "bytes=0-100 " // trailing space
+    try std.testing.expect(!safeRange("bytes=0-100, 200-300"));
+    try std.testing.expect(!safeRange("bytes=100-200, 500-600"));
+    try std.testing.expect(!safeRange("bits=0-1024"));
+    try std.testing.expect(!safeRange("items=0-10"));
+    try std.testing.expect(!safeRange("bytes=0-100-200"));
+    try std.testing.expect(!safeRange("0-100"));
+    try std.testing.expect(!safeRange("bytes=0-100 "));
 }
 
-test "safe-content-type" {}
-test "safe-language-value" {}
-test "safe-header-bytes" {}
+test "CORS: safe-content-type" {
+    try std.testing.expect(
+        safeContentType("text/plain"),
+    );
+    try std.testing.expect(
+        safeContentType("application/x-www-form-urlencoded; multipart/form-data; text/plain"),
+    );
+
+    try std.testing.expect(
+        !safeContentType("text/plain; something/else"),
+    );
+    try std.testing.expect(
+        !safeContentType("just/something/else"),
+    );
+}
+
+test "CORS: safe-language-value" {
+    try std.testing.expect(safeLanguageValue("en-US,en;q=0.9,fr;q=0.8"));
+    try std.testing.expect(safeLanguageValue("*; q=0.5"));
+    try std.testing.expect(safeLanguageValue("es-419, en"));
+
+    try std.testing.expect(!safeLanguageValue("\"en-US\""));
+    try std.testing.expect(!safeLanguageValue("en_US"));
+    try std.testing.expect(!safeLanguageValue("en+US"));
+    try std.testing.expect(!safeLanguageValue("en/GB"));
+    try std.testing.expect(!safeLanguageValue("en-GB\x09"));
+}
+
+test "CORS: safe-header-bytes" {
+    try std.testing.expect(safeHeaderBytes("application/json"));
+    try std.testing.expect(safeHeaderBytes("application/something"));
+    try std.testing.expect(safeHeaderBytes("application/vnd.api+json;charset=utf-8"));
+    try std.testing.expect(safeHeaderBytes("text/html\x09application/*"));
+
+    try std.testing.expect(!safeHeaderBytes("text/<xml>"));
+    try std.testing.expect(!safeHeaderBytes("application/json; profile=(secure)"));
+    try std.testing.expect(!safeHeaderBytes("application/json; versions=[1,2]"));
+    try std.testing.expect(!safeHeaderBytes("application/json\x0a"));
+    try std.testing.expect(!safeHeaderBytes("application/json\x00"));
+}
+
+test "CORS: passes-cors" {
+    const from_origin = "the-from-origin";
+
+    // basic non-preflight
+    var res = passesCors(from_origin, "GET", &.{}, false, false, .{
+        .res_methods = "GET",
+        .res_origin = from_origin,
+        .res_credentials = false,
+        .res_headers = &.{},
+    });
+    try std.testing.expect(res);
+
+    // basic non-preflight incorrect origin
+    res = passesCors(from_origin, "GET", &.{}, false, false, .{
+        .res_methods = "GET",
+        .res_origin = "some-other-origin",
+        .res_credentials = false,
+        .res_headers = &.{},
+    });
+    try std.testing.expect(!res);
+}
+
+test "CORS: passes-cors-prefligt" {
+    const from_origin = "the-from-origin";
+
+    // basic preflight
+    var res = passesCors(from_origin, "PATCH", &.{}, false, true, .{
+        .res_methods = "PATCH",
+        .res_origin = from_origin,
+        .res_credentials = false,
+        .res_headers = &.{},
+    });
+    try std.testing.expect(res);
+
+    // basic preflight incorrect origin
+    res = passesCors(from_origin, "PATCH", &.{}, false, true, .{
+        .res_methods = "PATCH",
+        .res_origin = "some-other-origin",
+        .res_credentials = false,
+        .res_headers = &.{},
+    });
+
+    // preflight matching unsafe headers
+    res = passesCors(from_origin, "PATCH", &.{"something-custom"}, false, true, .{
+        .res_methods = "PATCH",
+        .res_origin = from_origin,
+        .res_credentials = false,
+        .res_headers = "something-custom, something-extra",
+    });
+    try std.testing.expect(res);
+
+    // preflight non-matching unsafe headers
+    res = passesCors(from_origin, "PATCH", &.{"something-custom"}, false, true, .{
+        .res_methods = "PATCH",
+        .res_origin = from_origin,
+        .res_credentials = false,
+        .res_headers = "only-something-extra",
+    });
+    try std.testing.expect(!res);
+}
+
+test "CORS: passes-cors-creds" {
+    const from_origin = "the-from-origin";
+
+    // matching creds
+    var res = passesCors(from_origin, "PATCH", &.{}, true, false, .{
+        .res_methods = "PATCH",
+        .res_origin = from_origin,
+        .res_credentials = true,
+        .res_headers = &.{},
+    });
+    try std.testing.expect(res);
+
+    // matching creds origin wildcard
+    res = passesCors(from_origin, "PATCH", &.{}, true, false, .{
+        .res_methods = "PATCH",
+        .res_origin = "*",
+        .res_credentials = true,
+        .res_headers = &.{},
+    });
+    try std.testing.expect(!res);
+
+    // non matching creds
+    res = passesCors(from_origin, "PATCH", &.{}, true, false, .{
+        .res_methods = "PATCH",
+        .res_origin = from_origin,
+        .res_credentials = false,
+        .res_headers = &.{},
+    });
+    try std.testing.expect(!res);
+
+    // preflight matching creds matching header and wildcard
+    res = passesCors(from_origin, "PATCH", &.{"some-header"}, true, true, .{
+        .res_methods = "PATCH",
+        .res_origin = from_origin,
+        .res_credentials = true,
+        .res_headers = "some-header, *",
+    });
+    try std.testing.expect(res);
+
+    // preflight matching creds non-matching header and wildcard
+    res = passesCors(from_origin, "PATCH", &.{"some-header"}, true, true, .{
+        .res_methods = "PATCH",
+        .res_origin = from_origin,
+        .res_credentials = true,
+        .res_headers = "*",
+    });
+    try std.testing.expect(!res);
+
+    // preflight matching creds origin wildcard
+    res = passesCors(from_origin, "PATCH", &.{"some-header"}, true, true, .{
+        .res_methods = "PATCH",
+        .res_origin = "*",
+        .res_credentials = true,
+        .res_headers = "some-header",
+    });
+    try std.testing.expect(!res);
+}

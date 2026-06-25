@@ -186,11 +186,19 @@ pub const CorsContext = struct {
     fn headerCallback(response: Response) anyerror!HttpClient.HeaderResult {
         const corstext: *CorsContext = @ptrCast(@alignCast(response.ctx));
 
+        // preflight requires OK status
+        if (corstext.held != null and
+            (response.status() orelse 0 < 200 or
+                response.status() orelse 300 > 299))
+        {
+            return error.CorsDenied;
+        }
+
         if (try Cors.responsePassesCorsCtx(corstext, response)) {
             if (corstext.held == null) return corstext.forward.forwardHeader(response);
             return .proceed;
         } else {
-            return error.CorsDeinied;
+            return error.CorsDenied;
         }
     }
 
