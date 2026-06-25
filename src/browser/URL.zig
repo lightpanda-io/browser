@@ -537,6 +537,17 @@ pub fn getHostname(raw: [:0]const u8) []const u8 {
     return host[0..port_sep];
 }
 
+// Like getHostname, but for an origin serialization ("scheme://host[:port]"),
+// which is not necessarily sentinel-terminated. Used where the document's host
+// must come from its (possibly inherited) origin rather than its URL — e.g. an
+// about:blank iframe whose url stays "about:blank" but whose origin is the
+// parent's.
+pub fn getOriginHostname(origin: []const u8) []const u8 {
+    const host = getHost(origin);
+    const port_sep = findPortSeparator(host) orelse return host;
+    return host[0..port_sep];
+}
+
 pub fn getPort(raw: [:0]const u8) []const u8 {
     const host = getHost(raw);
     const port_sep = findPortSeparator(host) orelse return "";

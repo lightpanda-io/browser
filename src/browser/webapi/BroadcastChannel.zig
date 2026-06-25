@@ -160,11 +160,11 @@ const PostMessageCallback = struct {
 
         const sender = self.sender;
         const page = self.exec.page;
-        const origin = self.exec.js.origin;
+        const origin = self.exec.origin();
 
         // MessageEvent.origin is the serialization of the sender's origin (same
         // for every receiver); an opaque origin serializes to "null".
-        const sender_origin = self.exec.origin() orelse "null";
+        const sender_origin = origin orelse "null";
 
         // Snapshot every same-origin global up front. Dispatch (below) runs user
         // JS that can create or tear down frames/workers, so we must not hold a
@@ -174,7 +174,14 @@ const PostMessageCallback = struct {
         const arena = try page.getArena(.tiny, "BroadcastChannel.postMessage");
         defer page.releaseArena(arena);
 
-        for (try page.executionsForOrigin(arena, origin)) |exec| {
+        // Opaque origins have no string form and are unique per execution, so
+        // the sender is the only same-origin context
+        const executions = if (origin) |o|
+            try page.executionsForOrigin(arena, o)
+        else
+            (&self.exec)[0..1];
+
+        for (executions) |exec| {
             // The MessageEvent and its cloned `data` must live in the receiver's
             // realm, and its listeners are in the receiver's event manager.
             // localScope enters the receiver's v8 context, so both happen there.

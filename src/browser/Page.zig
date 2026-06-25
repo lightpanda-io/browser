@@ -320,7 +320,7 @@ fn findPopupBy(self: *Page, comptime field: []const u8, id: u32) ?*Frame {
 //
 // The returned set is fixed, so a caller may run user JS (which can create or
 // tear down frames/workers) while walking it without invalidating the slice.
-pub fn executionsForOrigin(self: *Page, arena: Allocator, origin: *js.Origin) ![]*js.Execution {
+pub fn executionsForOrigin(self: *Page, arena: Allocator, origin: []const u8) ![]*js.Execution {
     var list: std.ArrayList(*js.Execution) = .empty;
     try appendFrameExecutions(&self.frame, origin, arena, &list);
     for (self.popups.items) |popup| {
@@ -329,14 +329,18 @@ pub fn executionsForOrigin(self: *Page, arena: Allocator, origin: *js.Origin) ![
     return list.items;
 }
 
-fn appendFrameExecutions(frame: *Frame, origin: *js.Origin, arena: Allocator, list: *std.ArrayList(*js.Execution)) !void {
-    if (frame.js.origin == origin) {
-        try list.append(arena, &frame.js.execution);
+fn appendFrameExecutions(frame: *Frame, origin: []const u8, arena: Allocator, list: *std.ArrayList(*js.Execution)) !void {
+    if (frame.origin) |fo| {
+        if (std.mem.eql(u8, fo, origin)) {
+            try list.append(arena, &frame.js.execution);
+        }
     }
     for (frame.workers.items) |worker| {
         const wgs = worker._worker_scope;
-        if (wgs.js.origin == origin) {
-            try list.append(arena, &wgs.js.execution);
+        if (wgs.origin) |wo| {
+            if (std.mem.eql(u8, wo, origin)) {
+                try list.append(arena, &wgs.js.execution);
+            }
         }
     }
     for (frame.child_frames.items) |child| {

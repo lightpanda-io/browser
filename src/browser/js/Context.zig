@@ -229,18 +229,11 @@ pub fn deinit(self: *Context) void {
     v8.v8__MicrotaskQueue__DELETE(self.microtask_queue);
 }
 
+// setOrigin is called at navigation (opaque -> real origin) and again when a
+// script sets document.domain (real origin -> '!'-marked effective domain).
 pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     const env = self.env;
     const isolate = env.isolate;
-
-    if (comptime IS_DEBUG) {
-        // A frame starts off with an opaque origin. After navigation, setOrigin
-        // is called. This is the only time setOrigin should be called for that
-        // frame. Therefore, when setOrigin is called, the previous origin should
-        // have been opaque and its rc should have been 1.
-        lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
-    }
-
     const origin = try self.page.getOrCreateOrigin(key);
 
     self.page.releaseOrigin(self.origin);

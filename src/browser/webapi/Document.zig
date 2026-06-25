@@ -22,6 +22,8 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const URL = @import("../URL.zig");
+const idna = @import("../../sys/idna.zig");
+const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -147,7 +149,80 @@ pub fn getContentType(self: *const Document) []const u8 {
 }
 
 pub fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
-    return URL.getHostname((self._frame orelse frame).url);
+    const doc_frame = self._frame orelse frame;
+
+    // When document.domain has been set, the effective domain is encoded in
+    // the origin key with a leading '!' marker. The key is a "!scheme://host"
+    // serialization with the port already dropped, so the host *is* the
+    // effective domain.
+    const key = doc_frame.js.origin.key;
+    if (key.len != 0 and key[0] == '!') {
+        return URL.getHost(key[1..]);
+    }
+
+    // Derive from the origin, not the URL: an about:blank child inherits the
+    // parent origin while keeping url == "about:blank". Opaque origin => "".
+    const origin = doc_frame.origin orelse return "";
+    return URL.getOriginHostname(origin);
+}
+
+pub fn setDomain(self: *Document, value: []const u8) !void {
+    // e.g. (new Document().domain = '')
+    const doc_frame = self._frame orelse return error.SecurityError;
+    const origin = doc_frame.origin orelse return error.SecurityError;
+
+    const arena = doc_frame.call_arena;
+    const requested = if (idna.needsAscii(value)) try idna.toAscii(arena, value) else value;
+
+    // Validate against the current effective domain. Once relaxed,
+    // document.domain can only broaden further.
+    const base = self.getDomain(doc_frame);
+    if (isRelaxableTo(base, requested) == false) {
+        return error.SecurityError;
+    }
+
+    // When the domain is explicitly set, it only matches other explicitly set
+    // domains. We do this by prepending a '!' to the origin, so that it can
+    // only ever match another explicitly set domain.
+    // The scheme is preserved (http and https must never collide) and the
+    // port is dropped, per spec.
+    const scheme_end = (std.mem.indexOf(u8, origin, "://") orelse return error.SecurityError) + 3;
+    const key = try std.mem.concat(arena, u8, &.{ "!", origin[0..scheme_end], requested });
+    try doc_frame.js.setOrigin(key);
+}
+
+// Returns true if the requested domain is valid for the given host
+fn isRelaxableTo(host: []const u8, requested: []const u8) bool {
+    if (requested.len == 0) {
+        return false;
+    }
+
+    // Pure opt-in: relaxing to your own host is always allowed (and it's the
+    // only valid value for IPs)
+    if (std.mem.eql(u8, host, requested)) {
+        return true;
+    }
+
+    // request must be a subset of host, so it must be smaller
+    if (host.len <= requested.len) {
+        return false;
+    }
+
+    if (host[host.len - requested.len - 1] != '.') {
+        return false;
+    }
+
+    if (std.mem.endsWith(u8, host, requested) == false) {
+        return false;
+    }
+
+    // it can't be a bare TLD, "com"
+    if (std.mem.indexOfScalar(u8, requested, '.') == null) {
+        return false;
+    }
+
+    // and it can't be a public suffix (e.g. "gov.uk")
+    return public_suffix_list.lookup(requested) == false;
 }
 
 const CreateElementOptions = struct {
@@ -1178,7 +1253,7 @@ pub const JsApi = struct {
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
     pub const fonts = bridge.accessor(Document.getFonts, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
-    pub const domain = bridge.accessor(Document.getDomain, null, .{});
+    pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{ .dom_exception = true });
     pub const createElement = bridge.function(Document.createElement, .{ .dom_exception = true });
     pub const createElementNS = bridge.function(Document.createElementNS, .{ .dom_exception = true });
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
@@ -1260,4 +1335,32 @@ test "WebApi: Document" {
 
 test "WebApi: Document.evaluate" {
     try testing.htmlRunner("xpath/document_evaluate.html", .{});
+}
+
+test "Document: isRelaxableTo" {
+    // Pure opt-in (relax to self) is always allowed, including IP hosts.
+    try testing.expectEqual(true, isRelaxableTo("a.example.com", "a.example.com"));
+    try testing.expectEqual(true, isRelaxableTo("127.0.0.1", "127.0.0.1"));
+
+    // Relaxing to a registrable superdomain.
+    try testing.expectEqual(true, isRelaxableTo("a.example.com", "example.com"));
+    try testing.expectEqual(true, isRelaxableTo("a.b.example.com", "example.com"));
+    try testing.expectEqual(true, isRelaxableTo("a.b.example.com", "b.example.com"));
+
+    // Bare TLDs (single label) are never registrable. Multi-label public
+    // suffixes are rejected via the PSL — note the test build stubs the PSL
+    // to {gov.uk, api.gov.uk}, so those are the entries exercised here.
+    try testing.expectEqual(false, isRelaxableTo("a.example.com", "com"));
+    try testing.expectEqual(false, isRelaxableTo("foo.gov.uk", "gov.uk"));
+    try testing.expectEqual(false, isRelaxableTo("a.api.gov.uk", "api.gov.uk"));
+    // ...but a registrable domain sitting under that suffix is fine.
+    try testing.expectEqual(true, isRelaxableTo("a.dept.gov.uk", "dept.gov.uk"));
+
+    // Must be a label-boundary suffix, not a substring suffix.
+    try testing.expectEqual(false, isRelaxableTo("a.example.com", "ample.com"));
+    try testing.expectEqual(false, isRelaxableTo("notexample.com", "example.com"));
+
+    // Unrelated domain, and the empty string.
+    try testing.expectEqual(false, isRelaxableTo("a.example.com", "example.org"));
+    try testing.expectEqual(false, isRelaxableTo("a.example.com", ""));
 }
