@@ -74,25 +74,9 @@ pub fn deinit(self: *Updater) void {
     self.arena.deinit();
 }
 
-// TODO: Update this with actual versions.json when ready.
-const Versions = struct {
-    master: Entry,
-    @"0.16.0": Entry, // Consider this as stable.
-
-    /// Single version record.
-    const Entry = struct {
-        version: []const u8,
-        src: struct {
-            tarball: []const u8,
-            shasum: []const u8,
-            size: u64,
-        },
-    };
-};
-
 /// Returns Lightpanda versions; call `resetConnection` after you're done with
 /// `Versions` to do further requests.
-fn getVersions(self: *Updater) !Versions {
+fn getVersions(self: *Updater) !std.json.Value {
     try self.conn.setURL(VersionsUrl);
     try self.conn.setGetMode();
     try self.conn.setFollowLocation(true);
@@ -109,7 +93,7 @@ fn getVersions(self: *Updater) !Versions {
     }
 
     return std.json.parseFromSliceLeaky(
-        Versions,
+        std.json.Value,
         self.arena.allocator(),
         self.conn_read_buffer.items,
         .{
