@@ -222,7 +222,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     }
 
     if (!std.mem.eql(u8, "about:blank", params.url)) {
-        const encoded_url = try URL.resolve(frame.call_arena, "", params.url, .{});
+        const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
         try frame.navigate(
             encoded_url,
             .{ .reason = .address_bar, .kind = .{ .push = null } },
