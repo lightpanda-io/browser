@@ -28,7 +28,7 @@ const HttpClient = @import("../HttpClient.zig");
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
-const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
+const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -50,7 +50,7 @@ _loader_id: u32,
 _proto: *EventTarget,
 _frame: *Frame,
 _arena: Allocator,
-_worker_scope: *WorkerGlobalScope,
+_worker_scope: *DedicatedWorkerGlobalScope,
 
 _url: [:0]const u8,
 _type: WorkerType = .classic,
@@ -84,8 +84,10 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         ._frame_id = session.nextFrameId(),
         ._loader_id = session.nextLoaderId(),
     });
-    self._worker_scope = try WorkerGlobalScope.init(self, resolved_url);
-    errdefer self._worker_scope.deinit();
+    const dedicated_worker = try DedicatedWorkerGlobalScope.init(self, resolved_url);
+    errdefer dedicated_worker.deinit();
+
+    self._worker_scope = dedicated_worker;
     try frame.trackWorker(self);
 
     // `--disable-workers` (or `LP.configureLoading { worker: false }`):
@@ -182,7 +184,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 }
 
 fn loadInitialScript(self: *Worker, script: []const u8) !void {
-    const js_context = self._worker_scope.js;
+    const js_context = self._worker_scope._proto.js;
 
     if (js_context.env.terminatePending()) {
         return;
@@ -248,7 +250,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._http_response = null;
 
     log.err(.browser, "worker fetch error", .{
-        .url = self._worker_scope.url,
+        .url = self._url,
         .err = err,
     });
 
@@ -306,7 +308,7 @@ pub fn postMessage(self: *Worker, data: js.Value) !void {
     try self._worker_scope.receiveMessage(data);
 }
 
-// Called internally by WorkerGlobalScope when it wants to post a message to us
+// Called internally by DedicatedWorkerGlobalScope when it wants to post a message to us
 pub fn receiveMessage(self: *Worker, data: js.Value) !void {
     const frame = self._frame;
     const cloned_data = blk: {

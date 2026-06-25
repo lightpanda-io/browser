@@ -336,7 +336,7 @@ fn appendFrameExecutions(frame: *Frame, origin: []const u8, arena: Allocator, li
         }
     }
     for (frame.workers.items) |worker| {
-        const wgs = worker._worker_scope;
+        const wgs = worker._worker_scope._proto;
         if (wgs.origin) |wo| {
             if (std.mem.eql(u8, wo, origin)) {
                 try list.append(arena, &wgs.js.execution);
