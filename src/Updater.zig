@@ -29,7 +29,7 @@ const log = @import("log.zig");
 const MockVersion: [:0]const u8 = "0.16.0";
 
 /// Where to find versions JSON.
-const VersionsUrl: [:0]const u8 = "https://ziglang.org/download/index.json";
+const VersionsUrl: [:0]const u8 = "https://get.lightpanda.io/versions.json";
 
 pub const Channel = enum(u1) { stable, nightly };
 
