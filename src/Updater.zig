@@ -111,9 +111,43 @@ fn resetConnection(self: *Updater) !void {
     self.conn_err = .none;
 }
 
+const SortContext = struct {
+    object: std.json.ObjectMap,
+
+    pub fn lessThan(ctx: SortContext, a_index: usize, b_index: usize) bool {
+        const keys = ctx.object.keys();
+        const a_version = std.SemanticVersion.parse(keys[a_index]) catch unreachable;
+        const b_version = std.SemanticVersion.parse(keys[b_index]) catch unreachable;
+        return a_version.order(b_version).compare(.gt);
+    }
+};
+
 /// Informs about running version to given `Writer` by desired `Channel`.
-pub fn inform(self: *Updater, channel: Channel, writer: std.Io.Writer) void {
+pub fn inform(self: *Updater, channel: Channel, writer: *std.Io.Writer) !void {
     const versions = try self.getVersions();
+    defer self.resetConnection() catch {};
+
+    switch (channel) {
+        .stable => {
+            var stable = versions.object;
+            // Get rid of `nightly`.
+            lp.assert(stable.swapRemove("nightly"), "Updater.inform: incorrect JSON", .{});
+
+            // Sort and retrieve the newest.
+            stable.sort(SortContext{ .object = stable });
+            // Newest is at the beginning.
+            const newest = stable.values()[0].object;
+            const version = (newest.get("version") orelse return error.IncorrectJson).string;
+            try writer.print("Latest stable Lightpanda version is {s}.\n", .{version});
+            return writer.flush();
+        },
+        .nightly => {
+            const nightly = (versions.object.get("nightly") orelse return error.IncorrectJson).object;
+            const version = (nightly.get("version") orelse return error.IncorrectJson).string;
+            try writer.print("Latest nightly Lightpanda version is {s}.\n", .{version});
+            return writer.flush();
+        },
+    }
 }
 
 /// Invoked by `Connection` when there are body bytes.
