@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const Updater = lp.Updater;
 const log = lp.log;
 const builtin = @import("builtin");
 const zenai = @import("zenai");
@@ -188,6 +189,10 @@ fn injectScriptFileValidator(
     return list.append(allocator, bytes);
 }
 
+fn nightlyChannelValidator(_: Allocator, _: *std.process.ArgIterator) !Updater.Channel {
+    return .nightly;
+}
+
 /// Definition for all the commands and its arguments. See @cli.zig for further.
 const Commands = cli.Builder(.{
     .{
@@ -259,6 +264,20 @@ const Commands = cli.Builder(.{
             .{ .name = "effort", .type = ?Effort },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
+        },
+        .shared_options = CommonOptions,
+    },
+    .{
+        .name = "update",
+        .options = .{
+            .{
+                .name = "channel",
+                .type = Updater.Channel,
+                .default = .stable,
+                .variants = .{
+                    .{ .name = "nightly", .validator = nightlyChannelValidator },
+                },
+            },
         },
         .shared_options = CommonOptions,
     },
@@ -355,7 +374,7 @@ pub fn v8MaxHeapMb(self: *const Config) ?u32 {
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
+        inline .serve, .fetch, .mcp, .agent, .update => |opts| opts.http_proxy,
         else => unreachable,
     };
 }
@@ -363,7 +382,7 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
-        .help, .version => null,
+        else => null,
     };
 }
 
@@ -383,14 +402,14 @@ pub fn httpMaxHostOpen(self: *const Config) u8 {
 
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_connect_timeout orelse 0,
+        inline .serve, .fetch, .mcp, .agent, .update => |opts| opts.http_connect_timeout orelse 0,
         else => unreachable,
     };
 }
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_timeout orelse 5000,
+        inline .serve, .fetch, .mcp, .agent, .update => |opts| opts.http_timeout orelse 5000,
         else => unreachable,
     };
 }
@@ -401,7 +420,7 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_response_size,
+        inline .serve, .fetch, .mcp, .agent, .update => |opts| opts.http_max_response_size,
         else => unreachable,
     };
 }
@@ -465,14 +484,14 @@ pub fn logFilterScopes(self: *const Config) std.ArrayList(log.FilterRule) {
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent_suffix,
-        .help, .version => null,
+        else => null,
     };
 }
 
 pub fn userAgent(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent,
-        .help, .version => null,
+        else => null,
     };
 }
 
@@ -520,7 +539,7 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
             .keyid = opts.web_bot_auth_keyid orelse return null,
             .domain = opts.web_bot_auth_domain orelse return null,
         },
-        .help, .version => null,
+        else => null,
     };
 }
 
@@ -700,6 +719,7 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
             , .{ @field(Help, @tagName(tag)), Help.common_options });
             std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
+        .update => @panic("TODO"),
         .version => {
             const template = Help.version ++ "\n";
             std.debug.print(template, .{exec_name});
