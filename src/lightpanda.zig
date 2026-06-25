@@ -226,12 +226,15 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
 
 /// Check `Config.zig` for `options`.
 pub fn update(allocator: std.mem.Allocator, config: *const Config, options: anytype) !void {
-    if (options.channel == .nightly) @panic("TODO");
-
     var client = try Updater.init(allocator, config);
     defer client.deinit();
 
-    try client.getVersions();
+    var stdout = std.fs.File.stdout();
+    var buf: [4096]u8 = undefined;
+    var writer = stdout.writer(&buf);
+    const w = &writer.interface;
+    // Inform to stdout about version.
+    try client.inform(options.channel, w);
 }
 
 // Writes a single page's result object. Framing (the enclosing array and any
