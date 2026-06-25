@@ -57,7 +57,7 @@ pub fn getPoster(self: *const Video, frame: *Frame) ![]const u8 {
     if (poster.len == 0) {
         return "";
     }
-    return element.asConstNode().resolveURL(poster, frame, .{});
+    return element.asConstNode().resolveURLReflect(poster, frame, .{});
 }
 
 pub fn setPoster(self: *Video, value: []const u8, frame: *Frame) !void {

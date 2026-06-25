@@ -47,9 +47,9 @@ pub fn getContentDocument(self: *const IFrame) ?*Document {
     return window._document;
 }
 
-pub fn getSrc(self: *IFrame, frame: *Frame) ![:0]const u8 {
+pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
     if (self._src.len == 0) return "";
-    return self.asNode().resolveURL(self._src, frame, .{});
+    return self.asNode().resolveURLReflect(self._src, frame, .{});
 }
 
 pub fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {

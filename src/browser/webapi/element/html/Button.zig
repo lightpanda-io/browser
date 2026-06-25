@@ -142,7 +142,7 @@ pub fn getFormAction(self: *Button, frame: *Frame) ![]const u8 {
     if (action.len == 0) {
         return owner_url;
     }
-    return element.asNode().resolveURL(action, frame, .{});
+    return element.asNode().resolveURLReflect(action, frame, .{});
 }
 
 pub fn setFormAction(self: *Button, value: []const u8, frame: *Frame) !void {

@@ -659,7 +659,7 @@ pub fn setSize(self: *Input, size: i32, frame: *Frame) !void {
 
 pub fn getSrc(self: *const Input, frame: *Frame) ![]const u8 {
     const src = self.asConstElement().getAttributeSafe(comptime .wrap("src")) orelse return "";
-    return self.asConstElement().asConstNode().resolveURL(src, frame, .{});
+    return self.asConstElement().asConstNode().resolveURLReflect(src, frame, .{});
 }
 
 pub fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
@@ -928,7 +928,7 @@ pub fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
     if (action.len == 0) {
         return owner_url;
     }
-    return element.asNode().resolveURL(action, frame, .{});
+    return element.asNode().resolveURLReflect(action, frame, .{});
 }
 
 pub fn setFormAction(self: *Input, value: []const u8, frame: *Frame) !void {
