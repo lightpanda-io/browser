@@ -214,7 +214,7 @@ pub fn abortRequest(self: *InterceptionLayer, transfer: *Transfer) void {
         lp.assert(self.intercepted > 0, "InterceptionLayer.abortRequest", .{ .value = self.intercepted });
         log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
     }
-    transfer.abort(error.Abort);
+    transfer.abortParked(error.Abort);
 }
 
 pub fn fulfillRequest(
@@ -229,19 +229,24 @@ pub fn fulfillRequest(
         log.debug(.http, "fulfill transfer", .{ .intercepted = self.intercepted });
     }
 
+    // Leave the parked state (accounting `intercepted` exactly once) and move to
+    // .completing BEFORE running the user callbacks.
+    transfer.unpark();
+    transfer.state = .completing;
+    defer transfer.deinit();
+
     // `done` flips true once we've called the user's done_callback. If
     // done_callback itself throws, the user already saw their end-of-flow
     // notification; suppress error_callback to avoid double-notify.
     var done: bool = false;
     fulfillInner(&transfer.req, status, headers, body, &done) catch |err| {
         if (!done) {
+            // safe here despite the defer transfer.deinit() above since the
+            // state == .completing
             transfer.abort(err);
-        } else {
-            transfer.deinit();
         }
         return err;
     };
-    transfer.deinit();
 }
 
 fn fulfillInner(

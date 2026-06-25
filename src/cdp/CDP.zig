@@ -635,7 +635,7 @@ pub const BrowserContext = struct {
         const http_client = &browser.http_client;
         for (self.intercept_state.pendingIntercepts()) |transfer_id| {
             if (http_client.findTransfer(transfer_id)) |transfer| {
-                transfer.abort(error.ClientDisconnect);
+                transfer.abortParked(error.ClientDisconnect);
             }
         }
 

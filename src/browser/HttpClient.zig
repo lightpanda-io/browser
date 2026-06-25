@@ -1584,6 +1584,11 @@ pub const Transfer = struct {
     // for when a Transfer is queued for the next tick.
     _next_tick_node: ?NextTickNode = null,
 
+    // Debug canary: set on the first deinit, so that if a second deinit on the
+    // same instance is called, we have a double free. The memory _could_ be
+    // re-used, since the lack of a failure doesn't proove there's no UAF.
+    _deinited: bool = false,
+
     pub const State = union(enum) {
         // Pre-commit. Only valid inside the request flow (Client.request
         // or a re-entry like continueTransfer / unpark) before any commit
@@ -1664,6 +1669,10 @@ pub const Transfer = struct {
     }
 
     pub fn deinit(self: *Transfer) void {
+        if (comptime IS_DEBUG) {
+            lp.assert(self._deinited == false, "Transfer.deinit", .{ .id = self.id });
+            self._deinited = true;
+        }
         self.leaveIntercept();
         if (self._conn) |c| {
             self.client.removeConn(c);
@@ -1706,6 +1715,18 @@ pub const Transfer = struct {
     pub fn abort(self: *Transfer, err: anyerror) void {
         self.requestFailed(err, true);
         self.detachOrDeinit();
+    }
+
+    // Abort a transfer that an external owner (CDP interception) is holding in a
+    // .parked state. Unlike abort(), this is re-entrancy safe so that if
+    // requestFailed causes a teardown/navigate, this won't be killed again
+    // Mirrors InterceptionLayer.fulfillRequest. unpark asserts the transfer is
+    // actually parked.
+    pub fn abortParked(self: *Transfer, err: anyerror) void {
+        self.unpark();
+        self.state = .completing;
+        defer self.deinit();
+        self.requestFailed(err, true);
     }
 
     // Owner-driven teardown: fires shutdown_callback (not error_callback)
@@ -2001,8 +2022,7 @@ pub const Transfer = struct {
         }
 
         // The transfer is still .parked(.intercept_auth)
-        // abort -> deinit -> leaveIntercept decrements the counter.
-        self.abort(error.AbortAuthChallenge);
+        self.abortParked(error.AbortAuthChallenge);
     }
 
     // headerDoneCallback is called once the headers have been read.
@@ -2352,4 +2372,159 @@ test "HttpClient: isSyncWaitInterrupt ignores ping and non-teardown CDP methods"
         };
         try testing.expect(!isSyncWaitInterrupt(&msg));
     }
+}
+
+test "HttpClient: fulfillRequest survives a done_callback that tears down the owner" {
+    // Regression: Fetch.fulfillRequest runs the consumer's done_callback while
+    // the transfer is still parked for interception. A done_callback that runs
+    // JS which navigates / closes the page re-entrantly kills the transfer
+    // (abortOwner -> kill -> deinit). Previously the transfer was still
+    // `.parked` at that point, so the re-entrant teardown freed it
+    // synchronously and fulfillRequest's trailing deinit was a double-free +
+    // `intercepted` underflow (surfacing later as a Transfer.leaveIntercept
+    // assert at session teardown). fulfillRequest now moves the transfer to
+    // `.completing` first, so the teardown defers and there is exactly one free.
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    client.allocator = testing.allocator;
+    client.arena_pool = &pool;
+    client.transfers = .empty;
+    client.queue = .{};
+    client.next_tick_queue = .{};
+    client.next_tick_count = 0;
+    client.performing = false;
+    client.interception_layer = .{};
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner: Owner = .{};
+
+    const Ctx = struct {
+        client: *Client,
+        owner: *Owner,
+        done_called: bool = false,
+
+        fn doneCallback(ctx: *anyopaque) !void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.done_called = true;
+            // Mimics a navigation / page-close kicked off from inside the
+            // fulfilled response's done_callback, which kills this transfer.
+            self.client.abortOwner(self.owner);
+        }
+    };
+    var ctx = Ctx{ .client = &client, .owner = &owner };
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .frame_id = 0,
+            .loader_id = 0,
+            .method = .GET,
+            .url = "http://example.com/",
+            .headers = .{ .headers = null },
+            .cookie_jar = null,
+            .cookie_origin = "",
+            .resource_type = .document,
+            .notification = undefined,
+            .ctx = &ctx,
+            .done_callback = Ctx.doneCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+    owner.addTransfer(transfer);
+    transfer.owner = &owner;
+
+    // Mirror InterceptionLayer.request committing the transfer to CDP.
+    transfer.park(.intercept_request);
+    client.interception_layer.intercepted += 1;
+
+    try client.interception_layer.fulfillRequest(transfer, 200, &.{}, "hello");
+
+    try testing.expect(ctx.done_called);
+    // The transfer was freed exactly once: counter back to 0, dropped from the
+    // id index and the owner list. A double-free would have underflowed
+    // `intercepted` (or tripped the leaveIntercept assert).
+    try testing.expectEqual(0, client.interception_layer.intercepted);
+    try testing.expectEqual(0, client.transfers.count());
+    try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: abortParked survives an error_callback that tears down the owner" {
+    // Same re-entrancy hazard as fulfillRequest, but on the abort path
+    // (failRequest / continueWithAuth-cancel / session teardown). abortParked
+    // fires the failure callback while .completing, so a re-entrant owner
+    // teardown defers to the single deinit instead of double-freeing.
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    client.allocator = testing.allocator;
+    client.arena_pool = &pool;
+    client.transfers = .empty;
+    client.queue = .{};
+    client.next_tick_queue = .{};
+    client.next_tick_count = 0;
+    client.performing = false;
+    client.interception_layer = .{};
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner: Owner = .{};
+
+    const Ctx = struct {
+        client: *Client,
+        owner: *Owner,
+        err_called: bool = false,
+
+        fn errorCallback(ctx: *anyopaque, _: anyerror) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.err_called = true;
+            self.client.abortOwner(self.owner);
+        }
+    };
+    var ctx = Ctx{ .client = &client, .owner = &owner };
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .frame_id = 0,
+            .loader_id = 0,
+            .method = .GET,
+            .url = "http://example.com/",
+            .headers = .{ .headers = null },
+            .cookie_jar = null,
+            .cookie_origin = "",
+            .resource_type = .document,
+            .notification = undefined,
+            .ctx = &ctx,
+            .error_callback = Ctx.errorCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+    owner.addTransfer(transfer);
+    transfer.owner = &owner;
+
+    transfer.park(.intercept_request);
+    client.interception_layer.intercepted += 1;
+
+    transfer.abortParked(error.Abort);
+
+    try testing.expect(ctx.err_called);
+    try testing.expectEqual(0, client.interception_layer.intercepted);
+    try testing.expectEqual(0, client.transfers.count());
+    try testing.expectEqual(null, owner.transfers.first);
 }
