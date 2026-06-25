@@ -50,6 +50,18 @@ pub fn resolve(
     return allocator.dupeZ(u8, href.slice());
 }
 
+/// Resolves a user-provided "address bar" URL the way curl does. Bare host like
+/// `lightpanda.io` has no scheme, so it can't be parsed as an absolute URL.
+pub fn resolveNavigation(allocator: Allocator, url: []const u8, options: ResolveOptions) ![:0]const u8 {
+    return resolve(allocator, "", url, options) catch |err| switch (err) {
+        error.TypeError => {
+            const with_scheme = try std.fmt.allocPrintSentinel(allocator, "http://{s}", .{url}, 0);
+            return resolve(allocator, "", with_scheme, options);
+        },
+        else => return err,
+    };
+}
+
 const EncodeSet = enum { path, query, query_legacy, userinfo, fragment, component };
 
 pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
