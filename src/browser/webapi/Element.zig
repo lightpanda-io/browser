@@ -939,6 +939,12 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
             continue;
         }
 
+        // A DocumentFragment contributes its children, not itself
+        if (child.is(Node.DocumentFragment)) |_| {
+            try frame.insertAllChildrenBefore(child, parent, ref_node);
+            continue;
+        }
+
         if (child._parent) |current_parent| {
             frame.removeNode(current_parent, child, .{ .will_be_reconnected = parent_is_connected });
         }
