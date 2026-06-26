@@ -184,9 +184,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             }
 
             var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, &ft, urls, fetch_opts });
-            defer worker_thread.join();
-
-            app.network.run();
+            worker_thread.join();
         },
         .mcp => |opts| {
             log.info(.mcp, "starting server", .{});
@@ -207,7 +205,12 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             var worker_thread = try std.Thread.spawn(.{}, mcpThread, .{ allocator, app });
             defer worker_thread.join();
 
-            app.network.run();
+            // mcp talks over stdio on mcpThread. Only run the CDP accept/read
+            // loop when an optional CDP server was started; otherwise the main
+            // thread just waits for the worker.
+            if (cdp_server != null) {
+                app.network.run();
+            }
         },
         .agent => |opts| {
             log.info(.app, "starting agent", .{});
@@ -230,9 +233,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                     &cancelled,
                     &sig_bridge,
                 });
-                defer worker_thread.join();
-
-                app.network.run();
+                worker_thread.join();
             }
 
             if (cancelled) return error.UserCancelled;

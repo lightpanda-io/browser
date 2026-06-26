@@ -668,6 +668,14 @@ pub const Connection = struct {
         return self.getResponseCode();
     }
 
+    // Synchronous transfer that adds no request headers. request() injects the
+    // browser User-Agent / sec-ch-ua machinery meant for page fetches; callers
+    // that manage their own connection (telemetry) use this leaner path.
+    pub fn perform(self: *const Connection) !u16 {
+        try libcurl.curl_easy_perform(self._easy);
+        return self.getResponseCode();
+    }
+
     pub fn wsStartFrame(self: *const Connection, frame_type: libcurl.WsFrameType, size: usize) !void {
         try libcurl.curl_ws_start_frame(self._easy, frame_type, @intCast(size));
     }
