@@ -461,6 +461,8 @@ pub extern "C" fn encoding_max_encode_buffer_length(
 pub extern "C" fn html5ever_parse_fragment(
     html: *mut c_uchar,
     len: usize,
+    context_name: *const c_uchar,
+    context_name_len: usize,
     document: Ref,
     ctx: Ref,
     create_element_callback: CreateElementCallback,
@@ -510,10 +512,24 @@ pub extern "C" fn html5ever_parse_fragment(
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
+
+    // The initial state of the parser is dertmined by the context element.
+    // E.g., parsing the content of a script tag behaves differently than
+    // parsing the content of the body.
+    let context_local = if context_name.is_null() || context_name_len == 0 {
+        LocalName::from("body")
+    } else {
+        let name_bytes = unsafe { std::slice::from_raw_parts(context_name, context_name_len) };
+        match std::str::from_utf8(name_bytes) {
+            Ok(name) => LocalName::from(name),
+            Err(_) => LocalName::from("body"),
+        }
+    };
+
     parse_fragment(
         sink,
         Default::default(),
-        QualName::new(None, ns!(html), LocalName::from("body")),
+        QualName::new(None, ns!(html), context_local),
         vec![], // attributes
         false,  // context_element_allows_scripting
     )
