@@ -387,9 +387,9 @@ fn invokeGoto(
 ) q.JSValue {
     var funcs: [2]q.JSValue = undefined;
     const promise = q.JS_NewPromiseCapability(ctx, &funcs);
+    if (q.JS_IsException(promise)) return self.throwError(ctx, "internal: resolver alloc failed");
     defer q.JS_FreeValue(ctx, funcs[0]);
     defer q.JS_FreeValue(ctx, funcs[1]);
-    if (q.JS_IsException(promise)) return self.throwError(ctx, "internal: resolver alloc failed");
 
     const result = self.callTool(arena, .goto, args) catch |err| switch (err) {
         error.OutOfMemory => {
