@@ -585,10 +585,10 @@ pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notificatio
     const cdp = bc.cdp;
     const frame_id = &id.toFrameId(event.frame_id);
 
-    try cdp.sendEvent("Page.frameAttached", .{ .params = .{
+    try cdp.sendEvent("Page.frameAttached", .{
         .frameId = frame_id,
         .parentFrameId = &id.toFrameId(event.parent_id),
-    } }, .{ .session_id = session_id });
+    }, .{ .session_id = session_id });
 
     if (bc.page_life_cycle_events) {
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
@@ -1053,6 +1053,25 @@ test "cdp.frame: getFrameTree" {
             },
         }, .{ .id = 12 });
     }
+}
+
+test "cdp.frame: frameAttached" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-X" });
+
+    bc.notification.dispatch(.frame_child_frame_created, &.{
+        .frame_id = 2,
+        .parent_id = 1,
+        .loader_id = 7,
+        .timestamp = 0,
+    });
+
+    try ctx.expectSentEvent("Page.frameAttached", .{
+        .frameId = "FID-0000000002",
+        .parentFrameId = "FID-0000000001",
+    }, .{ .session_id = "SID-X" });
 }
 
 test "cdp.frame: captureScreenshot" {
