@@ -222,6 +222,37 @@ pub fn getLength(self: *Select) u32 {
     return i;
 }
 
+const AddBeforeOption = union(enum) {
+    option: *Option,
+    index: u32,
+};
+
+pub fn add(self: *Select, element: *Option, before_: ?AddBeforeOption, frame: *Frame) !void {
+    const self_node = self.asNode();
+
+    var before_node: ?*Node = null;
+    if (before_) |before| {
+        switch (before) {
+            .index => |idx| {
+                var i: u32 = 0;
+                var it = self_node.childrenIterator();
+                while (it.next()) |child| {
+                    if (child.is(Option) == null) {
+                        continue;
+                    }
+                    if (i == idx) {
+                        before_node = child;
+                        break;
+                    }
+                    i += 1;
+                }
+            },
+            .option => |before_option| before_node = before_option.asNode(),
+        }
+    }
+    _ = try self_node.insertBefore(element.asElement().asNode(), before_node, frame);
+}
+
 pub fn getSelectedOptions(self: *Select, frame: *Frame) !collections.NodeLive(.selected_options) {
     return collections.NodeLive(.selected_options).init(self.asNode(), {}, frame);
 }
@@ -340,6 +371,7 @@ pub const JsApi = struct {
     pub const willValidate = bridge.accessor(Select.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Select.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Select.getValidationMessage, null, .{});
+    pub const add = bridge.function(Select.add, .{ .dom_exception = true, .ce_reactions = true });
     pub const checkValidity = bridge.function(Select.checkValidity, .{});
     pub const reportValidity = bridge.function(Select.reportValidity, .{});
     pub const setCustomValidity = bridge.function(Select.setCustomValidity, .{});
