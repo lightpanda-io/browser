@@ -1205,7 +1205,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     }
 
     // Script may have queued a navigation (e.g. `top.location = …`).
-    try awaitQueuedNavigation(session);
+    try awaitQueuedNavigation(session, page._frame_id);
     const after = session.currentFrame() orelse return result;
     if (before == null or before.? == after) return result;
 
@@ -1260,9 +1260,7 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
         const promise = js_result.toPromise();
         promise.markAsHandled();
 
-        var runner = page._session.runner(.{}) catch {
-            return .{ .text = "promise: no runner available", .is_error = true };
-        };
+        var runner = page._session.runner(.{});
         var timer = std.time.Timer.start() catch unreachable;
         while (promise.state() == .pending) {
             const elapsed_ms: u32 = @intCast(timer.read() / std.time.ns_per_ms);
@@ -1270,7 +1268,7 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
                 return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
             }
             const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
-            _ = runner.tick(.{ .ms = budget }) catch |err| switch (err) {
+            _ = runner.tickForFrame(page._frame_id, budget, .{ .until = .done }) catch |err| switch (err) {
                 error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
                 else => return .{ .text = "promise: tick failed", .is_error = true },
             };
@@ -1422,13 +1420,13 @@ fn mapActionError(err: anytype) ToolError {
 
 /// If the previous action queued a navigation (form submit, link click,
 /// Enter on an input), drive the runner until it completes or times out.
-fn awaitQueuedNavigation(session: *lp.Session) ToolError!void {
+fn awaitQueuedNavigation(session: *lp.Session, frame_id: u32) ToolError!void {
     const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
     if (navigated == false) {
         return;
     }
-    var runner = session.runner(.{}) catch return ToolError.InternalError;
-    runner.wait(.{ .ms = 10000, .until = .done }) catch |err|
+    var runner = session.runner(.{});
+    runner.waitForFrame(frame_id, 10000, .{ .until = .done }) catch |err|
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 }
 
@@ -1446,7 +1444,9 @@ fn formatActionResult(
 /// caller (LLM, MCP client) can see whether the action triggered navigation.
 fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, body: []const u8) ToolError![]const u8 {
     const before = session.currentFrame();
-    try awaitQueuedNavigation(session);
+    if (before) |b| {
+        try awaitQueuedNavigation(session, b._frame_id);
+    }
     const page = try requireFrame(session);
     // A queued navigation that swaps the root frame tears down the previous
     // Page (`Session.replaceRootImmediate` / `commitPendingPage`), so every
@@ -1521,11 +1521,11 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    _ = try requireFrame(session);
+    const frame = try requireFrame(session);
 
     const timeout_ms = args.timeout orelse default_wait_timeout_ms;
 
-    const node = lp.actions.waitForSelector(args.selector, timeout_ms, session) catch |err| switch (err) {
+    const node = lp.actions.waitForSelector(args.selector, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.InvalidSelector => return ToolError.InvalidParams,
         error.Cancelled => return ToolError.Cancelled,
         // Timeout w/o a match: same outcome as `/hover selector=…` on a missing
@@ -1548,11 +1548,11 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    _ = try requireFrame(session);
+    const frame = try requireFrame(session);
 
     const timeout_ms = args.timeout orelse default_wait_timeout_ms;
 
-    lp.actions.waitForScript(args.script, timeout_ms, session) catch |err| switch (err) {
+    lp.actions.waitForScript(args.script, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
         error.Timeout => return ToolError.Timeout,
         error.ScriptError => return ToolError.InvalidParams,
@@ -1564,7 +1564,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
 
     // script may have queued a navigation (e.g. top.location=…); drain it so
     // the next command reads post-navigation state
-    try awaitQueuedNavigation(session);
+    try awaitQueuedNavigation(session, frame._frame_id);
 
     return "Script returned truthy.";
 }
@@ -1576,11 +1576,11 @@ fn execWaitForState(arena: std.mem.Allocator, session: *lp.Session, arguments: ?
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    _ = try requireFrame(session);
+    const frame = try requireFrame(session);
 
     const timeout_ms = args.timeout orelse default_wait_timeout_ms;
 
-    lp.actions.waitForState(args.state, timeout_ms, session) catch |err| switch (err) {
+    lp.actions.waitForState(args.state, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
         error.Timeout => return ToolError.Timeout,
         else => {
@@ -1840,11 +1840,12 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
         .kind = .{ .push = null },
     }) catch return ToolError.NavigationFailed;
 
-    var runner = session.runner(.{}) catch return ToolError.NavigationFailed;
-    const result = runner.waitResult(.{
-        .ms = timeout orelse 10000,
-        .until = default_nav_wait,
-    }) catch |err| return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+    var runner = session.runner(.{});
+    const condition = lp.Session.Runner.WaitCondition{ .frame_id = page.frame_id, .until = default_nav_wait };
+    var conditions = [_]lp.Session.Runner.WaitCondition{condition};
+    const result = runner.waitResult(timeout orelse 10000, &conditions) catch |err| {
+        return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+    };
 
     // re-fetch frame, navigate might have changed it.
     const frame = page.frame() orelse return ToolError.NavigationFailed;

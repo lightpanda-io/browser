@@ -321,12 +321,12 @@ fn waitForSelector(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    _ = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const timeout_ms = params.timeout orelse 5000;
     const selector_z = try cmd.arena.dupeZ(u8, params.selector);
 
-    const node = lp.actions.waitForSelector(selector_z, timeout_ms, bc.session) catch |err| {
+    const node = lp.actions.waitForSelector(selector_z, timeout_ms, frame._frame_id, bc.session) catch |err| {
         if (err == error.InvalidSelector) return error.InvalidParam;
         if (err == error.Timeout) return error.InternalError;
         return error.InternalError;
@@ -463,8 +463,7 @@ test "cdp.lp: action tools" {
 
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     // Test Click
     const btn = frame.document.getElementById("btn", frame).?.asNode();
@@ -526,8 +525,7 @@ test "cdp.lp: waitForSelector" {
 
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     // 1. Existing element
     try ctx.processMessage(.{

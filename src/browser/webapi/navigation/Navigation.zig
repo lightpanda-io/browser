@@ -511,9 +511,7 @@ test "Navigation: about:blank commits entry" {
     testing.test_session.navigation._index = 0;
 
     try frame.navigate("about:blank", .{});
-
-    var runner = try testing.test_session.runner(.{});
-    try runner.wait(.{ .ms = 1000 });
+    try testing.waitForFrame();
 
     // about:blank / blob: handling in Frame.navigate bypasses rameDoneCallback,
     // so commitNavigation never runs and _entries stays empty. Reading
@@ -543,9 +541,7 @@ test "Navigation: reload on empty stack seeds an entry" {
     // .reload, so without the empty-stack guard this would assert
     // `len: 0` in getCurrentEntry.
     try frame.navigate("about:blank", .{ .kind = .reload });
-
-    var runner = try testing.test_session.runner(.{});
-    try runner.wait(.{ .ms = 1000 });
+    try testing.waitForFrame();
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
