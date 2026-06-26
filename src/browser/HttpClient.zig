@@ -1057,7 +1057,28 @@ fn isRedirectStatus(status: u16) bool {
 
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
     // State at entry: .inflight = conn (multi just delivered a completion).
-    if (msg.err == null or msg.err.? == error.RecvError) {
+
+    // Workaround for libcurl Brotli trailing-byte rejection.
+    //
+    // Some CDNs (e.g. CloudFront serving Brave Search) emit a Brotli stream
+    // whose compressed payload has 1+ trailing bytes after the logical end.
+    // The Brotli decoder reports BROTLI_DECODER_RESULT_SUCCESS, but libcurl's
+    // brotli_do_write() (content_encoding.c:439) treats any unconsumed input
+    // bytes as CURLE_WRITE_ERROR. All decompressed body data has already been
+    // delivered to our write callback successfully.
+    //
+    // Browsers accept such responses (the decompressed content is valid), so
+    // we match that behavior: when CURLE_WRITE_ERROR arrives but our callback
+    // never errored and bytes were received, treat it as success.
+    const effective_err: ?anyerror = if (msg.err) |err| blk: {
+        if (err == error.WriteError and transfer.res.callback_error == null and transfer.res.bytes_received > 0) {
+            log.debug(.http, "WriteError downgraded", .{ .url = transfer.req.url, .bytes = transfer.res.bytes_received });
+            break :blk null;
+        }
+        break :blk err;
+    } else null;
+
+    if (effective_err == null or effective_err.? == error.RecvError) {
         transfer.detectAuthChallenge(msg.conn);
     }
 
@@ -1090,7 +1111,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // Handle redirects: reuse the same connection to preserve TCP state.
     // A redirect status without a Location header is not a redirect, it's a
     // final response and falls through so its body is delivered.
-    if (msg.err == null) {
+    if (effective_err == null) {
         const status = try msg.conn.getResponseCode();
         if (isRedirectStatus(status)) {
             if (msg.conn.getResponseHeader("location", 0)) |location| {
@@ -1127,7 +1148,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // of the response per HTTP/1.1 when there is no Content-Length).
     // We must check this before endTransfer, which may reset the easy handle.
     const is_conn_close_recv = blk: {
-        const err = msg.err orelse break :blk false;
+        const err = effective_err orelse break :blk false;
         if (err != error.RecvError) break :blk false;
         const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
         break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
@@ -1138,8 +1159,8 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // from .inflight; nothing to set here.)
     transfer.state = .completing;
 
-    if (msg.err != null and !is_conn_close_recv) {
-        transfer.requestFailed(transfer.res.callback_error orelse msg.err.?, true);
+    if (effective_err != null and !is_conn_close_recv) {
+        transfer.requestFailed(transfer.res.callback_error orelse effective_err.?, true);
         return true;
     }
 
