@@ -193,13 +193,11 @@ const ScheduleCallback = struct {
                 };
             },
             .animation_frame => {
-                // requestAnimationFrame is window-only; if a worker ever
-                // schedules with this mode it's a programming error.
-                const window = switch (self.exec.js.global) {
-                    .frame => |frame| frame.window,
-                    .worker => unreachable,
+                const now = switch (self.exec.js.global) {
+                    .frame => |frame| frame.window._performance.now(),
+                    .worker => |worker| worker._performance.now(),
                 };
-                ls.toLocal(self.cb).call(void, .{window._performance.now()}) catch |err| {
+                ls.toLocal(self.cb).call(void, .{now}) catch |err| {
                     log.warn(.js, "RAF", .{ .name = self.name, .err = err });
                 };
             },
