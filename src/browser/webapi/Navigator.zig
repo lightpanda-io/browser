@@ -122,6 +122,13 @@ pub fn javaEnabled(_: *const Navigator) bool {
     return false;
 }
 
+/// Noop, signal that the data was successfully queued
+pub fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
+    _ = url;
+    _ = data;
+    return true;
+}
+
 pub fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
 }
@@ -239,6 +246,7 @@ pub const JsApi = struct {
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
 
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
+    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{ .exposed = .window, .noop = true });
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
