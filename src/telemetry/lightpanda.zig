@@ -19,6 +19,10 @@ const MAX_PENDING = 4096; // hard cap: drop + count beyond this (reported via bu
 const RECLAIM_CAPACITY = 64; // reclaim the drain buffer once a burst grows it past this
 const MAX_BODY_SIZE = 500 * 1024; // 500KB
 const REQUEST_TIMEOUT_MS = 5000;
+
+// Coalescing window to batch events together
+const LINGER_MS = 5000;
+const LINGER_BATCH = 16;
 const URL = "https://telemetry.lightpanda.io/v2";
 
 const LightPanda = @This();
@@ -147,6 +151,17 @@ fn run(self: *LightPanda) void {
                 return;
             }
             self.cond.wait(&self.mutex);
+        }
+        linger: {
+            var timer = std.time.Timer.start() catch break :linger;
+            const linger_ns = LINGER_MS * std.time.ns_per_ms;
+            while (self.running and self.pending.items.len < LINGER_BATCH) {
+                const elapsed = timer.read();
+                if (elapsed >= linger_ns) {
+                    break;
+                }
+                self.cond.timedWait(&self.mutex, linger_ns - elapsed) catch break;
+            }
         }
 
         // Swap the batch out and release the lock for the (blocking) serialize +
@@ -341,25 +356,25 @@ const EventRow = struct {
 
 const testing = @import("../testing.zig");
 
-test "telemetry: event row wire format" {
+test "Telemetry: event row wire format" {
     const Case = struct { event: telemetry.Event, expected: []const u8 };
     const cases = [_]Case{
         .{ .event = .{ .run = {} }, .expected = "[\"sid0\",\"run\"]" },
         .{
-            .event = .{ .navigate = .{ .tls = true, .context = .page, .reason = .address_bar } },
-            .expected = "[\"sid0\",\"navigate\",true,\"page\",\"address_bar\"]",
+            .event = .{ .navigate = .{ .tls = true, .context = .page } },
+            .expected = "[\"sid0\",\"nav\",true,\"page\"]",
         },
         .{
-            .event = .{ .navigate = .{ .tls = false, .context = .popup, .reason = .anchor } },
-            .expected = "[\"sid0\",\"navigate\",false,\"popup\",\"anchor\"]",
+            .event = .{ .navigate = .{ .tls = false, .context = .popup } },
+            .expected = "[\"sid0\",\"nav\",false,\"popup\"]",
         },
         .{
-            .event = .{ .navigate = .{ .tls = true, .context = .iframe, .reason = .script } },
-            .expected = "[\"sid0\",\"navigate\",true,\"iframe\",\"script\"]",
+            .event = .{ .navigate = .{ .tls = true, .context = .iframe } },
+            .expected = "[\"sid0\",\"nav\",true,\"iframe\"]",
         },
         .{
             .event = .{ .buffer_overflow = .{ .dropped = 42 } },
-            .expected = "[\"sid0\",\"buffer_overflow\",42]",
+            .expected = "[\"sid0\",\"bof\",42]",
         },
         .{
             .event = .{ .llm = .{ .provider = "anthropic", .model = .wrap("claude") } },
@@ -379,7 +394,7 @@ test "telemetry: event row wire format" {
     }
 }
 
-test "telemetry: header wire format" {
+test "Telemetry: header wire format" {
     var w = std.Io.Writer.Allocating.init(testing.allocator);
     defer w.deinit();
 
@@ -394,5 +409,5 @@ test "telemetry: header wire format" {
 
     const out = w.written();
     try testing.expectEqual(true, std.mem.startsWith(u8, out, "{\"sid\":\"sid0\",\"iid\":\"the-iid\",\"mode\":\"serve\","));
-    try testing.expectEqual(true, std.mem.endsWith(u8, out, ",\"proxy\":true,\"driver\":\"cdp\"}"));
+    try testing.expectEqual(true, std.mem.endsWith(u8, out, ",\"proxy\":true}"));
 }
