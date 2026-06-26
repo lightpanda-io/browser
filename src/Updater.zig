@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const json = std.json;
+const SemanticVersion = std.SemanticVersion;
 const lp = @import("lightpanda");
 
 const Network = @import("network/Network.zig");
@@ -74,26 +76,54 @@ pub fn deinit(self: *Updater) void {
     self.arena.deinit();
 }
 
-/// Returns Lightpanda versions; call `resetConnection` after you're done with
-/// `Versions` to do further requests.
-fn getVersions(self: *Updater) !std.json.Value {
+const Version = struct {
+    @"aarch64-linux": Entry,
+    @"aarch64-macos": Entry,
+    date: []const u8,
+    version: []const u8,
+    @"x86_64-linux": Entry,
+    @"x86_64-macos": Entry,
+
+    const Entry = struct {
+        download_url: []const u8,
+        shasum: []const u8,
+        size: u64,
+    };
+};
+
+const Nightly = struct { nightly: Version };
+
+/// Returns Lightpanda versions for a channel; call `resetConnection` after
+/// you're done with `Versions` to do further requests.
+fn getVersions(
+    self: *Updater,
+    comptime channel: Channel,
+) !switch (channel) {
+    .stable => json.ArrayHashMap(Version),
+    .nightly => Nightly, // Only care about nightly record.
+} {
     try self.conn.setURL(VersionsUrl);
     try self.conn.setGetMode();
     try self.conn.setFollowLocation(true);
     try self.conn.setWriteCallback(onBytes);
 
-    const status = self.conn.request(&self.config.http_headers) catch |err| {
+    const status_int = self.conn.request(&self.config.http_headers) catch |err| {
         switch (self.conn_err) {
             .none => return err,
             .out_of_memory => return error.OutOfMemory,
         }
     };
-    if (status != 200) {
+    const status: std.http.Status = @enumFromInt(status_int);
+    if (status != .ok) {
         return error.UnexpectedStatus;
     }
 
-    return std.json.parseFromSliceLeaky(
-        std.json.Value,
+    const Json = switch (channel) {
+        .stable => json.ArrayHashMap(Version),
+        .nightly => Nightly,
+    };
+    return json.parseFromSliceLeaky(
+        Json,
         self.arena.allocator(),
         self.conn_read_buffer.items,
         .{
@@ -111,40 +141,59 @@ fn resetConnection(self: *Updater) !void {
     self.conn_err = .none;
 }
 
-const SortContext = struct {
-    object: std.json.ObjectMap,
+const SortCtx = struct {
+    keys: []const []const u8,
+    /// Carries the error that might happen while sorting.
+    err: anyerror!void = {},
 
-    pub fn lessThan(ctx: SortContext, a_index: usize, b_index: usize) bool {
-        const keys = ctx.object.keys();
-        const a_version = std.SemanticVersion.parse(keys[a_index]) catch unreachable;
-        const b_version = std.SemanticVersion.parse(keys[b_index]) catch unreachable;
-        return a_version.order(b_version).compare(.gt);
+    pub fn lessThan(ctx: *SortCtx, a_index: usize, b_index: usize) bool {
+        const keys = ctx.keys;
+        const a_version = SemanticVersion.parse(keys[a_index]) catch |err| {
+            ctx.err = err;
+            return false;
+        };
+        const b_version = SemanticVersion.parse(keys[b_index]) catch |err| {
+            ctx.err = err;
+            return false;
+        };
+
+        return a_version.order(b_version).compare(.lt);
     }
 };
 
 /// Informs about running version to given `Writer` by desired `Channel`.
 pub fn inform(self: *Updater, channel: Channel, writer: *std.Io.Writer) !void {
-    const versions = try self.getVersions();
-    defer self.resetConnection() catch {};
-
     switch (channel) {
         .stable => {
-            var stable = versions.object;
-            // Get rid of `nightly`.
-            lp.assert(stable.swapRemove("nightly"), "Updater.inform: incorrect JSON", .{});
+            var versions = (try self.getVersions(.stable)).map;
+            defer self.resetConnection() catch {};
 
-            // Sort and retrieve the newest.
-            stable.sort(SortContext{ .object = stable });
-            // Newest is at the beginning.
-            const newest = stable.values()[0].object;
-            const version = (newest.get("version") orelse return error.IncorrectJson).string;
-            try writer.print("Latest stable Lightpanda version is {s}.\n", .{version});
-            return writer.flush();
+            // Remove "nightly" entry.
+            lp.assert(versions.swapRemove("nightly"), "Updater.inform: \"nightly\" entry not found", .{});
+            // Sorting is necessary.
+            var sort_ctx = SortCtx{ .keys = versions.keys() };
+            versions.sort(&sort_ctx);
+            sort_ctx.err catch |err| return err;
+
+            // Get the latest.
+            const values = versions.values();
+            const top = values[values.len - 1];
+
+            std.debug.print("{s}\n", .{top.version});
         },
         .nightly => {
-            const nightly = (versions.object.get("nightly") orelse return error.IncorrectJson).object;
-            const version = (nightly.get("version") orelse return error.IncorrectJson).string;
-            try writer.print("Latest nightly Lightpanda version is {s}.\n", .{version});
+            const versions = try self.getVersions(.nightly);
+            defer self.resetConnection() catch {};
+            const nightly = versions.nightly;
+            // Parse to SemVer for comparison.
+            const semver_nightly = try SemanticVersion.parse(nightly.version);
+            const semver_current = try SemanticVersion.parse(lp.build_config.version);
+
+            switch (semver_current.order(semver_nightly)) {
+                .lt => try writer.print("A new version of Lightpanda nightly ({s}) is available.\n", .{nightly.version}),
+                .eq => try writer.writeAll("You're up-to-date."),
+                .gt => unreachable,
+            }
             return writer.flush();
         },
     }
