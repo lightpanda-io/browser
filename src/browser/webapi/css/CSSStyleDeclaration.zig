@@ -245,7 +245,9 @@ fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
 }
 
 // Normalize CSS property values for canonical serialization
-fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []const u8) ![]const u8 {
+fn normalizePropertyValue(arena: Allocator, property_name: []const u8, raw_value: []const u8) ![]const u8 {
+    const value = try normalizeLeadingZeros(arena, raw_value);
+
     // Per CSSOM spec, unitless zero in length properties should serialize as "0px"
     if (std.mem.eql(u8, value, "0") and isLengthProperty(property_name)) {
         return "0px";
@@ -284,6 +286,51 @@ fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []
     }
 
     return value;
+}
+
+// Insert a leading "0" before any bare ".<digit>". A value might have multiple
+// such bare digits
+fn normalizeLeadingZeros(arena: Allocator, value: []const u8) ![]const u8 {
+    // A bare ".<digit>" needs at least 2 chars, and a trailing "." can never be
+    // followed by a digit. So we only ever scan up to value.len - 1, which lets
+    // us index value[i + 1] without a bounds check.
+    if (value.len < 2) {
+        return value;
+    }
+
+    var inserts: usize = 0;
+    for (value[0 .. value.len - 1], 0..) |c, i| {
+        if (c != '.') {
+            continue;
+        }
+        if (!std.ascii.isDigit(value[i + 1])) {
+            // next value isn't a digit
+            continue;
+        }
+        if (i > 0 and std.ascii.isDigit(value[i - 1])) {
+            // previous value is a digit
+            continue;
+        }
+        inserts += 1;
+    }
+    if (inserts == 0) {
+        return value;
+    }
+
+    const buf = try arena.alloc(u8, value.len + inserts);
+    var w: usize = 0;
+    for (value[0 .. value.len - 1], 0..) |c, i| {
+        if (c == '.' and std.ascii.isDigit(value[i + 1]) and (i == 0 or !std.ascii.isDigit(value[i - 1]))) {
+            buf[w] = '0';
+            w += 1;
+        }
+        buf[w] = c;
+        w += 1;
+    }
+    // The last char is copied unconditionally: it can't start a bare ".<digit>".
+    buf[w] = value[value.len - 1];
+    w += 1;
+    return buf[0..w];
 }
 
 // Canonicalize anchor-size() so that the dashed ident (anchor name) comes before the size keyword.
