@@ -19,7 +19,7 @@ const MAX_PENDING = 4096; // hard cap: drop + count beyond this (reported via bu
 const RECLAIM_CAPACITY = 64; // reclaim the drain buffer once a burst grows it past this
 const MAX_BODY_SIZE = 500 * 1024; // 500KB
 const REQUEST_TIMEOUT_MS = 5000;
-const URL = "https://telemetry.lightpanda.io";
+const URL = "https://telemetry.lightpanda.io/v2";
 
 const LightPanda = @This();
 
@@ -32,6 +32,13 @@ writer: std.Io.Writer.Allocating,
 iid: ?[36]u8 = null,
 run_mode: Config.RunMode = .serve,
 interactive: bool = false,
+
+// Per run id
+sid: [16]u8,
+proxy: bool,
+
+// Header is sent before the first message, once sent, it isn't sent again
+header_sent: bool = false,
 
 // `mutex` guards the ring buffer (head/tail/dropped), `running`, and the lazy
 // `thread` creation. The sender thread blocks on `cond` while idle.
@@ -56,10 +63,15 @@ pending: std.ArrayList(telemetry.Event) = .empty,
 dropped: u32 = 0,
 
 pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode, interactive: bool) !void {
+    var raw_sid: [8]u8 = undefined;
+    std.crypto.random.bytes(&raw_sid);
+
     self.* = .{
         .iid = iid,
         .run_mode = run_mode,
         .interactive = interactive,
+        .sid = std.fmt.bytesToHex(raw_sid, .lower),
+        .proxy = app.config.httpProxy() != null,
         .allocator = app.allocator,
         .network = &app.network,
         .writer = std.Io.Writer.Allocating.init(app.allocator),
@@ -170,6 +182,10 @@ fn run(self: *LightPanda) void {
 }
 
 fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemetry.Event, dropped: u32, sent: *usize) !void {
+    if (self.header_sent == false) {
+        _ = try self.writeHeader();
+    }
+
     // The overflow report rides ahead of the first body; the rest of that body
     // and any subsequent ones are filled from `events` below.
     const has_overflow = dropped > 0;
@@ -203,6 +219,8 @@ fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemet
         try self.flush(conn);
         sent.* += queued;
     }
+
+    self.header_sent = true;
 }
 
 fn flush(self: *LightPanda, conn: *http.Connection) !void {
@@ -223,17 +241,24 @@ fn _flush(self: *LightPanda, conn: *http.Connection) !void {
 }
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
+    return self.writeLine(&EventRow{ .sid = &self.sid, .event = event });
+}
+
+fn writeHeader(self: *LightPanda) !bool {
     const iid: ?[]const u8 = if (self.iid) |*id| id else null;
-    const wrapped = LightPandaEvent{
+    return self.writeLine(&Header{
+        .sid = &self.sid,
         .iid = iid,
         .mode = self.run_mode,
-        .event = event,
         .interactive = self.interactive,
-    };
+        .proxy = self.proxy,
+    });
+}
 
+fn writeLine(self: *LightPanda, value: anytype) !bool {
     const checkpoint = self.writer.written().len;
 
-    try std.json.Stringify.value(&wrapped, .{ .emit_null_optional_fields = false }, &self.writer.writer);
+    try std.json.Stringify.value(value, .{}, &self.writer.writer);
     try self.writer.writer.writeByte('\n');
 
     if (self.writer.written().len > MAX_BODY_SIZE) {
@@ -243,17 +268,23 @@ fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
     return true;
 }
 
-const LightPandaEvent = struct {
+const Header = struct {
+    sid: []const u8,
     iid: ?[]const u8,
     mode: Config.RunMode,
     interactive: bool,
-    event: telemetry.Event,
+    proxy: bool,
 
-    pub fn jsonStringify(self: *const LightPandaEvent, writer: anytype) !void {
+    pub fn jsonStringify(self: *const Header, writer: anytype) !void {
         try writer.beginObject();
 
-        try writer.objectField("iid");
-        try writer.write(self.iid);
+        try writer.objectField("sid");
+        try writer.write(self.sid);
+
+        if (self.iid) |iid| {
+            try writer.objectField("iid");
+            try writer.write(iid);
+        }
 
         try writer.objectField("mode");
         // Special case: when running agent mode in non-interactive, we send a
@@ -273,22 +304,95 @@ const LightPandaEvent = struct {
         try writer.objectField("version");
         try writer.write(build_config.version);
 
-        try writer.objectField("event");
-        try writer.write(@tagName(std.meta.activeTag(self.event)));
-
-        inline for (@typeInfo(telemetry.Event).@"union".fields) |union_field| {
-            if (self.event == @field(telemetry.Event, union_field.name)) {
-                const inner = @field(self.event, union_field.name);
-                const TI = @typeInfo(@TypeOf(inner));
-                if (TI == .@"struct") {
-                    inline for (TI.@"struct".fields) |field| {
-                        try writer.objectField(field.name);
-                        try writer.write(@field(inner, field.name));
-                    }
-                }
-            }
-        }
+        try writer.objectField("proxy");
+        try writer.write(self.proxy);
 
         try writer.endObject();
     }
 };
+
+const EventRow = struct {
+    sid: []const u8,
+    event: telemetry.Event,
+
+    pub fn jsonStringify(self: *const EventRow, writer: anytype) !void {
+        try writer.beginArray();
+        try writer.write(self.sid);
+        switch (self.event) {
+            .run => try writer.write("run"),
+            .navigate => |n| {
+                try writer.write("nav");
+                try writer.write(n.tls);
+                try writer.write(n.context);
+            },
+            .buffer_overflow => |b| {
+                try writer.write("bof");
+                try writer.write(b.dropped);
+            },
+            .llm => |l| {
+                try writer.write("llm");
+                try writer.write(l.provider);
+                try writer.write(l.model);
+            },
+        }
+        try writer.endArray();
+    }
+};
+
+const testing = @import("../testing.zig");
+
+test "telemetry: event row wire format" {
+    const Case = struct { event: telemetry.Event, expected: []const u8 };
+    const cases = [_]Case{
+        .{ .event = .{ .run = {} }, .expected = "[\"sid0\",\"run\"]" },
+        .{
+            .event = .{ .navigate = .{ .tls = true, .context = .page, .reason = .address_bar } },
+            .expected = "[\"sid0\",\"navigate\",true,\"page\",\"address_bar\"]",
+        },
+        .{
+            .event = .{ .navigate = .{ .tls = false, .context = .popup, .reason = .anchor } },
+            .expected = "[\"sid0\",\"navigate\",false,\"popup\",\"anchor\"]",
+        },
+        .{
+            .event = .{ .navigate = .{ .tls = true, .context = .iframe, .reason = .script } },
+            .expected = "[\"sid0\",\"navigate\",true,\"iframe\",\"script\"]",
+        },
+        .{
+            .event = .{ .buffer_overflow = .{ .dropped = 42 } },
+            .expected = "[\"sid0\",\"buffer_overflow\",42]",
+        },
+        .{
+            .event = .{ .llm = .{ .provider = "anthropic", .model = .wrap("claude") } },
+            .expected = "[\"sid0\",\"llm\",\"anthropic\",\"claude\"]",
+        },
+        .{
+            .event = .{ .llm = .{ .provider = "nollm", .model = null } },
+            .expected = "[\"sid0\",\"llm\",\"nollm\",null]",
+        },
+    };
+
+    for (cases) |case| {
+        var w = std.Io.Writer.Allocating.init(testing.allocator);
+        defer w.deinit();
+        try std.json.Stringify.value(&EventRow{ .sid = "sid0", .event = case.event }, .{}, &w.writer);
+        try testing.expectEqual(case.expected, w.written());
+    }
+}
+
+test "telemetry: header wire format" {
+    var w = std.Io.Writer.Allocating.init(testing.allocator);
+    defer w.deinit();
+
+    const header = Header{
+        .sid = "sid0",
+        .iid = "the-iid",
+        .mode = .serve,
+        .interactive = false,
+        .proxy = true,
+    };
+    try std.json.Stringify.value(&header, .{}, &w.writer);
+
+    const out = w.written();
+    try testing.expectEqual(true, std.mem.startsWith(u8, out, "{\"sid\":\"sid0\",\"iid\":\"the-iid\",\"mode\":\"serve\","));
+    try testing.expectEqual(true, std.mem.endsWith(u8, out, ",\"proxy\":true,\"driver\":\"cdp\"}"));
+}
