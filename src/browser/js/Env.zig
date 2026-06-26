@@ -31,9 +31,11 @@ const App = @import("../../App.zig");
 const Frame = @import("../Frame.zig");
 const Window = @import("../webapi/Window.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
+const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
 
 const v8 = js.v8;
 const log = lp.log;
+
 const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -287,9 +289,9 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
         .subtype = .node,
     } else .{
-        .value = @ptrCast(global),
-        .prototype_chain = (&WorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
-        .prototype_len = @intCast(WorkerGlobalScope.JsApi.Meta.prototype_chain.len),
+        .value = @ptrCast(global._type.dedicated),
+        .prototype_chain = (&DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
+        .prototype_len = @intCast(DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
         .subtype = null,
     };
     v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
@@ -336,7 +338,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
 
     // Register in the identity map. Multiple contexts can be created for the
     // same global (via CDP), so we only register the first one.
-    const identity_ptr = if (comptime is_frame) @intFromPtr(global.window) else @intFromPtr(global);
+    const identity_ptr = if (comptime is_frame) @intFromPtr(global.window) else @intFromPtr(global._type.dedicated);
     const gop = try params.identity.identity_map.getOrPut(params.identity_arena, identity_ptr);
     if (gop.found_existing == false) {
         var global_global: v8.Global = undefined;
@@ -650,11 +652,30 @@ test "Env: Worker context " {
     const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
 
     var ls: js.Local.Scope = undefined;
-    worker._worker_scope.js.localScope(&ls);
+    worker._worker_scope._proto.js.localScope(&ls);
     defer ls.deinit();
 
     try testing.expectEqual(true, (try ls.local.exec("typeof Node === 'undefined'", null)).isTrue());
     try testing.expectEqual(true, (try ls.local.exec("typeof WorkerGlobalScope !== 'undefined'", null)).isTrue());
+
+    // A dedicated worker's global is a DedicatedWorkerGlobalScope, which inherits
+    // from WorkerGlobalScope. Both instanceof checks must hold (real sites, e.g.
+    // Shopify's Web Pixel sandbox, use `self instanceof DedicatedWorkerGlobalScope`
+    // to tell a worker apart from an iframe).
+    try testing.expectEqual(true, (try ls.local.exec("typeof DedicatedWorkerGlobalScope !== 'undefined'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("self instanceof DedicatedWorkerGlobalScope", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("self instanceof WorkerGlobalScope", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("self.constructor.name === 'DedicatedWorkerGlobalScope'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("self === globalThis", null)).isTrue());
+
+    // postMessage/close/onmessage live on DedicatedWorkerGlobalScope.prototype
+    // (per spec), not on WorkerGlobalScope.prototype.
+    try testing.expectEqual(true, (try ls.local.exec("DedicatedWorkerGlobalScope.prototype.hasOwnProperty('postMessage')", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("!WorkerGlobalScope.prototype.hasOwnProperty('postMessage')", null)).isTrue());
+
+    // AnimationFrameProvider mixin is exposed on the dedicated worker global.
+    try testing.expectEqual(true, (try ls.local.exec("typeof self.requestAnimationFrame === 'function'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("typeof self.cancelAnimationFrame === 'function'", null)).isTrue());
 }
 
 test "Env: Frame context" {
@@ -670,4 +691,5 @@ test "Env: Frame context" {
 
     try testing.expectEqual(true, (try ls.local.exec("typeof Node !== 'undefined'", null)).isTrue());
     try testing.expectEqual(true, (try ls.local.exec("typeof WorkerGlobalScope === 'undefined'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("typeof DedicatedWorkerGlobalScope === 'undefined'", null)).isTrue());
 }

@@ -53,15 +53,13 @@ pub const Owner = union(enum) {
 
     pub fn frameId(self: Owner) u32 {
         return switch (self) {
-            .frame => |f| f._frame_id,
-            .worker => |w| w._worker._frame_id,
+            inline else => |g| g._frame_id,
         };
     }
 
     pub fn loaderId(self: Owner) u32 {
         return switch (self) {
-            .frame => |f| f._loader_id,
-            .worker => |w| w._worker._loader_id,
+            inline else => |g| g._loader_id,
         };
     }
 

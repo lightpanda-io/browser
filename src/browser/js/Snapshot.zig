@@ -203,8 +203,8 @@ pub fn create() !Snapshot {
         }
 
         {
-            const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
-            const index = try createSnapshotContext(.worker, &WorkerJsApis, WorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
+            const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
+            const index = try createSnapshotContext(.worker, &WorkerJsApis, DedicatedWorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
             std.debug.assert(index == 1);
         }
     }

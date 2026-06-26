@@ -1007,6 +1007,7 @@ pub const PageJsApis = flattenTypes(&.{
 // This is a subset of PageJsApis plus WorkerGlobalScope.
 // TODO: Expand this list to include all worker-appropriate APIs.
 pub const WorkerJsApis = flattenTypes(&.{
+    @import("../webapi/DedicatedWorkerGlobalScope.zig"),
     @import("../webapi/WorkerGlobalScope.zig"),
     @import("../webapi/WorkerLocation.zig"),
     @import("../webapi/Navigator.zig"),
@@ -1068,6 +1069,7 @@ pub const WorkerJsApis = flattenTypes(&.{
 // subsets (PageJsApis, WorkerSnapshot.JsApis).
 pub const JsApis = blk: {
     const base = PageJsApis ++ [_]type{
+        @import("../webapi/DedicatedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerLocation.zig").JsApi,
     };
