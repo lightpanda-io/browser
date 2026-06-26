@@ -435,8 +435,7 @@ fn firstConditionError(conditions: []const WaitCondition) !void {
 
 fn hasRunnablePage(session: *Session) bool {
     for (session.pages.items) |page| {
-        const target = page.replacement orelse page;
-        switch (target.frame._parse_state) {
+        switch (page.frame._parse_state) {
             .html, .complete => return true,
             else => {},
         }
