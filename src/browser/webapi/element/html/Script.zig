@@ -46,7 +46,7 @@ pub fn asNode(self: *Script) *Node {
 
 pub fn getSrc(self: *Script, frame: *Frame) ![]const u8 {
     if (self._src.len == 0) return "";
-    return self.asNode().resolveURL(self._src, frame, .{});
+    return self.asNode().resolveURLReflect(self._src, frame, .{});
 }
 
 pub fn setSrc(self: *Script, src: []const u8, frame: *Frame) !void {

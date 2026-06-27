@@ -38,7 +38,11 @@ pub fn getHref(self: *Area, frame: *Frame) ![]const u8 {
     if (href.len == 0) {
         return "";
     }
-    return self.asNode().resolveURL(href, frame, .{});
+    return self.asNode().resolveURL(href, frame, .{}) catch |err| switch (err) {
+        // Per spec the getter must not throw; it returns the content attribute.
+        error.TypeError => href,
+        else => return err,
+    };
 }
 
 pub fn setHref(self: *Area, value: []const u8, frame: *Frame) !void {
@@ -164,7 +168,7 @@ pub fn setPathname(self: *Area, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getProtocol(self: *Area, frame: *Frame) ![]const u8 {
-    const href = try getResolvedHref(self, frame) orelse return "";
+    const href = try getResolvedHref(self, frame) orelse return ":";
     return URL.getProtocol(href);
 }
 
@@ -179,7 +183,12 @@ fn getResolvedHref(self: *Area, frame: *Frame) !?[:0]const u8 {
     if (href.len == 0) {
         return null;
     }
-    return try self.asNode().resolveURL(href, frame, .{});
+    return self.asNode().resolveURL(href, frame, .{}) catch |err| switch (err) {
+        // Unparseable against the base: treat as no resolved URL so the
+        // component getters return "" instead of throwing.
+        error.TypeError => null,
+        else => return err,
+    };
 }
 
 pub const JsApi = struct {

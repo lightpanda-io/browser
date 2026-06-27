@@ -308,7 +308,7 @@ fn navigate(cmd: *CDP.Command) !void {
     const session = bc.session;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
+    const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
 
     // Fast path: a freshly-created target whose root frame hasn't navigated
     // yet has nothing to preserve across the HTTP round-trip. Skip the

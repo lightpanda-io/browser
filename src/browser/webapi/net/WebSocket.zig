@@ -115,7 +115,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
     const arena = try exec.getArena(.medium, "WebSocket");
     errdefer exec.releaseArena(arena);
 
-    const resolved_url = try URL.resolve(arena, exec.base(), url, .{ .always_dupe = true, .encoding = exec.charset.* });
+    const resolved_url = try URL.resolve(arena, exec.base(), url, .{ .encoding = exec.charset.* });
 
     const http_client = &exec.session.browser.http_client;
     const conn = http_client.network.newConnection() orelse {

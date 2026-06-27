@@ -1965,9 +1965,9 @@ pub const Transfer = struct {
             }
 
             const base_url = try conn.getEffectiveUrl();
-            // base_url and location are owned by curl. The returned value
-            // will be stored in transfer.req.url, hence the always_dupe.
-            const resolved = try URL.resolve(arena, std.mem.span(base_url), location, .{ .always_dupe = true });
+            // base_url and location are owned by curl; resolve returns a fresh
+            // arena-owned copy that gets stored in transfer.req.url.
+            const resolved = try URL.resolve(arena, std.mem.span(base_url), location, .{});
 
             // RFC 7231 §7.1.2: if the Location value has no fragment, the redirect
             // inherits the fragment from the URI used to generate the request.

@@ -106,7 +106,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         const page = try session.createPage();
         const frame = page.frame().?;
         // not guaranteed to be valid after navigate
-        const encoded_url = try URL.ensureEncoded(frame.call_arena, url, "UTF-8");
+        const encoded_url = try URL.resolveNavigation(frame.call_arena, url, .{});
         _ = try frame.navigate(encoded_url, .{
             .reason = .address_bar,
             .kind = .{ .push = null },

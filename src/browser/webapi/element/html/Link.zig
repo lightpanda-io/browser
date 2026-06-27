@@ -49,7 +49,7 @@ pub fn getHref(self: *Link, frame: *Frame) ![]const u8 {
     if (href.len == 0) {
         return "";
     }
-    return element.asNode().resolveURL(href, frame, .{});
+    return element.asNode().resolveURLReflect(href, frame, .{});
 }
 
 pub fn setHref(self: *Link, value: []const u8, frame: *Frame) !void {

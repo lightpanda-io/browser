@@ -200,7 +200,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
 
     const exec = self._exec;
     self._method = try parseMethod(method_);
-    self._url = try URL.resolve(self._arena, exec.base(), url, .{ .always_dupe = true, .encoding = exec.charset.* });
+    self._url = try URL.resolve(self._arena, exec.base(), url, .{ .encoding = exec.charset.* });
     try self.stateChanged(.opened, exec);
 }
 

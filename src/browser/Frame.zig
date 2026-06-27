@@ -817,7 +817,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
             arena,
             frame_base,
             request_url,
-            .{ .always_dupe = true, .encoding = originator.charset },
+            .{ .encoding = originator.charset },
         );
         break :blk .{ u, false };
     };
@@ -1769,7 +1769,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
                 frame = frame.parent orelse break :base_blk "";
             }
         };
-        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .always_dupe = true, .encoding = self.charset });
+        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .encoding = self.charset });
     };
 
     const popup = try page.frame_arena.create(Frame);

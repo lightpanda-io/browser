@@ -24,7 +24,7 @@ pub fn asNode(self: *Quote) *Node {
 pub fn getCite(self: *Quote, frame: *Frame) ![]const u8 {
     const attr = self.asElement().getAttributeSafe(comptime .wrap("cite")) orelse return "";
     if (attr.len == 0) return "";
-    return self.asNode().resolveURL(attr, frame, .{});
+    return self.asNode().resolveURLReflect(attr, frame, .{});
 }
 
 pub fn setCite(self: *Quote, value: []const u8, frame: *Frame) !void {
