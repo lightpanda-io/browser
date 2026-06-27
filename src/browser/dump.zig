@@ -320,15 +320,22 @@ fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
 }
 
 fn shouldEscapeText(node_: ?*Node) bool {
+    // Raw text elements serialize their text content literally rather than
+    // HTML-escaping it
     const node = node_ orelse return true;
-    if (node.is(Node.Element.Html.Script) != null) {
-        return false;
-    }
-    // When scripting is enabled, <noscript> is a raw text element per the HTML spec
-    // (https://html.spec.whatwg.org/multipage/parsing.html#serialising-html-fragments).
-    // Its text content must not be HTML-escaped during serialization.
-    if (node.is(Node.Element.Html.Generic)) |generic| {
-        if (generic._tag == .noscript) return false;
+    const element = node.is(Node.Element) orelse return true;
+    const html_element = node.is(Node.Element.Html) orelse return true;
+
+    switch (html_element._type) {
+        .style, .script, .iframe => return false,
+        else => {
+            const tag = element.getTagNameLower();
+            inline for (.{ "xmp", "noembed", "noframes", "plaintext", "noscript" }) |raw_text_tag| {
+                if (std.mem.eql(u8, tag, raw_text_tag)) {
+                    return false;
+                }
+            }
+        },
     }
     return true;
 }

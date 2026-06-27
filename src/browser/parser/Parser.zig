@@ -259,9 +259,16 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
 }
 
 pub fn parseFragment(self: *Parser, html: []const u8) void {
+    const context_name: []const u8 = if (self.container.node.is(Element)) |el|
+        el.getLocalName()
+    else
+        "";
+
     h5e.html5ever_parse_fragment(
         html.ptr,
         html.len,
+        context_name.ptr,
+        context_name.len,
         &self.container,
         self,
         createElementCallback,

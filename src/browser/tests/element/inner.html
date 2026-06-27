@@ -201,3 +201,42 @@
   d1.innerHTML = '<span style="visibility:hidden">X</span>Y';
   testing.expectEqual("XY", d1.innerText);
 </script>
+
+<script id=rawTextContext>
+  // Setting innerHTML on a raw-text element (script/style/textarea/title) must
+  // parse the content in the matching raw-text tokenizer state. In particular a
+  // '<' followed by a letter is plain text, NOT the start of a tag — otherwise
+  // the body is truncated at the first '<' (e.g. `for(;l<localStorage.length;)`
+  // would be swallowed, leaving a half-statement that fails to compile).
+  const script = document.createElement('script');
+  const body = 'window.__x=0; for(let l=0;l<localStorage.length+3;){window.__x=l;l++;}';
+  script.innerHTML = body;
+  testing.expectEqual(body, script.innerHTML);
+  testing.expectEqual(1, script.childNodes.length);
+  testing.expectEqual(body, script.textContent);
+
+  const style = document.createElement('style');
+  style.innerHTML = 'a<b{color:red}';
+  testing.expectEqual('a<b{color:red}', style.innerHTML);
+  testing.expectEqual(1, style.childNodes.length);
+
+  // textarea / title are RCDATA: '<' + letter stays text (not a tag) and
+  // character references are decoded on parse. On serialization the content is
+  // re-escaped (RCDATA elements are NOT raw-text-serialized), so the round-trip
+  // shows '<' as &lt; and the decoded '&' re-escaped as &amp;.
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = 'x < y &amp; z';
+  testing.expectEqual('x < y & z', textarea.value);
+  testing.expectEqual('x &lt; y &amp; z', textarea.innerHTML);
+
+  const title = document.createElement('title');
+  title.innerHTML = '1 < 2 < three';
+  testing.expectEqual(1, title.childNodes.length);
+  testing.expectEqual('1 < 2 < three', title.textContent);
+  testing.expectEqual('1 &lt; 2 &lt; three', title.innerHTML);
+
+  // A normal element stays in the data state: '<b>' is a real child element.
+  d1.innerHTML = 'a<b>bold</b>';
+  testing.expectEqual('a<b>bold</b>', d1.innerHTML);
+  testing.expectEqual('B', d1.lastChild.tagName);
+</script>
