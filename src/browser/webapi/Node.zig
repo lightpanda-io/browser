@@ -587,7 +587,7 @@ pub fn resolveURL(self: *const Node, url: anytype, frame: *Frame, opts: ResolveU
 }
 
 // Same as `resolveURL` but can't return `TypeError`, this is needed for multiple
-// getters throught codebase. Returns back passed `url` for `TypeError`s.
+// getters throughout codebase. Returns provided `url` on `TypeError`.
 pub fn resolveURLReflect(self: *const Node, url: []const u8, frame: *Frame, opts: ResolveURLOpts) ![]const u8 {
     return self.resolveURL(url, frame, opts) catch |err| switch (err) {
         error.TypeError => url,
