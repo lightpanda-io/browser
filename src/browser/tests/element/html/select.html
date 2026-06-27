@@ -251,6 +251,96 @@
   }
 </script>
 
+<script id="options_add_errors">
+  {
+    const sel = document.createElement('select')
+    const opts = sel.options
+    const opt = document.createElement('option')
+
+    // `before` element that isn't in this select -> NotFoundError
+    const foreign = document.createElement('option')
+    testing.expectError('NotFoundError', () => { opts.add(opt, foreign) })
+    testing.expectEqual(0, opts.length)
+
+    // element and before being the same is a no-op (does not throw)
+    opts.add(opt, null)
+    testing.expectEqual(1, opts.length)
+    opts.add(opt, opt)
+    testing.expectEqual(1, opts.length)
+  }
+</script>
+
+<script id="select_add">
+  {
+    const sel = document.createElement('select')
+    testing.expectEqual(0, sel.length)
+
+    // Add an option
+    const opt1 = document.createElement('option')
+    opt1.value = 'a'
+    sel.add(opt1, null)
+    testing.expectEqual(1, sel.length)
+    testing.expectEqual('a', sel.options[0].value)
+
+    // Add another, no before arg
+    const opt2 = document.createElement('option')
+    opt2.value = 'b'
+    sel.add(opt2)
+    testing.expectEqual(2, sel.length)
+    testing.expectEqual('b', sel.options[1].value)
+
+    // Add before an option element
+    const opt0 = document.createElement('option')
+    opt0.value = 'zero'
+    sel.add(opt0, opt1)
+    testing.expectEqual(3, sel.length)
+    testing.expectEqual('zero', sel.options[0].value)
+    testing.expectEqual('a', sel.options[1].value)
+    testing.expectEqual('b', sel.options[2].value)
+
+    // Add before an index
+    const opt3 = document.createElement('option')
+    opt3.value = 'mid'
+    sel.add(opt3, 1)
+    testing.expectEqual(4, sel.length)
+    testing.expectEqual('zero', sel.options[0].value)
+    testing.expectEqual('mid', sel.options[1].value)
+    testing.expectEqual('a', sel.options[2].value)
+    testing.expectEqual('b', sel.options[3].value)
+
+    // Out-of-range index appends
+    const opt4 = document.createElement('option')
+    opt4.value = 'end'
+    sel.add(opt4, 999)
+    testing.expectEqual(5, sel.length)
+    testing.expectEqual('end', sel.options[4].value)
+
+    // Re-adding an already-attached option moves it (no duplicate)
+    sel.add(opt4, opt3)
+    testing.expectEqual(5, sel.length)
+    testing.expectEqual('end', sel.options[1].value)
+    testing.expectEqual('mid', sel.options[2].value)
+  }
+</script>
+
+<script id="select_add_errors">
+  {
+    const sel = document.createElement('select')
+    const opt = document.createElement('option')
+
+    // `before` element that isn't in this select -> NotFoundError
+    const foreign = document.createElement('option')
+    testing.expectError('NotFoundError', () => { sel.add(opt, foreign) })
+    testing.expectEqual(0, sel.length)
+
+    // element and before being the same is a no-op (does not throw)
+    sel.add(opt, null)
+    testing.expectEqual(1, sel.length)
+    sel.add(opt, opt)
+    testing.expectEqual(1, sel.length)
+  }
+</script>
+
 <script id="selectedOptions">
   {
     const sel = document.createElement('select')
