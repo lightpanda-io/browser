@@ -16,9 +16,6 @@
 //! Bindings for Servo's rust-url (https://github.com/servo/rust-url).
 //! Check @src/html5ever/url.rs for Rust-side of the bindings.
 
-const std = @import("std");
-const mem = std.mem;
-
 pub const Url = anyopaque;
 
 pub const OwnedString = extern struct {

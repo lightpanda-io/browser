@@ -20,7 +20,6 @@
 //! agreement. Key bytes live as a libcrypto EVP_PKEY in `CryptoKey._vary.pkey`.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 const crypto = @import("../../../sys/libcrypto.zig");
 
 const js = @import("../../js/js.zig");

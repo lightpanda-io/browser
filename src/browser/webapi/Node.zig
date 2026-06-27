@@ -35,7 +35,6 @@ pub const DocumentFragment = @import("DocumentFragment.zig");
 pub const DocumentType = @import("DocumentType.zig");
 pub const ShadowRoot = @import("ShadowRoot.zig");
 
-const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 const LinkedList = std.DoublyLinkedList;
