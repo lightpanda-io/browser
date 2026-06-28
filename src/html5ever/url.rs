@@ -40,6 +40,51 @@ fn ffi_guard<F: FnOnce() -> i32>(f: F) -> i32 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(1)
 }
 
+fn starts_with_parent_dir_segment(input: &str) -> bool {
+    matches!(
+        input.as_bytes(),
+        [b'.', b'.'] | [b'.', b'.', b'/', ..] | [b'.', b'.', b'?', ..] | [b'.', b'.', b'#', ..]
+    )
+}
+
+fn is_drive_letter_segment(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && (bytes[1] == b':' || bytes[1] == b'|')
+}
+
+fn adjusted_base_for_parent_dir_drive_segment(base: &Url, input: &str) -> Option<Url> {
+    if !starts_with_parent_dir_segment(input) {
+        return None;
+    }
+
+    let path_without_trailing_slash = base.path().strip_suffix('/')?;
+    let last_slash = path_without_trailing_slash.rfind('/')?;
+    let last_segment = &path_without_trailing_slash[last_slash + 1..];
+    if !is_drive_letter_segment(last_segment) {
+        return None;
+    }
+
+    // Keep true file drive roots clamped, e.g. `file:///C:/` + `..`.
+    if base.scheme() == "file" && last_slash == 0 {
+        return None;
+    }
+
+    let mut adjusted = base.clone();
+    let replacement_path = format!(
+        "{}__lightpanda_drive_segment__/",
+        &path_without_trailing_slash[..last_slash + 1]
+    );
+    adjusted.set_path(&replacement_path);
+    Some(adjusted)
+}
+
+fn join_url(base: &Url, input: &str) -> Result<Url, url::ParseError> {
+    match adjusted_base_for_parent_dir_drive_segment(base, input) {
+        Some(adjusted_base) => adjusted_base.join(input),
+        None => base.join(input),
+    }
+}
+
 /// WHATWG "domain to ASCII" (UTS#46, non-transitional, beStrict=false). Writes
 /// a NUL-terminated owned buffer to *out_ptr / *out_len (caller frees with
 /// lpurl_free). Returns 0 on success, 1 if `host` is not a valid domain.
@@ -128,7 +173,7 @@ pub unsafe extern "C" fn url_parse_with_base(
     };
 
     match Url::parse(base_slice) {
-        Ok(base) => match base.join(slice) {
+        Ok(base) => match join_url(&base, slice) {
             Ok(url) => Box::into_raw(Box::new(url)),
             Err(e) => {
                 *err = e as i32;
@@ -158,7 +203,7 @@ pub unsafe extern "C" fn url_join(
         }
     };
 
-    match base.join(slice) {
+    match join_url(base, slice) {
         Ok(url) => Box::into_raw(Box::new(url)),
         Err(e) => {
             *err = e as i32;
@@ -194,7 +239,7 @@ pub unsafe extern "C" fn url_can_parse_with_base(
     };
 
     match Url::parse(base_slice) {
-        Ok(url) => url.join(slice).is_ok(),
+        Ok(url) => join_url(&url, slice).is_ok(),
         Err(_) => false,
     }
 }
@@ -618,6 +663,47 @@ pub unsafe extern "C" fn url_get_href(
     *out_len = href.len();
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{free_owned_string, url_resolve_without_encoding};
+    use std::os::raw::c_uchar;
+
+    fn resolve(base: &str, input: &str) -> String {
+        let mut err = 0;
+        let owned = unsafe {
+            url_resolve_without_encoding(
+                base.as_ptr() as *const c_uchar,
+                base.len(),
+                input.as_ptr() as *const c_uchar,
+                input.len(),
+                &mut err,
+            )
+        };
+        assert_eq!(err, 0);
+
+        let bytes = unsafe { std::slice::from_raw_parts(owned.ptr, owned.len) };
+        let value = std::str::from_utf8(bytes).unwrap().to_owned();
+        unsafe { free_owned_string(owned) };
+        value
+    }
+
+    #[test]
+    fn url_resolve_parent_dir_pops_drive_letter_like_segments() {
+        assert_eq!(resolve("abc://x/y/z/C:/", ".."), "abc://x/y/z/");
+        assert_eq!(resolve("http://x/y/z/C:/", "../foo"), "http://x/y/z/foo");
+        assert_eq!(resolve("abc://x/y/z/C|/", "../../foo"), "abc://x/y/foo");
+        assert_eq!(resolve("abc://x/y/z/C:/", "..?q"), "abc://x/y/z/?q");
+        assert_eq!(resolve("abc://x/y/z/C:/", "..#h"), "abc://x/y/z/#h");
+    }
+
+    #[test]
+    fn url_resolve_parent_dir_preserves_file_drive_root() {
+        assert_eq!(resolve("file:///C:/", ".."), "file:///C:/");
+        assert_eq!(resolve("file:///C:/x/", ".."), "file:///C:/");
+        assert_eq!(resolve("file:///x/C:/", ".."), "file:///x/");
+    }
+}
+
 fn encode_query_ncr(encoding: &'static Encoding, s: &str) -> Cow<'static, [u8]> {
     // fast path: fully mappable
     let (out, _, had_errors) = encoding.encode(s);
@@ -700,13 +786,18 @@ pub unsafe extern "C" fn url_resolve_with_encoding(
         .map(|encoding| encoding.output_encoding())
         .filter(|&encoding| encoding != encoding_rs::UTF_8);
 
+    let adjusted_base = base
+        .as_ref()
+        .and_then(|base| adjusted_base_for_parent_dir_drive_segment(base, slice));
+    let base_ref = adjusted_base.as_ref().or(base.as_ref());
+
     let result = match encoding {
         Some(encoding) => Url::options()
-            .base_url(base.as_ref())
+            .base_url(base_ref)
             .encoding_override(Some(&move |s| encode_query_ncr(encoding, s)))
             .parse(slice),
         // Fallback to default.
-        None => match &base {
+        None => match base_ref {
             Some(base) => base.join(slice),
             None => Url::parse(slice),
         },
@@ -765,7 +856,7 @@ pub unsafe extern "C" fn url_resolve_without_encoding(
     };
 
     let result = match &base {
-        Some(base) => base.join(input),
+        Some(base) => join_url(base, input),
         None => Url::parse(input),
     };
     match result {

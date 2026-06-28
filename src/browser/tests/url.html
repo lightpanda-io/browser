@@ -100,6 +100,16 @@
     testing.expectEqual('http://example.com/a/b/foo', url.toString());
   }
 
+  // Parent directory references pop drive-letter-like path segments when they
+  // are regular URL path segments, not file drive roots.
+  {
+    testing.expectEqual('abc://x/y/z/', new URL('..', 'abc://x/y/z/C:/').href);
+    testing.expectEqual('abc://x/y/z/foo', new URL('../foo', 'abc://x/y/z/C:/').href);
+    testing.expectEqual('abc://x/y/foo', new URL('../../foo', 'abc://x/y/z/C|/').href);
+    testing.expectEqual('file:///C:/', new URL('..', 'file:///C:/').href);
+    testing.expectEqual('file:///x/', new URL('..', 'file:///x/C:/').href);
+  }
+
   // Over-popping ".." clamps at the root.
   {
     const base = 'http://example.com/a/b/c/d';
