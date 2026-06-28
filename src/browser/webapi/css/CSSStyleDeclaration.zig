@@ -96,6 +96,9 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     const prop = self.findProperty(wrapped) orelse {
         // Only return default values for computed styles
         if (self._is_computed) {
+            if (self._element) |element| {
+                if (findInlineValue(element, normalized, frame)) |value| return value;
+            }
             return getDefaultPropertyValue(self, wrapped);
         }
         return "";
@@ -234,6 +237,19 @@ pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
         node = n.next;
     }
     return null;
+}
+
+fn findInlineValue(element: *const Element, normalized_name: []const u8, frame: *Frame) ?[]const u8 {
+    const attr_value = element.getAttributeSafe(comptime .wrap("style")) orelse return null;
+    var it = CssParser.parseDeclarationsList(attr_value);
+    var result: ?[]const u8 = null;
+    while (it.next()) |declaration| {
+        if (std.ascii.eqlIgnoreCase(declaration.name, normalized_name)) {
+            // Keep the last matching declaration, matching CSS declaration order.
+            result = normalizePropertyValue(frame.call_arena, normalized_name, declaration.value) catch declaration.value;
+        }
+    }
+    return result;
 }
 
 fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
