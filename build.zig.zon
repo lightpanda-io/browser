@@ -19,16 +19,16 @@
             .hash = "N-V-__8AAJ2cNgAgfBtAw33Bxfu1IWISDeKKSr3DAqoAysIJ",
         },
         .nghttp2 = .{
-            .url = "https://github.com/nghttp2/nghttp2/releases/download/v1.68.0/nghttp2-1.68.0.tar.gz",
-            .hash = "N-V-__8AAL15vQCI63ZL6Zaz5hJg6JTEgYXGbLnMFSnf7FT3",
+            .url = "https://github.com/nghttp2/nghttp2/releases/download/v1.69.0/nghttp2-1.69.0.tar.gz",
+            .hash = "N-V-__8AAMHpvwChC6orFCDB8MeiumT6OlfmKfmrWlak7Int",
         },
         .@"boringssl-zig" = .{
             .url = "git+https://github.com/Syndica/boringssl-zig.git#c53df00d06b02b755ad88bbf4d1202ed9687b096",
             .hash = "boringssl-0.1.0-VtJeWehMAAA4RNnwRnzEvKcS9rjsR1QVRw1uJrwXxmVK",
         },
         .curl = .{
-            .url = "https://github.com/curl/curl/releases/download/curl-8_18_0/curl-8.18.0.tar.gz",
-            .hash = "N-V-__8AALp9QAGn6CCHZ6fK_FfMyGtG824LSHYHHasM3w-y",
+            .url = "https://github.com/curl/curl/releases/download/curl-8_20_0/curl-8.20.0.tar.gz",
+            .hash = "N-V-__8AAHM9RQHjzJo8Wn4dbGPqNOC21zZJJA9PcCj7FPF5",
         },
         .sqlite3 = .{
             .url = "https://github.com/allyourcodebase/sqlite3/archive/8f840560eae88ab66668c6827c64ffbd0d74ef37.tar.gz",
