@@ -73,6 +73,8 @@ const cache_migrations: []const Migration = &.{
 
 pub fn init(allocator: std.mem.Allocator, path: [:0]const u8) !SqliteCache {
     var pool = try Pool.init(allocator, path);
+    errdefer pool.deinit(allocator);
+
     var version: usize = 0;
 
     {
