@@ -189,6 +189,7 @@ fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
 
     var lower_name: [256]u8 = undefined;
     for (meta.headers) |h| {
+        if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
@@ -196,6 +197,7 @@ fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
         );
     }
     for (meta.vary_headers) |h| {
+        if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, true)",
@@ -224,6 +226,7 @@ fn updateMetadata(conn: Conn, meta: CachedMetadata) !void {
 
     var lower_name: [256]u8 = undefined;
     for (meta.headers) |h| {
+        if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
