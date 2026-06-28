@@ -238,31 +238,15 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     else
         null;
 
-    const cache = if (config.httpCacheDir()) |cache_dir_path| blk: {
-        const trimmed_dir = std.mem.trimEnd(u8, cache_dir_path, &.{'/'});
-
-        std.fs.cwd().makePath(trimmed_dir) catch |e| {
-            log.err(.cache, "failed to create cache directory", .{
-                .path = trimmed_dir,
-                .err = e,
-            });
-            return e;
-        };
-
-        const cache_path = try std.fmt.allocPrintSentinel(
-            allocator,
-            "{s}/cache.db",
-            .{trimmed_dir},
-            0,
-        );
-        defer allocator.free(cache_path);
+    const cache = if (try config.httpCacheSqlitePath(allocator)) |cache_dir_path| blk: {
+        defer allocator.free(cache_dir_path);
 
         break :blk Cache{
             .kind = .{
-                .sqlite = SqliteCache.init(allocator, cache_path) catch |e| {
+                .sqlite = SqliteCache.init(allocator, cache_dir_path) catch |e| {
                     log.err(.cache, "failed to init", .{
                         .kind = "SqliteCache",
-                        .path = cache_path,
+                        .path = cache_dir_path,
                         .err = e,
                     });
                     return e;
