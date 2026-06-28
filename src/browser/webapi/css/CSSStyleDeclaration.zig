@@ -243,11 +243,18 @@ fn findInlineValue(element: *const Element, normalized_name: []const u8, frame: 
     const attr_value = element.getAttributeSafe(comptime .wrap("style")) orelse return null;
     var it = CssParser.parseDeclarationsList(attr_value);
     var result: ?[]const u8 = null;
+    var result_important = false;
     while (it.next()) |declaration| {
-        if (std.ascii.eqlIgnoreCase(declaration.name, normalized_name)) {
-            // Keep the last matching declaration, matching CSS declaration order.
-            result = normalizePropertyValue(frame.call_arena, normalized_name, declaration.value) catch declaration.value;
+        if (!std.ascii.eqlIgnoreCase(declaration.name, normalized_name)) {
+            continue;
         }
+        // A later declaration wins, except a normal one never overrides an
+        // earlier !important declaration (CSS cascade precedence).
+        if (result_important and !declaration.important) {
+            continue;
+        }
+        result = normalizePropertyValue(frame.call_arena, normalized_name, declaration.value) catch declaration.value;
+        result_important = declaration.important;
     }
     return result;
 }
