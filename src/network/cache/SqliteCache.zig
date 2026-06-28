@@ -249,8 +249,6 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         return null;
     };
 
-    const body = try loadBody(conn, arena, req.url);
-
     // Vary matching.
     for (metadata.vary_headers) |vary_hdr| {
         const incoming = for (req.request_headers) |h| {
@@ -269,6 +267,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         }
     }
 
+    const body = try loadBody(conn, arena, req.url);
     const expired = metadata.isStale(req.timestamp);
     log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
 
