@@ -275,7 +275,7 @@ pub const Indexed = struct {
                     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                     var caller: Caller = undefined;
                     if (!caller.init(v8_isolate)) {
-                        return 0;
+                        return 1;
                     }
                     defer caller.deinit();
 
@@ -293,7 +293,7 @@ pub const Indexed = struct {
                     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                     var caller: Caller = undefined;
                     if (!caller.init(v8_isolate)) {
-                        return 0;
+                        return 1;
                     }
                     defer caller.deinit();
                     return caller.getEnumerator(T, enumerator, handle.?, .{});
@@ -325,7 +325,7 @@ pub const NamedIndexed = struct {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
                 if (!caller.init(v8_isolate)) {
-                    return 0;
+                    return 1;
                 }
                 defer caller.deinit();
 
@@ -341,7 +341,7 @@ pub const NamedIndexed = struct {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
                 if (!caller.init(v8_isolate)) {
-                    return 0;
+                    return 1;
                 }
                 defer caller.deinit();
 
@@ -369,7 +369,7 @@ pub const NamedIndexed = struct {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
                 if (!caller.init(v8_isolate)) {
-                    return 0;
+                    return 1;
                 }
                 defer caller.deinit();
 
@@ -486,8 +486,8 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
     // During snapshot creation, there's no Context in embedder data yet.
     // I hate this check, but there doesn't seem to be a way to add this method
     // to the global, without triggering it during snapshot creation.
-    const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate) orelse return 0;
-    const ctx: *Context = @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(v8_context, 1) orelse return 0));
+    const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate) orelse return 1;
+    const ctx: *Context = @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(v8_context, 1) orelse return 1));
 
     var caller: Caller = undefined;
     caller.initWithContext(ctx, v8_context);
@@ -500,7 +500,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
     defer hs.deinit();
 
     const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
-        return 0;
+        return 1;
     };
 
     // Only Page contexts have document.getElementById lookup
@@ -508,10 +508,10 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         .frame => |frame| {
             const document = frame.document;
             if (document.getElementById(property, frame)) |el| {
-                const js_val = local.zigValueToJs(el, .{}) catch return 0;
+                const js_val = local.zigValueToJs(el, .{}) catch return 1;
                 var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
                 pc.getReturnValue().set(js_val);
-                return 1;
+                return 0;
             }
         },
         .worker => {}, // no global lookup in a worker
@@ -521,7 +521,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         if (std.mem.startsWith(u8, property, "__")) {
             // some frameworks will extend built-in types using a __ prefix
             // these should always be safe to ignore.
-            return 0;
+            return 1;
         }
 
         const ignored = std.StaticStringMap(void).initComptime(.{
@@ -553,13 +553,12 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         });
         if (!ignored.has(property)) {
             var buf: [2048]u8 = undefined;
-            const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return 0;
-            logUnknownProperty(local, key) catch return 0;
+            const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return 1;
+            logUnknownProperty(local, key) catch return 1;
         }
     }
 
-    // not intercepted
-    return 0;
+    return 1;
 }
 
 // Only used for debugging
@@ -574,7 +573,7 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
 
             var caller: Caller = undefined;
             if (!caller.init(v8_isolate)) {
-                return 0;
+                return 1;
             }
             defer caller.deinit();
 
@@ -585,45 +584,44 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
             defer hs.deinit();
 
             const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
-                return 0;
+                return 1;
             };
 
             if (std.mem.startsWith(u8, property, "__")) {
                 // some frameworks will extend built-in types using a __ prefix
                 // these should always be safe to ignore.
-                return 0;
+                return 1;
             }
 
             if (std.mem.startsWith(u8, property, "jQuery")) {
-                return 0;
+                return 1;
             }
 
             if (JsApi == @import("../webapi/cdata/Text.zig").JsApi or JsApi == @import("../webapi/cdata/Comment.zig").JsApi) {
                 if (std.mem.eql(u8, property, "tagName")) {
                     // knockout does this, a lot.
-                    return 0;
+                    return 1;
                 }
             }
 
             if (JsApi == @import("../webapi/element/Html.zig").JsApi or JsApi == @import("../webapi/Element.zig").JsApi or JsApi == @import("../webapi/element/html/Custom.zig").JsApi) {
                 // react ?
-                if (std.mem.eql(u8, property, "props")) return 0;
-                if (std.mem.eql(u8, property, "hydrated")) return 0;
-                if (std.mem.eql(u8, property, "isHydrated")) return 0;
+                if (std.mem.eql(u8, property, "props")) return 1;
+                if (std.mem.eql(u8, property, "hydrated")) return 1;
+                if (std.mem.eql(u8, property, "isHydrated")) return 1;
             }
 
             if (JsApi == @import("../webapi/Console.zig").JsApi) {
-                if (std.mem.eql(u8, property, "firebug")) return 0;
+                if (std.mem.eql(u8, property, "firebug")) return 1;
             }
 
             const ignored = std.StaticStringMap(void).initComptime(.{});
             if (!ignored.has(property)) {
                 var buf: [2048]u8 = undefined;
-                const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return 0;
-                logUnknownProperty(local, key) catch return 0;
+                const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return 1;
+                logUnknownProperty(local, key) catch return 1;
             }
-            // not intercepted
-            return 0;
+            return 1;
         }
     }.wrap;
 }

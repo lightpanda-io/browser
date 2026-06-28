@@ -183,8 +183,7 @@ pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndex(T, local, func, idx, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        return 1;
     };
 }
 
@@ -210,8 +209,7 @@ pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedIndex(T, local, func, name, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        return 1;
     };
 }
 
@@ -237,8 +235,7 @@ pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setNamedIndex(T, local, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        return 1;
     };
 }
 
@@ -265,7 +262,7 @@ pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *c
     const info = PropertyCallbackInfo{ .handle = handle };
     return _deleteNamedIndex(T, local, func, name, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        return 0;
+        return 1;
     };
 }
 
@@ -291,8 +288,7 @@ pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *co
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getEnumerator(T, local, func, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        return 1;
     };
 }
 
@@ -318,13 +314,11 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
                 // if error.NotHandled is part of the error set.
                 if (isInErrorSet(error.NotHandled, eu.error_set)) {
                     if (err == error.NotHandled) {
-                        // not intercepted
-                        return 0;
+                        return 1;
                     }
                 }
                 handleError(T, F, local, err, info, opts);
-                // not intercepted
-                return 0;
+                return 1;
             };
         },
         else => ret,
@@ -333,8 +327,7 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
     if (comptime with_value) {
         info.getReturnValue().set(try local.zigValueToJs(non_error_ret, opts));
     }
-    // intercepted
-    return 1;
+    return 0;
 }
 
 fn isInErrorSet(err: anyerror, comptime T: type) bool {

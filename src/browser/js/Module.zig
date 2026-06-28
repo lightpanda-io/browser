@@ -46,7 +46,6 @@ pub fn getException(self: Module) js.Value {
 
 pub fn getModuleRequests(self: Module) Requests {
     return .{
-        .context_handle = self.local.handle,
         .handle = v8.v8__Module__GetModuleRequests(self.handle).?,
     };
 }
@@ -117,14 +116,13 @@ pub const Global = struct {
 
 const Requests = struct {
     handle: *const v8.FixedArray,
-    context_handle: *const v8.Context,
 
     pub fn len(self: Requests) usize {
         return @intCast(v8.v8__FixedArray__Length(self.handle));
     }
 
     pub fn get(self: Requests, idx: usize) Request {
-        return .{ .handle = v8.v8__FixedArray__Get(self.handle, self.context_handle, @intCast(idx)).? };
+        return .{ .handle = v8.v8__FixedArray__Get(self.handle, @intCast(idx)).? };
     }
 };
 
