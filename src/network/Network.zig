@@ -33,7 +33,6 @@ const WebBotAuth = @import("WebBotAuth.zig");
 const CurlDebugAllocator = @import("CurlDebugAllocator.zig");
 
 const Cache = @import("cache/Cache.zig");
-const FsCache = @import("cache/FsCache.zig");
 const SqliteCache = @import("cache/SqliteCache.zig");
 
 const log = lp.log;
