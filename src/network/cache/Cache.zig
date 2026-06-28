@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const Http = @import("../http.zig");
-const FsCache = @import("FsCache.zig");
 const SqliteCache = @import("SqliteCache.zig");
 
 const log = lp.log;
@@ -29,7 +28,6 @@ const log = lp.log;
 pub const Cache = @This();
 
 kind: union(enum) {
-    fs: FsCache,
     sqlite: SqliteCache,
 },
 
