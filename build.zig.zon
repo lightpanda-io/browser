@@ -6,7 +6,7 @@
     .dependencies = .{
         .v8 = .{
             .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/8bb45873631bf2c419a7eeb452f5f65fcb18c609.tar.gz",
-            .hash = "v8-0.0.0-xddH65qdBAA1hmB-gqEmhEzO0-aXKyEsmo1s34mssemb",
+            .hash = "v8-0.0.0-xddH63jnAgBlV_WzDYAcATFU7XfA848ysZNHSomz-rXq",
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
