@@ -274,10 +274,11 @@ pub fn tryCache(
         log.debug(.cache, "no store", .{ .url = url, .vary = v, .reason = "vary" });
         return null;
     };
+
     const cc = blk: {
         if (cache_control == null) {
-            log.debug(.cache, "no store", .{ .url = url, .reason = "no cache control" });
-            return null;
+            log.debug(.cache, "heuristic cache", .{ .url = url, .max_age = 86400 });
+            break :blk CacheControl{ .max_age = 86400, .must_revalidate = false };
         }
         if (CacheControl.parse(cache_control.?)) |cc| {
             break :blk cc;
@@ -441,4 +442,26 @@ test "Cache: CachedMetadata.renew updates etag and last_modified" {
 
     try testing.expectEqualSlices(u8, "\"new-etag\"", meta.etag.?);
     try testing.expectEqualSlices(u8, "Tue, 02 Jan 2024 00:00:00 GMT", meta.last_modified.?);
+}
+
+test "Cache: tryCache heuristic when no cache-control" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const result = try tryCache(
+        arena.allocator(),
+        1000,
+        "https://example.com",
+        200,
+        "text/html",
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        false,
+    );
+    try testing.expectEqual(@as(u64, 86400), result.?.cache_control.max_age);
+    try testing.expectEqual(false, result.?.cache_control.must_revalidate);
 }
