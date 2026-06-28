@@ -460,9 +460,26 @@ pub fn userAgent(self: *const Config) ?[]const u8 {
     };
 }
 
-pub fn httpCacheDir(self: *const Config) ?[]const u8 {
+/// This returns if our HTTP Cache is enabled or not.
+pub fn httpCacheEnabled(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_dir,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_dir != null,
+        else => false,
+    };
+}
+
+/// This returns the constructed path of the Sqlite DB for the HTTP Cache.
+pub fn httpCacheSqlitePath(self: *const Config, allocator: std.mem.Allocator) !?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| {
+            const cache_dir = opts.http_cache_dir orelse return null;
+            return try std.fmt.allocPrintSentinel(
+                allocator,
+                "{s}/cache.db",
+                .{std.mem.trimEnd(u8, cache_dir, &.{'/'})},
+                0,
+            );
+        },
         else => null,
     };
 }
