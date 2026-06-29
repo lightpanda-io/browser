@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+  <script id=deferred_script_drains_after_sync_stylesheet>
+    // Runs during parsing, before the body's deferred script + stylesheet.
+    // Crucially this is the LAST blocking <script> in the document: nothing
+    // blocking follows the <link rel=stylesheet> below, so the only thing
+    // that can flush the deferred script's completion is the stylesheet
+    // fetch itself (the regression). A blocking <script> after the <link>
+    // would call flushFrame on its own and hide the bug.
+    testing.expectEqual('loading', document.readyState);
+    testing.expectEqual(undefined, window.__deferRan);
+
+    testing.onload(() => {
+      // Reaching load means the deferred-script queue drained: the deferred
+      // script ran and the document advanced out of "loading".
+      testing.expectEqual(true, window.__deferRan);
+      testing.expectEqual('complete', document.readyState);
+    });
+  </script>
+</head>
+<body>
+  <!--
+    Regression: a `<script defer>` followed by an external
+    `<link rel=stylesheet>` (external-stylesheet loading enabled).
+
+    Frame.loadExternalStylesheet fetches the sheet SYNCHRONOUSLY, registering
+    a blocking request for the frame. While that blocking request is active,
+    the DeferringLayer holds back the completion callbacks of every OTHER
+    in-flight transfer for the frame — including the deferred script that
+    started loading just above. Those deferred completions must be flushed
+    once the sync fetch returns; otherwise the script stays at
+    `complete == false`, the deferred-script queue never drains, and
+    DOMContentLoaded / the load event / readyState -> "complete" never fire.
+  -->
+  <script defer src="/defer-marker.js"></script>
+  <link rel="stylesheet" href="/styles/visibility.css">
+</body>
