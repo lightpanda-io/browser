@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const Updater = lp.Updater;
 const log = lp.log;
 const builtin = @import("builtin");
 const zenai = @import("zenai");
@@ -187,10 +186,6 @@ fn injectScriptFileValidator(
     return list.append(allocator, bytes);
 }
 
-fn nightlyChannelValidator(_: Allocator, _: *std.process.ArgIterator) !Updater.Channel {
-    return .nightly;
-}
-
 /// Definition for all the commands and its arguments. See @cli.zig for further.
 const Commands = cli.Builder(.{
     .{
@@ -265,20 +260,7 @@ const Commands = cli.Builder(.{
         },
         .shared_options = CommonOptions,
     },
-    .{
-        .name = "update",
-        .options = .{
-            .{
-                .name = "channel",
-                .type = Updater.Channel,
-                .default = .stable,
-                .variants = .{
-                    .{ .name = "nightly", .validator = nightlyChannelValidator },
-                },
-            },
-        },
-        .shared_options = CommonOptions,
-    },
+    .{ .name = "update", .options = .{}, .shared_options = CommonOptions },
     .{ .name = "version", .options = .{} },
 });
 
