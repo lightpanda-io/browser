@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 const MessagePort = @import("../MessagePort.zig");
@@ -116,8 +117,9 @@ pub fn getOrigin(self: *const MessageEvent) []const u8 {
     return self._origin;
 }
 
-pub fn getSource(self: *const MessageEvent) ?*Window {
-    return self._source;
+pub fn getSource(self: *const MessageEvent, frame: *Frame) ?Window.Access {
+    const source = self._source orelse return null;
+    return Window.Access.init(frame.window, source);
 }
 
 pub fn getPorts(self: *const MessageEvent) []const *MessagePort {
