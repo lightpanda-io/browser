@@ -19,6 +19,7 @@
 const std = @import("std");
 const json = std.json;
 const SemanticVersion = std.SemanticVersion;
+const Allocator = std.mem.Allocator;
 const lp = @import("lightpanda");
 
 const Network = @import("network/Network.zig");
@@ -26,9 +27,6 @@ const http = @import("network/http.zig");
 const libcurl = @import("sys/libcurl.zig");
 const Config = @import("Config.zig");
 const log = @import("log.zig");
-
-// TODO: Remove this.
-const MockVersion: [:0]const u8 = "0.16.0";
 
 /// Where to find versions JSON.
 const VersionsUrl: [:0]const u8 = "https://get.lightpanda.io/versions.json";
@@ -44,12 +42,12 @@ conn: http.Connection,
 /// Read buffer for `conn`.
 conn_read_buffer: std.ArrayList(u8) = .empty,
 /// Needed to report OutOfMemory.
-conn_err: enum(u1) { none, out_of_memory } = .none,
+conn_err: Allocator.Error!void = {},
 /// TODO: Come up with a solution where we don't have to embed this here?
 config: *const Config,
 
 /// Initializes the update client; meant to be used as singleton.
-pub fn init(allocator: std.mem.Allocator, config: *const Config) !Updater {
+pub fn init(allocator: Allocator, config: *const Config) !Updater {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -108,10 +106,8 @@ fn getVersions(
     try self.conn.setWriteCallback(onBytes);
 
     const status_int = self.conn.request(&self.config.http_headers) catch |err| {
-        switch (self.conn_err) {
-            .none => return err,
-            .out_of_memory => return error.OutOfMemory,
-        }
+        self.conn_err catch |conn_err| return conn_err;
+        return err;
     };
     const status: std.http.Status = @enumFromInt(status_int);
     if (status != .ok) {
@@ -135,10 +131,19 @@ fn getVersions(
 }
 
 /// Resets everything related to `conn`.
-fn resetConnection(self: *Updater) !void {
-    try self.conn.reset(self.config, self.ca_blob, null);
+fn resetConnection(self: *Updater) void {
+    self.conn.reset(self.config, self.ca_blob, null) catch {};
     self.conn_read_buffer.clearRetainingCapacity();
-    self.conn_err = .none;
+    self.conn_err = {};
+}
+
+fn versioning() []const u8 {
+    comptime {
+        const version = SemanticVersion.parse(lp.build_config.version) catch unreachable;
+        const pre = version.pre orelse return "";
+        const index = std.mem.indexOfScalar(u8, pre, '.') orelse pre.len;
+        return pre[0..index];
+    }
 }
 
 const SortCtx = struct {
@@ -161,42 +166,47 @@ const SortCtx = struct {
     }
 };
 
-/// Informs about running version to given `Writer` by desired `Channel`.
-pub fn inform(self: *Updater, channel: Channel, writer: *std.Io.Writer) !void {
-    switch (channel) {
-        .stable => {
-            var versions = (try self.getVersions(.stable)).map;
-            defer self.resetConnection() catch {};
-
-            // Remove "nightly" entry.
-            lp.assert(versions.swapRemove("nightly"), "Updater.inform: \"nightly\" entry not found", .{});
-            // Sorting is necessary.
-            var sort_ctx = SortCtx{ .keys = versions.keys() };
-            versions.sort(&sort_ctx);
-            sort_ctx.err catch |err| return err;
-
-            // Get the latest.
-            const values = versions.values();
-            const top = values[values.len - 1];
-
-            std.debug.print("{s}\n", .{top.version});
-        },
-        .nightly => {
-            const versions = try self.getVersions(.nightly);
-            defer self.resetConnection() catch {};
-            const nightly = versions.nightly;
-            // Parse to SemVer for comparison.
-            const semver_nightly = try SemanticVersion.parse(nightly.version);
-            const semver_current = try SemanticVersion.parse(lp.build_config.version);
-
-            switch (semver_current.order(semver_nightly)) {
-                .lt => try writer.print("A new version of Lightpanda nightly ({s}) is available.\n", .{nightly.version}),
-                .eq => try writer.writeAll("You're up-to-date."),
-                .gt => unreachable,
-            }
-            return writer.flush();
-        },
+/// Informs about running version to given `Writer`.
+pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
+    const kind = comptime versioning();
+    if (comptime std.mem.eql(u8, "dev", kind)) {
+        try writer.print("Running a development version of Lightpanda ({s}).\n", .{lp.build_config.version});
+        return writer.flush();
     }
+    if (comptime std.mem.eql(u8, "nightly", kind)) {
+        try writer.print("Running a nightly version of Lightpanda ({s}).\n", .{lp.build_config.version});
+        return writer.flush();
+    }
+
+    var versions = (try self.getVersions(.stable)).map;
+    defer self.resetConnection();
+
+    // Remove "nightly" entry.
+    lp.assert(versions.swapRemove("nightly"), "Updater.inform: \"nightly\" entry not found", .{});
+    // Sorting is necessary.
+    var sort_ctx = SortCtx{ .keys = versions.keys() };
+    versions.sort(&sort_ctx);
+    sort_ctx.err catch |err| return err;
+
+    // Get the latest.
+    const values = versions.values();
+    const top = values[values.len - 1];
+
+    const latest = try std.SemanticVersion.parse(top.version);
+    const current = try std.SemanticVersion.parse(lp.build_config.version);
+
+    switch (current.order(latest)) {
+        .lt => try writer.print(
+            \\Running an older version of Lightpanda ({s}), latest release is {s}.
+            \\
+            \\Update via one-liner:
+            \\curl -fsSL https://pkg.lightpanda.io/install.sh | bash
+            \\
+        , .{ lp.build_config.version, top.version }),
+        .gt, .eq => try writer.writeAll("Lightpanda is up-to-date.\n"),
+    }
+
+    return writer.flush();
 }
 
 /// Invoked by `Connection` when there are body bytes.
@@ -206,9 +216,7 @@ fn onBytes(buffer: [*]const u8, buf_count: usize, buf_len: usize, raw_conn: ?*an
 
     const chunk = buffer[0 .. buf_count * buf_len];
     self.conn_read_buffer.appendSlice(self.arena.allocator(), chunk) catch |err| {
-        if (err != error.OutOfMemory) unreachable;
-        // We have to do this in order to report errors from here.
-        self.conn_err = .out_of_memory;
+        self.conn_err = err;
         return 0;
     };
     return chunk.len;
