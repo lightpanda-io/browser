@@ -676,7 +676,7 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
             , .{Help.general});
             std.debug.print(template, .{exec_name});
         },
-        inline .fetch, .serve, .mcp, .agent => |tag| {
+        inline .fetch, .serve, .mcp, .agent, .update => |tag| {
             const template = comptimePrint(
                 \\{s}
                 \\
@@ -685,7 +685,6 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
             , .{ @field(Help, @tagName(tag)), Help.common_options });
             std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
-        .update => @panic("TODO"),
         .version => {
             const template = Help.version ++ "\n";
             std.debug.print(template, .{exec_name});
