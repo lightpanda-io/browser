@@ -161,6 +161,12 @@ jobs:
         with:
           name: lightpanda-x86_64-linux
 
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: "Generate and publish versions.json"
         run: |
           chmod +x lightpanda-x86_64-linux
