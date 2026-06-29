@@ -1048,7 +1048,7 @@ fn isTeardownMethod(method: []const u8) bool {
         std.mem.eql(u8, method, "Page.close");
 }
 
-fn isRedirectStatus(status: u16) bool {
+pub fn isRedirectStatus(status: u16) bool {
     return switch (status) {
         301, 302, 303, 307, 308 => true,
         else => false,
@@ -1937,12 +1937,6 @@ pub const Transfer = struct {
     fn handleRedirect(transfer: *Transfer, location: []const u8) !void {
         const req = &transfer.req;
         const conn = transfer._conn.?;
-        const arena = transfer.arena;
-
-        transfer._redirect_count += 1;
-        if (transfer._redirect_count > transfer.client.network.config.httpMaxRedirects()) {
-            return error.TooManyRedirects;
-        }
 
         // retrieve cookies from the redirect's response.
         if (req.cookie_jar) |jar| {
@@ -1956,18 +1950,32 @@ pub const Transfer = struct {
             }
         }
 
+        // base_url and location are owned by curl; applyRedirectTarget resolves a
+        // fresh arena-owned copy that gets stored in transfer.req.url.
+        const base_url = try conn.getEffectiveUrl();
+        const status = try conn.getResponseCode();
+        try transfer.applyRedirectTarget(std.mem.span(base_url), location, status);
+    }
+
+    // Called above (in handleRedirect) and by a CDP fulfill request which redirects
+    pub fn applyRedirectTarget(transfer: *Transfer, base: [:0]const u8, location: []const u8, status: u16) !void {
+        const req = &transfer.req;
+        const arena = transfer.arena;
+
+        transfer._redirect_count += 1;
+        if (transfer._redirect_count > transfer.client.network.config.httpMaxRedirects()) {
+            return error.TooManyRedirects;
+        }
+
         // resolve the redirect target.
         const url: [:0]const u8 = blk: {
             if (location.len == 0) {
                 // Might seem silly, but URL.resovle will return location as-is
-                // if empty, and location is memory owned by libcurl.
+                // if empty, and location may be memory owned by libcurl.
                 break :blk "";
             }
 
-            const base_url = try conn.getEffectiveUrl();
-            // base_url and location are owned by curl; resolve returns a fresh
-            // arena-owned copy that gets stored in transfer.req.url.
-            const resolved = try URL.resolve(arena, std.mem.span(base_url), location, .{});
+            const resolved = try URL.resolve(arena, base, location, .{});
 
             // RFC 7231 §7.1.2: if the Location value has no fragment, the redirect
             // inherits the fragment from the URI used to generate the request.
@@ -1985,7 +1993,6 @@ pub const Transfer = struct {
         try transfer.updateURL(url);
         // 301, 302, 303 → change to GET, drop body.
         // 307, 308 → keep method and body.
-        const status = try conn.getResponseCode();
         if (status == 301 or status == 302 or status == 303) {
             req.method = .GET;
             req.body = null;
@@ -2476,6 +2483,196 @@ test "HttpClient: fulfillRequest survives a done_callback that tears down the ow
     try testing.expectEqual(0, client.interception_layer.intercepted);
     try testing.expectEqual(0, client.transfers.count());
     try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: fulfillRequest follows a 3xx redirect" {
+    // Regression for #2828: a CDP Fetch.fulfillRequest with a 3xx status + a
+    // Location header must be followed like a real network redirect (re-issued
+    // down the chain to the resolved target), not delivered as a final response.
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    // Only network.config is read (httpMaxRedirects, which ignores its config),
+    // so a pointer to an otherwise-undefined Network is safe here.
+    var net: Network = undefined;
+
+    var client: Client = undefined;
+    client.allocator = testing.allocator;
+    client.arena_pool = &pool;
+    client.network = &net;
+    client.transfers = .empty;
+    client.queue = .{};
+    client.next_tick_queue = .{};
+    client.next_tick_count = 0;
+    client.performing = false;
+    client.interception_layer = .{};
+    defer client.transfers.deinit(testing.allocator);
+
+    // Capturing stub for interception_layer.next: records the re-issued request
+    // and returns without committing (transfer stays .created; we clean up).
+    const Captor = struct {
+        captured: bool = false,
+        url: []const u8 = "",
+        method: Method = undefined,
+
+        fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.captured = true;
+            self.url = transfer.req.url;
+            self.method = transfer.req.method;
+        }
+    };
+    var captor = Captor{};
+    client.interception_layer.next = .{
+        .ptr = &captor,
+        .vtable = &.{ .request = Captor.request },
+    };
+
+    // 302 with a relative Location: rewrite to GET, drop body, resolve target.
+    {
+        const arena = try pool.acquire(.small, "test");
+        const transfer = try arena.create(Transfer);
+        transfer.* = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .frame_id = 0,
+                .loader_id = 0,
+                .method = .POST,
+                .url = "http://example.com/start",
+                .body = "payload",
+                .headers = .{ .headers = null },
+                .cookie_jar = null,
+                .cookie_origin = "",
+                .resource_type = .document,
+                .notification = undefined,
+                .ctx = undefined,
+            },
+            .client = &client,
+            .id = 1,
+            .start_time = 0,
+        };
+        try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+
+        transfer.park(.intercept_request);
+        client.interception_layer.intercepted += 1;
+
+        try client.interception_layer.fulfillRequest(transfer, 302, &.{
+            .{ .name = "Location", .value = "/end" },
+        }, null);
+
+        try testing.expect(captor.captured);
+        try testing.expectEqual("http://example.com/end", captor.url);
+        try testing.expectEqual(.GET, captor.method);
+        try testing.expectEqual(null, transfer.req.body);
+        // Unparked exactly once; transfer is still alive (re-issued, not deinited).
+        try testing.expectEqual(0, client.interception_layer.intercepted);
+        try testing.expectEqual(1, client.transfers.count());
+        transfer.deinit();
+    }
+
+    // 307 with an absolute Location: keep method and body.
+    captor = .{};
+    {
+        const arena = try pool.acquire(.small, "test");
+        const transfer = try arena.create(Transfer);
+        transfer.* = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .frame_id = 0,
+                .loader_id = 0,
+                .method = .POST,
+                .url = "http://example.com/start",
+                .body = "payload",
+                .headers = .{ .headers = null },
+                .cookie_jar = null,
+                .cookie_origin = "",
+                .resource_type = .document,
+                .notification = undefined,
+                .ctx = undefined,
+            },
+            .client = &client,
+            .id = 2,
+            .start_time = 0,
+        };
+        try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+
+        transfer.park(.intercept_request);
+        client.interception_layer.intercepted += 1;
+
+        try client.interception_layer.fulfillRequest(transfer, 307, &.{
+            .{ .name = "location", .value = "http://example.com/other" },
+        }, null);
+
+        try testing.expect(captor.captured);
+        try testing.expectEqual("http://example.com/other", captor.url);
+        try testing.expectEqual(.POST, captor.method);
+        try testing.expectEqual("payload", transfer.req.body.?);
+        try testing.expectEqual(0, client.interception_layer.intercepted);
+        transfer.deinit();
+    }
+}
+
+test "HttpClient: fulfillRequest delivers a 3xx without a Location as the response" {
+    // A redirect status with no Location header is not a redirect: the body is
+    // delivered as the final response (matching the real-network path).
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    client.allocator = testing.allocator;
+    client.arena_pool = &pool;
+    client.transfers = .empty;
+    client.queue = .{};
+    client.next_tick_queue = .{};
+    client.next_tick_count = 0;
+    client.performing = false;
+    client.interception_layer = .{};
+    defer client.transfers.deinit(testing.allocator);
+
+    const Ctx = struct {
+        done_called: bool = false,
+        fn doneCallback(ctx: *anyopaque) !void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.done_called = true;
+        }
+    };
+    var ctx = Ctx{};
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .frame_id = 0,
+            .loader_id = 0,
+            .method = .GET,
+            .url = "http://example.com/",
+            .headers = .{ .headers = null },
+            .cookie_jar = null,
+            .cookie_origin = "",
+            .resource_type = .document,
+            .notification = undefined,
+            .ctx = &ctx,
+            .done_callback = Ctx.doneCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+
+    transfer.park(.intercept_request);
+    client.interception_layer.intercepted += 1;
+
+    try client.interception_layer.fulfillRequest(transfer, 302, &.{}, "body");
+
+    // Delivered (done_callback ran) and freed exactly once.
+    try testing.expect(ctx.done_called);
+    try testing.expectEqual(0, client.interception_layer.intercepted);
+    try testing.expectEqual(0, client.transfers.count());
 }
 
 test "HttpClient: abortParked survives an error_callback that tears down the owner" {

@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const builtin = @import("builtin");
 const lp = @import("lightpanda");
 const log = lp.log;
@@ -23,6 +24,7 @@ const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
 const http = @import("../http.zig");
+const HttpClient = @import("../../browser/HttpClient.zig");
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
@@ -232,6 +234,26 @@ pub fn fulfillRequest(
     // Leave the parked state (accounting `intercepted` exactly once) and move to
     // .completing BEFORE running the user callbacks.
     transfer.unpark();
+
+    if (HttpClient.isRedirectStatus(status)) {
+        if (findLocation(headers)) |location| {
+            fulfilledRedirect(transfer, status, headers, location) catch |err| {
+                if (transfer.state == .created) {
+                    transfer.abort(err);
+                }
+                return err;
+            };
+            self.next.request(transfer) catch |err| {
+                if (transfer.state == .created) {
+                    transfer.abort(err);
+                }
+                return err;
+            };
+            return;
+        }
+    }
+
+    // Not a redirect: move to .completing BEFORE running the user callbacks.
     transfer.state = .completing;
     defer transfer.deinit();
 
@@ -280,4 +302,26 @@ fn fulfillInner(
 
     done.* = true;
     try req.done_callback(req.ctx);
+}
+
+fn fulfilledRedirect(transfer: *Transfer, status: u16, headers: []const http.Header, location: []const u8) !void {
+    // retrieve cookies from the fulfilled response's headers.
+    if (transfer.req.cookie_jar) |jar| {
+        for (headers) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
+                try jar.populateFromResponse(transfer.req.url, hdr.value);
+            }
+        }
+    }
+
+    try transfer.applyRedirectTarget(transfer.req.url, location, status);
+}
+
+fn findLocation(headers: []const http.Header) ?[]const u8 {
+    for (headers) |hdr| {
+        if (std.ascii.eqlIgnoreCase(hdr.name, "location")) {
+            return hdr.value;
+        }
+    }
+    return null;
 }
