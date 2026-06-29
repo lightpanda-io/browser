@@ -370,6 +370,7 @@ pub fn serialize(self: Value) !Serialized {
         .throw_data_clone_error = CloneDelegate.throwDataCloneError,
     }) orelse return error.JsException;
     defer v8.v8__ValueSerializer__DELETE(serializer);
+
     // the delegate callbacks only fire during WriteValue, after this is set
     delegate_ctx.serializer = serializer;
 
