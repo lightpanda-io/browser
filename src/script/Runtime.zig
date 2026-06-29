@@ -43,7 +43,7 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
 /// In-flight async `goto`s; emptied before each `runSource` returns.
-pending_gotos: std.ArrayListUnmanaged(PendingGoto),
+pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
 run_timer: std.time.Timer,
 
