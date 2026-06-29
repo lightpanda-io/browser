@@ -50,12 +50,21 @@ pub fn toValue(self: String) js.Value {
 pub fn toSlice(self: String) ![]u8 {
     return self._toSlice(false, self.local.call_arena);
 }
+
 pub fn toSliceZ(self: String) ![:0]u8 {
     return self._toSlice(true, self.local.call_arena);
 }
+
 pub fn toSliceWithAlloc(self: String, allocator: Allocator) ![]u8 {
     return self._toSlice(false, allocator);
 }
+
+// e.g. after a header byte — instead of allocating a temporary and copying.
+pub fn toSliceWithBuf(self: String, buf: []u8) []u8 {
+    const n = v8.v8__String__WriteUtf8(self.handle, self.local.isolate.handle, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    return buf[0..@intCast(n)];
+}
+
 fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !(if (null_terminate) [:0]u8 else []u8) {
     const local = self.local;
     const handle = self.handle;

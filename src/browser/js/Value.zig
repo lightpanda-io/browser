@@ -333,75 +333,92 @@ pub fn structuredClone(self: Value) !Value {
 // Clone a value to a different context (within the same isolate).
 // Used for cross-context messaging (e.g., Worker <-> Page).
 pub fn structuredCloneTo(self: Value, target: *const js.Local) !Value {
-    const source_context = self.local.handle;
-    const target_context = target.handle;
-    const v8_isolate = target.isolate.handle;
-
-    const SerializerDelegate = struct {
-        // Called when V8 encounters a host object it doesn't know how to serialize.
-        // Returns false to indicate the object cannot be cloned, and throws a DataCloneError.
-        // V8 asserts has_exception() after this returns false, so we must throw here.
-        fn writeHostObject(_: ?*anyopaque, isolate: ?*v8.Isolate, _: ?*const v8.Object) callconv(.c) v8.MaybeBool {
-            const iso = isolate orelse return .{ .has_value = true, .value = false };
-            const message = v8.v8__String__NewFromUtf8(iso, "The object cannot be cloned.", v8.kNormal, -1);
-            const error_value = v8.v8__Exception__Error(message) orelse return .{ .has_value = true, .value = false };
-            _ = v8.v8__Isolate__ThrowException(iso, error_value);
-            return .{ .has_value = true, .value = false };
-        }
-
-        // Called by V8 to report serialization errors. The exception should already be thrown.
-        fn throwDataCloneError(_: ?*anyopaque, _: ?*const v8.String) callconv(.c) void {}
-
-        // Called when V8 encounters a SharedArrayBuffer. We don't support sharing them across
-        // contexts, so throw a DataCloneError and return false. V8's WriteJSArrayBuffer calls
-        // RETURN_VALUE_IF_EXCEPTION after this, so throwing prevents the fatal FromJust call.
-        fn getSharedArrayBufferId(_: ?*anyopaque, isolate: ?*v8.Isolate, _: ?*const v8.SharedArrayBuffer, _: ?*u32) callconv(.c) bool {
-            const iso = isolate orelse return false;
-            const message = v8.v8__String__NewFromUtf8(iso, "SharedArrayBuffer cannot be cloned.", v8.kNormal, -1);
-            const error_value = v8.v8__Exception__Error(message) orelse return false;
-            _ = v8.v8__Isolate__ThrowException(iso, error_value);
-            return false;
-        }
-    };
-
-    const size, const data = blk: {
-        const serializer = v8.v8__ValueSerializer__New(v8_isolate, &.{
-            .data = null,
-            .get_shared_array_buffer_id = SerializerDelegate.getSharedArrayBufferId,
-            .write_host_object = SerializerDelegate.writeHostObject,
-            .throw_data_clone_error = SerializerDelegate.throwDataCloneError,
-        }) orelse return error.JsException;
-
-        defer v8.v8__ValueSerializer__DELETE(serializer);
-
-        var write_result: v8.MaybeBool = undefined;
-        v8.v8__ValueSerializer__WriteHeader(serializer);
-        v8.v8__ValueSerializer__WriteValue(serializer, source_context, self.handle, &write_result);
-        if (!write_result.has_value or !write_result.value) {
-            return error.JsException;
-        }
-
-        var size: usize = undefined;
-        const data = v8.v8__ValueSerializer__Release(serializer, &size) orelse return error.JsException;
-        break :blk .{ size, data };
-    };
-
-    defer v8.v8__ValueSerializer__FreeBuffer(data);
-
-    const cloned_handle = blk: {
-        const deserializer = v8.v8__ValueDeserializer__New(v8_isolate, data, size, null) orelse return error.JsException;
-        defer v8.v8__ValueDeserializer__DELETE(deserializer);
-
-        var read_header_result: v8.MaybeBool = undefined;
-        v8.v8__ValueDeserializer__ReadHeader(deserializer, target_context, &read_header_result);
-        if (!read_header_result.has_value or !read_header_result.value) {
-            return error.JsException;
-        }
-        break :blk v8.v8__ValueDeserializer__ReadValue(deserializer, target_context) orelse return error.JsException;
-    };
-
-    return .{ .local = target, .handle = cloned_handle };
+    const serialized = try self.serialize();
+    defer serialized.deinit();
+    return deserialize(target, serialized.bytes());
 }
+
+// A structured-serialized value: a V8-owned byte buffer. Caller must free it
+// and must dupe the bytes if they want it to outlive the current local scope.
+pub const Serialized = struct {
+    data: [*c]u8,
+    size: usize,
+
+    pub fn bytes(self: Serialized) []const u8 {
+        return self.data[0..self.size];
+    }
+
+    pub fn deinit(self: Serialized) void {
+        v8.v8__ValueSerializer__FreeBuffer(self.data);
+    }
+};
+
+// Serialize `self` into a V8-owned buffer. The caller must call deinit on the
+// result. Raises a JS exception (DataCloneError) for unserializable values.
+pub fn serialize(self: Value) !Serialized {
+    const serializer = v8.v8__ValueSerializer__New(self.local.isolate.handle, &.{
+        .data = null,
+        .get_shared_array_buffer_id = CloneDelegate.getSharedArrayBufferId,
+        .write_host_object = CloneDelegate.writeHostObject,
+        .throw_data_clone_error = CloneDelegate.throwDataCloneError,
+    }) orelse return error.JsException;
+    defer v8.v8__ValueSerializer__DELETE(serializer);
+
+    var write_result: v8.MaybeBool = undefined;
+    v8.v8__ValueSerializer__WriteHeader(serializer);
+    v8.v8__ValueSerializer__WriteValue(serializer, self.local.handle, self.handle, &write_result);
+    if (!write_result.has_value or !write_result.value) {
+        return error.JsException;
+    }
+
+    var size: usize = undefined;
+    const data = v8.v8__ValueSerializer__Release(serializer, &size) orelse return error.JsException;
+    return .{ .data = data, .size = size };
+}
+
+// Deserialize a structured-serialized buffer (from `serialize`) into a value in
+// `local`'s context. A malformed buffer surfaces as error.JsException.
+pub fn deserialize(local: *const js.Local, bytes: []const u8) !Value {
+    const deserializer = v8.v8__ValueDeserializer__New(local.isolate.handle, bytes.ptr, bytes.len, null) orelse return error.JsException;
+    defer v8.v8__ValueDeserializer__DELETE(deserializer);
+
+    var read_header_result: v8.MaybeBool = undefined;
+    v8.v8__ValueDeserializer__ReadHeader(deserializer, local.handle, &read_header_result);
+    if (!read_header_result.has_value or !read_header_result.value) {
+        return error.JsException;
+    }
+
+    const handle = v8.v8__ValueDeserializer__ReadValue(deserializer, local.handle) orelse return error.JsException;
+    return .{ .local = local, .handle = handle };
+}
+
+const CloneDelegate = struct {
+    // Called when V8 encounters a host object it doesn't know how to serialize.
+    // Returns false (cannot clone) and throws a DataCloneError. V8 asserts
+    // has_exception() after a false return, so we must throw here.
+    fn writeHostObject(_: ?*anyopaque, isolate: ?*v8.Isolate, _: ?*const v8.Object) callconv(.c) v8.MaybeBool {
+        const iso = isolate orelse return .{ .has_value = true, .value = false };
+        const message = v8.v8__String__NewFromUtf8(iso, "The object cannot be cloned.", v8.kNormal, -1);
+        const error_value = v8.v8__Exception__Error(message) orelse return .{ .has_value = true, .value = false };
+        _ = v8.v8__Isolate__ThrowException(iso, error_value);
+        return .{ .has_value = true, .value = false };
+    }
+
+    // Called by V8 to report serialization errors. The exception is already thrown.
+    fn throwDataCloneError(_: ?*anyopaque, _: ?*const v8.String) callconv(.c) void {}
+
+    // Called when V8 encounters a SharedArrayBuffer. We don't support sharing them
+    // across contexts, so throw a DataCloneError and return false. V8's
+    // WriteJSArrayBuffer calls RETURN_VALUE_IF_EXCEPTION after this, so throwing
+    // prevents the fatal FromJust call.
+    fn getSharedArrayBufferId(_: ?*anyopaque, isolate: ?*v8.Isolate, _: ?*const v8.SharedArrayBuffer, _: ?*u32) callconv(.c) bool {
+        const iso = isolate orelse return false;
+        const message = v8.v8__String__NewFromUtf8(iso, "SharedArrayBuffer cannot be cloned.", v8.kNormal, -1);
+        const error_value = v8.v8__Exception__Error(message) orelse return false;
+        _ = v8.v8__Isolate__ThrowException(iso, error_value);
+        return false;
+    }
+};
 
 pub fn persist(self: Value) !Global {
     return self._persist(true);
