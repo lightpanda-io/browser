@@ -216,10 +216,12 @@
   document.body.appendChild(plainDiv);
   testing.expectEqual('block', window.getComputedStyle(plainDiv).getPropertyValue('display'));
 
-  // A normal declaration must not override an earlier !important one.
+  // A normal declaration must not override an earlier !important one, and the
+  // computed and inline (el.style) paths must agree on the resolved value.
   const impDiv = document.createElement('div');
   impDiv.setAttribute('style', 'color: red !important; color: blue');
   document.body.appendChild(impDiv);
   testing.expectEqual('red', window.getComputedStyle(impDiv).getPropertyValue('color'));
+  testing.expectEqual('red', impDiv.style.getPropertyValue('color'));
 }
 </script>
