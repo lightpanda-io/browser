@@ -370,6 +370,7 @@ pub fn serialize(self: Value) !Serialized {
         .throw_data_clone_error = CloneDelegate.throwDataCloneError,
     }) orelse return error.JsException;
     defer v8.v8__ValueSerializer__DELETE(serializer);
+
     // the delegate callbacks only fire during WriteValue, after this is set
     delegate_ctx.serializer = serializer;
 
@@ -409,6 +410,7 @@ pub fn deserialize(local: *const js.Local, bytes: []const u8) !Value {
     return .{ .local = local, .handle = handle };
 }
 
+<<<<<<< HEAD
 // Host object types that support structured cloning via structuredSerialize /
 // structuredDeserialize hooks. The serialized payload tags each host object
 // with its position in this list; buffers never outlive the process, so the
@@ -613,6 +615,7 @@ const CloneDelegate = struct {
         _ = isolate.throwException(js_value.handle);
     }
 };
+
 
 pub fn persist(self: Value) !Global {
     return self._persist(true);

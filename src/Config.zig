@@ -114,6 +114,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
+    .{ .name = "indexdb_dir", .type = ?[:0]const u8 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -563,6 +564,13 @@ pub fn storageEngine(self: *const Config) ?Storage.EngineType {
 pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_sqlite_path,
+        else => unreachable,
+    };
+}
+
+pub fn indexDBDir(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.indexdb_dir,
         else => unreachable,
     };
 }

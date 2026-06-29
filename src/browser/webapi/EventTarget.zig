@@ -51,6 +51,9 @@ pub const Type = union(enum) {
     font_face_set: *@import("css/FontFaceSet.zig"),
     websocket: *@import("net/WebSocket.zig"),
     cookie_store: *@import("storage/CookieStore.zig"),
+    idb_request: *@import("storage/idb/IDBRequest.zig"),
+    idb_database: *@import("storage/idb/IDBDatabase.zig"),
+    idb_transaction: *@import("storage/idb/IDBTransaction.zig"),
     notification: *@import("Notification.zig"),
 };
 
@@ -164,6 +167,9 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .font_face_set => writer.writeAll("<FontFaceSet>"),
         .websocket => writer.writeAll("<WebSocket>"),
         .cookie_store => writer.writeAll("<CookieStore>"),
+        .idb_request => writer.writeAll("<IDBRequest>"),
+        .idb_database => writer.writeAll("<IDBDatabase>"),
+        .idb_transaction => writer.writeAll("<IDBTransaction>"),
         .notification => writer.writeAll("<Notification>"),
     };
 }
@@ -189,6 +195,9 @@ pub fn toString(self: *EventTarget) []const u8 {
         .font_face_set => return "[object FontFaceSet]",
         .websocket => return "[object WebSocket]",
         .cookie_store => return "[object CookieStore]",
+        .idb_request => return "[object IDBRequest]",
+        .idb_database => return "[object IDBDatabase]",
+        .idb_transaction => return "[object IDBTransaction]",
         .notification => return "[object Notification]",
     };
 }
