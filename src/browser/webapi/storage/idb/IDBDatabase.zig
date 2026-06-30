@@ -81,7 +81,7 @@ pub fn createObjectStore(
 
     const owned_name = try exec.dupeString(name);
     const key_path = if (opts.keyPath) |kp| try exec.dupeString(kp) else null;
-    return IDBObjectStore.init(self._engine, txn, store_id, owned_name, key_path, exec);
+    return IDBObjectStore.init(self._engine, txn, store_id, owned_name, key_path, opts.autoIncrement, exec);
 }
 
 // Only callable during upgradeneeded, hence the _txn check

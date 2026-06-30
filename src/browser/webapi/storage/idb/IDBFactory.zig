@@ -200,8 +200,8 @@ const DeleteContext = struct {
 };
 
 pub fn cmp(_: *IDBFactory, first: js.Value, second: js.Value, exec: *Execution) !i32 {
-    const a = try Key.encodeValue(first, exec.call_arena);
-    const b = try Key.encodeValue(second, exec.call_arena);
+    const a = try Key.encodeValue(exec.call_arena, first);
+    const b = try Key.encodeValue(exec.call_arena, second);
     return switch (std.mem.order(u8, a, b)) {
         .lt => -1,
         .eq => 0,
