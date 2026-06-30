@@ -21,6 +21,11 @@ const lp = @import("lightpanda");
 
 pub const v8 = @import("v8").c;
 
+pub const Intercepted = struct {
+    pub const yes: u32 = 0;
+    pub const no: u32 = 1;
+};
+
 const string = @import("../../string.zig");
 
 pub const Env = @import("Env.zig");

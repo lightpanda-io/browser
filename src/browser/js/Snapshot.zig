@@ -798,6 +798,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     .deleter = null,
                     .definer = null,
                     .descriptor = null,
+                    .index_of = null,
                     .data = null,
                     .flags = 0,
                 };

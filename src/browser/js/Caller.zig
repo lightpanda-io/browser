@@ -173,7 +173,7 @@ fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo, compti
     info.getReturnValue().set(this.handle);
 }
 
-pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -183,12 +183,11 @@ pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndex(T, local, func, idx, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        return js.Intercepted.no;
     };
 }
 
-fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -200,7 +199,7 @@ fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, inf
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
-pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -210,12 +209,11 @@ pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedIndex(T, local, func, name, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        return js.Intercepted.no;
     };
 }
 
-fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -227,7 +225,7 @@ fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
-pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -237,12 +235,11 @@ pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setNamedIndex(T, local, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        return js.Intercepted.no;
     };
 }
 
-fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -255,7 +252,7 @@ fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     return handleIndexedReturn(T, F, false, local, ret, info, opts);
 }
 
-pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -265,11 +262,11 @@ pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *c
     const info = PropertyCallbackInfo{ .handle = handle };
     return _deleteNamedIndex(T, local, func, name, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        return 0;
+        return js.Intercepted.no;
     };
 }
 
-fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -281,7 +278,7 @@ fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name:
     return handleIndexedReturn(T, F, false, local, ret, info, opts);
 }
 
-pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -291,12 +288,11 @@ pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *co
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getEnumerator(T, local, func, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        return js.Intercepted.no;
     };
 }
 
-fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -307,7 +303,7 @@ fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: Pr
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
-fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     // need to unwrap this error immediately for when opts.null_as_undefined == true
     // and we need to compare it to null;
     const non_error_ret = switch (@typeInfo(@TypeOf(ret))) {
@@ -318,13 +314,11 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
                 // if error.NotHandled is part of the error set.
                 if (isInErrorSet(error.NotHandled, eu.error_set)) {
                     if (err == error.NotHandled) {
-                        // not intercepted
-                        return 0;
+                        return js.Intercepted.no;
                     }
                 }
                 handleError(T, F, local, err, info, opts);
-                // not intercepted
-                return 0;
+                return js.Intercepted.no;
             };
         },
         else => ret,
@@ -333,8 +327,7 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
     if (comptime with_value) {
         info.getReturnValue().set(try local.zigValueToJs(non_error_ret, opts));
     }
-    // intercepted
-    return 1;
+    return js.Intercepted.yes;
 }
 
 fn isInErrorSet(err: anyerror, comptime T: type) bool {
