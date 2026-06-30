@@ -276,14 +276,21 @@ pub fn tryCache(
     };
 
     const cc = blk: {
-        if (cache_control == null) {
+        if (cache_control) |c| {
+            if (CacheControl.parse(c)) |cc| {
+                break :blk cc;
+            }
+        } else if (last_modified != null) {
+            // Requires Last-Modified to be present to heuristically cache.
             log.debug(.cache, "heuristic cache", .{ .url = url, .max_age = 86400 });
             break :blk CacheControl{ .max_age = 86400, .must_revalidate = false };
         }
-        if (CacheControl.parse(cache_control.?)) |cc| {
-            break :blk cc;
-        }
-        log.debug(.cache, "no store", .{ .url = url, .cache_control = cache_control.?, .reason = "cache control" });
+
+        log.debug(.cache, "no store", .{
+            .url = url,
+            .cache_control = cache_control orelse "null",
+            .last_modified = last_modified orelse "null",
+        });
         return null;
     };
 
@@ -459,6 +466,27 @@ test "Cache: tryCache heuristic when no cache-control" {
         null,
         null,
         null,
+        false,
+        false,
+    );
+    try testing.expectEqual(null, result);
+}
+
+test "Cache: tryCache heuristic when no cache-control with last-modified" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const result = try tryCache(
+        arena.allocator(),
+        1000,
+        "https://example.com",
+        200,
+        "text/html",
+        null,
+        null,
+        null,
+        null,
+        "Wed, 21 Oct 2015 07:28:00 GMT",
         false,
         false,
     );
