@@ -306,7 +306,7 @@ const Row = struct {
     }
 };
 
-const Rows = struct {
+pub const Rows = struct {
     stmt: Statement,
 
     pub fn deinit(self: Rows) void {
