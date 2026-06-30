@@ -82,6 +82,18 @@ pub fn newObject(self: *const Local) js.Object {
     };
 }
 
+pub fn newDate(self: *const Local, time_ms: f64) !js.Value {
+    const handle = v8.v8__Date__New(self.handle, time_ms) orelse return error.JsException;
+    return .{ .local = self, .handle = handle };
+}
+
+pub fn newNumber(self: *const Local, f: f64) !js.Value {
+    return .{
+        .local = self,
+        .handle = self.isolate.initNumber(f).handle,
+    };
+}
+
 pub fn newArray(self: *const Local, len: u32) js.Array {
     return .{
         .local = self,

@@ -187,6 +187,89 @@
 }
 </script>
 
+<!-- cmp across the full key-type ordering (number < string < binary < array)
+     plus array element-wise comparison and prefix rules. -->
+<script id="cmp_key_types" type=module>
+{
+    // Cross-type ordering.
+    testing.expectEqual(-1, indexedDB.cmp(42, "42"));             // number < string
+    testing.expectEqual(-1, indexedDB.cmp("z", new Uint8Array([0]))); // string < binary
+    testing.expectEqual(-1, indexedDB.cmp(new Uint8Array([255]), [0])); // binary < array
+
+    // Arrays compare element-wise; a shorter prefix sorts first.
+    testing.expectEqual(-1, indexedDB.cmp([1], [1, 2]));
+    testing.expectEqual(1, indexedDB.cmp([1, 2], [1, 1]));
+    testing.expectEqual(0, indexedDB.cmp([1, "a"], [1, "a"]));
+    testing.expectEqual(-1, indexedDB.cmp([1, [2]], [1, [3]])); // nested
+
+    // Binary keys compare by byte value.
+    testing.expectEqual(-1, indexedDB.cmp(new Uint8Array([1, 2]), new Uint8Array([1, 3])));
+
+    // Invalid keys (boolean, null, NaN) are DataErrors.
+    for (const bad of [true, null, NaN, {}]) {
+        let threw = null;
+        try { indexedDB.cmp(1, bad); } catch (e) { threw = e; }
+        testing.expectEqual("DataError", threw && threw.name);
+    }
+}
+</script>
+
+<!-- Array and binary values can be used as object-store keys and round-trip
+     through get(). -->
+<script id="array_binary_keys" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("akeys-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = (e) => {
+        const tx = e.target.result.transaction("s", "readwrite");
+        const store = tx.objectStore("s");
+        store.add("composite", ["a", 1]);
+        store.add("blob", new Uint8Array([1, 2, 3]));
+
+        const g1 = store.get(["a", 1]);
+        const g2 = store.get(new Uint8Array([1, 2, 3]));
+        g2.onsuccess = () => state.resolve({ composite: g1.result, blob: g2.result });
+    };
+    await state.done((got) => {
+        testing.expectEqual("composite", got.composite);
+        testing.expectEqual("blob", got.blob);
+    });
+}
+</script>
+
+<!-- Date values are keys (number < date < string), round-trip through get(),
+     and getKey/cursor decode them back to Date objects. An invalid Date is a
+     DataError. -->
+<script id="date_keys" type=module>
+{
+    testing.expectEqual(-1, indexedDB.cmp(42, new Date(0)));      // number < date
+    testing.expectEqual(-1, indexedDB.cmp(new Date(1), "a"));     // date < string
+    testing.expectEqual(-1, indexedDB.cmp(new Date(1), new Date(2)));
+
+    let threw = null;
+    try { indexedDB.cmp(1, new Date(NaN)); } catch (e) { threw = e; }
+    testing.expectEqual("DataError", threw && threw.name);
+
+    const state = await testing.async();
+    const open = indexedDB.open("date-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("s", "readwrite").objectStore("s");
+        const when = new Date(1700000000000);
+        store.add("event", when);
+        const g = store.get(when);
+        const k = store.getKey(when);
+        k.onsuccess = () => state.resolve({ value: g.result, key: k.result });
+    };
+    await state.done((got) => {
+        testing.expectEqual("event", got.value);
+        testing.expectEqual(true, got.key instanceof Date);
+        testing.expectEqual(1700000000000, got.key.getTime());
+    });
+}
+</script>
+
 <!-- During upgradeneeded, request.transaction is the versionchange transaction;
      a store created in the upgrade belongs to it and seeded data persists. -->
 <script id="request_transaction" type=module>
@@ -304,6 +387,248 @@
         state.resolve(threw && threw.name);
     };
     await state.done((name) => testing.expectEqual("ReadOnlyError", name));
+}
+</script>
+
+<!-- In-line keys: a store with a keyPath extracts the key from the value, and
+     an explicit key argument is a DataError. -->
+<script id="inline_keys" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("inline-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("books", { keyPath: "isbn" });
+    open.onsuccess = (e) => {
+        const tx = e.target.result.transaction("books", "readwrite");
+        const store = tx.objectStore("books");
+        testing.expectEqual("isbn", store.keyPath);
+        testing.expectEqual(false, store.autoIncrement);
+
+        store.add({ isbn: "111", title: "A" });
+
+        // Supplying an explicit key to an in-line store throws DataError.
+        let threw = null;
+        try { store.add({ isbn: "222" }, "extra"); } catch (err) { threw = err; }
+
+        const g = store.get("111");
+        g.onsuccess = () => state.resolve({ title: g.result.title, threw: threw && threw.name });
+    };
+    await state.done((got) => {
+        testing.expectEqual("A", got.title);
+        testing.expectEqual("DataError", got.threw);
+    });
+}
+</script>
+
+<!-- Nested key path "a.b" extracts a key from a nested property. -->
+<script id="nested_keypath" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("nested-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s", { keyPath: "id.value" });
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("s", "readwrite").objectStore("s");
+        store.add({ id: { value: 7 }, name: "deep" });
+        const g = store.get(7);
+        g.onsuccess = () => state.resolve(g.result && g.result.name);
+    };
+    await state.done((name) => testing.expectEqual("deep", name));
+}
+</script>
+
+<!-- autoIncrement generates keys for out-of-line stores, returns the key from
+     add(), and the generator advances past an explicitly supplied higher key. -->
+<script id="auto_increment" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("autoinc-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s", { autoIncrement: true });
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("s", "readwrite").objectStore("s");
+        const a = store.add("first");   // key 1
+        const b = store.add("second");  // key 2
+        store.add("tenth", 10);         // explicit key bumps the generator
+        const c = store.add("eleventh"); // key 11
+        c.onsuccess = () => state.resolve({ a: a.result, b: b.result, c: c.result });
+    };
+    await state.done((got) => {
+        testing.expectEqual(1, got.a);
+        testing.expectEqual(2, got.b);
+        testing.expectEqual(11, got.c);
+    });
+}
+</script>
+
+<!-- autoIncrement with a key path injects the generated key back into the
+     stored value. -->
+<script id="auto_increment_inline" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("autoinc-inline-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s", { keyPath: "id", autoIncrement: true });
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("s", "readwrite").objectStore("s");
+        const r = store.add({ name: "auto" });
+        r.onsuccess = () => {
+            const g = store.get(r.result);
+            g.onsuccess = () => state.resolve({ key: r.result, stored: g.result });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual(1, got.key);
+        testing.expectEqual(1, got.stored.id); // injected
+        testing.expectEqual("auto", got.stored.name);
+    });
+}
+</script>
+
+<!-- autoIncrement with a nested keyPath: a missing intermediate is created and
+     the key injected; a non-object intermediate is a DataError (and must not
+     consume a generated key). -->
+<script id="auto_increment_nested" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("autoinc-nested-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s", { keyPath: "a.b", autoIncrement: true });
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("s", "readwrite").objectStore("s");
+
+        const r1 = store.add({ name: "x" });          // a.b missing -> create + inject key 1
+
+        // a is a primitive: the key cannot be injected -> DataError, no key consumed.
+        let threw = null;
+        try { store.add({ a: 5 }); } catch (err) { threw = err; }
+
+        const r2 = store.add({ name: "y" });          // still key 2, generator not bumped
+        r2.onsuccess = () => {
+            const g = store.get(r1.result);
+            g.onsuccess = () => state.resolve({
+                k1: r1.result, k2: r2.result, threw: threw && threw.name, stored: g.result,
+            });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual(1, got.k1);
+        testing.expectEqual("DataError", got.threw);
+        testing.expectEqual(2, got.k2); // failed add did not consume key 2
+        testing.expectEqual(1, got.stored.a.b); // injected into a created nested object
+    });
+}
+</script>
+
+<!-- getKey returns the primary key (or undefined); getAllKeys returns every
+     key in order. -->
+<script id="get_key_all_keys" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("getkey-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("s");
+        s.add("a", 3);
+        s.add("b", 1);
+        s.add("c", 2);
+    };
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("s", "readonly").objectStore("s");
+        const present = store.getKey(2);
+        const absent = store.getKey(99);
+        const all = store.getAllKeys();
+        all.onsuccess = () => state.resolve({ present: present.result, absent: absent.result, all: all.result });
+    };
+    await state.done((got) => {
+        testing.expectEqual(2, got.present);
+        testing.expectEqual(undefined, got.absent);
+        testing.expectEqual(3, got.all.length);
+        testing.expectEqual(1, got.all[0]); // sorted key order
+        testing.expectEqual(3, got.all[2]);
+    });
+}
+</script>
+
+<!-- IDBKeyRange factory methods, properties, and includes(). -->
+<script id="key_range" type=module>
+{
+    const r = IDBKeyRange.bound(1, 10, false, true);
+    testing.expectEqual(1, r.lower);
+    testing.expectEqual(10, r.upper);
+    testing.expectEqual(false, r.lowerOpen);
+    testing.expectEqual(true, r.upperOpen);
+    testing.expectEqual(true, r.includes(1));
+    testing.expectEqual(true, r.includes(9));
+    testing.expectEqual(false, r.includes(10)); // upper is open
+    testing.expectEqual(false, r.includes(0));
+
+    const only = IDBKeyRange.only("k");
+    testing.expectEqual("k", only.lower);
+    testing.expectEqual("k", only.upper);
+    testing.expectEqual(true, only.includes("k"));
+    testing.expectEqual(false, only.includes("j"));
+
+    const lb = IDBKeyRange.lowerBound(5, true);
+    testing.expectEqual(5, lb.lower);
+    testing.expectEqual(undefined, lb.upper);
+    testing.expectEqual(false, lb.includes(5)); // open
+    testing.expectEqual(true, lb.includes(6));
+
+    const ub = IDBKeyRange.upperBound(5);
+    testing.expectEqual(undefined, ub.lower);
+    testing.expectEqual(true, ub.includes(5));
+
+    // bound() with lower > upper is a DataError.
+    let threw = null;
+    try { IDBKeyRange.bound(10, 1); } catch (e) { threw = e; }
+    testing.expectEqual("DataError", threw && threw.name);
+
+    // IDBKeyRange is not constructable.
+    let ctorThrew = false;
+    try { new IDBKeyRange(); } catch (e) { ctorThrew = true; }
+    testing.expectEqual(true, ctorThrew);
+}
+</script>
+
+<!-- Ranged get/getAll/count/delete using a key range and a bare key. -->
+<script id="ranged_queries" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("range-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("s");
+        for (let i = 1; i <= 5; i++) s.add("v" + i, i);
+    };
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const store = db.transaction("s", "readwrite").objectStore("s");
+
+        const range = IDBKeyRange.bound(2, 4);
+        const first = store.get(range);          // first value in [2,4]
+        const all = store.getAll(range);         // values for keys 2,3,4
+        const keys = store.getAllKeys(IDBKeyRange.lowerBound(3)); // keys 3,4,5
+        const cnt = store.count(range);          // 3
+        const limited = store.getAll(null, 2);   // first two of everything
+
+        store.delete(IDBKeyRange.bound(4, 5));   // remove keys 4,5
+        const afterDelete = store.count();
+
+        afterDelete.onsuccess = () => state.resolve({
+            first: first.result,
+            all: all.result,
+            keys: keys.result,
+            cnt: cnt.result,
+            limited: limited.result,
+            remaining: afterDelete.result,
+        });
+    };
+    await state.done((got) => {
+        testing.expectEqual("v2", got.first);
+        testing.expectEqual(3, got.all.length);
+        testing.expectEqual("v2", got.all[0]);
+        testing.expectEqual("v4", got.all[2]);
+        testing.expectEqual(3, got.keys.length);
+        testing.expectEqual(3, got.keys[0]);
+        testing.expectEqual(5, got.keys[2]);
+        testing.expectEqual(3, got.cnt);
+        testing.expectEqual(2, got.limited.length);
+        testing.expectEqual(3, got.remaining); // keys 1,2,3 remain
+    });
 }
 </script>
 

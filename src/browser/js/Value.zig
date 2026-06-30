@@ -126,6 +126,10 @@ pub fn isArrayBuffer(self: Value) bool {
     return v8.v8__Value__IsArrayBuffer(self.handle);
 }
 
+pub fn isDate(self: Value) bool {
+    return v8.v8__Value__IsDate(self.handle);
+}
+
 pub fn isUint8Array(self: Value) bool {
     return v8.v8__Value__IsUint8Array(self.handle);
 }
