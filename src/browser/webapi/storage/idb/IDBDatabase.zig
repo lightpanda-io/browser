@@ -26,8 +26,10 @@ const EventTarget = @import("../../EventTarget.zig");
 const Engine = @import("Engine.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
 const IDBObjectStore = @import("IDBObjectStore.zig");
+const DOMStringList = @import("../../collections.zig").DOMStringList;
 
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 
 const IDBDatabase = @This();
 
@@ -114,12 +116,41 @@ pub fn transaction(
     options: ?TransactionOptions,
     exec: *Execution,
 ) !*IDBTransaction {
-    _ = store_names; // TODO
+    const scope = try normalizeStoreNames(store_names, exec.arena);
     const opts = options orelse TransactionOptions{};
     return IDBTransaction.init(exec, self, switch (mode orelse .readonly) {
         .readonly => .readonly,
         .readwrite => .readwrite,
-    }, opts.durability);
+    }, opts.durability, scope);
+}
+
+// The transaction's scope: the requested store names, sorted with duplicates
+// removed (per the IndexedDB spec's "transaction scope" steps).
+fn normalizeStoreNames(store_names: StoreNames, arena: Allocator) ![]const []const u8 {
+    var list: std.ArrayList([]const u8) = .empty;
+    switch (store_names) {
+        .name => |name| try list.append(arena, try arena.dupe(u8, name)),
+        .names => |names| {
+            try list.ensureUnusedCapacity(arena, names.len);
+            for (names) |name| list.appendAssumeCapacity(try arena.dupe(u8, name));
+        },
+    }
+
+    std.mem.sort([]const u8, list.items, {}, lessThan);
+
+    // Drop duplicates now that equal names are adjacent.
+    var write: usize = 0;
+    for (list.items, 0..) |name, read| {
+        if (read == 0 or !std.mem.eql(u8, name, list.items[write - 1])) {
+            list.items[write] = name;
+            write += 1;
+        }
+    }
+    return list.items[0..write];
+}
+
+fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
 }
 
 pub fn close(_: *IDBDatabase) void {
@@ -135,6 +166,16 @@ pub fn getVersion(self: *const IDBDatabase) i64 {
     return self._version;
 }
 
+pub fn getObjectStoreNames(self: *IDBDatabase, exec: *Execution) !*DOMStringList {
+    const arena = try exec.getArena(.small, "IDB.getObjectStoreNames");
+    errdefer exec.releaseArena(arena);
+
+    const names = try self._engine.objectStoreNames(arena, self._database_id);
+    const list = try arena.create(DOMStringList);
+    list.* = .{ ._items = names, ._arena = arena };
+    return list;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IDBDatabase);
 
@@ -146,6 +187,7 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(IDBDatabase.getName, null, .{});
     pub const version = bridge.accessor(IDBDatabase.getVersion, null, .{});
+    pub const objectStoreNames = bridge.accessor(IDBDatabase.getObjectStoreNames, null, .{});
     pub const createObjectStore = bridge.function(IDBDatabase.createObjectStore, .{});
     pub const deleteObjectStore = bridge.function(IDBDatabase.deleteObjectStore, .{});
     pub const transaction = bridge.function(IDBDatabase.transaction, .{});
