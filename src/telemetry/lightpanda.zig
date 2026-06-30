@@ -25,6 +25,18 @@ const LINGER_MS = 5000;
 const LINGER_BATCH = 16;
 const URL = "https://telemetry.lightpanda.io/v2";
 
+const OS_CODE = switch (builtin.os.tag) {
+    .linux => "L",
+    .macos => "M",
+    .ios => "I",
+    else => "O",
+};
+const ARCH_CODE = switch (builtin.cpu.arch) {
+    .x86_64 => "X",
+    .aarch64 => "A",
+    else => "O",
+};
+
 const LightPanda = @This();
 
 allocator: Allocator,
@@ -34,9 +46,8 @@ network: *Network,
 writer: std.Io.Writer.Allocating,
 
 iid: ?[36]u8 = null,
-run_mode: Config.RunMode = .serve,
-interactive: bool = false,
-proxy: bool,
+mode: []const u8,
+proxy: u8,
 
 // Header is sent before the first message, once sent, it isn't sent again
 header_sent: bool = false,
@@ -66,12 +77,18 @@ dropped: u32 = 0,
 pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode, interactive: bool) !void {
     self.* = .{
         .iid = iid,
-        .run_mode = run_mode,
-        .interactive = interactive,
-        .proxy = app.config.httpProxy() != null,
         .allocator = app.allocator,
         .network = &app.network,
+        .proxy = if (app.config.httpProxy() != null) 1 else 0,
         .writer = std.Io.Writer.Allocating.init(app.allocator),
+        .mode = switch (run_mode) {
+            .fetch => "F",
+            .serve => "S",
+            .agent => if (interactive == false) "AR" else "A",
+            .mcp => "M",
+            .version => "V",
+            .help => "H",
+        },
     };
 }
 
@@ -249,17 +266,13 @@ fn _flush(self: *LightPanda, conn: *http.Connection) !void {
 }
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
-    return self.writeLine(&EventRow{
-        .iid = if (self.iid) |*iid| iid else "00000000-0000-0000-0000-000000000000",
-        .event = event,
-    });
+    return self.writeLine(&EventRow{.event = event});
 }
 
 fn writeHeader(self: *LightPanda) !bool {
     return self.writeLine(&Header{
         .iid = if (self.iid) |*iid| iid else "00000000-0000-0000-0000-000000000000",
-        .mode = self.run_mode,
-        .interactive = self.interactive,
+        .mode = self.mode,
         .proxy = self.proxy,
     });
 }
@@ -278,12 +291,10 @@ fn writeLine(self: *LightPanda, value: anytype) !bool {
 }
 
 const EventRow = struct {
-    iid: []const u8,
     event: telemetry.Event,
 
     pub fn jsonStringify(self: *const EventRow, writer: anytype) !void {
         try writer.beginArray();
-        try writer.write(self.iid);
         switch (self.event) {
             .run => try writer.write("R"),
             .navigate => |n| {
@@ -311,22 +322,17 @@ const EventRow = struct {
 
 const Header = struct {
     iid: []const u8,
-    mode: Config.RunMode,
-    interactive: bool,
-    proxy: bool,
+    mode: []const u8,
+    proxy: u8,
 
     pub fn jsonStringify(self: *const Header, writer: anytype) !void {
         try writer.beginArray();
         try writer.write(self.iid);
         try writer.write("H");
-        if (self.mode == .agent and self.interactive == false) {
-            try writer.write("agent_replay");
-        } else {
-            try writer.write(self.mode);
-        }
-        try writer.write(@as(u8, if (self.proxy) 1 else 0));
-        try writer.write(builtin.os.tag);
-        try writer.write(builtin.cpu.arch);
+        try writer.write(self.mode);
+        try writer.write(self.proxy);
+        try writer.write(OS_CODE);
+        try writer.write(ARCH_CODE);
         try writer.write(build_config.version);
         try writer.endArray();
     }
@@ -336,37 +342,37 @@ const testing = @import("../testing.zig");
 test "Telemetry: event row wire format" {
     const Case = struct { event: telemetry.Event, expected: []const u8 };
     const cases = [_]Case{
-        .{ .event = .{ .run = {} }, .expected = "[\"sid0\",\"R\"]" },
+        .{ .event = .{ .run = {} }, .expected = "[\"R\"]" },
         .{
             .event = .{ .navigate = .{ .tls = true, .context = .page } },
-            .expected = "[\"sid0\",\"N\",1,\"P\"]",
+            .expected = "[\"N\",1,\"P\"]",
         },
         .{
             .event = .{ .navigate = .{ .tls = false, .context = .popup } },
-            .expected = "[\"sid0\",\"N\",0,\"O\"]",
+            .expected = "[\"N\",0,\"O\"]",
         },
         .{
             .event = .{ .navigate = .{ .tls = true, .context = .iframe } },
-            .expected = "[\"sid0\",\"N\",1,\"I\"]",
+            .expected = "[\"N\",1,\"I\"]",
         },
         .{
             .event = .{ .buffer_overflow = .{ .dropped = 42 } },
-            .expected = "[\"sid0\",\"B\",42]",
+            .expected = "[\"B\",42]",
         },
         .{
             .event = .{ .llm = .{ .provider = "anthropic", .model = .wrap("claude") } },
-            .expected = "[\"sid0\",\"L\",\"anthropic\",\"claude\"]",
+            .expected = "[\"L\",\"anthropic\",\"claude\"]",
         },
         .{
             .event = .{ .llm = .{ .provider = "nollm", .model = null } },
-            .expected = "[\"sid0\",\"L\",\"nollm\",null]",
+            .expected = "[\"L\",\"nollm\",null]",
         },
     };
 
     for (cases) |case| {
         var w = std.Io.Writer.Allocating.init(testing.allocator);
         defer w.deinit();
-        try std.json.Stringify.value(&EventRow{ .iid = "sid0", .event = case.event }, .{}, &w.writer);
+        try std.json.Stringify.value(&EventRow{ .event = case.event }, .{}, &w.writer);
         try testing.expectEqual(case.expected, w.written());
     }
 }
@@ -377,13 +383,12 @@ test "Telemetry: header wire format" {
 
     const header = Header{
         .iid = "the-iid",
-        .mode = .serve,
-        .interactive = false,
-        .proxy = true,
+        .mode = "S",
+        .proxy = 1,
     };
     try std.json.Stringify.value(&header, .{}, &w.writer);
 
-    const expected = try std.fmt.allocPrint(testing.allocator, "[\"the-iid\",\"H\",\"serve\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ @tagName(builtin.os.tag), @tagName(builtin.cpu.arch), build_config.version });
+    const expected = try std.fmt.allocPrint(testing.allocator, "[\"the-iid\",\"H\",\"S\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ OS_CODE, ARCH_CODE, build_config.version });
     defer testing.allocator.free(expected);
 
     try testing.expectEqual(expected, w.written());
