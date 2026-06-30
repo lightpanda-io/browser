@@ -24,20 +24,24 @@ pub const Manager = @import("Manager.zig");
 
 pub const IDBFactory = @import("IDBFactory.zig");
 pub const IDBRequest = @import("IDBRequest.zig");
+pub const IDBCursor = @import("IDBCursor.zig");
 pub const IDBDatabase = @import("IDBDatabase.zig");
 pub const IDBKeyRange = @import("IDBKeyRange.zig");
 pub const IDBTransaction = @import("IDBTransaction.zig");
 pub const IDBObjectStore = @import("IDBObjectStore.zig");
+pub const IDBCursorWithValue = @import("IDBCursorWithValue.zig");
 pub const IDBVersionChangeEvent = @import("IDBVersionChangeEvent.zig");
 
 pub fn registerTypes() []const type {
     return &.{
         IDBFactory,
         IDBRequest,
+        IDBCursor,
         IDBDatabase,
         IDBKeyRange,
         IDBTransaction,
         IDBObjectStore,
+        IDBCursorWithValue,
         IDBVersionChangeEvent,
     };
 }

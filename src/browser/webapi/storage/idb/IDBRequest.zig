@@ -26,6 +26,7 @@ const EventTarget = @import("../../EventTarget.zig");
 const DOMException = @import("../../DOMException.zig");
 
 const idb = @import("idb.zig");
+const IDBCursor = @import("IDBCursor.zig");
 const IDBDatabase = @import("IDBDatabase.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
 const IDBVersionChangeEvent = @import("IDBVersionChangeEvent.zig");
@@ -36,9 +37,10 @@ const FunctionSetter = idb.FunctionSetter;
 const IDBRequest = @This();
 
 _proto: *EventTarget,
-_result: Result = .none,
+_result: Result = .{.none = js.Undefined{}},
 _error: ?anyerror = null,
 _txn: ?*IDBTransaction = null,
+_cursor: ?*IDBCursor = null,
 _ready_state: ReadyState = .pending,
 
 _on_success: ?js.Function.Global = null,
@@ -55,8 +57,8 @@ const ReadyState = enum {
 };
 
 const Result = union(enum) {
-    none,
-    value: js.Value.Global, // the result of a get/add/put
+    none: ?js.Undefined,      // null or undefined (different APIs return different values)
+    value: js.Value.Global, // the result of a get/add/put, or a positioned cursor
     database: *IDBDatabase, // the result of an open
 };
 
@@ -68,14 +70,27 @@ pub fn asEventTarget(self: *IDBRequest) *EventTarget {
     return self._proto;
 }
 
-pub fn setValueResult(self: *IDBRequest, value: js.Value) !void {
-    self._result = .{ .value = try value.persist() };
+// Not exposed to JS, called internally
+pub fn setValue(self: *IDBRequest, value: js.Value) !void {
+    return self.setValueGlobal(try value.persist());
 }
 
+// Not exposed to JS, called internally
+pub fn setValueGlobal(self: *IDBRequest, global: js.Value.Global) void {
+    self._result = .{ .value = global };
+}
+
+// Not exposed to JS, called internally. Result becomes JS `null` (not undefined).
+pub fn setNull(self: *IDBRequest) void {
+    self._result = .{.none = null};
+}
+
+// Not exposed to JS, called internally
 pub fn setDatabaseResult(self: *IDBRequest, database: *IDBDatabase) void {
     self._result = .{ .database = database };
 }
 
+// Not exposed to JS, called internally
 pub fn setError(self: *IDBRequest, err: anyerror) void {
     self._error = err;
 }
@@ -88,6 +103,11 @@ pub fn deliver(self: *IDBRequest, exec: *Execution) !void {
     self._ready_state = .done;
     if (self._error != null) {
         return self.fire(exec, comptime .wrap("error"), self._on_error);
+    }
+    if (self._cursor) |cursor| {
+        // A cursor request re-fires on every iteration; let the cursor mark itself
+        // readable (got value) right before the success handler runs.
+        cursor.beforeDeliver();
     }
     return self.fire(exec, comptime .wrap("success"), self._on_success);
 }
@@ -112,7 +132,7 @@ pub fn getReadyState(self: *const IDBRequest) ReadyState {
     return self._ready_state;
 }
 
-pub fn getResult(self: *const IDBRequest) !Result {
+pub fn getResult(self: *const IDBRequest) Result {
     return self._result;
 }
 
@@ -174,7 +194,7 @@ pub const JsApi = struct {
     };
 
     pub const readyState = bridge.accessor(IDBRequest.getReadyState, null, .{});
-    pub const result = bridge.accessor(IDBRequest.getResult, null, .{ .null_as_undefined = true });
+    pub const result = bridge.accessor(IDBRequest.getResult, null, .{});
     pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{ .null_as_undefined = true });
     pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{ .null_as_undefined = true });
     pub const onsuccess = bridge.accessor(IDBRequest.getOnSuccess, IDBRequest.setOnSuccess, .{});
