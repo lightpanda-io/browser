@@ -1396,7 +1396,7 @@ test "cdp.frame: navigate does not follow Location on a non-redirect 3xx" {
 }
 
 test "cdp.frame: navigate answers with errorText when the navigation fails" {
-    const filter: testing.LogFilter = .init(&.{ .frame });
+    const filter: testing.LogFilter = .init(&.{.frame});
     defer filter.deinit();
 
     // A root navigation that fails before commit (here: connection refused —
