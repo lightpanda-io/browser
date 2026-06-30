@@ -23,6 +23,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   build-linux:
