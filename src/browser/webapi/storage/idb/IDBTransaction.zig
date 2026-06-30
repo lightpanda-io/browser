@@ -29,6 +29,7 @@ const Engine = @import("Engine.zig");
 const IDBDatabase = @import("IDBDatabase.zig");
 const IDBRequest = @import("IDBRequest.zig");
 const IDBObjectStore = @import("IDBObjectStore.zig");
+const DOMStringList = @import("../../collections.zig").DOMStringList;
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -41,6 +42,10 @@ _exec: *Execution,
 _db: *IDBDatabase,
 _engine: *Engine,
 _mode: Mode,
+// The transaction's scope: the store names it was opened over, sorted and
+// deduped. Empty for a versionchange transaction, whose scope is "all stores"
+// and is resolved live in getObjectStoreNames.
+_scope: []const []const u8 = &.{},
 // Advisory only: we always commit through sqlite. Stored to expose the property.
 _durability: Durability = .default,
 _requests: std.ArrayList(*IDBRequest) = .empty,
@@ -74,13 +79,14 @@ pub const Durability = enum {
     }
 };
 
-pub fn init(exec: *Execution, db: *IDBDatabase, mode: Mode, durability: Durability) !*IDBTransaction {
+pub fn init(exec: *Execution, db: *IDBDatabase, mode: Mode, durability: Durability, scope: []const []const u8) !*IDBTransaction {
     const self = try exec._factory.eventTarget(IDBTransaction{
         ._proto = undefined,
         ._exec = exec,
         ._db = db,
         ._engine = db._engine,
         ._mode = mode,
+        ._scope = scope,
         ._durability = durability,
     });
 
@@ -201,6 +207,22 @@ pub fn getDb(self: *IDBTransaction) *IDBDatabase {
     return self._db;
 }
 
+pub fn getObjectStoreNames(self: *IDBTransaction, exec: *Execution) !*DOMStringList {
+    const arena = try exec.getArena(.small, "IDB.getObjectStoreNames");
+    errdefer exec.releaseArena(arena);
+
+    // A versionchange transaction spans every store; its set changes as the
+    // upgrade creates/deletes stores, so resolve it live rather than caching.
+    const names = if (self._mode == .versionchange)
+        try self._engine.objectStoreNames(arena, self._db._database_id)
+    else
+        self._scope;
+
+    const list = try arena.create(DOMStringList);
+    list.* = .{ ._items = names, ._arena = arena };
+    return list;
+}
+
 pub fn getOnComplete(self: *const IDBTransaction) ?js.Function.Global {
     return self._on_complete;
 }
@@ -284,6 +306,7 @@ pub const JsApi = struct {
     pub const mode = bridge.accessor(IDBTransaction.getMode, null, .{});
     pub const durability = bridge.accessor(IDBTransaction.getDurability, null, .{});
     pub const db = bridge.accessor(IDBTransaction.getDb, null, .{});
+    pub const objectStoreNames = bridge.accessor(IDBTransaction.getObjectStoreNames, null, .{});
     pub const objectStore = bridge.function(IDBTransaction.objectStore, .{ .dom_exception = true });
     pub const abort = bridge.function(IDBTransaction.abort, .{ .dom_exception = true });
     pub const commit = bridge.function(IDBTransaction.commit, .{ .dom_exception = true });
