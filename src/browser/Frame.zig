@@ -52,6 +52,7 @@ const VisualViewport = @import("webapi/VisualViewport.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const Worker = @import("webapi/Worker.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
+const Selector = @import("webapi/selector/Selector.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
@@ -120,6 +121,10 @@ _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attri
 // that actually access these features via JavaScript, saving 24 bytes per element.
 _element_styles: Element.StyleLookup = .empty,
 _element_datasets: Element.DatasetLookup = .empty,
+
+// Keyed by selector string. The parsed AST borrows slices of the key, so both
+// live on `arena` (frame lifetime). See Selector.cachedParse.
+_selector_cache: std.StringHashMapUnmanaged([]const Selector.Selector) = .empty,
 _element_class_lists: Element.ClassListLookup = .empty,
 _element_rel_lists: Element.RelListLookup = .empty,
 _element_shadow_roots: Element.ShadowRootLookup = .empty,
