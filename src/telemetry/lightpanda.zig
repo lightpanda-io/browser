@@ -266,7 +266,7 @@ fn _flush(self: *LightPanda, conn: *http.Connection) !void {
 }
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
-    return self.writeLine(&EventRow{.event = event});
+    return self.writeLine(&EventRow{ .event = event });
 }
 
 fn writeHeader(self: *LightPanda) !bool {
