@@ -177,12 +177,12 @@ pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
 
 pub fn objectStore(self: *IDBTransaction, name: []const u8, exec: *Execution) !*IDBObjectStore {
     const database_id = self._db._database_id;
-    const store_id = (try self._engine.objectStoreId(database_id, name)) orelse {
+    const info = (try self._engine.objectStoreInfo(exec.arena, database_id, name)) orelse {
         return error.NotFound;
     };
 
     const owned_name = try exec.dupeString(name);
-    return IDBObjectStore.init(self._engine, self, store_id, owned_name, null, exec);
+    return IDBObjectStore.init(self._engine, self, info.id, owned_name, info.key_path, info.auto_increment, exec);
 }
 
 pub fn getMode(self: *const IDBTransaction) Mode {
