@@ -1396,6 +1396,9 @@ test "cdp.frame: navigate does not follow Location on a non-redirect 3xx" {
 }
 
 test "cdp.frame: navigate answers with errorText when the navigation fails" {
+    const filter: testing.LogFilter = .init(&.{.frame});
+    defer filter.deinit();
+
     // A root navigation that fails before commit (here: connection refused —
     // nothing listens on port 1) must still answer the Page.navigate command.
     // Chrome resolves it with an errorText field ("present if and only if
