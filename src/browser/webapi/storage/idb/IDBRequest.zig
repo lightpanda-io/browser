@@ -37,7 +37,7 @@ const FunctionSetter = idb.FunctionSetter;
 const IDBRequest = @This();
 
 _proto: *EventTarget,
-_result: Result = .{.none = js.Undefined{}},
+_result: Result = .{ .none = js.Undefined{} },
 _error: ?anyerror = null,
 _txn: ?*IDBTransaction = null,
 _cursor: ?*IDBCursor = null,
@@ -57,7 +57,7 @@ const ReadyState = enum {
 };
 
 const Result = union(enum) {
-    none: ?js.Undefined,      // null or undefined (different APIs return different values)
+    none: ?js.Undefined, // null or undefined (different APIs return different values)
     value: js.Value.Global, // the result of a get/add/put, or a positioned cursor
     database: *IDBDatabase, // the result of an open
 };
@@ -82,7 +82,7 @@ pub fn setValueGlobal(self: *IDBRequest, global: js.Value.Global) void {
 
 // Not exposed to JS, called internally. Result becomes JS `null` (not undefined).
 pub fn setNull(self: *IDBRequest) void {
-    self._result = .{.none = null};
+    self._result = .{ .none = null };
 }
 
 // Not exposed to JS, called internally
