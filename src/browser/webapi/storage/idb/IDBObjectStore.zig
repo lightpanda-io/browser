@@ -16,12 +16,14 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
+const IDBIndex = @import("IDBIndex.zig");
 const IDBCursor = @import("IDBCursor.zig");
 const IDBRequest = @import("IDBRequest.zig");
 const IDBKeyRange = @import("IDBKeyRange.zig");
@@ -29,6 +31,7 @@ const IDBTransaction = @import("IDBTransaction.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 
 const IDBObjectStore = @This();
 
@@ -100,11 +103,16 @@ pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
     const bounds = try IDBKeyRange.resolveQuery(exec.call_arena, query, exec);
     const request = try txn.newRequest();
 
-    self._engine.deleteRange(self._store_id, bounds) catch |err| {
+    self.deleteBounds(bounds) catch |err| {
         log.warn(.storage, "idb delete", .{ .err = err });
         request.setError(err);
     };
     return request;
+}
+
+fn deleteBounds(self: *IDBObjectStore, bounds: Engine.Bounds) !void {
+    try self._engine.deleteIndexRecordsForRange(self._store_id, bounds);
+    try self._engine.deleteRange(self._store_id, bounds);
 }
 
 pub fn clear(self: *IDBObjectStore, _: *Execution) !*IDBRequest {
@@ -115,11 +123,16 @@ pub fn clear(self: *IDBObjectStore, _: *Execution) !*IDBRequest {
     try txn.ensureBegun();
 
     const request = try txn.newRequest();
-    self._engine.clear(self._store_id) catch |err| {
+    self.clearAll() catch |err| {
         log.warn(.storage, "idb clear", .{ .err = err });
         request.setError(err);
     };
     return request;
+}
+
+fn clearAll(self: *IDBObjectStore) !void {
+    try self._engine.clearIndexRecordsForStore(self._store_id);
+    try self._engine.clear(self._store_id);
 }
 
 pub fn count(self: *IDBObjectStore, query: ?js.Value, exec: *Execution) !*IDBRequest {
@@ -138,27 +151,43 @@ pub fn count(self: *IDBObjectStore, query: ?js.Value, exec: *Execution) !*IDBReq
 }
 
 pub fn getAll(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+    return self._getAll(query, count_, .value, exec);
+}
+
+fn _getAll(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, column: Engine.Column, exec: *Execution) !*IDBRequest {
     const txn = self._txn orelse return error.TransactionInactiveError;
     try txn.ensureBegun();
 
-    const local = exec.js.local.?;
-    const arena = exec.call_arena;
-    const bounds = try IDBKeyRange.resolveQuery(arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(exec.call_arena, query, exec);
     const request = try txn.newRequest();
 
-    const values = self._engine.getAllRange(arena, self._store_id, bounds, .value, count_) catch |err| {
+    const arr = self.collectAll(exec, bounds, column, count_) catch |err| {
         log.warn(.storage, "idb getAll", .{ .err = err });
         request.setError(err);
         return request;
     };
-
-    const arr = local.newArray(@intCast(values.len));
-    for (values, 0..) |bytes, i| {
-        const value = try js.Value.deserialize(local, bytes);
-        _ = try arr.set(@intCast(i), value, .{});
-    }
-    try request.setValue(arr.toValue());
+    try request.setValue(arr);
     return request;
+}
+
+// Stream a getAll/getAllKeys result straight into a JS array: .value rows
+// deserialize, .key rows decode — nothing is copied out of sqlite first.
+fn collectAll(self: *IDBObjectStore, exec: *Execution, bounds: Engine.Bounds, column: Engine.Column, count_: ?u32) !js.Value {
+    const local = exec.js.local.?;
+    const arena = exec.call_arena;
+
+    var rows = try self._engine.getAllRangeRows(self._store_id, bounds, column, count_);
+    defer rows.deinit();
+
+    const arr = local.newArray(0);
+    var i: u32 = 0;
+    while (try rows.next()) |row| {
+        const bytes = row.get([]const u8, 0);
+        const value = if (column == .value) try js.Value.deserialize(local, bytes) else try Key.decodeToJs(arena, local, bytes);
+        _ = try arr.set(i, value, .{});
+        i += 1;
+    }
+    return arr.toValue();
 }
 
 pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
@@ -181,26 +210,7 @@ pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
 }
 
 pub fn getAllKeys(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
-    try txn.ensureBegun();
-
-    const arena = exec.call_arena;
-    const bounds = try IDBKeyRange.resolveQuery(arena, query, exec);
-    const request = try txn.newRequest();
-
-    const keys = self._engine.getAllRange(arena, self._store_id, bounds, .key, count_) catch |err| {
-        log.warn(.storage, "idb getAllKeys", .{ .err = err });
-        request.setError(err);
-        return request;
-    };
-
-    const local = exec.js.local.?;
-    const arr = local.newArray(@intCast(keys.len));
-    for (keys, 0..) |bytes, i| {
-        _ = try arr.set(@intCast(i), try Key.decodeToJs(arena, local, bytes), .{});
-    }
-    try request.setValue(arr.toValue());
-    return request;
+    return self._getAll(query, count_, .key, exec);
 }
 
 pub fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
@@ -296,18 +306,157 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
 
     const request = try txn.newRequest();
 
-    const result = switch (kind) {
-        .add => self._engine.add(self._store_id, encoded, serialized.bytes()),
-        .put => self._engine.put(self._store_id, encoded, serialized.bytes()),
-    };
-    result catch |err| {
+    // Record + index rows are atomic: a unique-index violation rolls the record
+    // write back too.
+    try self._engine.savepoint();
+    self.writeRecord(kind, encoded, serialized.bytes(), value, exec) catch |err| {
+        self._engine.rollbackSavepoint();
         log.warn(.storage, "idb write", .{ .err = err, .kind = kind });
         request.setError(err);
         return request;
     };
+    try self._engine.releaseSavepoint();
 
     try request.setValue(key_value);
     return request;
+}
+
+fn writeRecord(self: *IDBObjectStore, kind: WriteKind, key: []const u8, bytes: []const u8, value: js.Value, exec: *Execution) !void {
+    switch (kind) {
+        .add => try self._engine.add(self._store_id, key, bytes),
+        .put => try self._engine.put(self._store_id, key, bytes),
+    }
+    try self.reindex(value, key, exec);
+}
+
+// Used by IDBCursor.update: overwrite the record at `key` and re-index, atomically.
+pub fn writeAt(self: *IDBObjectStore, key: []const u8, value: js.Value, bytes: []const u8, exec: *Execution) !void {
+    try self._engine.savepoint();
+    errdefer self._engine.rollbackSavepoint();
+
+    try self._engine.put(self._store_id, key, bytes);
+    try self.reindex(value, key, exec);
+
+    try self._engine.releaseSavepoint();
+}
+
+// Used by IDBCursor.delete: drop the record at `key` and its index entries.
+pub fn deleteAt(self: *IDBObjectStore, key: []const u8) !void {
+    try self._engine.deleteIndexRecordsForKey(self._store_id, key);
+    try self._engine.deleteRange(self._store_id, Engine.Bounds.point(key));
+}
+
+// Drop a record's old index entries and add fresh ones from `value`.
+fn reindex(self: *IDBObjectStore, value: js.Value, primary_key: []const u8, exec: *Execution) !void {
+    const arena = exec.call_arena;
+    const indexes = try self._engine.indexesForStore(arena, self._store_id);
+    if (indexes.len == 0) {
+        return;
+    }
+
+    var seen: std.ArrayList([]const u8) = .empty;
+    try self._engine.deleteIndexRecordsForKey(self._store_id, primary_key);
+    for (indexes) |idx| {
+        try self.addIndexEntries(arena, &seen, idx.id, idx.unique, idx.multi_entry, idx.key_path, value, primary_key);
+    }
+}
+
+fn addIndexEntries(self: *IDBObjectStore, arena: Allocator, seen: *std.ArrayList([]const u8), index_id: i64, unique: bool, multi_entry: bool, key_path: []const u8, value: js.Value, primary_key: []const u8) !void {
+    const extracted = Key.evaluatePath(value, key_path) orelse return;
+    if (multi_entry and extracted.isArray()) {
+        seen.clearRetainingCapacity();
+
+        // every value of an array is added, but only once (e.g. deduplicated)
+        const arr = extracted.toArray();
+        for (0..arr.len()) |i| {
+            const element = try arr.get(@intCast(i));
+            const encoded = Key.encodeValue(arena, element) catch continue; // skip invalid elements
+            for (seen.items) |s| {
+                if (std.mem.eql(u8, s, encoded)) {
+                    continue;
+                }
+            }
+            try seen.append(arena, encoded);
+            try self._engine.addIndexRecord(index_id, encoded, primary_key, unique);
+        }
+    } else {
+        const encoded = Key.encodeValue(arena, extracted) catch return; // not a valid key -> not indexed
+        try self._engine.addIndexRecord(index_id, encoded, primary_key, unique);
+    }
+}
+
+const CreateIndexOptions = struct {
+    unique: bool = false,
+    multiEntry: bool = false,
+};
+
+// Only callable during an upgrade (versionchange transaction).
+pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8, options: ?CreateIndexOptions, exec: *Execution) !*IDBIndex {
+    const txn = self._txn orelse return error.InvalidStateError;
+    if (txn._mode != .versionchange) {
+        return error.InvalidStateError;
+    }
+    const opts = options orelse CreateIndexOptions{};
+
+    try self._engine.savepoint();
+    errdefer self._engine.rollbackSavepoint();
+
+    const index_id = self._engine.createIndexRow(self._store_id, name, key_path, opts.unique, opts.multiEntry) catch |err| switch (err) {
+        error.Constraint => return error.ConstraintError, // duplicate index name
+        else => return err,
+    };
+
+    const arena = exec.call_arena;
+    const local = exec.js.local.?;
+
+    {
+        // we reach directly in to _engine.conn here to avoid copying the values out
+        // sqlite
+        var rows = try self._engine.conn.rows("select key, value from idb_records where object_store_id = ?1", .{self._store_id});
+        defer rows.deinit();
+
+        var seen: std.ArrayList([]const u8) = .empty;
+        while (try rows.next()) |row| {
+            const value = try js.Value.deserialize(local, row.get([]const u8, 1));
+            try self.addIndexEntries(arena, &seen, index_id, opts.unique, opts.multiEntry, key_path, value, row.get([]const u8, 0));
+        }
+    }
+
+    const owned_name = try exec.dupeString(name);
+    const owned_key_path = try exec.dupeString(key_path);
+    const idb_index = try IDBIndex.init(self, .{
+        .id = index_id,
+        .key_path = owned_key_path,
+        .unique = opts.unique,
+        .multi_entry = opts.multiEntry,
+    }, owned_name, exec);
+    try self._engine.releaseSavepoint();
+    return idb_index;
+}
+
+// Only callable during an upgrade (versionchange transaction).
+pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void {
+    const txn = self._txn orelse return error.InvalidStateError;
+    if (txn._mode != .versionchange) {
+        return error.InvalidStateError;
+    }
+    self._engine.deleteIndexRow(self._store_id, name) catch |err| switch (err) {
+        error.NotFound => return error.NotFoundError,
+        else => return err,
+    };
+}
+
+pub fn index(self: *IDBObjectStore, name: []const u8, exec: *Execution) !*IDBIndex {
+    if (self._txn == null) {
+        return error.InvalidStateError;
+    }
+    const info = (try self._engine.indexInfo(exec.arena, self._store_id, name)) orelse return error.NotFound;
+    const owned_name = try exec.dupeString(name);
+    return IDBIndex.init(self, info, owned_name, exec);
+}
+
+pub fn getIndexNames(self: *IDBObjectStore, exec: *Execution) ![]const []const u8 {
+    return self._engine.indexNames(exec.arena, self._store_id);
 }
 
 pub const JsApi = struct {
@@ -334,4 +483,8 @@ pub const JsApi = struct {
     pub const getAllKeys = bridge.function(IDBObjectStore.getAllKeys, .{ });
     pub const openCursor = bridge.function(IDBObjectStore.openCursor, .{ });
     pub const openKeyCursor = bridge.function(IDBObjectStore.openKeyCursor, .{ });
+    pub const indexNames = bridge.accessor(IDBObjectStore.getIndexNames, null, .{});
+    pub const createIndex = bridge.function(IDBObjectStore.createIndex, .{ });
+    pub const deleteIndex = bridge.function(IDBObjectStore.deleteIndex, .{ });
+    pub const index = bridge.function(IDBObjectStore.index, .{ });
 };

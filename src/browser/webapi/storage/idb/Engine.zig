@@ -34,27 +34,51 @@ pub fn open(path: [:0]const u8) !Engine {
 
     try conn.busyTimeout(1000);
     try conn.exec("pragma journal_mode=wal", .{});
+    try conn.exec("pragma foreign_keys = on", .{});
+
     try conn.exec(
         \\ create table if not exists idb_databases (
         \\   id integer primary key,
         \\   name text not null unique,
         \\   version integer not null
         \\ );
+        \\
         \\ create table if not exists idb_object_stores (
         \\   id integer primary key,
-        \\   database_id integer not null references idb_databases(id),
+        \\   database_id integer not null references idb_databases(id) on delete cascade,
         \\   name text not null,
         \\   key_path text,
         \\   auto_increment integer not null default 0,
         \\   key_generator integer not null default 1,
         \\   unique(database_id, name)
         \\ );
+        \\
         \\ create table if not exists idb_records (
-        \\   object_store_id integer not null references idb_object_stores(id),
+        \\   object_store_id integer not null references idb_object_stores(id) on delete cascade,
         \\   key blob not null,
         \\   value blob not null,
         \\   primary key (object_store_id, key)
         \\ ) without rowid;
+        \\
+        \\ create table if not exists idb_indexes (
+        \\   id integer primary key,
+        \\   object_store_id integer not null references idb_object_stores(id) on delete cascade,
+        \\   name text not null,
+        \\   key_path text not null,
+        \\   is_unique integer not null default 0,
+        \\   multi_entry integer not null default 0,
+        \\   unique(object_store_id, name)
+        \\ );
+        \\
+        \\ create table if not exists idb_index_records (
+        \\   index_id integer not null references idb_indexes(id) on delete cascade,
+        \\   key blob not null,
+        \\   primary_key blob not null,
+        \\   is_unique integer not null,
+        \\   primary key (index_id, key, primary_key)
+        \\ ) without rowid;
+        \\ create unique index if not exists idb_index_unique
+        \\   on idb_index_records(index_id, key) where is_unique = 1;
     , .{});
     return .{ .conn = conn };
 }
@@ -94,17 +118,7 @@ pub fn upsertDatabase(self: *Engine, name: []const u8, version: i64) !i64 {
 }
 
 pub fn deleteDatabase(self: *Engine, name: []const u8) !void {
-    const database_id = (try self.databaseId(name)) orelse return;
-
-    try self.begin();
-    errdefer self.rollback();
-    try self.conn.exec(
-        "delete from idb_records where object_store_id in (select id from idb_object_stores where database_id = ?1)",
-        .{database_id},
-    );
-    try self.conn.exec("delete from idb_object_stores where database_id = ?1", .{database_id});
-    try self.conn.exec("delete from idb_databases where id = ?1", .{database_id});
-    try self.commit();
+    return self.conn.exec("delete from idb_databases where name = ?1", .{name});
 }
 
 pub fn objectStoreId(self: *const Engine, database_id: i64, name: []const u8) !?i64 {
@@ -177,10 +191,15 @@ pub fn createObjectStore(
 }
 
 pub fn deleteObjectStore(self: *Engine, database_id: i64, name: []const u8) !void {
-    const store_id = (try self.objectStoreId(database_id, name)) orelse return error.NotFound;
-    // caller has a transaction open
-    try self.conn.exec("delete from idb_records where object_store_id = ?1", .{store_id});
-    try self.conn.exec("delete from idb_object_stores where id = ?1", .{store_id});
+    // caller has a transaction open; cascade drops records, indexes and index
+    // records.
+    const deleted = try self.conn.scalar(i64,
+        \\ delete from idb_object_stores where database_id = ?1 and name = ?2
+        \\ returning id
+    , .{ database_id, name });
+    if (deleted == null) {
+        return error.NotFound;
+    }
 }
 
 pub fn add(self: *Engine, object_store_id: i64, key: []const u8, value: []const u8) !void {
@@ -208,6 +227,265 @@ pub fn get(self: *const Engine, allocator: Allocator, object_store_id: i64, key:
 
 pub fn clear(self: *Engine, object_store_id: i64) !void {
     return self.conn.exec("delete from idb_records where object_store_id = ?1", .{object_store_id});
+}
+
+pub const IndexInfo = struct {
+    id: i64,
+    key_path: []const u8,
+    unique: bool,
+    multi_entry: bool,
+};
+
+pub fn createIndexRow(self: *Engine, object_store_id: i64, name: []const u8, key_path: []const u8, unique: bool, multi_entry: bool) !i64 {
+    return (try self.conn.scalar(
+        i64,
+        \\ insert into idb_indexes (object_store_id, name, key_path, is_unique, multi_entry)
+        \\ values (?1, ?2, ?3, ?4, ?5) returning id
+    ,
+        .{ object_store_id, name, key_path, unique, multi_entry },
+    )) orelse error.UnknownError;
+}
+
+pub fn deleteIndexRow(self: *Engine, object_store_id: i64, name: []const u8) !void {
+    const deleted = try self.conn.scalar(
+        i64,
+        "delete from idb_indexes where object_store_id = ?1 and name = ?2 returning id",
+        .{ object_store_id, name },
+    );
+    if (deleted == null) {
+        return error.NotFound;
+    }
+}
+
+pub fn indexInfo(self: *const Engine, arena: Allocator, object_store_id: i64, name: []const u8) !?IndexInfo {
+    var row = (try self.conn.row(
+        "select id, key_path, is_unique, multi_entry from idb_indexes where object_store_id = ?1 and name = ?2",
+        .{ object_store_id, name },
+    )) orelse return null;
+    defer row.deinit();
+
+    return .{
+        .id = row.get(i64, 0),
+        .key_path = try arena.dupe(u8, row.get([]const u8, 1)),
+        .unique = row.get(bool, 2),
+        .multi_entry = row.get(bool, 3),
+    };
+}
+
+pub fn indexesForStore(self: *const Engine, arena: Allocator, object_store_id: i64) ![]IndexInfo {
+    var rows = try self.conn.rows(
+        "select id, key_path, is_unique, multi_entry from idb_indexes where object_store_id = ?1",
+        .{object_store_id},
+    );
+    defer rows.deinit();
+
+    var list: std.ArrayList(IndexInfo) = .empty;
+    while (try rows.next()) |row| {
+        try list.append(arena, .{
+            .id = row.get(i64, 0),
+            .key_path = try arena.dupe(u8, row.get([]const u8, 1)),
+            .unique = row.get(bool, 2),
+            .multi_entry = row.get(bool, 3),
+        });
+    }
+    return list.items;
+}
+
+pub fn indexNames(self: *const Engine, arena: Allocator, object_store_id: i64) ![]const []const u8 {
+    var rows = try self.conn.rows(
+        "select name from idb_indexes where object_store_id = ?1 order by name",
+        .{object_store_id},
+    );
+    defer rows.deinit();
+
+    var list: std.ArrayList([]const u8) = .empty;
+    while (try rows.next()) |row| {
+        try list.append(arena, try arena.dupe(u8, row.get([]const u8, 0)));
+    }
+    return list.items;
+}
+
+pub fn addIndexRecord(self: *Engine, index_id: i64, key: []const u8, primary_key: []const u8, unique: bool) !void {
+    return self.conn.exec(
+        "insert into idb_index_records (index_id, key, primary_key, is_unique) values (?1, ?2, ?3, ?4)",
+        .{ index_id, key, primary_key, unique },
+    );
+}
+
+pub fn deleteIndexRecordsForKey(self: *Engine, object_store_id: i64, primary_key: []const u8) !void {
+    return self.conn.exec(
+        \\ delete from idb_index_records
+        \\ where primary_key = ?2 and index_id in (
+        \\   select id from idb_indexes where object_store_id = ?1
+        \\ )
+    , .{ object_store_id, primary_key });
+}
+
+pub fn clearIndexRecordsForStore(self: *Engine, object_store_id: i64) !void {
+    return self.conn.exec(
+        "delete from idb_index_records where index_id in (select id from idb_indexes where object_store_id = ?1)",
+        .{object_store_id},
+    );
+}
+
+// Drop index entries for every record about to be deleted by a ranged delete.
+pub fn deleteIndexRecordsForRange(self: *Engine, object_store_id: i64, b: Bounds) !void {
+    const ops = rangeOps(b);
+    var buf: [400]u8 = undefined;
+    const sql = try std.fmt.bufPrintZ(&buf,
+        \\ delete from idb_index_records where index_id in (
+        \\   select id from idb_indexes where object_store_id = ?1
+        \\ ) and primary_key in (
+        \\   select key from idb_records where object_store_id = ?1 and key {s} ?2 and key {s} ?3
+        \\)
+    , .{ ops.lo, ops.hi });
+
+    return self.conn.exec(sql, .{ object_store_id, b.lower, b.upper });
+}
+
+pub fn savepoint(self: *Engine) !void {
+    return self.conn.exec("savepoint idb_op", .{});
+}
+
+pub fn releaseSavepoint(self: *Engine) !void {
+    return self.conn.exec("release idb_op", .{});
+}
+
+pub fn rollbackSavepoint(self: *Engine) void {
+    self.conn.exec("rollback to idb_op", .{}) catch |err| {
+        log.warn(.storage, "idb savepoint rollback", .{ .err = err, .sqlite = self.conn.lastError() });
+    };
+    self.conn.exec("release idb_op", .{}) catch |err| {
+        log.warn(.storage, "idb savepoint release", .{ .err = err });
+    };
+}
+
+// First record value in an index range (joins back to the store by primary key).
+pub fn indexGetRange(self: *const Engine, arena: Allocator, object_store_id: i64, index_id: i64, b: Bounds) !?[]u8 {
+    const ops = rangeOps(b);
+
+    var buf: [512]u8 = undefined;
+    const sql = try std.fmt.bufPrint(&buf,
+        \\ select r.value
+        \\ from idb_index_records ir
+        \\ join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key
+        \\ where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4 order by ir.key, ir.primary_key
+        \\ limit 1
+    , .{ ops.lo, ops.hi });
+
+    var row = (try self.conn.row(sql, .{ object_store_id, index_id, b.lower, b.upper })) orelse return null;
+    defer row.deinit();
+
+    return try arena.dupe(u8, row.get([]const u8, 0));
+}
+
+// First primary key in an index range.
+pub fn indexGetKeyRange(self: *const Engine, arena: Allocator, index_id: i64, b: Bounds) !?[]u8 {
+    const ops = rangeOps(b);
+    var buf: [320]u8 = undefined;
+    const sql = try std.fmt.bufPrint(&buf,
+        \\ select primary_key
+        \\ from idb_index_records
+        \\ where index_id = ?1 and key {s} ?2 and key {s} ?3
+        \\ order by key, primary_key limit 1
+    , .{ ops.lo, ops.hi });
+
+    var row = (try self.conn.row(sql, .{ index_id, b.lower, b.upper })) orelse return null;
+    defer row.deinit();
+
+    return try arena.dupe(u8, row.get([]const u8, 0));
+}
+
+pub fn indexCountRange(self: *const Engine, index_id: i64, b: Bounds) !i64 {
+    const ops = rangeOps(b);
+    var buf: [320]u8 = undefined;
+    const sql = try std.fmt.bufPrint(&buf,
+        \\ select count(*)
+        \\ from idb_index_records
+        \\ where index_id = ?1 and key {s} ?2 and key {s} ?3
+    , .{ ops.lo, ops.hi });
+
+    return (try self.conn.scalar(i64, sql, .{ index_id, b.lower, b.upper })) orelse 0;
+}
+
+// Open an index getAll/getAllKeys cursor (.value joins the store, .key is the
+// primary key). The JS layer streams rows straight into a JS array.
+pub fn indexGetAllRangeRows(self: *const Engine, object_store_id: i64, index_id: i64, b: Bounds, column: Column, limit_: ?u32) !Sqlite.Rows {
+    const ops = rangeOps(b);
+    const limit: i64 = if (limit_) |c| @intCast(c) else -1;
+    var buf: [512]u8 = undefined;
+
+    if (column == .value) {
+        const sql = try std.fmt.bufPrint(&buf,
+            \\ select r.value
+            \\ from idb_index_records ir
+            \\ join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key
+            \\ where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4
+            \\ order by ir.key, ir.primary_key
+            \\ limit ?5
+        , .{ ops.lo, ops.hi });
+        return self.conn.rows(sql, .{ object_store_id, index_id, b.lower, b.upper, limit });
+    }
+
+    const sql = try std.fmt.bufPrint(&buf,
+        \\ select primary_key
+        \\ from idb_index_records
+        \\ where index_id = ?1 and key {s} ?2 and key {s} ?3
+        \\ order by key, primary_key
+        \\ limit ?4
+    , .{ ops.lo, ops.hi });
+    return self.conn.rows(sql, .{ index_id, b.lower, b.upper, limit });
+}
+
+pub const IndexCursorRecord = struct {
+    key: []u8,
+    primary_key: []u8,
+    value: ?[]u8,
+};
+
+pub fn indexCursorSeek(
+    self: *const Engine,
+    arena: Allocator,
+    object_store_id: i64,
+    index_id: i64,
+    b: Bounds,
+    reverse: bool,
+    from_key: []const u8,
+    from_pk: []const u8,
+    pk_inclusive: bool,
+    with_value: bool,
+    offset: u32,
+) !?IndexCursorRecord {
+    const ops = rangeOps(b);
+    const order = if (reverse) "desc" else "asc";
+    // Position past the current (key, primary_key): a strictly-greater key, or an
+    // equal key with a greater (or, for continuePrimaryKey, >=) primary key.
+    const key_op = if (reverse) "< " else "> ";
+    const pk_op = if (reverse) (if (pk_inclusive) "<= " else "< ") else (if (pk_inclusive) ">= " else "> ");
+
+    var buf: [640]u8 = undefined;
+    const select = if (with_value)
+        "select ir.key, ir.primary_key, r.value from idb_index_records ir join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key"
+    else
+        "select ir.key, ir.primary_key from idb_index_records ir";
+
+    const sql = try std.fmt.bufPrint(
+        &buf,
+        \\ {s} where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4 and (ir.key {s}?5 or (ir.key = ?5 and ir.primary_key {s}?6))
+        \\ order by ir.key {s}, ir.primary_key {s}
+        \\ limit 1 offset ?7
+    ,
+        .{ select, ops.lo, ops.hi, key_op, pk_op, order, order },
+    );
+
+    var row = (try self.conn.row(sql, .{ object_store_id, index_id, b.lower, b.upper, from_key, from_pk, @as(i64, offset) })) orelse return null;
+    defer row.deinit();
+
+    return .{
+        .key = try arena.dupe(u8, row.get([]const u8, 0)),
+        .primary_key = try arena.dupe(u8, row.get([]const u8, 1)),
+        .value = if (with_value) try arena.dupe(u8, row.get([]const u8, 2)) else null,
+    };
 }
 
 pub const Bounds = struct {
@@ -284,20 +562,35 @@ fn rangeSql(buf: []u8, head: []const u8, b: Bounds, tail: []const u8) ![:0]u8 {
     );
 }
 
+// A point range stores empty operators; index queries want a closed range.
+fn rangeOps(b: Bounds) struct { lo: []const u8, hi: []const u8 } {
+    return .{
+        .lo = if (b.is_point) ">= " else b.lower_op,
+        .hi = if (b.is_point) "<= " else b.upper_op,
+    };
+}
+
 // What a ranged getAll/getAllKeys returns: the value or key column.
 pub const Column = enum {
     value,
     key,
 };
 
-pub fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) ![]const []u8 {
+// Open a getAll/getAllKeys cursor. The JS layer streams rows straight into a JS
+// array, avoiding a copy of the whole result set out of sqlite. (The SQL text is
+// copied into the prepared statement, so the stack `buf` can be discarded.)
+pub fn getAllRangeRows(self: *const Engine, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) !Sqlite.Rows {
     var buf: [256]u8 = undefined;
     const head = if (column == .value) "select value" else "select key";
     const sql = try rangeSql(&buf, head, b, " order by key limit ?4");
+
     // SQLite treats a negative LIMIT as "no limit".
     const limit: i64 = if (limit_) |c| @intCast(c) else -1;
+    return self.conn.rows(sql, .{ object_store_id, b.lower, b.upper, limit });
+}
 
-    var rows = try self.conn.rows(sql, .{ object_store_id, b.lower, b.upper, limit });
+pub fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) ![]const []u8 {
+    var rows = try self.getAllRangeRows(object_store_id, b, column, limit_);
     defer rows.deinit();
 
     var list: std.ArrayList([]u8) = .empty;

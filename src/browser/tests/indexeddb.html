@@ -647,18 +647,21 @@
     open.onsuccess = (e) => {
         const store = e.target.result.transaction("s", "readonly").objectStore("s");
         const seen = [];
+        let sourceIsStore = null;
         const req = store.openCursor();
         req.onsuccess = () => {
             const cursor = req.result;
             if (cursor) {
+                if (sourceIsStore === null) sourceIsStore = cursor.source === store;
                 seen.push([cursor.key, cursor.primaryKey, cursor.value, cursor.direction]);
                 cursor.continue();
             } else {
-                state.resolve(seen);
+                state.resolve({ seen, sourceIsStore });
             }
         };
     };
-    await state.done((seen) => {
+    await state.done((got) => {
+        const seen = got.seen;
         testing.expectEqual(3, seen.length);
         testing.expectEqual(1, seen[0][0]); // key
         testing.expectEqual(1, seen[0][1]); // primaryKey == key for object store
@@ -666,6 +669,7 @@
         testing.expectEqual("next", seen[0][3]); // direction
         testing.expectEqual(3, seen[2][0]);
         testing.expectEqual("c", seen[2][2]);
+        testing.expectEqual(true, got.sourceIsStore); // cursor.source === the store handle
     });
 }
 </script>
@@ -770,6 +774,144 @@
         testing.expectEqual(1, seen[0][0]);
         testing.expectEqual(undefined, seen[0][1]); // key cursor has no value
     });
+}
+</script>
+
+<!-- createIndex during upgrade, populated from existing data; index get/getKey/
+     getAll/count look records up by a non-primary property. -->
+<script id="index_basic" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("idx-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("people", { keyPath: "id" });
+        s.add({ id: 1, age: 30, name: "Ann" });   // seeded before the index exists
+        const idx = s.createIndex("byAge", "age");
+        testing.expectEqual("byAge", idx.name);
+        testing.expectEqual("age", idx.keyPath);
+        testing.expectEqual(false, idx.unique);
+        s.add({ id: 2, age: 25, name: "Bob" });    // indexed on insert
+        s.add({ id: 3, age: 25, name: "Cy" });
+    };
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("people").objectStore("people");
+        testing.expectEqual("byAge", store.indexNames[0]);
+        const idx = store.index("byAge");
+
+        const g = idx.get(25);        // first record (by primaryKey) with age 25
+        const gk = idx.getKey(25);    // its primary key
+        const all = idx.getAll(25);   // all records with age 25
+        const cnt = idx.count();      // total index entries
+        cnt.onsuccess = () => state.resolve({
+            got: g.result, key: gk.result, all: all.result, count: cnt.result,
+        });
+    };
+    await state.done((r) => {
+        testing.expectEqual("Bob", r.got.name);  // lowest primaryKey among age 25
+        testing.expectEqual(2, r.key);
+        testing.expectEqual(2, r.all.length);
+        testing.expectEqual(3, r.count);
+    });
+}
+</script>
+
+<!-- A unique index rejects a duplicate key with ConstraintError, and the failed
+     write leaves the store unchanged (savepoint rollback). -->
+<script id="index_unique" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("idxu-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("u", { keyPath: "id" });
+        s.createIndex("email", "email", { unique: true });
+        s.add({ id: 1, email: "a@x.com" });
+    };
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("u", "readwrite").objectStore("u");
+        const dup = store.add({ id: 2, email: "a@x.com" }); // collides on the unique index
+        dup.onerror = (ev) => {
+            ev.preventDefault();
+            const c = store.count();
+            c.onsuccess = () => state.resolve({ err: dup.error.name, count: c.result });
+        };
+    };
+    await state.done((r) => {
+        testing.expectEqual("ConstraintError", r.err);
+        testing.expectEqual(1, r.count); // id:2 was rolled back
+    });
+}
+</script>
+
+<!-- An index cursor exposes key (index key), primaryKey (store key) and value,
+     in index-key order; multiEntry indexes one entry per array element. -->
+<script id="index_cursor_multientry" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("idxc-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("posts", { keyPath: "id" });
+        s.createIndex("tags", "tags", { multiEntry: true });
+        s.add({ id: 10, tags: ["a", "b"] });
+        s.add({ id: 20, tags: ["b", "c"] });
+    };
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("posts").objectStore("posts");
+        const idx = store.index("tags");
+
+        // Cursor over the whole index: (indexKey, primaryKey) pairs.
+        const seen = [];
+        const cur = idx.openCursor();
+        cur.onsuccess = () => {
+            const c = cur.result;
+            if (c) { seen.push([c.key, c.primaryKey, c.value.id]); c.continue(); return; }
+            // "b" appears in both posts.
+            const bPosts = idx.getAll("b");
+            bPosts.onsuccess = () => state.resolve({ seen, bCount: bPosts.result.length });
+        };
+    };
+    await state.done((r) => {
+        // tags expand to: a->10, b->10, b->20, c->20 (index-key then primaryKey order)
+        testing.expectEqual(4, r.seen.length);
+        testing.expectEqual("a", r.seen[0][0]);
+        testing.expectEqual(10, r.seen[0][1]);
+        testing.expectEqual("b", r.seen[1][0]);
+        testing.expectEqual(10, r.seen[1][1]);
+        testing.expectEqual(20, r.seen[2][1]);
+        testing.expectEqual(2, r.bCount);
+    });
+}
+</script>
+
+<!-- deleteDatabase removes index data too: re-creating a unique index after a
+     delete must not collide with orphaned index records (sqlite reuses ids). -->
+<script id="index_delete_db_isolation" type=module>
+{
+    const state = await testing.async();
+    const open1 = indexedDB.open("idx-iso-db", 1);
+    open1.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("s", { keyPath: "id" });
+        s.createIndex("email", "email", { unique: true });
+        s.add({ id: 1, email: "a@x.com" });
+    };
+    open1.onsuccess = (e) => {
+        e.target.result.close();
+        const del = indexedDB.deleteDatabase("idx-iso-db");
+        del.onsuccess = () => {
+            const open2 = indexedDB.open("idx-iso-db", 1);
+            open2.onupgradeneeded = (e2) => {
+                const s = e2.target.result.createObjectStore("s", { keyPath: "id" });
+                s.createIndex("email", "email", { unique: true });
+            };
+            open2.onsuccess = (e2) => {
+                const store = e2.target.result.transaction("s", "readwrite").objectStore("s");
+                // Same email as the deleted db — must succeed, not hit a stale index row.
+                const req = store.add({ id: 1, email: "a@x.com" });
+                req.onsuccess = () => state.resolve({ ok: true });
+                req.onerror = () => state.resolve({ ok: false, err: req.error.name });
+            };
+        };
+    };
+    await state.done((r) => testing.expectEqual(true, r.ok));
 }
 </script>
 
