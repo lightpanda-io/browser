@@ -36,9 +36,6 @@ writer: std.Io.Writer.Allocating,
 iid: ?[36]u8 = null,
 run_mode: Config.RunMode = .serve,
 interactive: bool = false,
-
-// Per run id
-sid: [16]u8,
 proxy: bool,
 
 // Header is sent before the first message, once sent, it isn't sent again
@@ -67,14 +64,10 @@ pending: std.ArrayList(telemetry.Event) = .empty,
 dropped: u32 = 0,
 
 pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode, interactive: bool) !void {
-    var raw_sid: [8]u8 = undefined;
-    std.crypto.random.bytes(&raw_sid);
-
     self.* = .{
         .iid = iid,
         .run_mode = run_mode,
         .interactive = interactive,
-        .sid = std.fmt.bytesToHex(raw_sid, .lower),
         .proxy = app.config.httpProxy() != null,
         .allocator = app.allocator,
         .network = &app.network,
@@ -256,14 +249,15 @@ fn _flush(self: *LightPanda, conn: *http.Connection) !void {
 }
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
-    return self.writeLine(&EventRow{ .sid = &self.sid, .event = event });
+    return self.writeLine(&EventRow{
+        .iid = if (self.iid) |*iid| iid else "00000000-0000-0000-0000-000000000000",
+        .event = event,
+    });
 }
 
 fn writeHeader(self: *LightPanda) !bool {
-    const iid: ?[]const u8 = if (self.iid) |*id| id else null;
     return self.writeLine(&Header{
-        .sid = &self.sid,
-        .iid = iid,
+        .iid = if (self.iid) |*iid| iid else "00000000-0000-0000-0000-000000000000",
         .mode = self.run_mode,
         .interactive = self.interactive,
         .proxy = self.proxy,
@@ -283,69 +277,30 @@ fn writeLine(self: *LightPanda, value: anytype) !bool {
     return true;
 }
 
-const Header = struct {
-    sid: []const u8,
-    iid: ?[]const u8,
-    mode: Config.RunMode,
-    interactive: bool,
-    proxy: bool,
-
-    pub fn jsonStringify(self: *const Header, writer: anytype) !void {
-        try writer.beginObject();
-
-        try writer.objectField("sid");
-        try writer.write(self.sid);
-
-        if (self.iid) |iid| {
-            try writer.objectField("iid");
-            try writer.write(iid);
-        }
-
-        try writer.objectField("mode");
-        // Special case: when running agent mode in non-interactive, we send a
-        // special running mode.
-        if (self.mode == .agent and self.interactive == false) {
-            try writer.write("agent_replay");
-        } else {
-            try writer.write(self.mode);
-        }
-
-        try writer.objectField("os");
-        try writer.write(builtin.os.tag);
-
-        try writer.objectField("arch");
-        try writer.write(builtin.cpu.arch);
-
-        try writer.objectField("version");
-        try writer.write(build_config.version);
-
-        try writer.objectField("proxy");
-        try writer.write(self.proxy);
-
-        try writer.endObject();
-    }
-};
-
 const EventRow = struct {
-    sid: []const u8,
+    iid: []const u8,
     event: telemetry.Event,
 
     pub fn jsonStringify(self: *const EventRow, writer: anytype) !void {
         try writer.beginArray();
-        try writer.write(self.sid);
+        try writer.write(self.iid);
         switch (self.event) {
-            .run => try writer.write("run"),
+            .run => try writer.write("R"),
             .navigate => |n| {
-                try writer.write("nav");
-                try writer.write(n.tls);
-                try writer.write(n.context);
+                try writer.write("N");
+                try writer.write(@as(u8, if (n.tls) 1 else 0));
+                try writer.write(switch (n.context) {
+                    .iframe => "I",
+                    .popup => "O",
+                    .page => "P",
+                });
             },
             .buffer_overflow => |b| {
-                try writer.write("bof");
+                try writer.write("B");
                 try writer.write(b.dropped);
             },
             .llm => |l| {
-                try writer.write("llm");
+                try writer.write("L");
                 try writer.write(l.provider);
                 try writer.write(l.model);
             },
@@ -354,42 +309,64 @@ const EventRow = struct {
     }
 };
 
-const testing = @import("../testing.zig");
+const Header = struct {
+    iid: []const u8,
+    mode: Config.RunMode,
+    interactive: bool,
+    proxy: bool,
 
+    pub fn jsonStringify(self: *const Header, writer: anytype) !void {
+        try writer.beginArray();
+        try writer.write(self.iid);
+        try writer.write("H");
+        if (self.mode == .agent and self.interactive == false) {
+            try writer.write("agent_replay");
+        } else {
+            try writer.write(self.mode);
+        }
+        try writer.write(@as(u8, if (self.proxy) 1 else 0));
+        try writer.write(builtin.os.tag);
+        try writer.write(builtin.cpu.arch);
+        try writer.write(build_config.version);
+        try writer.endArray();
+    }
+};
+
+const testing = @import("../testing.zig");
 test "Telemetry: event row wire format" {
     const Case = struct { event: telemetry.Event, expected: []const u8 };
     const cases = [_]Case{
-        .{ .event = .{ .run = {} }, .expected = "[\"sid0\",\"run\"]" },
+        .{ .event = .{ .run = {} }, .expected = "[\"sid0\",\"R\"]" },
         .{
             .event = .{ .navigate = .{ .tls = true, .context = .page } },
-            .expected = "[\"sid0\",\"nav\",true,\"page\"]",
+            .expected = "[\"sid0\",\"N\",1,\"P\"]",
         },
         .{
             .event = .{ .navigate = .{ .tls = false, .context = .popup } },
-            .expected = "[\"sid0\",\"nav\",false,\"popup\"]",
+            .expected = "[\"sid0\",\"N\",0,\"O\"]",
         },
         .{
             .event = .{ .navigate = .{ .tls = true, .context = .iframe } },
-            .expected = "[\"sid0\",\"nav\",true,\"iframe\"]",
+            .expected = "[\"sid0\",\"N\",1,\"I\"]",
         },
         .{
             .event = .{ .buffer_overflow = .{ .dropped = 42 } },
-            .expected = "[\"sid0\",\"bof\",42]",
+            .expected = "[\"sid0\",\"B\",42]",
         },
         .{
             .event = .{ .llm = .{ .provider = "anthropic", .model = .wrap("claude") } },
-            .expected = "[\"sid0\",\"llm\",\"anthropic\",\"claude\"]",
+            .expected = "[\"sid0\",\"L\",\"anthropic\",\"claude\"]",
         },
         .{
             .event = .{ .llm = .{ .provider = "nollm", .model = null } },
-            .expected = "[\"sid0\",\"llm\",\"nollm\",null]",
+            .expected = "[\"sid0\",\"L\",\"nollm\",null]",
         },
     };
 
     for (cases) |case| {
         var w = std.Io.Writer.Allocating.init(testing.allocator);
         defer w.deinit();
-        try std.json.Stringify.value(&EventRow{ .sid = "sid0", .event = case.event }, .{}, &w.writer);
+        try std.json.Stringify.value(&EventRow{ .iid = "sid0", .event = case.event }, .{}, &w.writer);
         try testing.expectEqual(case.expected, w.written());
     }
 }
@@ -399,7 +376,6 @@ test "Telemetry: header wire format" {
     defer w.deinit();
 
     const header = Header{
-        .sid = "sid0",
         .iid = "the-iid",
         .mode = .serve,
         .interactive = false,
@@ -407,7 +383,8 @@ test "Telemetry: header wire format" {
     };
     try std.json.Stringify.value(&header, .{}, &w.writer);
 
-    const out = w.written();
-    try testing.expectEqual(true, std.mem.startsWith(u8, out, "{\"sid\":\"sid0\",\"iid\":\"the-iid\",\"mode\":\"serve\","));
-    try testing.expectEqual(true, std.mem.endsWith(u8, out, ",\"proxy\":true}"));
+    const expected = try std.fmt.allocPrint(testing.allocator, "[\"the-iid\",\"H\",\"serve\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ @tagName(builtin.os.tag), @tagName(builtin.cpu.arch), build_config.version });
+    defer testing.allocator.free(expected);
+
+    try testing.expectEqual(expected, w.written());
 }
