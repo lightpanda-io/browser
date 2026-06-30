@@ -198,3 +198,30 @@
   testing.expectEqual('1', divStyle.opacity);
 }
 </script>
+
+<script id="computedStyleInline">
+{
+  const div = document.createElement('div');
+  div.style.cssText = 'text-transform: uppercase; font-weight: 700; color: rgb(1, 2, 3)';
+  document.body.appendChild(div);
+
+  const cs = window.getComputedStyle(div);
+  testing.expectEqual('uppercase', cs.getPropertyValue('text-transform'));
+  testing.expectEqual('700', cs.getPropertyValue('font-weight'));
+  testing.expectEqual('rgb(1, 2, 3)', cs.getPropertyValue('color'));
+  testing.expectEqual('rgb(1, 2, 3)', div.style.getPropertyValue('color'));
+  testing.expectEqual('', cs.getPropertyValue('letter-spacing'));
+
+  const plainDiv = document.createElement('div');
+  document.body.appendChild(plainDiv);
+  testing.expectEqual('block', window.getComputedStyle(plainDiv).getPropertyValue('display'));
+
+  // A normal declaration must not override an earlier !important one, and the
+  // computed and inline (el.style) paths must agree on the resolved value.
+  const impDiv = document.createElement('div');
+  impDiv.setAttribute('style', 'color: red !important; color: blue');
+  document.body.appendChild(impDiv);
+  testing.expectEqual('red', window.getComputedStyle(impDiv).getPropertyValue('color'));
+  testing.expectEqual('red', impDiv.style.getPropertyValue('color'));
+}
+</script>

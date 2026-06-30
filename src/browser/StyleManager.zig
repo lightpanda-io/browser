@@ -875,6 +875,15 @@ fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*
     return style.asCSSStyleDeclaration().findProperty(property_name);
 }
 
+/// Resolved value of an element's inline `style=` declaration for `property_name`,
+/// or null when the element has no such declaration. Reads the element's parsed
+/// inline style (the same source `el.style` exposes), so `getComputedStyle` and
+/// `el.style` agree on inline values instead of resolving them independently.
+pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+    const property = getInlineStyleProperty(el, property_name, self.frame) orelse return null;
+    return property._value.str();
+}
+
 const testing = @import("../testing.zig");
 test "StyleManager: computeSpecificity: element selector" {
     // div -> (0, 0, 1)

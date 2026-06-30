@@ -49,7 +49,7 @@ pub fn init(element: ?*Element, is_computed: bool, frame: *Frame) !*CSSStyleDecl
             if (el.getAttributeSafe(comptime .wrap("style"))) |attr_value| {
                 var it = CssParser.parseDeclarationsList(attr_value);
                 while (it.next()) |declaration| {
-                    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
+                    try self.applyParsedDeclaration(declaration, frame);
                 }
             }
         }
@@ -96,6 +96,11 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     const prop = self.findProperty(wrapped) orelse {
         // Only return default values for computed styles
         if (self._is_computed) {
+            if (self._element) |element| {
+                // Resolve inline `style=` declarations through the element's
+                // parsed inline style, so computed values match `el.style`.
+                if (frame._style_manager.inlineStyleValue(element, wrapped)) |value| return value;
+            }
             return getDefaultPropertyValue(self, wrapped);
         }
         return "";
@@ -122,6 +127,19 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
     try self.setPropertyImpl(property_name, value, important, frame);
 
     try self.syncStyleAttribute(frame);
+}
+
+/// Apply one declaration parsed from a `style=` block. Unlike the imperative
+/// setProperty path, within a single declaration block a normal declaration must
+/// not override an earlier !important one (CSS cascade precedence).
+fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
+    if (!declaration.important) {
+        const normalized = normalizePropertyName(declaration.name, &frame.buf);
+        if (self.findProperty(.wrap(normalized))) |existing| {
+            if (existing._important) return;
+        }
+    }
+    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
 }
 
 fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, frame: *Frame) !void {
@@ -207,7 +225,7 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !
     // Parse and set new properties
     var it = CssParser.parseDeclarationsList(text);
     while (it.next()) |declaration| {
-        try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
+        try self.applyParsedDeclaration(declaration, frame);
     }
     try self.syncStyleAttribute(frame);
 }
