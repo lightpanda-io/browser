@@ -307,6 +307,49 @@ pub fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, 
     return list.items;
 }
 
+pub const CursorRecord = struct {
+    key: []u8,
+    // null for a key-only cursor (the value column isn't selected or duped).
+    value: ?[]u8,
+};
+
+// Seek a single record for a cursor: within `b`, in `reverse` order or not,
+// positioned by `from_op ?4` (e.g. "> " last_key) and skipping `offset` matches
+// (for advance). `from_key` of the min/max sentinel makes the position clause a
+// no-op for the first step. `with_value` is false for openKeyCursor, which skips
+// the (potentially large) value column entirely.
+pub fn cursorSeek(
+    self: *const Engine,
+    arena: Allocator,
+    object_store_id: i64,
+    b: Bounds,
+    reverse: bool,
+    from_op: []const u8,
+    from_key: []const u8,
+    offset: u32,
+    with_value: bool,
+) !?CursorRecord {
+    // A point range stores its operators empty; a cursor still wants a closed
+    // range over the single key.
+    const lower_op = if (b.is_point) ">= " else b.lower_op;
+    const upper_op = if (b.is_point) "<= " else b.upper_op;
+    const order = if (reverse) "desc" else "asc";
+
+    var buf: [320]u8 = undefined;
+    const sql = try std.fmt.bufPrint(
+        &buf,
+        "{s} from idb_records where object_store_id = ?1 and key {s} ?2 and key {s} ?3 and key {s} ?4 order by key {s} limit 1 offset ?5",
+        .{ if (with_value) "select key, value" else "select key", lower_op, upper_op, from_op, order },
+    );
+
+    var row = (try self.conn.row(sql, .{ object_store_id, b.lower, b.upper, from_key, @as(i64, offset) })) orelse return null;
+    defer row.deinit();
+    return .{
+        .key = try arena.dupe(u8, row.get([]const u8, 0)),
+        .value = if (with_value) try arena.dupe(u8, row.get([]const u8, 1)) else null,
+    };
+}
+
 const testing = @import("../../../../testing.zig");
 test "IDB - Engine: ranged getAll/count honour open and closed bounds" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);

@@ -632,6 +632,147 @@
 }
 </script>
 
+<!-- A forward cursor walks every record in key order; key/value/primaryKey are
+     exposed and continue() advances it. -->
+<script id="cursor_forward" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("cursor-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("s");
+        s.add("a", 1);
+        s.add("b", 2);
+        s.add("c", 3);
+    };
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("s", "readonly").objectStore("s");
+        const seen = [];
+        const req = store.openCursor();
+        req.onsuccess = () => {
+            const cursor = req.result;
+            if (cursor) {
+                seen.push([cursor.key, cursor.primaryKey, cursor.value, cursor.direction]);
+                cursor.continue();
+            } else {
+                state.resolve(seen);
+            }
+        };
+    };
+    await state.done((seen) => {
+        testing.expectEqual(3, seen.length);
+        testing.expectEqual(1, seen[0][0]); // key
+        testing.expectEqual(1, seen[0][1]); // primaryKey == key for object store
+        testing.expectEqual("a", seen[0][2]); // value
+        testing.expectEqual("next", seen[0][3]); // direction
+        testing.expectEqual(3, seen[2][0]);
+        testing.expectEqual("c", seen[2][2]);
+    });
+}
+</script>
+
+<!-- A "prev" cursor walks in reverse; a range clamps it; continue(key) jumps. -->
+<script id="cursor_prev_and_range" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("cursor2-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("s");
+        for (let i = 1; i <= 5; i++) s.add("v" + i, i);
+    };
+    open.onsuccess = (e) => {
+        // Both cursors share one transaction (a new transaction can't begin
+        // while this one is still draining — single active txn per connection).
+        const store = e.target.result.transaction("s").objectStore("s");
+        const reverse = [];
+        const r1 = store.openCursor(null, "prev");
+        r1.onsuccess = () => {
+            const c = r1.result;
+            if (c) { reverse.push(c.key); c.continue(); return; }
+
+            // Range [2,4], then continue(4) to jump from 2 straight to 4.
+            const jumped = [];
+            const r2 = store.openCursor(IDBKeyRange.bound(2, 4));
+            r2.onsuccess = () => {
+                const c2 = r2.result;
+                if (!c2) { state.resolve({ reverse, jumped }); return; }
+                jumped.push(c2.key);
+                if (c2.key === 2) c2.continue(4); else c2.continue();
+            };
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual([5, 4, 3, 2, 1].join(), got.reverse.join());
+        testing.expectEqual([2, 4].join(), got.jumped.join()); // skipped 3 via continue(4)
+    });
+}
+</script>
+
+<!-- advance(n) skips records; update()/delete() mutate at the cursor. -->
+<script id="cursor_advance_update_delete" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("cursor3-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("s");
+        for (let i = 1; i <= 4; i++) s.add("v" + i, i);
+    };
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction("s", "readwrite");
+        const store = tx.objectStore("s");
+
+        // advance(2) from the start lands on key 3; update it, then delete key 4.
+        const req = store.openCursor();
+        let advanced = false;
+        req.onsuccess = () => {
+            const c = req.result;
+            if (!c) return;
+            if (!advanced) { advanced = true; c.advance(2); return; }
+            if (c.key === 3) { c.update("V3"); c.continue(); return; }
+            if (c.key === 4) { c.delete(); c.continue(); return; }
+        };
+        tx.oncomplete = () => {
+            const store2 = db.transaction("s", "readonly").objectStore("s");
+            const all = store2.getAll();
+            const keys = store2.getAllKeys();
+            keys.onsuccess = () => state.resolve({ all: all.result, keys: keys.result });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual([1, 2, 3].join(), got.keys.join()); // key 4 deleted
+        testing.expectEqual("V3", got.all[2]); // key 3 updated
+    });
+}
+</script>
+
+<!-- openKeyCursor yields keys without values. -->
+<script id="key_cursor" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("keycursor-db", 1);
+    open.onupgradeneeded = (e) => {
+        const s = e.target.result.createObjectStore("s");
+        s.add("a", 1);
+        s.add("b", 2);
+    };
+    open.onsuccess = (e) => {
+        const store = e.target.result.transaction("s").objectStore("s");
+        const req = store.openKeyCursor();
+        const seen = [];
+        req.onsuccess = () => {
+            const c = req.result;
+            if (c) { seen.push([c.key, c.value]); c.continue(); }
+            else state.resolve(seen);
+        };
+    };
+    await state.done((seen) => {
+        testing.expectEqual(2, seen.length);
+        testing.expectEqual(1, seen[0][0]);
+        testing.expectEqual(undefined, seen[0][1]); // key cursor has no value
+    });
+}
+</script>
+
 <!-- clear() empties the store; commit() settles the transaction explicitly. -->
 <script id="clear_and_commit" type=module>
 {

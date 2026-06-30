@@ -171,8 +171,12 @@ pub fn ensureBegun(self: *IDBTransaction) !void {
 pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
     const request = try IDBRequest.init(self._exec);
     request._txn = self;
-    try self._requests.append(self._exec.arena, request);
+    try self.enqueue(request);
     return request;
+}
+
+pub fn enqueue(self: *IDBTransaction, request: *IDBRequest) !void {
+    try self._requests.append(self._exec.arena, request);
 }
 
 pub fn objectStore(self: *IDBTransaction, name: []const u8, exec: *Execution) !*IDBObjectStore {

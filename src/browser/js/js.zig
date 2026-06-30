@@ -329,6 +329,7 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                     // but this can never be valid.
                     @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
                 },
+                Undefined => return isolate.initUndefined(),
                 inline String, BigInt, Integer, Number, Value, Object => return value.handle,
                 else => {},
             }

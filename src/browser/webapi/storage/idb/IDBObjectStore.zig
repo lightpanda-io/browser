@@ -22,6 +22,7 @@ const js = @import("../../../js/js.zig");
 
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
+const IDBCursor = @import("IDBCursor.zig");
 const IDBRequest = @import("IDBRequest.zig");
 const IDBKeyRange = @import("IDBKeyRange.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
@@ -85,7 +86,7 @@ pub fn get(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReques
     const b = bytes orelse return request;
 
     const value = try js.Value.deserialize(exec.js.local.?, b);
-    try request.setValueResult(value);
+    try request.setValue(value);
     return request;
 }
 
@@ -132,7 +133,7 @@ pub fn count(self: *IDBObjectStore, query: ?js.Value, exec: *Execution) !*IDBReq
         request.setError(err);
         return request;
     };
-    try request.setValueResult(try exec.js.local.?.zigValueToJs(n, .{}));
+    try request.setValue(try exec.js.local.?.zigValueToJs(n, .{}));
     return request;
 }
 
@@ -156,7 +157,7 @@ pub fn getAll(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *Exec
         const value = try js.Value.deserialize(local, bytes);
         _ = try arr.set(@intCast(i), value, .{});
     }
-    try request.setValueResult(arr.toValue());
+    try request.setValue(arr.toValue());
     return request;
 }
 
@@ -175,7 +176,7 @@ pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
     };
 
     const bytes = found orelse return request; // no record -> undefined
-    try request.setValueResult(try Key.decodeToJs(arena, exec.js.local.?, bytes));
+    try request.setValue(try Key.decodeToJs(arena, exec.js.local.?, bytes));
     return request;
 }
 
@@ -198,8 +199,18 @@ pub fn getAllKeys(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *
     for (keys, 0..) |bytes, i| {
         _ = try arr.set(@intCast(i), try Key.decodeToJs(arena, local, bytes), .{});
     }
-    try request.setValueResult(arr.toValue());
+    try request.setValue(arr.toValue());
     return request;
+}
+
+pub fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
+    return IDBCursor.open(self, bounds, direction orelse .next, false, exec);
+}
+
+pub fn openKeyCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
+    return IDBCursor.open(self, bounds, direction orelse .next, true, exec);
 }
 
 pub fn getName(self: *const IDBObjectStore) []const u8 {
@@ -295,7 +306,7 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
         return request;
     };
 
-    try request.setValueResult(key_value);
+    try request.setValue(key_value);
     return request;
 }
 
@@ -321,4 +332,6 @@ pub const JsApi = struct {
     pub const count = bridge.function(IDBObjectStore.count, .{ .dom_exception = true });
     pub const getAll = bridge.function(IDBObjectStore.getAll, .{ .dom_exception = true });
     pub const getAllKeys = bridge.function(IDBObjectStore.getAllKeys, .{ .dom_exception = true });
+    pub const openCursor = bridge.function(IDBObjectStore.openCursor, .{ .dom_exception = true });
+    pub const openKeyCursor = bridge.function(IDBObjectStore.openKeyCursor, .{ .dom_exception = true });
 };
