@@ -96,7 +96,7 @@ const script_skill =
     \\- No `window`, `document`, DOM, `localStorage` — read pages with `page.extract(...)`, run page-side JS only via `page.evaluate("...")`.
     \\- No `require`, `process`, `fs`, npm. Standard ECMAScript built-ins only (`JSON`, `Map`, template literals, …).
     \\- `page.goto(...)` is **async — always `await` it**. Page methods are **synchronous**: `const data = page.extract({...})`, never `await page.extract(...)`. The script body runs as an async function, so top-level `await` is allowed.
-    \\- **Re-navigating reuses the same page**: `await page.goto(url2)` keeps `page` valid and points it at the new URL. Work through one page at a time and read it before navigating away.
+    \\- **Re-navigating reuses the same page**: `await page.goto(url2)` keeps `page` valid and points it at the new URL, discarding the old page — read it before navigating away. Independent URLs don't share a page: make a `new Page()` for each and load them in parallel (fan-out, best practice 2).
     \\- Page `evaluate("...")` cannot see script variables — interpolate values into the string. Script code cannot see page variables.
     \\- Variables persist across navigations within one run, so cross-page aggregation is plain JS.
     \\- **`return <value>` is the script's output**, printed automatically (objects/arrays as JSON). End with `return page.extract({...});` or `return results;`. A bare trailing expression is NOT printed; neither is `console.log(JSON.stringify(...))`.
@@ -107,7 +107,7 @@ const script_skill =
     \\
     \\| Call | Notes |
     \\|------|-------|
-    \\| `new Page()` | Makes a page object. No navigation yet — call `page.goto(url)` before any other method. |
+    \\| `new Page()` | Makes a page object. No navigation yet — call `page.goto(url)` before any other method. Make several to navigate in parallel (fan-out, best practice 2). |
     \\| `await page.goto(url[, { timeout }])` | **Async — must be `await`ed.** Navigates the page (re-navigating reuses the same object). Waits for `load`. Default timeout 10000 ms. Rejects on navigation failure; a **timeout does NOT reject** (the page may still be usable). |
     \\| `page.close()` | Marks the page done; later method calls on it error. The page is otherwise reclaimed at script end. |
     \\| `page.extract(schema)` | The only primitive returning a real JS value (object/array). See schema below. |
@@ -152,18 +152,19 @@ const script_skill =
     \\## Best practices
     \\
     \\1. **Navigate, settle, read.** After `await page.goto` on a dynamic page (feeds, search results, comment threads), call `page.waitForState("networkidle")` or `page.waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
-    \\2. **List-to-detail: read the list, then walk it.** Extract the list of links, then for each item `await page.goto(item.url)` and `page.extract(...)`, assembling plain JS objects — read each detail page before navigating to the next:
+    \\2. **List-to-detail — fan out independent pages.** Extract the list, then open one page per item and start every navigation together so the detail pages load in parallel instead of one-after-another:
     \\   ```js
-    \\   const page = new Page();
-    \\   await page.goto(listUrl);
-    \\   const { items } = page.extract({ items: [{ selector: "a.row", fields: { url: { attr: "href" } } }] });
-    \\   const details = [];
-    \\   for (const it of items) {
-    \\     await page.goto(it.url);
-    \\     details.push({ ...it, ...page.extract({ /* schema */ }) });
-    \\   }
-    \\   return details;
+    \\   const list = new Page();
+    \\   await list.goto(listUrl);
+    \\   const { items } = list.extract({ items: [{ selector: "a.row", fields: { url: { attr: "href" } } }] });
+    \\
+    \\   const pages = items.map(() => new Page());
+    \\   await Promise.all(pages.map((p, i) => p.goto(items[i].url)));   // all in flight at once
+    \\   return pages.map((p, i) => ({ ...items[i], ...p.extract({ /* schema */ }) }));
     \\   ```
+    \\   - Concurrency is bounded by the HTTP connection pool (10 by default, `--http-max-concurrent`); extra navigations queue rather than fail. For long lists, fan out in batches and `page.close()` each page once read so its memory is reclaimed.
+    \\   - `Promise.all` rejects the whole batch if any `goto` *fails* (a timeout does not reject); use `Promise.allSettled` when partial results are fine.
+    \\   - Walk **serially** on one page (`for (const it of items) { await page.goto(it.url); … }`) only when the steps depend on each other — each page decides the next URL, or they share login/session state.
     \\3. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `page.evaluate` block is always wrong: lift the raw strings with `page.extract`, then trim/split/parse them in top-level JS. Reserve `page.evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every navigation/reload, while script variables persist.
     \\4. **Credentials via `$LP_*` placeholders** in any string argument (`page.fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
     \\5. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
@@ -178,7 +179,7 @@ const script_skill =
     \\| `extract is not defined` (or click/fill/…) | These are methods on the page object, not globals → `const page = new Page(); await page.goto(url); page.extract(...)` |
     \\| `Page must be called with new` | `Page(...)` called without `new` → `const page = new Page();` |
     \\| `page is not navigated or has been closed` | A method on a fresh `new Page()` (or a closed page) → `await page.goto(url)` first |
-    \\| `page handle is no longer valid` | Used a page after a later `goto` replaced it → read a page before navigating away |
+    \\| `page handle is no longer valid` | Used a page after a later `goto` on the **same** page replaced it → read it before navigating away. Sibling pages from other `new Page()` calls stay valid. |
     \\| `document is not defined` | DOM API in script context → use `page.extract` or `page.evaluate` |
     \\| `require is not defined` | Not Node.js |
     \\| `no page loaded - run page.goto(url) first` | Page method before navigation |
