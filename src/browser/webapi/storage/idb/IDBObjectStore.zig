@@ -28,6 +28,7 @@ const IDBCursor = @import("IDBCursor.zig");
 const IDBRequest = @import("IDBRequest.zig");
 const IDBKeyRange = @import("IDBKeyRange.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
+const DOMStringList = @import("../../collections.zig").DOMStringList;
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -455,8 +456,14 @@ pub fn index(self: *IDBObjectStore, name: []const u8, exec: *Execution) !*IDBInd
     return IDBIndex.init(self, info, owned_name, exec);
 }
 
-pub fn getIndexNames(self: *IDBObjectStore, exec: *Execution) ![]const []const u8 {
-    return self._engine.indexNames(exec.arena, self._store_id);
+pub fn getIndexNames(self: *IDBObjectStore, exec: *Execution) !*DOMStringList {
+    const arena = try exec.getArena(.small, "IDB.getIndexNames");
+    errdefer exec.releaseArena(arena);
+
+    const names = try self._engine.indexNames(arena, self._store_id);
+    const list = try arena.create(DOMStringList);
+    list.* = .{ ._items = names, ._arena = arena };
+    return list;
 }
 
 pub const JsApi = struct {

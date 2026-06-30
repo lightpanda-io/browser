@@ -305,6 +305,20 @@ pub fn indexNames(self: *const Engine, arena: Allocator, object_store_id: i64) !
     return list.items;
 }
 
+pub fn objectStoreNames(self: *const Engine, arena: Allocator, database_id: i64) ![]const []const u8 {
+    var rows = try self.conn.rows(
+        "select name from idb_object_stores where database_id = ?1 order by name",
+        .{database_id},
+    );
+    defer rows.deinit();
+
+    var list: std.ArrayList([]const u8) = .empty;
+    while (try rows.next()) |row| {
+        try list.append(arena, try arena.dupe(u8, row.get([]const u8, 0)));
+    }
+    return list.items;
+}
+
 pub fn addIndexRecord(self: *Engine, index_id: i64, key: []const u8, primary_key: []const u8, unique: bool) !void {
     return self.conn.exec(
         "insert into idb_index_records (index_id, key, primary_key, is_unique) values (?1, ?2, ?3, ?4)",
