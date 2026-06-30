@@ -1846,7 +1846,9 @@ fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHa
 
 /// Start a navigation without waiting for it to load, so the agent script Runtime
 /// can drive several gotos concurrently. `receiver_frame_id`, when set, is the
-/// page a re-goto on the same `Page` object replaces — only that one is closed.
+/// page a re-goto on the same `Page` object replaces — only that page is closed,
+/// and only its nodes are evicted from the registry; sibling pages' node IDs stay
+/// valid.
 pub fn startGoto(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -1856,8 +1858,8 @@ pub fn startGoto(
 ) ToolError!StartedGoto {
     const args = try parseArgs(GotoParams, arena, arguments);
     if (receiver_frame_id) |fid| {
-        if (session.livePage(fid) != null) {
-            registry.reset();
+        if (session.livePage(fid)) |page| {
+            registry.resetFrame(arena, &page.frame);
             session.closePage(fid);
         }
     }
