@@ -481,3 +481,30 @@
     testing.expectEqual(false, registered);
   }
 </script>
+
+<script id=xhr_send_flag type=module>
+  {
+    // Per spec, calling send() while a request is already in flight throws
+    // InvalidStateError (the "send() flag"). Without it, two concurrent
+    // transfers race on the XHR's single response slot and one is left dangling
+    // at teardown (the "release overflow" UAF).
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => state.resolve();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+    testing.expectError('InvalidStateError', () => req.send());
+
+    await state.done(() => {
+      // the first request was unaffected by the rejected second send()
+      testing.expectEqual(200, req.status);
+    });
+
+    // a fresh open() clears the flag, so the object is reusable
+    const state2 = await testing.async();
+    req.onload = () => state2.resolve();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+    await state2.done(() => testing.expectEqual(200, req.status));
+  }
+</script>

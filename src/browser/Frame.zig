@@ -40,7 +40,6 @@ const FileList = @import("webapi/FileList.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
-const Text = @import("webapi/cdata/Text.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
 const Window = @import("webapi/Window.zig");
@@ -51,8 +50,6 @@ const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const VisualViewport = @import("webapi/VisualViewport.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
-const MutationObserver = @import("webapi/MutationObserver.zig");
-const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const Worker = @import("webapi/Worker.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
@@ -817,7 +814,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
             arena,
             frame_base,
             request_url,
-            .{ .always_dupe = true, .encoding = originator.charset },
+            .{ .encoding = originator.charset },
         );
         break :blk .{ u, false };
     };
@@ -1769,7 +1766,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
                 frame = frame.parent orelse break :base_blk "";
             }
         };
-        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .always_dupe = true, .encoding = self.charset });
+        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .encoding = self.charset });
     };
 
     const popup = try page.frame_arena.create(Frame);

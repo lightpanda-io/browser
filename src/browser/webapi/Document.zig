@@ -191,6 +191,31 @@ pub fn setDomain(self: *Document, value: []const u8) !void {
     try doc_frame.js.setOrigin(key);
 }
 
+pub fn getCookie(_: *Document, frame: *Frame) ![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.call_arena), .{
+        .is_http = false,
+        .is_navigation = true,
+    });
+    return buf.items;
+}
+
+pub fn setCookie(_: *Document, cookie_str: []const u8, frame: *Frame) ![]const u8 {
+    // we use the cookie jar's allocator to parse the cookie because it
+    // outlives the frame's arena.
+    const Cookie = @import("storage/Cookie.zig");
+    const c = Cookie.parse(frame._session.cookie_jar.allocator, frame.url, cookie_str) catch {
+        // Invalid cookies should be silently ignored, not throw errors
+        return "";
+    };
+    if (c.http_only) {
+        c.deinit();
+        return ""; // HttpOnly cookies cannot be set from JS
+    }
+    try frame._session.cookie_jar.add(c, std.time.timestamp(), false);
+    return cookie_str;
+}
+
 // Returns true if the requested domain is valid for the given host
 fn isRelaxableTo(host: []const u8, requested: []const u8) bool {
     if (requested.len == 0) {
@@ -1254,6 +1279,7 @@ pub const JsApi = struct {
     pub const fonts = bridge.accessor(Document.getFonts, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{ .dom_exception = true });
+    pub const cookie = bridge.accessor(Document.getCookie, Document.setCookie, .{});
     pub const createElement = bridge.function(Document.createElement, .{ .dom_exception = true });
     pub const createElementNS = bridge.function(Document.createElementNS, .{ .dom_exception = true });
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});

@@ -224,31 +224,6 @@ pub fn getAll(self: *HTMLDocument, frame: *Frame) !*collections.HTMLAllCollectio
     return frame._factory.create(collections.HTMLAllCollection.init(self.asNode(), frame));
 }
 
-pub fn getCookie(_: *HTMLDocument, frame: *Frame) ![]const u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.call_arena), .{
-        .is_http = false,
-        .is_navigation = true,
-    });
-    return buf.items;
-}
-
-pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, frame: *Frame) ![]const u8 {
-    // we use the cookie jar's allocator to parse the cookie because it
-    // outlives the frame's arena.
-    const Cookie = @import("storage/Cookie.zig");
-    const c = Cookie.parse(frame._session.cookie_jar.allocator, frame.url, cookie_str) catch {
-        // Invalid cookies should be silently ignored, not throw errors
-        return "";
-    };
-    if (c.http_only) {
-        c.deinit();
-        return ""; // HttpOnly cookies cannot be set from JS
-    }
-    try frame._session.cookie_jar.add(c, std.time.timestamp(), false);
-    return cookie_str;
-}
-
 pub fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
     if (self._document_type) |dt| {
         return dt;
@@ -302,6 +277,5 @@ pub const JsApi = struct {
     pub const plugins = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
-    pub const cookie = bridge.accessor(HTMLDocument.getCookie, HTMLDocument.setCookie, .{});
     pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
 };

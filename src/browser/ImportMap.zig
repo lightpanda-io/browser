@@ -234,7 +234,7 @@ fn parseScopeKey(arena: Allocator, base: [:0]const u8, key: []const u8) ![]const
     if (key.len == 0) {
         return base;
     }
-    return URL.resolve(arena, base, key, .{ .always_dupe = true, .encoding = "UTF-8" });
+    return URL.resolve(arena, base, key, .{ .encoding = "UTF-8" });
 }
 
 /// Returns the parsed URL if `specifier` looks like a URL. Else returns null;
@@ -248,7 +248,7 @@ fn parseIfLikeURL(arena: Allocator, base: [:0]const u8, specifier: []const u8) ?
         std.mem.startsWith(u8, specifier, "../") or
         hasScheme(specifier))
     {
-        return URL.resolve(arena, base, specifier, .{ .always_dupe = true, .encoding = "UTF-8" }) catch return null;
+        return URL.resolve(arena, base, specifier, .{ .encoding = "UTF-8" }) catch return null;
     }
     return null;
 }
@@ -331,7 +331,7 @@ fn resolveImportsMatch(
 
         const base_addr = entry.resolved orelse return error.SpecifierResolutionFailed;
         const after = normalized[entry.specifier.len..];
-        const url = URL.resolve(arena, base_addr, after, .{ .always_dupe = true, .encoding = "UTF-8" }) catch {
+        const url = URL.resolve(arena, base_addr, after, .{ .encoding = "UTF-8" }) catch {
             return error.SpecifierResolutionFailed;
         };
 

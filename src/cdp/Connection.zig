@@ -24,13 +24,11 @@ const CDP = @import("CDP.zig");
 
 const App = @import("../App.zig");
 const Inbox = @import("../Inbox.zig");
-const Config = @import("../Config.zig");
 const WS = @import("../network/WS.zig");
 const ArenaPool = @import("../ArenaPool.zig");
 
 const log = lp.log;
 const posix = std.posix;
-const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 pub const Connection = @This();

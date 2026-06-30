@@ -53,6 +53,11 @@ pub fn init(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !*
     return exec._factory.create(URL{ ._url = u });
 }
 
+/// Like the constructor, but returns null instead of throwing when parsing fails.
+pub fn parse(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) ?*URL {
+    return URL.init(url, maybe_base, exec) catch null;
+}
+
 pub fn deinit(self: *URL, _: *Page) void {
     // Not tracked by arena.
     U.url_free(self._url);
@@ -209,7 +214,7 @@ pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
     const search_params = self._search_params orelse return;
     var out: [*]const u8 = undefined;
     var len: usize = 0;
-    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) out[0..len] else "";
+    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
     try search_params.updateFromString(search_value, exec);
 }
 
@@ -242,10 +247,11 @@ pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
         return sp;
     }
 
-    // Get current search string (omitting '?').
+    // Get current search string; rust-url always skips '?' so we have to
+    // go a byte back to include it.
     var out: [*]const u8 = undefined;
     var len: usize = 0;
-    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) out[0..len] else "";
+    const search_value = if (U.url_get_query(self._url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
 
     const params = try URLSearchParams.init(.{ .query_string = search_value }, exec);
     self._search_params = params;
@@ -273,7 +279,7 @@ pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
     const search_params = self._search_params orelse return;
     var out: [*]const u8 = undefined;
     var len: usize = 0;
-    const search_value = if (U.url_get_query(url, &out, &len) == 0) out[0..len] else "";
+    const search_value = if (U.url_get_query(url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
     try search_params.updateFromString(search_value, exec);
 }
 
@@ -296,14 +302,6 @@ pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
     var len: usize = 0;
     U.url_to_string(self._url, &out, &len);
     return out[0..len];
-}
-
-/// Like the constructor, but returns null instead of throwing when parsing fails.
-pub fn parse(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !?*URL {
-    return URL.init(url, maybe_base, exec) catch |err| switch (err) {
-        error.TypeError => null,
-        else => err,
-    };
 }
 
 pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {

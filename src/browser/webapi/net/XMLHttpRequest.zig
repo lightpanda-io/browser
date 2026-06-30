@@ -52,6 +52,7 @@ _http_response: ?HttpClient.Response = null,
 // number of inflight requests, we can have multiple, e.g. xhr calling its own
 // send from the onload callback
 _active_requests: u8 = 0,
+_send_flag: bool = false,
 
 _url: [:0]const u8 = "",
 _method: http.Method = .GET,
@@ -185,6 +186,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
         transfer.abort(error.Abort);
         self._http_response = null;
     }
+    self._send_flag = false;
 
     // Reset internal state. _override_mime intentionally survives open()
     // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
@@ -200,7 +202,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
 
     const exec = self._exec;
     self._method = try parseMethod(method_);
-    self._url = try URL.resolve(self._arena, exec.base(), url, .{ .always_dupe = true, .encoding = exec.charset.* });
+    self._url = try URL.resolve(self._arena, exec.base(), url, .{ .encoding = exec.charset.* });
     try self.stateChanged(.opened, exec);
 }
 
@@ -224,7 +226,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     if (comptime IS_DEBUG) {
         log.debug(.http, "XMLHttpRequest.send", .{ .url = self._url });
     }
-    if (self._ready_state != .opened) {
+    if (self._ready_state != .opened or self._send_flag) {
         return error.InvalidStateError;
     }
 
@@ -259,6 +261,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     self.acquireRef();
     self._active_requests += 1;
+    self._send_flag = true;
 
     exec.makeRequest(.{
         .ctx = self,
@@ -282,6 +285,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .body_outlives_request = true,
     }) catch |err| {
         self.releaseSelfRef();
+        self._send_flag = false;
         return err;
     };
 }

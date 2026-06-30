@@ -16,9 +16,6 @@
 //! Bindings for Servo's rust-url (https://github.com/servo/rust-url).
 //! Check @src/html5ever/url.rs for Rust-side of the bindings.
 
-const std = @import("std");
-const mem = std.mem;
-
 pub const Url = anyopaque;
 
 pub const OwnedString = extern struct {
@@ -83,6 +80,12 @@ pub extern "c" fn url_get_fragment(url: *const Url, out_ptr: *[*]const u8, out_l
 pub extern "c" fn url_set_query(url: *Url, ptr: [*]const u8, len: usize) i32;
 pub extern "c" fn url_set_query_to_null(url: *Url) void;
 pub extern "c" fn url_get_query(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) i32;
+/// `err` is `0` if there's no error.
+/// Returned `OwnedString` doesn't have a sentinel; callers must be aware of that.
+pub extern "c" fn url_resolve_with_encoding(base_ptr: [*]const u8, base_len: usize, input_ptr: [*]const u8, input_len: usize, enc_ptr: [*]const u8, enc_len: usize, err: *i32) OwnedString;
+/// `err` is `0` if there's no error.
+/// Returned `OwnedString` doesn't have a sentinel; callers must be aware of that.
+pub extern "c" fn url_resolve_without_encoding(base_ptr: [*]const u8, base_len: usize, input_ptr: [*]const u8, input_len: usize, err: *i32) OwnedString;
 
 extern "c" fn url_get_port(url: *const Url) i32;
 pub inline fn urlGetPort(url: *const Url) ?u16 {

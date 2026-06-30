@@ -308,7 +308,7 @@ fn navigate(cmd: *CDP.Command) !void {
     const session = bc.session;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
+    const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
 
     // Fast path: a freshly-created target whose root frame hasn't navigated
     // yet has nothing to preserve across the HTTP round-trip. Skip the
@@ -585,10 +585,10 @@ pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notificatio
     const cdp = bc.cdp;
     const frame_id = &id.toFrameId(event.frame_id);
 
-    try cdp.sendEvent("Page.frameAttached", .{ .params = .{
+    try cdp.sendEvent("Page.frameAttached", .{
         .frameId = frame_id,
         .parentFrameId = &id.toFrameId(event.parent_id),
-    } }, .{ .session_id = session_id });
+    }, .{ .session_id = session_id });
 
     if (bc.page_life_cycle_events) {
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
@@ -1055,6 +1055,25 @@ test "cdp.frame: getFrameTree" {
     }
 }
 
+test "cdp.frame: frameAttached" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-X" });
+
+    bc.notification.dispatch(.frame_child_frame_created, &.{
+        .frame_id = 2,
+        .parent_id = 1,
+        .loader_id = 7,
+        .timestamp = 0,
+    });
+
+    try ctx.expectSentEvent("Page.frameAttached", .{
+        .frameId = "FID-0000000002",
+        .parentFrameId = "FID-0000000001",
+    }, .{ .session_id = "SID-X" });
+}
+
 test "cdp.frame: captureScreenshot" {
     const LogFilter = @import("../../testing.zig").LogFilter;
     const filter: LogFilter = .init(&.{.not_implemented});
@@ -1377,6 +1396,9 @@ test "cdp.frame: navigate does not follow Location on a non-redirect 3xx" {
 }
 
 test "cdp.frame: navigate answers with errorText when the navigation fails" {
+    const filter: testing.LogFilter = .init(&.{.frame});
+    defer filter.deinit();
+
     // A root navigation that fails before commit (here: connection refused —
     // nothing listens on port 1) must still answer the Page.navigate command.
     // Chrome resolves it with an errorText field ("present if and only if

@@ -81,7 +81,7 @@ const Cache = enum {
 pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     const arena = exec.arena;
     const url = switch (input) {
-        .url => |u| try URL.resolve(arena, exec.base(), u, .{ .always_dupe = true, .encoding = exec.charset.* }),
+        .url => |u| try URL.resolve(arena, exec.base(), u, .{ .encoding = exec.charset.* }),
         .request => |r| try arena.dupeZ(u8, r._url),
     };
 

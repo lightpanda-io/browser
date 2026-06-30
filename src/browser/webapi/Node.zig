@@ -35,7 +35,6 @@ pub const DocumentFragment = @import("DocumentFragment.zig");
 pub const DocumentType = @import("DocumentType.zig");
 pub const ShadowRoot = @import("ShadowRoot.zig");
 
-const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 const LinkedList = std.DoublyLinkedList;
@@ -584,6 +583,15 @@ pub fn resolveURL(self: *const Node, url: anytype, frame: *Frame, opts: ResolveU
     const owner_frame = self.ownerFrame(frame);
     const allocator = opts.allocator orelse frame.call_arena;
     return URL.resolve(allocator, owner_frame.base(), url, .{ .encoding = owner_frame.charset });
+}
+
+// Same as `resolveURL` but can't return `TypeError`, this is needed for multiple
+// getters throughout codebase. Returns provided `url` on `TypeError`.
+pub fn resolveURLReflect(self: *const Node, url: []const u8, frame: *Frame, opts: ResolveURLOpts) ![]const u8 {
+    return self.resolveURL(url, frame, opts) catch |err| switch (err) {
+        error.TypeError => url,
+        else => err,
+    };
 }
 
 pub fn isSameDocumentAs(self: *const Node, other: *const Node, frame: *const Frame) bool {

@@ -55,8 +55,6 @@ pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
@@ -106,7 +104,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         const page = try session.createPage();
         const frame = page.frame().?;
         // not guaranteed to be valid after navigate
-        const encoded_url = try URL.ensureEncoded(frame.call_arena, url, "UTF-8");
+        const encoded_url = try URL.resolveNavigation(frame.call_arena, url, .{});
         _ = try frame.navigate(encoded_url, .{
             .reason = .address_bar,
             .kind = .{ .push = null },

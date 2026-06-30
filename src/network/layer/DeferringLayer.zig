@@ -20,10 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 
-const Client = @import("../../browser/HttpClient.zig").Client;
 const Network = @import("../Network.zig");
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
-const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
 const StableResponse = @import("../../browser/HttpClient.zig").StableResponse;
