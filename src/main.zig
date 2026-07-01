@@ -54,6 +54,8 @@ pub fn main() !void {
 }
 
 fn run(allocator: Allocator, main_arena: Allocator) !void {
+    lp.core_dump.disableIfRequested();
+
     const args = try Config.parseArgs(main_arena);
     defer args.deinit(main_arena);
 

@@ -205,6 +205,10 @@ A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpand
 
 By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
 
+### Core dumps
+
+Set `LIGHTPANDA_DISABLE_CORE_DUMP` (to any value) to suppress crash core dumps by zeroing the soft `RLIMIT_CORE` at startup.
+
 ## Status
 
 Lightpanda is in Beta and currently a work in progress. Stability and coverage are improving and many websites now work.
