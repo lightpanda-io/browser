@@ -27,33 +27,6 @@ const Allocator = std.mem.Allocator;
 
 const Sqlite = @This();
 
-pool: Pool,
-
-pub fn init(allocator: Allocator, path_: ?[:0]const u8) !Sqlite {
-    const path = path_ orelse ":memory:";
-    var pool = try Pool.init(allocator, path);
-    errdefer pool.deinit(allocator);
-
-    {
-        // copy by value warning! The connection HAS to be returned to the
-        // pool in this scope. If we didn't have this scope, we'd assign the
-        // pool to the return value (copy A) and then release the original
-        const conn = try pool.acquire();
-        defer pool.release(conn);
-
-        const version = try @import("migrations.zig").run(conn);
-        log.info(.storage, "storage initialized", .{ .engine = "sqlite", .version = version, .path = path });
-    }
-
-    return .{
-        .pool = pool,
-    };
-}
-
-pub fn deinit(self: *Sqlite, allocator: Allocator) void {
-    self.pool.deinit(allocator);
-}
-
 pub const Migration = union(enum) {
     sql: [:0]const u8,
     func: struct {
