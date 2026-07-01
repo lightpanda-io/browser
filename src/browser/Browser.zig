@@ -25,6 +25,7 @@ const Notification = @import("../Notification.zig");
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 const Session = @import("Session.zig");
+const Selector = @import("webapi/selector/Selector.zig");
 const Viewport = @import("Viewport.zig");
 const HttpClient = @import("HttpClient.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
@@ -43,6 +44,9 @@ session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: HttpClient,
+
+// Shared across pages, survives navigation. See Selector.Cache.
+selector_cache: Selector.Cache,
 
 // Permission state set via CDP Browser.grantPermissions / setPermission /
 // resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
@@ -109,6 +113,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .http_client = undefined,
         .page_pool = std.heap.MemoryPool(Page).init(allocator),
         .fc_identity_pool = .init(allocator),
+        .selector_cache = .init(allocator),
     };
     try self.http_client.init(allocator, &app.network, cdp);
 }
@@ -123,6 +128,7 @@ pub fn deinit(self: *Browser) void {
     self.http_client.deinit();
     self.clearPermissions();
     self.permissions.deinit(self.allocator);
+    self.selector_cache.deinit();
 }
 
 // Set (or overwrite) the stored state for a permission. The name is duped into

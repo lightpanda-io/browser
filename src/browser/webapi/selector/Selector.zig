@@ -51,24 +51,66 @@ pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {
     return .{ .selectors = try Parser.parseList(arena, input) };
 }
 
-/// Parse `input` via the frame's selector cache. The parsed AST borrows slices
-/// of its input, so on a miss the key is duped into `frame.arena` and parsed
-/// against that copy; both share the frame's lifetime. Only for selectors that
-/// recur (page scripts, waitForSelector) — one-off synthesized selectors use the
-/// `*Uncached` variants so they don't pollute a frame-lifetime cache.
+/// One-off synthesized selectors use the `*Uncached` variants instead.
 fn cachedParse(frame: *Frame, input: []const u8) ![]const Selector {
-    if (input.len == 0) {
-        return error.SyntaxError;
+    return frame._session.browser.selector_cache.parse(input);
+}
+
+/// On the Browser because a parsed selector references no Frame/Context, so
+/// entries survive navigation. Per-entry arena so eviction can free one entry.
+pub const Cache = struct {
+    // Caps retained memory, not correctness; oldest entry evicted on overflow.
+    const max_entries = 1024;
+
+    allocator: Allocator,
+    map: std.StringArrayHashMapUnmanaged(Entry) = .empty,
+
+    const Entry = struct {
+        arena: std.heap.ArenaAllocator,
+        selectors: []const Selector,
+    };
+
+    pub fn init(allocator: Allocator) Cache {
+        return .{ .allocator = allocator };
     }
-    if (frame._selector_cache.get(input)) |selectors| {
+
+    pub fn deinit(self: *Cache) void {
+        for (self.map.values()) |*entry| {
+            entry.arena.deinit();
+        }
+        self.map.deinit(self.allocator);
+    }
+
+    fn parse(self: *Cache, input: []const u8) ![]const Selector {
+        if (input.len == 0) {
+            return error.SyntaxError;
+        }
+        if (self.map.get(input)) |entry| {
+            return entry.selectors;
+        }
+
+        // The AST borrows slices of its input, so dupe the key into the arena.
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        errdefer arena.deinit();
+        const entry_arena = arena.allocator();
+        const owned = try entry_arena.dupe(u8, input);
+        const selectors = try Parser.parseList(entry_arena, owned);
+
+        if (self.map.count() >= max_entries) {
+            self.evictOldest();
+        }
+        try self.map.put(self.allocator, owned, .{ .arena = arena, .selectors = selectors });
         return selectors;
     }
 
-    const owned = try frame.arena.dupe(u8, input);
-    const selectors = try Parser.parseList(frame.arena, owned);
-    try frame._selector_cache.put(frame.arena, owned, selectors);
-    return selectors;
-}
+    // Insertion order is preserved, so index 0 is the oldest.
+    fn evictOldest(self: *Cache) void {
+        const key = self.map.keys()[0];
+        var arena = self.map.values()[0].arena;
+        std.debug.assert(self.map.orderedRemove(key));
+        arena.deinit();
+    }
+};
 
 fn collectAll(arena: Allocator, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
