@@ -162,7 +162,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         // The prototype (EventTarget) for Navigation is created when a Frame is created.
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
-        .idb = IdbManager.init(allocator, browser.app.config.indexDBDir()),
+        .idb = IdbManager.init(allocator),
         .browser = browser,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator, notification),

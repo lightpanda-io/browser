@@ -85,6 +85,7 @@ fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator) !?log.Level {
 }
 
 /// Common CLI args.
+<<<<<<< HEAD
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
@@ -116,7 +117,6 @@ const CommonOptions = .{
     .{ .name = "enable_external_stylesheets", .type = bool },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
-    .{ .name = "indexdb_dir", .type = ?[:0]const u8 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -580,13 +580,6 @@ pub fn storageEngine(self: *const Config) ?Storage.EngineType {
 pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_sqlite_path,
-        else => unreachable,
-    };
-}
-
-pub fn indexDBDir(self: *const Config) ?[:0]const u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.indexdb_dir,
         else => unreachable,
     };
 }
