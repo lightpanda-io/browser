@@ -44,6 +44,9 @@ _proto: *EventTarget,
 _op: Operation = .none,
 _error: ?anyerror = null,
 _txn: ?*IDBTransaction = null,
+// Same request can show up multiple times in txn._requests, but it should only
+// be executed/fired in its last append (to preserve ordering).
+_txn_index: usize = 0,
 _cursor: ?*IDBCursor = null,
 _ready_state: ReadyState = .pending,
 _result: Result = .{ .none = js.Undefined{} },
