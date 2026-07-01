@@ -324,6 +324,7 @@ const DeferredContext = struct {
     fn firePartial(self: *DeferredContext) void {
         const stable_response = self.stable_resp orelse @panic("stable_resp must be set for any of the partial fire events");
         const response = Response.fromStable(&stable_response);
+        defer self.buffered.clearRetainingCapacity();
 
         for (self.buffered.items) |event| {
             switch (event) {
@@ -355,7 +356,5 @@ const DeferredContext = struct {
                 .done, .err => @panic("firePartial cant fire terminal events"),
             }
         }
-
-        self.buffered.clearRetainingCapacity();
     }
 };
