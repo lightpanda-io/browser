@@ -26,8 +26,11 @@ const EventTarget = @import("../../EventTarget.zig");
 const DOMException = @import("../../DOMException.zig");
 
 const idb = @import("idb.zig");
+const Engine = @import("Engine.zig");
+const IDBIndex = @import("IDBIndex.zig");
 const IDBCursor = @import("IDBCursor.zig");
 const IDBDatabase = @import("IDBDatabase.zig");
+const IDBObjectStore = @import("IDBObjectStore.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
 const IDBVersionChangeEvent = @import("IDBVersionChangeEvent.zig");
 
@@ -37,11 +40,12 @@ const FunctionSetter = idb.FunctionSetter;
 const IDBRequest = @This();
 
 _proto: *EventTarget,
-_result: Result = .{ .none = js.Undefined{} },
+_op: Operation = .none,
 _error: ?anyerror = null,
 _txn: ?*IDBTransaction = null,
 _cursor: ?*IDBCursor = null,
 _ready_state: ReadyState = .pending,
+_result: Result = .{ .none = js.Undefined{} },
 
 _on_success: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
@@ -182,6 +186,82 @@ fn getFunctionFromSetter(setter: ?FunctionSetter) ?js.Function.Global {
         .func => |f| f,
         .anything => null,
     };
+}
+
+// A database operation, captured when a request method is called and run later.
+pub const Operation = union(enum) {
+    none,
+    store_get: StoreQuery,
+    store_get_key: StoreQuery,
+    store_get_all: StoreGetAll,
+    store_count: StoreQuery,
+    store_delete: StoreQuery,
+    store_clear: *IDBObjectStore,
+    store_write: StoreWrite,
+    index_get: IndexQuery,
+    index_get_key: IndexQuery,
+    index_get_all: IndexGetAll,
+    index_count: IndexQuery,
+    cursor_iterate: CursorIterate,
+    cursor_update: CursorUpdate,
+    cursor_delete: CursorDelete,
+
+    const StoreQuery = struct { store: *IDBObjectStore, bounds: Engine.Bounds };
+    const StoreGetAll = struct { store: *IDBObjectStore, bounds: Engine.Bounds, column: Engine.Column, count: ?u32 };
+    const StoreWrite = struct { store: *IDBObjectStore, kind: IDBObjectStore.WriteKind, value: js.Value.Global, key: IDBObjectStore.PreparedKey };
+    const IndexQuery = struct { index: *IDBIndex, bounds: Engine.Bounds };
+    const IndexGetAll = struct { index: *IDBIndex, bounds: Engine.Bounds, column: Engine.Column, count: ?u32 };
+    const CursorIterate = struct { cursor: *IDBCursor, seek: IDBCursor.Seek, offset: u32 };
+    const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: js.Value.Global };
+    const CursorDelete = struct { cursor: *IDBCursor, key: []const u8 };
+};
+
+// Commit this request's operation: record it and queue the request on its
+// transaction's drain.
+pub fn submit(self: *IDBRequest, op: Operation, exec: *Execution) !*IDBRequest {
+    self._op = op;
+    const txn = self._txn.?;
+    try txn.enqueue(self);
+
+    if (txn.getMode() == .versionchange) {
+        // for "upgradeneeded" we run them immediately (and still queue them, but
+        // their .op == .noop at that point). This is necessary to keep this
+        // operation consistent / ordered with other "upgradeneeded" changes that
+        // happen synchronously (e.g. createIndex). And we queue it so that,
+        // while the re-execute will be noop, the events will still fire.
+        try self.execute(exec);
+    }
+    return self;
+}
+
+
+pub fn execute(self: *IDBRequest, exec: *Execution) !void {
+    const op = self._op;
+    if (op == .none) {
+        return;
+    }
+
+    self._op = .none;
+    if (self._txn) |txn| {
+        try txn.ensureBegun();
+    }
+    switch (op) {
+        .none => unreachable,
+        .store_get => |o| try o.store.runGet(self, o.bounds, exec),
+        .store_get_key => |o| try o.store.runGetKey(self, o.bounds, exec),
+        .store_get_all => |o| try o.store.runGetAll(self, o.bounds, o.column, o.count, exec),
+        .store_count => |o| try o.store.runCount(self, o.bounds, exec),
+        .store_delete => |o| try o.store.runDelete(self, o.bounds, exec),
+        .store_clear => |store| try store.runClear(self, exec),
+        .store_write => |o| try o.store.runWrite(self, o.kind, o.value, o.key, exec),
+        .index_get => |o| try o.index.runGet(self, o.bounds, exec),
+        .index_get_key => |o| try o.index.runGetKey(self, o.bounds, exec),
+        .index_get_all => |o| try o.index.runGetAll(self, o.bounds, o.column, o.count, exec),
+        .index_count => |o| try o.index.runCount(self, o.bounds, exec),
+        .cursor_iterate => |o| try o.cursor.runIterate(o.seek, o.offset, exec),
+        .cursor_update => |o| try o.cursor.runUpdate(self, o.key, o.value, exec),
+        .cursor_delete => |o| try o.cursor.runDelete(self, o.key),
+    }
 }
 
 pub const JsApi = struct {

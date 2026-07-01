@@ -84,7 +84,7 @@ const Source = union(enum) {
 };
 
 // How the next iterate() positions the cursor.
-const Seek = union(enum) {
+pub const Seek = union(enum) {
     first, // start of the range, in the iteration direction
     next, // strictly past the current position
     to: []const u8, // continue(key): first record at/after an index/store key
@@ -109,7 +109,7 @@ pub fn openIndex(index: *IDBIndex, bounds: Engine.Bounds, direction: Direction, 
 }
 
 fn create(store: *IDBObjectStore, txn: *IDBTransaction, index_id: ?i64, source: Source, bounds: Engine.Bounds, direction: Direction, key_only: bool, exec: *Execution) !*IDBRequest {
-    try txn.ensureBegun();
+    try txn.assertActive();
 
     const request = try txn.newRequest();
     const self = try exec._factory.create(IDBCursor{
@@ -136,8 +136,24 @@ fn create(store: *IDBObjectStore, txn: *IDBTransaction, index_id: ?i64, source: 
     // avoiding the bridge's pointer -> js.Value lookup each time.
     self._js = try public.persist();
 
-    try self.iterate(.first, 0, exec);
-    return request;
+    // The first seek runs in the drain (or immediately, for a versionchange txn),
+    // not here — so the connection is only touched while the txn owns it.
+    return request.submit(.{ .cursor_iterate = .{ .cursor = self, .seek = .first, .offset = 0 } }, exec);
+}
+
+// Re-arm the cursor's existing request with its next seek and requeue it. Called by
+// continue/advance from within a success handler; the drain loop picks the requeued
+// request up in the same pass (a versionchange cursor runs it now).
+fn reiterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
+    _ = try self._request.submit(.{ .cursor_iterate = .{ .cursor = self, .seek = seek, .offset = offset } }, exec);
+}
+
+// Run the deferred seek, staging the positioned cursor (or null) on the request.
+pub fn runIterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
+    self.iterate(seek, offset, exec) catch |err| {
+        log.warn(.storage, "idb cursor iterate", .{ .err = err });
+        self._request.setError(err);
+    };
 }
 
 // Called by IDBRequest.deliver right before a cursor's success handler runs.
@@ -155,11 +171,10 @@ pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void
         if (if (self._direction.reverse()) order != .lt else order != .gt) {
             return error.DataError;
         }
-        try self.iterate(.{ .to = encoded }, 0, exec);
+        try self.reiterate(.{ .to = encoded }, 0, exec);
     } else {
-        try self.iterate(.next, 0, exec);
+        try self.reiterate(.next, 0, exec);
     }
-    try self._txn.enqueue(self._request);
 }
 
 pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: js.Value, exec: *Execution) !void {
@@ -184,8 +199,7 @@ pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: 
     };
     if (!ok) return error.DataError;
 
-    try self.iterate(.{ .to_primary = .{ .key = key, .primary_key = primary_key } }, 0, exec);
-    try self._txn.enqueue(self._request);
+    try self.reiterate(.{ .to_primary = .{ .key = key, .primary_key = primary_key } }, 0, exec);
 }
 
 pub fn advance(self: *IDBCursor, count: u32, exec: *Execution) !void {
@@ -195,8 +209,7 @@ pub fn advance(self: *IDBCursor, count: u32, exec: *Execution) !void {
 
     try self.prepareIterate();
     // `count` records forward = skip count-1 past the immediate next.
-    try self.iterate(.next, count - 1, exec);
-    try self._txn.enqueue(self._request);
+    try self.reiterate(.next, count - 1, exec);
 }
 
 pub fn update(self: *IDBCursor, value: js.Value, exec: *Execution) !*IDBRequest {
@@ -224,20 +237,32 @@ pub fn update(self: *IDBCursor, value: js.Value, exec: *Execution) !*IDBRequest 
         }
     }
 
-    const serialized = try value.serialize();
+    // Snapshot the record key: the write runs in the drain, by which point a
+    // `continue` could have moved the cursor's live position on.
+    const request = try self._txn.newRequest();
+    const value_global = try value.persist();
+    return request.submit(.{ .cursor_update = .{ .cursor = self, .key = key, .value = value_global } }, exec);
+}
+
+pub fn runUpdate(self: *IDBCursor, request: *IDBRequest, key: []const u8, value_global: js.Value.Global, exec: *Execution) !void {
+    const local = exec.js.local.?;
+    const value = value_global.local(local);
+
+    const serialized = value.serialize() catch |err| {
+        request.setError(err);
+        return;
+    };
     defer serialized.deinit();
 
-    const request = try self._txn.newRequest();
     self._store.writeAt(key, value, serialized.bytes(), exec) catch |err| {
         log.warn(.storage, "idb cursor update", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
-    try request.setValue(try Key.decodeToJs(exec.call_arena, exec.js.local.?, key));
-    return request;
+    try request.setValue(try Key.decodeToJs(exec.call_arena, local, key));
 }
 
-pub fn delete(self: *IDBCursor) !*IDBRequest {
+pub fn delete(self: *IDBCursor, exec: *Execution) !*IDBRequest {
     if (self._txn._mode == .readonly) {
         return error.ReadOnlyError;
     }
@@ -250,14 +275,17 @@ pub fn delete(self: *IDBCursor) !*IDBRequest {
         return error.InvalidStateError;
     }
 
+    // Snapshot the record key (see update): the delete runs later, in the drain.
     const key = self._primary_key orelse return error.InvalidStateError;
-
     const request = try self._txn.newRequest();
+    return request.submit(.{ .cursor_delete = .{ .cursor = self, .key = key } }, exec);
+}
+
+pub fn runDelete(self: *IDBCursor, request: *IDBRequest, key: []const u8) !void {
     self._store.deleteAt(key) catch |err| {
         log.warn(.storage, "idb cursor delete", .{ .err = err });
         request.setError(err);
     };
-    return request;
 }
 
 pub fn getKey(self: *const IDBCursor, exec: *Execution) !?js.Value {
