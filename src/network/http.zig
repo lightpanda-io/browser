@@ -21,6 +21,7 @@ const posix = std.posix;
 
 const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");
+const crypto = @import("../sys/libcrypto.zig");
 const IpFilter = @import("IpFilter.zig");
 
 const log = @import("lightpanda").log;
@@ -368,7 +369,7 @@ pub const Connection = struct {
     };
 
     pub fn init(
-        ca_blob: ?libcurl.CurlBlob,
+        x509_store: *crypto.X509_STORE,
         config: *const Config,
         ip_filter: ?*const IpFilter,
     ) !Connection {
@@ -377,7 +378,7 @@ pub const Connection = struct {
         var self = Connection{ ._easy = easy, .in_use = false, .transport = .none };
         errdefer self.deinit();
 
-        try self.reset(config, ca_blob, ip_filter);
+        try self.reset(config, x509_store, ip_filter);
         return self;
     }
 
@@ -501,7 +502,7 @@ pub const Connection = struct {
     pub fn reset(
         self: *Connection,
         config: *const Config,
-        ca_blob: ?libcurl.CurlBlob,
+        x509_store: *crypto.X509_STORE,
         ip_filter: ?*const IpFilter,
     ) !void {
         libcurl.curl_easy_reset(self._easy);
@@ -524,15 +525,28 @@ pub const Connection = struct {
             try libcurl.curl_easy_setopt(self._easy, .proxy, null);
         }
 
-        // tls
-        if (ca_blob) |ca| {
-            try libcurl.curl_easy_setopt(self._easy, .ca_info_blob, ca);
-            if (http_proxy != null) {
-                try libcurl.curl_easy_setopt(self._easy, .proxy_ca_info_blob, ca);
-            }
-        } else {
-            assert(config.tlsVerifyHost() == false, "Http.init tls_verify_host", .{});
+        // TLS.
+        if (config.tlsVerifyHost()) {
+            // Provide certificate store to connection's SSL_CTX.
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ctx_function, &(struct {
+                fn wrap(
+                    _: *libcurl.Curl,
+                    raw_ssl_ctx: *anyopaque,
+                    raw_x509_store: *anyopaque,
+                ) callconv(.c) libcurl.CurlCode {
+                    const ssl_ctx: *crypto.SSL_CTX = @ptrCast(raw_ssl_ctx);
+                    const store: *crypto.X509_STORE = @ptrCast(raw_x509_store);
 
+                    const result = crypto.SSL_CTX_set1_verify_cert_store(ssl_ctx, store);
+                    if (result != 1) {
+                        return libcurl.CURLE.ABORTED_BY_CALLBACK;
+                    }
+                    return libcurl.CURLE.OK;
+                }
+            }).wrap);
+            // Pass our store to CURLOPT_SSL_CTX_FUNCTION.
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ctx_data, x509_store);
+        } else {
             try libcurl.curl_easy_setopt(self._easy, .ssl_verify_host, false);
             try libcurl.curl_easy_setopt(self._easy, .ssl_verify_peer, false);
 
