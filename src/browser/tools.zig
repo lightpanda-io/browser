@@ -1826,24 +1826,58 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
 /// is deliberately avoided as a default: on real sites trackers/timers keep the
 /// network from ever fully idling, so it just rides the timeout.
 const default_nav_wait: lp.Config.WaitUntil = .load;
+const default_nav_timeout_ms: u32 = 10000;
+
+pub const StartedGoto = struct {
+    frame_id: u32,
+    timeout_ms: u32,
+};
+
+/// Open a fresh top-level page and start its navigation. The frame is non-null
+/// right after createPage but navigate can change/null it, so callers re-fetch.
+fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHandle {
+    const page = session.createPage() catch return ToolError.NavigationFailed;
+    _ = page.frame().?.navigate(url, .{
+        .reason = .address_bar,
+        .kind = .{ .push = null },
+    }) catch return ToolError.NavigationFailed;
+    return page;
+}
+
+/// Start a navigation without waiting for it to load, so the agent script Runtime
+/// can drive several gotos concurrently. `receiver_frame_id`, when set, is the
+/// page a re-goto on the same `Page` object replaces — only that page is closed,
+/// and only its nodes are evicted from the registry; sibling pages' node IDs stay
+/// valid.
+pub fn startGoto(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    arguments: ?std.json.Value,
+    receiver_frame_id: ?u32,
+) ToolError!StartedGoto {
+    const args = try parseArgs(GotoParams, arena, arguments);
+    if (receiver_frame_id) |fid| {
+        if (session.livePage(fid)) |page| {
+            registry.resetFrame(arena, &page.frame);
+            session.closePage(fid);
+        }
+    }
+    const page = try openPage(session, args.url);
+    return .{ .frame_id = page.frame_id, .timeout_ms = args.timeout orelse default_nav_timeout_ms };
+}
 
 fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
     if (session.primaryPage()) |old_page| {
         registry.reset();
         old_page.close();
     }
-    const page = session.createPage() catch return ToolError.NavigationFailed;
-    // frame cannot be null immediately after createPage, but don't cache it
-    // since navigate can change/null it.
-    _ = page.frame().?.navigate(url, .{
-        .reason = .address_bar,
-        .kind = .{ .push = null },
-    }) catch return ToolError.NavigationFailed;
+    const page = try openPage(session, url);
 
     var runner = session.runner(.{});
     const condition = lp.Session.Runner.WaitCondition{ .frame_id = page.frame_id, .until = default_nav_wait };
     var conditions = [_]lp.Session.Runner.WaitCondition{condition};
-    const result = runner.waitResult(timeout orelse 10000, &conditions) catch |err| {
+    const result = runner.waitResult(timeout orelse default_nav_timeout_ms, &conditions) catch |err| {
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
     };
 

@@ -70,6 +70,10 @@ _page_destruction_queue: std.ArrayList(*Page) = .{},
 // Round-robin cursor for fair page iteration (processQueuedNavigation)
 _nav_cursor: usize = 0,
 
+// Set by the agent script Runtime around one tool call so each `Page` handle's
+// tools act on its own frame, not `pages[0]`. Null for all other callers.
+_tool_frame_override: ?*Frame = null,
+
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
 // CDP target IDs stay unique across BrowserContext lifecycle on a single
@@ -440,6 +444,9 @@ pub fn primaryPage(self: *Session) ?PageHandle {
 
 // DEPRECATED. Exists during our transition to multi-page sessions.
 pub fn currentFrame(self: *Session) ?*Frame {
+    if (self._tool_frame_override) |frame| {
+        return frame;
+    }
     if (self.pages.items.len == 0) {
         return null;
     }
@@ -448,6 +455,11 @@ pub fn currentFrame(self: *Session) ?*Frame {
         std.debug.assert(page.replaces == null);
     }
     return &page.frame;
+}
+
+/// See `_tool_frame_override`. Pass null to clear.
+pub fn setToolFrameOverride(self: *Session, frame: ?*Frame) void {
+    self._tool_frame_override = frame;
 }
 
 // Multi-page aware: frame ids are globally unique (monotonic on `Browser`).
