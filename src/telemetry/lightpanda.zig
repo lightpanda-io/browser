@@ -19,7 +19,23 @@ const MAX_PENDING = 4096; // hard cap: drop + count beyond this (reported via bu
 const RECLAIM_CAPACITY = 64; // reclaim the drain buffer once a burst grows it past this
 const MAX_BODY_SIZE = 500 * 1024; // 500KB
 const REQUEST_TIMEOUT_MS = 5000;
-const URL = "https://telemetry.lightpanda.io";
+
+// Coalescing window to batch events together
+const LINGER_MS = 5000;
+const LINGER_BATCH = 16;
+const URL = "https://telemetry.lightpanda.io/v2";
+
+const OS_CODE = switch (builtin.os.tag) {
+    .linux => "L",
+    .macos => "M",
+    .ios => "I",
+    else => "O",
+};
+const ARCH_CODE = switch (builtin.cpu.arch) {
+    .x86_64 => "X",
+    .aarch64 => "A",
+    else => "O",
+};
 
 const LightPanda = @This();
 
@@ -30,8 +46,8 @@ network: *Network,
 writer: std.Io.Writer.Allocating,
 
 iid: ?[36]u8 = null,
-run_mode: Config.RunMode = .serve,
-interactive: bool = false,
+mode: []const u8,
+proxy: u8,
 
 // `mutex` guards the ring buffer (head/tail/dropped), `running`, and the lazy
 // `thread` creation. The sender thread blocks on `cond` while idle.
@@ -58,11 +74,18 @@ dropped: u32 = 0,
 pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode, interactive: bool) !void {
     self.* = .{
         .iid = iid,
-        .run_mode = run_mode,
-        .interactive = interactive,
         .allocator = app.allocator,
         .network = &app.network,
+        .proxy = if (app.config.httpProxy() != null) 1 else 0,
         .writer = std.Io.Writer.Allocating.init(app.allocator),
+        .mode = switch (run_mode) {
+            .fetch => "F",
+            .serve => "S",
+            .agent => if (interactive == false) "AR" else "A",
+            .mcp => "M",
+            .version => "V",
+            .help => "H",
+        },
     };
 }
 
@@ -136,6 +159,17 @@ fn run(self: *LightPanda) void {
             }
             self.cond.wait(&self.mutex);
         }
+        linger: {
+            var timer = std.time.Timer.start() catch break :linger;
+            const linger_ns = LINGER_MS * std.time.ns_per_ms;
+            while (self.running and self.pending.items.len < LINGER_BATCH) {
+                const elapsed = timer.read();
+                if (elapsed >= linger_ns) {
+                    break;
+                }
+                self.cond.timedWait(&self.mutex, linger_ns - elapsed) catch break;
+            }
+        }
 
         // Swap the batch out and release the lock for the (blocking) serialize +
         // POST so producers never wait on the network.
@@ -170,6 +204,8 @@ fn run(self: *LightPanda) void {
 }
 
 fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemetry.Event, dropped: u32, sent: *usize) !void {
+    _ = try self.writeHeader();
+
     // The overflow report rides ahead of the first body; the rest of that body
     // and any subsequent ones are filled from `events` below.
     const has_overflow = dropped > 0;
@@ -223,17 +259,21 @@ fn _flush(self: *LightPanda, conn: *http.Connection) !void {
 }
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
-    const iid: ?[]const u8 = if (self.iid) |*id| id else null;
-    const wrapped = LightPandaEvent{
-        .iid = iid,
-        .mode = self.run_mode,
-        .event = event,
-        .interactive = self.interactive,
-    };
+    return self.writeLine(&EventRow{ .event = event });
+}
 
+fn writeHeader(self: *LightPanda) !bool {
+    return self.writeLine(&Header{
+        .iid = if (self.iid) |*iid| iid else "00000000-0000-0000-0000-000000000000",
+        .mode = self.mode,
+        .proxy = self.proxy,
+    });
+}
+
+fn writeLine(self: *LightPanda, value: anytype) !bool {
     const checkpoint = self.writer.written().len;
 
-    try std.json.Stringify.value(&wrapped, .{ .emit_null_optional_fields = false }, &self.writer.writer);
+    try std.json.Stringify.value(value, .{}, &self.writer.writer);
     try self.writer.writer.writeByte('\n');
 
     if (self.writer.written().len > MAX_BODY_SIZE) {
@@ -243,52 +283,106 @@ fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
     return true;
 }
 
-const LightPandaEvent = struct {
-    iid: ?[]const u8,
-    mode: Config.RunMode,
-    interactive: bool,
+const EventRow = struct {
     event: telemetry.Event,
 
-    pub fn jsonStringify(self: *const LightPandaEvent, writer: anytype) !void {
-        try writer.beginObject();
-
-        try writer.objectField("iid");
-        try writer.write(self.iid);
-
-        try writer.objectField("mode");
-        // Special case: when running agent mode in non-interactive, we send a
-        // special running mode.
-        if (self.mode == .agent and self.interactive == false) {
-            try writer.write("agent_replay");
-        } else {
-            try writer.write(self.mode);
+    pub fn jsonStringify(self: *const EventRow, writer: anytype) !void {
+        try writer.beginArray();
+        switch (self.event) {
+            .run => try writer.write("R"),
+            .navigate => |n| {
+                try writer.write("N");
+                try writer.write(@as(u8, if (n.tls) 1 else 0));
+                try writer.write(switch (n.context) {
+                    .iframe => "I",
+                    .popup => "O",
+                    .page => "P",
+                });
+            },
+            .buffer_overflow => |b| {
+                try writer.write("B");
+                try writer.write(b.dropped);
+            },
+            .llm => |l| {
+                try writer.write("L");
+                try writer.write(l.provider);
+                try writer.write(l.model);
+            },
         }
-
-        try writer.objectField("os");
-        try writer.write(builtin.os.tag);
-
-        try writer.objectField("arch");
-        try writer.write(builtin.cpu.arch);
-
-        try writer.objectField("version");
-        try writer.write(build_config.version);
-
-        try writer.objectField("event");
-        try writer.write(@tagName(std.meta.activeTag(self.event)));
-
-        inline for (@typeInfo(telemetry.Event).@"union".fields) |union_field| {
-            if (self.event == @field(telemetry.Event, union_field.name)) {
-                const inner = @field(self.event, union_field.name);
-                const TI = @typeInfo(@TypeOf(inner));
-                if (TI == .@"struct") {
-                    inline for (TI.@"struct".fields) |field| {
-                        try writer.objectField(field.name);
-                        try writer.write(@field(inner, field.name));
-                    }
-                }
-            }
-        }
-
-        try writer.endObject();
+        try writer.endArray();
     }
 };
+
+const Header = struct {
+    iid: []const u8,
+    mode: []const u8,
+    proxy: u8,
+
+    pub fn jsonStringify(self: *const Header, writer: anytype) !void {
+        try writer.beginArray();
+        try writer.write(self.iid);
+        try writer.write("H");
+        try writer.write(self.mode);
+        try writer.write(self.proxy);
+        try writer.write(OS_CODE);
+        try writer.write(ARCH_CODE);
+        try writer.write(build_config.version);
+        try writer.endArray();
+    }
+};
+
+const testing = @import("../testing.zig");
+test "Telemetry: event row wire format" {
+    const Case = struct { event: telemetry.Event, expected: []const u8 };
+    const cases = [_]Case{
+        .{ .event = .{ .run = {} }, .expected = "[\"R\"]" },
+        .{
+            .event = .{ .navigate = .{ .tls = true, .context = .page } },
+            .expected = "[\"N\",1,\"P\"]",
+        },
+        .{
+            .event = .{ .navigate = .{ .tls = false, .context = .popup } },
+            .expected = "[\"N\",0,\"O\"]",
+        },
+        .{
+            .event = .{ .navigate = .{ .tls = true, .context = .iframe } },
+            .expected = "[\"N\",1,\"I\"]",
+        },
+        .{
+            .event = .{ .buffer_overflow = .{ .dropped = 42 } },
+            .expected = "[\"B\",42]",
+        },
+        .{
+            .event = .{ .llm = .{ .provider = "anthropic", .model = .wrap("claude") } },
+            .expected = "[\"L\",\"anthropic\",\"claude\"]",
+        },
+        .{
+            .event = .{ .llm = .{ .provider = "nollm", .model = null } },
+            .expected = "[\"L\",\"nollm\",null]",
+        },
+    };
+
+    for (cases) |case| {
+        var w = std.Io.Writer.Allocating.init(testing.allocator);
+        defer w.deinit();
+        try std.json.Stringify.value(&EventRow{ .event = case.event }, .{}, &w.writer);
+        try testing.expectEqual(case.expected, w.written());
+    }
+}
+
+test "Telemetry: header wire format" {
+    var w = std.Io.Writer.Allocating.init(testing.allocator);
+    defer w.deinit();
+
+    const header = Header{
+        .iid = "the-iid",
+        .mode = "S",
+        .proxy = 1,
+    };
+    try std.json.Stringify.value(&header, .{}, &w.writer);
+
+    const expected = try std.fmt.allocPrint(testing.allocator, "[\"the-iid\",\"H\",\"S\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ OS_CODE, ARCH_CODE, build_config.version });
+    defer testing.allocator.free(expected);
+
+    try testing.expectEqual(expected, w.written());
+}

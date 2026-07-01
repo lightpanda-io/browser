@@ -111,8 +111,9 @@ pub const Event = union(enum) {
 
     const Navigate = struct {
         tls: bool,
-        proxy: bool,
-        driver: enum { cdp } = .cdp,
+        context: Context,
+
+        const Context = enum { page, iframe, popup };
     };
 
     const BufferOverflow = struct {
