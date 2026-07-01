@@ -25,6 +25,7 @@ const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
 const IDBIndex = @import("IDBIndex.zig");
 const IDBCursor = @import("IDBCursor.zig");
+const IDBRecord = @import("IDBRecord.zig");
 const IDBRequest = @import("IDBRequest.zig");
 const IDBKeyRange = @import("IDBKeyRange.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
@@ -156,20 +157,35 @@ pub fn runCount(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Boun
     try request.setValue(try exec.js.local.?.zigValueToJs(n, .{}));
 }
 
-pub fn getAll(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
-    return self._getAll(query, count_, .value, exec);
+// What a getAll/getAllKeys/getAllRecords produces
+pub const GetAllMode = enum { value, key, record };
+
+pub fn getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+    return self._getAll(query_or_options, count_, .value, exec);
 }
 
-fn _getAll(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, column: Engine.Column, exec: *Execution) !*IDBRequest {
+pub fn getAllKeys(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+    return self._getAll(query_or_options, count_, .key, exec);
+}
+
+pub fn getAllRecords(self: *IDBObjectStore, options: ?js.Value, exec: *Execution) !*IDBRequest {
     const txn = self._txn orelse return error.TransactionInactiveError;
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
+    const args = try IDBKeyRange.resolveGetAllOptions(exec.arena, options, exec);
     const request = try txn.newRequest();
-    return request.submit(.{ .store_get_all = .{ .store = self, .bounds = bounds, .column = column, .count = count_ } }, exec);
+    return request.submit(.{ .store_get_all = .{ .store = self, .args = args, .mode = .record } }, exec);
 }
 
-pub fn runGetAll(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, column: Engine.Column, count_: ?u32, exec: *Execution) !void {
-    const arr = self.collectAll(exec, bounds, column, count_) catch |err| {
+fn _getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, mode: GetAllMode, exec: *Execution) !*IDBRequest {
+    const txn = self._txn orelse return error.TransactionInactiveError;
+    try txn.assertActive();
+    const args = try IDBKeyRange.resolveGetAll(exec.arena, query_or_options, count_, exec);
+    const request = try txn.newRequest();
+    return request.submit(.{ .store_get_all = .{ .store = self, .args = args, .mode = mode } }, exec);
+}
+
+pub fn runGetAll(self: *IDBObjectStore, request: *IDBRequest, args: IDBKeyRange.GetAllArgs, mode: GetAllMode, exec: *Execution) !void {
+    const arr = self.collectAll(exec, args, mode) catch |err| {
         log.warn(.storage, "idb getAll", .{ .err = err });
         request.setError(err);
         return;
@@ -177,21 +193,26 @@ pub fn runGetAll(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bou
     try request.setValue(arr);
 }
 
-// Stream a getAll/getAllKeys result straight into a JS array: .value rows
-// deserialize, .key rows decode — nothing is copied out of sqlite first.
-fn collectAll(self: *IDBObjectStore, exec: *Execution, bounds: Engine.Bounds, column: Engine.Column, count_: ?u32) !js.Value {
+fn collectAll(self: *IDBObjectStore, exec: *Execution, args: IDBKeyRange.GetAllArgs, mode: GetAllMode) !js.Value {
     const local = exec.js.local.?;
-    const arena = exec.call_arena;
+    // A store's primary keys are unique, so nextunique/prevunique are just
+    // next/prev here — no de-duplication needed. For an object store the key is the
+    // primary key.
+    const reverse = args.direction == .prev or args.direction == .prevunique;
 
-    var rows = try self._engine.getAllRangeRows(self._store_id, bounds, column, count_);
+    var rows = try self._engine.getAllRows(self._store_id, args.bounds, reverse, args.count);
     defer rows.deinit();
 
     const arr = local.newArray(0);
     var i: u32 = 0;
     while (try rows.next()) |row| {
-        const bytes = row.get([]const u8, 0);
-        const value = if (column == .value) try js.Value.deserialize(local, bytes) else try Key.decodeToJs(arena, local, bytes);
-        _ = try arr.set(i, value, .{});
+        const key = row.get([]const u8, 0);
+        const out: js.Value = switch (mode) {
+            .value => try js.Value.deserialize(local, row.get([]const u8, 1)),
+            .key => try Key.decodeToJs(exec.call_arena, local, key),
+            .record => try IDBRecord.initValue(exec, local, key, key, row.get([]const u8, 1)),
+        };
+        _ = try arr.set(i, out, .{});
         i += 1;
     }
     return arr.toValue();
@@ -214,10 +235,6 @@ pub fn runGetKey(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bou
     };
     const bytes = found orelse return; // no record -> undefined
     try request.setValue(try Key.decodeToJs(arena, exec.js.local.?, bytes));
-}
-
-pub fn getAllKeys(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
-    return self._getAll(query, count_, .key, exec);
 }
 
 pub fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
@@ -521,17 +538,18 @@ pub const JsApi = struct {
     pub const keyPath = bridge.accessor(IDBObjectStore.getKeyPath, null, .{});
     pub const autoIncrement = bridge.accessor(IDBObjectStore.getAutoIncrement, null, .{});
     pub const transaction = bridge.accessor(IDBObjectStore.getTransaction, null, .{ .null_as_undefined = true });
-    pub const add = bridge.function(IDBObjectStore.add, .{ });
-    pub const put = bridge.function(IDBObjectStore.put, .{ });
-    pub const get = bridge.function(IDBObjectStore.get, .{ });
-    pub const getKey = bridge.function(IDBObjectStore.getKey, .{ });
-    pub const delete = bridge.function(IDBObjectStore.delete, .{ });
-    pub const clear = bridge.function(IDBObjectStore.clear, .{ });
-    pub const count = bridge.function(IDBObjectStore.count, .{ });
-    pub const getAll = bridge.function(IDBObjectStore.getAll, .{ });
-    pub const getAllKeys = bridge.function(IDBObjectStore.getAllKeys, .{ });
-    pub const openCursor = bridge.function(IDBObjectStore.openCursor, .{ });
-    pub const openKeyCursor = bridge.function(IDBObjectStore.openKeyCursor, .{ });
+    pub const add = bridge.function(IDBObjectStore.add, .{});
+    pub const put = bridge.function(IDBObjectStore.put, .{});
+    pub const get = bridge.function(IDBObjectStore.get, .{});
+    pub const getKey = bridge.function(IDBObjectStore.getKey, .{});
+    pub const delete = bridge.function(IDBObjectStore.delete, .{});
+    pub const clear = bridge.function(IDBObjectStore.clear, .{});
+    pub const count = bridge.function(IDBObjectStore.count, .{});
+    pub const getAll = bridge.function(IDBObjectStore.getAll, .{});
+    pub const getAllKeys = bridge.function(IDBObjectStore.getAllKeys, .{});
+    pub const getAllRecords = bridge.function(IDBObjectStore.getAllRecords, .{});
+    pub const openCursor = bridge.function(IDBObjectStore.openCursor, .{});
+    pub const openKeyCursor = bridge.function(IDBObjectStore.openKeyCursor, .{});
     pub const indexNames = bridge.accessor(IDBObjectStore.getIndexNames, null, .{});
     pub const createIndex = bridge.function(IDBObjectStore.createIndex, .{ });
     pub const deleteIndex = bridge.function(IDBObjectStore.deleteIndex, .{ });

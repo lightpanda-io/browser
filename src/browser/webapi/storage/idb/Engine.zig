@@ -422,33 +422,38 @@ pub fn indexCountRange(self: *const Engine, index_id: i64, b: Bounds) !i64 {
     return (try self.conn.scalar(i64, sql, .{ index_id, b.lower, b.upper })) orelse 0;
 }
 
-// Open an index getAll/getAllKeys cursor (.value joins the store, .key is the
-// primary key). The JS layer streams rows straight into a JS array.
-pub fn indexGetAllRangeRows(self: *const Engine, object_store_id: i64, index_id: i64, b: Bounds, column: Column, limit_: ?u32) !Sqlite.Rows {
+// Full (index key, primary key, value) rows over an index range, ordered by index
+// key (then primary key), ascending or — for a reverse direction — descending, and
+// limited to `limit_` rows (null = no limit).
+//
+// When unique is true, we use sqlite3 bare aggregates to resolve the uniqueness
+// Note that min(ir.primary_key) is used regardless of `reverse` because
+// uniqueness is always based on ascending order.
+pub fn indexGetAllRows(self: *const Engine, object_store_id: i64, index_id: i64, b: Bounds, reverse: bool, unique: bool, limit_: ?u32) !Sqlite.Rows {
     const ops = rangeOps(b);
-    const limit: i64 = if (limit_) |c| @intCast(c) else -1;
-    var buf: [512]u8 = undefined;
+    const order = if (reverse) "desc" else "asc";
 
-    if (column == .value) {
-        const sql = try std.fmt.bufPrint(&buf,
-            \\ select r.value
-            \\ from idb_index_records ir
-            \\ join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key
-            \\ where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4
-            \\ order by ir.key, ir.primary_key
-            \\ limit ?5
-        , .{ ops.lo, ops.hi });
-        return self.conn.rows(sql, .{ object_store_id, index_id, b.lower, b.upper, limit });
-    }
-
+    var buf: [640]u8 = undefined;
     const sql = try std.fmt.bufPrint(&buf,
-        \\ select primary_key
-        \\ from idb_index_records
-        \\ where index_id = ?1 and key {s} ?2 and key {s} ?3
-        \\ order by key, primary_key
-        \\ limit ?4
-    , .{ ops.lo, ops.hi });
-    return self.conn.rows(sql, .{ index_id, b.lower, b.upper, limit });
+        \\ select ir.key, {s}, r.value
+        \\ from idb_index_records ir
+        \\ join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key
+        \\ where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4
+        \\ {s}
+        \\ order by ir.key {s}{s}
+        \\ limit ?5
+    , .{
+        if (unique) "min(ir.primary_key)" else "ir.primary_key",
+        ops.lo,
+        ops.hi,
+        if (unique) "group by ir.key" else "",
+        order,
+        if (unique) "" else if (reverse) ", ir.primary_key desc" else ", ir.primary_key asc",
+    });
+
+    // SQLite treats a negative LIMIT as "no limit".
+    const limit: i64 = if (limit_) |c| @intCast(c) else -1;
+    return self.conn.rows(sql, .{ object_store_id, index_id, b.lower, b.upper, limit });
 }
 
 pub const IndexCursorRecord = struct {
@@ -598,6 +603,15 @@ pub fn getAllRangeRows(self: *const Engine, object_store_id: i64, b: Bounds, col
     const head = if (column == .value) "select value" else "select key";
     const sql = try rangeSql(&buf, head, b, " order by key limit ?4");
 
+    // SQLite treats a negative LIMIT as "no limit".
+    const limit: i64 = if (limit_) |c| @intCast(c) else -1;
+    return self.conn.rows(sql, .{ object_store_id, b.lower, b.upper, limit });
+}
+
+// Full (key, value) rows over a store range, ordered by key
+pub fn getAllRows(self: *const Engine, object_store_id: i64, b: Bounds, reverse: bool, limit_: ?u32) !Sqlite.Rows {
+    var buf: [256]u8 = undefined;
+    const sql = try rangeSql(&buf, "select key, value", b, if (reverse) " order by key desc limit ?4" else " order by key limit ?4");
     // SQLite treats a negative LIMIT as "no limit".
     const limit: i64 = if (limit_) |c| @intCast(c) else -1;
     return self.conn.rows(sql, .{ object_store_id, b.lower, b.upper, limit });

@@ -52,6 +52,7 @@ _requests: std.ArrayList(*IDBRequest) = .empty,
 _begun: bool = false,
 _settled: bool = false,
 _aborted: bool = false,
+_committing: bool = false,
 
 _on_complete: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
@@ -122,11 +123,18 @@ pub fn commit(self: *IDBTransaction, exec: *Execution) !void {
     if (self._settled) {
         return error.InvalidStateError;
     }
-    self.settle(exec);
+
+    if (self._mode == .versionchange) {
+        self.settle(exec);
+    } else {
+        // The drain is already scheduled and will settle us; just enter the
+        // "committing" state. It isn't _settled yet, so we can't use that flag
+        self._committing = true;
+    }
 }
 
 pub fn abort(self: *IDBTransaction, exec: *Execution) !void {
-    if (self._settled) {
+    if (self._settled or self._committing) {
         return error.InvalidStateError;
     }
 
@@ -166,9 +174,10 @@ pub fn settle(self: *IDBTransaction, exec: *Execution) void {
     self.fire(exec, comptime .wrap("complete"), self._on_complete);
 }
 
-// "is this transaction still usable". Once settled, it cannot be used.
+// "is this transaction still usable". Once settled or explicitly committing, it no
+// longer accepts new requests.
 pub fn assertActive(self: *const IDBTransaction) !void {
-    if (self._settled) {
+    if (self._settled or self._committing) {
         return error.TransactionInactiveError;
     }
 }

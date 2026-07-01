@@ -30,6 +30,7 @@ const Engine = @import("Engine.zig");
 const IDBIndex = @import("IDBIndex.zig");
 const IDBCursor = @import("IDBCursor.zig");
 const IDBDatabase = @import("IDBDatabase.zig");
+const IDBKeyRange = @import("IDBKeyRange.zig");
 const IDBObjectStore = @import("IDBObjectStore.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
 const IDBVersionChangeEvent = @import("IDBVersionChangeEvent.zig");
@@ -207,10 +208,10 @@ pub const Operation = union(enum) {
     cursor_delete: CursorDelete,
 
     const StoreQuery = struct { store: *IDBObjectStore, bounds: Engine.Bounds };
-    const StoreGetAll = struct { store: *IDBObjectStore, bounds: Engine.Bounds, column: Engine.Column, count: ?u32 };
+    const StoreGetAll = struct { store: *IDBObjectStore, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
     const StoreWrite = struct { store: *IDBObjectStore, kind: IDBObjectStore.WriteKind, value: js.Value.Global, key: IDBObjectStore.PreparedKey };
     const IndexQuery = struct { index: *IDBIndex, bounds: Engine.Bounds };
-    const IndexGetAll = struct { index: *IDBIndex, bounds: Engine.Bounds, column: Engine.Column, count: ?u32 };
+    const IndexGetAll = struct { index: *IDBIndex, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
     const CursorIterate = struct { cursor: *IDBCursor, seek: IDBCursor.Seek, offset: u32 };
     const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: js.Value.Global };
     const CursorDelete = struct { cursor: *IDBCursor, key: []const u8 };
@@ -234,7 +235,6 @@ pub fn submit(self: *IDBRequest, op: Operation, exec: *Execution) !*IDBRequest {
     return self;
 }
 
-
 pub fn execute(self: *IDBRequest, exec: *Execution) !void {
     const op = self._op;
     if (op == .none) {
@@ -249,14 +249,14 @@ pub fn execute(self: *IDBRequest, exec: *Execution) !void {
         .none => unreachable,
         .store_get => |o| try o.store.runGet(self, o.bounds, exec),
         .store_get_key => |o| try o.store.runGetKey(self, o.bounds, exec),
-        .store_get_all => |o| try o.store.runGetAll(self, o.bounds, o.column, o.count, exec),
+        .store_get_all => |o| try o.store.runGetAll(self, o.args, o.mode, exec),
         .store_count => |o| try o.store.runCount(self, o.bounds, exec),
         .store_delete => |o| try o.store.runDelete(self, o.bounds, exec),
         .store_clear => |store| try store.runClear(self, exec),
         .store_write => |o| try o.store.runWrite(self, o.kind, o.value, o.key, exec),
         .index_get => |o| try o.index.runGet(self, o.bounds, exec),
         .index_get_key => |o| try o.index.runGetKey(self, o.bounds, exec),
-        .index_get_all => |o| try o.index.runGetAll(self, o.bounds, o.column, o.count, exec),
+        .index_get_all => |o| try o.index.runGetAll(self, o.args, o.mode, exec),
         .index_count => |o| try o.index.runCount(self, o.bounds, exec),
         .cursor_iterate => |o| try o.cursor.runIterate(o.seek, o.offset, exec),
         .cursor_update => |o| try o.cursor.runUpdate(self, o.key, o.value, exec),

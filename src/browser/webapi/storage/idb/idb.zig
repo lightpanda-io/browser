@@ -23,6 +23,7 @@ pub const Engine = @import("Engine.zig");
 pub const Manager = @import("Manager.zig");
 
 pub const IDBFactory = @import("IDBFactory.zig");
+pub const IDBRecord = @import("IDBRecord.zig");
 pub const IDBRequest = @import("IDBRequest.zig");
 pub const IDBCursor = @import("IDBCursor.zig");
 pub const IDBIndex = @import("IDBIndex.zig");
@@ -36,6 +37,7 @@ pub const IDBVersionChangeEvent = @import("IDBVersionChangeEvent.zig");
 pub fn registerTypes() []const type {
     return &.{
         IDBFactory,
+        IDBRecord,
         IDBRequest,
         IDBCursor,
         IDBIndex,
