@@ -221,7 +221,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .max_response_size = network.config.httpMaxResponseSize() orelse std.math.maxInt(u32),
 
         .cache_layer = .{},
-        .robots_layer = .{ .allocator = allocator, .network = network },
+        .robots_layer = .init(allocator, network),
         .web_bot_auth_layer = .{},
         .interception_layer = .{},
         .deferring_layer = .{ .allocator = allocator, .network = network },
@@ -270,7 +270,7 @@ pub fn deinit(self: *Client) void {
         self.allocator.free(owned);
     }
 
-    self.robots_layer.deinit(self.allocator);
+    self.robots_layer.deinit();
     self.deferring_layer.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);

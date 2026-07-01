@@ -25,6 +25,7 @@ const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const HeaderResult = @import("../../browser/HttpClient.zig").HeaderResult;
 
+const Coalescer = @import("../Coalescer.zig");
 const Robots = @import("../Robots.zig");
 const Network = @import("../Network.zig");
 
@@ -36,7 +37,7 @@ const RobotsLayer = @This();
 next: Layer = undefined,
 network: *Network,
 allocator: Allocator,
-pending: std.StringHashMapUnmanaged(std.ArrayList(*Transfer)) = .empty,
+pending: Coalescer,
 
 pub fn layer(self: *RobotsLayer) Layer {
     return .{
@@ -47,12 +48,16 @@ pub fn layer(self: *RobotsLayer) Layer {
     };
 }
 
-pub fn deinit(self: *RobotsLayer, allocator: Allocator) void {
-    var it = self.pending.iterator();
-    while (it.next()) |entry| {
-        entry.value_ptr.deinit(allocator);
-    }
-    self.pending.deinit(allocator);
+pub fn init(allocator: Allocator, network: *Network) RobotsLayer {
+    return .{
+        .allocator = allocator,
+        .network = network,
+        .pending = .{ .allocator = allocator },
+    };
+}
+
+pub fn deinit(self: *RobotsLayer) void {
+    self.pending.deinit();
 }
 
 fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
@@ -101,68 +106,55 @@ fn fetchRobotsThenRequest(
     robots_url: [:0]const u8,
     transfer: *Transfer,
 ) !void {
-    const entry = try self.pending.getOrPut(self.allocator, robots_url);
+    switch (try self.pending.join(robots_url, transfer, .robots)) {
+        .joined => return,
+        .first => {
+            errdefer {
+                self.pending.remove(robots_url);
+                transfer.unpark();
+            }
 
-    if (!entry.found_existing) {
-        errdefer std.debug.assert(self.pending.remove(robots_url));
-        entry.value_ptr.* = .empty;
+            const robots_ctx = try transfer.arena.create(RobotsContext);
+            robots_ctx.* = .{
+                .layer = self,
+                .buffer = .empty,
+                .arena = transfer.arena,
+                .robots_url = robots_url,
+            };
 
-        try entry.value_ptr.append(self.allocator, transfer);
-        transfer.park(.robots);
-        errdefer {
-            entry.value_ptr.deinit(self.allocator);
-            transfer.unpark();
-        }
+            // CRITICAL: build a fresh Headers for the inner robots fetch.
+            // We value-copy req from the parent, but Headers is a struct wrapping
+            // a *curl_slist — value copy shares the pointer. Letting Client.request
+            // take ownership of a shared headers list means both transfers will
+            // free it at deinit time -> double-free. The robots.txt fetch is a
+            // system-level GET anyway, no need to inherit the parent's user headers.
+            var new_req = transfer.req;
+            new_req.headers = try transfer.client.newHeaders();
+            errdefer new_req.headers.deinit();
+            new_req.method = .GET;
+            new_req.url = robots_url;
+            new_req.internal = true;
+            new_req.resource_type = .fetch;
+            new_req.body = null;
+            new_req.ctx = robots_ctx;
+            new_req.start_callback = null;
+            new_req.header_callback = RobotsContext.headerCallback;
+            new_req.data_callback = RobotsContext.dataCallback;
+            new_req.done_callback = RobotsContext.doneCallback;
+            new_req.error_callback = RobotsContext.errorCallback;
+            new_req.shutdown_callback = RobotsContext.shutdownCallback;
 
-        const robots_ctx = try transfer.arena.create(RobotsContext);
-        robots_ctx.* = .{
-            .layer = self,
-            .buffer = .empty,
-            .arena = transfer.arena,
-            .robots_url = robots_url,
-        };
-
-        // CRITICAL: build a fresh Headers for the inner robots fetch.
-        // We value-copy req from the parent, but Headers is a struct wrapping
-        // a *curl_slist — value copy shares the pointer. Letting Client.request
-        // take ownership of a shared headers list means both transfers will
-        // free it at deinit time -> double-free. The robots.txt fetch is a
-        // system-level GET anyway, no need to inherit the parent's user headers.
-        var new_req = transfer.req;
-        new_req.headers = try transfer.client.newHeaders();
-        errdefer new_req.headers.deinit();
-        new_req.method = .GET;
-        new_req.url = robots_url;
-        new_req.internal = true;
-        new_req.resource_type = .fetch;
-        new_req.body = null;
-        new_req.ctx = robots_ctx;
-        new_req.start_callback = null;
-        new_req.header_callback = RobotsContext.headerCallback;
-        new_req.data_callback = RobotsContext.dataCallback;
-        new_req.done_callback = RobotsContext.doneCallback;
-        new_req.error_callback = RobotsContext.errorCallback;
-        new_req.shutdown_callback = RobotsContext.shutdownCallback;
-
-        log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
-        try transfer.client.request(new_req, transfer.owner);
-    } else {
-        // Already one in flight, just queue behind.
-        try entry.value_ptr.append(self.allocator, transfer);
-
-        // Parked: RobotsLayer owns destruction via flushPending / flushPendingShutdown
-        // until robots.txt resolves. Without this, Client.request's errdefer (or
-        // any caller's cleanup) would deinit a transfer that's still on the
-        // pending list, leaving flushPending with a dangling pointer.
-        transfer.park(.robots);
+            log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
+            try transfer.client.request(new_req, transfer.owner);
+        },
     }
 }
 
 fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) void {
-    var queued = self.pending.fetchRemove(robots_url) orelse return;
-    defer queued.value.deinit(self.allocator);
+    var queued = self.pending.take(robots_url) orelse return;
+    defer queued.deinit(self.allocator);
 
-    for (queued.value.items) |transfer| {
+    for (queued.items) |transfer| {
         if (!allowed) {
             log.warn(.http, "blocked by robots", .{ .url = transfer.req.url });
             transfer.abort(error.RobotsBlocked);
@@ -190,8 +182,8 @@ fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) voi
 // without owner teardown, this assumption breaks — see comment above
 // detachOrDeinit in HttpClient.zig.)
 fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8) void {
-    var pending = self.pending.fetchRemove(robots_url) orelse return;
-    pending.value.deinit(self.allocator);
+    var pending = self.pending.take(robots_url) orelse return;
+    pending.deinit(self.allocator);
 }
 
 const RobotsContext = struct {
@@ -248,9 +240,10 @@ const RobotsContext = struct {
                         try network.robot_store.putAbsent(robots_url);
                         break :blk null;
                     };
+
                     if (robots) |r| {
                         try network.robot_store.put(robots_url, r);
-                        const path = URL.getPathname(l.pending.get(robots_url).?.items[0].req.url);
+                        const path = URL.getPathname(l.pending.peek(robots_url).?[0].req.url);
                         allowed = r.isAllowed(path);
                     }
                 }
