@@ -367,8 +367,5 @@
     \\  --storage-sqlite-path <PATH>
     \\          Path to the SQLite database file for persistent storage.
     \\          Use ":memory:" for in-memory storage.
-    \\  --indexdb_dir <PATH>
-    \\          Directory to store an SQLite database for IndexDB.
-    \\          Defaults to ":memory:"
     ,
 }

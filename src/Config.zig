@@ -85,37 +85,7 @@ fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator) !?log.Level {
 }
 
 /// Common CLI args.
-const CommonOptions = .{
-    .{ .name = "obey_robots", .type = bool },
-    .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
-    .{ .name = "http_proxy", .type = ?[:0]const u8 },
-    .{ .name = "http_max_concurrent", .type = ?u8 },
-    .{ .name = "http_max_host_open", .type = ?u8 },
-    .{ .name = "http_timeout", .type = ?u31 },
-    .{ .name = "http_connect_timeout", .type = ?u31 },
-    .{ .name = "http_max_response_size", .type = ?usize },
-    .{ .name = "ws_max_concurrent", .type = ?u8 },
-    .{ .name = "insecure_disable_tls_host_verification", .type = bool },
-    .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
-    .{ .name = "log_format", .type = ?log.Format },
-    .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterScopesValidator },
-    .{ .name = "user_agent_suffix", .type = ?[]const u8 },
-    .{ .name = "http_cache_dir", .type = ?[]const u8 },
-    .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
-    .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
-    .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
-    .{ .name = "user_agent", .type = ?[]const u8 },
-    .{ .name = "block_private_networks", .type = bool },
-    .{ .name = "block_cidrs", .type = ?[]const u8 },
-    .{ .name = "cookie", .type = ?[]const u8 },
-    .{ .name = "cookie_jar", .type = ?[]const u8 },
-    .{ .name = "storage_engine", .type = ?Storage.EngineType },
-    .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
-    .{ .name = "disable_subframes", .type = bool },
-    .{ .name = "disable_workers", .type = bool },
-    .{ .name = "enable_external_stylesheets", .type = bool },
-    .{ .name = "indexdb_dir", .type = ?[:0]const u8 },
-};
+const CommonOptions = .{ .{ .name = "obey_robots", .type = bool }, .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 }, .{ .name = "http_proxy", .type = ?[:0]const u8 }, .{ .name = "http_max_concurrent", .type = ?u8 }, .{ .name = "http_max_host_open", .type = ?u8 }, .{ .name = "http_timeout", .type = ?u31 }, .{ .name = "http_connect_timeout", .type = ?u31 }, .{ .name = "http_max_response_size", .type = ?usize }, .{ .name = "ws_max_concurrent", .type = ?u8 }, .{ .name = "insecure_disable_tls_host_verification", .type = bool }, .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator }, .{ .name = "log_format", .type = ?log.Format }, .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterScopesValidator }, .{ .name = "user_agent_suffix", .type = ?[]const u8 }, .{ .name = "http_cache_dir", .type = ?[]const u8 }, .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 }, .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 }, .{ .name = "web_bot_auth_domain", .type = ?[]const u8 }, .{ .name = "user_agent", .type = ?[]const u8 }, .{ .name = "block_private_networks", .type = bool }, .{ .name = "block_cidrs", .type = ?[]const u8 }, .{ .name = "cookie", .type = ?[]const u8 }, .{ .name = "cookie_jar", .type = ?[]const u8 }, .{ .name = "storage_engine", .type = ?Storage.EngineType }, .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 }, .{ .name = "disable_subframes", .type = bool }, .{ .name = "disable_workers", .type = bool }, .{ .name = "enable_external_stylesheets", .type = bool } };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
     // Peek next argument.
@@ -564,13 +534,6 @@ pub fn storageEngine(self: *const Config) ?Storage.EngineType {
 pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_sqlite_path,
-        else => unreachable,
-    };
-}
-
-pub fn indexDBDir(self: *const Config) ?[:0]const u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.indexdb_dir,
         else => unreachable,
     };
 }

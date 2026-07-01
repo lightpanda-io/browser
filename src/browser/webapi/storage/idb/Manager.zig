@@ -27,11 +27,10 @@ const Allocator = std.mem.Allocator;
 const Manager = @This();
 
 allocator: Allocator,
-base_dir: []const u8,
 engines: std.StringHashMapUnmanaged(*Engine) = .empty,
 
-pub fn init(allocator: Allocator, base_dir: ?[]const u8) Manager {
-    return .{ .allocator = allocator, .base_dir = base_dir orelse ":memory:" };
+pub fn init(allocator: Allocator) Manager {
+    return .{ .allocator = allocator };
 }
 
 pub fn deinit(self: *Manager) void {
@@ -55,7 +54,7 @@ pub fn engineForOrigin(self: *Manager, origin: []const u8) !*Engine {
     const engine = try self.allocator.create(Engine);
     errdefer self.allocator.destroy(engine);
 
-    engine.* = try self.open(origin);
+    engine.* = try Engine.open(":memory:");
     errdefer engine.close();
 
     gop.key_ptr.* = try self.allocator.dupe(u8, origin);
@@ -63,29 +62,9 @@ pub fn engineForOrigin(self: *Manager, origin: []const u8) !*Engine {
     return engine;
 }
 
-fn open(self: *Manager, origin: []const u8) !Engine {
-    if (std.mem.eql(u8, self.base_dir, ":memory:")) {
-        return Engine.open(":memory:");
-    }
-
-    // we hash the origin for two reason:
-    // 1 - it fixes the length, so we don't have to worry about illegally long filename
-    // 2 - It removes any unsafe characters
-    var digest: [16]u8 = undefined;
-    std.crypto.hash.Blake3.hash(origin, &digest, .{});
-    var name_buf: [64]u8 = undefined;
-    const file_name = std.fmt.bufPrint(&name_buf, "idb-{x}.sqlite", .{&digest}) catch unreachable;
-
-    const path = try std.fs.path.joinZ(self.allocator, &.{ self.base_dir, file_name });
-    defer self.allocator.free(path);
-
-    log.debug(.storage, "idb open", .{ .origin = origin, .path = path });
-    return Engine.open(path);
-}
-
 const testing = @import("../../../../testing.zig");
 test "IDB - Manager: same origin returns same engine, distinct origins differ" {
-    var mgr = Manager.init(testing.allocator, null);
+    var mgr = Manager.init(testing.allocator);
     defer mgr.deinit();
 
     const a1 = try mgr.engineForOrigin("https://a.com");
@@ -97,7 +76,7 @@ test "IDB - Manager: same origin returns same engine, distinct origins differ" {
 }
 
 test "IDB - Manager: in-memory engines are origin-isolated" {
-    var mgr = Manager.init(testing.allocator, null);
+    var mgr = Manager.init(testing.allocator);
     defer mgr.deinit();
 
     const a = try mgr.engineForOrigin("https://a.com");
@@ -108,12 +87,7 @@ test "IDB - Manager: in-memory engines are origin-isolated" {
 }
 
 test "IDB - Manager: on-disk engines hash to per-origin files, isolated" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
-    defer testing.allocator.free(dir);
-
-    var mgr = Manager.init(testing.allocator, dir);
+    var mgr = Manager.init(testing.allocator);
     defer mgr.deinit();
 
     // A long origin (hostname near the 253-byte limit) must still open: the
