@@ -25,11 +25,9 @@ const crypto = @import("../sys/libcrypto.zig");
 const IpFilter = @import("IpFilter.zig");
 
 const log = @import("lightpanda").log;
-const assert = @import("lightpanda").assert;
 
 pub const ENABLE_DEBUG = false;
 
-pub const Blob = libcurl.CurlBlob;
 pub const WaitFd = libcurl.CurlWaitFd;
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
