@@ -86,6 +86,9 @@ fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator) !?log.Level {
 
 /// Common CLI args.
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ed18d6ede (fix broken zig fmt)
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
