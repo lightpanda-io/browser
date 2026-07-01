@@ -49,9 +49,6 @@ iid: ?[36]u8 = null,
 mode: []const u8,
 proxy: u8,
 
-// Header is sent before the first message, once sent, it isn't sent again
-header_sent: bool = false,
-
 // `mutex` guards the ring buffer (head/tail/dropped), `running`, and the lazy
 // `thread` creation. The sender thread blocks on `cond` while idle.
 mutex: std.Thread.Mutex = .{},
@@ -207,9 +204,7 @@ fn run(self: *LightPanda) void {
 }
 
 fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemetry.Event, dropped: u32, sent: *usize) !void {
-    if (self.header_sent == false) {
-        _ = try self.writeHeader();
-    }
+    _ = try self.writeHeader();
 
     // The overflow report rides ahead of the first body; the rest of that body
     // and any subsequent ones are filled from `events` below.
@@ -244,8 +239,6 @@ fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemet
         try self.flush(conn);
         sent.* += queued;
     }
-
-    self.header_sent = true;
 }
 
 fn flush(self: *LightPanda, conn: *http.Connection) !void {
