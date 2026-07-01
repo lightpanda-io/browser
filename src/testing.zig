@@ -715,6 +715,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/defer-marker.js")) {
+        // A deferred script body. Used by the regression test for a
+        // <script defer> whose completion is deferred by a later
+        // <link rel=stylesheet>'s synchronous fetch — it must still execute.
+        return req.respond("window.__deferRan = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/javascript" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/500")) {
         return req.respond("Internal Server Error", .{
             .status = .internal_server_error,
