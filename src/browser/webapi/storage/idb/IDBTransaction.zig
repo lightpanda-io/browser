@@ -138,6 +138,10 @@ pub fn abort(self: *IDBTransaction, exec: *Execution) !void {
     }
 
     for (self._requests.items) |request| {
+        request._op = .none;
+        if (request._ready_state == .done) {
+            continue;
+        }
         request.setError(error.AbortError);
         request.deliver(exec) catch |err| {
             log.warn(.storage, "idb abort deliver", .{ .err = err });
@@ -162,6 +166,13 @@ pub fn settle(self: *IDBTransaction, exec: *Execution) void {
     self.fire(exec, comptime .wrap("complete"), self._on_complete);
 }
 
+// "is this transaction still usable". Once settled, it cannot be used.
+pub fn assertActive(self: *const IDBTransaction) !void {
+    if (self._settled) {
+        return error.TransactionInactiveError;
+    }
+}
+
 pub fn ensureBegun(self: *IDBTransaction) !void {
     if (self._settled) {
         return error.TransactionInactiveError;
@@ -177,7 +188,6 @@ pub fn ensureBegun(self: *IDBTransaction) !void {
 pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
     const request = try IDBRequest.init(self._exec);
     request._txn = self;
-    try self.enqueue(request);
     return request;
 }
 
@@ -283,12 +293,28 @@ fn finalize(ctx: *anyopaque) void {
     }
 }
 
-// Deliver every queued request in order. Re-reads len each iteration so a
-// `success` handler can enqueue a follow-up request on this transaction.
 fn deliverPending(self: *IDBTransaction, exec: *Execution) void {
+    // exec.js.local must be non-null. In some cases it is (e.g. tx.commit()
+    // called directly from JS), in others is isn't (drain schedule tasks).
+    // Easier to explicitly create one and then restore whatever was there before.
+
+    const prev_local = exec.js.local;
+    defer exec.js.local = prev_local;
+
+    var ls: js.Local.Scope = undefined;
+    exec.js.localScope(&ls);
+    defer ls.deinit();
+
+    exec.js.local = &ls.local;
+
     var i: usize = 0;
     while (i < self._requests.items.len) : (i += 1) {
-        self._requests.items[i].deliver(exec) catch |err| {
+        const request = self._requests.items[i];
+        request.execute(exec) catch |err| {
+            log.warn(.storage, "idb request execute", .{ .err = err });
+            request.setError(err);
+        };
+        request.deliver(exec) catch |err| {
             log.warn(.storage, "idb request deliver", .{ .err = err });
         };
     }
