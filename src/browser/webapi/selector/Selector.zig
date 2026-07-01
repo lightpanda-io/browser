@@ -51,43 +51,27 @@ pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {
     return .{ .selectors = try Parser.parseList(arena, input) };
 }
 
-// SelectorPath synthesizes many one-off selectors, so past the cap we parse
-// into a per-call arena rather than grow the frame-lifetime cache unbounded.
-const max_cache_entries = 1024;
-
-/// The parsed AST borrows slices of its input, so on a miss the key is duped
-/// into `frame.arena` and parsed against that copy; both share the frame's
-/// lifetime. `fallback` backs the parse once the cache is full.
-fn cachedParse(frame: *Frame, fallback: Allocator, input: []const u8) ![]const Selector {
+/// Parse `input` via the frame's selector cache. The parsed AST borrows slices
+/// of its input, so on a miss the key is duped into `frame.arena` and parsed
+/// against that copy; both share the frame's lifetime. Only for selectors that
+/// recur (page scripts, waitForSelector) — one-off synthesized selectors use the
+/// `*Uncached` variants so they don't pollute a frame-lifetime cache.
+fn cachedParse(frame: *Frame, input: []const u8) ![]const Selector {
     if (input.len == 0) {
         return error.SyntaxError;
     }
     if (frame._selector_cache.get(input)) |selectors| {
         return selectors;
     }
-    if (frame._selector_cache.count() >= max_cache_entries) {
-        return Parser.parseList(fallback, input);
-    }
 
-    const arena = frame.arena;
-    const owned = try arena.dupe(u8, input);
-    const selectors = try Parser.parseList(arena, owned);
-    try frame._selector_cache.put(arena, owned, selectors);
+    const owned = try frame.arena.dupe(u8, input);
+    const selectors = try Parser.parseList(frame.arena, owned);
+    try frame._selector_cache.put(frame.arena, owned, selectors);
     return selectors;
 }
 
-pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
-    const parsed = Parsed{ .selectors = try cachedParse(frame, frame.call_arena, input) };
-    return parsed.query(root, frame);
-}
-
-pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
-    const arena = try frame.getArena(.small, "querySelectorAll");
-    errdefer frame.releaseArena(arena);
-
+fn collectAll(arena: Allocator, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
-
-    const selectors = try cachedParse(frame, arena, input);
     for (selectors) |selector| {
         try List.collect(arena, root, selector, &nodes, frame);
     }
@@ -100,28 +84,63 @@ pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
     return list;
 }
 
-pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
-    const selectors = try cachedParse(frame, frame.call_arena, input);
-
+fn matchesAny(selectors: []const Selector, el: *Node.Element, scope: *Node, frame: *Frame) bool {
     for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, el.asNode(), frame)) {
+        if (List.matches(el.asNode(), selector, scope, frame)) {
             return true;
         }
     }
     return false;
 }
 
+pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
+    const parsed = Parsed{ .selectors = try cachedParse(frame, input) };
+    return parsed.query(root, frame);
+}
+
+pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
+    const arena = try frame.getArena(.small, "querySelectorAll");
+    errdefer frame.releaseArena(arena);
+    return collectAll(arena, try cachedParse(frame, input), root, frame);
+}
+
+pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
+    return matchesAny(try cachedParse(frame, input), el, el.asNode(), frame);
+}
+
 // Like matches, but allows the caller to specify a scope node distinct from el.
 // Used by closest() so that :scope always refers to the original context element.
 pub fn matchesWithScope(el: *Node.Element, input: []const u8, scope: *Node.Element, frame: *Frame) !bool {
-    const selectors = try cachedParse(frame, frame.call_arena, input);
+    return matchesAny(try cachedParse(frame, input), el, scope.asNode(), frame);
+}
 
-    for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, scope.asNode(), frame)) {
-            return true;
-        }
+// Uncached counterparts for one-off selectors (SelectorPath's synthesized
+// candidates): parse into `arena` instead of the frame cache. querySelectorAll
+// has no arena parameter — it parses into the same pooled arena that backs the
+// returned List.
+
+pub fn querySelectorUncached(arena: Allocator, root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
+    if (input.len == 0) {
+        return error.SyntaxError;
     }
-    return false;
+    const parsed = Parsed{ .selectors = try Parser.parseList(arena, input) };
+    return parsed.query(root, frame);
+}
+
+pub fn querySelectorAllUncached(root: *Node, input: []const u8, frame: *Frame) !*List {
+    if (input.len == 0) {
+        return error.SyntaxError;
+    }
+    const arena = try frame.getArena(.small, "querySelectorAllUncached");
+    errdefer frame.releaseArena(arena);
+    return collectAll(arena, try Parser.parseList(arena, input), root, frame);
+}
+
+pub fn matchesUncached(arena: Allocator, el: *Node.Element, input: []const u8, frame: *Frame) !bool {
+    if (input.len == 0) {
+        return error.SyntaxError;
+    }
+    return matchesAny(try Parser.parseList(arena, input), el, el.asNode(), frame);
 }
 
 pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bool {
