@@ -240,3 +240,20 @@
   testing.expectEqual('a<b>bold</b>', d1.innerHTML);
   testing.expectEqual('B', d1.lastChild.tagName);
 </script>
+
+<script id=leadingBOM>
+  // A leading U+FEFF (BOM / ZWNBSP) is only stripped from a document's input
+  // stream, never from a parsed fragment. innerHTML must preserve it, otherwise
+  // round-tripped markup (e.g. React hydrating BOM-prefixed CMS strings) breaks.
+  // Uses the \uFEFF escape rather than a raw BOM byte so the assertion does not
+  // depend on this file's charset.
+  const el = document.createElement('div');
+  el.innerHTML = '\uFEFFabc';
+  testing.expectEqual(4, el.textContent.length);
+  testing.expectEqual(0xFEFF, el.textContent.charCodeAt(0));
+  testing.expectEqual('\uFEFFabc', el.textContent);
+
+  // An interior BOM is likewise preserved.
+  el.innerHTML = 'x\uFEFFy';
+  testing.expectEqual('x\uFEFFy', el.textContent);
+</script>
