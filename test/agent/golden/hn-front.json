@@ -1,0 +1,97 @@
+[
+  {
+    "comments": [
+      {
+        "text": "Comment 1 on story 101. This is deterministic fixture text.",
+        "user": "user_101_1"
+      },
+      {
+        "text": "Comment 2 on story 101. This is deterministic fixture text.",
+        "user": "user_101_2"
+      },
+      {
+        "text": "Comment 3 on story 101. This is deterministic fixture text.",
+        "user": "user_101_3"
+      }
+    ],
+    "rank": "1.",
+    "title": "Story One: Local-first software",
+    "url": "https://example.com/1"
+  },
+  {
+    "comments": [
+      {
+        "text": "Comment 1 on story 102. This is deterministic fixture text.",
+        "user": "user_102_1"
+      },
+      {
+        "text": "Comment 2 on story 102. This is deterministic fixture text.",
+        "user": "user_102_2"
+      },
+      {
+        "text": "Comment 3 on story 102. This is deterministic fixture text.",
+        "user": "user_102_3"
+      }
+    ],
+    "rank": "2.",
+    "title": "Story Two: A tiny headless browser",
+    "url": "https://example.com/2"
+  },
+  {
+    "comments": [
+      {
+        "text": "Comment 1 on story 103. This is deterministic fixture text.",
+        "user": "user_103_1"
+      },
+      {
+        "text": "Comment 2 on story 103. This is deterministic fixture text.",
+        "user": "user_103_2"
+      },
+      {
+        "text": "Comment 3 on story 103. This is deterministic fixture text.",
+        "user": "user_103_3"
+      }
+    ],
+    "rank": "3.",
+    "title": "Story Three: Zig comptime tricks",
+    "url": "https://example.com/3"
+  },
+  {
+    "comments": [
+      {
+        "text": "Comment 1 on story 104. This is deterministic fixture text.",
+        "user": "user_104_1"
+      },
+      {
+        "text": "Comment 2 on story 104. This is deterministic fixture text.",
+        "user": "user_104_2"
+      },
+      {
+        "text": "Comment 3 on story 104. This is deterministic fixture text.",
+        "user": "user_104_3"
+      }
+    ],
+    "rank": "4.",
+    "title": "Story Four: Deterministic replay for agents",
+    "url": "https://example.com/4"
+  },
+  {
+    "comments": [
+      {
+        "text": "Comment 1 on story 105. This is deterministic fixture text.",
+        "user": "user_105_1"
+      },
+      {
+        "text": "Comment 2 on story 105. This is deterministic fixture text.",
+        "user": "user_105_2"
+      },
+      {
+        "text": "Comment 3 on story 105. This is deterministic fixture text.",
+        "user": "user_105_3"
+      }
+    ],
+    "rank": "5.",
+    "title": "Story Five: The end of CDP overhead",
+    "url": "https://example.com/5"
+  }
+]

@@ -13,6 +13,7 @@ on:
     paths:
       - ".github/**"
       - "src/**"
+      - "test/agent/**"
       - "build.zig"
       - "build.zig.zon"
 
@@ -28,6 +29,7 @@ on:
     paths:
       - ".github/**"
       - "src/**"
+      - "test/agent/**"
       - "build.zig"
       - "build.zig.zon"
 
@@ -401,6 +403,33 @@ jobs:
       - run: chmod a+x ./lightpanda
 
       - run: ./lightpanda fetch https://demo-browser.lightpanda.io/campfire-commerce/
+
+  agent-deterministic:
+    name: agent deterministic replay
+    needs: zig-build-release
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # Checkout THIS repo — agent fixtures, golden files and run.sh live here.
+      - uses: actions/checkout@v6
+
+      - name: download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: lightpanda-build-release
+          path: bin
+
+      - run: chmod a+x bin/lightpanda
+
+      # No API key: replays a golden PandaScript against frozen local fixtures
+      # and diffs the returned JSON against golden/hn-front.json. The keyed
+      # live layer runs separately in agent-regression.yml.
+      - name: deterministic agent replay
+        env:
+          LPD: ${{ github.workspace }}/bin/lightpanda
+        run: ./test/agent/run.sh deterministic
 
   mcp-smoke:
     name: mcp smoke
