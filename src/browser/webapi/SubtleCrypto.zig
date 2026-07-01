@@ -185,7 +185,7 @@ pub fn importKey(
             const k = jwk.k orelse {
                 return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
             };
-            break :blk common.base64Decode(exec.call_arena, k) catch |err| switch (err) {
+            break :blk common.base64Decode(exec.local_arena, k) catch |err| switch (err) {
                 error.DataError => return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } }),
                 else => |e| return e,
             };
@@ -309,13 +309,13 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !js.Promise {
 
     // The `alg` registry value depends on the algorithm and key length.
     const alg: []const u8 = switch (key._type) {
-        .aes => try std.fmt.allocPrint(exec.call_arena, "A{d}{s}", .{
+        .aes => try std.fmt.allocPrint(exec.local_arena, "A{d}{s}", .{
             key._key.len * 8,
             key._algorithm.name[4..], // strip "AES-"
         }),
         .hmac => blk: {
             const hash: []const u8 = key._algorithm.hash orelse "SHA-";
-            break :blk try std.fmt.allocPrint(exec.call_arena, "HS{s}", .{hash[4..]}); // strip "SHA-"
+            break :blk try std.fmt.allocPrint(exec.local_arena, "HS{s}", .{hash[4..]}); // strip "SHA-"
         },
         else => {
             log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
@@ -324,7 +324,7 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !js.Promise {
     };
 
     return local.resolvePromise(JwkSecret{
-        .k = try common.base64Encode(exec.call_arena, key._key),
+        .k = try common.base64Encode(exec.local_arena, key._key),
         .alg = alg,
         .ext = key._extractable,
         .key_ops = try key.getUsages(exec),

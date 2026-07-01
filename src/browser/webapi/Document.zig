@@ -171,7 +171,7 @@ pub fn setDomain(self: *Document, value: []const u8) !void {
     const doc_frame = self._frame orelse return error.SecurityError;
     const origin = doc_frame.origin orelse return error.SecurityError;
 
-    const arena = doc_frame.call_arena;
+    const arena = doc_frame.local_arena;
     const requested = if (idna.needsAscii(value)) try idna.toAscii(arena, value) else value;
 
     // Validate against the current effective domain. Once relaxed,
@@ -193,7 +193,7 @@ pub fn setDomain(self: *Document, value: []const u8) !void {
 
 pub fn getCookie(_: *Document, frame: *Frame) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
-    try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.call_arena), .{
+    try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.local_arena), .{
         .is_http = false,
         .is_navigation = true,
     });
@@ -738,7 +738,7 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Eleme
 
     const root = self.asNode();
     var stack: std.ArrayList(*Node) = .empty;
-    try stack.append(frame.call_arena, root);
+    try stack.append(frame.local_arena, root);
 
     var visibility_cache: Element.VisibilityCache = .{};
     var preorder_index: f64 = 0;
@@ -770,7 +770,7 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Eleme
         // Add children to stack in reverse order so we process them in document order
         var child = node.lastChild();
         while (child) |c| {
-            try stack.append(frame.call_arena, c);
+            try stack.append(frame.local_arena, c);
             child = c.previousSibling();
         }
     }
@@ -783,7 +783,7 @@ pub fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]cons
     var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
     var result: std.ArrayList(*Element) = .empty;
     while (current) |el| {
-        try result.append(frame.call_arena, el);
+        try result.append(frame.local_arena, el);
         current = el.parentElement();
     }
     return result.items;

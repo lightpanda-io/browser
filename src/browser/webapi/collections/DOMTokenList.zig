@@ -45,7 +45,7 @@ const Lookup = std.StringArrayHashMapUnmanaged(void);
 const WHITESPACE = " \t\n\r\x0C";
 
 pub fn length(self: *const DOMTokenList, frame: *Frame) !u32 {
-    const tokens = try self.getTokens(frame.call_arena);
+    const tokens = try self.getTokens(frame.local_arena);
     return @intCast(tokens.count());
 }
 
@@ -53,7 +53,7 @@ pub fn length(self: *const DOMTokenList, frame: *Frame) !u32 {
 pub fn item(self: *const DOMTokenList, index: usize, frame: *Frame) !?[]const u8 {
     var i: usize = 0;
 
-    const allocator = frame.call_arena;
+    const allocator = frame.local_arena;
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
 
     var it = std.mem.tokenizeAny(u8, self.getValue(), WHITESPACE);
@@ -84,7 +84,7 @@ pub fn add(self: *DOMTokenList, tokens: []const []const u8, frame: *Frame) !void
         try validateToken(token);
     }
 
-    const allocator = frame.call_arena;
+    const allocator = frame.local_arena;
     var lookup = try self.getTokens(allocator);
     try lookup.ensureUnusedCapacity(allocator, tokens.len);
 
@@ -100,7 +100,7 @@ pub fn remove(self: *DOMTokenList, tokens: []const []const u8, frame: *Frame) !v
         try validateToken(token);
     }
 
-    var lookup = try self.getTokens(frame.call_arena);
+    var lookup = try self.getTokens(frame.local_arena);
     for (tokens) |token| {
         _ = lookup.orderedRemove(token);
     }
@@ -151,8 +151,8 @@ pub fn replace(self: *DOMTokenList, old_token: []const u8, new_token: []const u8
         return error.InvalidCharacterError;
     }
 
-    const allocator = frame.call_arena;
-    var lookup = try self.getTokens(frame.call_arena);
+    const allocator = frame.local_arena;
+    var lookup = try self.getTokens(allocator);
 
     // Check if old_token exists
     if (!lookup.contains(old_token)) {

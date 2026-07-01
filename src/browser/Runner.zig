@@ -368,7 +368,7 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
         defer try_catch.deinit();
 
         const s = ls.local.compile(src, "wait_script") catch |err| {
-            const caught = try_catch.caughtOrError(frame.call_arena, err);
+            const caught = try_catch.caughtOrError(frame.local_arena, err);
             log.err(.app, "wait script error", .{ .err = caught });
             return error.ScriptError;
         };
@@ -396,7 +396,7 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
 
         const script = compiled.get(ls.local.isolate).bindToCurrentContext(&ls.local);
         const value = script.run() catch |err| {
-            const caught = try_catch.caughtOrError(frame.call_arena, err);
+            const caught = try_catch.caughtOrError(frame.local_arena, err);
             log.err(.app, "wait script error", .{ .err = caught });
             return error.ScriptError;
         };

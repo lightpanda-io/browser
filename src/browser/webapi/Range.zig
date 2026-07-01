@@ -569,7 +569,7 @@ pub fn createContextualFragment(self: *const Range, html: []const u8, frame: *Fr
 
 pub fn toString(self: *const Range, frame: *Frame) ![]const u8 {
     // Simplified implementation: just extract text content
-    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try self.writeTextContent(&buf.writer);
     return buf.written();
 }

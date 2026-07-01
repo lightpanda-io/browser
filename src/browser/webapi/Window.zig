@@ -696,11 +696,11 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
 
 const base64 = @import("encoding/base64.zig");
 pub fn btoa(_: *const Window, input: base64.BinInput, frame: *Frame) ![]const u8 {
-    return base64.encode(frame.call_arena, input);
+    return base64.encode(frame.local_arena, input);
 }
 
 pub fn atob(_: *const Window, input: base64.BinInput, frame: *Frame) !js.String.OneByte {
-    const decoded = try base64.decode(frame.call_arena, input);
+    const decoded = try base64.decode(frame.local_arena, input);
     return .{ .bytes = decoded };
 }
 

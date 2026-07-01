@@ -38,7 +38,7 @@ pub fn getStyle(self: *CSSStyleRule, frame: *Frame) !*CSSStyleProperties {
 pub fn getCssText(self: *CSSStyleRule, frame: *Frame) ![]const u8 {
     const style_props = try self.getStyle(frame);
     const style = style_props.asCSSStyleDeclaration();
-    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try buf.writer.print("{s} {{ ", .{self._selector_text});
     try style.format(&buf.writer);
     try buf.writer.writeAll(" }");

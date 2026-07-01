@@ -151,7 +151,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     const normalized = normalizePropertyName(property_name, &frame.buf);
 
     // Normalize the value for canonical serialization
-    const normalized_value = try normalizePropertyValue(frame.call_arena, normalized, value);
+    const normalized_value = try normalizePropertyValue(frame.local_arena, normalized, value);
 
     // Find existing property
     if (self.findProperty(.wrap(normalized))) |existing| {
@@ -206,7 +206,7 @@ pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) 
 }
 
 pub fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
-    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try self.format(&buf.writer);
     return buf.written();
 }

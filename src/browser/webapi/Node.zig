@@ -908,7 +908,7 @@ pub fn setData(self: *Node, data: []const u8, frame: *Frame) !void {
 
 pub fn normalize(self: *Node, frame: *Frame) !void {
     var buffer: std.ArrayList(u8) = .empty;
-    return self._normalize(frame.call_arena, &buffer, frame);
+    return self._normalize(frame.local_arena, &buffer, frame);
 }
 
 const CloneError = error{
@@ -1311,7 +1311,9 @@ pub const JsApi = struct {
         // cdata and attributes can return value directly, avoiding the copy
         switch (self._type) {
             .element, .document_fragment => {
-                var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+                // local_arena: read-only text collection, result converted to
+                // v8 before returning; no JS runs in between.
+                var buf = std.Io.Writer.Allocating.init(frame.local_arena);
                 try self.getTextContent(&buf.writer);
                 return buf.written();
             },

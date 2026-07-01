@@ -302,7 +302,7 @@ pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     if (fl._files.len == 0) {
         return "";
     }
-    return try std.fmt.allocPrint(frame.call_arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
+    return try std.fmt.allocPrint(frame.local_arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
 }
 
 pub fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {

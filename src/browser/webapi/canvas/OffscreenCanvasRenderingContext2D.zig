@@ -34,7 +34,7 @@ const OffscreenCanvasRenderingContext2D = @This();
 _fill_style: color.RGBA = color.RGBA.Named.black,
 
 pub fn getFillStyle(self: *const OffscreenCanvasRenderingContext2D, exec: *Execution) ![]const u8 {
-    var w = std.Io.Writer.Allocating.init(exec.call_arena);
+    var w = std.Io.Writer.Allocating.init(exec.local_arena);
     try self._fill_style.format(&w.writer);
     return w.written();
 }

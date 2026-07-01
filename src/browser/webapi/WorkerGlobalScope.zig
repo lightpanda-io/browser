@@ -70,6 +70,7 @@ _http_owner: HttpClient.Owner = .{},
 
 arena: Allocator,
 call_arena: Allocator,
+local_arena: Allocator,
 url: [:0]const u8,
 // Same-origin constraint: a worker's origin is inherited from its parent frame.
 origin: ?[]const u8 = null,
@@ -129,6 +130,9 @@ pub fn init(
     const call_arena = try session.getArena(.small, "WorkerGlobalScope.call_arena");
     errdefer session.releaseArena(call_arena);
 
+    const local_arena = try session.getArena(.small, "WorkerGlobalScope.local_arena");
+    errdefer session.releaseArena(local_arena);
+
     const factory = frame._factory;
     const self = try factory.eventTargetWithAllocator(arena, WorkerGlobalScope{
         .url = url,
@@ -136,6 +140,7 @@ pub fn init(
         .origin = frame.origin,
         .js = undefined,
         .call_arena = call_arena,
+        .local_arena = local_arena,
         ._frame = frame,
         ._page = frame._page,
         ._session = session,
@@ -162,6 +167,7 @@ pub fn init(
 
     self.js = try session.browser.env.createWorkerContext(self, .{
         .call_arena = call_arena,
+        .local_arena = local_arena,
         .identity_arena = arena,
         .identity = &self._identity,
     });
@@ -191,6 +197,7 @@ pub fn deinit(self: *WorkerGlobalScope) void {
     }
     browser.env.destroyContext(self.js);
     session.releaseArena(self.call_arena);
+    session.releaseArena(self.local_arena);
 }
 
 pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {

@@ -190,7 +190,7 @@ pub fn getUsages(self: *const CryptoKey, exec: *const Execution) ![]const []cons
             n += 1;
         }
     }
-    return exec.call_arena.dupe([]const u8, buf[0..n]);
+    return exec.local_arena.dupe([]const u8, buf[0..n]);
 }
 
 pub const JsApi = struct {

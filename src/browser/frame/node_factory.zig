@@ -356,7 +356,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                                 defer try_catch.deinit();
 
                                 ls.local.eval(inject_script, "inject_script") catch |err| {
-                                    const caught = try_catch.caughtOrError(frame.call_arena, err);
+                                    const caught = try_catch.caughtOrError(frame.local_arena, err);
                                     log.err(.app, "inject script error", .{ .err = caught });
                                 };
                             }

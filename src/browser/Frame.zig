@@ -251,9 +251,14 @@ js: *JS.Context,
 // An arena for the lifetime of the frame.
 arena: Allocator,
 
-// An arena with a lifetime guaranteed to be for 1 invoking of a Zig function
-// from JS. Best arena to use, when possible.
+// An arena with a lifetime for at least the scope of one Zig invocation from
+// JS. Prefer local_arena where possible. Use call_arena when allocations may
+// need to call back into JS (event dispatch, forEach callback, ....)
 call_arena: Allocator,
+
+// An arena with a lifetime guaranteed to be for exactly 1 invoking of a Zig
+// function from JS. Best arena to use, when possible.
+local_arena: Allocator,
 
 parent: ?*Frame,
 window: *Window,
@@ -306,6 +311,9 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     const call_arena = try session.getArena(.medium, "call_arena");
     errdefer session.releaseArena(call_arena);
 
+    const local_arena = try session.getArena(.medium, "local_arena");
+    errdefer session.releaseArena(local_arena);
+
     const factory = &page.factory;
     const document = (try factory.document(Node.Document.HTMLDocument{
         ._proto = undefined,
@@ -320,6 +328,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .document = document,
         .window = undefined,
         .call_arena = call_arena,
+        .local_arena = local_arena,
         ._frame_id = frame_id,
         ._page = page,
         ._session = session,
@@ -382,6 +391,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .identity = &page.identity,
         .identity_arena = arena,
         .call_arena = self.call_arena,
+        .local_arena = self.local_arena,
     });
     errdefer browser.env.destroyContext(self.js);
 
@@ -480,6 +490,7 @@ pub fn deinit(self: *Frame) void {
     self._style_manager.deinit();
 
     page.releaseArena(self.call_arena);
+    page.releaseArena(self.local_arena);
 }
 
 pub fn trackWorker(self: *Frame, worker: *Worker) !void {

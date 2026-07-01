@@ -103,7 +103,7 @@ pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
         return "";
     };
 
-    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try title_element.asNode().getTextContent(&buf.writer);
     const text = buf.written();
 
@@ -114,7 +114,7 @@ pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
     var started = false;
     var in_whitespace = false;
     var result: std.ArrayList(u8) = .empty;
-    try result.ensureTotalCapacity(frame.call_arena, text.len);
+    try result.ensureTotalCapacity(frame.local_arena, text.len);
 
     for (text) |c| {
         const is_ascii_ws = c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0C';
