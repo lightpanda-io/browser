@@ -526,9 +526,20 @@ pub extern "C" fn html5ever_parse_fragment(
         }
     };
 
+    // Only a document's input stream may have a single leading U+FEFF BOM
+    // stripped; fragment parsing (innerHTML, setHTMLUnsafe, etc.) must preserve
+    // a leading U+FEFF as a ZWNBSP.
+    let opts = ParseOpts {
+        tokenizer: html5ever::tokenizer::TokenizerOpts {
+            discard_bom: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
     parse_fragment(
         sink,
-        Default::default(),
+        opts,
         QualName::new(None, ns!(html), context_local),
         vec![], // attributes
         false,  // context_element_allows_scripting
