@@ -156,11 +156,9 @@ pub fn matchesWithScope(el: *Node.Element, input: []const u8, scope: *Node.Eleme
     return matchesAny(try cachedParse(frame, input), el, scope.asNode(), frame);
 }
 
-// Uncached counterparts for one-off selectors (SelectorPath's synthesized
-// candidates): parse into `arena` instead of the frame cache. querySelectorAll
-// has no arena parameter — it parses into the same pooled arena that backs the
-// returned List.
-
+/// Uncached counterparts for one-off selectors (SelectorPath): parse into
+/// `arena` instead of caching. querySelectorAllUncached takes no arena — it uses
+/// the pooled arena backing its List.
 pub fn querySelectorUncached(arena: Allocator, root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
     if (input.len == 0) {
         return error.SyntaxError;
