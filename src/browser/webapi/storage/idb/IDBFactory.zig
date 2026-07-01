@@ -118,7 +118,11 @@ const OpenContext = struct {
         // it's exposed as `request.transaction` and committed here once the
         // handler returns.
         try engine.begin();
-        errdefer engine.rollback();
+
+        var closed = false;
+        errdefer if (closed == false) {
+            engine.rollback();
+        };
 
         const database_id = try engine.upsertDatabase(self.name, requested);
         const db = try IDBDatabase.init(exec, engine, database_id, self.name, requested);
@@ -135,13 +139,16 @@ const OpenContext = struct {
         }
 
         if (txn.aborted()) {
-            // updateneeded handler called abort() (what a jerk!)
+            // updateneeded handler called abort() (what a jerk!) — abort() already
+            // rolled back.
+            closed = true;
             self.request._txn = null;
             self.request.setError(error.AbortError);
             return self.request.deliver(exec);
         }
 
         txn.settle(exec);
+        closed = true;
         self.request._txn = null;
         return self.request.fireSuccess(exec);
     }

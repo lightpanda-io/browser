@@ -335,7 +335,9 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
 
 pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: js.Value.Global, prepared: PreparedKey, exec: *Execution) !void {
     self.writeInner(request, kind, value_global, prepared, exec) catch |err| {
-        log.warn(.storage, "idb write", .{ .err = err, .kind = kind });
+        if (err != error.Constraint) {
+            log.warn(.storage, "idb write", .{ .err = err, .kind = kind });
+        }
         request.setError(err);
     };
 }

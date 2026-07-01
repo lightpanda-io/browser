@@ -145,11 +145,12 @@ pub fn abort(self: *IDBTransaction, exec: *Execution) !void {
         self._engine.rollback();
     }
 
-    for (self._requests.items) |request| {
-        request._op = .none;
-        if (request._ready_state == .done) {
+    // request whose op already ran (op == .none) was delivered and is skipped.
+    for (self._requests.items, 0..) |request, i| {
+        if (i != request._txn_index or request._op == .none) {
             continue;
         }
+        request._op = .none;
         request.setError(error.AbortError);
         request.deliver(exec) catch |err| {
             log.warn(.storage, "idb abort deliver", .{ .err = err });
@@ -162,7 +163,14 @@ pub fn abort(self: *IDBTransaction, exec: *Execution) !void {
 // commit fails). Drives a transaction to a successful close — shared by the
 // drain task and the open path's synchronous versionchange transaction.
 pub fn settle(self: *IDBTransaction, exec: *Execution) void {
+    if (self._settled) {
+        return;
+    }
     self.deliverPending(exec);
+    if (self._settled) {
+        // a request handler might have settled this (e.g. called abort)
+        return;
+    }
     if (self._begun) {
         self._engine.commit() catch |err| {
             log.warn(.storage, "idb commit", .{ .err = err, .sqlite = self._engine.conn.lastError() });
@@ -201,6 +209,7 @@ pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
 }
 
 pub fn enqueue(self: *IDBTransaction, request: *IDBRequest) !void {
+    request._txn_index = self._requests.items.len;
     try self._requests.append(self._exec.arena, request);
 }
 
@@ -318,6 +327,11 @@ fn deliverPending(self: *IDBTransaction, exec: *Execution) void {
 
     var i: usize = 0;
     while (i < self._requests.items.len) : (i += 1) {
+        // A handler may have aborted the transaction mid-delivery; abort() already
+        // delivered AbortError to the remaining requests, so stop here.
+        if (self._settled) {
+            return;
+        }
         const request = self._requests.items[i];
         request.execute(exec) catch |err| {
             log.warn(.storage, "idb request execute", .{ .err = err });

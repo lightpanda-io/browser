@@ -997,6 +997,29 @@
 }
 </script>
 
+<!-- A request's success handler may abort() its own transaction mid-delivery.
+     settle() must not then commit/rollback the already-rolled-back transaction, and
+     the write must not persist. -->
+<script id="abort_in_success_handler" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("abort-handler-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s").add("v1", "k");
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction("s", "readwrite");
+        const req = tx.objectStore("s").put("v2", "k");
+        req.onsuccess = () => tx.abort();
+        tx.onabort = () => {
+            const g = db.transaction("s", "readonly").objectStore("s").get("k");
+            g.onsuccess = () => state.resolve(g.result);
+        };
+    };
+    // The put was rolled back by the abort, so "k" keeps its original value.
+    await state.done((value) => testing.expectEqual("v1", value));
+}
+</script>
+
 <!-- After commit(), the transaction is "committing": abort() must throw
      InvalidStateError (commit wins), and the writes still land. -->
 <script id="commit_then_abort" type=module>
@@ -1021,6 +1044,31 @@
     await state.done((got) => {
         testing.expectEqual("InvalidStateError", got.threw);
         testing.expectEqual("v", got.value); // commit won, the write persisted
+    });
+}
+</script>
+
+<!-- Calling commit() inside upgradeneeded settles the versionchange transaction;
+     the open path must not settle it a second time. The upgrade still persists and
+     the open still succeeds. -->
+<script id="commit_in_upgradeneeded" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("commit-upgrade-db", 1);
+    open.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        db.createObjectStore("s").add("v", "k");
+        e.target.transaction.commit();
+    };
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const g = db.transaction("s", "readonly").objectStore("s").get("k");
+        g.onsuccess = () => state.resolve({ version: db.version, value: g.result });
+    };
+    open.onerror = () => state.resolve({ err: open.error && open.error.name });
+    await state.done((got) => {
+        testing.expectEqual(1, got.version);
+        testing.expectEqual("v", got.value);
     });
 }
 </script>
