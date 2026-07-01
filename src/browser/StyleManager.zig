@@ -864,13 +864,13 @@ const CheckVisibilityOptions = struct {
 const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
 fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*CSSStyleProperty {
-    if (!el.hasAttributeSafe(comptime .wrap("style"))) {
-        // cheap guard to avoid creating the CSSStyleProperty if there is no style attribute
-        return null;
-    }
-    const style = el.getOrCreateStyle(frame) catch |err| {
-        log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
-        return null;
+    const style = frame._element_styles.get(el) orelse blk: {
+        // No JS-set style object and no style attribute -> nothing inline to read.
+        if (el.getAttributeSafe(comptime .wrap("style")) == null) return null;
+        break :blk el.getOrCreateStyle(frame) catch |err| {
+            log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
+            return null;
+        };
     };
     return style.asCSSStyleDeclaration().findProperty(property_name);
 }
