@@ -22,9 +22,11 @@ const js = @import("../../../js/js.zig");
 
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
+const IDBCursor = @import("IDBCursor.zig");
 
 const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
+const Direction = IDBCursor.Direction;
 
 const IDBKeyRange = @This();
 
@@ -121,18 +123,82 @@ pub fn toBounds(self: *const IDBKeyRange) Engine.Bounds {
     };
 }
 
-// Resolve a get/getAll/count/delete query argument — a key, an IDBKeyRange, or
-// nothing (null/undefined) — into engine bounds. A bare key becomes a point
-// range; the encoded key is allocated in `arena`.
 pub fn resolveQuery(arena: Allocator, query: ?js.Value, exec: *Execution) !Engine.Bounds {
     const q = query orelse return Engine.Bounds.unbounded();
     if (q.isNullOrUndefined()) {
         return Engine.Bounds.unbounded();
     }
+
     if (exec.js.local.?.jsValueToZig(*IDBKeyRange, q)) |range| {
         return range.toBounds();
     } else |_| {}
+
     return Engine.Bounds.point(try Key.encodeValue(arena, q));
+}
+
+pub const GetAllArgs = struct {
+    bounds: Engine.Bounds,
+    direction: Direction = .next,
+    count: ?u32 = null,
+};
+
+// getAll/getAllKeys take either the legacy (query, count) pair or a single
+// IDBGetAllOptions dictionary as the first argument. Per Web IDL, the first
+// argument is the options dictionary when it's an object that is not itself a key
+// or an IDBKeyRange; otherwise it's the query and `count` is the count.
+pub fn resolveGetAll(arena: Allocator, query_or_options: ?js.Value, count: ?u32, exec: *Execution) !GetAllArgs {
+    if (query_or_options) |v| {
+        if (isOptionsDictionary(v, exec)) {
+            return resolveOptions(arena, v, exec);
+        }
+    }
+    return .{ .bounds = try resolveQuery(arena, query_or_options, exec), .count = normalizeCount(count) };
+}
+
+// getAllRecords always takes an IDBGetAllOptions dictionary (or nothing).
+pub fn resolveGetAllOptions(arena: Allocator, options: ?js.Value, exec: *Execution) !GetAllArgs {
+    const v = options orelse return .{ .bounds = Engine.Bounds.unbounded() };
+    if (v.isNullOrUndefined()) {
+        return .{ .bounds = Engine.Bounds.unbounded() };
+    }
+    return resolveOptions(arena, v, exec);
+}
+
+fn isOptionsDictionary(v: js.Value, exec: *Execution) bool {
+    if (!v.isObject()) {
+        return false;
+    }
+
+    // Objects that are themselves valid keys (array / binary / date) or a key
+    // range are queries, not the options dictionary.
+    if (v.isArray() or v.isArrayBuffer() or v.isTypedArray() or v.isDate()) {
+        return false;
+    }
+
+    if (exec.js.local.?.jsValueToZig(*IDBKeyRange, v)) |_| return false else |_| {}
+    return true;
+}
+
+fn resolveOptions(arena: Allocator, v: js.Value, exec: *Execution) !GetAllArgs {
+    const obj = v.toObject();
+    var args: GetAllArgs = .{ .bounds = try resolveQuery(arena, try obj.get("query"), exec) };
+
+    const count = try obj.get("count");
+    if (!count.isNullOrUndefined()) {
+        args.count = normalizeCount(try count.toU32());
+    }
+
+    const direction = try obj.get("direction");
+    if (!direction.isNullOrUndefined()) {
+        args.direction = try direction.toZig(Direction);
+    }
+
+    return args;
+}
+
+fn normalizeCount(count: ?u32) ?u32 {
+    const c = count orelse return null;
+    return if (c == 0) null else c;
 }
 
 pub const JsApi = struct {

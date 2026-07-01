@@ -925,7 +925,6 @@
         const db = e.target.result;
         const tx = db.transaction("s", "readwrite");
         tx.objectStore("s").clear();
-        // oncomplete must be set before commit(): commit settles synchronously.
         tx.oncomplete = () => {
             const c = db.transaction("s", "readonly").objectStore("s").count();
             c.onsuccess = () => state.resolve(c.result);
@@ -995,6 +994,82 @@
         txb.onerror = () => state.resolve({ err: txb.error.name });
     };
     await state.done((count) => testing.expectEqual(2, count));
+}
+</script>
+
+<!-- After commit(), the transaction is "committing": abort() must throw
+     InvalidStateError (commit wins), and the writes still land. -->
+<script id="commit_then_abort" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("commit-abort-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction("s", "readwrite");
+        tx.objectStore("s").put("v", "k");
+        tx.commit();
+
+        let threw = null;
+        try { tx.abort(); } catch (err) { threw = err.name; }
+
+        tx.oncomplete = () => {
+            const g = db.transaction("s", "readonly").objectStore("s").get("k");
+            g.onsuccess = () => state.resolve({ threw, value: g.result });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual("InvalidStateError", got.threw);
+        testing.expectEqual("v", got.value); // commit won, the write persisted
+    });
+}
+</script>
+
+<!-- getAllRecords + the IDBGetAllOptions dictionary (query/count/direction),
+     returning IDBRecord {key, primaryKey, value}. Also checks the dictionary
+     overload of getAll/getAllKeys, and that commit() delivers asynchronously (the
+     request handler is attached *after* commit()). -->
+<script id="get_all_records" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("records-db", 1);
+    open.onupgradeneeded = (e) => {
+        const store = e.target.result.createObjectStore("s");
+        for (const k of ["a", "b", "c", "d"]) store.add("v" + k, k);
+    };
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const out = {};
+
+        // getAllRecords with a bound range, reversed.
+        const tx = db.transaction("s", "readonly");
+        const r1 = tx.objectStore("s").getAllRecords(
+            { query: IDBKeyRange.bound("b", "d"), direction: "prev", count: 2 });
+        r1.onsuccess = () => { out.records = r1.result.map((rec) => [rec.key, rec.primaryKey, rec.value]); };
+
+        // getAll via the options-dictionary overload.
+        const r2 = tx.objectStore("s").getAll({ count: 2 });
+        r2.onsuccess = () => { out.values = r2.result; };
+
+        // commit() is async: this success handler is attached after commit().
+        const r3 = tx.objectStore("s").getAllKeys();
+        tx.commit();
+        r3.onsuccess = () => { out.keys = r3.result; state.resolve(out); };
+    };
+    await state.done((got) => {
+        // prev over [b,d] => d,c,b; count 2 => d,c. record = [key, primaryKey, value].
+        testing.expectEqual(2, got.records.length);
+        testing.expectEqual("d", got.records[0][0]);
+        testing.expectEqual("d", got.records[0][1]);
+        testing.expectEqual("vd", got.records[0][2]);
+        testing.expectEqual("c", got.records[1][0]);
+        // getAll({count:2}) => first two values.
+        testing.expectEqual(2, got.values.length);
+        testing.expectEqual("va", got.values[0]);
+        // getAllKeys still delivered after the post-commit() handler was attached.
+        testing.expectEqual(4, got.keys.length);
+        testing.expectEqual("a", got.keys[0]);
+    });
 }
 </script>
 </body>

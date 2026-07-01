@@ -24,6 +24,7 @@ const js = @import("../../../js/js.zig");
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
 const IDBCursor = @import("IDBCursor.zig");
+const IDBRecord = @import("IDBRecord.zig");
 const IDBRequest = @import("IDBRequest.zig");
 const IDBKeyRange = @import("IDBKeyRange.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
@@ -96,23 +97,30 @@ pub fn runGetKey(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, e
     try request.setValue(try Key.decodeToJs(arena, exec.js.local.?, b));
 }
 
-pub fn getAll(self: *IDBIndex, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
-    return self._getAll(query, count_, .value, exec);
+pub fn getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+    return self._getAll(query_or_options, count_, .value, exec);
 }
 
-pub fn getAllKeys(self: *IDBIndex, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
-    return self._getAll(query, count_, .key, exec);
+pub fn getAllKeys(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+    return self._getAll(query_or_options, count_, .key, exec);
 }
 
-fn _getAll(self: *IDBIndex, query: ?js.Value, count_: ?u32, column: Engine.Column, exec: *Execution) !*IDBRequest {
+pub fn getAllRecords(self: *IDBIndex, options: ?js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
+    const args = try IDBKeyRange.resolveGetAllOptions(exec.arena, options, exec);
     const request = try t.newRequest();
-    return request.submit(.{ .index_get_all = .{ .index = self, .bounds = bounds, .column = column, .count = count_ } }, exec);
+    return request.submit(.{ .index_get_all = .{ .index = self, .args = args, .mode = .record } }, exec);
 }
 
-pub fn runGetAll(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, column: Engine.Column, count_: ?u32, exec: *Execution) !void {
-    const arr = self.collectAll(bounds, count_, column, exec) catch |err| {
+fn _getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, mode: IDBObjectStore.GetAllMode, exec: *Execution) !*IDBRequest {
+    const t = try self.txn();
+    const args = try IDBKeyRange.resolveGetAll(exec.arena, query_or_options, count_, exec);
+    const request = try t.newRequest();
+    return request.submit(.{ .index_get_all = .{ .index = self, .args = args, .mode = mode } }, exec);
+}
+
+pub fn runGetAll(self: *IDBIndex, request: *IDBRequest, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode, exec: *Execution) !void {
+    const arr = self.collectAll(args, mode, exec) catch |err| {
         log.warn(.storage, "idb index getAll", .{ .err = err });
         request.setError(err);
         return;
@@ -120,24 +128,32 @@ pub fn runGetAll(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, c
     try request.setValue(arr);
 }
 
-// Stream an index getAll/getAllKeys straight into a JS array: .value rows are
-// the joined records (deserialized), .key rows are primary keys (decoded).
-fn collectAll(self: *IDBIndex, bounds: Engine.Bounds, count_: ?u32, column: Engine.Column, exec: *Execution) !js.Value {
+// Build a JS array of an index result: for .value the joined record value; for .key
+// the primary key; for .record the (index key, primary key, value) triple.
+fn collectAll(self: *IDBIndex, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode, exec: *Execution) !js.Value {
     const local = exec.js.local.?;
-    const arena = exec.call_arena;
+    const reverse = args.direction == .prev or args.direction == .prevunique;
+    const unique = args.direction == .nextunique or args.direction == .prevunique;
 
-    var rows = try self._engine.indexGetAllRangeRows(self._store._store_id, self._index_id, bounds, column, count_);
+    var rows = try self._engine.indexGetAllRows(self._store._store_id, self._index_id, args.bounds, reverse, unique, args.count);
     defer rows.deinit();
 
     const arr = local.newArray(0);
     var i: u32 = 0;
     while (try rows.next()) |row| {
-        const bytes = row.get([]const u8, 0);
-        const value = if (column == .value) try js.Value.deserialize(local, bytes) else try Key.decodeToJs(arena, local, bytes);
-        _ = try arr.set(i, value, .{});
+        _ = try arr.set(i, try rowToValue(exec, mode, row.get([]const u8, 0), row.get([]const u8, 1), row.get([]const u8, 2)), .{});
         i += 1;
     }
     return arr.toValue();
+}
+
+fn rowToValue(exec: *Execution, mode: IDBObjectStore.GetAllMode, key: []const u8, primary_key: []const u8, value: []const u8) !js.Value {
+    const local = exec.js.local.?;
+    return switch (mode) {
+        .value => js.Value.deserialize(local, value),
+        .key => Key.decodeToJs(exec.call_arena, local, primary_key),
+        .record => IDBRecord.initValue(exec, local, key, primary_key, value),
+    };
 }
 
 pub fn count(self: *IDBIndex, query: ?js.Value, exec: *Execution) !*IDBRequest {
@@ -204,6 +220,7 @@ pub const JsApi = struct {
     pub const getKey = bridge.function(IDBIndex.getKey, .{ .dom_exception = true });
     pub const getAll = bridge.function(IDBIndex.getAll, .{ .dom_exception = true });
     pub const getAllKeys = bridge.function(IDBIndex.getAllKeys, .{ .dom_exception = true });
+    pub const getAllRecords = bridge.function(IDBIndex.getAllRecords, .{ .dom_exception = true });
     pub const count = bridge.function(IDBIndex.count, .{ .dom_exception = true });
     pub const openCursor = bridge.function(IDBIndex.openCursor, .{ .dom_exception = true });
     pub const openKeyCursor = bridge.function(IDBIndex.openKeyCursor, .{ .dom_exception = true });
