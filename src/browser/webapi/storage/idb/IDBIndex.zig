@@ -56,41 +56,44 @@ pub fn init(obj_store: *IDBObjectStore, info: Engine.IndexInfo, name: []const u8
 
 fn txn(self: *IDBIndex) !*IDBTransaction {
     const t = self._store._txn orelse return error.TransactionInactiveError;
-    try t.ensureBegun();
+    try t.assertActive();
     return t;
 }
 
 pub fn get(self: *IDBIndex, query: js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const arena = exec.call_arena;
-    const bounds = try IDBKeyRange.resolveQuery(arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try t.newRequest();
+    return request.submit(.{ .index_get = .{ .index = self, .bounds = bounds } }, exec);
+}
 
+pub fn runGet(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
+    const arena = exec.call_arena;
     const bytes = self._engine.indexGetRange(arena, self._store._store_id, self._index_id, bounds) catch |err| {
         log.warn(.storage, "idb index get", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
-
-    const b = bytes orelse return request;
+    const b = bytes orelse return;
     try request.setValue(try js.Value.deserialize(exec.js.local.?, b));
-    return request;
 }
 
 pub fn getKey(self: *IDBIndex, query: js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const arena = exec.call_arena;
-    const bounds = try IDBKeyRange.resolveQuery(arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try t.newRequest();
+    return request.submit(.{ .index_get_key = .{ .index = self, .bounds = bounds } }, exec);
+}
 
+pub fn runGetKey(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
+    const arena = exec.call_arena;
     const bytes = self._engine.indexGetKeyRange(arena, self._index_id, bounds) catch |err| {
         log.warn(.storage, "idb index getKey", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
-    const b = bytes orelse return request;
+    const b = bytes orelse return;
     try request.setValue(try Key.decodeToJs(arena, exec.js.local.?, b));
-    return request;
 }
 
 pub fn getAll(self: *IDBIndex, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
@@ -103,16 +106,18 @@ pub fn getAllKeys(self: *IDBIndex, query: ?js.Value, count_: ?u32, exec: *Execut
 
 fn _getAll(self: *IDBIndex, query: ?js.Value, count_: ?u32, column: Engine.Column, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const bounds = try IDBKeyRange.resolveQuery(exec.call_arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try t.newRequest();
+    return request.submit(.{ .index_get_all = .{ .index = self, .bounds = bounds, .column = column, .count = count_ } }, exec);
+}
 
+pub fn runGetAll(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, column: Engine.Column, count_: ?u32, exec: *Execution) !void {
     const arr = self.collectAll(bounds, count_, column, exec) catch |err| {
         log.warn(.storage, "idb index getAll", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
     try request.setValue(arr);
-    return request;
 }
 
 // Stream an index getAll/getAllKeys straight into a JS array: .value rows are
@@ -137,16 +142,18 @@ fn collectAll(self: *IDBIndex, bounds: Engine.Bounds, count_: ?u32, column: Engi
 
 pub fn count(self: *IDBIndex, query: ?js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const bounds = try IDBKeyRange.resolveQuery(exec.call_arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try t.newRequest();
+    return request.submit(.{ .index_count = .{ .index = self, .bounds = bounds } }, exec);
+}
 
+pub fn runCount(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
     const n = self._engine.indexCountRange(self._index_id, bounds) catch |err| {
         log.warn(.storage, "idb index count", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
     try request.setValue(try exec.js.local.?.zigValueToJs(n, .{}));
-    return request;
 }
 
 pub fn openCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {

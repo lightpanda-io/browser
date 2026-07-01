@@ -935,4 +935,66 @@
     await state.done((count) => testing.expectEqual(0, count));
 }
 </script>
+
+<!-- Serialization: awaiting a request's success and then starting the next
+     transaction (the "wrapper await" pattern many IDB libraries use) resumes the
+     await *during* txN's drain, before it commits. Because operations run inside
+     each transaction's own drain, txN+1 waits its turn on the single connection
+     instead of colliding with txN's still-open transaction. -->
+<script id="sequential_await_transactions" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("seq-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = async (e) => {
+        const db = e.target.result;
+        try {
+            for (let i = 0; i < 5; i++) {
+                const tx = db.transaction("s", "readwrite");
+                const req = tx.objectStore("s").put("v" + i, "k" + i);
+                // Resumes mid-drain, before tx commits — the old eager `begin`
+                // would make the next iteration's begin fail here.
+                await new Promise((resolve, reject) => {
+                    req.onsuccess = resolve;
+                    req.onerror = () => reject(req.error);
+                });
+            }
+            const all = db.transaction("s", "readonly").objectStore("s").getAll();
+            all.onsuccess = () => state.resolve(all.result);
+            all.onerror = () => state.resolve({ err: all.error.name });
+        } catch (err) {
+            state.resolve({ err: err && err.name });
+        }
+    };
+    await state.done((values) => {
+        testing.expectEqual(5, values.length);
+        testing.expectEqual("v0", values[0]);
+        testing.expectEqual("v4", values[4]);
+    });
+}
+</script>
+
+<!-- Two readwrite transactions opened before either drains. They serialize on the
+     shared connection (one drain fully commits before the next begins) rather than
+     the second's begin colliding with the first. -->
+<script id="overlapping_transactions" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("overlap-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const txa = db.transaction("s", "readwrite");
+        txa.objectStore("s").put("a", "ka");
+        const txb = db.transaction("s", "readwrite");
+        txb.objectStore("s").put("b", "kb");
+        txb.oncomplete = () => {
+            const c = db.transaction("s", "readonly").objectStore("s").count();
+            c.onsuccess = () => state.resolve(c.result);
+        };
+        txb.onerror = () => state.resolve({ err: txb.error.name });
+    };
+    await state.done((count) => testing.expectEqual(2, count));
+}
+</script>
 </body>

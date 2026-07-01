@@ -73,25 +73,25 @@ pub fn put(self: *IDBObjectStore, value: js.Value, key: ?js.Value, exec: *Execut
 
 pub fn get(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
     const txn = self._txn orelse return error.TransactionInactiveError;
-    try txn.ensureBegun();
-
-    // Both the encoded key and the fetched bytes are consumed within this call
-    // (the bytes are deserialized below), so the per-call scratch arena suffices.
-    const arena = exec.call_arena;
-    const bounds = try IDBKeyRange.resolveQuery(arena, query, exec);
+    try txn.assertActive();
+    // Bounds are captured for deferred execution, so they must outlive this call —
+    // the page arena, not the per-call scratch arena.
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try txn.newRequest();
+    return request.submit(.{ .store_get = .{ .store = self, .bounds = bounds } }, exec);
+}
 
+pub fn runGet(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
+    // The fetched bytes are deserialized here and then discarded, so the per-call
+    // scratch arena suffices for them.
+    const arena = exec.call_arena;
     const bytes = self._engine.getRange(arena, self._store_id, bounds) catch |err| {
         log.warn(.storage, "idb get", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
-
-    const b = bytes orelse return request;
-
-    const value = try js.Value.deserialize(exec.js.local.?, b);
-    try request.setValue(value);
-    return request;
+    const b = bytes orelse return; // no record -> undefined
+    try request.setValue(try js.Value.deserialize(exec.js.local.?, b));
 }
 
 pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
@@ -99,16 +99,17 @@ pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
     }
-    try txn.ensureBegun();
-
-    const bounds = try IDBKeyRange.resolveQuery(exec.call_arena, query, exec);
+    try txn.assertActive();
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try txn.newRequest();
+    return request.submit(.{ .store_delete = .{ .store = self, .bounds = bounds } }, exec);
+}
 
+pub fn runDelete(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, _: *Execution) !void {
     self.deleteBounds(bounds) catch |err| {
         log.warn(.storage, "idb delete", .{ .err = err });
         request.setError(err);
     };
-    return request;
 }
 
 fn deleteBounds(self: *IDBObjectStore, bounds: Engine.Bounds) !void {
@@ -116,19 +117,21 @@ fn deleteBounds(self: *IDBObjectStore, bounds: Engine.Bounds) !void {
     try self._engine.deleteRange(self._store_id, bounds);
 }
 
-pub fn clear(self: *IDBObjectStore, _: *Execution) !*IDBRequest {
+pub fn clear(self: *IDBObjectStore, exec: *Execution) !*IDBRequest {
     const txn = self._txn orelse return error.TransactionInactiveError;
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
     }
-    try txn.ensureBegun();
-
+    try txn.assertActive();
     const request = try txn.newRequest();
+    return request.submit(.{ .store_clear = self }, exec);
+}
+
+pub fn runClear(self: *IDBObjectStore, request: *IDBRequest, _: *Execution) !void {
     self.clearAll() catch |err| {
         log.warn(.storage, "idb clear", .{ .err = err });
         request.setError(err);
     };
-    return request;
 }
 
 fn clearAll(self: *IDBObjectStore) !void {
@@ -138,17 +141,19 @@ fn clearAll(self: *IDBObjectStore) !void {
 
 pub fn count(self: *IDBObjectStore, query: ?js.Value, exec: *Execution) !*IDBRequest {
     const txn = self._txn orelse return error.TransactionInactiveError;
-    try txn.ensureBegun();
-
-    const bounds = try IDBKeyRange.resolveQuery(exec.call_arena, query, exec);
+    try txn.assertActive();
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try txn.newRequest();
+    return request.submit(.{ .store_count = .{ .store = self, .bounds = bounds } }, exec);
+}
+
+pub fn runCount(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
     const n = self._engine.countRange(self._store_id, bounds) catch |err| {
         log.warn(.storage, "idb count", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
     try request.setValue(try exec.js.local.?.zigValueToJs(n, .{}));
-    return request;
 }
 
 pub fn getAll(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
@@ -157,18 +162,19 @@ pub fn getAll(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *Exec
 
 fn _getAll(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, column: Engine.Column, exec: *Execution) !*IDBRequest {
     const txn = self._txn orelse return error.TransactionInactiveError;
-    try txn.ensureBegun();
-
-    const bounds = try IDBKeyRange.resolveQuery(exec.call_arena, query, exec);
+    try txn.assertActive();
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try txn.newRequest();
+    return request.submit(.{ .store_get_all = .{ .store = self, .bounds = bounds, .column = column, .count = count_ } }, exec);
+}
 
+pub fn runGetAll(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, column: Engine.Column, count_: ?u32, exec: *Execution) !void {
     const arr = self.collectAll(exec, bounds, column, count_) catch |err| {
         log.warn(.storage, "idb getAll", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
     try request.setValue(arr);
-    return request;
 }
 
 // Stream a getAll/getAllKeys result straight into a JS array: .value rows
@@ -193,21 +199,21 @@ fn collectAll(self: *IDBObjectStore, exec: *Execution, bounds: Engine.Bounds, co
 
 pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
     const txn = self._txn orelse return error.TransactionInactiveError;
-    try txn.ensureBegun();
-
-    const arena = exec.call_arena;
-    const bounds = try IDBKeyRange.resolveQuery(arena, query, exec);
+    try txn.assertActive();
+    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
     const request = try txn.newRequest();
+    return request.submit(.{ .store_get_key = .{ .store = self, .bounds = bounds } }, exec);
+}
 
+pub fn runGetKey(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
+    const arena = exec.call_arena;
     const found = self._engine.getKeyRange(arena, self._store_id, bounds) catch |err| {
         log.warn(.storage, "idb getKey", .{ .err = err });
         request.setError(err);
-        return request;
+        return;
     };
-
-    const bytes = found orelse return request; // no record -> undefined
+    const bytes = found orelse return; // no record -> undefined
     try request.setValue(try Key.decodeToJs(arena, exec.js.local.?, bytes));
-    return request;
 }
 
 pub fn getAllKeys(self: *IDBObjectStore, query: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
@@ -240,86 +246,122 @@ pub fn getTransaction(self: *IDBObjectStore) ?*IDBTransaction {
     return self._txn;
 }
 
-const WriteKind = enum { add, put };
+pub const WriteKind = enum { add, put };
+
+// The key that we're writing to. We need to validate this on the request side
+// so we might as well store the result for the execution side.
+pub const PreparedKey = union(enum) {
+    // generate number key + injsect into value
+    generate_in_line,
+
+    // generate number key, don't inject
+    generate_out_of_line,
+
+    // an explicit key, could be passed in or extracted from the value
+    explicit: struct { encoded: []const u8, bump: ?f64 },
+};
 
 fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: WriteKind, exec: *Execution) !*IDBRequest {
     const txn = self._txn orelse return error.TransactionInactiveError;
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
     }
-    try txn.ensureBegun();
+    try txn.assertActive();
 
-    const local = exec.js.local.?;
-
-    var generated = false;
-    const key_value: js.Value = blk: {
+    // Resolve (and validate) the key now, so DataError / a throwing key getter
+    // throws synchronously. Encoded key bytes are captured on the page arena to
+    // outlive this call. The record write itself is deferred to runWrite.
+    const prepared: PreparedKey = blk: {
         if (self._key_path) |kp| {
             if (key_arg != null) {
                 // can't have an explicit key if we're configured for in-line keys
                 return error.DataError;
             }
-
             if (Key.evaluatePath(value, kp)) |extracted| {
-                break :blk extracted;
+                break :blk .{ .explicit = .{
+                    .encoded = try Key.encodeValue(exec.arena, extracted),
+                    .bump = if (self._auto_increment and extracted.isNumber()) try extracted.toF64() else null,
+                } };
             }
-
             // The keypath wasn't in the value...
             if (self._auto_increment == false) {
-                // and auto-increment is disabled, no key, error.
                 return error.DataError;
             }
-
             if (Key.canInjectKey(value, kp) == false) {
                 return error.DataError;
             }
-
-            generated = true;
-            const n = try self._engine.nextGeneratedKey(self._store_id);
-            const k = try local.newNumber(@floatFromInt(n));
-            try Key.injectKey(local, value, kp, k);
-            break :blk k;
+            break :blk .generate_in_line;
         }
 
         // Out-of-line keys.
         if (key_arg) |k| {
-            break :blk k;
+            break :blk .{ .explicit = .{
+                .encoded = try Key.encodeValue(exec.arena, k),
+                .bump = if (self._auto_increment and k.isNumber()) try k.toF64() else null,
+            } };
         }
-
         if (self._auto_increment == false) {
             return error.DataError;
         }
-
-        generated = true;
-        const n = try self._engine.nextGeneratedKey(self._store_id);
-        break :blk try local.newNumber(@floatFromInt(n));
+        break :blk .generate_out_of_line;
     };
 
-    const encoded = try Key.encodeValue(exec.call_arena, key_value);
+    const request = try txn.newRequest();
+    const value_global = try value.persist();
+    return request.submit(.{ .store_write = .{
+        .store = self,
+        .kind = kind,
+        .value = value_global,
+        .key = prepared,
+    } }, exec);
+}
 
-    if (self._auto_increment and !generated and key_value.isNumber()) {
-        // auto-increment is enabled, but this was NOT a generated key, so we
-        // need to bump the generator so that future generated keys don't collide
-        try self._engine.maybeBumpGenerator(self._store_id, try key_value.toF64());
-    }
+pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: js.Value.Global, prepared: PreparedKey, exec: *Execution) !void {
+    self.writeInner(request, kind, value_global, prepared, exec) catch |err| {
+        log.warn(.storage, "idb write", .{ .err = err, .kind = kind });
+        request.setError(err);
+    };
+}
+
+fn writeInner(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: js.Value.Global, prepared: PreparedKey, exec: *Execution) !void {
+    const local = exec.js.local.?;
+    const value = value_global.local(local);
+
+    // Resolve the encoded key + the JS value that becomes the request result. For
+    // generated keys, that's where the connection is finally touched.
+    const encoded: []const u8 = switch (prepared) {
+        .explicit => |e| blk: {
+            if (e.bump) |b| {
+                try self._engine.maybeBumpGenerator(self._store_id, b);
+            }
+            break :blk e.encoded;
+        },
+        .generate_out_of_line => blk: {
+            const n = try self._engine.nextGeneratedKey(self._store_id);
+            break :blk try Key.encodeValue(exec.call_arena, try local.newNumber(@floatFromInt(n)));
+        },
+        .generate_in_line => blk: {
+            const n = try self._engine.nextGeneratedKey(self._store_id);
+            const k = try local.newNumber(@floatFromInt(n));
+            try Key.injectKey(local, value, self._key_path.?, k);
+            break :blk try Key.encodeValue(exec.call_arena, k);
+        },
+    };
 
     const serialized = try value.serialize();
     defer serialized.deinit();
-
-    const request = try txn.newRequest();
 
     // Record + index rows are atomic: a unique-index violation rolls the record
     // write back too.
     try self._engine.savepoint();
     self.writeRecord(kind, encoded, serialized.bytes(), value, exec) catch |err| {
         self._engine.rollbackSavepoint();
-        log.warn(.storage, "idb write", .{ .err = err, .kind = kind });
-        request.setError(err);
-        return request;
+        return err;
     };
     try self._engine.releaseSavepoint();
 
-    try request.setValue(key_value);
-    return request;
+    // The request result is the record's key (decoded back from the encoded bytes).
+    try request.setValue(try Key.decodeToJs(exec.call_arena, local, encoded));
 }
 
 fn writeRecord(self: *IDBObjectStore, kind: WriteKind, key: []const u8, bytes: []const u8, value: js.Value, exec: *Execution) !void {
