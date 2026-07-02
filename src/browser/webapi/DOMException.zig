@@ -61,14 +61,18 @@ pub fn fromError(err: anyerror) ?DOMException {
         error.InvalidAccessError => .{ ._code = .invalid_access_error },
         error.OperationError => .{ ._code = .operation_error },
         error.DataError => .{ ._code = .data_error },
+        error.ConstraintError => .{ ._code = .constraint_error },
+        error.VersionError => .{ ._code = .version_error },
+        error.TransactionInactiveError => .{ ._code = .transaction_inactive_error },
+        error.ReadOnlyError => .{ ._code = .read_only_error },
         else => null,
     };
 }
 
 pub fn getCode(self: *const DOMException) u8 {
     return switch (self._code) {
-        // WebCrypto-only errors: no legacy numeric code.
-        .operation_error, .data_error => 0,
+        // no legacy numeric code
+        .operation_error, .data_error, .constraint_error, .version_error, .transaction_inactive_error, .read_only_error => 0,
         else => @intFromEnum(self._code),
     };
 }
@@ -103,6 +107,10 @@ pub fn getName(self: *const DOMException) []const u8 {
         .data_clone_error => "DataCloneError",
         .operation_error => "OperationError",
         .data_error => "DataError",
+        .constraint_error => "ConstraintError",
+        .version_error => "VersionError",
+        .transaction_inactive_error => "TransactionInactiveError",
+        .read_only_error => "ReadOnlyError",
     };
 }
 
@@ -135,6 +143,10 @@ pub fn getMessage(self: *const DOMException) []const u8 {
         .data_clone_error => "The object can not be cloned",
         .operation_error => "The operation failed for an operation-specific reason",
         .data_error => "Data provided to an operation does not meet requirements",
+        .constraint_error => "A mutation operation in the transaction failed because a constraint was not satisfied",
+        .version_error => "An attempt was made to open a database using a lower version than the existing version",
+        .transaction_inactive_error => "A request was placed against a transaction which is currently not active, or which is finished",
+        .read_only_error => "A mutation operation was attempted in a read-only transaction",
     };
 }
 
@@ -178,6 +190,14 @@ const Code = enum(u8) {
     data_error = 0xFE,
     /// Defined by WebCrypto; no legacy code, exposed via name only.
     operation_error = 0xFF,
+    /// Defined by IndexedDB; no legacy code, exposed via name only.
+    constraint_error = 0xFD,
+    /// Defined by IndexedDB; no legacy code, exposed via name only.
+    version_error = 0xFC,
+    /// Defined by IndexedDB; no legacy code, exposed via name only.
+    transaction_inactive_error = 0xFB,
+    /// Defined by IndexedDB; no legacy code, exposed via name only.
+    read_only_error = 0xFA,
 
     /// Maps a standard error name to its legacy code
     /// Returns .none (code 0) for non-legacy error names
@@ -206,6 +226,10 @@ const Code = enum(u8) {
             .{ "DataCloneError", .data_clone_error },
             .{ "OperationError", .operation_error },
             .{ "DataError", .data_error },
+            .{ "ConstraintError", .constraint_error },
+            .{ "VersionError", .version_error },
+            .{ "TransactionInactiveError", .transaction_inactive_error },
+            .{ "ReadOnlyError", .read_only_error },
         });
         return lookup.get(name) orelse .none;
     }

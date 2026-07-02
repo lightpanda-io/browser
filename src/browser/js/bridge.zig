@@ -966,6 +966,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/Node.zig"),
     @import("../webapi/storage/storage.zig"),
     @import("../webapi/storage/CookieStore.zig"),
+    @import("../webapi/storage/idb/idb.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/Window.zig"),
@@ -1057,6 +1058,7 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
     @import("../webapi/storage/CookieStore.zig"),
+    @import("../webapi/storage/idb/idb.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/BroadcastChannel.zig"),
 });
