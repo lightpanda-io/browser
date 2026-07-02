@@ -36,12 +36,18 @@ const Queue = std.PriorityQueue(Task, void, struct {
 const Scheduler = @This();
 
 _sequence: u64,
+// Some things (e.g. IndexedDB) can have operations that are only valid for a
+// specific task boundary. So every time we start a task, we increment the
+// scheduler's generation. Code can snapshot this version and then compare it
+// later to see if we're still in the same task.
+generation: u64,
 low_priority: Queue,
 high_priority: Queue,
 
 pub fn init(allocator: std.mem.Allocator) Scheduler {
     return .{
         ._sequence = 0,
+        .generation = 0,
         .low_priority = Queue.init(allocator, {}),
         .high_priority = Queue.init(allocator, {}),
     };
@@ -115,6 +121,8 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
         if (comptime IS_DEBUG) {
             log.debug(.scheduler, "scheduler.runTask", .{ .name = task.name });
         }
+
+        self.generation +%= 1;
 
         const repeat_in_ms = task.callback(task.ctx) catch |err| {
             log.warn(.scheduler, "task.callback", .{ .name = task.name, .err = err });

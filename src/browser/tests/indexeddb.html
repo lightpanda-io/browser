@@ -1120,4 +1120,37 @@
     });
 }
 </script>
+
+<!-- A transaction stays active across a synchronous, unrelated event dispatch
+     made from within one of its request handlers. The nested dispatch must not
+     be mistaken for a return to the event loop (which would deactivate the
+     transaction). -->
+<script id="txn_active_across_nested_dispatch" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("nested-dispatch-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction("s", "readwrite");
+        const req = tx.objectStore("s").put("v", "k");
+        req.onsuccess = () => {
+            // Dispatch an unrelated event synchronously, mid-handler. Its
+            // dispatch runs a microtask checkpoint, but the JS stack isn't empty,
+            // so the transaction is still active for the request that follows.
+            const target = document.createElement("div");
+            target.addEventListener("x", () => {});
+            target.dispatchEvent(new Event("x"));
+            try {
+                const g = tx.objectStore("s").get("k");
+                g.onsuccess = () => state.resolve(g.result);
+                g.onerror = () => state.resolve({ err: g.error && g.error.name });
+            } catch (err) {
+                state.resolve({ threw: err.name });
+            }
+        };
+    };
+    await state.done((got) => testing.expectEqual("v", got));
+}
+</script>
 </body>
