@@ -51,22 +51,69 @@ pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {
     return .{ .selectors = try Parser.parseList(arena, input) };
 }
 
-pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
-    const parsed = try parseLeaky(frame.call_arena, input);
-    return parsed.query(root, frame);
+/// One-off synthesized selectors use the `*Uncached` variants instead.
+fn cachedParse(frame: *Frame, input: []const u8) ![]const Selector {
+    return frame._session.browser.selector_cache.parse(input);
 }
 
-pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
-    if (input.len == 0) {
-        return error.SyntaxError;
+/// On the Browser because a parsed selector references no Frame/Context, so
+/// entries survive navigation. Per-entry arena so eviction can free one entry.
+pub const Cache = struct {
+    // Caps retained memory, not correctness; oldest entry evicted on overflow.
+    const max_entries = 1024;
+
+    allocator: Allocator,
+    map: std.StringArrayHashMapUnmanaged(Entry) = .empty,
+
+    const Entry = struct {
+        arena: std.heap.ArenaAllocator,
+        selectors: []const Selector,
+    };
+
+    pub fn init(allocator: Allocator) Cache {
+        return .{ .allocator = allocator };
     }
 
-    const arena = try frame.getArena(.small, "querySelectorAll");
-    errdefer frame.releaseArena(arena);
+    pub fn deinit(self: *Cache) void {
+        for (self.map.values()) |*entry| {
+            entry.arena.deinit();
+        }
+        self.map.deinit(self.allocator);
+    }
 
+    fn parse(self: *Cache, input: []const u8) ![]const Selector {
+        if (input.len == 0) {
+            return error.SyntaxError;
+        }
+        if (self.map.get(input)) |entry| {
+            return entry.selectors;
+        }
+
+        // The AST borrows slices of its input, so dupe the key into the arena.
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        errdefer arena.deinit();
+        const entry_arena = arena.allocator();
+        const owned = try entry_arena.dupe(u8, input);
+        const selectors = try Parser.parseList(entry_arena, owned);
+
+        if (self.map.count() >= max_entries) {
+            self.evictOldest();
+        }
+        try self.map.put(self.allocator, owned, .{ .arena = arena, .selectors = selectors });
+        return selectors;
+    }
+
+    // Insertion order is preserved, so index 0 is the oldest.
+    fn evictOldest(self: *Cache) void {
+        const key = self.map.keys()[0];
+        var arena = self.map.values()[0].arena;
+        std.debug.assert(self.map.orderedRemove(key));
+        arena.deinit();
+    }
+};
+
+fn collectAll(arena: Allocator, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
-
-    const selectors = try Parser.parseList(arena, input);
     for (selectors) |selector| {
         try List.collect(arena, root, selector, &nodes, frame);
     }
@@ -79,38 +126,61 @@ pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
     return list;
 }
 
-pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
-    if (input.len == 0) {
-        return error.SyntaxError;
-    }
-
-    const arena = frame.call_arena;
-    const selectors = try Parser.parseList(arena, input);
-
+fn matchesAny(selectors: []const Selector, el: *Node.Element, scope: *Node, frame: *Frame) bool {
     for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, el.asNode(), frame)) {
+        if (List.matches(el.asNode(), selector, scope, frame)) {
             return true;
         }
     }
     return false;
 }
 
+pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
+    const parsed = Parsed{ .selectors = try cachedParse(frame, input) };
+    return parsed.query(root, frame);
+}
+
+pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
+    const arena = try frame.getArena(.small, "querySelectorAll");
+    errdefer frame.releaseArena(arena);
+    return collectAll(arena, try cachedParse(frame, input), root, frame);
+}
+
+pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
+    return matchesAny(try cachedParse(frame, input), el, el.asNode(), frame);
+}
+
 // Like matches, but allows the caller to specify a scope node distinct from el.
 // Used by closest() so that :scope always refers to the original context element.
 pub fn matchesWithScope(el: *Node.Element, input: []const u8, scope: *Node.Element, frame: *Frame) !bool {
+    return matchesAny(try cachedParse(frame, input), el, scope.asNode(), frame);
+}
+
+/// Uncached counterparts for one-off selectors (SelectorPath): parse into
+/// `arena` instead of caching. querySelectorAllUncached takes no arena — it uses
+/// the pooled arena backing its List.
+pub fn querySelectorUncached(arena: Allocator, root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
     if (input.len == 0) {
         return error.SyntaxError;
     }
+    const parsed = Parsed{ .selectors = try Parser.parseList(arena, input) };
+    return parsed.query(root, frame);
+}
 
-    const arena = frame.call_arena;
-    const selectors = try Parser.parseList(arena, input);
-
-    for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, scope.asNode(), frame)) {
-            return true;
-        }
+pub fn querySelectorAllUncached(root: *Node, input: []const u8, frame: *Frame) !*List {
+    if (input.len == 0) {
+        return error.SyntaxError;
     }
-    return false;
+    const arena = try frame.getArena(.small, "querySelectorAllUncached");
+    errdefer frame.releaseArena(arena);
+    return collectAll(arena, try Parser.parseList(arena, input), root, frame);
+}
+
+pub fn matchesUncached(arena: Allocator, el: *Node.Element, input: []const u8, frame: *Frame) !bool {
+    if (input.len == 0) {
+        return error.SyntaxError;
+    }
+    return matchesAny(try Parser.parseList(arena, input), el, el.asNode(), frame);
 }
 
 pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bool {

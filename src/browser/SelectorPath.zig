@@ -162,14 +162,14 @@ fn siblingMatches(self: SelectorPath, el: *Element, sel: []const u8) bool {
     const parent = el.parentElement() orelse return false;
     var child = parent.firstElementChild();
     while (child) |c| : (child = c.nextElementSibling()) {
-        if (c != el and (Selector.matches(c, sel, self.frame) catch false)) return true;
+        if (c != el and (Selector.matchesUncached(self.arena, c, sel, self.frame) catch false)) return true;
     }
     return false;
 }
 
 fn matchCount(self: SelectorPath, candidate: []const u8) usize {
     const root = self.frame.window._document.asNode();
-    const list = Selector.querySelectorAll(root, candidate, self.frame) catch return 0;
+    const list = Selector.querySelectorAllUncached(root, candidate, self.frame) catch return 0;
     defer list.deinit(self.frame._page);
     return list.getLength();
 }
@@ -206,7 +206,7 @@ fn isPlainAttrValue(value: []const u8) bool {
 /// first-match against the document.
 fn isFirstMatch(self: SelectorPath, target: *Element, candidate: []const u8) bool {
     const root = self.frame.window._document.asNode();
-    const first = (Selector.querySelector(root, candidate, self.frame) catch return false) orelse return false;
+    const first = (Selector.querySelectorUncached(self.arena, root, candidate, self.frame) catch return false) orelse return false;
     return first == target;
 }
 
