@@ -132,7 +132,7 @@ pub fn send(self: *LightPanda, raw_event: telemetry.Event) !void {
 fn run(self: *LightPanda) void {
     // The connection is created, owned, and torn down entirely on this thread;
     // the network thread never sees it (Transport == .none).
-    var conn = http.Connection.init(self.network.ca_blob, self.network.config, self.network.ip_filter) catch |err| {
+    var conn = http.Connection.init(self.network.x509_store, self.network.config, self.network.ip_filter) catch |err| {
         // Essentially OOM — the process is already in trouble. The thread
         // handle stays set so send() won't respawn; events drop at the cap.
         log.warn(.telemetry, "connection init", .{ .err = err });

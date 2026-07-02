@@ -36,6 +36,11 @@ pub const CurlSocket = c.curl_socket_t;
 pub const CurlBlob = c.curl_blob;
 pub const CurlOffT = c.curl_off_t;
 
+pub const CURLE = struct {
+    pub const OK = c.CURLE_OK;
+    pub const ABORTED_BY_CALLBACK = c.CURLE_ABORTED_BY_CALLBACK;
+};
+
 pub const CurlDebugFunction = fn (*Curl, CurlInfoType, [*c]u8, usize, *anyopaque) c_int;
 pub const CurlHeaderFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
 pub const CurlWriteFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
@@ -229,6 +234,8 @@ pub const CurlOption = enum(c.CURLoption) {
     upload = c.CURLOPT_UPLOAD,
     opensocket_function = c.CURLOPT_OPENSOCKETFUNCTION,
     opensocket_data = c.CURLOPT_OPENSOCKETDATA,
+    ssl_ctx_function = c.CURLOPT_SSL_CTX_FUNCTION,
+    ssl_ctx_data = c.CURLOPT_SSL_CTX_DATA,
 };
 
 pub const CurlMOption = enum(c.CURLMoption) {
@@ -742,6 +749,15 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
                 else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
             };
             break :blk c.curl_easy_setopt(easy, opt, cb);
+        },
+        .ssl_ctx_function => blk: {
+            const cb: c.curl_ssl_ctx_callback = @ptrCast(value);
+            break :blk c.curl_easy_setopt(easy, opt, cb);
+        },
+        .ssl_ctx_data => blk: {
+            // We can make sure that passed data is always X509_STORE since we
+            // don't require anything else throughout project.
+            break :blk c.curl_easy_setopt(easy, opt, value);
         },
     };
     try errorCheck(code);
