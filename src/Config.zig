@@ -473,6 +473,17 @@ pub fn httpCacheSqlitePath(self: *const Config, allocator: std.mem.Allocator) !?
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| {
             const cache_dir = opts.http_cache_dir orelse return null;
+
+            // Ensure path exists for SQLite Cache Directory
+            std.fs.cwd().makePath(cache_dir) catch |e| {
+                log.err(
+                    .cache,
+                    "failed to make path",
+                    .{ .kind = "SqliteCache", .path = cache_dir, .err = e },
+                );
+                return e;
+            };
+
             return try std.fmt.allocPrintSentinel(
                 allocator,
                 "{s}/cache.db",

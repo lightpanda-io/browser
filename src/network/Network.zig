@@ -223,18 +223,6 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     const cache = if (try config.httpCacheSqlitePath(allocator)) |cache_dir_path| blk: {
         defer allocator.free(cache_dir_path);
 
-        // Ensure path exists for SQLite Cache Directory
-        if (std.fs.path.dirname(cache_dir_path)) |dir| {
-            std.fs.cwd().makePath(dir) catch |e| {
-                log.err(
-                    .cache,
-                    "failed to make path",
-                    .{ .kind = "SqliteCache", .path = cache_dir_path, .err = e },
-                );
-                return e;
-            };
-        }
-
         break :blk Cache{
             .kind = .{
                 .sqlite = SqliteCache.init(allocator, cache_dir_path) catch |e| {
