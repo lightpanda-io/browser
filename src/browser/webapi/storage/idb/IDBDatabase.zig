@@ -66,7 +66,6 @@ pub fn createObjectStore(
     self: *IDBDatabase,
     name: []const u8,
     options: ?CreateObjectStoreOptions,
-    exec: *Execution,
 ) !*IDBObjectStore {
     const txn = self._txn orelse return error.InvalidStateError;
 
@@ -81,17 +80,18 @@ pub fn createObjectStore(
         else => return err,
     };
 
-    const owned_name = try exec.dupeString(name);
-    const key_path = if (opts.keyPath) |kp| try exec.dupeString(kp) else null;
-    return IDBObjectStore.init(self._engine, txn, store_id, owned_name, key_path, opts.autoIncrement, exec);
+    const owned_name = try txn.dupe(name);
+    const key_path = if (opts.keyPath) |kp| try txn.dupe(kp) else null;
+    const store = try IDBObjectStore.init(txn, store_id, owned_name, key_path, opts.autoIncrement);
+    try txn.cacheStore(store);
+    return store;
 }
 
 // Only callable during upgradeneeded, hence the _txn check
 pub fn deleteObjectStore(self: *IDBDatabase, name: []const u8, _: *Execution) !void {
-    if (self._txn == null) {
-        return error.InvalidStateError;
-    }
-    return self._engine.deleteObjectStore(self._database_id, name);
+    const txn = self._txn orelse return error.InvalidStateError;
+    try self._engine.deleteObjectStore(self._database_id, name);
+    txn.uncacheStore(name);
 }
 
 const TransactionMode = enum {
@@ -116,41 +116,49 @@ pub fn transaction(
     options: ?TransactionOptions,
     exec: *Execution,
 ) !*IDBTransaction {
-    const scope = try normalizeStoreNames(store_names, exec.arena);
     const opts = options orelse TransactionOptions{};
-    return IDBTransaction.init(exec, self, switch (mode orelse .readonly) {
+    const txn = try IDBTransaction.init(self, switch (mode orelse .readonly) {
         .readonly => .readonly,
         .readwrite => .readwrite,
-    }, opts.durability, scope);
+    }, opts.durability, exec);
+    txn._scope = try normalizeStoreNames(txn._arena, store_names);
+    return txn;
 }
 
 // The transaction's scope: the requested store names, sorted with duplicates
 // removed (per the IndexedDB spec's "transaction scope" steps).
-fn normalizeStoreNames(store_names: StoreNames, arena: Allocator) ![]const []const u8 {
+fn normalizeStoreNames(arena: Allocator, store_names: StoreNames) ![]const []const u8 {
     var list: std.ArrayList([]const u8) = .empty;
     switch (store_names) {
         .name => |name| try list.append(arena, try arena.dupe(u8, name)),
         .names => |names| {
             try list.ensureUnusedCapacity(arena, names.len);
-            for (names) |name| list.appendAssumeCapacity(try arena.dupe(u8, name));
+            for (names) |name| {
+                list.appendAssumeCapacity(try arena.dupe(u8, name));
+            }
         },
     }
 
-    std.mem.sort([]const u8, list.items, {}, lessThan);
+    std.mem.sort([]const u8, list.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lessThan);
 
-    // Drop duplicates now that equal names are adjacent.
-    var write: usize = 0;
-    for (list.items, 0..) |name, read| {
-        if (read == 0 or !std.mem.eql(u8, name, list.items[write - 1])) {
+    // Drop duplicates now that equal names are adjacent. The first name always
+    // survives, so only the rest need comparing.
+    if (list.items.len <= 1) {
+        return list.items;
+    }
+
+    var write: usize = 1;
+    for (list.items[1..]) |name| {
+        if (!std.mem.eql(u8, name, list.items[write - 1])) {
             list.items[write] = name;
             write += 1;
         }
     }
     return list.items[0..write];
-}
-
-fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-    return std.mem.lessThan(u8, a, b);
 }
 
 pub fn close(_: *IDBDatabase) void {

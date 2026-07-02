@@ -640,6 +640,7 @@ pub fn close(self: *Window) void {
         }
     }
 
+    page.session.idb.detachContext(frame.js);
     frame.js.scheduler.reset();
     frame.abortTransfers();
 

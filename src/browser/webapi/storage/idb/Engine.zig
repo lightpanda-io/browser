@@ -34,22 +34,32 @@ conn: Sqlite.Conn,
 // (intrusive, caller-owned) node on `_gate_waiters` and are handed ownership in
 // FIFO order as it's released.
 //
-// LIFETIME GAP (to resolve in the IDB memory rework): the Engine is
-// session-scoped but the waiters (IDBTransaction / Open+DeleteContext) are
-// page-scoped, so these are the only session->page pointers in IDB. A waiter
-// freed on navigation while still owning or parked here leaves a dangling
-// pointer/node that a later same-origin page can deref or deadlock on; a parked
-// waiter has no scheduler task and so no finalizer to unlink it on teardown. The
-// rework must session-scope these objects, add a page-teardown unlink, or drop
-// the wait-list for a bool gate.
+// The Engine is session-scoped but the waiters (IDBTransaction /
+// Open+DeleteContext) are context-scoped, so these are the only session->page
+// pointers in IDB. Every participant tags its waiter with its js Context;
+// detach() must be called before that context's scheduler is reset or torn
+// down, otherwise a parked waiter dangles here and a later wake would schedule
+// onto a dead scheduler.
 _gate_owner: ?*GateWaiter = null,
 _gate_waiters: std.DoublyLinkedList = .{},
 
 pub const GateWaiter = struct {
     node: std.DoublyLinkedList.Node = .{},
+    // A bit unusual. Normally, if we need to tear something down when the frame
+    // is destroyed, we track that on the frame (see Frame._file_lists). And
+    // we _could_ do that here too, but the Engine still needs the list, so that
+    // would require book-keeping in 2 lists. Instead, Engine owns the list and
+    // we track the *js.Context (because it needs to work for both WGS and
+    // frames). On context teardown, we can iterate the list and remove any
+    // waiters associated with that context.
+    ctx: *anyopaque,
+
     // Called when this waiter is handed the gate; typically reschedules the
     // owner's task so it re-runs and finds itself the owner.
     wake: *const fn (waiter: *GateWaiter) void,
+
+    // Called when detach() removes this waiter because its context is going away.
+    cancel: *const fn (waiter: *GateWaiter) void,
 };
 
 pub fn acquireGate(self: *Engine, waiter: *GateWaiter) bool {
@@ -68,18 +78,39 @@ pub fn acquireGate(self: *Engine, waiter: *GateWaiter) bool {
 
 // Release the gate held by `waiter`, handing it directly to the next parked
 // waiter (no window where an unrelated contender can grab it) and waking it.
-// No-op if `waiter` isn't the current owner.
-pub fn releaseGate(self: *Engine, waiter: *GateWaiter) void {
+pub fn releaseGate(self: *Engine, waiter: *GateWaiter) bool {
     if (self._gate_owner != waiter) {
-        return;
+        return false;
     }
     if (self._gate_waiters.popFirst()) |node| {
         const next: *GateWaiter = @fieldParentPtr("node", node);
         self._gate_owner = next;
         next.wake(next);
-        return;
+        return true;
     }
     self._gate_owner = null;
+    return true;
+}
+
+// A js Context is being torn down: remove every waiter associated with it.
+pub fn detach(self: *Engine, ctx: *anyopaque) void {
+    var node = self._gate_waiters.first;
+    while (node) |n| {
+        const next = n.next;
+        const waiter: *GateWaiter = @fieldParentPtr("node", n);
+        if (waiter.ctx == ctx) {
+            self._gate_waiters.remove(n);
+            waiter.cancel(waiter);
+        }
+        node = next;
+    }
+
+    const owner = self._gate_owner orelse return;
+    if (owner.ctx != ctx) {
+        return;
+    }
+    owner.cancel(owner);
+    _ = self.releaseGate(owner);
 }
 
 pub fn open(path: [:0]const u8) !Engine {
@@ -805,6 +836,60 @@ test "IDB - Engine: getRange/getKeyRange first-in-range and deleteRange" {
     // deleteRange removes [4,5], leaving 1,2,3.
     try engine.deleteRange(store_id, boundsFor(k4, false, try numKey(arena, 5), false));
     try testing.expectEqual(3, try engine.countRange(store_id, Engine.Bounds.unbounded()));
+}
+
+test "IDB - Engine: detach unlinks parked waiters and hands off an owned gate" {
+    var engine = try Engine.open(":memory:");
+    defer engine.close();
+
+    const TestWaiter = struct {
+        waiter: Engine.GateWaiter,
+        woken: u32 = 0,
+        cancelled: u32 = 0,
+
+        fn init(ctx: *anyopaque) @This() {
+            return .{ .waiter = .{ .ctx = ctx, .wake = wake, .cancel = cancel } };
+        }
+        fn wake(w: *Engine.GateWaiter) void {
+            const self: *@This() = @fieldParentPtr("waiter", w);
+            self.woken += 1;
+        }
+        fn cancel(w: *Engine.GateWaiter) void {
+            const self: *@This() = @fieldParentPtr("waiter", w);
+            self.cancelled += 1;
+        }
+    };
+
+    var ctx_a: u8 = 0;
+    var ctx_b: u8 = 0;
+
+    // a1 owns; a2 and b1 park behind it.
+    var a1 = TestWaiter.init(&ctx_a);
+    var a2 = TestWaiter.init(&ctx_a);
+    var b1 = TestWaiter.init(&ctx_b);
+    try testing.expectEqual(true, engine.acquireGate(&a1.waiter));
+    try testing.expectEqual(false, engine.acquireGate(&a2.waiter));
+    try testing.expectEqual(false, engine.acquireGate(&b1.waiter));
+
+    // Detaching context A cancels both its waiters (owner + parked, no wakes
+    // for either) and hands the gate straight to b1.
+    engine.detach(&ctx_a);
+    try testing.expectEqual(1, a1.cancelled);
+    try testing.expectEqual(0, a1.woken);
+    try testing.expectEqual(1, a2.cancelled);
+    try testing.expectEqual(0, a2.woken);
+    try testing.expectEqual(0, b1.cancelled);
+    try testing.expectEqual(1, b1.woken);
+    try testing.expect(engine._gate_owner == &b1.waiter);
+
+    // Detaching a context with no participants is a no-op.
+    engine.detach(&ctx_a);
+    try testing.expect(engine._gate_owner == &b1.waiter);
+
+    // releaseGate reports whether the caller actually owned the gate.
+    try testing.expectEqual(false, engine.releaseGate(&a1.waiter));
+    try testing.expectEqual(true, engine.releaseGate(&b1.waiter));
+    try testing.expectEqual(null, engine._gate_owner);
 }
 
 test "IDB - Engine: open creates schema" {

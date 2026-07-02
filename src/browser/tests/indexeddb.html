@@ -1153,4 +1153,40 @@
     await state.done((got) => testing.expectEqual("v", got));
 }
 </script>
+
+<!-- Per spec, objectStore(name) and index(name) return the same instance for
+     the same name within one transaction, including a store created during the
+     upgrade it's requested in. -->
+<script id="same_object_store_and_index" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("same-object-db", 1);
+    let upgrade = null;
+    open.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        const tx = e.target.transaction;
+        const store = db.createObjectStore("s");
+        const index = store.createIndex("by_x", "x");
+        upgrade = {
+            store: tx.objectStore("s") === store,
+            index: store.index("by_x") === index,
+        };
+    };
+    open.onsuccess = (e) => {
+        const tx = e.target.result.transaction(["s", "s"], "readonly");
+        const store = tx.objectStore("s");
+        state.resolve({
+            upgrade,
+            store: tx.objectStore("s") === store,
+            index: store.index("by_x") === store.index("by_x"),
+        });
+    };
+    await state.done((got) => {
+        testing.expectEqual(true, got.upgrade.store);
+        testing.expectEqual(true, got.upgrade.index);
+        testing.expectEqual(true, got.store);
+        testing.expectEqual(true, got.index);
+    });
+}
+</script>
 </body>
