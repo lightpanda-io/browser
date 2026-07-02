@@ -8,6 +8,7 @@
     \\  fetch       fetches the specified URL
     \\  mcp         starts an MCP (Model Context Protocol) server over stdio
     \\  agent       starts an interactive AI agent that can browse the web
+    \\  update      checks whether a newer version of {0s} is available
     \\  version     displays the version of {0s}
     \\  help        displays this message
     \\
@@ -256,6 +257,12 @@
     \\GOOGLE_API_KEY/GEMINI_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or
     \\MISTRAL_API_KEY. The local servers (Ollama, llama.cpp) do not require an
     \\API key.
+    ,
+    .update =
+    \\usage: {0s} update [COMMON_OPTIONS]
+    \\
+    \\Checks whether a newer release of {0s} is available. When one is found,
+    \\prints the running version, the latest release, and how to update.
     ,
     .version =
     \\usage:  {0s} version

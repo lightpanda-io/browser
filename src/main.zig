@@ -70,6 +70,10 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             try lp.Agent.listModels(allocator, opts);
             return std.process.cleanExit();
         },
+        .update => {
+            try lp.update(allocator, &args);
+            return std.process.cleanExit();
+        },
         else => {},
     }
 
