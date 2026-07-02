@@ -352,6 +352,7 @@ pub const X509_STORE = struct_x509_store_st;
 pub extern fn X509_STORE_new() ?*X509_STORE;
 pub extern fn X509_STORE_free(store: *X509_STORE) void;
 pub extern fn X509_STORE_add_cert(store: ?*X509_STORE, x: ?*X509) c_int;
+pub extern fn X509_STORE_load_locations(store: *X509_STORE, file: ?[*:0]const u8, dir: ?[*:0]const u8) c_int;
 
 pub const struct_ssl_ctx_st = opaque {};
 pub const SSL_CTX = struct_ssl_ctx_st;
