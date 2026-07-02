@@ -28,6 +28,60 @@ const Engine = @This();
 
 conn: Sqlite.Conn,
 
+// A single sqlite connection backs every database of an origin, so only one
+// transaction (or open/delete) may hold it in a `begin`/`commit` bracket at a
+// time. `_gate_owner` is whoever currently holds it; contenders park their
+// (intrusive, caller-owned) node on `_gate_waiters` and are handed ownership in
+// FIFO order as it's released.
+//
+// LIFETIME GAP (to resolve in the IDB memory rework): the Engine is
+// session-scoped but the waiters (IDBTransaction / Open+DeleteContext) are
+// page-scoped, so these are the only session->page pointers in IDB. A waiter
+// freed on navigation while still owning or parked here leaves a dangling
+// pointer/node that a later same-origin page can deref or deadlock on; a parked
+// waiter has no scheduler task and so no finalizer to unlink it on teardown. The
+// rework must session-scope these objects, add a page-teardown unlink, or drop
+// the wait-list for a bool gate.
+_gate_owner: ?*GateWaiter = null,
+_gate_waiters: std.DoublyLinkedList = .{},
+
+pub const GateWaiter = struct {
+    node: std.DoublyLinkedList.Node = .{},
+    // Called when this waiter is handed the gate; typically reschedules the
+    // owner's task so it re-runs and finds itself the owner.
+    wake: *const fn (waiter: *GateWaiter) void,
+};
+
+pub fn acquireGate(self: *Engine, waiter: *GateWaiter) bool {
+    if (self._gate_owner == null) {
+        self._gate_owner = waiter;
+        return true;
+    }
+
+    if (self._gate_owner == waiter) {
+        return true;
+    }
+
+    self._gate_waiters.append(&waiter.node);
+    return false;
+}
+
+// Release the gate held by `waiter`, handing it directly to the next parked
+// waiter (no window where an unrelated contender can grab it) and waking it.
+// No-op if `waiter` isn't the current owner.
+pub fn releaseGate(self: *Engine, waiter: *GateWaiter) void {
+    if (self._gate_owner != waiter) {
+        return;
+    }
+    if (self._gate_waiters.popFirst()) |node| {
+        const next: *GateWaiter = @fieldParentPtr("node", node);
+        self._gate_owner = next;
+        next.wake(next);
+        return;
+    }
+    self._gate_owner = null;
+}
+
 pub fn open(path: [:0]const u8) !Engine {
     const conn = try Sqlite.Conn.open(path);
     errdefer conn.close();
