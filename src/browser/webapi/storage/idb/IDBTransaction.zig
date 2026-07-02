@@ -160,6 +160,7 @@ pub fn initVersionChange(db: *IDBDatabase, exec: *Execution) !*IDBTransaction {
         ._mode = .versionchange,
         ._arena = arena,
         ._begun = true,
+        ._active_turn = exec.js.scheduler.generation,
         ._queue = undefined,
         ._gate_waiter = undefined,
     });
@@ -261,23 +262,35 @@ pub fn abort(self: *IDBTransaction, exec: *Execution) !void {
 }
 
 pub fn settle(self: *IDBTransaction, exec: *Execution) void {
+    // Deliver batches until the queue stays empty — a handler may enqueue more.
+    while (self.settleStep(exec)) {}
+}
+
+// One settle turn: deliver the pending batch of request events (handlers may
+// enqueue more) and, once the queue stays empty, commit and fire `complete`.
+// Returns true while more batches remain.
+pub fn settleStep(self: *IDBTransaction, exec: *Execution) bool {
     if (comptime IS_DEBUG) {
         // non versionchange mode goes through the scheduler + drain
         std.debug.assert(self._mode == .versionchange);
     }
 
     if (self._settled) {
-        return;
+        return false;
     }
-    // Deliver batches until the queue stays empty — a handler may enqueue more.
-    while (self._queue.items.len > 0) {
+
+    if (self._queue.items.len > 0) {
         self.deliverBatch(exec);
         if (self._settled) {
-            // a request handler might have settled this (e.g. called abort)
-            return;
+            // a request handler settled this (e.g. called abort) mid-batch
+            return false;
+        }
+        if (self._queue.items.len > 0) {
+            return true;
         }
     }
     self.commitAndComplete(exec);
+    return false;
 }
 
 // Commit the underlying sqlite transaction (if begun), release the connection
@@ -300,13 +313,14 @@ fn commitAndComplete(self: *IDBTransaction, exec: *Execution) void {
 
 // "is this transaction still usable". Once settled or explicitly committing, it
 // no longer accepts new requests; nor does it outside its active turn (a request
-// made from an unrelated task). A versionchange transaction runs synchronously
-// during upgradeneeded and stays active until settled, so it skips the turn check.
+// made from an unrelated task). The turn is stamped at creation (which covers
+// the upgradeneeded dispatch for a versionchange transaction) and again by each
+// delivered batch.
 pub fn assertActive(self: *const IDBTransaction) !void {
     if (self._settled or self._committing) {
         return error.TransactionInactiveError;
     }
-    if (self._mode != .versionchange and self._active_turn != self._exec.js.scheduler.generation) {
+    if (self._active_turn != self._exec.js.scheduler.generation) {
         return error.TransactionInactiveError;
     }
 }
