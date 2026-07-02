@@ -73,10 +73,20 @@ const OpenContext = struct {
     // destruction then. When parked on the gate instead, cancelParked owns it.
     _scheduled: bool = true,
 
+    // If an callback queued more requests, we need to process those requests
+    // on the next tick, and thus need to hold onto the transaction (which pins
+    // that transaction (_rc++) so that it does't get cleaned up from under us).
+    _upgrade: ?*IDBTransaction = null,
+
     fn cancelled(ctx: *anyopaque) void {
         // What if we're gated? Well, A scheduled task is only canceled on
         // teardown, which would have already called Engine.detach(js_ctx).
         const self: *OpenContext = @ptrCast(@alignCast(ctx));
+        if (self._upgrade) |txn| {
+            self.request._txn = .none;
+            txn._db._txn = null;
+            txn.releaseRef(self.exec.page);
+        }
         self.exec._factory.destroy(self);
     }
 
@@ -85,6 +95,14 @@ const OpenContext = struct {
     // in the wake->run window the task finalizer does.
     fn cancelParked(waiter: *Engine.GateWaiter) void {
         const self: *OpenContext = @fieldParentPtr("_gate_waiter", waiter);
+        if (self._upgrade) |txn| {
+            if (txn._begun) {
+                txn._engine.rollback();
+                txn._begun = false;
+            }
+            txn._settled = true;
+            return;
+        }
         if (!self._scheduled) {
             self.exec._factory.destroy(self);
         }
@@ -93,6 +111,10 @@ const OpenContext = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *OpenContext = @ptrCast(@alignCast(ctx));
         self._scheduled = false;
+
+        if (self._upgrade != null) {
+            return self.drainUpgrade();
+        }
 
         const engine = self.resolveEngine() catch |err| {
             self.exec._factory.destroy(self);
@@ -107,15 +129,57 @@ const OpenContext = struct {
         if (!engine.acquireGate(&self._gate_waiter)) {
             return null; // parked; not destroyed
         }
-        defer self.exec._factory.destroy(self);
-        defer _ = engine.releaseGate(&self._gate_waiter);
 
-        self.runOpen(engine) catch |err| {
+        const upgrading = self.runOpen(engine) catch |err| blk: {
             log.warn(.storage, "idb open", .{ .err = err, .name = self.name });
             self.request.setError(err);
             self.request.deliver(self.exec) catch {};
+            break :blk false;
         };
+        if (upgrading) {
+            self._scheduled = true;
+            return 1; // the versionchange drain continues next turn; keep the gate
+        }
+
+        _ = engine.releaseGate(&self._gate_waiter);
+        self.exec._factory.destroy(self);
         return null;
+    }
+
+    // One turn of the versionchange drain: deliver a batch of request events;
+    // handlers may enqueue more. Once the transaction settles — the queue
+    // stayed empty (committed, `complete` fired) or a handler aborted —
+    // deliver the open request's outcome and clean up.
+    fn drainUpgrade(self: *OpenContext) !?u32 {
+        const txn = self._upgrade.?;
+        if (txn.settleStep(self.exec)) {
+            self._scheduled = true;
+            return 1;
+        }
+
+        self._upgrade = null;
+        const engine = txn._engine;
+        defer self.exec._factory.destroy(self);
+        defer _ = engine.releaseGate(&self._gate_waiter);
+        try self.finishUpgrade(txn);
+        return null;
+    }
+
+    // The versionchange transaction settled (committed or aborted): sever the
+    // upgrade wiring, drop our pin (may free the transaction), and deliver the
+    // open request's outcome.
+    fn finishUpgrade(self: *OpenContext, txn: *IDBTransaction) !void {
+        const exec = self.exec;
+        const aborted = txn.aborted();
+        self.request._txn = .none;
+        txn._db._txn = null;
+        txn.releaseRef(exec.page);
+
+        if (aborted) {
+            self.request.setError(error.AbortError);
+            return self.request.deliver(exec);
+        }
+        return self.request.fireSuccess(exec);
     }
 
     // Scheduler wake-up: the connection gate was handed to us, so re-run.
@@ -141,7 +205,10 @@ const OpenContext = struct {
         return self.exec.session.idb.engineForOrigin(origin);
     }
 
-    fn runOpen(self: *OpenContext, engine: *Engine) !void {
+    // Returns true when an upgrade drain is now pending: the versionchange
+    // transaction has queued requests, the gate stays held and drainUpgrade
+    // takes over on the next turns.
+    fn runOpen(self: *OpenContext, engine: *Engine) !bool {
         const exec = self.exec;
         const existing = try engine.databaseVersion(self.name);
 
@@ -153,21 +220,22 @@ const OpenContext = struct {
             if (requested < current) {
                 self.request.setError(error.VersionError);
                 self.request.deliver(exec) catch {};
-                return;
+                return false;
             }
 
             if (requested == current) {
                 const database_id = (try engine.databaseId(self.name)).?;
                 const db = try IDBDatabase.init(exec, engine, database_id, self.name, current);
                 self.request.setDatabaseResult(db);
-                return self.request.fireSuccess(exec);
+                try self.request.fireSuccess(exec);
+                return false;
             }
         }
 
         // New database or an upgrade to a higher version. Run a versionchange
         // transaction so user JS can evolve the schema during `upgradeneeded`;
-        // it's exposed as `request.transaction` and committed here once the
-        // handler returns.
+        // it's exposed as `request.transaction` and committed once its request
+        // queue stays empty.
         try engine.begin();
 
         var closed = false;
@@ -181,34 +249,41 @@ const OpenContext = struct {
 
         const txn = try IDBTransaction.initVersionChange(db, exec);
         txn.acquireRef();
-        defer txn.releaseRef(exec.page);
-
-        self.request._txn = .{ .borrowed = txn };
-        // The request is page-scoped and must never outlive this pointer; the
-        // success/abort paths below null it before delivering, this covers the
-        // error paths.
-        defer self.request._txn = .none;
 
         {
+            // The wiring below outlives this call on the drain path; on an
+            // error it must be severed here, with our pin.
+            errdefer {
+                self.request._txn = .none;
+                db._txn = null;
+                txn.releaseRef(exec.page);
+            }
+            self.request._txn = .{ .borrowed = txn };
             db._txn = txn;
-            defer db._txn = null;
             const old_version: u64 = @intCast(existing orelse 0);
             try self.request.fireUpgradeNeeded(exec, old_version, @intCast(requested));
         }
 
-        if (txn.aborted()) {
-            // updateneeded handler called abort() (what a jerk!) — abort() already
-            // rolled back.
+        if (!txn.aborted() and txn._queue.items.len > 0) {
+            // The handler left requests pending (e.g. a keep-alive loop).
+            // Deliver their events one batch per scheduler turn — never
+            // synchronously — so timer tasks can interleave and observe the
+            // transaction as inactive. The drain owns the sqlite txn's fate now.
             closed = true;
-            self.request._txn = .none;
-            self.request.setError(error.AbortError);
-            return self.request.deliver(exec);
+            self._upgrade = txn;
+            return true;
         }
 
-        txn.settle(exec);
+        if (!txn.aborted()) {
+            // Nothing queued: settle synchronously (commit + fire `complete`).
+            txn.settle(exec);
+        }
+        // An aborted transaction — the upgradeneeded handler called abort()
+        // (what a jerk!) — already rolled back; finishUpgrade delivers its
+        // AbortError.
         closed = true;
-        self.request._txn = .none;
-        return self.request.fireSuccess(exec);
+        try self.finishUpgrade(txn);
+        return false;
     }
 };
 
