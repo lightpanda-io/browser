@@ -2188,6 +2188,27 @@ pub fn scheduleCustomElementBackupDrain(self: *Frame) !void {
     try self.js.queueCustomElementBackupDrain();
 }
 
+// Run the network-idle notification checks for this frame and, recursively,
+// its child frames. CDP clients (e.g. puppeteer's networkidle0) expect the
+// networkIdle/networkAlmostIdle lifecycle events on every frame, like Chrome
+// emits them, not just on the root frame.
+pub fn checkIdleNotifications(self: *Frame, total_http_activity: usize) void {
+    switch (self._parse_state) {
+        .html, .complete => {
+            if (self._notified_network_almost_idle.check(total_http_activity <= 2)) {
+                self.notifyNetworkAlmostIdle();
+            }
+            if (self._notified_network_idle.check(total_http_activity == 0)) {
+                self.notifyNetworkIdle();
+            }
+        },
+        else => {},
+    }
+    for (self.child_frames.items) |child| {
+        child.checkIdleNotifications(total_http_activity);
+    }
+}
+
 pub fn notifyNetworkIdle(self: *Frame) void {
     lp.assert(self._notified_network_idle == .done, "Frame.notifyNetworkIdle", .{});
     self._session.notification.dispatch(.frame_network_idle, &.{
