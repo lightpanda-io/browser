@@ -61,13 +61,17 @@ const CreateObjectStoreOptions = struct {
     autoIncrement: bool = false,
 };
 
-// Only callable during upgradeneeded, hence the _txn check
+// Only callable while the upgrade transaction is live and active, hence the checks
 pub fn createObjectStore(
     self: *IDBDatabase,
     name: []const u8,
     options: ?CreateObjectStoreOptions,
 ) !*IDBObjectStore {
     const txn = self._txn orelse return error.InvalidStateError;
+    if (txn._settled) {
+        return error.InvalidStateError;
+    }
+    try txn.assertActive();
 
     const opts = options orelse CreateObjectStoreOptions{};
     const store_id = self._engine.createObjectStore(
@@ -87,9 +91,13 @@ pub fn createObjectStore(
     return store;
 }
 
-// Only callable during upgradeneeded, hence the _txn check
+// Only callable while the upgrade transaction is live and active, hence the checks
 pub fn deleteObjectStore(self: *IDBDatabase, name: []const u8, _: *Execution) !void {
     const txn = self._txn orelse return error.InvalidStateError;
+    if (txn._settled) {
+        return error.InvalidStateError;
+    }
+    try txn.assertActive();
     try self._engine.deleteObjectStore(self._database_id, name);
     txn.uncacheStore(name);
 }
