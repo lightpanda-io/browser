@@ -94,6 +94,13 @@ run_deterministic() {
   fi
 }
 
+# Surface the agent's own error output on failure — an instant empty answer
+# usually means an API error (bad key, quota, restriction) that only appears
+# on stderr.
+show_err() {
+  sed -n '/^\$usage /!p' "$1" | tail -3 | sed 's/^/    /'
+}
+
 # Grep the stable "$usage total=N" line lightpanda prints to stderr and fail
 # if a single task blew past the token ceiling (runaway agent loop).
 check_usage() {
@@ -117,6 +124,7 @@ run_live_qa() {
     else
       fail "Q&A: expected \"$expected\" not found in answer"
       info "  answer: $(tr '\n' ' ' <"$TMP/out" | cut -c1-200)"
+      show_err "$TMP/err"
     fi
     check_usage "$TMP/err" "Q&A \"$expected\""
   done <"$HERE/cases/static-qa.tsv"
@@ -134,7 +142,9 @@ run_live_hn() {
   check_usage "$TMP/err" "HN save"
 
   if [ ! -s "$script" ]; then
-    fail "HN save produced no script"; return
+    fail "HN save produced no script"
+    show_err "$TMP/err"
+    return
   fi
   # A real replay script drives the page — it must navigate and extract.
   if grep -q 'goto(' "$script" && grep -q 'extract(' "$script"; then
