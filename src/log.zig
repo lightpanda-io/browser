@@ -172,7 +172,11 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
 
     var buf: [4096]u8 = undefined;
     var stderr = std.fs.File.stderr();
-    var writer = stderr.writer(&buf);
+    // writerStreaming, not writer: the default positional mode starts each
+    // fresh Writer at offset 0, so when stderr is redirected to a regular file
+    // every log line overwrites the previous one. Streaming writes at the fd
+    // offset, which is what append-style logging needs.
+    var writer = stderr.writerStreaming(&buf);
 
     logTo(scope, level, msg, data, &writer.interface) catch |log_err| {
         std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
