@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
 
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
@@ -49,7 +50,7 @@ _index_id: ?i64 = null,
 
 // the JS value of this Cursor, pre-converted and cached as an optimization
 // since this cursor will be the request value on every iteration.
-_js: js.Value.Global,
+_js: *js.Value.BareGlobal,
 
 // Encoded current key; null before iteration and at the end. For an index cursor
 // this is the index key; for an object store it equals the primary key.
@@ -59,6 +60,14 @@ _key: ?[]const u8 = null,
 _primary_key: ?[]const u8 = null,
 // Current record's serialized value bytes (null when key-only or exhausted).
 _value: ?[]const u8 = null,
+
+// Backing storage for _key/_primary_key/_value, reused across positions so a
+// long scan holds one record's worth of memory, not the whole traversal.
+// Anything that must survive a reposition (update/delete/continue snapshots)
+// is duped onto the transaction's arena instead.
+_key_buf: std.ArrayList(u8) = .empty,
+_pk_buf: std.ArrayList(u8) = .empty,
+_val_buf: std.ArrayList(u8) = .empty,
 
 pub const Direction = enum {
     next,
@@ -96,23 +105,22 @@ fn startSentinel(reverse: bool) []const u8 {
 }
 
 // Cursor over an object store.
-pub fn open(store: *IDBObjectStore, bounds: Engine.Bounds, direction: Direction, key_only: bool, exec: *Execution) !*IDBRequest {
-    const txn = store._txn orelse return error.TransactionInactiveError;
-    return create(store, txn, null, .{ .store = store }, bounds, direction, key_only, exec);
+pub fn init(store: *IDBObjectStore, bounds: Engine.Bounds, direction: Direction, key_only: bool, exec: *Execution) !*IDBRequest {
+    return _init(store, store._txn, null, .{ .store = store }, bounds, direction, key_only, exec);
 }
 
 // Cursor over an index (key = index key, primaryKey = store key).
-pub fn openIndex(index: *IDBIndex, bounds: Engine.Bounds, direction: Direction, key_only: bool, exec: *Execution) !*IDBRequest {
+pub fn initIndex(index: *IDBIndex, bounds: Engine.Bounds, direction: Direction, key_only: bool, exec: *Execution) !*IDBRequest {
     const store = index._store;
-    const txn = store._txn orelse return error.TransactionInactiveError;
-    return create(store, txn, index._index_id, .{ .index = index }, bounds, direction, key_only, exec);
+    return _init(store, store._txn, index._index_id, .{ .index = index }, bounds, direction, key_only, exec);
 }
 
-fn create(store: *IDBObjectStore, txn: *IDBTransaction, index_id: ?i64, source: Source, bounds: Engine.Bounds, direction: Direction, key_only: bool, exec: *Execution) !*IDBRequest {
+fn _init(store: *IDBObjectStore, txn: *IDBTransaction, index_id: ?i64, source: Source, bounds: Engine.Bounds, direction: Direction, key_only: bool, exec: *Execution) !*IDBRequest {
     try txn.assertActive();
 
     const request = try txn.newRequest();
-    const self = try exec._factory.create(IDBCursor{
+    const self = try txn._arena.create(IDBCursor);
+    self.* = .{
         ._engine = store._engine,
         ._store = store,
         ._txn = txn,
@@ -123,29 +131,30 @@ fn create(store: *IDBObjectStore, txn: *IDBTransaction, index_id: ?i64, source: 
         ._index_id = index_id,
         ._js = undefined,
         ._source = source,
-    });
+    };
     request._cursor = self;
 
     const local = exec.js.local.?;
     const public: js.Value = if (key_only)
         try local.zigValueToJs(self, .{})
     else
-        try local.zigValueToJs(try IDBCursorWithValue.init(self, exec), .{});
+        try local.zigValueToJs(try IDBCursorWithValue.init(self), .{});
 
     // Pre-converted and cached because it's the request value on every iteration,
     // avoiding the bridge's pointer -> js.Value lookup each time.
-    self._js = try public.persist();
+    self._js = try txn.persist(public);
 
     // The first seek runs in the drain (or immediately, for a versionchange txn),
     // not here — so the connection is only touched while the txn owns it.
     return request.submit(.{ .cursor_iterate = .{ .cursor = self, .seek = .first, .offset = 0 } }, exec);
 }
 
-// Re-arm the cursor's existing request with its next seek and requeue it. Called by
-// continue/advance from within a success handler; the drain loop picks the requeued
-// request up in the same pass (a versionchange cursor runs it now).
-fn reiterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
-    _ = try self._request.submit(.{ .cursor_iterate = .{ .cursor = self, .seek = seek, .offset = offset } }, exec);
+pub fn acquireRef(self: *IDBCursor) void {
+    self._txn.acquireRef();
+}
+
+pub fn releaseRef(self: *IDBCursor, page: *Page) void {
+    self._txn.releaseRef(page);
 }
 
 // Run the deferred seek, staging the positioned cursor (or null) on the request.
@@ -165,7 +174,7 @@ pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void
     try self.prepareIterate();
 
     if (key_arg) |k| {
-        const encoded = try Key.encodeValue(exec.arena, k);
+        const encoded = try Key.encodeValue(self._txn._arena, k);
         // The target must move past the current key in the iteration direction.
         const order = std.mem.order(u8, encoded, self._key.?);
         if (if (self._direction.reverse()) order != .lt else order != .gt) {
@@ -185,8 +194,8 @@ pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: 
     try self.prepareIterate();
 
     const reverse = self._direction.reverse();
-    const key = try Key.encodeValue(exec.arena, key_arg);
-    const primary_key = try Key.encodeValue(exec.arena, primary_key_arg);
+    const key = try Key.encodeValue(self._txn._arena, key_arg);
+    const primary_key = try Key.encodeValue(self._txn._arena, primary_key_arg);
 
     // The (key, primaryKey) pair must move past the current position.
     const ok = switch (std.mem.order(u8, key, self._key.?)) {
@@ -226,25 +235,28 @@ pub fn update(self: *IDBCursor, value: js.Value, exec: *Execution) !*IDBRequest 
     }
 
     // The record sits at the primary (store) key, even for an index cursor.
-    const key = self._primary_key orelse return error.InvalidStateError;
+    const current_key = self._primary_key orelse return error.InvalidStateError;
 
     // For an in-line store, the value's own key must match the record's key.
     if (self._store._key_path) |kp| {
         const extracted = Key.evaluatePath(value, kp) orelse return error.DataError;
         const encoded = try Key.encodeValue(exec.call_arena, extracted);
-        if (!std.mem.eql(u8, encoded, key)) {
+        if (!std.mem.eql(u8, encoded, current_key)) {
             return error.DataError;
         }
     }
 
     // Snapshot the record key: the write runs in the drain, by which point a
-    // `continue` could have moved the cursor's live position on.
+    // `continue` could have moved the cursor's live position (and reused its
+    // key buffer).
+    const key = try self._txn._arena.dupe(u8, current_key);
     const request = try self._txn.newRequest();
-    const value_global = try value.persist();
+    const value_global = try self._txn.persist(value);
     return request.submit(.{ .cursor_update = .{ .cursor = self, .key = key, .value = value_global } }, exec);
 }
 
-pub fn runUpdate(self: *IDBCursor, request: *IDBRequest, key: []const u8, value_global: js.Value.Global, exec: *Execution) !void {
+pub fn runUpdate(self: *IDBCursor, request: *IDBRequest, key: []const u8, value_global: *js.Value.BareGlobal, exec: *Execution) !void {
+    defer value_global.deinit();
     const local = exec.js.local.?;
     const value = value_global.local(local);
 
@@ -276,7 +288,8 @@ pub fn delete(self: *IDBCursor, exec: *Execution) !*IDBRequest {
     }
 
     // Snapshot the record key (see update): the delete runs later, in the drain.
-    const key = self._primary_key orelse return error.InvalidStateError;
+    const current_key = self._primary_key orelse return error.InvalidStateError;
+    const key = try self._txn._arena.dupe(u8, current_key);
     const request = try self._txn.newRequest();
     return request.submit(.{ .cursor_delete = .{ .cursor = self, .key = key } }, exec);
 }
@@ -307,11 +320,12 @@ pub fn getSource(self: *const IDBCursor) Source {
     return self._source;
 }
 
-// Seek the next record and stage it as the request result. The keys/value live on
-// the page arena (they must survive across event-loop turns within the txn).
+// Seek the next record and stage it as the request result. The engine dupes
+// the row onto the per-call scratch arena; position() then copies it into the
+// cursor's reused buffers (which must survive across event-loop turns).
 fn iterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
     const reverse = self._direction.reverse();
-    const arena = exec.arena;
+    const arena = exec.call_arena;
     const store_id = self._store._store_id;
 
     if (self._index_id) |index_id| {
@@ -322,7 +336,7 @@ fn iterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
             .to_primary => |tp| .{ tp.key, tp.primary_key, true },
         };
         const rec = try self._engine.indexCursorSeek(arena, store_id, index_id, self._bounds, reverse, from_key, from_pk, pk_inclusive, !self._key_only, offset);
-        if (rec) |r| self.position(r.key, r.primary_key, r.value) else self.exhaust();
+        if (rec) |r| try self.position(r.key, r.primary_key, r.value) else self.exhaust();
     } else {
         const from_op, const from_key = switch (seek) {
             .first => .{ if (reverse) "<= " else ">= ", startSentinel(reverse) },
@@ -332,14 +346,35 @@ fn iterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
         };
         const rec = try self._engine.cursorSeek(arena, store_id, self._bounds, reverse, from_op, from_key, offset, !self._key_only);
         // For an object store the key is the primary key.
-        if (rec) |r| self.position(r.key, r.key, r.value) else self.exhaust();
+        if (rec) |r| try self.position(r.key, r.key, r.value) else self.exhaust();
     }
 }
 
-fn position(self: *IDBCursor, key: []const u8, primary_key: []const u8, value: ?[]const u8) void {
-    self._key = key;
-    self._primary_key = primary_key;
-    self._value = value;
+// Re-arm the cursor's existing request with its next seek and requeue it. Called by
+// continue/advance from within a success handler; the drain loop picks the requeued
+// request up in the same pass (a versionchange cursor runs it now).
+fn reiterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
+    _ = try self._request.submit(.{ .cursor_iterate = .{ .cursor = self, .seek = seek, .offset = offset } }, exec);
+}
+
+fn position(self: *IDBCursor, key: []const u8, primary_key: []const u8, value: ?[]const u8) !void {
+    const arena = self._txn._arena;
+
+    self._key_buf.clearRetainingCapacity();
+    try self._key_buf.appendSlice(arena, key);
+    self._key = self._key_buf.items;
+
+    self._pk_buf.clearRetainingCapacity();
+    try self._pk_buf.appendSlice(arena, primary_key);
+    self._primary_key = self._pk_buf.items;
+
+    if (value) |v| {
+        self._val_buf.clearRetainingCapacity();
+        try self._val_buf.appendSlice(arena, v);
+        self._value = self._val_buf.items;
+    } else {
+        self._value = null;
+    }
     self._request.setValueGlobal(self._js);
 }
 

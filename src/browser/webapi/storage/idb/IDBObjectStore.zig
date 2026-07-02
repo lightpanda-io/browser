@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 
+const Page = @import("../../../Page.zig");
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
 const IDBIndex = @import("IDBIndex.zig");
@@ -42,26 +43,35 @@ _store_id: i64,
 _name: []const u8,
 _key_path: ?[]const u8,
 _auto_increment: bool,
-// only null during an upgradeneeded
-_txn: ?*IDBTransaction,
+_txn: *IDBTransaction,
+// identity map, store.indexes('a') === store.index('a')
+_indexes: std.ArrayList(*IDBIndex) = .empty,
 
 pub fn init(
-    engine: *Engine,
-    txn: ?*IDBTransaction,
+    txn: *IDBTransaction,
     store_id: i64,
     name: []const u8,
     key_path: ?[]const u8,
     auto_increment: bool,
-    exec: *Execution,
 ) !*IDBObjectStore {
-    return exec._factory.create(IDBObjectStore{
-        ._engine = engine,
+    const self = try txn._arena.create(IDBObjectStore);
+    self.* = .{
         ._txn = txn,
-        ._store_id = store_id,
         ._name = name,
+        ._engine = txn._engine,
+        ._store_id = store_id,
         ._key_path = key_path,
         ._auto_increment = auto_increment,
-    });
+    };
+    return self;
+}
+
+pub fn acquireRef(self: *IDBObjectStore) void {
+    self._txn.acquireRef();
+}
+
+pub fn releaseRef(self: *IDBObjectStore, page: *Page) void {
+    self._txn.releaseRef(page);
 }
 
 pub fn add(self: *IDBObjectStore, value: js.Value, key: ?js.Value, exec: *Execution) !*IDBRequest {
@@ -73,18 +83,14 @@ pub fn put(self: *IDBObjectStore, value: js.Value, key: ?js.Value, exec: *Execut
 }
 
 pub fn get(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
+    const txn = self._txn;
     try txn.assertActive();
-    // Bounds are captured for deferred execution, so they must outlive this call —
-    // the page arena, not the per-call scratch arena.
-    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get = .{ .store = self, .bounds = bounds } }, exec);
 }
 
 pub fn runGet(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
-    // The fetched bytes are deserialized here and then discarded, so the per-call
-    // scratch arena suffices for them.
     const arena = exec.call_arena;
     const bytes = self._engine.getRange(arena, self._store_id, bounds) catch |err| {
         log.warn(.storage, "idb get", .{ .err = err });
@@ -96,12 +102,12 @@ pub fn runGet(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds
 }
 
 pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
+    const txn = self._txn;
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
     }
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_delete = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -119,7 +125,7 @@ fn deleteBounds(self: *IDBObjectStore, bounds: Engine.Bounds) !void {
 }
 
 pub fn clear(self: *IDBObjectStore, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
+    const txn = self._txn;
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
     }
@@ -141,9 +147,9 @@ fn clearAll(self: *IDBObjectStore) !void {
 }
 
 pub fn count(self: *IDBObjectStore, query: ?js.Value, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
+    const txn = self._txn;
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_count = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -169,17 +175,17 @@ pub fn getAllKeys(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u
 }
 
 pub fn getAllRecords(self: *IDBObjectStore, options: ?js.Value, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
+    const txn = self._txn;
     try txn.assertActive();
-    const args = try IDBKeyRange.resolveGetAllOptions(exec.arena, options, exec);
+    const args = try IDBKeyRange.resolveGetAllOptions(txn._arena, options, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get_all = .{ .store = self, .args = args, .mode = .record } }, exec);
 }
 
 fn _getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, mode: GetAllMode, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
+    const txn = self._txn;
     try txn.assertActive();
-    const args = try IDBKeyRange.resolveGetAll(exec.arena, query_or_options, count_, exec);
+    const args = try IDBKeyRange.resolveGetAll(txn._arena, query_or_options, count_, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get_all = .{ .store = self, .args = args, .mode = mode } }, exec);
 }
@@ -210,7 +216,7 @@ fn collectAll(self: *IDBObjectStore, exec: *Execution, args: IDBKeyRange.GetAllA
         const out: js.Value = switch (mode) {
             .value => try js.Value.deserialize(local, row.get([]const u8, 1)),
             .key => try Key.decodeToJs(exec.call_arena, local, key),
-            .record => try IDBRecord.initValue(exec, local, key, key, row.get([]const u8, 1)),
+            .record => try IDBRecord.initValue(self._txn, local, key, key, row.get([]const u8, 1)),
         };
         _ = try arr.set(i, out, .{});
         i += 1;
@@ -219,9 +225,9 @@ fn collectAll(self: *IDBObjectStore, exec: *Execution, args: IDBKeyRange.GetAllA
 }
 
 pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
+    const txn = self._txn;
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get_key = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -238,13 +244,13 @@ pub fn runGetKey(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bou
 }
 
 pub fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
-    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
-    return IDBCursor.open(self, bounds, direction orelse .next, false, exec);
+    const bounds = try IDBKeyRange.resolveQuery(self._txn._arena, query, exec);
+    return IDBCursor.init(self, bounds, direction orelse .next, false, exec);
 }
 
 pub fn openKeyCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
-    const bounds = try IDBKeyRange.resolveQuery(exec.arena, query, exec);
-    return IDBCursor.open(self, bounds, direction orelse .next, true, exec);
+    const bounds = try IDBKeyRange.resolveQuery(self._txn._arena, query, exec);
+    return IDBCursor.init(self, bounds, direction orelse .next, true, exec);
 }
 
 pub fn getName(self: *const IDBObjectStore) []const u8 {
@@ -259,7 +265,7 @@ pub fn getAutoIncrement(self: *const IDBObjectStore) bool {
     return self._auto_increment;
 }
 
-pub fn getTransaction(self: *IDBObjectStore) ?*IDBTransaction {
+pub fn getTransaction(self: *IDBObjectStore) *IDBTransaction {
     return self._txn;
 }
 
@@ -279,15 +285,15 @@ pub const PreparedKey = union(enum) {
 };
 
 fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: WriteKind, exec: *Execution) !*IDBRequest {
-    const txn = self._txn orelse return error.TransactionInactiveError;
+    const txn = self._txn;
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
     }
     try txn.assertActive();
 
     // Resolve (and validate) the key now, so DataError / a throwing key getter
-    // throws synchronously. Encoded key bytes are captured on the page arena to
-    // outlive this call. The record write itself is deferred to runWrite.
+    // throws synchronously. Encoded key bytes are captured on the transaction's
+    // arena to outlive this call. The record write itself is deferred to runWrite.
     const prepared: PreparedKey = blk: {
         if (self._key_path) |kp| {
             if (key_arg != null) {
@@ -296,7 +302,7 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
             }
             if (Key.evaluatePath(value, kp)) |extracted| {
                 break :blk .{ .explicit = .{
-                    .encoded = try Key.encodeValue(exec.arena, extracted),
+                    .encoded = try Key.encodeValue(txn._arena, extracted),
                     .bump = if (self._auto_increment and extracted.isNumber()) try extracted.toF64() else null,
                 } };
             }
@@ -313,7 +319,7 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
         // Out-of-line keys.
         if (key_arg) |k| {
             break :blk .{ .explicit = .{
-                .encoded = try Key.encodeValue(exec.arena, k),
+                .encoded = try Key.encodeValue(txn._arena, k),
                 .bump = if (self._auto_increment and k.isNumber()) try k.toF64() else null,
             } };
         }
@@ -324,7 +330,7 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
     };
 
     const request = try txn.newRequest();
-    const value_global = try value.persist();
+    const value_global = try txn.persist(value);
     return request.submit(.{ .store_write = .{
         .store = self,
         .kind = kind,
@@ -333,7 +339,10 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
     } }, exec);
 }
 
-pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: js.Value.Global, prepared: PreparedKey, exec: *Execution) !void {
+pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: *js.Value.BareGlobal, prepared: PreparedKey, exec: *Execution) !void {
+    // Written (or failed) is written: the pinned value is dead once this op
+    // ran, so release its handle now instead of at transaction teardown.
+    defer value_global.deinit();
     self.writeInner(request, kind, value_global, prepared, exec) catch |err| {
         if (err != error.Constraint) {
             log.warn(.storage, "idb write", .{ .err = err, .kind = kind });
@@ -342,7 +351,7 @@ pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, va
     };
 }
 
-fn writeInner(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: js.Value.Global, prepared: PreparedKey, exec: *Execution) !void {
+fn writeInner(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: *js.Value.BareGlobal, prepared: PreparedKey, exec: *Execution) !void {
     const local = exec.js.local.?;
     const value = value_global.local(local);
 
@@ -454,7 +463,7 @@ const CreateIndexOptions = struct {
 
 // Only callable during an upgrade (versionchange transaction).
 pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8, options: ?CreateIndexOptions, exec: *Execution) !*IDBIndex {
-    const txn = self._txn orelse return error.InvalidStateError;
+    const txn = self._txn;
     if (txn._mode != .versionchange) {
         return error.InvalidStateError;
     }
@@ -484,21 +493,22 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8
         }
     }
 
-    const owned_name = try exec.dupeString(name);
-    const owned_key_path = try exec.dupeString(key_path);
+    const owned_name = try txn.dupe(name);
+    const owned_key_path = try txn.dupe(key_path);
     const idb_index = try IDBIndex.init(self, .{
         .id = index_id,
         .key_path = owned_key_path,
         .unique = opts.unique,
         .multi_entry = opts.multiEntry,
-    }, owned_name, exec);
+    }, owned_name);
     try self._engine.releaseSavepoint();
+    try self._indexes.append(txn._arena, idb_index);
     return idb_index;
 }
 
 // Only callable during an upgrade (versionchange transaction).
 pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void {
-    const txn = self._txn orelse return error.InvalidStateError;
+    const txn = self._txn;
     if (txn._mode != .versionchange) {
         return error.InvalidStateError;
     }
@@ -506,15 +516,27 @@ pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void
         error.NotFound => return error.NotFoundError,
         else => return err,
     };
+    for (self._indexes.items, 0..) |idx, i| {
+        if (std.mem.eql(u8, idx._name, name)) {
+            _ = self._indexes.swapRemove(i);
+            break;
+        }
+    }
 }
 
-pub fn index(self: *IDBObjectStore, name: []const u8, exec: *Execution) !*IDBIndex {
-    if (self._txn == null) {
-        return error.InvalidStateError;
+pub fn index(self: *IDBObjectStore, name: []const u8, _: *Execution) !*IDBIndex {
+    for (self._indexes.items) |idx| {
+        if (std.mem.eql(u8, idx._name, name)) {
+            return idx;
+        }
     }
-    const info = (try self._engine.indexInfo(exec.arena, self._store_id, name)) orelse return error.NotFound;
-    const owned_name = try exec.dupeString(name);
-    return IDBIndex.init(self, info, owned_name, exec);
+
+    const txn = self._txn;
+    const info = (try self._engine.indexInfo(txn._arena, self._store_id, name)) orelse return error.NotFound;
+    const owned_name = try txn.dupe(name);
+    const idx = try IDBIndex.init(self, info, owned_name);
+    try self._indexes.append(txn._arena, idx);
+    return idx;
 }
 
 pub fn getIndexNames(self: *IDBObjectStore, exec: *Execution) !*DOMStringList {
