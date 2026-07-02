@@ -129,8 +129,6 @@ use_proxy: bool,
 // Current TLS verification state, applied per-connection in makeRequest.
 tls_verify: bool = true,
 
-obey_robots: bool,
-
 // User agent override set via CDP Emulation.setUserAgentOverride.
 // When set, takes precedence over the config's http_headers values.
 // Both fields are allocated from self.allocator when set, null otherwise.
@@ -217,7 +215,6 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
         .tls_verify = network.config.tlsVerifyHost(),
-        .obey_robots = network.config.obeyRobots(),
         .max_response_size = network.config.httpMaxResponseSize() orelse std.math.maxInt(u32),
 
         .cache_layer = .{},
