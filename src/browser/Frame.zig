@@ -1340,6 +1340,10 @@ fn urlBasename(arena: Allocator, url: []const u8) !?[]const u8 {
     return try arena.dupe(u8, name);
 }
 
+fn isUtf16Encoding(charset: []const u8) bool {
+    return std.mem.eql(u8, charset, "UTF-16LE") or std.mem.eql(u8, charset, "UTF-16BE");
+}
+
 fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
     var self: *Frame = @ptrCast(@alignCast(response.ctx));
 
@@ -1355,8 +1359,10 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
 
         // If the HTTP Content-Type header didn't specify a charset and this is HTML,
         // prescan the first 1024 bytes for a <meta charset> declaration.
+        var html_prescan_found_charset = false;
         if (mime.content_type == .text_html and mime.is_default_charset) {
             if (Mime.prescanCharset(data)) |charset| {
+                html_prescan_found_charset = true;
                 if (charset.len <= 40) {
                     @memcpy(mime.charset[0..charset.len], charset);
                     mime.charset[charset.len] = 0;
@@ -1380,7 +1386,8 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
                 const charset_str = mime.charsetString();
                 const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
                 if (info.isValid()) {
-                    self.charset = info.name();
+                    const name = info.name();
+                    self.charset = if (html_prescan_found_charset and isUtf16Encoding(name)) "UTF-8" else name;
                 }
                 self._parse_state = .{ .html = .{
                     .buffer = .empty,

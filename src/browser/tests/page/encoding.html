@@ -69,6 +69,30 @@
   }
 </script>
 
+<script id="unicode_label_falls_back_to_utf8" type=module>
+  {
+    const state = await testing.async();
+
+    // The legacy "unicode" label maps to UTF-16LE, but HTML prescan maps
+    // UTF-16 labels back to UTF-8 so ASCII pages stay readable.
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframe.src = 'encoding/unicode_label.html';
+    iframe.onload = () => { state.resolve(); }
+
+    await state.done(() => {
+      testing.expectEqual('Hello world', iframe.contentDocument.getElementById('title').textContent);
+      testing.expectEqual(
+        'This page is plain ASCII but declares charset=unicode.',
+        iframe.contentDocument.getElementById('body').textContent,
+      );
+      testing.expectEqual('UTF-8', iframe.contentDocument.characterSet);
+      testing.expectEqual('UTF-8', iframe.contentDocument.charset);
+      testing.expectEqual('UTF-8', iframe.contentDocument.inputEncoding);
+    });
+  }
+</script>
+
 <script id="no_charset_fallback" type=module>
   {
     const state = await testing.async();
