@@ -18,7 +18,9 @@
 
 const js = @import("../../../js/js.zig");
 
+const Page = @import("../../../Page.zig");
 const Key = @import("Key.zig");
+const IDBTransaction = @import("IDBTransaction.zig");
 
 const Execution = js.Execution;
 
@@ -26,29 +28,31 @@ const IDBRecord = @This();
 
 // A single result of getAllRecords: the (index or store) key, the primary/store
 // key, and the value. Stored encoded/serialized and decoded lazily on access
-// (mirroring IDBKeyRange). The bytes are page-arena lived — the record is handed
-// back inside a JS array the page may retain past the request.
+// (mirroring IDBKeyRange). Record and bytes live on the transaction's arena;
+_txn: *IDBTransaction,
 _key: []const u8,
 _primary_key: []const u8,
 _value: []const u8,
 
-pub fn init(exec: *Execution, key: []const u8, primary_key: []const u8, value: []const u8) !*IDBRecord {
-    return exec._factory.create(IDBRecord{
-        ._key = key,
-        ._primary_key = primary_key,
-        ._value = value,
-    });
+pub fn acquireRef(self: *IDBRecord) void {
+    self._txn.acquireRef();
 }
 
-// Build a record from borrowed bytes — duped onto the page arena so the record
-// outlives this call — and return its JS value.
-pub fn initValue(exec: *Execution, local: *const js.Local, key: []const u8, primary_key: []const u8, value: []const u8) !js.Value {
-    const record = try init(
-        exec,
-        try exec.arena.dupe(u8, key),
-        try exec.arena.dupe(u8, primary_key),
-        try exec.arena.dupe(u8, value),
-    );
+pub fn releaseRef(self: *IDBRecord, page: *Page) void {
+    self._txn.releaseRef(page);
+}
+
+// Build a record from borrowed bytes — duped onto the transaction's arena so
+// the record outlives this call — and return its JS value.
+pub fn initValue(txn: *IDBTransaction, local: *const js.Local, key: []const u8, primary_key: []const u8, value: []const u8) !js.Value {
+    const arena = txn._arena;
+    const record = try arena.create(IDBRecord);
+    record.* = .{
+        ._txn = txn,
+        ._key = try arena.dupe(u8, key),
+        ._primary_key = try arena.dupe(u8, primary_key),
+        ._value = try arena.dupe(u8, value),
+    };
     return local.zigValueToJs(record, .{});
 }
 

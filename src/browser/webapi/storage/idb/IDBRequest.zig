@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 
+const Page = @import("../../../Page.zig");
 const Event = @import("../../Event.zig");
 const EventTarget = @import("../../EventTarget.zig");
 const DOMException = @import("../../DOMException.zig");
@@ -43,13 +44,16 @@ const IDBRequest = @This();
 _proto: *EventTarget,
 _op: Operation = .none,
 _error: ?anyerror = null,
-_txn: ?*IDBTransaction = null,
+_txn: Txn = .none,
 // Same request can show up multiple times in txn._requests, but it should only
 // be executed/fired in its last append (to preserve ordering).
 _txn_index: usize = 0,
 _cursor: ?*IDBCursor = null,
 _ready_state: ReadyState = .pending,
 _result: Result = .{ .none = js.Undefined{} },
+// whether or not we own th result value, if we do, we can free it once we know
+// it cannot be used
+_result_owned: bool = false,
 
 _on_success: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
@@ -66,8 +70,24 @@ const ReadyState = enum {
 
 const Result = union(enum) {
     none: ?js.Undefined, // null or undefined (different APIs return different values)
-    value: js.Value.Global, // the result of a get/add/put, or a positioned cursor
+    value: *js.Value.BareGlobal, // the result of a get/add/put, or a positioned cursor
     database: *IDBDatabase, // the result of an open
+};
+
+const Txn = union(enum) {
+    // a page-scoped open/deleteDatabase request, outside an upgrade
+    none,
+
+    // The transaction this request belongs to — and whose arena it lives on.
+    // Set once by IDBTransaction.newRequest, before the request is ever
+    // wrapped, and never reassigned: the FC acquire and release must resolve
+    // the same target. Wrapper pins forward to it.
+    owned: *IDBTransaction,
+
+    // An open request's exposure of the versionchange transaction while the
+    // upgrade runs — spec visibility only, not ownership: the request stays
+    // page-scoped and pins nothing.
+    borrowed: *IDBTransaction,
 };
 
 pub fn init(exec: *Execution) !*IDBRequest {
@@ -78,18 +98,66 @@ pub fn asEventTarget(self: *IDBRequest) *EventTarget {
     return self._proto;
 }
 
-// Not exposed to JS, called internally
-pub fn setValue(self: *IDBRequest, value: js.Value) !void {
-    return self.setValueGlobal(try value.persist());
+// The FC machinery calls these when a JS wrapper is created/collected. A
+// request created through a transaction lives on that transaction's arena and
+// forwards its wrapper pins there; open/delete requests are page-scoped and
+// pin nothing.
+pub fn acquireRef(self: *IDBRequest) void {
+    switch (self._txn) {
+        .owned => |txn| txn.acquireRef(),
+        .none, .borrowed => {},
+    }
 }
 
-// Not exposed to JS, called internally
-pub fn setValueGlobal(self: *IDBRequest, global: js.Value.Global) void {
+pub fn releaseRef(self: *IDBRequest, page: *Page) void {
+    if (self._op == .none and self._ready_state == .done) {
+        // v8 is done with this request and we're done with it. Eagerly release
+        // our value
+        self.clearOwnedResult();
+    }
+    switch (self._txn) {
+        .owned => |txn| txn.releaseRef(page),
+        .none, .borrowed => {},
+    }
+}
+
+// Release the result handle if this request owns one.
+fn clearOwnedResult(self: *IDBRequest) void {
+    if (!self._result_owned) {
+        return;
+    }
+
+    self._result_owned = false;
+    switch (self._result) {
+        .value => |global| {
+            // It's ok to keep this in txn._globals, deinit can be called multiple times
+            global.deinit();
+            self._result = .{ .none = js.Undefined{} };
+        },
+        .none, .database => {},
+    }
+}
+
+// Not exposed to JS, called internally. Only requests created through a
+// transaction (newRequest) carry value results; open/delete requests use
+// setDatabaseResult or errors.
+pub fn setValue(self: *IDBRequest, value: js.Value) !void {
+    const global = try self._txn.owned.persist(value);
+    self.clearOwnedResult();
+    self._result = .{ .value = global };
+    self._result_owned = true;
+}
+
+// Not exposed to JS, called internally. The handle is borrowed (a cursor's
+// transaction-owned _js), not owned by this request.
+pub fn setValueGlobal(self: *IDBRequest, global: *js.Value.BareGlobal) void {
+    self.clearOwnedResult();
     self._result = .{ .value = global };
 }
 
 // Not exposed to JS, called internally. Result becomes JS `null` (not undefined).
 pub fn setNull(self: *IDBRequest) void {
+    self.clearOwnedResult();
     self._result = .{ .none = null };
 }
 
@@ -140,12 +208,27 @@ pub fn getReadyState(self: *const IDBRequest) ReadyState {
     return self._ready_state;
 }
 
-pub fn getResult(self: *const IDBRequest) Result {
-    return self._result;
+// What the `result` accessor hands the bridge: the stored handle resolved to a
+// local value.
+const JsResult = union(enum) {
+    value: js.Value,
+    none: ?js.Undefined,
+    database: *IDBDatabase,
+};
+
+pub fn getResult(self: *const IDBRequest, exec: *Execution) JsResult {
+    return switch (self._result) {
+        .none => |n| .{ .none = n },
+        .value => |global| .{ .value = global.local(exec.js.local.?) },
+        .database => |db| .{ .database = db },
+    };
 }
 
 pub fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
-    return self._txn;
+    return switch (self._txn) {
+        .none => null,
+        .owned, .borrowed => |txn| txn,
+    };
 }
 
 // Return this as a DOMException directly. If we return an error, the bridge
@@ -212,11 +295,11 @@ pub const Operation = union(enum) {
 
     const StoreQuery = struct { store: *IDBObjectStore, bounds: Engine.Bounds };
     const StoreGetAll = struct { store: *IDBObjectStore, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
-    const StoreWrite = struct { store: *IDBObjectStore, kind: IDBObjectStore.WriteKind, value: js.Value.Global, key: IDBObjectStore.PreparedKey };
+    const StoreWrite = struct { store: *IDBObjectStore, kind: IDBObjectStore.WriteKind, value: *js.Value.BareGlobal, key: IDBObjectStore.PreparedKey };
     const IndexQuery = struct { index: *IDBIndex, bounds: Engine.Bounds };
     const IndexGetAll = struct { index: *IDBIndex, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
     const CursorIterate = struct { cursor: *IDBCursor, seek: IDBCursor.Seek, offset: u32 };
-    const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: js.Value.Global };
+    const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: *js.Value.BareGlobal };
     const CursorDelete = struct { cursor: *IDBCursor, key: []const u8 };
 };
 
@@ -224,7 +307,7 @@ pub const Operation = union(enum) {
 // transaction's drain.
 pub fn submit(self: *IDBRequest, op: Operation, exec: *Execution) !*IDBRequest {
     self._op = op;
-    const txn = self._txn.?;
+    const txn = self._txn.owned;
     try txn.enqueue(self);
 
     if (txn.getMode() == .versionchange) {
@@ -245,8 +328,9 @@ pub fn execute(self: *IDBRequest, exec: *Execution) !void {
     }
 
     self._op = .none;
-    if (self._txn) |txn| {
-        try txn.ensureBegun();
+    switch (self._txn) {
+        .owned => |txn| try txn.ensureBegun(),
+        .none, .borrowed => {},
     }
     switch (op) {
         .none => unreachable,

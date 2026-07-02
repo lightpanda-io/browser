@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 
+const Page = @import("../../../Page.zig");
 const Event = @import("../../Event.zig");
 const EventTarget = @import("../../EventTarget.zig");
 
@@ -33,6 +34,7 @@ const DOMStringList = @import("../../collections.zig").DOMStringList;
 
 const log = lp.log;
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 const FunctionSetter = idb.FunctionSetter;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -50,6 +52,24 @@ _scope: []const []const u8 = &.{},
 // Advisory only: we always commit through sqlite. Stored to expose the property.
 _durability: Durability = .default,
 
+// The transaction owns everything created under it — requests, stores,
+// indexes, cursors, encoded keys, pending write values — on a pooled arena,
+// released when `_rc` drops to zero. Refs: one per live JS wrapper of any
+// owned object, one while a drain task is scheduled, one while parked on the
+// engine's connection gate (gate ownership needs no ref of its own: it's only
+// ever held while a drain task exists).
+_rc: lp.RC(u32) = .{},
+_arena: Allocator,
+
+// v8 handles owned by the transaction, swept (reset) in deinit. Slots are
+// arena-allocated so an early release and the sweep hit the same instance —
+// a v8 Global reset is only idempotent through a single instance.
+_globals: std.ArrayList(*js.Value.BareGlobal) = .empty,
+
+// objectStore() must return the same object for a given name within one
+// transaction (per spec); this also keeps repeated lookups off sqlite.
+_stores: std.ArrayList(*IDBObjectStore) = .empty,
+
 // request queue, swaps between &_queue_a and &_queue_b so that, as we drain, new
 // requests are queued in the new queue and will be processed on the next drain
 _queue: *std.ArrayList(*IDBRequest),
@@ -65,6 +85,13 @@ _gate_waiter: Engine.GateWaiter,
 // capture the scheduler's generation here and reject any request made in a
 // later generation (see assertActive).
 _active_turn: u64 = 0,
+
+// The transaction can be freed when v8 doesn't reference it (or any child,
+// e.g. an IDBRequest), when we have no scheduled drain AND when we aren't
+// parked in the Engine's wait gate. This last one we track explicitly so
+// that, when Engine.detach cancels us, we know whether the registration held
+// a pin (parked) or the drain task does (owner).
+_parked: bool = false,
 
 _on_complete: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
@@ -92,38 +119,46 @@ pub const Durability = enum {
     }
 };
 
-pub fn init(exec: *Execution, db: *IDBDatabase, mode: Mode, durability: Durability, scope: []const []const u8) !*IDBTransaction {
-    const self = try exec._factory.eventTarget(IDBTransaction{
-        ._proto = undefined,
-        ._exec = exec,
-        ._db = db,
-        ._engine = db._engine,
-        ._mode = mode,
-        ._scope = scope,
-        ._durability = durability,
-        ._active_turn = exec.js.scheduler.generation,
-        ._queue = undefined,
-        ._gate_waiter = undefined,
-    });
-    self._queue = &self._queue_a;
-    self._gate_waiter = .{ .wake = resumeDrain };
+pub fn init(db: *IDBDatabase, mode: Mode, durability: Durability, exec: *Execution) !*IDBTransaction {
+    const arena = try exec.getArena(.small, "IDBTransaction");
 
-    // Schedule the drain even for an empty transaction so it still `complete`s.
-    try exec.js.scheduler.add(self, drain, 0, .{
-        .name = "IDBTransaction.drain",
-        .finalizer = finalize,
-    });
+    const self = blk: {
+        errdefer exec.releaseArena(arena);
+        const s = try exec._factory.eventTargetWithAllocator(arena, IDBTransaction{
+            ._proto = undefined,
+            ._exec = exec,
+            ._db = db,
+            ._engine = db._engine,
+            ._mode = mode,
+            ._arena = arena,
+            ._durability = durability,
+            ._active_turn = exec.js.scheduler.generation,
+            ._queue = undefined,
+            ._gate_waiter = undefined,
+        });
+        s._queue = &s._queue_a;
+        s._gate_waiter = .{ .ctx = exec.js, .wake = resumeDrain, .cancel = cancelGate };
+        break :blk s;
+    };
+
+    try self.scheduleDrain();
     return self;
 }
 
-// We need a "special" transaction for upgradeneeded
-pub fn initVersionChange(exec: *Execution, db: *IDBDatabase) !*IDBTransaction {
-    const self = try exec._factory.eventTarget(IDBTransaction{
+// We need a "special" transaction for upgradeneeded. It has no drain task and
+// no gate registration, so it starts with zero refs: the caller (the open
+// path) must pin it for the duration of the upgrade.
+pub fn initVersionChange(db: *IDBDatabase, exec: *Execution) !*IDBTransaction {
+    const arena = try exec.getArena(.small, "IDBTransaction");
+    errdefer exec.releaseArena(arena);
+
+    const self = try exec._factory.eventTargetWithAllocator(arena, IDBTransaction{
         ._proto = undefined,
         ._exec = exec,
         ._db = db,
         ._engine = db._engine,
         ._mode = .versionchange,
+        ._arena = arena,
         ._begun = true,
         ._queue = undefined,
         ._gate_waiter = undefined,
@@ -131,8 +166,45 @@ pub fn initVersionChange(exec: *Execution, db: *IDBDatabase) !*IDBTransaction {
     self._queue = &self._queue_a;
     // A versionchange transaction never contends for the gate (the open path
     // holds it); keep the node well-formed so releaseGate's owner check no-ops.
-    self._gate_waiter = .{ .wake = resumeDrain };
+    self._gate_waiter = .{ .ctx = exec.js, .wake = resumeDrain, .cancel = cancelGate };
     return self;
+}
+
+pub fn deinit(self: *IDBTransaction, page: *Page) void {
+    if (comptime IS_DEBUG) {
+        // Pins hold refs, so the last release can't happen while parked (nor
+        // while a drain task is scheduled).
+        std.debug.assert(self._parked == false);
+    }
+    for (self._globals.items) |slot| {
+        slot.deinit();
+    }
+    page.releaseArena(self._arena);
+}
+
+pub fn acquireRef(self: *IDBTransaction) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *IDBTransaction, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+// Persist a JS value with the transaction's lifetime: the handle is reset when the
+// transaction's memory is released — or earlier, by calling deinit() on the
+// returned slot (the sweep's second reset is then a no-op).
+pub fn persist(self: *IDBTransaction, value: js.Value) !*js.Value.BareGlobal {
+    const slot = try self._arena.create(js.Value.BareGlobal);
+    try self._globals.append(self._arena, slot);
+    slot.* = value.bare();
+    return slot;
+}
+
+pub fn dupe(self: *IDBTransaction, value: []const u8) ![]const u8 {
+    if (lp.String.intern(value)) |v| {
+        return v;
+    }
+    return self._arena.dupe(u8, value);
 }
 
 pub fn asEventTarget(self: *IDBTransaction) *EventTarget {
@@ -167,8 +239,11 @@ pub fn abort(self: *IDBTransaction, exec: *Execution) !void {
 
     if (self._begun) {
         self._engine.rollback();
+        self._begun = false;
     }
-    self._engine.releaseGate(&self._gate_waiter);
+    // No-op if we're parked rather than owner; the park pin is then released
+    // by the eventual wake (drain's settled path) or a detach cancel.
+    _ = self._engine.releaseGate(&self._gate_waiter);
 
     for ([_]*std.ArrayList(*IDBRequest){ &self._queue_a, &self._queue_b }) |queue| {
         for (queue.items, 0..) |request, i| {
@@ -212,12 +287,14 @@ fn commitAndComplete(self: *IDBTransaction, exec: *Execution) void {
         self._engine.commit() catch |err| {
             log.warn(.storage, "idb commit", .{ .err = err, .sqlite = self._engine.conn.lastError() });
             self._engine.rollback();
-            self._engine.releaseGate(&self._gate_waiter);
+            self._begun = false;
+            _ = self._engine.releaseGate(&self._gate_waiter);
             self.fire(exec, comptime .wrap("abort"), self._on_abort);
             return;
         };
+        self._begun = false;
     }
-    self._engine.releaseGate(&self._gate_waiter);
+    _ = self._engine.releaseGate(&self._gate_waiter);
     self.fire(exec, comptime .wrap("complete"), self._on_complete);
 }
 
@@ -247,24 +324,48 @@ pub fn ensureBegun(self: *IDBTransaction) !void {
 }
 
 pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
-    const request = try IDBRequest.init(self._exec);
-    request._txn = self;
+    const request = try self._exec._factory.eventTargetWithAllocator(self._arena, IDBRequest{ ._proto = undefined });
+    request._txn = .{ .owned = self };
     return request;
 }
 
 pub fn enqueue(self: *IDBTransaction, request: *IDBRequest) !void {
     request._txn_index = self._queue.items.len;
-    try self._queue.append(self._exec.arena, request);
+    try self._queue.append(self._arena, request);
 }
 
-pub fn objectStore(self: *IDBTransaction, name: []const u8, exec: *Execution) !*IDBObjectStore {
+pub fn objectStore(self: *IDBTransaction, name: []const u8) !*IDBObjectStore {
+    for (self._stores.items) |store| {
+        if (std.mem.eql(u8, store._name, name)) {
+            return store;
+        }
+    }
+
     const database_id = self._db._database_id;
-    const info = (try self._engine.objectStoreInfo(exec.arena, database_id, name)) orelse {
+    const info = (try self._engine.objectStoreInfo(self._arena, database_id, name)) orelse {
         return error.NotFound;
     };
 
-    const owned_name = try exec.dupeString(name);
-    return IDBObjectStore.init(self._engine, self, info.id, owned_name, info.key_path, info.auto_increment, exec);
+    const owned_name = try self.dupe(name);
+    const store = try IDBObjectStore.init(self, info.id, owned_name, info.key_path, info.auto_increment);
+    try self._stores.append(self._arena, store);
+    return store;
+}
+
+// Register a store created during an upgrade so a later objectStore() returns
+// the same object.
+pub fn cacheStore(self: *IDBTransaction, store: *IDBObjectStore) !void {
+    try self._stores.append(self._arena, store);
+}
+
+// A store was deleted during an upgrade; a later objectStore() must miss.
+pub fn uncacheStore(self: *IDBTransaction, name: []const u8) void {
+    for (self._stores.items, 0..) |store, i| {
+        if (std.mem.eql(u8, store._name, name)) {
+            _ = self._stores.swapRemove(i);
+            return;
+        }
+    }
 }
 
 pub fn getMode(self: *const IDBTransaction) Mode {
@@ -285,10 +386,17 @@ pub fn getObjectStoreNames(self: *IDBTransaction, exec: *Execution) !*DOMStringL
 
     // A versionchange transaction spans every store; its set changes as the
     // upgrade creates/deletes stores, so resolve it live rather than caching.
+    // The list is refcounted and can outlive the transaction, so the scope
+    // names are copied onto the list's own arena.
     const names = if (self._mode == .versionchange)
         try self._engine.objectStoreNames(arena, self._db._database_id)
-    else
-        self._scope;
+    else blk: {
+        const copy = try arena.alloc([]const u8, self._scope.len);
+        for (self._scope, 0..) |name, i| {
+            copy[i] = try arena.dupe(u8, name);
+        }
+        break :blk copy;
+    };
 
     const list = try arena.create(DOMStringList);
     list.* = .{ ._items = names, ._arena = arena };
@@ -338,11 +446,33 @@ fn fire(self: *IDBTransaction, exec: *Execution, typ: lp.String, handler: ?js.Fu
     };
 }
 
+// Schedule the drain task, which pins the transaction until it runs to completion
+// (or its scheduler finalizer runs).
+fn scheduleDrain(self: *IDBTransaction) !void {
+    self.acquireRef();
+    errdefer self.releaseRef(self._exec.page);
+    try self._exec.js.scheduler.add(self, drain, 0, .{
+        .name = "IDBTransaction.drain",
+        .finalizer = finalize,
+    });
+}
+
 fn drain(ctx: *anyopaque) !?u32 {
     const self: *IDBTransaction = @ptrCast(@alignCast(ctx));
+    const repeat = self.drainInner();
+    if (repeat == null) {
+        // The drain task is done; drop its pin. May free the transaction —
+        // must be the last touch.
+        self.releaseRef(self._exec.page);
+    }
+    return repeat;
+}
+
+fn drainInner(self: *IDBTransaction) ?u32 {
     if (self._settled) {
-        // Already settled (e.g. via an abort).
-        self._engine.releaseGate(&self._gate_waiter);
+        // Already settled (e.g. via an abort, which released the gate; the
+        // release here is a defensive no-op in that case).
+        _ = self._engine.releaseGate(&self._gate_waiter);
         return null;
     }
 
@@ -350,7 +480,12 @@ fn drain(ctx: *anyopaque) !?u32 {
 
     if (self._queue.items.len > 0) {
         if (self._engine.acquireGate(&self._gate_waiter) == false) {
-            return null; // parked; resumeDrain reschedules us
+            // Parked: no drain task exists while we wait for the gate, and our
+            // wrappers may all be collected, so the registration itself must
+            // pin us until resumeDrain (or a detach cancel) unparks.
+            self._parked = true;
+            self.acquireRef();
+            return null;
         }
 
         self.deliverBatch(exec);
@@ -369,6 +504,14 @@ fn drain(ctx: *anyopaque) !?u32 {
     return null;
 }
 
+fn unpark(self: *IDBTransaction) void {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self._parked);
+    }
+    self._parked = false;
+    self.releaseRef(self._exec.page);
+}
+
 // Scheduler wake-up: the gate was handed to us, so run the drain again.
 fn resumeDrain(waiter: *Engine.GateWaiter) void {
     const self: *IDBTransaction = @fieldParentPtr("_gate_waiter", waiter);
@@ -376,21 +519,45 @@ fn resumeDrain(waiter: *Engine.GateWaiter) void {
         std.debug.assert(self._mode != .versionchange);
     }
 
-    self._exec.js.scheduler.add(self, drain, 0, .{
-        .name = "IDBTransaction.drain",
-        .finalizer = finalize,
-    }) catch |err| {
-        self._engine.releaseGate(&self._gate_waiter);
+    defer self.unpark();
+    self.scheduleDrain() catch |err| {
+        // We were handed the gate; if we can't reschedule, hand it off so the
+        // waiters behind us aren't stranded. Unpark may free self — last touch.
         log.warn(.storage, "idb resume drain", .{ .err = err });
+        _ = self._engine.releaseGate(&self._gate_waiter);
     };
 }
 
+// Scheduler task finalizer: our context's scheduler is being torn down.
+// Engine.detach normally ran first and already unlinked us from the gate; the
+// gate handling here is a backstop for a scheduler reset without a detach.
+// Never parked here — a parked transaction has no task to finalize.
 fn finalize(ctx: *anyopaque) void {
     const self: *IDBTransaction = @ptrCast(@alignCast(ctx));
     if (self._begun and !self._settled) {
         self._engine.rollback();
+        self._begun = false;
     }
-    self._engine.releaseGate(&self._gate_waiter);
+    self._settled = true;
+    _ = self._engine.releaseGate(&self._gate_waiter);
+    // The task pin; may free the transaction — must be the last touch.
+    self.releaseRef(self._exec.page);
+}
+
+// Engine.detach cancel: our context is going away; the unlink/hand-off is
+// detach's job. The one site that runs in either gate state: parked, the
+// registration held our pin; as owner, a drain task exists and its finalizer
+// releases that pin instead.
+fn cancelGate(waiter: *Engine.GateWaiter) void {
+    const self: *IDBTransaction = @fieldParentPtr("_gate_waiter", waiter);
+    if (self._begun) {
+        self._engine.rollback();
+        self._begun = false;
+    }
+    self._settled = true;
+    if (self._parked == true) {
+        self.unpark();
+    }
 }
 
 // Deliver the requests queued as of now, one queue's worth. Requests enqueued

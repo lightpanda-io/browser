@@ -43,6 +43,16 @@ pub fn deinit(self: *Manager) void {
     self.engines.deinit(self.allocator);
 }
 
+// A js Context is being torn down (navigation, popup close, worker close):
+// every engine must drop any gate participant whose callbacks would run in it.
+// Must be called before that context's scheduler is reset or deinit'd.
+pub fn detachContext(self: *Manager, ctx: *anyopaque) void {
+    var it = self.engines.valueIterator();
+    while (it.next()) |engine| {
+        engine.*.detach(ctx);
+    }
+}
+
 // Gets or creates the engine for the given origin.
 pub fn engineForOrigin(self: *Manager, origin: []const u8) !*Engine {
     const gop = try self.engines.getOrPut(self.allocator, origin);

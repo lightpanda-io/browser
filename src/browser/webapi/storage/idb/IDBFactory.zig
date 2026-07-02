@@ -52,7 +52,7 @@ pub fn open(_: *IDBFactory, name: []const u8, version: ?u64, exec: *Execution) !
         .name = try exec.dupeString(name),
         .version = version,
         .exec = exec,
-        ._gate_waiter = .{ .wake = OpenContext.wakeUp },
+        ._gate_waiter = .{ .ctx = exec.js, .wake = OpenContext.wakeUp, .cancel = OpenContext.cancelParked },
     });
 
     try exec.js.scheduler.add(ctx, OpenContext.run, 0, .{
@@ -69,14 +69,30 @@ const OpenContext = struct {
     exec: *Execution,
     // Our node in the engine's connection gate wait-list. See Engine.acquireGate.
     _gate_waiter: Engine.GateWaiter,
+    // Whether a scheduler task currently points at us; its finalizer owns our
+    // destruction then. When parked on the gate instead, cancelParked owns it.
+    _scheduled: bool = true,
 
     fn cancelled(ctx: *anyopaque) void {
+        // What if we're gated? Well, A scheduled task is only canceled on
+        // teardown, which would have already called Engine.detach(js_ctx).
         const self: *OpenContext = @ptrCast(@alignCast(ctx));
         self.exec._factory.destroy(self);
     }
 
+    // Engine.detach cancel: our context is going away while we sit on the
+    // gate. When parked there's no scheduler task, so we own our destruction;
+    // in the wake->run window the task finalizer does.
+    fn cancelParked(waiter: *Engine.GateWaiter) void {
+        const self: *OpenContext = @fieldParentPtr("_gate_waiter", waiter);
+        if (!self._scheduled) {
+            self.exec._factory.destroy(self);
+        }
+    }
+
     fn run(ctx: *anyopaque) !?u32 {
         const self: *OpenContext = @ptrCast(@alignCast(ctx));
+        self._scheduled = false;
 
         const engine = self.resolveEngine() catch |err| {
             self.exec._factory.destroy(self);
@@ -92,7 +108,7 @@ const OpenContext = struct {
             return null; // parked; not destroyed
         }
         defer self.exec._factory.destroy(self);
-        defer engine.releaseGate(&self._gate_waiter);
+        defer _ = engine.releaseGate(&self._gate_waiter);
 
         self.runOpen(engine) catch |err| {
             log.warn(.storage, "idb open", .{ .err = err, .name = self.name });
@@ -111,9 +127,11 @@ const OpenContext = struct {
         }) catch |err| {
             // We were handed the gate; if we can't reschedule, hand it off so the
             // waiters behind us aren't stranded.
-            if (self.resolveEngine()) |engine| engine.releaseGate(&self._gate_waiter) else |_| {}
             log.warn(.storage, "idb resume open", .{ .err = err });
+            if (self.resolveEngine()) |engine| _ = engine.releaseGate(&self._gate_waiter) else |_| {}
+            self.exec._factory.destroy(self);
         };
+        self._scheduled = true;
     }
 
     fn resolveEngine(self: *OpenContext) !*Engine {
@@ -161,8 +179,15 @@ const OpenContext = struct {
         const db = try IDBDatabase.init(exec, engine, database_id, self.name, requested);
         self.request.setDatabaseResult(db);
 
-        const txn = try IDBTransaction.initVersionChange(exec, db);
-        self.request._txn = txn;
+        const txn = try IDBTransaction.initVersionChange(db, exec);
+        txn.acquireRef();
+        defer txn.releaseRef(exec.page);
+
+        self.request._txn = .{ .borrowed = txn };
+        // The request is page-scoped and must never outlive this pointer; the
+        // success/abort paths below null it before delivering, this covers the
+        // error paths.
+        defer self.request._txn = .none;
 
         {
             db._txn = txn;
@@ -175,14 +200,14 @@ const OpenContext = struct {
             // updateneeded handler called abort() (what a jerk!) — abort() already
             // rolled back.
             closed = true;
-            self.request._txn = null;
+            self.request._txn = .none;
             self.request.setError(error.AbortError);
             return self.request.deliver(exec);
         }
 
         txn.settle(exec);
         closed = true;
-        self.request._txn = null;
+        self.request._txn = .none;
         return self.request.fireSuccess(exec);
     }
 };
@@ -199,7 +224,7 @@ pub fn deleteDatabase(_: *IDBFactory, name: []const u8, exec: *Execution) !*IDBR
         .request = request,
         .name = try exec.dupeString(name),
         .exec = exec,
-        ._gate_waiter = .{ .wake = DeleteContext.wakeUp },
+        ._gate_waiter = .{ .ctx = exec.js, .wake = DeleteContext.wakeUp, .cancel = DeleteContext.cancelParked },
     });
 
     try exec.js.scheduler.add(ctx, DeleteContext.run, 0, .{
@@ -214,14 +239,27 @@ const DeleteContext = struct {
     name: []const u8,
     exec: *Execution,
     _gate_waiter: Engine.GateWaiter,
+    // See OpenContext._scheduled.
+    _scheduled: bool = true,
 
     fn cancelled(ctx: *anyopaque) void {
+        // What if we're gated? Well, A scheduled task is only canceled on
+        // teardown, which would have already called Engine.detach(js_ctx).
         const self: *DeleteContext = @ptrCast(@alignCast(ctx));
         self.exec._factory.destroy(self);
     }
 
+    // See OpenContext.cancelParked.
+    fn cancelParked(waiter: *Engine.GateWaiter) void {
+        const self: *DeleteContext = @fieldParentPtr("_gate_waiter", waiter);
+        if (!self._scheduled) {
+            self.exec._factory.destroy(self);
+        }
+    }
+
     fn run(ctx: *anyopaque) !?u32 {
         const self: *DeleteContext = @ptrCast(@alignCast(ctx));
+        self._scheduled = false;
 
         const engine = self.resolveEngine() catch |err| {
             self.exec._factory.destroy(self);
@@ -234,7 +272,7 @@ const DeleteContext = struct {
             return null; // parked; not destroyed
         }
         defer self.exec._factory.destroy(self);
-        defer engine.releaseGate(&self._gate_waiter);
+        defer _ = engine.releaseGate(&self._gate_waiter);
 
         self.runDelete(engine) catch |err| {
             log.warn(.storage, "idb deleteDatabase", .{ .err = err, .name = self.name });
@@ -253,9 +291,11 @@ const DeleteContext = struct {
         }) catch |err| {
             // We were handed the gate; if we can't reschedule, hand it off so the
             // waiters behind us aren't stranded.
-            if (self.resolveEngine()) |engine| engine.releaseGate(&self._gate_waiter) else |_| {}
             log.warn(.storage, "idb resume delete", .{ .err = err });
+            if (self.resolveEngine()) |engine| _ = engine.releaseGate(&self._gate_waiter) else |_| {}
+            self.exec._factory.destroy(self);
         };
+        self._scheduled = true;
     }
 
     fn resolveEngine(self: *DeleteContext) !*Engine {
