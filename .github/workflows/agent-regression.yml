@@ -1,6 +1,11 @@
 name: agent-regression
 
 on:
+  # TEMPORARY: validate the workflow from this branch pre-merge; the
+  # workflow_dispatch UI button only exists once the file is on main.
+  # Remove before merging.
+  push:
+    branches: [agent-regression]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
