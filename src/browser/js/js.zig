@@ -414,13 +414,24 @@ pub const FinalizerCallback = struct {
 
     // Called during Page teardown to force cleanup regardless of identities.
     pub fn deinit(self: *FinalizerCallback, page: *Page) void {
-        // Mark all identities as done so stale V8 weak callbacks
-        // won't find the wrong FC if resolved_ptr_id is reused.
+        // Any Identity still linked here has a weak callback that never
+        // fired (releaseRef unlinks itself when it runs). By this point
+        // every Global referencing these Identities was Reset by its
+        // identity map's teardown — main world in Page.deinit, isolated
+        // worlds on frame_remove / BrowserContext.deinit — and resetting a
+        // weak Global cancels its pending first-pass callback, so
+        // releaseRef can no longer fire for them. Return the nodes to the
+        // pool: waiting on the (now-cancelled) callback to free them leaks
+        // one Identity per surfaced object per navigation until the
+        // Browser is torn down.
         var id = self.identities;
         while (id) |identity| {
-            identity.done = true;
-            id = identity.next;
+            const next = identity.next;
+            identity.browser.fc_identity_pool.destroy(identity);
+            id = next;
         }
+        self.identities = null;
+        self.identity_count = 0;
         self.release_ref(self.finalizer_ptr_id, page);
         page.releaseArena(self.arena);
     }
