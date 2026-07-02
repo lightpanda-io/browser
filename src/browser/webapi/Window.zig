@@ -705,7 +705,8 @@ pub fn atob(_: *const Window, input: base64.BinInput, frame: *Frame) !js.String.
 }
 
 pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
-    return value.structuredClone();
+    // the serializer already threw (e.g. a DataCloneError); keep it
+    return value.structuredClone() catch error.TryCatchRethrow;
 }
 
 pub fn getFrame(self: *Window, idx: usize) !?*Window {

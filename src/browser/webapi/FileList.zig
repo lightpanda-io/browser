@@ -1,4 +1,23 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 
 const File = @import("File.zig");
 
@@ -22,6 +41,22 @@ pub fn item(self: *const FileList, index: u32) ?*File {
         return null;
     }
     return self._files[index];
+}
+
+pub fn structuredSerialize(self: *const FileList, writer: *js.StructuredWriter) !void {
+    writer.writeUint32(@intCast(self._files.len));
+    for (self._files) |file| {
+        try file.structuredSerialize(writer);
+    }
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !FileList {
+    const count = try reader.readUint32();
+    const files = try reader.local.ctx.arena.alloc(*File, count);
+    for (files) |*file| {
+        file.* = try File.structuredDeserialize(reader, page);
+    }
+    return .{ ._files = files };
 }
 
 pub fn iterator(self: *FileList, exec: *const js.Execution) !*Iterator {

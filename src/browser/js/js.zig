@@ -43,6 +43,8 @@ pub const Isolate = @import("Isolate.zig");
 pub const HandleScope = @import("HandleScope.zig");
 
 pub const Value = @import("Value.zig");
+pub const StructuredWriter = Value.StructuredWriter;
+pub const StructuredReader = Value.StructuredReader;
 pub const Array = @import("Array.zig");
 pub const String = @import("String.zig");
 pub const Object = @import("Object.zig");
@@ -177,6 +179,22 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             try ctx.trackGlobal(global);
 
             return .{ .handle = global };
+        }
+
+        // Direct view into the typed array's backing memory.
+        pub fn slice(self: *const Self) []BackingInt {
+            const view: *const v8.ArrayBufferView = @ptrCast(self.handle);
+            const byte_len = v8.v8__ArrayBufferView__ByteLength(view);
+            if (byte_len == 0) {
+                return @constCast(&[_]BackingInt{});
+            }
+            const byte_offset = v8.v8__ArrayBufferView__ByteOffset(view);
+            const array_buffer = v8.v8__ArrayBufferView__Buffer(view).?;
+            const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+            const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
+            const data = v8.v8__BackingStore__Data(backing_store).?;
+            const base = @as([*]u8, @ptrCast(data)) + byte_offset;
+            return @as([*]BackingInt, @ptrCast(@alignCast(base)))[0 .. byte_len / @sizeOf(BackingInt)];
         }
     };
 }
