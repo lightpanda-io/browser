@@ -314,13 +314,8 @@ fn createSnapshotContext(
                 const name = JsApi.Meta.name;
                 const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 var maybe_result: v8.MaybeBool = undefined;
-                // Web IDL: interface objects on the global are non-enumerable
-                // by default. Opt back in via JsApi.Meta.enumerable = true.
-                var properties: v8.PropertyAttribute = v8.DontEnum;
-                if (@hasDecl(JsApi.Meta, "enumerable") and JsApi.Meta.enumerable == true) {
-                    properties = v8.None;
-                }
-                v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, properties, &maybe_result);
+                // Web IDL: interface objects on the global are non-enumerable.
+                v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, v8.DontEnum, &maybe_result);
             }
         }
 
@@ -759,12 +754,13 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 if (value.static) {
                     v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
                 } else {
-                    const accessor_attr = if (own_properties) attribute else attribute | v8.DontEnum;
+                    // Web IDL: attributes on the interface prototype object
+                    // (and mirrored onto [Global] instances) are enumerable.
                     v8.v8__ObjectTemplate__SetAccessorProperty__Config(define_on orelse prototype, &.{
                         .key = js_name,
                         .getter = getter_callback,
                         .setter = setter_callback,
-                        .attribute = accessor_attr,
+                        .attribute = attribute,
                     });
                 }
             },
@@ -785,8 +781,9 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 if (value.static and !own_properties) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {
-                    const fn_attr: v8.PropertyAttribute = if (own_properties) v8.None else v8.DontEnum;
-                    v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), fn_attr);
+                    // Web IDL: operations on the interface prototype object
+                    // (and mirrored onto [Global] instances) are enumerable.
+                    v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), v8.None);
                 }
             },
             bridge.Indexed => {
@@ -825,7 +822,8 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     v8.v8__Symbol__GetAsyncIterator(isolate)
                 else
                     v8.v8__Symbol__GetIterator(isolate);
-                v8.v8__Template__Set(@ptrCast(prototype), js_name, @ptrCast(function_template), v8.None);
+                // Web IDL: @@iterator is { writable, enumerable: false, configurable }.
+                v8.v8__Template__Set(@ptrCast(prototype), js_name, @ptrCast(function_template), v8.DontEnum);
             },
             bridge.Property => {
                 const js_value = switch (value.value) {
