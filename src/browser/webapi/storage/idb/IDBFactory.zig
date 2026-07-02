@@ -52,6 +52,7 @@ pub fn open(_: *IDBFactory, name: []const u8, version: ?u64, exec: *Execution) !
         .name = try exec.dupeString(name),
         .version = version,
         .exec = exec,
+        ._gate_waiter = .{ .wake = OpenContext.wakeUp },
     });
 
     try exec.js.scheduler.add(ctx, OpenContext.run, 0, .{
@@ -66,6 +67,8 @@ const OpenContext = struct {
     name: []const u8,
     version: ?u64,
     exec: *Execution,
+    // Our node in the engine's connection gate wait-list. See Engine.acquireGate.
+    _gate_waiter: Engine.GateWaiter,
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *OpenContext = @ptrCast(@alignCast(ctx));
@@ -74,9 +77,24 @@ const OpenContext = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *OpenContext = @ptrCast(@alignCast(ctx));
-        defer self.exec._factory.destroy(self);
 
-        self.runOpen() catch |err| {
+        const engine = self.resolveEngine() catch |err| {
+            self.exec._factory.destroy(self);
+            self.request.setError(err);
+            self.request.deliver(self.exec) catch {};
+            return null;
+        };
+
+        // An open that upgrades runs a versionchange transaction on the shared
+        // connection, so it must serialize with other transactions/opens. Park
+        // on the gate if it's held; wakeUp re-runs us when it's handed over.
+        if (!engine.acquireGate(&self._gate_waiter)) {
+            return null; // parked; not destroyed
+        }
+        defer self.exec._factory.destroy(self);
+        defer engine.releaseGate(&self._gate_waiter);
+
+        self.runOpen(engine) catch |err| {
             log.warn(.storage, "idb open", .{ .err = err, .name = self.name });
             self.request.setError(err);
             self.request.deliver(self.exec) catch {};
@@ -84,14 +102,29 @@ const OpenContext = struct {
         return null;
     }
 
-    fn runOpen(self: *OpenContext) !void {
-        const exec = self.exec;
+    // Scheduler wake-up: the connection gate was handed to us, so re-run.
+    fn wakeUp(waiter: *Engine.GateWaiter) void {
+        const self: *OpenContext = @fieldParentPtr("_gate_waiter", waiter);
+        self.exec.js.scheduler.add(self, run, 0, .{
+            .name = "IDBFactory.open",
+            .finalizer = cancelled,
+        }) catch |err| {
+            // We were handed the gate; if we can't reschedule, hand it off so the
+            // waiters behind us aren't stranded.
+            if (self.resolveEngine()) |engine| engine.releaseGate(&self._gate_waiter) else |_| {}
+            log.warn(.storage, "idb resume open", .{ .err = err });
+        };
+    }
 
+    fn resolveEngine(self: *OpenContext) !*Engine {
         // origin being null was already guarded against, so this should be
         // unreachable, but this is safer.
-        const origin = exec.origin() orelse return error.SecurityError;
+        const origin = self.exec.origin() orelse return error.SecurityError;
+        return self.exec.session.idb.engineForOrigin(origin);
+    }
 
-        const engine = try exec.session.idb.engineForOrigin(origin);
+    fn runOpen(self: *OpenContext, engine: *Engine) !void {
+        const exec = self.exec;
         const existing = try engine.databaseVersion(self.name);
 
         // No explicit version means "open at the current version" (or 1 for a
@@ -166,6 +199,7 @@ pub fn deleteDatabase(_: *IDBFactory, name: []const u8, exec: *Execution) !*IDBR
         .request = request,
         .name = try exec.dupeString(name),
         .exec = exec,
+        ._gate_waiter = .{ .wake = DeleteContext.wakeUp },
     });
 
     try exec.js.scheduler.add(ctx, DeleteContext.run, 0, .{
@@ -179,6 +213,7 @@ const DeleteContext = struct {
     request: *IDBRequest,
     name: []const u8,
     exec: *Execution,
+    _gate_waiter: Engine.GateWaiter,
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *DeleteContext = @ptrCast(@alignCast(ctx));
@@ -187,9 +222,21 @@ const DeleteContext = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *DeleteContext = @ptrCast(@alignCast(ctx));
-        defer self.exec._factory.destroy(self);
 
-        self.runDelete() catch |err| {
+        const engine = self.resolveEngine() catch |err| {
+            self.exec._factory.destroy(self);
+            self.request.setError(err);
+            self.request.deliver(self.exec) catch {};
+            return null;
+        };
+
+        if (!engine.acquireGate(&self._gate_waiter)) {
+            return null; // parked; not destroyed
+        }
+        defer self.exec._factory.destroy(self);
+        defer engine.releaseGate(&self._gate_waiter);
+
+        self.runDelete(engine) catch |err| {
             log.warn(.storage, "idb deleteDatabase", .{ .err = err, .name = self.name });
             self.request.setError(err);
             self.request.deliver(self.exec) catch {};
@@ -197,12 +244,28 @@ const DeleteContext = struct {
         return null;
     }
 
-    fn runDelete(self: *DeleteContext) !void {
-        const exec = self.exec;
-        const origin = exec.origin() orelse return error.SecurityError;
-        const engine = try exec.session.idb.engineForOrigin(origin);
+    // Scheduler wake-up: the connection gate was handed to us, so re-run.
+    fn wakeUp(waiter: *Engine.GateWaiter) void {
+        const self: *DeleteContext = @fieldParentPtr("_gate_waiter", waiter);
+        self.exec.js.scheduler.add(self, run, 0, .{
+            .name = "IDBFactory.deleteDatabase",
+            .finalizer = cancelled,
+        }) catch |err| {
+            // We were handed the gate; if we can't reschedule, hand it off so the
+            // waiters behind us aren't stranded.
+            if (self.resolveEngine()) |engine| engine.releaseGate(&self._gate_waiter) else |_| {}
+            log.warn(.storage, "idb resume delete", .{ .err = err });
+        };
+    }
+
+    fn resolveEngine(self: *DeleteContext) !*Engine {
+        const origin = self.exec.origin() orelse return error.SecurityError;
+        return self.exec.session.idb.engineForOrigin(origin);
+    }
+
+    fn runDelete(self: *DeleteContext, engine: *Engine) !void {
         try engine.deleteDatabase(self.name);
-        return self.request.fireSuccess(exec);
+        return self.request.fireSuccess(self.exec);
     }
 };
 
