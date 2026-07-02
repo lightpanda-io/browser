@@ -210,6 +210,7 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
             .document => "Document",
             .fetch => "Fetch",
             .stylesheet => "Stylesheet",
+            .preflight => "Preflight",
         },
         .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
@@ -454,6 +455,7 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
             .document => "Document",
             .fetch => "Fetch",
             .stylesheet => "Stylesheet",
+            .preflight => "Preflight",
         },
         .authChallenge = .{
             .origin = "", // TODO get origin, could be the proxy address for example.
