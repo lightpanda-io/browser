@@ -20,7 +20,6 @@ const std = @import("std");
 const log = @import("../log.zig");
 const Config = @import("../Config.zig");
 const Blackhole = @import("Blackhole.zig");
-const Sqlite = @import("sqlite/Sqlite.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -28,12 +27,10 @@ const Storage = @This();
 
 pub const EngineType = enum {
     none,
-    sqlite,
 };
 
 const Engine = union(EngineType) {
     none: Blackhole,
-    sqlite: Sqlite,
 };
 
 engine: Engine,
@@ -50,13 +47,9 @@ pub fn init(allocator: Allocator, config: *const Config) !Storage {
     };
 }
 
-fn initEngine(allocator: Allocator, engine_type: EngineType, config: *const Config) !Engine {
+fn initEngine(_: Allocator, engine_type: EngineType, _: *const Config) !Engine {
     switch (engine_type) {
         .none => return .{ .none = Blackhole{} },
-        .sqlite => {
-            const sqlite_path = config.storageSqlitePath();
-            return .{ .sqlite = try Sqlite.init(allocator, sqlite_path) };
-        },
     }
 }
 

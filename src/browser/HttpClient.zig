@@ -232,7 +232,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         next = layerWith(&self.robots_layer, next);
     }
 
-    if (network.config.httpCacheDir() != null) {
+    if (network.config.httpCacheEnabled()) {
         next = layerWith(&self.cache_layer, next);
     }
 
