@@ -1280,7 +1280,7 @@ pub fn getClientRects(self: *Element, frame: *Frame) ![]DOMRect {
     if (!self.checkVisibilityCached(null, frame)) {
         return &.{};
     }
-    const rects = try frame.call_arena.alloc(DOMRect, 1);
+    const rects = try frame.local_arena.alloc(DOMRect, 1);
     rects[0] = self.getBoundingClientRectForVisible(frame);
     return rects;
 }
@@ -1924,14 +1924,16 @@ pub const JsApi = struct {
 
     pub const innerText = bridge.accessor(_innerText, Element.setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *Element, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.getInnerText(&buf.writer, frame);
         return buf.written();
     }
 
     pub const outerHTML = bridge.accessor(_getOuterHTML, _setOuterHTML, .{ .ce_reactions = true });
     fn _getOuterHTML(self: *Element, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        // local_arena: serialization is read-only and the returned string is
+        // converted to v8 before this call returns. No JS runs in between.
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.getOuterHTML(&buf.writer, frame);
         return buf.written();
     }
@@ -1942,7 +1944,9 @@ pub const JsApi = struct {
 
     pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
     fn _getInnerHTML(self: *Element, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        // local_arena: read-only serialization, result converted to v8 before
+        // returning; no JS runs in between.
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.getInnerHTML(&buf.writer, frame);
         return buf.written();
     }

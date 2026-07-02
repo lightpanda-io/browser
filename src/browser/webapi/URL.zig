@@ -174,7 +174,7 @@ pub fn getSearch(self: *const URL, exec: *const Execution) ![]const u8 {
             return "";
         }
 
-        var buf = std.Io.Writer.Allocating.init(exec.call_arena);
+        var buf = std.Io.Writer.Allocating.init(exec.local_arena);
         try buf.writer.writeByte('?');
         try search_params.toString(&buf.writer);
         return buf.written();
@@ -262,7 +262,7 @@ pub fn getOrigin(self: *const URL, exec: *const Execution) ![]const u8 {
     const origin = U.url_get_origin(self._url);
     defer origin.deinit();
 
-    return exec.call_arena.dupe(u8, origin.slice());
+    return exec.local_arena.dupe(u8, origin.slice());
 }
 
 pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
@@ -288,7 +288,7 @@ pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
         if (search_params.getSize() == 0) {
             U.url_set_query_to_null(self._url);
         } else {
-            var buf = std.Io.Writer.Allocating.init(exec.call_arena);
+            var buf = std.Io.Writer.Allocating.init(exec.local_arena);
             defer buf.deinit();
             try search_params.toString(&buf.writer);
             const query = buf.written();

@@ -100,6 +100,10 @@ arena: Allocator,
 // owned by the IsolatedWorld.
 call_arena: Allocator,
 
+// Like call_arena, but reset on _every_ Caller.deinit rather than only at
+// call_depth 0.
+local_arena: Allocator,
+
 // Because calls can be nested (i.e.a function calling a callback),
 // we can only reset the call_arena when call_depth == 0. If we were
 // to reset it within a callback, it would invalidate the data of
@@ -700,7 +704,7 @@ fn importMetaResolveCallback(callback_handle: ?*const v8.FunctionCallbackInfo) c
         return;
     };
 
-    const resolved = ctx.script_manager.resolveSpecifier(ctx.call_arena, data.base, specifier) catch {
+    const resolved = ctx.script_manager.resolveSpecifier(ctx.local_arena, data.base, specifier) catch {
         _ = isolate.throwException(isolate.createTypeError("failed to resolve module specifier"));
         return;
     };
@@ -904,7 +908,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
         defer try_catch.deinit();
 
         break :blk self.module(true, local, ms.src(), state.specifier, true) catch |err| {
-            const caught = try_catch.caughtOrError(self.call_arena, err);
+            const caught = try_catch.caughtOrError(self.local_arena, err);
             log.err(.js, "module compilation failed", .{
                 .caught = caught,
                 .specifier = state.specifier,

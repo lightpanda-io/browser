@@ -381,7 +381,7 @@ const Context = struct {
 
                 if (!info.has_visible and label == null and href_raw == null) return;
 
-                const href = if (href_raw) |h| URL.resolve(frame.call_arena, frame.base(), h, .{ .encoding = frame.charset }) catch h else null;
+                const href = if (href_raw) |h| URL.resolve(frame.local_arena, frame.base(), h, .{ .encoding = frame.charset }) catch h else null;
 
                 if (info.has_block) {
                     try self.renderChildren(el.asNode());

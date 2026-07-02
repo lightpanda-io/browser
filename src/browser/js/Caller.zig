@@ -33,6 +33,7 @@ const v8 = js.v8;
 const log = lp.log;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const CALL_ARENA_RETAIN = 1024 * 16;
+const LOCAL_ARENA_RETAIN = 1024 * 16;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Caller = @This();
@@ -99,6 +100,16 @@ pub fn deinit(self: *Caller) void {
     if (call_depth == 0) {
         const arena: *ArenaAllocator = @ptrCast(@alignCast(ctx.call_arena.ptr));
         _ = arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
+    }
+
+    // Unlike call_arena, local_arena is reset on _every_ return, since its
+    // users promise not to hold data across a nested call. In debug, free
+    // back to the backing allocator so a stale pointer trips the
+    // DebugAllocator's use-after-free detection; in release, retain a buffer
+    // to avoid realloc churn.
+    {
+        const local_arena: *ArenaAllocator = @ptrCast(@alignCast(ctx.local_arena.ptr));
+        _ = local_arena.reset(if (comptime IS_DEBUG) .free_all else .{ .retain_with_limit = LOCAL_ARENA_RETAIN });
     }
 
     ctx.call_depth = call_depth;

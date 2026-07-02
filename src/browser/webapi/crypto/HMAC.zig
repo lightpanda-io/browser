@@ -151,7 +151,7 @@ pub fn sign(
         return resolver.promise();
     }
 
-    const buffer = try exec.call_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
+    const buffer = try exec.local_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
     var out_len: u32 = 0;
     // Try to sign.
     _ = crypto.HMAC(
@@ -163,7 +163,6 @@ pub fn sign(
         buffer.ptr,
         &out_len,
     ) orelse {
-        exec.call_arena.free(buffer);
         // Failure.
         resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
         return resolver.promise();

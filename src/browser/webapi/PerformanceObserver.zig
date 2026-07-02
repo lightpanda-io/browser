@@ -216,11 +216,11 @@ pub const EntryList = struct {
     }
 
     pub fn getEntriesByType(self: *const EntryList, entry_type: []const u8, exec: *Execution) ![]const *Performance.Entry {
-        return Performance.filterEntriesByType(exec.call_arena, self._entries, entry_type);
+        return Performance.filterEntriesByType(exec.local_arena, self._entries, entry_type);
     }
 
     pub fn getEntriesByName(self: *const EntryList, name: []const u8, entry_type: ?[]const u8, exec: *Execution) ![]const *Performance.Entry {
-        return Performance.filterEntriesByName(exec.call_arena, self._entries, name, entry_type);
+        return Performance.filterEntriesByName(exec.local_arena, self._entries, name, entry_type);
     }
 
     pub const JsApi = struct {

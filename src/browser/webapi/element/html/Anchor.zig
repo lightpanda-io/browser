@@ -64,7 +64,7 @@ pub fn setTarget(self: *Anchor, value: []const u8, frame: *Frame) !void {
 
 pub fn getOrigin(self: *Anchor, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
-    return (try URL.getOrigin(frame.call_arena, href)) orelse "null";
+    return (try URL.getOrigin(frame.local_arena, href)) orelse "null";
 }
 
 pub fn getHost(self: *Anchor, frame: *Frame) ![]const u8 {

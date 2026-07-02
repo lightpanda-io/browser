@@ -66,7 +66,7 @@ pub fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
 
     if (self.getOwnerNode()) |owner| {
         if (owner.is(Element.Html.Style)) |style| {
-            const text = try style.asNode().getTextContentAlloc(frame.call_arena);
+            const text = try style.asNode().getTextContentAlloc(frame.local_arena);
             try self.replaceSync(text, frame);
         }
     }

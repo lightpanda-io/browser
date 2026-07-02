@@ -191,7 +191,7 @@ pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
 }
 
 pub fn takeRecords(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionObserverEntry {
-    const entries = try frame.call_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
+    const entries = try frame.local_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
     self._pending_entries.clearRetainingCapacity();
     return entries;
 }

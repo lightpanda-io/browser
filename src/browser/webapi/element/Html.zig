@@ -1598,7 +1598,7 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
 
     // both nodes are Text nodes
 
-    const merged = try std.mem.concat(frame.call_arena, u8, &.{ left.getData().str(), right.getData().str() });
+    const merged = try std.mem.concat(frame.local_arena, u8, &.{ left.getData().str(), right.getData().str() });
     // set the left node to the merged value
     try left.setData(merged, frame);
 
@@ -1610,7 +1610,7 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
 }
 
 fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
-    const arena = frame.call_arena;
+    const arena = frame.local_arena;
     var nodes: std.ArrayList(Node.NodeOrText) = .empty;
 
     var rest = value;

@@ -64,7 +64,7 @@ pub fn pbkdf2(
 ) Error![]const u8 {
     try checkBaseKey(base_key, "PBKDF2", usage_ok);
     const digest = crypto.findDigest(params.hash.name()) catch return error.NotSupported;
-    const out = try exec.call_arena.alloc(u8, try outputLen(length));
+    const out = try exec.local_arena.alloc(u8, try outputLen(length));
     // A zero-length derivation is valid and yields an empty buffer; the C
     // routines reject a zero output length, so short-circuit here.
     if (out.len == 0) {
@@ -97,7 +97,7 @@ pub fn hkdf(
 ) Error![]const u8 {
     try checkBaseKey(base_key, "HKDF", usage_ok);
     const digest = crypto.findDigest(params.hash.name()) catch return error.NotSupported;
-    const out = try exec.call_arena.alloc(u8, try outputLen(length));
+    const out = try exec.local_arena.alloc(u8, try outputLen(length));
     // A zero-length derivation is valid and yields an empty buffer; the C
     // routines reject a zero output length, so short-circuit here.
     if (out.len == 0) {

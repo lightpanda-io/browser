@@ -627,7 +627,7 @@ pub fn inverse(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
 }
 
 pub fn toFloat32Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f32) {
-    const out = try exec.call_arena.alloc(f32, 16);
+    const out = try exec.local_arena.alloc(f32, 16);
     for (0..16) |i| {
         out[i] = @floatCast(self._m[i]);
     }
@@ -635,7 +635,7 @@ pub fn toFloat32Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution)
 }
 
 pub fn toFloat64Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f64) {
-    const out = try exec.call_arena.dupe(f64, &self._m);
+    const out = try exec.local_arena.dupe(f64, &self._m);
     return .{ .values = out };
 }
 
@@ -648,7 +648,7 @@ pub fn toString(self: *const DOMMatrixReadOnly, exec: *const js.Execution) ![]co
                 return error.InvalidStateError;
             }
         }
-        return std.fmt.allocPrint(exec.call_arena, "matrix({d}, {d}, {d}, {d}, {d}, {d})", .{
+        return std.fmt.allocPrint(exec.local_arena, "matrix({d}, {d}, {d}, {d}, {d}, {d})", .{
             m[0], m[1], m[4], m[5], m[12], m[13],
         });
     }
@@ -657,7 +657,7 @@ pub fn toString(self: *const DOMMatrixReadOnly, exec: *const js.Execution) ![]co
             return error.InvalidStateError;
         }
     }
-    return std.fmt.allocPrint(exec.call_arena, "matrix3d({d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d})", .{
+    return std.fmt.allocPrint(exec.local_arena, "matrix3d({d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d})", .{
         m[0],  m[1],  m[2],  m[3],
         m[4],  m[5],  m[6],  m[7],
         m[8],  m[9],  m[10], m[11],

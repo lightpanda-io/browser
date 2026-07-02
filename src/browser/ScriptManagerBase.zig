@@ -935,7 +935,7 @@ pub const Script = struct {
             return;
         }
 
-        const caught = try_catch.caughtOrError(frame.call_arena, error.Unknown);
+        const caught = try_catch.caughtOrError(frame.local_arena, error.Unknown);
         log.warn(.js, "eval script", .{
             .url = url,
             .caught = caught,

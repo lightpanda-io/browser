@@ -65,7 +65,7 @@ pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {
         return value;
     }
 
-    const result = try frame.call_arena.alloc(u8, out_len);
+    const result = try frame.local_arena.alloc(u8, out_len);
     var pos: usize = 0;
 
     if (needsEscape(true, first)) {
