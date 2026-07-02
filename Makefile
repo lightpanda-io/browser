@@ -33,6 +33,65 @@ else
 endif
 
 
+# Darwin SDK shim for macOS 26+
+# -----------------------------
+# macOS 26 CommandLineTools dropped `arm64-macos` from every system .tbd
+# export — only `arm64e-macos` remains. Zig 0.15.x bundles a
+# libSystem.tbd that still has `arm64-macos` but is pinned to macOS 15.5;
+# its auto-detection picks the higher-numbered system SDK and the arm64
+# link fails with ~30 undefined libSystem / CoreFoundation /
+# SystemConfiguration symbols.
+#
+# When the system SDK lacks `arm64-macos`, build a hybrid SDK shim into
+# .lp-cache/darwin-sdk-shim/ once: usr/include and friends are
+# symlinked from the system SDK, libSystem.tbd is swapped for Zig's
+# bundled copy, every other .tbd is rewritten to also export arm64-macos.
+# A repo-local xcrun wrapper at $(DARWIN_SDK_SHIM_BIN)/xcrun is prepended
+# to PATH for `zig` invocations, so Zig's SDK detection lands on the
+# shim instead of the system SDK. Hosts that don't need the shim (older
+# macOS, Linux, or any future Apple SDK that puts arm64-macos back) skip
+# this block entirely — the Makefile is identical to before.
+ifeq ($(OS), macos)
+SYS_SDK := $(shell /usr/bin/xcrun --sdk macosx --show-sdk-path 2>/dev/null)
+# Check the FIRST `targets:` block in libSystem.tbd (the main libSystem entry,
+# which is what the Mach-O linker resolves `-lSystem` against). The
+# `[^e]arm64-macos` regex avoids the false-positive match on `arm64e-macos`
+# substrings; sub-library entries lower in the .tbd may carry arm64-macos
+# even when the main entry doesn't, but those aren't what the link picks up.
+NEEDS_DARWIN_SDK_SHIM := $(shell awk '/^targets:/ { if ($$0 !~ /[^e]arm64-macos/) print "yes"; exit }' "$(SYS_SDK)/usr/lib/libSystem.tbd" 2>/dev/null)
+
+ifeq ($(NEEDS_DARWIN_SDK_SHIM), yes)
+DARWIN_SDK_SHIM_DIR := $(BC).lp-cache/darwin-sdk-shim
+DARWIN_SDK_SHIM_SDK := $(DARWIN_SDK_SHIM_DIR)/sdk
+DARWIN_SDK_SHIM_BIN := $(DARWIN_SDK_SHIM_DIR)/bin
+DARWIN_SDK_SHIM_MARK := $(DARWIN_SDK_SHIM_DIR)/.built
+
+# Prepend the wrapper bin dir to PATH and point the wrapper at the shim
+# SDK. Both vars are exported so `zig build` and any nested invocations
+# pick them up. The wrapper falls through to /usr/bin/xcrun if the env
+# var or the directory is missing, so an in-progress build won't trip
+# over a partial shim.
+export PATH := $(DARWIN_SDK_SHIM_BIN):$(PATH)
+export LIGHTPANDA_DARWIN_SDK_SHIM := $(DARWIN_SDK_SHIM_SDK)
+
+$(DARWIN_SDK_SHIM_MARK): $(BC)scripts/darwin-sdk-shim.sh
+	@printf "\033[36mBuilding macOS 26 SDK shim at $(DARWIN_SDK_SHIM_DIR) (one-time)...\033[0m\n"
+	@$(BC)scripts/darwin-sdk-shim.sh "$(DARWIN_SDK_SHIM_DIR)"
+	@mkdir -p $(DARWIN_SDK_SHIM_DIR)
+	@touch $(DARWIN_SDK_SHIM_MARK)
+
+.PHONY: darwin-sdk-shim darwin-sdk-shim-clean
+## Build (or rebuild) the macOS 26 SDK shim used to link arm64-macos binaries
+darwin-sdk-shim: $(DARWIN_SDK_SHIM_MARK)
+
+## Remove the macOS SDK shim; next test/build rebuilds it
+darwin-sdk-shim-clean:
+	@find $(DARWIN_SDK_SHIM_DIR) -mindepth 1 -delete 2>/dev/null || true
+	@rmdir $(DARWIN_SDK_SHIM_DIR) 2>/dev/null || true
+endif
+endif
+
+
 # Prebuilt V8
 # -----------
 # Building V8 from source takes 10+ minutes. `make download-v8` fetches the
@@ -85,7 +144,7 @@ download-v8:
 	@printf "\033[33mV8 ready: %s\033[0m\n" "$(V8_CACHE)"
 
 ## Build v8 snapshot
-build-v8-snapshot:
+build-v8-snapshot: $(DARWIN_SDK_SHIM_MARK)
 	@printf "\033[36mBuilding v8 snapshot (release safe)...\033[0m\n"
 	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
@@ -97,7 +156,7 @@ build: build-v8-snapshot
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build in debug mode
-build-dev:
+build-dev: $(DARWIN_SDK_SHIM_MARK)
 	@printf "\033[36mBuilding (debug)...\033[0m\n"
 	@$(ZIG) build $(ZIGFLAGS) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
@@ -114,7 +173,7 @@ run-debug: build-dev
 
 ## Test - `grep` is used to filter out the huge compile command on build
 ifeq ($(OS), macos)
-test:
+test: $(DARWIN_SDK_SHIM_MARK)
 	@script -q /dev/null sh -c 'TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace' 2>&1 \
 		| grep --line-buffered -v "^/.*zig test -freference-trace"
 else
@@ -132,6 +191,10 @@ end2end:
 clean:
 	rm -rf zig-out .zig-cache src/snapshot.bin
 	cd src/html5ever && cargo clean
+ifeq ($(NEEDS_DARWIN_SDK_SHIM), yes)
+	@find $(DARWIN_SDK_SHIM_DIR) -mindepth 1 -delete 2>/dev/null || true
+	@rmdir $(DARWIN_SDK_SHIM_DIR) 2>/dev/null || true
+endif
 
 # Install and build required dependencies commands
 # ------------
