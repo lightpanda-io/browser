@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 
 const String = lp.String;
 const Execution = js.Execution;
@@ -81,6 +82,27 @@ pub fn init(
         ._width = width,
         ._height = height,
         ._data = try exec.js.local.?.createTypedArray(.uint8_clamped, size).persist(),
+    });
+}
+
+pub fn structuredSerialize(self: *const ImageData, writer: *js.StructuredWriter) !void {
+    writer.writeUint32(self._width);
+    writer.writeUint32(self._height);
+    writer.writeBytes(self._data.local(writer.local).slice());
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*ImageData {
+    const width = try reader.readUint32();
+    const height = try reader.readUint32();
+    const bytes = try reader.readBytes();
+
+    const data = reader.local.createTypedArray(.uint8_clamped, bytes.len);
+    @memcpy(data.slice(), bytes);
+
+    return page.factory.create(ImageData{
+        ._width = width,
+        ._height = height,
+        ._data = try data.persist(),
     });
 }
 

@@ -72,6 +72,29 @@ pub fn acquireRef(self: *File) void {
     self._proto.acquireRef();
 }
 
+pub fn structuredSerialize(self: *const File, writer: *js.StructuredWriter) !void {
+    try self._proto.structuredSerialize(writer);
+    writer.writeBytes(self._name);
+    writer.writeUint64(@bitCast(self._last_modified));
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*File {
+    const blob = try Blob.structuredDeserialize(reader, page);
+    errdefer blob.deinit(page);
+
+    const name = try reader.readBytes();
+    const last_modified = try reader.readUint64();
+
+    const file = try blob._arena.create(File);
+    file.* = .{
+        ._proto = blob,
+        ._name = try blob._arena.dupe(u8, name),
+        ._last_modified = @bitCast(last_modified),
+    };
+    blob._type = .{ .file = file };
+    return file;
+}
+
 pub fn getName(self: *const File) []const u8 {
     return self._name;
 }
