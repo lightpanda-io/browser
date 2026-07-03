@@ -174,17 +174,21 @@ pub fn beforeDeliver(self: *IDBCursor) void {
 }
 
 pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void {
-    try self.prepareIterate();
+    try self.assertIterable();
 
     if (key_arg) |k| {
+        // Key conversion (DataError) must run before the got-value flag is
+        // cleared, so a failing continue() leaves the cursor re-iterable.
         const encoded = try Key.encodeValue(self._txn._arena, k);
         // The target must move past the current key in the iteration direction.
         const order = std.mem.order(u8, encoded, self._key.?);
         if (if (self._direction.reverse()) order != .lt else order != .gt) {
             return error.DataError;
         }
+        self._got_value = false;
         try self.reiterate(.{ .to = encoded }, 0, exec);
     } else {
+        self._got_value = false;
         try self.reiterate(.next, 0, exec);
     }
 }
@@ -194,9 +198,10 @@ pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: 
     if (self._index_id == null or self._direction == .nextunique or self._direction == .prevunique) {
         return error.InvalidAccessError;
     }
-    try self.prepareIterate();
+    try self.assertIterable();
 
     const reverse = self._direction.reverse();
+    // Key conversion (DataError) precedes clearing the got-value flag; see continue().
     const key = try Key.encodeValue(self._txn._arena, key_arg);
     const primary_key = try Key.encodeValue(self._txn._arena, primary_key_arg);
 
@@ -211,6 +216,7 @@ pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: 
     };
     if (!ok) return error.DataError;
 
+    self._got_value = false;
     try self.reiterate(.{ .to_primary = .{ .key = key, .primary_key = primary_key } }, 0, exec);
 }
 
@@ -219,7 +225,8 @@ pub fn advance(self: *IDBCursor, count: u32, exec: *Execution) !void {
         return error.TypeError;
     }
 
-    try self.prepareIterate();
+    try self.assertIterable();
+    self._got_value = false;
     // `count` records forward = skip count-1 past the immediate next.
     try self.reiterate(.next, count - 1, exec);
 }
@@ -395,8 +402,7 @@ pub fn getValueJs(self: *IDBCursor, exec: *Execution) !?js.Value {
     return value;
 }
 
-// validate the state before we can advance/continue
-fn prepareIterate(self: *IDBCursor) !void {
+fn assertIterable(self: *IDBCursor) !void {
     if (self._txn._settled == true) {
         return error.TransactionInactiveError;
     }
@@ -404,8 +410,6 @@ fn prepareIterate(self: *IDBCursor) !void {
     if (self._got_value == false) {
         return error.InvalidStateError;
     }
-
-    self._got_value = false;
 }
 
 fn assertCanUpdate(self: *IDBCursor) !void {

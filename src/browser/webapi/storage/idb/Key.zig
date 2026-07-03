@@ -193,7 +193,7 @@ fn fromJsDepth(value: js.Value, allocator: Allocator, depth: usize) !Value {
         const len = arr.len();
         const items = try allocator.alloc(Value, len);
         for (0..len) |i| {
-            const element = try arr.get(@intCast(i));
+            const element = arr.get(@intCast(i)) catch return error.TryCatchRethrow;
             items[i] = try fromJsDepth(element, allocator, depth + 1);
         }
         return .{ .array = items };
