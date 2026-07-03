@@ -55,6 +55,14 @@ pub const OpCode = enum(u8) {
     pong = 128 | 10,
 };
 
+// We'll grow our buffer up to cdp-max-message-size (default 1MB), but should
+// try to reclaim some of that space. A lot of drivers send large messages
+// upfront (e.g. page.addScriptToEvaluateOnNewDocument) and then settle into
+// smaller messages. So after RECLAIM_AFTER messages which would fit in
+// RECLAIM_TO, we'll shrink the buffer.
+const RECLAIM_TO = 256 * 1024;
+const RECLAIM_AFTER = 8;
+
 // WebSocket message reader. Given websocket message, acts as an iterator that
 // can return zero or more Messages. When next returns null, any incomplete
 // message will remain in reader.data
@@ -74,6 +82,9 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
         buf: []u8,
 
         fragments: ?Fragments = null,
+
+        // consecutive messages we've received which fit i RECLAIM_TO
+        small_message_streak: usize = 0,
 
         const Self = @This();
 
@@ -177,8 +188,12 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
                     mask(buf[header_len - 4 .. header_len], payload);
                 }
 
-                // whatever happens after this, we know where the next message starts
                 self.pos += message_len;
+                if (message_len < RECLAIM_TO) {
+                    self.small_message_streak +|= 1;
+                } else {
+                    self.small_message_streak = 0;
+                }
 
                 const fin = byte1 & 128 == 128;
 
@@ -281,6 +296,7 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
                 // get the best utilization of our buffer
                 self.pos = 0;
                 self.len = 0;
+                self.maybeReclaim();
                 return;
             }
 
@@ -308,6 +324,20 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
             std.mem.copyForwards(u8, self.buf, partial);
             self.pos = 0;
             self.len = partial_bytes;
+        }
+
+        fn maybeReclaim(self: *Self) void {
+            const floor = @min(RECLAIM_TO, self.max_message_size);
+            if (self.buf.len <= floor or self.small_message_streak < RECLAIM_AFTER) {
+                return;
+            }
+
+            self.buf = self.allocator.remap(self.buf, floor) orelse blk: {
+                const smaller = self.allocator.alloc(u8, floor) catch return;
+                self.allocator.free(self.buf);
+                break :blk smaller;
+            };
+            self.small_message_streak = 0;
         }
     };
 }
@@ -415,4 +445,90 @@ test "mask" {
         mask(&.{ 1, 2, 200, 240 }, payload);
         try testing.expectEqual(true, std.mem.eql(u8, payload, message));
     }
+}
+
+// Builds an unmasked (server->client) text frame.
+fn writeFrame(list: *std.ArrayList(u8), allocator: Allocator, payload: []const u8) !void {
+    try list.append(allocator, @intFromEnum(OpCode.text)); // FIN + text opcode
+    if (payload.len <= 125) {
+        try list.append(allocator, @intCast(payload.len));
+    } else if (payload.len <= 65535) {
+        try list.append(allocator, 126);
+        try list.append(allocator, @intCast((payload.len >> 8) & 0xff));
+        try list.append(allocator, @intCast(payload.len & 0xff));
+    } else {
+        try list.append(allocator, 127);
+        var i: usize = 8;
+        while (i > 0) {
+            i -= 1;
+            try list.append(allocator, @intCast((payload.len >> @intCast(i * 8)) & 0xff));
+        }
+    }
+    try list.appendSlice(allocator, payload);
+}
+
+// Drives one complete frame through the reader the way Connection does:
+// feed bytes (growing when next() asks for room), drain complete messages,
+// then compact.
+fn feedAndDrain(reader: anytype, frame: []const u8) !void {
+    var offset: usize = 0;
+    while (true) {
+        const free = reader.readBuf();
+        if (free.len > 0 and offset < frame.len) {
+            const n = @min(free.len, frame.len - offset);
+            @memcpy(free[0..n], frame[offset..][0..n]);
+            reader.len += n;
+            offset += n;
+        }
+        if (try reader.next()) |_| {
+            continue;
+        }
+        if (offset >= frame.len) {
+            break;
+        }
+    }
+    reader.compact();
+}
+
+test "reader: reclaims buffer after a run of small messages" {
+    const allocator = testing.allocator;
+    var reader = try Reader(false).init(allocator, 4 * 1024 * 1024);
+    defer reader.deinit();
+
+    // A large message forces the buffer to grow well past RECLAIM_TO.
+    const big_payload = try allocator.alloc(u8, RECLAIM_TO + 100 * 1024);
+    defer allocator.free(big_payload);
+    @memset(big_payload, 'a');
+
+    var big: std.ArrayList(u8) = .{};
+    defer big.deinit(allocator);
+    try writeFrame(&big, allocator, big_payload);
+
+    try feedAndDrain(&reader, big.items);
+    try testing.expect(reader.buf.len > RECLAIM_TO);
+    try testing.expectEqual(@as(usize, 0), reader.small_message_streak);
+
+    // A whole run of small messages delivered in a *single* batch must count
+    // as individual messages, not as one compaction — reads don't align with
+    // message boundaries over TCP. Stop one short of the threshold.
+    var batch: std.ArrayList(u8) = .{};
+    defer batch.deinit(allocator);
+    for (0..RECLAIM_AFTER - 1) |_| {
+        try writeFrame(&batch, allocator, "hello");
+    }
+    try feedAndDrain(&reader, batch.items);
+    try testing.expectEqual(@as(usize, RECLAIM_AFTER - 1), reader.small_message_streak);
+    try testing.expect(reader.buf.len > RECLAIM_TO);
+
+    // One more small message tips the run over the threshold and shrinks.
+    var small: std.ArrayList(u8) = .{};
+    defer small.deinit(allocator);
+    try writeFrame(&small, allocator, "hello");
+    try feedAndDrain(&reader, small.items);
+    try testing.expectEqual(@as(usize, RECLAIM_TO), reader.buf.len);
+
+    // A later large message resets the run and re-grows the buffer.
+    try feedAndDrain(&reader, big.items);
+    try testing.expect(reader.buf.len > RECLAIM_TO);
+    try testing.expectEqual(@as(usize, 0), reader.small_message_streak);
 }
