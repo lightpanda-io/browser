@@ -307,10 +307,10 @@
     \\          Proxy-Authorization: Bearer <token>.
     \\  --http-max-concurrent <INT>
     \\          Maximum number of concurrent HTTP requests.
-    \\          Defaults to 10.
+    \\          Defaults to 40.
     \\  --http-max-host-open <INT>
     \\          Maximum open connections to a given host:port.
-    \\          Defaults to 4.
+    \\          Defaults to 6.
     \\  --http-connect-timeout <INT>
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.

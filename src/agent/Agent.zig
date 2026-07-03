@@ -162,7 +162,7 @@ const script_skill =
     \\   await Promise.all(pages.map((p, i) => p.goto(items[i].url)));   // all in flight at once
     \\   return pages.map((p, i) => ({ ...items[i], ...p.extract({ /* schema */ }) }));
     \\   ```
-    \\   - Concurrency is bounded by the HTTP connection pool (10 by default, `--http-max-concurrent`); extra navigations queue rather than fail. For long lists, fan out in batches and `page.close()` each page once read so its memory is reclaimed.
+    \\   - Concurrency is bounded by the HTTP connection pool (40 by default, `--http-max-concurrent`); extra navigations queue rather than fail. For long lists, fan out in batches and `page.close()` each page once read so its memory is reclaimed.
     \\   - `Promise.all` rejects the whole batch if any `goto` *fails* (a timeout does not reject); use `Promise.allSettled` when partial results are fine.
     \\   - Walk **serially** on one page (`for (const it of items) { await page.goto(it.url); … }`) only when the steps depend on each other — each page decides the next URL, or they share login/session state.
     \\3. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `page.evaluate` block is always wrong: lift the raw strings with `page.extract`, then trim/split/parse them in top-level JS. Reserve `page.evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every navigation/reload, while script variables persist.
