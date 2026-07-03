@@ -1083,6 +1083,30 @@ test "agent script runtime: parallel gotos coexist and route per page" {
     );
 }
 
+test "agent script runtime: goto resolves $LP_* placeholders" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    _ = setenv(@constCast("LP_RUNTIME_GOTO_BASE"), @constCast("http://localhost:9582"), 1);
+    defer _ = unsetenv(@constCast("LP_RUNTIME_GOTO_BASE"));
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("$LP_RUNTIME_GOTO_BASE/src/browser/tests/mcp_actions.html");
+        \\const { btn } = page.extract({ btn: "#btn" });
+        \\if (btn !== "Click Me") throw new Error("wrong page: " + btn);
+    );
+}
+
+extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
+extern fn unsetenv(name: [*:0]u8) c_int;
+
 test "agent script runtime: a tool-triggered navigation keeps the handle routable" {
     defer testing.reset();
     defer testing.test_session.closeAllPages();
