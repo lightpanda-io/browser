@@ -23,10 +23,13 @@ const js = @import("../../../js/js.zig");
 
 const EventTarget = @import("../../EventTarget.zig");
 
+const idb = @import("idb.zig");
 const Engine = @import("Engine.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
 const IDBObjectStore = @import("IDBObjectStore.zig");
 const DOMStringList = @import("../../collections.zig").DOMStringList;
+
+const FunctionSetter = idb.FunctionSetter;
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -40,6 +43,7 @@ _database_id: i64,
 _name: []const u8,
 _version: i64,
 _txn: ?*IDBTransaction = null, // only set during upgradeneeded
+_on_error: ?js.Function.Global = null,
 
 pub fn init(exec: *Execution, engine: *Engine, database_id: i64, name: []const u8, version: i64) !*IDBDatabase {
     return exec._factory.eventTarget(IDBDatabase{
@@ -192,6 +196,17 @@ pub fn getObjectStoreNames(self: *IDBDatabase, exec: *Execution) !*DOMStringList
     return list;
 }
 
+pub fn getOnError(self: *const IDBDatabase) ?js.Function.Global {
+    return self._on_error;
+}
+
+pub fn setOnError(self: *IDBDatabase, setter: ?FunctionSetter) void {
+    self._on_error = if (setter) |s| switch (s) {
+        .func => |f| f,
+        .anything => null,
+    } else null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IDBDatabase);
 
@@ -208,4 +223,5 @@ pub const JsApi = struct {
     pub const deleteObjectStore = bridge.function(IDBDatabase.deleteObjectStore, .{ .dom_exception = true });
     pub const transaction = bridge.function(IDBDatabase.transaction, .{ .dom_exception = true });
     pub const close = bridge.function(IDBDatabase.close, .{});
+    pub const onerror = bridge.accessor(IDBDatabase.getOnError, IDBDatabase.setOnError, .{});
 };

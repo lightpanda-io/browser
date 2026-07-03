@@ -36,6 +36,7 @@ const IDBObjectStore = @import("IDBObjectStore.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
 const IDBVersionChangeEvent = @import("IDBVersionChangeEvent.zig");
 
+const log = lp.log;
 const Execution = js.Execution;
 const FunctionSetter = idb.FunctionSetter;
 
@@ -178,14 +179,14 @@ pub fn failed(self: *const IDBRequest) bool {
 pub fn deliver(self: *IDBRequest, exec: *Execution) !void {
     self._ready_state = .done;
     if (self._error != null) {
-        return self.fire(exec, comptime .wrap("error"), self._on_error);
+        return self.fireError(exec);
     }
     if (self._cursor) |cursor| {
         // A cursor request re-fires on every iteration; let the cursor mark itself
         // readable (got value) right before the success handler runs.
         cursor.beforeDeliver();
     }
-    return self.fire(exec, comptime .wrap("success"), self._on_success);
+    return self.fireSuccess(exec);
 }
 
 pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, new_version: u64) !void {
@@ -196,12 +197,73 @@ pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, 
 
 pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {
     self._ready_state = .done;
-    return self.fire(exec, comptime .wrap("success"), self._on_success);
+
+    const event = try Event.initTrusted(comptime .wrap("success"), null, exec.page);
+    event.acquireRef();
+    defer _ = event.releaseRef(exec.page);
+
+    try exec.dispatch(self.asEventTarget(), event, self._on_success, .{ .context = "IDBRequest.success" });
+
+    if (event._listeners_did_throw) blk: {
+        // if the event threw, we must abort
+        const txn = switch (self._txn) {
+            .owned => |t| t,
+            .none, .borrowed => break :blk,
+        };
+
+        if (!txn._settled and !txn._committing) {
+            txn.abortWith(exec, error.AbortError) catch |err| {
+                log.warn(.storage, "idb success-event abort", .{ .err = err });
+            };
+        }
+    }
 }
 
-fn fire(self: *IDBRequest, exec: *Execution, typ: lp.String, handler: ?js.Function.Global) !void {
-    const event = try Event.initTrusted(typ, null, exec.page);
-    try exec.dispatch(self.asEventTarget(), event, handler, .{ .context = "IDBRequest" });
+fn fireError(self: *IDBRequest, exec: *Execution) !void {
+    // Requests created inside a transaction own an abortable transaction; open/
+    // delete requests (and the borrowed upgrade-transaction view) do not.
+    const txn: ?*IDBTransaction = switch (self._txn) {
+        .owned => |t| t,
+        .none, .borrowed => null,
+    };
+
+    const event = try Event.initTrusted(comptime .wrap("error"), .{ .bubbles = true, .cancelable = true }, exec.page);
+    event.acquireRef();
+    defer _ = event.releaseRef(exec.page);
+
+    const et = self.asEventTarget();
+    event._target = et;
+    event._dispatch_target = et;
+
+    try exec.dispatch(et, event, self._on_error, .{ .context = "IDBRequest.error", .inject_target = false });
+    if (txn) |tx| {
+        if (!event._stop_propagation) {
+            try exec.dispatch(tx.asEventTarget(), event, tx._on_error, .{ .context = "IDBTransaction.error", .inject_target = false });
+        }
+        if (!event._stop_propagation) {
+            const db = tx._db;
+            try exec.dispatch(db.asEventTarget(), event, db._on_error, .{ .context = "IDBDatabase.error", .inject_target = false });
+        }
+
+        // Don't re-abort a transaction that's already finishing — the AbortError
+        // events an abort itself delivers come back through here.
+        if (!tx._settled and !tx._committing) {
+            const reason: ?anyerror = if (event._listeners_did_throw)
+                error.AbortError
+            else if (!event._prevent_default)
+                self._error
+            else
+                null;
+            if (reason != null) {
+                // catch (rather than propagate): the abort's own event dispatch
+                // can re-enter here, so keeping the error set out of deliver's
+                // recursion is both simpler and avoids an unresolvable inferred set.
+                tx.abortWith(exec, reason) catch |err| {
+                    log.warn(.storage, "idb error-event abort", .{ .err = err });
+                };
+            }
+        }
+    }
 }
 
 pub fn getReadyState(self: *const IDBRequest) ReadyState {

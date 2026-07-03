@@ -24,6 +24,7 @@ const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 const Event = @import("../../Event.zig");
 const EventTarget = @import("../../EventTarget.zig");
+const DOMException = @import("../../DOMException.zig");
 
 const idb = @import("idb.zig");
 const Engine = @import("Engine.zig");
@@ -80,6 +81,7 @@ _begun: bool = false,
 _settled: bool = false,
 _aborted: bool = false,
 _committing: bool = false,
+_error: ?anyerror = null,
 _gate_waiter: Engine.GateWaiter,
 // A transaction is only active for one execution of a Scheduler's task. We
 // capture the scheduler's generation here and reject any request made in a
@@ -230,13 +232,20 @@ pub fn commit(self: *IDBTransaction, exec: *Execution) !void {
     }
 }
 
+// JS-facing, no reason
 pub fn abort(self: *IDBTransaction, exec: *Execution) !void {
+    return self.abortWith(exec, null);
+}
+
+// Internal, optional reason
+pub fn abortWith(self: *IDBTransaction, exec: *Execution, reason: ?anyerror) error{InvalidStateError}!void {
     if (self._settled or self._committing) {
         return error.InvalidStateError;
     }
 
     self._aborted = true;
     self._settled = true;
+    self._error = reason;
 
     if (self._begun) {
         self._engine.rollback();
@@ -415,6 +424,15 @@ pub fn getObjectStoreNames(self: *IDBTransaction, exec: *Execution) !*DOMStringL
     const list = try arena.create(DOMStringList);
     list.* = .{ ._items = names, ._arena = arena };
     return list;
+}
+
+pub fn getError(self: *const IDBTransaction) ?DOMException {
+    const err = self._error orelse return null;
+    const mapped: anyerror = switch (err) {
+        error.Constraint => error.ConstraintError,
+        else => err,
+    };
+    return DOMException.fromError(mapped) orelse DOMException.init(null, "UnknownError");
 }
 
 pub fn getOnComplete(self: *const IDBTransaction) ?js.Function.Global {
@@ -629,6 +647,7 @@ pub const JsApi = struct {
     pub const durability = bridge.accessor(IDBTransaction.getDurability, null, .{});
     pub const db = bridge.accessor(IDBTransaction.getDb, null, .{});
     pub const objectStoreNames = bridge.accessor(IDBTransaction.getObjectStoreNames, null, .{});
+    pub const @"error" = bridge.accessor(IDBTransaction.getError, null, .{ .null_as_undefined = true });
     pub const objectStore = bridge.function(IDBTransaction.objectStore, .{ .dom_exception = true });
     pub const abort = bridge.function(IDBTransaction.abort, .{ .dom_exception = true });
     pub const commit = bridge.function(IDBTransaction.commit, .{ .dom_exception = true });
