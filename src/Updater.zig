@@ -119,15 +119,22 @@ pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
     try libcurl.curl_easy_setopt(conn._easy, .write_data, &ctx);
 
     // Make a request.
-    const status_int = conn.request(&self.config.http_headers) catch |err| {
+    const status_int = conn.perform() catch |err| {
         ctx.err catch |ctx_err| return ctx_err;
         return err;
     };
     const status: std.http.Status = @enumFromInt(status_int);
-    if (status != .ok) {
-        return error.UnexpectedStatus;
+    switch (status) {
+        // Write what's received.
+        .ok => try writer.writeAll(ctx.buffer.items),
+        // Client failed.
+        .bad_request => try writer.writeAll("Versions format is invalid.\n"),
+        // Server failed.
+        .internal_server_error,
+        .service_unavailable,
+        => try writer.writeAll("Couldn't get the versions list from remote.\n"),
+        else => return error.UnexpectedStatus,
     }
 
-    try writer.writeAll(ctx.buffer.items);
     return writer.flush();
 }
