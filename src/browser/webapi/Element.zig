@@ -1143,10 +1143,12 @@ pub fn animate(_: *Element, _: ?js.Object, _: ?js.Object, frame: *Frame) !*Anima
     return Animation.init(frame);
 }
 
-pub fn closest(self: *Element, selector: []const u8, frame: *Frame) !?*Element {
-    if (selector.len == 0) {
+pub fn closest(self: *Element, input: []const u8, frame: *Frame) !?*Element {
+    if (input.len == 0) {
         return error.SyntaxError;
     }
+
+    const selector = try Selector.cachedParse(frame._session.browser, input);
 
     var current: ?*Element = self;
     while (current) |el| {
