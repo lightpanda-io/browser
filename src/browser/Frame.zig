@@ -119,6 +119,10 @@ _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attri
 // Lazily-created style, classList, and dataset objects. Only stored for elements
 // that actually access these features via JavaScript, saving 24 bytes per element.
 _element_styles: Element.StyleLookup = .empty,
+// Computed-style views handed out by window.getComputedStyle. The computed
+// variant is a stateless lazy view, so one per element suffices — and Chrome
+// returns the same object for repeated calls, so identity is also conformance.
+_element_computed_styles: Element.StyleLookup = .empty,
 _element_datasets: Element.DatasetLookup = .empty,
 _element_class_lists: Element.ClassListLookup = .empty,
 _element_rel_lists: Element.RelListLookup = .empty,

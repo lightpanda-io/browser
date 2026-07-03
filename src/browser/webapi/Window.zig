@@ -506,9 +506,16 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
     if (pseudo_element) |pe| {
         if (pe.len != 0) {
             log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pe });
+            // Chrome hands out a distinct object per pseudo-element, so these
+            // can't share the per-element cache entry.
+            return CSSStyleProperties.init(element, true, frame);
         }
     }
-    return CSSStyleProperties.init(element, true, frame);
+    const gop = try frame._element_computed_styles.getOrPut(frame.arena, element);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try CSSStyleProperties.init(element, true, frame);
+    }
+    return gop.value_ptr.*;
 }
 
 // window.open(url?, target?, features?) — v1 scope:
