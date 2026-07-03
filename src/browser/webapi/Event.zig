@@ -49,6 +49,7 @@ _time_stamp: u64,
 _needs_retargeting: bool = false,
 _is_trusted: bool = false,
 _in_passive_listener: bool = false,
+_listeners_did_throw: bool = false, // IndexedDB needs to abort on callback throw
 
 // There's a period of time between creating an event and handing it off to v8
 // where things can fail. If it does fail, we need to deinit the event. The timing

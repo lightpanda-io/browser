@@ -288,7 +288,11 @@ pub fn dispatchDirect(
     if (getFunction(handler, &ls.local)) |func| {
         event._current_target = target;
         _ = func.callWithThis(void, target, .{event}) catch |err| {
-            log.warn(.event, opts.context, .{ .err = err });
+            if (err == error.JsException) {
+                event._listeners_did_throw = true;
+            } else {
+                log.warn(.event, opts.context, .{ .err = err });
+            }
         };
     }
 
@@ -432,24 +436,45 @@ pub const Listener = struct {
     ) error{OutOfMemory}!void {
         switch (self.function) {
             .value => |value| local.toLocal(value).callWithThis(void, event._current_target.?, .{event}) catch |err| {
-                log.warn(.event, context, .{ .err = err });
+                if (err == error.JsException) {
+                    event._listeners_did_throw = true;
+                } else {
+                    log.warn(.event, context, .{ .err = err });
+                }
             },
             .string => |string| {
                 const str = try arena.dupeZ(u8, string.str());
                 local.eval(str, null) catch |err| {
-                    log.warn(.event, context, .{ .err = err });
+                    if (err == error.JsException) {
+                        event._listeners_did_throw = true;
+                    } else {
+                        log.warn(.event, context, .{ .err = err });
+                    }
                 };
             },
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
                 const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
-                    log.warn(.event, context, .{ .err = err });
+                    // Getting "handleEvent" threw (e.g. a throwing getter).
+                    if (err == error.JsException) {
+                        event._listeners_did_throw = true;
+                    } else {
+                        log.warn(.event, context, .{ .err = err });
+                    }
                     break :blk null;
                 };
                 if (handle_event) |handleEvent| {
                     handleEvent.callWithThis(void, obj, .{event}) catch |err| {
-                        log.warn(.event, context, .{ .err = err });
+                        if (err == error.JsException) {
+                            event._listeners_did_throw = true;
+                        } else {
+                            log.warn(.event, context, .{ .err = err });
+                        }
                     };
+                } else {
+                    // The listener was an object without the handleEvent function
+                    // This is throwing a TypeError
+                    event._listeners_did_throw = true;
                 }
             },
         }
