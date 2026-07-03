@@ -71,9 +71,13 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
     switch (args.mode) {
         .help => |tag| return args.printUsageAndExit(tag, true),
-        .version => {
-            var stdout = std.fs.File.stdout().writer(&.{});
-            try stdout.interface.print("{s}\n", .{lp.build_config.version});
+        .version => |opts| {
+            if (opts.check) {
+                try lp.checkVersion(allocator, &args);
+            } else {
+                var stdout = std.fs.File.stdout().writer(&.{});
+                try stdout.interface.print("{s}\n", .{lp.build_config.version});
+            }
             return std.process.cleanExit();
         },
         .agent => |opts| if (opts.list_models) {

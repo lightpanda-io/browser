@@ -225,8 +225,7 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
     }
 }
 
-/// Check `Config.zig` for `options`.
-pub fn update(allocator: std.mem.Allocator, config: *const Config) !void {
+pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
     var client = try Updater.init(allocator, config);
     defer client.deinit();
 
@@ -234,7 +233,6 @@ pub fn update(allocator: std.mem.Allocator, config: *const Config) !void {
     var buf: [4096]u8 = undefined;
     var writer = stdout.writer(&buf);
     const w = &writer.interface;
-    // Inform to stdout about version.
     try client.inform(w);
 }
 
