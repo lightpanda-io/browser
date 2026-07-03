@@ -1,10 +1,6 @@
 name: agent-regression
 
 on:
-  # TEMPORARY: validate the demo-checkout wiring from this branch pre-merge;
-  # remove before merging.
-  push:
-    branches: [agent-regression]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
