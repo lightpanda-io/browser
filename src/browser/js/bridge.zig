@@ -1000,6 +1000,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/XPathResult.zig"),
     @import("../webapi/XPathExpression.zig"),
     @import("../webapi/XPathEvaluator.zig"),
+    @import("../webapi/collections/DOMStringList.zig"),
 });
 
 // APIs available on Worker context globals (constructors like URL, Headers, etc.)
@@ -1061,6 +1062,8 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/storage/idb/idb.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/BroadcastChannel.zig"),
+    @import("../webapi/BroadcastChannel.zig"),
+    @import("../webapi/collections/DOMStringList.zig"),
 });
 
 // Master list of ALL JS APIs across all contexts.

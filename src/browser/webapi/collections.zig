@@ -43,9 +43,5 @@ pub fn registerTypes() []const type {
         DOMTokenList.KeyIterator,
         DOMTokenList.ValueIterator,
         DOMTokenList.EntryIterator,
-        DOMStringList,
-        DOMStringList.KeyIterator,
-        DOMStringList.ValueIterator,
-        DOMStringList.EntryIterator,
     };
 }

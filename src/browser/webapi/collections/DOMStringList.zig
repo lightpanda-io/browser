@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
-const Frame = @import("../../Frame.zig");
 const GenericIterator = @import("iterator.zig").Entry;
 
 pub const KeyIterator = GenericIterator(Iterator, "0");
@@ -30,6 +29,17 @@ pub const EntryIterator = GenericIterator(Iterator, null);
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
+
+// not registered in collections.zig, because this is one of the rare
+// collections that's also available in Worker
+pub fn registerTypes() []const type {
+    return &.{
+        DOMStringList,
+        DOMStringList.KeyIterator,
+        DOMStringList.ValueIterator,
+        DOMStringList.EntryIterator,
+    };
+}
 
 pub const DOMStringList = @This();
 

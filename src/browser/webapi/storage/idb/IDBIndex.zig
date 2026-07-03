@@ -82,7 +82,7 @@ pub fn get(self: *IDBIndex, query: js.Value, exec: *Execution) !*IDBRequest {
 pub fn runGet(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
     const arena = exec.call_arena;
     const bytes = self._engine.indexGetRange(arena, self._store._store_id, self._index_id, bounds) catch |err| {
-        log.warn(.storage, "idb index get", .{ .err = err });
+        log.warn(.storage, "idb index get", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
@@ -100,7 +100,7 @@ pub fn getKey(self: *IDBIndex, query: js.Value, exec: *Execution) !*IDBRequest {
 pub fn runGetKey(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
     const arena = exec.call_arena;
     const bytes = self._engine.indexGetKeyRange(arena, self._index_id, bounds) catch |err| {
-        log.warn(.storage, "idb index getKey", .{ .err = err });
+        log.warn(.storage, "idb index getKey", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
@@ -132,7 +132,7 @@ fn _getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, mode: IDB
 
 pub fn runGetAll(self: *IDBIndex, request: *IDBRequest, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode, exec: *Execution) !void {
     const arr = self.collectAll(args, mode, exec) catch |err| {
-        log.warn(.storage, "idb index getAll", .{ .err = err });
+        log.warn(.storage, "idb index getAll", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
@@ -176,7 +176,7 @@ pub fn count(self: *IDBIndex, query: ?js.Value, exec: *Execution) !*IDBRequest {
 
 pub fn runCount(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
     const n = self._engine.indexCountRange(self._index_id, bounds) catch |err| {
-        log.warn(.storage, "idb index count", .{ .err = err });
+        log.warn(.storage, "idb index count", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };

@@ -33,8 +33,7 @@ pub fn init(cursor: *IDBCursor) !*IDBCursorWithValue {
 }
 
 pub fn getValue(self: *const IDBCursorWithValue, exec: *Execution) !?js.Value {
-    const bytes = self._proto._value orelse return null;
-    return try js.Value.deserialize(exec.js.local.?, bytes);
+    return self._proto.getValueJs(exec);
 }
 
 pub const JsApi = struct {

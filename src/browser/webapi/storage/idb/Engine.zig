@@ -172,6 +172,10 @@ pub fn close(self: *Engine) void {
     self.conn.close();
 }
 
+pub fn lastError(self: *const Engine) [:0]const u8 {
+    return self.conn.lastError();
+}
+
 pub fn begin(self: *Engine) !void {
     return self.conn.exec("begin immediate", .{});
 }
