@@ -35,8 +35,8 @@
             .hash = "sqlite3-3.51.0-DMxLWssOAABZ8cAvU_LfBIbp0kZjm824PU8sSLXpEDdr",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#a8c031222f7545c363b91197394b50024d370a7e",
-            .hash = "zenai-0.0.0-iOY_VB6zBABxSlIgM38xQQv53QEzy8PuDgHopcQ4mwbV",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#e58635146733157eb4936388b21a071fcabfa687",
+            .hash = "zenai-0.0.0-iOY_VIf0BADH7PvSOlnVf564krXnAlns_1IIhh9ZDdwz",
         },
         .isocline = .{
             .url = "git+https://github.com/arrufat/isocline?ref=lightpanda#832a9fe25f5f4458fcc47b5acc7c21db669c2f47",
