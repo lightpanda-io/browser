@@ -361,7 +361,7 @@ pub const Operation = union(enum) {
     const IndexQuery = struct { index: *IDBIndex, bounds: Engine.Bounds };
     const IndexGetAll = struct { index: *IDBIndex, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
     const CursorIterate = struct { cursor: *IDBCursor, seek: IDBCursor.Seek, offset: u32 };
-    const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: *js.Value.BareGlobal };
+    const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: []const u8 };
     const CursorDelete = struct { cursor: *IDBCursor, key: []const u8 };
 };
 

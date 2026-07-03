@@ -307,7 +307,7 @@ pub fn settleStep(self: *IDBTransaction, exec: *Execution) bool {
 fn commitAndComplete(self: *IDBTransaction, exec: *Execution) void {
     if (self._begun) {
         self._engine.commit() catch |err| {
-            log.warn(.storage, "idb commit", .{ .err = err, .sqlite = self._engine.conn.lastError() });
+            log.warn(.storage, "idb commit", .{ .err = err, .sqlite = self._engine.lastError() });
             self._engine.rollback();
             self._begun = false;
             _ = self._engine.releaseGate(&self._gate_waiter);
@@ -385,6 +385,7 @@ pub fn cacheStore(self: *IDBTransaction, store: *IDBObjectStore) !void {
 pub fn uncacheStore(self: *IDBTransaction, name: []const u8) void {
     for (self._stores.items, 0..) |store, i| {
         if (std.mem.eql(u8, store._name, name)) {
+            store._deleted = true;
             _ = self._stores.swapRemove(i);
             return;
         }

@@ -131,7 +131,7 @@ const OpenContext = struct {
         }
 
         const upgrading = self.runOpen(engine) catch |err| blk: {
-            log.warn(.storage, "idb open", .{ .err = err, .name = self.name });
+            log.warn(.storage, "idb open", .{ .err = err, .name = self.name, .sqlite = engine.lastError() });
             self.request.setError(err);
             self.request.deliver(self.exec) catch {};
             break :blk false;
@@ -350,7 +350,7 @@ const DeleteContext = struct {
         defer _ = engine.releaseGate(&self._gate_waiter);
 
         self.runDelete(engine) catch |err| {
-            log.warn(.storage, "idb deleteDatabase", .{ .err = err, .name = self.name });
+            log.warn(.storage, "idb deleteDatabase", .{ .err = err, .name = self.name, .sqlite = engine.lastError() });
             self.request.setError(err);
             self.request.deliver(self.exec) catch {};
         };

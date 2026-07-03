@@ -60,6 +60,9 @@ _key: ?[]const u8 = null,
 _primary_key: ?[]const u8 = null,
 // Current record's serialized value bytes (null when key-only or exhausted).
 _value: ?[]const u8 = null,
+// The deserialized JS value, cached so repeated `.value` reads return the same
+// object (and observe mutations to it). Reset whenever the cursor repositions.
+_value_js: ?*js.Value.BareGlobal = null,
 
 // Backing storage for _key/_primary_key/_value, reused across positions so a
 // long scan holds one record's worth of memory, not the whole traversal.
@@ -160,7 +163,7 @@ pub fn releaseRef(self: *IDBCursor, page: *Page) void {
 // Run the deferred seek, staging the positioned cursor (or null) on the request.
 pub fn runIterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
     self.iterate(seek, offset, exec) catch |err| {
-        log.warn(.storage, "idb cursor iterate", .{ .err = err });
+        log.warn(.storage, "idb cursor iterate", .{ .err = err, .sqlite = self._engine.lastError() });
         self._request.setError(err);
     };
 }
@@ -222,20 +225,16 @@ pub fn advance(self: *IDBCursor, count: u32, exec: *Execution) !void {
 }
 
 pub fn update(self: *IDBCursor, value: js.Value, exec: *Execution) !*IDBRequest {
-    if (self._txn._mode == .readonly) {
-        return error.ReadOnlyError;
-    }
-
-    if (self._txn._settled == true) {
-        return error.TransactionInactiveError;
-    }
-
-    if (self._got_value == false) {
-        return error.InvalidStateError;
-    }
+    try self.assertCanUpdate();
 
     // The record sits at the primary (store) key, even for an index cursor.
     const current_key = self._primary_key orelse return error.InvalidStateError;
+
+    // Structured-clone the value now, synchronously: an unserializable value must
+    // throw DataCloneError from update() itself, not fail later in the drain. The
+    // stored clone also decouples the record from any later mutation of the arg.
+    const serialized = value.serialize() catch return error.TryCatchRethrow;
+    defer serialized.deinit();
 
     // For an in-line store, the value's own key must match the record's key.
     if (self._store._key_path) |kp| {
@@ -246,28 +245,24 @@ pub fn update(self: *IDBCursor, value: js.Value, exec: *Execution) !*IDBRequest 
         }
     }
 
-    // Snapshot the record key: the write runs in the drain, by which point a
-    // `continue` could have moved the cursor's live position (and reused its
-    // key buffer).
+    // Snapshot the record key and the serialized clone onto the transaction arena:
+    // the write runs in the drain, by which point a `continue` could have moved
+    // the cursor's live position (and reused its key buffer).
     const key = try self._txn._arena.dupe(u8, current_key);
+    const bytes = try self._txn._arena.dupe(u8, serialized.bytes());
     const request = try self._txn.newRequest();
-    const value_global = try self._txn.persist(value);
-    return request.submit(.{ .cursor_update = .{ .cursor = self, .key = key, .value = value_global } }, exec);
+    return request.submit(.{ .cursor_update = .{ .cursor = self, .key = key, .value = bytes } }, exec);
 }
 
-pub fn runUpdate(self: *IDBCursor, request: *IDBRequest, key: []const u8, value_global: *js.Value.BareGlobal, exec: *Execution) !void {
-    defer value_global.deinit();
+pub fn runUpdate(self: *IDBCursor, request: *IDBRequest, key: []const u8, bytes: []const u8, exec: *Execution) !void {
     const local = exec.js.local.?;
-    const value = value_global.local(local);
-
-    const serialized = value.serialize() catch |err| {
+    const value = js.Value.deserialize(local, bytes) catch |err| {
         request.setError(err);
         return;
     };
-    defer serialized.deinit();
 
-    self._store.writeAt(key, value, serialized.bytes(), exec) catch |err| {
-        log.warn(.storage, "idb cursor update", .{ .err = err });
+    self._store.writeAt(key, value, bytes, exec) catch |err| {
+        log.warn(.storage, "idb cursor update", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
@@ -275,17 +270,7 @@ pub fn runUpdate(self: *IDBCursor, request: *IDBRequest, key: []const u8, value_
 }
 
 pub fn delete(self: *IDBCursor, exec: *Execution) !*IDBRequest {
-    if (self._txn._mode == .readonly) {
-        return error.ReadOnlyError;
-    }
-
-    if (self._txn._settled == true) {
-        return error.TransactionInactiveError;
-    }
-
-    if (self._got_value == false) {
-        return error.InvalidStateError;
-    }
+    try self.assertCanUpdate();
 
     // Snapshot the record key (see update): the delete runs later, in the drain.
     const current_key = self._primary_key orelse return error.InvalidStateError;
@@ -296,7 +281,7 @@ pub fn delete(self: *IDBCursor, exec: *Execution) !*IDBRequest {
 
 pub fn runDelete(self: *IDBCursor, request: *IDBRequest, key: []const u8) !void {
     self._store.deleteAt(key) catch |err| {
-        log.warn(.storage, "idb cursor delete", .{ .err = err });
+        log.warn(.storage, "idb cursor delete", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
     };
 }
@@ -359,6 +344,7 @@ fn reiterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void 
 
 fn position(self: *IDBCursor, key: []const u8, primary_key: []const u8, value: ?[]const u8) !void {
     const arena = self._txn._arena;
+    self.invalidateValue();
 
     self._key_buf.clearRetainingCapacity();
     try self._key_buf.appendSlice(arena, key);
@@ -379,10 +365,34 @@ fn position(self: *IDBCursor, key: []const u8, primary_key: []const u8, value: ?
 }
 
 fn exhaust(self: *IDBCursor) void {
+    self.invalidateValue();
     self._key = null;
     self._primary_key = null;
     self._value = null;
     self._request.setNull();
+}
+
+// Drop any cached `.value` object; the next read re-deserializes at the new
+// position. The persisted slot's handle is reset here so it doesn't pin the old
+// value until transaction teardown.
+fn invalidateValue(self: *IDBCursor) void {
+    if (self._value_js) |slot| {
+        slot.deinit();
+        self._value_js = null;
+    }
+}
+
+// The deserialized current value, created on first read and cached so repeated
+// `.value` accesses return the same JS object (see IDBCursorWithValue.getValue).
+pub fn getValueJs(self: *IDBCursor, exec: *Execution) !?js.Value {
+    const bytes = self._value orelse return null;
+    const local = exec.js.local.?;
+    if (self._value_js) |slot| {
+        return slot.local(local);
+    }
+    const value = try js.Value.deserialize(local, bytes);
+    self._value_js = try self._txn.persist(value);
+    return value;
 }
 
 // validate the state before we can advance/continue
@@ -396,6 +406,20 @@ fn prepareIterate(self: *IDBCursor) !void {
     }
 
     self._got_value = false;
+}
+
+fn assertCanUpdate(self: *IDBCursor) !void {
+    try self._txn.assertActive();
+
+    if (self._txn._mode == .readonly) {
+        return error.ReadOnlyError;
+    }
+    if (self._store._deleted) {
+        return error.InvalidStateError;
+    }
+    if (self._got_value == false) {
+        return error.InvalidStateError;
+    }
 }
 
 pub const JsApi = struct {

@@ -44,6 +44,7 @@ _name: []const u8,
 _key_path: ?[]const u8,
 _auto_increment: bool,
 _txn: *IDBTransaction,
+_deleted: bool = false,
 // identity map, store.indexes('a') === store.index('a')
 _indexes: std.ArrayList(*IDBIndex) = .empty,
 
@@ -83,6 +84,7 @@ pub fn put(self: *IDBObjectStore, value: js.Value, key: ?js.Value, exec: *Execut
 }
 
 pub fn get(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
     const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
@@ -93,7 +95,7 @@ pub fn get(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReques
 pub fn runGet(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
     const arena = exec.call_arena;
     const bytes = self._engine.getRange(arena, self._store_id, bounds) catch |err| {
-        log.warn(.storage, "idb get", .{ .err = err });
+        log.warn(.storage, "idb get", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
@@ -102,6 +104,7 @@ pub fn runGet(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds
 }
 
 pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const txn = self._txn;
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
@@ -114,7 +117,7 @@ pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
 
 pub fn runDelete(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, _: *Execution) !void {
     self.deleteBounds(bounds) catch |err| {
-        log.warn(.storage, "idb delete", .{ .err = err });
+        log.warn(.storage, "idb delete", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
     };
 }
@@ -125,6 +128,7 @@ fn deleteBounds(self: *IDBObjectStore, bounds: Engine.Bounds) !void {
 }
 
 pub fn clear(self: *IDBObjectStore, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const txn = self._txn;
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
@@ -136,7 +140,7 @@ pub fn clear(self: *IDBObjectStore, exec: *Execution) !*IDBRequest {
 
 pub fn runClear(self: *IDBObjectStore, request: *IDBRequest, _: *Execution) !void {
     self.clearAll() catch |err| {
-        log.warn(.storage, "idb clear", .{ .err = err });
+        log.warn(.storage, "idb clear", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
     };
 }
@@ -147,6 +151,7 @@ fn clearAll(self: *IDBObjectStore) !void {
 }
 
 pub fn count(self: *IDBObjectStore, query: ?js.Value, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
     const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
@@ -156,7 +161,7 @@ pub fn count(self: *IDBObjectStore, query: ?js.Value, exec: *Execution) !*IDBReq
 
 pub fn runCount(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
     const n = self._engine.countRange(self._store_id, bounds) catch |err| {
-        log.warn(.storage, "idb count", .{ .err = err });
+        log.warn(.storage, "idb count", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
@@ -175,6 +180,7 @@ pub fn getAllKeys(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u
 }
 
 pub fn getAllRecords(self: *IDBObjectStore, options: ?js.Value, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
     const args = try IDBKeyRange.resolveGetAllOptions(txn._arena, options, exec);
@@ -183,6 +189,7 @@ pub fn getAllRecords(self: *IDBObjectStore, options: ?js.Value, exec: *Execution
 }
 
 fn _getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, mode: GetAllMode, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
     const args = try IDBKeyRange.resolveGetAll(txn._arena, query_or_options, count_, exec);
@@ -192,7 +199,7 @@ fn _getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, mod
 
 pub fn runGetAll(self: *IDBObjectStore, request: *IDBRequest, args: IDBKeyRange.GetAllArgs, mode: GetAllMode, exec: *Execution) !void {
     const arr = self.collectAll(exec, args, mode) catch |err| {
-        log.warn(.storage, "idb getAll", .{ .err = err });
+        log.warn(.storage, "idb getAll", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
@@ -225,6 +232,7 @@ fn collectAll(self: *IDBObjectStore, exec: *Execution, args: IDBKeyRange.GetAllA
 }
 
 pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
     const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
@@ -235,7 +243,7 @@ pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
 pub fn runGetKey(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds, exec: *Execution) !void {
     const arena = exec.call_arena;
     const found = self._engine.getKeyRange(arena, self._store_id, bounds) catch |err| {
-        log.warn(.storage, "idb getKey", .{ .err = err });
+        log.warn(.storage, "idb getKey", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
@@ -244,11 +252,13 @@ pub fn runGetKey(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bou
 }
 
 pub fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const bounds = try IDBKeyRange.resolveQuery(self._txn._arena, query, exec);
     return IDBCursor.init(self, bounds, direction orelse .next, false, exec);
 }
 
 pub fn openKeyCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const bounds = try IDBKeyRange.resolveQuery(self._txn._arena, query, exec);
     return IDBCursor.init(self, bounds, direction orelse .next, true, exec);
 }
@@ -285,6 +295,7 @@ pub const PreparedKey = union(enum) {
 };
 
 fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: WriteKind, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const txn = self._txn;
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
@@ -345,7 +356,7 @@ pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, va
     defer value_global.deinit();
     self.writeInner(request, kind, value_global, prepared, exec) catch |err| {
         if (err != error.Constraint) {
-            log.warn(.storage, "idb write", .{ .err = err, .kind = kind });
+            log.warn(.storage, "idb write", .{ .err = err, .kind = kind, .sqlite = self._engine.lastError() });
         }
         request.setError(err);
     };
@@ -463,10 +474,13 @@ const CreateIndexOptions = struct {
 
 // Only callable during an upgrade (versionchange transaction).
 pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8, options: ?CreateIndexOptions, exec: *Execution) !*IDBIndex {
+    try self.assertLive();
     const txn = self._txn;
     if (txn._mode != .versionchange) {
         return error.InvalidStateError;
     }
+    // Spec order: the transaction-state check precedes the index-name check.
+    try txn.assertActive();
     const opts = options orelse CreateIndexOptions{};
 
     try self._engine.savepoint();
@@ -508,10 +522,13 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8
 
 // Only callable during an upgrade (versionchange transaction).
 pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void {
+    try self.assertLive();
     const txn = self._txn;
     if (txn._mode != .versionchange) {
         return error.InvalidStateError;
     }
+    // Spec order: the transaction-state check precedes the index-name check.
+    try txn.assertActive();
     self._engine.deleteIndexRow(self._store_id, name) catch |err| switch (err) {
         error.NotFound => return error.NotFoundError,
         else => return err,
@@ -525,6 +542,7 @@ pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void
 }
 
 pub fn index(self: *IDBObjectStore, name: []const u8, _: *Execution) !*IDBIndex {
+    try self.assertLive();
     for (self._indexes.items) |idx| {
         if (std.mem.eql(u8, idx._name, name)) {
             return idx;
@@ -547,6 +565,12 @@ pub fn getIndexNames(self: *IDBObjectStore, exec: *Execution) !*DOMStringList {
     const list = try arena.create(DOMStringList);
     list.* = .{ ._items = names, ._arena = arena };
     return list;
+}
+
+fn assertLive(self: *const IDBObjectStore) !void {
+    if (self._deleted) {
+        return error.InvalidStateError;
+    }
 }
 
 pub const JsApi = struct {
