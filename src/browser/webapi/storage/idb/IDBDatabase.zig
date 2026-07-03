@@ -24,6 +24,7 @@ const js = @import("../../../js/js.zig");
 const EventTarget = @import("../../EventTarget.zig");
 
 const idb = @import("idb.zig");
+const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
 const IDBTransaction = @import("IDBTransaction.zig");
 const IDBObjectStore = @import("IDBObjectStore.zig");
@@ -61,7 +62,7 @@ pub fn asEventTarget(self: *IDBDatabase) *EventTarget {
 }
 
 const CreateObjectStoreOptions = struct {
-    keyPath: ?[]const u8 = null,
+    keyPath: ?Key.KeyPath = null,
     autoIncrement: bool = false,
 };
 
@@ -78,10 +79,24 @@ pub fn createObjectStore(
     try txn.assertActive();
 
     const opts = options orelse CreateObjectStoreOptions{};
+
+    // Validate + copy the key path onto the transaction arena so it outlives the
+    // call. autoIncrement is incompatible with an empty or compound key path.
+    const key_path: ?Key.KeyPath = if (opts.keyPath) |kp| blk: {
+        if (Key.isValidKeyPathSpec(kp) == false) {
+            return error.SyntaxError;
+        }
+        if (opts.autoIncrement and keyPathBlocksAutoIncrement(kp)) {
+            return error.InvalidAccessError;
+        }
+        break :blk try Key.dupeKeyPath(txn._arena, kp);
+    } else null;
+
     const store_id = self._engine.createObjectStore(
+        txn._arena,
         self._database_id,
         name,
-        opts.keyPath,
+        key_path,
         opts.autoIncrement,
     ) catch |err| switch (err) {
         error.Constraint => return error.ConstraintError,
@@ -89,10 +104,18 @@ pub fn createObjectStore(
     };
 
     const owned_name = try txn.dupe(name);
-    const key_path = if (opts.keyPath) |kp| try txn.dupe(kp) else null;
     const store = try IDBObjectStore.init(txn, store_id, owned_name, key_path, opts.autoIncrement);
     try txn.cacheStore(store);
     return store;
+}
+
+// autoIncrement requires an out-of-line or single-property in-line key; an empty
+// or compound key path can't carry a generated key.
+fn keyPathBlocksAutoIncrement(kp: Key.KeyPath) bool {
+    return switch (kp) {
+        .string => |s| s.len == 0,
+        .list => true,
+    };
 }
 
 // Only callable while the upgrade transaction is live and active, hence the checks

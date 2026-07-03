@@ -44,6 +44,14 @@ pub const Value = union(enum) {
     array: []const Value,
 };
 
+// A key path is either a single string path or, for a compound key, a list of
+// string paths. An out-of-line store has no key path at all (represented as an
+// optional KeyPath by its holders).
+pub const KeyPath = union(enum) {
+    string: []const u8,
+    list: []const []const u8,
+};
+
 pub fn number(n: f64) Key {
     return .{ .value = .{ .number = n } };
 }
@@ -159,8 +167,8 @@ fn decodeBytes(allocator: Allocator, bytes: []const u8, pos: *usize) ![]u8 {
 }
 
 // Build a Key.Value from a JS value, validating that it is a structurally valid
-// IDB key. Invalid keys (booleans, null/undefined, objects, NaN, ±Inf, and —
-// until the binding supports it — Date) produce error.DataError.
+// IDB key. Invalid keys (booleans, null/undefined, plain objects, NaN, and
+// invalid Dates) produce error.DataError.
 pub fn fromJs(value: js.Value, allocator: Allocator) !Value {
     return fromJsDepth(value, allocator, 0);
 }
@@ -173,7 +181,8 @@ fn fromJsDepth(value: js.Value, allocator: Allocator, depth: usize) !Value {
     }
     if (value.isNumber()) {
         var n = try value.toF64();
-        if (std.math.isNan(n) or std.math.isInf(n)) return error.DataError;
+        // NaN is not a valid key; ±Infinity is (it sorts at the numeric extremes).
+        if (std.math.isNan(n)) return error.DataError;
         if (n == 0) n = 0; // normalize -0 to +0
         return .{ .number = n };
     }
@@ -217,6 +226,134 @@ pub fn toJs(value: Value, local: *const Local) !js.Value {
             return arr.toValue();
         },
     }
+}
+
+pub fn isValidKeyPath(path: []const u8) bool {
+    if (path.len == 0) {
+        // empty is valid
+        return true;
+    }
+
+    // if not empty, must be one or more "identifiers" split by '.'
+    var it = std.mem.splitScalar(u8, path, '.');
+    while (it.next()) |component| {
+        if (isIdentifier(component) == false) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn isIdentifier(s: []const u8) bool {
+    if (s.len == 0) {
+        return false;
+    }
+
+    // leading 0-9 not allowed
+    const first_ok = switch (s[0]) {
+        'a'...'z', 'A'...'Z', '_', '$' => true,
+        else => |c| c >= 0x80,
+    };
+    if (first_ok == false) {
+        return false;
+    }
+
+    for (s[1..]) |c| {
+        const ok = switch (c) {
+            'a'...'z', 'A'...'Z', '_', '$', '0' ... '9' => true,
+            else => c >= 0x80,
+        };
+        if (ok == false) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Validate the spec's (DOMString or sequence<DOMString>) key path form. A
+// compound path must be a non-empty list of valid, non-empty string paths.
+pub fn isValidKeyPathSpec(kp: KeyPath) bool {
+    switch (kp) {
+        .string => |s| return isValidKeyPath(s),
+        .list => |items| {
+            if (items.len == 0) {
+                return false;
+            }
+            for (items) |item| {
+                if (item.len == 0 or isValidKeyPath(item) == false) {
+                    return false;
+                }
+            }
+            return true;
+        },
+    }
+}
+
+pub fn dupeKeyPath(arena: Allocator, kp: KeyPath) !KeyPath {
+    switch (kp) {
+        .string => |s| return .{ .string = try arena.dupe(u8, s) },
+        .list => |items| {
+            const copy = try arena.alloc([]const u8, items.len);
+            for (items, 0..) |item, i| {
+                copy[i] = try arena.dupe(u8, item);
+            }
+            return .{ .list = copy };
+        },
+    }
+}
+
+pub fn extractKeyPath(local: *const Local, value: js.Value, kp: KeyPath) !?js.Value {
+    switch (kp) {
+        .string => |s| return evaluatePath(value, s),
+        .list => |items| {
+            const arr = local.newArray(@intCast(items.len));
+            for (items, 0..) |item, i| {
+                const component = evaluatePath(value, item) orelse return null;
+                _ = try arr.set(@intCast(i), component, .{});
+            }
+            return arr.toValue();
+        },
+    }
+}
+
+pub fn keyPathToJs(local: *const Local, kp: ?KeyPath) !js.Value {
+    const path = kp orelse return .{ .local = local, .handle = local.isolate.initNull() };
+    switch (path) {
+        .string => |s| return local.newString(s).toValue(),
+        .list => |items| {
+            const arr = local.newArray(@intCast(items.len));
+            for (items, 0..) |item, i| {
+                _ = try arr.set(@intCast(i), local.newString(item).toValue(), .{});
+            }
+            return arr.toValue();
+        },
+    }
+}
+
+// Storage form of a key path: the text column value and its component count. A
+// count of 0 denotes a single string path; a positive count is a compound path
+// of that many ','-joined components (a valid component can't contain a ',').
+// The count both disambiguates a one-element list from a string and lets decode
+// allocate the exact slice.
+pub const ColumnKeyPath = struct { text: []const u8, component_length: usize };
+
+pub fn encodeKeyPathColumn(arena: Allocator, kp: KeyPath) !ColumnKeyPath {
+    return switch (kp) {
+        .string => |s| .{ .text = s, .component_length = 0 },
+        .list => |items| .{ .text = try std.mem.join(arena, ",", items), .component_length = items.len },
+    };
+}
+
+pub fn decodeKeyPathColumn(arena: Allocator, text: []const u8, component_length: usize) !KeyPath {
+    if (component_length == 0) {
+        return .{ .string = try arena.dupe(u8, text) };
+    }
+    const items = try arena.alloc([]const u8, component_length);
+    var it = std.mem.splitScalar(u8, text, ',');
+    for (items) |*item| {
+        item.* = try arena.dupe(u8, it.next() orelse return error.InvalidKeyEncoding);
+    }
+    return .{ .list = items };
 }
 
 // Given a key path , "manager.id", extract that from an object

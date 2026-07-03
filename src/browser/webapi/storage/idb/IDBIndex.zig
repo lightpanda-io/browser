@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 
 const Page = @import("../../../Page.zig");
+const idb = @import("idb.zig");
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
 const IDBCursor = @import("IDBCursor.zig");
@@ -40,9 +41,12 @@ _store: *IDBObjectStore,
 _engine: *Engine,
 _index_id: i64,
 _name: []const u8,
-_key_path: []const u8,
+_key_path: Key.KeyPath,
 _unique: bool,
 _multi_entry: bool,
+// not just for efficiency, we must return the same v8::Array every time the
+// compound key is accessed.
+_key_path_js: ?*js.Value.BareGlobal = null,
 
 pub fn init(obj_store: *IDBObjectStore, info: Engine.IndexInfo, name: []const u8) !*IDBIndex {
     const self = try obj_store._txn._arena.create(IDBIndex);
@@ -197,8 +201,8 @@ pub fn getName(self: *const IDBIndex) []const u8 {
     return self._name;
 }
 
-pub fn getKeyPath(self: *const IDBIndex) []const u8 {
-    return self._key_path;
+pub fn getKeyPath(self: *IDBIndex, exec: *Execution) !js.Value {
+    return idb.cachedKeyPathJs(&self._key_path_js, self._store._txn, self._key_path, exec);
 }
 
 pub fn getUnique(self: *const IDBIndex) bool {

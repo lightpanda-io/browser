@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 
 const Page = @import("../../../Page.zig");
+const idb = @import("idb.zig");
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
 const IDBIndex = @import("IDBIndex.zig");
@@ -41,18 +42,21 @@ const IDBObjectStore = @This();
 _engine: *Engine,
 _store_id: i64,
 _name: []const u8,
-_key_path: ?[]const u8,
+_key_path: ?Key.KeyPath,
 _auto_increment: bool,
 _txn: *IDBTransaction,
 _deleted: bool = false,
 // identity map, store.indexes('a') === store.index('a')
 _indexes: std.ArrayList(*IDBIndex) = .empty,
+// not just for efficiency, we must return the same v8::Array every time the
+// compound key is accessed.
+_key_path_js: ?*js.Value.BareGlobal = null,
 
 pub fn init(
     txn: *IDBTransaction,
     store_id: i64,
     name: []const u8,
-    key_path: ?[]const u8,
+    key_path: ?Key.KeyPath,
     auto_increment: bool,
 ) !*IDBObjectStore {
     const self = try txn._arena.create(IDBObjectStore);
@@ -267,8 +271,8 @@ pub fn getName(self: *const IDBObjectStore) []const u8 {
     return self._name;
 }
 
-pub fn getKeyPath(self: *const IDBObjectStore) ?[]const u8 {
-    return self._key_path;
+pub fn getKeyPath(self: *IDBObjectStore, exec: *Execution) !js.Value {
+    return idb.cachedKeyPathJs(&self._key_path_js, self._txn, self._key_path, exec);
 }
 
 pub fn getAutoIncrement(self: *const IDBObjectStore) bool {
@@ -311,7 +315,7 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
                 // can't have an explicit key if we're configured for in-line keys
                 return error.DataError;
             }
-            if (Key.evaluatePath(value, kp)) |extracted| {
+            if (try Key.extractKeyPath(exec.js.local.?, value, kp)) |extracted| {
                 break :blk .{ .explicit = .{
                     .encoded = try Key.encodeValue(txn._arena, extracted),
                     .bump = if (self._auto_increment and extracted.isNumber()) try extracted.toF64() else null,
@@ -321,7 +325,9 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
             if (self._auto_increment == false) {
                 return error.DataError;
             }
-            if (Key.canInjectKey(value, kp) == false) {
+            // A compound or empty key path can't carry a generated key, so
+            // auto_increment implies a non-empty single-property path here.
+            if (Key.canInjectKey(value, kp.string) == false) {
                 return error.DataError;
             }
             break :blk .generate_in_line;
@@ -382,7 +388,7 @@ fn writeInner(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, valu
         .generate_in_line => blk: {
             const n = try self._engine.nextGeneratedKey(self._store_id);
             const k = try local.newNumber(@floatFromInt(n));
-            try Key.injectKey(local, value, self._key_path.?, k);
+            try Key.injectKey(local, value, self._key_path.?.string, k);
             break :blk try Key.encodeValue(exec.call_arena, k);
         },
     };
@@ -439,12 +445,12 @@ fn reindex(self: *IDBObjectStore, value: js.Value, primary_key: []const u8, exec
     var seen: std.ArrayList([]const u8) = .empty;
     try self._engine.deleteIndexRecordsForKey(self._store_id, primary_key);
     for (indexes) |idx| {
-        try self.addIndexEntries(arena, &seen, idx.id, idx.unique, idx.multi_entry, idx.key_path, value, primary_key);
+        try self.addIndexEntries(exec.js.local.?, arena, &seen, idx.id, idx.unique, idx.multi_entry, idx.key_path, value, primary_key);
     }
 }
 
-fn addIndexEntries(self: *IDBObjectStore, arena: Allocator, seen: *std.ArrayList([]const u8), index_id: i64, unique: bool, multi_entry: bool, key_path: []const u8, value: js.Value, primary_key: []const u8) !void {
-    const extracted = Key.evaluatePath(value, key_path) orelse return;
+fn addIndexEntries(self: *IDBObjectStore, local: *const js.Local, arena: Allocator, seen: *std.ArrayList([]const u8), index_id: i64, unique: bool, multi_entry: bool, key_path: Key.KeyPath, value: js.Value, primary_key: []const u8) !void {
+    const extracted = (try Key.extractKeyPath(local, value, key_path)) orelse return;
     if (multi_entry and extracted.isArray()) {
         seen.clearRetainingCapacity();
 
@@ -473,7 +479,7 @@ const CreateIndexOptions = struct {
 };
 
 // Only callable during an upgrade (versionchange transaction).
-pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8, options: ?CreateIndexOptions, exec: *Execution) !*IDBIndex {
+pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPath, options: ?CreateIndexOptions, exec: *Execution) !*IDBIndex {
     try self.assertLive();
     const txn = self._txn;
     if (txn._mode != .versionchange) {
@@ -481,12 +487,21 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8
     }
     // Spec order: the transaction-state check precedes the index-name check.
     try txn.assertActive();
+    if (Key.isValidKeyPathSpec(key_path) == false) {
+        return error.SyntaxError;
+    }
     const opts = options orelse CreateIndexOptions{};
+    // multiEntry is meaningless for a compound key path.
+    if (opts.multiEntry and std.meta.activeTag(key_path) == .list) {
+        return error.InvalidAccessError;
+    }
+
+    const owned_key_path = try Key.dupeKeyPath(txn._arena, key_path);
 
     try self._engine.savepoint();
     errdefer self._engine.rollbackSavepoint();
 
-    const index_id = self._engine.createIndexRow(self._store_id, name, key_path, opts.unique, opts.multiEntry) catch |err| switch (err) {
+    const index_id = self._engine.createIndexRow(txn._arena, self._store_id, name, owned_key_path, opts.unique, opts.multiEntry) catch |err| switch (err) {
         error.Constraint => return error.ConstraintError, // duplicate index name
         else => return err,
     };
@@ -503,12 +518,11 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8
         var seen: std.ArrayList([]const u8) = .empty;
         while (try rows.next()) |row| {
             const value = try js.Value.deserialize(local, row.get([]const u8, 1));
-            try self.addIndexEntries(arena, &seen, index_id, opts.unique, opts.multiEntry, key_path, value, row.get([]const u8, 0));
+            try self.addIndexEntries(local, arena, &seen, index_id, opts.unique, opts.multiEntry, owned_key_path, value, row.get([]const u8, 0));
         }
     }
 
     const owned_name = try txn.dupe(name);
-    const owned_key_path = try txn.dupe(key_path);
     const idb_index = try IDBIndex.init(self, .{
         .id = index_id,
         .key_path = owned_key_path,

@@ -245,7 +245,7 @@ pub fn update(self: *IDBCursor, value: js.Value, exec: *Execution) !*IDBRequest 
 
     // For an in-line store, the value's own key must match the record's key.
     if (self._store._key_path) |kp| {
-        const extracted = Key.evaluatePath(value, kp) orelse return error.DataError;
+        const extracted = (try Key.extractKeyPath(exec.js.local.?, value, kp)) orelse return error.DataError;
         const encoded = try Key.encodeValue(exec.call_arena, extracted);
         if (!std.mem.eql(u8, encoded, current_key)) {
             return error.DataError;
