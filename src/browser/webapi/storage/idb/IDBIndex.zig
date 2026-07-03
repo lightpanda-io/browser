@@ -44,6 +44,9 @@ _name: []const u8,
 _key_path: Key.KeyPath,
 _unique: bool,
 _multi_entry: bool,
+_deleted: bool = false,
+// Created by this (versionchange) transaction — so an abort must delete it.
+_created: bool = false,
 // not just for efficiency, we must return the same v8::Array every time the
 // compound key is accessed.
 _key_path_js: ?*js.Value.BareGlobal = null,
@@ -70,7 +73,16 @@ pub fn releaseRef(self: *IDBIndex, page: *Page) void {
     self._store._txn.releaseRef(page);
 }
 
+// The index (or its object store) may have been deleted — including by an
+// aborted upgrade. That check precedes the transaction-active check per spec.
+fn assertLive(self: *const IDBIndex) !void {
+    if (self._deleted or self._store._deleted) {
+        return error.InvalidStateError;
+    }
+}
+
 fn txn(self: *IDBIndex) !*IDBTransaction {
+    try self.assertLive();
     const t = self._store._txn;
     try t.assertActive();
     return t;
@@ -78,7 +90,7 @@ fn txn(self: *IDBIndex) !*IDBTransaction {
 
 pub fn get(self: *IDBIndex, query: js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const bounds = try IDBKeyRange.resolveQuery(t._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(t._arena, query, exec);
     const request = try t.newRequest();
     return request.submit(.{ .index_get = .{ .index = self, .bounds = bounds } }, exec);
 }
@@ -96,7 +108,7 @@ pub fn runGet(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, exec
 
 pub fn getKey(self: *IDBIndex, query: js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const bounds = try IDBKeyRange.resolveQuery(t._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(t._arena, query, exec);
     const request = try t.newRequest();
     return request.submit(.{ .index_get_key = .{ .index = self, .bounds = bounds } }, exec);
 }
@@ -188,11 +200,13 @@ pub fn runCount(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, ex
 }
 
 pub fn openCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena, query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, false, exec);
 }
 
 pub fn openKeyCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+    try self.assertLive();
     const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena, query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, true, exec);
 }

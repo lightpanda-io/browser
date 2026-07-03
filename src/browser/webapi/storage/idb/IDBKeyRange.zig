@@ -123,9 +123,24 @@ pub fn toBounds(self: *const IDBKeyRange) Engine.Bounds {
     };
 }
 
+// query/count/openCursor: a missing or null/undefined query means "all records".
 pub fn resolveQuery(arena: Allocator, query: ?js.Value, exec: *Execution) !Engine.Bounds {
-    const q = query orelse return Engine.Bounds.unbounded();
+    return resolveQueryInner(arena, query, false, exec);
+}
+
+// get/getKey/delete: the query must be a valid key or key range. null/undefined
+// is a DataError
+pub fn resolveKey(arena: Allocator, query: ?js.Value, exec: *Execution) !Engine.Bounds {
+    return resolveQueryInner(arena, query, true, exec);
+}
+
+fn resolveQueryInner(arena: Allocator, query: ?js.Value, null_disallowed: bool, exec: *Execution) !Engine.Bounds {
+    const q = query orelse {
+        if (null_disallowed) return error.DataError;
+        return Engine.Bounds.unbounded();
+    };
     if (q.isNullOrUndefined()) {
+        if (null_disallowed) return error.DataError;
         return Engine.Bounds.unbounded();
     }
 

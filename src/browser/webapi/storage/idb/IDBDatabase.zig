@@ -105,6 +105,7 @@ pub fn createObjectStore(
 
     const owned_name = try txn.dupe(name);
     const store = try IDBObjectStore.init(txn, store_id, owned_name, key_path, opts.autoIncrement);
+    store._created = true;
     try txn.cacheStore(store);
     return store;
 }

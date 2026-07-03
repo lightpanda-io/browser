@@ -260,7 +260,7 @@ fn isIdentifier(s: []const u8) bool {
 
     for (s[1..]) |c| {
         const ok = switch (c) {
-            'a'...'z', 'A'...'Z', '_', '$', '0' ... '9' => true,
+            'a'...'z', 'A'...'Z', '_', '$', '0'...'9' => true,
             else => c >= 0x80,
         };
         if (ok == false) {

@@ -46,6 +46,8 @@ _key_path: ?Key.KeyPath,
 _auto_increment: bool,
 _txn: *IDBTransaction,
 _deleted: bool = false,
+// Created by this (versionchange) transaction — so an abort must delete it.
+_created: bool = false,
 // identity map, store.indexes('a') === store.index('a')
 _indexes: std.ArrayList(*IDBIndex) = .empty,
 // not just for efficiency, we must return the same v8::Array every time the
@@ -91,7 +93,7 @@ pub fn get(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReques
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(txn._arena, query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -114,7 +116,7 @@ pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
         return error.ReadOnlyError;
     }
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(txn._arena, query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_delete = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -239,7 +241,7 @@ pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(txn._arena, query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get_key = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -529,6 +531,7 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPat
         .unique = opts.unique,
         .multi_entry = opts.multiEntry,
     }, owned_name);
+    idb_index._created = true;
     try self._engine.releaseSavepoint();
     try self._indexes.append(txn._arena, idb_index);
     return idb_index;
@@ -549,6 +552,8 @@ pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void
     };
     for (self._indexes.items, 0..) |idx, i| {
         if (std.mem.eql(u8, idx._name, name)) {
+            // A handle the caller still holds must report itself deleted.
+            idx._deleted = true;
             _ = self._indexes.swapRemove(i);
             break;
         }
