@@ -53,6 +53,7 @@ pub fn init(allocator: Allocator, config: *const Config) !Updater {
 
 pub fn deinit(self: *Updater) void {
     Network.globalDeinit();
+    crypto.X509_STORE_free(self.x509_store);
     self.arena.deinit();
 }
 
