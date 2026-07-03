@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const Key = @import("Key.zig");
 const Sqlite = @import("../../../../storage/sqlite/Sqlite.zig");
 
 const log = lp.log;
@@ -133,6 +134,7 @@ pub fn open(path: [:0]const u8) !Engine {
         \\   database_id integer not null references idb_databases(id) on delete cascade,
         \\   name text not null,
         \\   key_path text,
+        \\   key_path_component_length integer not null default 0,
         \\   auto_increment integer not null default 0,
         \\   key_generator integer not null default 1,
         \\   unique(database_id, name)
@@ -150,6 +152,7 @@ pub fn open(path: [:0]const u8) !Engine {
         \\   object_store_id integer not null references idb_object_stores(id) on delete cascade,
         \\   name text not null,
         \\   key_path text not null,
+        \\   key_path_component_length integer not null default 0,
         \\   is_unique integer not null default 0,
         \\   multi_entry integer not null default 0,
         \\   unique(object_store_id, name)
@@ -220,13 +223,13 @@ pub fn objectStoreId(self: *const Engine, database_id: i64, name: []const u8) !?
 
 pub const StoreInfo = struct {
     id: i64,
-    key_path: ?[]const u8,
+    key_path: ?Key.KeyPath,
     auto_increment: bool,
 };
 
 pub fn objectStoreInfo(self: *const Engine, arena: Allocator, database_id: i64, name: []const u8) !?StoreInfo {
     var row = (try self.conn.row(
-        "select id, key_path, auto_increment from idb_object_stores where database_id = ?1 and name = ?2",
+        "select id, key_path, key_path_component_length, auto_increment from idb_object_stores where database_id = ?1 and name = ?2",
         .{ database_id, name },
     )) orelse return null;
     defer row.deinit();
@@ -234,8 +237,8 @@ pub fn objectStoreInfo(self: *const Engine, arena: Allocator, database_id: i64, 
     const key_path = row.get(?[]const u8, 1);
     return .{
         .id = row.get(i64, 0),
-        .key_path = if (key_path) |kp| try arena.dupe(u8, kp) else null,
-        .auto_increment = row.get(bool, 2),
+        .key_path = if (key_path) |kp| try Key.decodeKeyPathColumn(arena, kp, @intCast(row.get(i64, 2))) else null,
+        .auto_increment = row.get(bool, 3),
     };
 }
 
@@ -267,15 +270,23 @@ pub fn maybeBumpGenerator(self: *Engine, store_id: i64, key: f64) !void {
 
 pub fn createObjectStore(
     self: *Engine,
+    arena: Allocator,
     database_id: i64,
     name: []const u8,
-    key_path: ?[]const u8,
+    key_path: ?Key.KeyPath,
     auto_increment: bool,
 ) !i64 {
+    const column = if (key_path) |kp| try Key.encodeKeyPathColumn(arena, kp) else null;
     try self.conn.exec(
-        \\ insert into idb_object_stores (database_id, name, key_path, auto_increment)
-        \\ values (?1, ?2, ?3, ?4)
-    , .{ database_id, name, key_path, auto_increment });
+        \\ insert into idb_object_stores (database_id, name, key_path, key_path_component_length, auto_increment)
+        \\ values (?1, ?2, ?3, ?4, ?5)
+    , .{
+        database_id,
+        name,
+        if (column) |c| c.text else null,
+        if (column) |c| c.component_length else @as(usize, 0),
+        auto_increment,
+    });
     return (try self.objectStoreId(database_id, name)).?;
 }
 
@@ -320,18 +331,19 @@ pub fn clear(self: *Engine, object_store_id: i64) !void {
 
 pub const IndexInfo = struct {
     id: i64,
-    key_path: []const u8,
+    key_path: Key.KeyPath,
     unique: bool,
     multi_entry: bool,
 };
 
-pub fn createIndexRow(self: *Engine, object_store_id: i64, name: []const u8, key_path: []const u8, unique: bool, multi_entry: bool) !i64 {
+pub fn createIndexRow(self: *Engine, arena: Allocator, object_store_id: i64, name: []const u8, key_path: Key.KeyPath, unique: bool, multi_entry: bool) !i64 {
+    const column = try Key.encodeKeyPathColumn(arena, key_path);
     return (try self.conn.scalar(
         i64,
-        \\ insert into idb_indexes (object_store_id, name, key_path, is_unique, multi_entry)
-        \\ values (?1, ?2, ?3, ?4, ?5) returning id
+        \\ insert into idb_indexes (object_store_id, name, key_path, key_path_component_length, is_unique, multi_entry)
+        \\ values (?1, ?2, ?3, ?4, ?5, ?6) returning id
     ,
-        .{ object_store_id, name, key_path, unique, multi_entry },
+        .{ object_store_id, name, column.text, column.component_length, unique, multi_entry },
     )) orelse error.UnknownError;
 }
 
@@ -348,22 +360,22 @@ pub fn deleteIndexRow(self: *Engine, object_store_id: i64, name: []const u8) !vo
 
 pub fn indexInfo(self: *const Engine, arena: Allocator, object_store_id: i64, name: []const u8) !?IndexInfo {
     var row = (try self.conn.row(
-        "select id, key_path, is_unique, multi_entry from idb_indexes where object_store_id = ?1 and name = ?2",
+        "select id, key_path, key_path_component_length, is_unique, multi_entry from idb_indexes where object_store_id = ?1 and name = ?2",
         .{ object_store_id, name },
     )) orelse return null;
     defer row.deinit();
 
     return .{
         .id = row.get(i64, 0),
-        .key_path = try arena.dupe(u8, row.get([]const u8, 1)),
-        .unique = row.get(bool, 2),
-        .multi_entry = row.get(bool, 3),
+        .key_path = try Key.decodeKeyPathColumn(arena, row.get([]const u8, 1), @intCast(row.get(i64, 2))),
+        .unique = row.get(bool, 3),
+        .multi_entry = row.get(bool, 4),
     };
 }
 
 pub fn indexesForStore(self: *const Engine, arena: Allocator, object_store_id: i64) ![]IndexInfo {
     var rows = try self.conn.rows(
-        "select id, key_path, is_unique, multi_entry from idb_indexes where object_store_id = ?1",
+        "select id, key_path, key_path_component_length, is_unique, multi_entry from idb_indexes where object_store_id = ?1",
         .{object_store_id},
     );
     defer rows.deinit();
@@ -372,9 +384,9 @@ pub fn indexesForStore(self: *const Engine, arena: Allocator, object_store_id: i
     while (try rows.next()) |row| {
         try list.append(arena, .{
             .id = row.get(i64, 0),
-            .key_path = try arena.dupe(u8, row.get([]const u8, 1)),
-            .unique = row.get(bool, 2),
-            .multi_entry = row.get(bool, 3),
+            .key_path = try Key.decodeKeyPathColumn(arena, row.get([]const u8, 1), @intCast(row.get(i64, 2))),
+            .unique = row.get(bool, 3),
+            .multi_entry = row.get(bool, 4),
         });
     }
     return list.items;
@@ -769,7 +781,7 @@ test "IDB - Engine: ranged getAll/count honour open and closed bounds" {
     var engine = try Engine.open(":memory:");
     defer engine.close();
     const db_id = try engine.upsertDatabase("app", 1);
-    const store_id = try engine.createObjectStore(db_id, "s", null, false);
+    const store_id = try engine.createObjectStore(testing.allocator, db_id, "s", null, false);
     try seedNumbers(&engine, store_id, arena, &.{ 3, 1, 5, 2, 4 });
 
     const k2 = try numKey(arena, 2);
@@ -821,7 +833,7 @@ test "IDB - Engine: getRange/getKeyRange first-in-range and deleteRange" {
     var engine = try Engine.open(":memory:");
     defer engine.close();
     const db_id = try engine.upsertDatabase("app", 1);
-    const store_id = try engine.createObjectStore(db_id, "s", null, false);
+    const store_id = try engine.createObjectStore(testing.allocator, db_id, "s", null, false);
     try seedNumbers(&engine, store_id, arena, &.{ 1, 2, 3, 4, 5 });
 
     const k2 = try numKey(arena, 2);
@@ -909,7 +921,7 @@ test "IDB - Engine: database + object store + add/get round-trip" {
     const db_id = try engine.upsertDatabase("app", 1);
     try testing.expectEqual(1, (try engine.databaseVersion("app")).?);
 
-    const store_id = try engine.createObjectStore(db_id, "books", null, false);
+    const store_id = try engine.createObjectStore(testing.allocator, db_id, "books", null, false);
 
     // Value bytes deliberately include an embedded NUL and high bytes to prove
     // the BLOB path is binary-safe (serialized values are arbitrary bytes).
@@ -928,7 +940,7 @@ test "IDB - Engine: add rejects duplicate key, put overwrites" {
     defer engine.close();
 
     const db_id = try engine.upsertDatabase("app", 1);
-    const store_id = try engine.createObjectStore(db_id, "s", null, false);
+    const store_id = try engine.createObjectStore(testing.allocator, db_id, "s", null, false);
 
     try engine.add(store_id, "k", "v1");
     try testing.expectError(error.Constraint, engine.add(store_id, "k", "v2"));
@@ -944,8 +956,8 @@ test "IDB - Engine: createObjectStore rejects duplicate name" {
     defer engine.close();
 
     const db_id = try engine.upsertDatabase("app", 1);
-    _ = try engine.createObjectStore(db_id, "s", null, false);
-    try testing.expectError(error.Constraint, engine.createObjectStore(db_id, "s", null, false));
+    _ = try engine.createObjectStore(testing.allocator, db_id, "s", null, false);
+    try testing.expectError(error.Constraint, engine.createObjectStore(testing.allocator, db_id, "s", null, false));
 }
 
 test "IDB - Engine: rollback discards uncommitted writes" {
@@ -953,7 +965,7 @@ test "IDB - Engine: rollback discards uncommitted writes" {
     defer engine.close();
 
     const db_id = try engine.upsertDatabase("app", 1);
-    const store_id = try engine.createObjectStore(db_id, "s", null, false);
+    const store_id = try engine.createObjectStore(testing.allocator, db_id, "s", null, false);
 
     try engine.begin();
     try engine.add(store_id, "k", "v");
@@ -961,8 +973,6 @@ test "IDB - Engine: rollback discards uncommitted writes" {
 
     try testing.expectEqual(null, try engine.get(testing.allocator, store_id, "k"));
 }
-
-const Key = @import("Key.zig");
 
 // Seed a store with numeric keys n and values "v<n>", inserted out of order so
 // the range tests prove ORDER BY rather than insertion order.

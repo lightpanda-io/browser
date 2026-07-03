@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../js/js.zig");
 
 pub const Key = @import("Key.zig");
@@ -48,6 +49,24 @@ pub fn registerTypes() []const type {
         IDBCursorWithValue,
         IDBVersionChangeEvent,
     };
+}
+
+// the keyPath attribute need identity equality. For a compound key (an array)
+// we have to return the same v8::rray on every reach. So users of KeyPath will
+// cache it locally, and store it in the Transaction's globals list for cleanup.
+pub fn cachedKeyPathJs(cache: *?*js.Value.BareGlobal, txn: *IDBTransaction, kp: ?Key.KeyPath, exec: *js.Execution) !js.Value {
+    const local = exec.js.local.?;
+    if (kp) |path| {
+        if (std.meta.activeTag(path) == .list) {
+            if (cache.*) |slot| {
+                return slot.local(local);
+            }
+            const value = try Key.keyPathToJs(local, path);
+            cache.* = try txn.persist(value);
+            return value;
+        }
+    }
+    return Key.keyPathToJs(local, kp);
 }
 
 // An on* event-handler attribute setter. The bridge can hand the setter either
