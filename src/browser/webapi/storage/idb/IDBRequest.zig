@@ -50,6 +50,7 @@ _txn: Txn = .none,
 // be executed/fired in its last append (to preserve ordering).
 _txn_index: usize = 0,
 _cursor: ?*IDBCursor = null,
+_source: Source = .{ .none = null },
 _ready_state: ReadyState = .pending,
 _result: Result = .{ .none = js.Undefined{} },
 // whether or not we own th result value, if we do, we can free it once we know
@@ -73,6 +74,13 @@ const Result = union(enum) {
     none: ?js.Undefined, // null or undefined (different APIs return different values)
     value: *js.Value.BareGlobal, // the result of a get/add/put, or a positioned cursor
     database: *IDBDatabase, // the result of an open
+};
+
+const Source = union(enum) {
+    none: ?js.Undefined,
+    store: *IDBObjectStore,
+    index: *IDBIndex,
+    cursor: *IDBCursor,
 };
 
 const Txn = union(enum) {
@@ -286,6 +294,12 @@ pub fn getResult(self: *const IDBRequest, exec: *Execution) JsResult {
     };
 }
 
+// The bridge converts the active union variant (the store/index/cursor, or JS
+// null for an open/delete request).
+pub fn getSource(self: *const IDBRequest) Source {
+    return self._source;
+}
+
 pub fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
     return switch (self._txn) {
         .none => null,
@@ -363,12 +377,31 @@ pub const Operation = union(enum) {
     const CursorIterate = struct { cursor: *IDBCursor, seek: IDBCursor.Seek, offset: u32 };
     const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: []const u8 };
     const CursorDelete = struct { cursor: *IDBCursor, key: []const u8 };
+
+    fn source(op: Operation) Source {
+        return switch (op) {
+            .none => .{ .none = null },
+            .store_get, .store_get_key, .store_count, .store_delete => |o| .{ .store = o.store },
+            .store_get_all => |o| .{ .store = o.store },
+            .store_clear => |store| .{ .store = store },
+            .store_write => |o| .{ .store = o.store },
+            .index_get, .index_get_key, .index_count => |o| .{ .index = o.index },
+            .index_get_all => |o| .{ .index = o.index },
+            .cursor_iterate => |o| switch (o.cursor._source) {
+                .store => |s| .{ .store = s },
+                .index => |x| .{ .index = x },
+            },
+            .cursor_update => |o| .{ .cursor = o.cursor },
+            .cursor_delete => |o| .{ .cursor = o.cursor },
+        };
+    }
 };
 
 // Commit this request's operation: record it and queue the request on its
 // transaction's drain.
 pub fn submit(self: *IDBRequest, op: Operation, exec: *Execution) !*IDBRequest {
     self._op = op;
+    self._source = op.source();
     const txn = self._txn.owned;
     try txn.enqueue(self);
 
@@ -424,6 +457,7 @@ pub const JsApi = struct {
 
     pub const readyState = bridge.accessor(IDBRequest.getReadyState, null, .{});
     pub const result = bridge.accessor(IDBRequest.getResult, null, .{});
+    pub const source = bridge.accessor(IDBRequest.getSource, null, .{});
     pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{ .null_as_undefined = true });
     pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{ .null_as_undefined = true });
     pub const onsuccess = bridge.accessor(IDBRequest.getOnSuccess, IDBRequest.setOnSuccess, .{});
