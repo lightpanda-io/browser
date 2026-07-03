@@ -303,8 +303,11 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
 pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeout_ms: u32) !*Node.Element {
     const session = self.session;
+    const arena = try session.getArena(.small, "Runner.waitForSelector");
+    defer session.releaseArena(arena);
+
     var timer = try std.time.Timer.start();
-    const selector = try Selector.cachedParse(session.browser, input);
+    const selector = try Selector.parseLeaky(arena, input);
 
     while (true) {
         if (session.isCancelled()) {

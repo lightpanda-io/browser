@@ -45,6 +45,13 @@ pub fn mapErrorToDOM(err: anyerror) anyerror {
     };
 }
 
+pub fn parseLeaky(arena: Allocator, input: []const u8) ![]const Selector {
+    if (input.len == 0) {
+        return error.SyntaxError;
+    }
+    return Parser.parseList(arena, input);
+}
+
 /// One-off synthesized selectors use the `*Uncached` variants instead.
 pub fn cachedParse(browser: *Browser, input: []const u8) ![]const Selector {
     return browser.selector_cache.parse(input);
