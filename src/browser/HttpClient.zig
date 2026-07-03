@@ -578,6 +578,16 @@ fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
             if (req.body_outlives_request == false) {
                 owned.body = try arena.dupe(u8, b);
             }
+
+            // Browsers never send Expect: 100-continue; libcurl generates it
+            // for HTTP/1.1 requests whose body exceeds 1MB
+            // (EXPECT_100_THRESHOLD), which stalls the request ~1s against
+            // servers/proxies that never answer the interim response. An
+            // empty value ("Expect:") suppresses the generated header. Only
+            // requests with a body can trigger it, and over HTTP/2 curl never
+            // generates it, so the entry is inert there. Added here (not
+            // configureConn) so redirect/auth retries don't append duplicates.
+            try owned.headers.add("Expect:");
         }
 
         const t = try arena.create(Transfer);
