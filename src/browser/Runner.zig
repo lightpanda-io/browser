@@ -263,12 +263,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 }
             },
             .html, .complete => {
-                if (frame._notified_network_almost_idle.check(total_http_activity <= 2)) {
-                    frame.notifyNetworkAlmostIdle();
-                }
-                if (frame._notified_network_idle.check(total_http_activity == 0)) {
-                    frame.notifyNetworkIdle();
-                }
+                frame.checkIdleNotifications(total_http_activity);
 
                 const met = switch (condition.until) {
                     .done => is_done,
@@ -472,4 +467,28 @@ test "Runner: waitForScript" {
 
     var runner = page.session.runner(.{});
     try runner.waitForScript(page.frame_id, "document.querySelector('#sel1')", 10);
+}
+
+test "Runner: networkidle notifies child frames" {
+    const page = try testing.pageTest("runner/iframe_idle.html", .{});
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    const frame = page.frame().?;
+    try testing.expectEqual(2, frame.child_frames.items.len);
+
+    // A `.networkidle` wait resolves via `is_done` once the page is fully
+    // idle, which can happen before the 500ms idle-notification hold. Keep
+    // ticking (like the CDP serve loop does) until the notifications fire.
+    var attempts: usize = 0;
+    while (frame._notified_network_idle != .done and attempts < 50) : (attempts += 1) {
+        _ = try runner.tickForFrame(page.frame_id, 20, .{ .until = .networkidle });
+        std.Thread.sleep(25 * std.time.ns_per_ms);
+    }
+
+    try testing.expectEqual(true, frame._notified_network_idle == .done);
+    for (frame.child_frames.items) |child| {
+        try testing.expectEqual(true, child._notified_network_almost_idle == .done);
+        try testing.expectEqual(true, child._notified_network_idle == .done);
+    }
 }
