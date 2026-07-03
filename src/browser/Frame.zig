@@ -2517,50 +2517,19 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
     }
 
-    const parent_is_connected = parent.isConnected();
-
-    // Tri-state behavior for mutations:
-    // 1. from_parser=true, parse_mode=document -> no mutations (initial document parse)
-    // 2. from_parser=true, parse_mode=fragment -> mutations (innerHTML additions)
-    // 3. from_parser=false, parse_mode=document -> mutation (js manipulation)
-    // split like this because from_parser can be comptime known.
-    const should_notify = if (comptime from_parser)
-        self._parse_mode == .fragment
-    else
-        true;
-
-    if (should_notify) {
-        if (comptime from_parser == false) {
-            // When the parser adds the node, nodeIsReady is only called when the
-            // nodeComplete() callback is executed. nodeIsReady resolves the
-            // node's owning frame itself (only for the few node types that have
-            // ready work), so pass the incumbent `self`.
-            try self.nodeIsReady(false, child);
-
-            // Check if text was added to a script that hasn't started yet.
-            if (child._type == .cdata and parent_is_connected) {
-                if (parent.is(Element.Html.Script)) |script| {
-                    if (!script._executed) {
-                        try self.nodeIsReady(false, parent);
-                    }
-                }
-            }
-        }
-
-        // Notify mutation observers about childList change
-        if (observers.hasMutationObservers(self)) {
-            const previous_sibling = child.previousSibling();
-            const next_sibling = child.nextSibling();
-            const added = [_]*Node{child};
-            observers.notifyChildListChange(self, parent, &added, &.{}, previous_sibling, next_sibling);
-        }
-    }
-
+    // The parser path does its own (limited) notification and connected-callback
+    // work, then returns.
     if (comptime from_parser) {
+        // Of the parser insertions, only fragment parses (innerHTML) mutate a
+        // live tree; the initial document parse suppresses notifications.
+        if (self._parse_mode == .fragment) {
+            self.notifyChildInserted(parent, child);
+        }
+
         if (child.is(Element)) |el| {
-            // Invoke connectedCallback for custom elements during parsing
-            // For main document parsing, we know nodes are connected (fast path)
-            // For fragment parsing (innerHTML), we need to check connectivity
+            // Invoke connectedCallback for custom elements during parsing.
+            // For main document parsing we know nodes are connected (fast path);
+            // for fragment parsing (innerHTML) we check connectivity.
             if (child.isConnected() or child.isInShadowTree()) {
                 if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
                     try self.addElementId(parent, el, id);
@@ -2570,6 +2539,23 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
         return;
     }
+
+    const parent_is_connected = parent.isConnected();
+
+    // nodeIsReady resolves the node's owning frame itself (only for the few node
+    // types that have ready work), so pass the incumbent `self`.
+    try self.nodeIsReady(false, child);
+
+    // Check if text was added to a script that hasn't started yet.
+    if (child._type == .cdata and parent_is_connected) {
+        if (parent.is(Element.Html.Script)) |script| {
+            if (!script._executed) {
+                try self.nodeIsReady(false, parent);
+            }
+        }
+    }
+
+    self.notifyChildInserted(parent, child);
 
     if (opts.child_already_connected and !opts.adopting_to_new_document) {
         // The child is already connected in the same document, we don't have to reconnect it.
@@ -2608,6 +2594,17 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
             try Element.Html.Custom.enqueueConnectedCallbackOnElement(false, el, self);
         }
     }
+}
+
+fn notifyChildInserted(self: *Frame, parent: *Node, child: *Node) void {
+    if (!observers.hasMutationObservers(self)) {
+        return;
+    }
+
+    const previous_sibling = child.previousSibling();
+    const next_sibling = child.nextSibling();
+    const added = [_]*Node{child};
+    observers.notifyChildListChange(self, parent, &added, &.{}, previous_sibling, next_sibling);
 }
 
 pub fn attributeChange(self: *Frame, element: *Element, name: String, value: String, old_value: ?String) void {
