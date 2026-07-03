@@ -13,7 +13,6 @@ on:
     paths:
       - ".github/**"
       - "src/**"
-      - "test/agent/**"
       - "build.zig"
       - "build.zig.zon"
 
@@ -29,7 +28,6 @@ on:
     paths:
       - ".github/**"
       - "src/**"
-      - "test/agent/**"
       - "build.zig"
       - "build.zig.zon"
 
@@ -412,8 +410,10 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      # Checkout THIS repo — agent fixtures, golden files and run.sh live here.
       - uses: actions/checkout@v6
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
 
       - name: download artifact
         uses: actions/download-artifact@v8
@@ -423,13 +423,13 @@ jobs:
 
       - run: chmod a+x bin/lightpanda
 
-      # No API key: replays a golden PandaScript against frozen local fixtures
-      # and diffs the returned JSON against golden/hn-front.json. The keyed
-      # live layer runs separately in agent-regression.yml.
+      # No API key: replays golden PandaScripts against the demo sites and
+      # diffs the returned JSON against agent/golden/. The keyed live layer
+      # runs separately in agent-regression.yml.
       - name: deterministic agent replay
         env:
-          LPD: ${{ github.workspace }}/bin/lightpanda
-        run: ./test/agent/run.sh deterministic
+          LPD_PATH: ${{ github.workspace }}/bin/lightpanda
+        run: ./agent/run.sh deterministic
 
   mcp-smoke:
     name: mcp smoke

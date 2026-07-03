@@ -128,12 +128,13 @@ end2end:
 	@test -d ../demo
 	cd ../demo && go run runner/main.go
 
-## Run the agent regression suite (LAYER=deterministic|live|all, default all).
-## The live layer needs GOOGLE_API_KEY or GEMINI_API_KEY; without one only
-## the deterministic layer runs. See test/agent/README.md.
+## Run the agent regression suite from ../demo (LAYER=deterministic|live|all,
+## default all). The live layer needs GOOGLE_API_KEY or GEMINI_API_KEY;
+## without one only the deterministic layer runs. See ../demo/agent/README.md.
 test-agent:
+	@test -d ../demo
 	@test -x zig-out/bin/lightpanda || $(MAKE) build
-	@./test/agent/run.sh $(LAYER)
+	@cd ../demo && ./agent/run.sh $(LAYER)
 
 ## Remove build artifacts (keeps .lp-cache/ and zig-pkg/ — slow to re-fetch)
 clean:

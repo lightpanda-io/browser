@@ -1,1 +1,0 @@
-Go to https://news.ycombinator.com, collect the top 5 stories and the top 3 comments of each story. Return a JSON array of exactly 5 objects, each with keys "title" (the story title string) and "comments" (an array of at most 3 objects, each with keys "user" and "text"; leave it empty if the story has no comments yet).
