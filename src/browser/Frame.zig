@@ -1398,7 +1398,7 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
                     .arena = try self.getArena(.large, "Frame.navigate"),
                 } };
             },
-            .application_json, .text_javascript, .text_css, .text_plain => {
+            .application_json, .text_javascript, .text_css, .text_plain, .text_markdown => {
                 var arr: std.ArrayList(u8) = .empty;
                 try arr.appendSlice(self.arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
                 self._parse_state = .{ .text = arr };
