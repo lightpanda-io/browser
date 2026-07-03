@@ -301,13 +301,13 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     return .done;
 }
 
-pub fn waitForSelector(self: *Runner, frame_id: u32, selector: [:0]const u8, timeout_ms: u32) !*Node.Element {
+pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeout_ms: u32) !*Node.Element {
     const session = self.session;
     const arena = try session.getArena(.small, "Runner.waitForSelector");
     defer session.releaseArena(arena);
 
     var timer = try std.time.Timer.start();
-    const parsed_selector = try Selector.parseLeaky(arena, selector);
+    const selector = try Selector.parseLeaky(arena, input);
 
     while (true) {
         if (session.isCancelled()) {
@@ -319,7 +319,7 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, selector: [:0]const u8, tim
         };
         const frame = &page.frame;
 
-        if (try parsed_selector.query(frame.document.asNode(), frame)) |el| {
+        if (try Selector.query(selector, frame.document.asNode(), frame)) |el| {
             return el;
         }
 
