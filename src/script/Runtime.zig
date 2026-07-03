@@ -449,10 +449,10 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     // `pages[0]` is not necessarily this handle's page.
     const frame_id = self.receiverFrameId(context, info) orelse
         return self.throwError("page is not navigated or has been closed; call page.goto(url) first");
-    const frame = self.session.findFrameByFrameId(frame_id) orelse
+    if (self.session.findFrameByFrameId(frame_id) == null)
         return self.throwError("page handle is no longer valid; the page was closed");
 
-    self.session.setToolFrameOverride(frame);
+    self.session.setToolFrameOverride(frame_id);
     defer self.session.setToolFrameOverride(null);
 
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
@@ -1080,6 +1080,27 @@ test "agent script runtime: parallel gotos coexist and route per page" {
         \\const db = b.extract({ s0: "#sel0" });
         \\if (da.btn !== "Click Me") throw new Error("page a read wrong page: " + JSON.stringify(da));
         \\if (db.s0 !== "selector-0-content") throw new Error("page b read wrong page: " + JSON.stringify(db));
+    );
+}
+
+test "agent script runtime: a tool-triggered navigation keeps the handle routable" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // click commits a replacement Page mid-call; the frame override and the
+    // handle's frame id must both survive the swap.
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_nav.html");
+        \\page.click("#navlink");
+        \\const href = page.evaluate("location.href");
+        \\if (href !== "about:blank") throw new Error("expected about:blank, got: " + href);
     );
 }
 
