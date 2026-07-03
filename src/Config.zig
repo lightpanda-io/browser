@@ -262,8 +262,9 @@ const Commands = cli.Builder(.{
         },
         .shared_options = CommonOptions,
     },
-    .{ .name = "update", .options = .{}, .shared_options = CommonOptions },
-    .{ .name = "version", .options = .{} },
+    .{ .name = "version", .options = .{
+        .{ .name = "check", .type = bool },
+    } },
 });
 
 pub const RunMode = Commands.Enum;
@@ -275,7 +276,11 @@ exec_name: []const u8,
 http_headers: HttpHeaders,
 
 fn modeNeedsHttp(mode: Mode) bool {
-    return mode != .help and mode != .version;
+    return switch (mode) {
+        .help => false,
+        .version => |opts| opts.check,
+        else => true,
+    };
 }
 
 pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
@@ -308,6 +313,8 @@ pub fn interactive(self: *const Config) bool {
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
+        // `version --check` talks to the release endpoint; always verify.
+        .version => true,
         else => unreachable,
     };
 }
@@ -356,7 +363,8 @@ pub fn v8MaxHeapMb(self: *const Config) ?u32 {
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent, .update => |opts| opts.http_proxy,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
+        .version => null,
         else => unreachable,
     };
 }
@@ -384,14 +392,16 @@ pub fn httpMaxHostOpen(self: *const Config) u8 {
 
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent, .update => |opts| opts.http_connect_timeout orelse 0,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_connect_timeout orelse 0,
+        .version => 0,
         else => unreachable,
     };
 }
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent, .update => |opts| opts.http_timeout orelse 5000,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_timeout orelse 5000,
+        .version => 5000,
         else => unreachable,
     };
 }
@@ -402,7 +412,7 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent, .update => |opts| opts.http_max_response_size,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_response_size,
         else => unreachable,
     };
 }
@@ -692,7 +702,7 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
             , .{Help.general});
             std.debug.print(template, .{exec_name});
         },
-        inline .fetch, .serve, .mcp, .agent, .update => |tag| {
+        inline .fetch, .serve, .mcp, .agent => |tag| {
             const template = comptimePrint(
                 \\{s}
                 \\
