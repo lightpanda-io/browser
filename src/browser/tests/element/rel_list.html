@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<link id=l1 rel="stylesheet" href="data:text/css,">
+<div id=d1 class="foo"></div>
+
+<script id=supports>
+{
+  const rl = $('#l1').relList;
+  testing.expectEqual(true, rl.supports('modulepreload'));
+  testing.expectEqual(true, rl.supports('MODULEPRELOAD'));
+  testing.expectEqual(true, rl.supports('preload'));
+  testing.expectEqual(true, rl.supports('stylesheet'));
+  testing.expectEqual(false, rl.supports('prefetch'));
+}
+</script>
+
+<script id=supports_undefined_tokens>
+{
+  // classList's backing attribute defines no supported tokens.
+  testing.expectError('TypeError', () => $('#d1').classList.supports('foo'));
+}
+</script>
