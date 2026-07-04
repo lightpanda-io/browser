@@ -19,6 +19,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const crypto = @import("libcrypto.zig");
+
 const c = @cImport({
     @cInclude("curl/curl.h");
 });
@@ -31,9 +33,7 @@ pub const CurlCode = c.CURLcode;
 pub const CurlMCode = c.CURLMcode;
 pub const CurlSList = c.curl_slist;
 pub const CurlHeader = c.curl_header;
-pub const CurlHttpPost = c.curl_httppost;
 pub const CurlSocket = c.curl_socket_t;
-pub const CurlBlob = c.curl_blob;
 pub const CurlOffT = c.curl_off_t;
 
 pub const CURLE = struct {
@@ -41,12 +41,14 @@ pub const CURLE = struct {
     pub const ABORTED_BY_CALLBACK = c.CURLE_ABORTED_BY_CALLBACK;
 };
 
-pub const CurlDebugFunction = fn (*Curl, CurlInfoType, [*c]u8, usize, *anyopaque) c_int;
-pub const CurlHeaderFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
-pub const CurlWriteFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
+pub const CurlHeaderFunction = *const fn ([*]const u8, usize, usize, *anyopaque) callconv(.c) usize;
+pub const CurlWriteFunction = *const fn ([*]const u8, usize, usize, *anyopaque) callconv(.c) usize;
 pub const curl_writefunc_error: usize = c.CURL_WRITEFUNC_ERROR;
 pub const curl_readfunc_pause: usize = c.CURL_READFUNC_PAUSE;
-pub const CurlReadFunction = fn ([*]u8, usize, usize, *anyopaque) usize;
+pub const CurlReadFunction = *const fn ([*]u8, usize, usize, *anyopaque) callconv(.c) usize;
+pub const CurlOpenSocketFunction = *const fn (?*anyopaque, c_uint, [*c]CurlSockAddr) callconv(.c) CurlSocket;
+pub const CurlSslCtxFunction = *const fn (*Curl, *anyopaque, *anyopaque) callconv(.c) CurlCode;
+pub const CurlDebugFunction = *const fn (*Curl, CurlInfoType, [*c]u8, usize, ?*anyopaque) callconv(.c) c_int;
 
 pub const CurlSockType = enum(c.curlsocktype) {
     ipcxn = c.CURLSOCKTYPE_IPCXN,
@@ -200,12 +202,8 @@ pub const CurlOption = enum(c.CURLoption) {
     url = c.CURLOPT_URL,
     timeout_ms = c.CURLOPT_TIMEOUT_MS,
     connect_timeout_ms = c.CURLOPT_CONNECTTIMEOUT_MS,
-    max_redirs = c.CURLOPT_MAXREDIRS,
     follow_location = c.CURLOPT_FOLLOWLOCATION,
-    redir_protocols_str = c.CURLOPT_REDIR_PROTOCOLS_STR,
     proxy = c.CURLOPT_PROXY,
-    ca_info_blob = c.CURLOPT_CAINFO_BLOB,
-    proxy_ca_info_blob = c.CURLOPT_PROXY_CAINFO_BLOB,
     ssl_verify_host = c.CURLOPT_SSL_VERIFYHOST,
     ssl_verify_peer = c.CURLOPT_SSL_VERIFYPEER,
     proxy_ssl_verify_host = c.CURLOPT_PROXY_SSL_VERIFYHOST,
@@ -215,7 +213,6 @@ pub const CurlOption = enum(c.CURLoption) {
     debug_function = c.CURLOPT_DEBUGFUNCTION,
     custom_request = c.CURLOPT_CUSTOMREQUEST,
     post = c.CURLOPT_POST,
-    http_post = c.CURLOPT_HTTPPOST,
     post_field_size = c.CURLOPT_POSTFIELDSIZE,
     copy_post_fields = c.CURLOPT_COPYPOSTFIELDS,
     http_get = c.CURLOPT_HTTPGET,
@@ -595,43 +592,29 @@ pub fn curl_easy_perform(easy: *Curl) Error!void {
 }
 
 pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype) Error!void {
-    const opt: c.CURLoption = @intFromEnum(option);
-    const code = switch (option) {
+    const v = switch (comptime option) {
         .verbose,
         .post,
         .upload,
         .http_get,
-        .ssl_verify_host,
         .ssl_verify_peer,
-        .proxy_ssl_verify_host,
         .proxy_ssl_verify_peer,
-        => blk: {
-            const n: c_long = switch (@typeInfo(@TypeOf(value))) {
-                .bool => switch (option) {
-                    .ssl_verify_host, .proxy_ssl_verify_host => if (value) 2 else 0,
-                    else => if (value) 1 else 0,
-                },
-                else => @compileError("expected bool|integer for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
-            };
-            break :blk c.curl_easy_setopt(easy, opt, n);
-        },
+        => @as(c_long, @intFromBool(value)),
+
+        // VERIFYHOST expects 0 or 2 (since 7.66.0, 1 is treated the same as 2).
+        // https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html
+        .ssl_verify_host,
+        .proxy_ssl_verify_host,
+        => @as(c_long, if (value) 2 else 0),
 
         .timeout_ms,
         .connect_timeout_ms,
-        .max_redirs,
         .follow_location,
         .post_field_size,
         .connect_only,
-        => blk: {
-            const n: c_long = switch (@typeInfo(@TypeOf(value))) {
-                .comptime_int, .int => @intCast(value),
-                else => @compileError("expected integer for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
-            };
-            break :blk c.curl_easy_setopt(easy, opt, n);
-        },
+        => @as(c_long, @intCast(value)),
 
         .url,
-        .redir_protocols_str,
         .proxy,
         .accept_encoding,
         .custom_request,
@@ -639,128 +622,28 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .user_pwd,
         .proxy_user_pwd,
         .copy_post_fields,
-        => blk: {
-            const s: ?[*]const u8 = value;
-            break :blk c.curl_easy_setopt(easy, opt, s);
-        },
+        => @as(?[*]const u8, value),
 
-        .ca_info_blob,
-        .proxy_ca_info_blob,
-        => blk: {
-            const blob: CurlBlob = value;
-            break :blk c.curl_easy_setopt(easy, opt, blob);
-        },
-
-        .http_post => blk: {
-            // CURLOPT_HTTPPOST expects ?*curl_httppost (multipart formdata)
-            const ptr: ?*CurlHttpPost = value;
-            break :blk c.curl_easy_setopt(easy, opt, ptr);
-        },
-
-        .http_header => blk: {
-            const list: ?*CurlSList = value;
-            break :blk c.curl_easy_setopt(easy, opt, list);
-        },
+        .http_header => @as(?*CurlSList, value),
 
         .private,
         .header_data,
         .read_data,
         .write_data,
         .opensocket_data,
-        => blk: {
-            const ptr: ?*anyopaque = switch (@typeInfo(@TypeOf(value))) {
-                .null => null,
-                else => @ptrCast(value),
-            };
-            break :blk c.curl_easy_setopt(easy, opt, ptr);
-        },
+        => @as(?*anyopaque, @ptrCast(value)),
 
-        .debug_function => blk: {
-            const cb: c.curl_debug_callback = switch (@typeInfo(@TypeOf(value))) {
-                .null => null,
-                .@"fn" => struct {
-                    fn cb(handle: ?*Curl, msg_type: c.curl_infotype, raw: [*c]u8, len: usize, user: ?*anyopaque) callconv(.c) c_int {
-                        const h = handle orelse unreachable;
-                        const u = user orelse unreachable;
-                        return value(h, @enumFromInt(@intFromEnum(msg_type)), raw, len, u);
-                    }
-                }.cb,
-                else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
-            };
-            break :blk c.curl_easy_setopt(easy, opt, cb);
-        },
+        .ssl_ctx_data => @as(*crypto.X509_STORE, value),
 
-        .opensocket_function => blk: {
-            const cb: c.curl_opensocket_callback = switch (@typeInfo(@TypeOf(value))) {
-                .null => null,
-                .@"fn" => struct {
-                    fn cb(clientp: ?*anyopaque, purpose: c.curlsocktype, address: [*c]c.curl_sockaddr) callconv(.c) c.curl_socket_t {
-                        const addr: *CurlSockAddr = @ptrCast(address orelse return CURL_SOCKET_BAD);
-                        return value(@enumFromInt(purpose), addr, clientp);
-                    }
-                }.cb,
-                else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
-            };
-            break :blk c.curl_easy_setopt(easy, opt, cb);
-        },
-
-        .header_function => blk: {
-            const cb: c.curl_write_callback = switch (@typeInfo(@TypeOf(value))) {
-                .null => null,
-                .@"fn" => struct {
-                    fn cb(buffer: [*c]u8, count: usize, len: usize, user: ?*anyopaque) callconv(.c) usize {
-                        const u = user orelse unreachable;
-                        return value(@ptrCast(buffer), count, len, u);
-                    }
-                }.cb,
-                else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
-            };
-            break :blk c.curl_easy_setopt(easy, opt, cb);
-        },
-
-        .read_function => blk: {
-            const cb: c.curl_write_callback = switch (@typeInfo(@TypeOf(value))) {
-                .null => null,
-                .@"fn" => |info| struct {
-                    fn cb(buffer: [*c]u8, count: usize, len: usize, user: ?*anyopaque) callconv(.c) usize {
-                        const user_arg = if (@typeInfo(info.params[3].type.?) == .optional)
-                            user
-                        else
-                            user orelse unreachable;
-                        return value(@ptrCast(buffer), count, len, user_arg);
-                    }
-                }.cb,
-                else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
-            };
-            break :blk c.curl_easy_setopt(easy, opt, cb);
-        },
-        .write_function => blk: {
-            const cb: c.curl_write_callback = switch (@typeInfo(@TypeOf(value))) {
-                .null => null,
-                .@"fn" => |info| struct {
-                    fn cb(buffer: [*c]u8, count: usize, len: usize, user: ?*anyopaque) callconv(.c) usize {
-                        const user_arg = if (@typeInfo(info.params[3].type.?) == .optional)
-                            user
-                        else
-                            user orelse unreachable;
-                        return value(@ptrCast(buffer), count, len, user_arg);
-                    }
-                }.cb,
-                else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
-            };
-            break :blk c.curl_easy_setopt(easy, opt, cb);
-        },
-        .ssl_ctx_function => blk: {
-            const cb: c.curl_ssl_ctx_callback = @ptrCast(value);
-            break :blk c.curl_easy_setopt(easy, opt, cb);
-        },
-        .ssl_ctx_data => blk: {
-            // We can make sure that passed data is always X509_STORE since we
-            // don't require anything else throughout project.
-            break :blk c.curl_easy_setopt(easy, opt, value);
-        },
+        .debug_function => @as(CurlDebugFunction, value),
+        .opensocket_function => @as(CurlOpenSocketFunction, value),
+        .header_function => @as(CurlHeaderFunction, value),
+        .read_function => @as(CurlReadFunction, value),
+        .write_function => @as(CurlWriteFunction, value),
+        .ssl_ctx_function => @as(CurlSslCtxFunction, value),
     };
-    try errorCheck(code);
+    const code = c.curl_easy_setopt(easy, @intFromEnum(option), v);
+    return errorCheck(code);
 }
 
 pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Error!void {

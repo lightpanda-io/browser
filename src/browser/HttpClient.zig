@@ -2098,7 +2098,7 @@ pub const Transfer = struct {
         return result;
     }
 
-    fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
+    fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) usize {
         // libcurl should only ever emit 1 chunk at a time
         if (comptime IS_DEBUG) {
             std.debug.assert(chunk_count == 1);
