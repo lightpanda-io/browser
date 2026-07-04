@@ -1059,6 +1059,12 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/storage/CookieStore.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/BroadcastChannel.zig"),
+    @import("../webapi/event/CustomEvent.zig"),
+    @import("../webapi/event/ProgressEvent.zig"),
+    @import("../webapi/Notification.zig"),
+    @import("../webapi/FileList.zig"),
+    @import("../webapi/MessageChannel.zig"),
+    @import("../webapi/MessagePort.zig"),
 });
 
 // Master list of ALL JS APIs across all contexts.

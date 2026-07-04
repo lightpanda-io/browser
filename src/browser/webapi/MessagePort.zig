@@ -19,12 +19,12 @@
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 
 const log = lp.log;
+const Execution = js.Execution;
 
 const MessagePort = @This();
 
@@ -35,8 +35,8 @@ _on_message: ?js.Function.Global = null,
 _on_message_error: ?js.Function.Global = null,
 _entangled_port: ?*MessagePort = null,
 
-pub fn init(frame: *Frame) !*MessagePort {
-    return frame._factory.eventTarget(MessagePort{
+pub fn init(exec: *Execution) !*MessagePort {
+    return exec._factory.eventTarget(MessagePort{
         ._proto = undefined,
     });
 }
@@ -50,7 +50,7 @@ pub fn entangle(port1: *MessagePort, port2: *MessagePort) void {
     port2._entangled_port = port1;
 }
 
-pub fn postMessage(self: *MessagePort, message: js.Value, frame: *Frame) !void {
+pub fn postMessage(self: *MessagePort, message: js.Value, exec: *Execution) !void {
     if (self._closed) {
         return;
     }
@@ -66,7 +66,7 @@ pub fn postMessage(self: *MessagePort, message: js.Value, frame: *Frame) !void {
     // value throws a DataCloneError to the caller. Mirrors Worker.postMessage.
     const cloned = blk: {
         var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
 
         // Contain any V8 exception from a failed serialization so it surfaces as
@@ -83,13 +83,13 @@ pub fn postMessage(self: *MessagePort, message: js.Value, frame: *Frame) !void {
     errdefer cloned.release();
 
     // Create callback to deliver message
-    const callback = try frame._factory.create(PostMessageCallback{
-        .frame = frame,
+    const callback = try exec._factory.create(PostMessageCallback{
+        .exec = exec,
         .port = other,
         .message = cloned,
     });
 
-    try frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
+    try exec.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "MessagePort.postMessage",
         .low_priority = false,
         .finalizer = PostMessageCallback.cancelled,
@@ -132,7 +132,7 @@ pub fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
 const PostMessageCallback = struct {
     port: *MessagePort,
     message: js.Value.Temp,
-    frame: *Frame,
+    exec: *Execution,
 
     // Called by the scheduler if the task is dropped before it runs. `run` and
     // `cancelled` are mutually exclusive, so the temp is released exactly once.
@@ -143,13 +143,13 @@ const PostMessageCallback = struct {
     }
 
     fn deinit(self: *PostMessageCallback) void {
-        self.frame._factory.destroy(self);
+        self.exec._factory.destroy(self);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
-        const frame = self.frame;
+        const exec = self.exec;
 
         // The MessageEvent takes ownership of the cloned temp and releases it on
         // teardown; on any path where we don't hand it over, release it here so
@@ -160,7 +160,7 @@ const PostMessageCallback = struct {
         }
 
         const target = self.port.asEventTarget();
-        if (!frame._event_manager.hasDirectListeners(target, "message", self.port._on_message)) {
+        if (!exec.hasDirectListeners(target, "message", self.port._on_message)) {
             self.message.release();
             return null;
         }
@@ -169,13 +169,13 @@ const PostMessageCallback = struct {
             .data = .{ .value = self.message },
             .origin = "",
             .source = null,
-        }, frame._page) catch |err| {
+        }, exec.page) catch |err| {
             self.message.release();
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });
             return null;
         }).asEvent();
 
-        frame._event_manager.dispatchDirect(target, event, self.port._on_message, .{ .context = "MessagePort message" }) catch |err| {
+        exec.dispatch(target, event, self.port._on_message, .{ .context = "MessagePort message" }) catch |err| {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });
         };
 
