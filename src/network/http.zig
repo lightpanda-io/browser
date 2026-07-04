@@ -328,12 +328,12 @@ pub const ResponseHead = struct {
 /// Returns CURL_SOCKET_BAD to block; otherwise creates and returns a real socket fd.
 /// clientp is a *const IpFilter passed via CURLOPT_OPENSOCKETDATA.
 fn opensocketCallback(
-    raw_ip_filter: ?*anyopaque,
+    clientp: ?*anyopaque,
     _: c_uint,
     addr: [*c]libcurl.CurlSockAddr,
 ) callconv(.c) libcurl.CurlSocket {
     const address: *libcurl.CurlSockAddr = @ptrCast(addr);
-    const filter: *const IpFilter = @ptrCast(@alignCast(raw_ip_filter orelse return libcurl.CURL_SOCKET_BAD));
+    const filter: *const IpFilter = @ptrCast(@alignCast(clientp orelse return libcurl.CURL_SOCKET_BAD));
 
     if (filter.isBlockedSockaddr(address)) {
         if (address.family == posix.AF.INET or address.family == posix.AF.INET6) {
@@ -466,7 +466,7 @@ pub const Connection = struct {
 
     pub fn setWriteCallback(
         self: *Connection,
-        comptime data_cb: libcurl.WriteFunction,
+        comptime data_cb: libcurl.CurlWriteFunction,
     ) !void {
         try libcurl.curl_easy_setopt(self._easy, .write_data, self);
         try libcurl.curl_easy_setopt(self._easy, .write_function, data_cb);
@@ -474,7 +474,7 @@ pub const Connection = struct {
 
     pub fn setReadCallback(
         self: *Connection,
-        comptime data_cb: libcurl.ReadFunction,
+        comptime data_cb: libcurl.CurlReadFunction,
         upload: bool,
     ) !void {
         try libcurl.curl_easy_setopt(self._easy, .read_data, self);
@@ -486,7 +486,7 @@ pub const Connection = struct {
 
     pub fn setHeaderCallback(
         self: *Connection,
-        comptime data_cb: libcurl.HeaderFunction,
+        comptime data_cb: libcurl.CurlHeaderFunction,
     ) !void {
         try libcurl.curl_easy_setopt(self._easy, .header_data, self);
         try libcurl.curl_easy_setopt(self._easy, .header_function, data_cb);
@@ -762,7 +762,7 @@ pub const Handles = struct {
     }
 };
 
-fn debugCallback(_: *libcurl.Curl, msg_type: libcurl.CurlInfoType, raw: [*c]u8, len: usize, _: *anyopaque) c_int {
+fn debugCallback(_: *libcurl.Curl, msg_type: libcurl.CurlInfoType, raw: [*c]u8, len: usize, _: ?*anyopaque) callconv(.c) c_int {
     const data = raw[0..len];
     switch (msg_type) {
         .text => std.debug.print("libcurl [text]: {s}\n", .{data}),

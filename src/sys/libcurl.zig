@@ -41,14 +41,14 @@ pub const CURLE = struct {
     pub const ABORTED_BY_CALLBACK = c.CURLE_ABORTED_BY_CALLBACK;
 };
 
-pub const HeaderFunction = *const fn ([*]const u8, usize, usize, *anyopaque) callconv(.c) usize;
-pub const WriteFunction = *const fn ([*]const u8, usize, usize, *anyopaque) callconv(.c) usize;
+pub const CurlHeaderFunction = *const fn ([*]const u8, usize, usize, *anyopaque) callconv(.c) usize;
+pub const CurlWriteFunction = *const fn ([*]const u8, usize, usize, *anyopaque) callconv(.c) usize;
 pub const curl_writefunc_error: usize = c.CURL_WRITEFUNC_ERROR;
 pub const curl_readfunc_pause: usize = c.CURL_READFUNC_PAUSE;
-pub const ReadFunction = *const fn ([*]u8, usize, usize, *anyopaque) callconv(.c) usize;
-pub const OpenSocketFunction = *const fn (?*anyopaque, c_uint, [*c]CurlSockAddr) callconv(.c) CurlSocket;
-pub const SslCtxFunction = *const fn (*Curl, *anyopaque, *anyopaque) callconv(.c) CurlCode;
-pub const DebugFunction = *const fn (*Curl, CurlInfoType, [*c]u8, usize, ?*anyopaque) callconv(.c) c_int;
+pub const CurlReadFunction = *const fn ([*]u8, usize, usize, *anyopaque) callconv(.c) usize;
+pub const CurlOpenSocketFunction = *const fn (?*anyopaque, c_uint, [*c]CurlSockAddr) callconv(.c) CurlSocket;
+pub const CurlSslCtxFunction = *const fn (*Curl, *anyopaque, *anyopaque) callconv(.c) CurlCode;
+pub const CurlDebugFunction = *const fn (*Curl, CurlInfoType, [*c]u8, usize, ?*anyopaque) callconv(.c) c_int;
 
 pub const CurlSockType = enum(c.curlsocktype) {
     ipcxn = c.CURLSOCKTYPE_IPCXN,
@@ -635,12 +635,12 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
 
         .ssl_ctx_data => @as(*crypto.X509_STORE, value),
 
-        .debug_function => @as(DebugFunction, value),
-        .opensocket_function => @as(OpenSocketFunction, value),
-        .header_function => @as(HeaderFunction, value),
-        .read_function => @as(ReadFunction, value),
-        .write_function => @as(WriteFunction, value),
-        .ssl_ctx_function => @as(SslCtxFunction, value),
+        .debug_function => @as(CurlDebugFunction, value),
+        .opensocket_function => @as(CurlOpenSocketFunction, value),
+        .header_function => @as(CurlHeaderFunction, value),
+        .read_function => @as(CurlReadFunction, value),
+        .write_function => @as(CurlWriteFunction, value),
+        .ssl_ctx_function => @as(CurlSslCtxFunction, value),
     };
     const code = c.curl_easy_setopt(easy, @intFromEnum(option), v);
     return errorCheck(code);
