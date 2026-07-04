@@ -72,7 +72,7 @@ const ReadyState = enum {
 
 const Result = union(enum) {
     none: ?js.Undefined, // null or undefined (different APIs return different values)
-    value: *js.Value.BareGlobal, // the result of a get/add/put, or a positioned cursor
+    value: *js.GlobalSlot, // the result of a get/add/put, or a positioned cursor
     database: *IDBDatabase, // the result of an open
 };
 
@@ -139,8 +139,8 @@ fn clearOwnedResult(self: *IDBRequest) void {
     self._result_owned = false;
     switch (self._result) {
         .value => |global| {
-            // It's ok to keep this in txn._globals, deinit can be called multiple times
-            global.deinit();
+            // It's ok to keep this in txn._globals, reset can be called multiple times
+            global.reset();
             self._result = .{ .none = js.Undefined{} };
         },
         .none, .database => {},
@@ -159,7 +159,7 @@ pub fn setValue(self: *IDBRequest, value: js.Value) !void {
 
 // Not exposed to JS, called internally. The handle is borrowed (a cursor's
 // transaction-owned _js), not owned by this request.
-pub fn setValueGlobal(self: *IDBRequest, global: *js.Value.BareGlobal) void {
+pub fn setValueGlobal(self: *IDBRequest, global: *js.GlobalSlot) void {
     self.clearOwnedResult();
     self._result = .{ .value = global };
 }
@@ -371,7 +371,7 @@ pub const Operation = union(enum) {
 
     const StoreQuery = struct { store: *IDBObjectStore, bounds: Engine.Bounds };
     const StoreGetAll = struct { store: *IDBObjectStore, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
-    const StoreWrite = struct { store: *IDBObjectStore, kind: IDBObjectStore.WriteKind, value: *js.Value.BareGlobal, key: IDBObjectStore.PreparedKey };
+    const StoreWrite = struct { store: *IDBObjectStore, kind: IDBObjectStore.WriteKind, value: *js.GlobalSlot, key: IDBObjectStore.PreparedKey };
     const IndexQuery = struct { index: *IDBIndex, bounds: Engine.Bounds };
     const IndexGetAll = struct { index: *IDBIndex, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
     const CursorIterate = struct { cursor: *IDBCursor, seek: IDBCursor.Seek, offset: u32 };

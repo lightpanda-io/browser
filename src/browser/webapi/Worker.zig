@@ -265,13 +265,13 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 }
 
 // Fire an error event on the Worker object (parent context)
-fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Temp) void {
+fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Global) void {
     self._fireErrorEvent(message, error_value) catch |err| {
         log.warn(.browser, "worker fire error", .{ .err = err, .message = message });
     };
 }
 
-fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Temp) !void {
+fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Global) !void {
     const frame = self._frame;
     const target = self.asEventTarget();
     const on_error = self._on_error;
@@ -318,7 +318,7 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
 
         // clones from where it currently is (the Worker context) to our Page's context
         const cloned = data.structuredCloneTo(&ls.local) catch |err| break :blk err;
-        break :blk cloned.temp();
+        break :blk cloned.persist();
     };
 
     const message_arena = try frame.getArena(.tiny, "Worker.receiveMessage");
@@ -376,7 +376,7 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
 }
 
 const ReceiveMessageCallback = struct {
-    data: anyerror!js.Value.Temp,
+    data: anyerror!js.Value.Global,
     arena: Allocator,
     worker: *Worker,
 

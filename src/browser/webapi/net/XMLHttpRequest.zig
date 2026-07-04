@@ -71,7 +71,7 @@ _response_headers: std.ArrayList([]const u8) = .empty,
 _response_type: ResponseType = .text,
 
 _ready_state: ReadyState = .unsent,
-_on_ready_state_change: ?js.Function.Temp = null,
+_on_ready_state_change: ?js.Function.Global = null,
 _with_credentials: bool = false,
 _timeout: u32 = 0,
 
@@ -147,13 +147,13 @@ fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
 }
 
-pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Temp {
+pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
     return self._on_ready_state_change;
 }
 
 pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_ready_state_change = try cb.tempWithThis(self);
+        self._on_ready_state_change = try cb.persistWithThis(self);
     } else {
         self._on_ready_state_change = null;
     }

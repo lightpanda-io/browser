@@ -52,7 +52,7 @@ _created: bool = false,
 _indexes: std.ArrayList(*IDBIndex) = .empty,
 // not just for efficiency, we must return the same v8::Array every time the
 // compound key is accessed.
-_key_path_js: ?*js.Value.BareGlobal = null,
+_key_path_js: ?*js.GlobalSlot = null,
 
 pub fn init(
     txn: *IDBTransaction,
@@ -358,10 +358,10 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
     } }, exec);
 }
 
-pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: *js.Value.BareGlobal, prepared: PreparedKey, exec: *Execution) !void {
+pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: *js.GlobalSlot, prepared: PreparedKey, exec: *Execution) !void {
     // Written (or failed) is written: the pinned value is dead once this op
     // ran, so release its handle now instead of at transaction teardown.
-    defer value_global.deinit();
+    defer value_global.reset();
     self.writeInner(request, kind, value_global, prepared, exec) catch |err| {
         if (err != error.Constraint) {
             log.warn(.storage, "idb write", .{ .err = err, .kind = kind, .sqlite = self._engine.lastError() });
@@ -370,7 +370,7 @@ pub fn runWrite(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, va
     };
 }
 
-fn writeInner(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: *js.Value.BareGlobal, prepared: PreparedKey, exec: *Execution) !void {
+fn writeInner(self: *IDBObjectStore, request: *IDBRequest, kind: WriteKind, value_global: *js.GlobalSlot, prepared: PreparedKey, exec: *Execution) !void {
     const local = exec.js.local.?;
     const value = value_global.local(local);
 

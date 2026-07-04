@@ -65,7 +65,7 @@ _arena: Allocator,
 // v8 handles owned by the transaction, swept (reset) in deinit. Slots are
 // arena-allocated so an early release and the sweep hit the same instance —
 // a v8 Global reset is only idempotent through a single instance.
-_globals: std.ArrayList(*js.Value.BareGlobal) = .empty,
+_globals: std.ArrayList(*js.GlobalSlot) = .empty,
 
 // objectStore() must return the same object for a given name within one
 // transaction (per spec); this also keeps repeated lookups off sqlite.
@@ -180,7 +180,7 @@ pub fn deinit(self: *IDBTransaction, page: *Page) void {
         std.debug.assert(self._parked == false);
     }
     for (self._globals.items) |slot| {
-        slot.deinit();
+        slot.reset();
     }
     page.releaseArena(self._arena);
 }
@@ -194,12 +194,12 @@ pub fn releaseRef(self: *IDBTransaction, page: *Page) void {
 }
 
 // Persist a JS value with the transaction's lifetime: the handle is reset when the
-// transaction's memory is released — or earlier, by calling deinit() on the
+// transaction's memory is released — or earlier, by calling reset() on the
 // returned slot (the sweep's second reset is then a no-op).
-pub fn persist(self: *IDBTransaction, value: js.Value) !*js.Value.BareGlobal {
-    const slot = try self._arena.create(js.Value.BareGlobal);
+pub fn persist(self: *IDBTransaction, value: js.Value) !*js.GlobalSlot {
+    const slot = try value.persistBare(self._arena);
+    errdefer slot.reset();
     try self._globals.append(self._arena, slot);
-    slot.* = value.bare();
     return slot;
 }
 

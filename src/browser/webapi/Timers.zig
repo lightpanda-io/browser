@@ -58,7 +58,7 @@ pub const Mode = enum {
 
 pub const ScheduleOpts = struct {
     repeat: bool,
-    params: []js.Value.Temp,
+    params: []js.Value.Global,
     name: []const u8,
     low_priority: bool = false,
     mode: Mode = .normal,
@@ -67,7 +67,7 @@ pub const ScheduleOpts = struct {
 pub fn schedule(
     self: *Timers,
     exec: *js.Execution,
-    cb: js.Function.Temp,
+    cb: js.Function.Global,
     delay_ms: u32,
     opts: ScheduleOpts,
 ) !u32 {
@@ -82,9 +82,9 @@ pub fn schedule(
     const timer_id = self._timer_id +% 1;
     self._timer_id = timer_id;
 
-    var persisted_params: []js.Value.Temp = &.{};
+    var persisted_params: []js.Value.Global = &.{};
     if (opts.params.len > 0) {
-        persisted_params = try arena.dupe(js.Value.Temp, opts.params);
+        persisted_params = try arena.dupe(js.Value.Global, opts.params);
     }
 
     const gop = try self._callbacks.getOrPut(exec.arena, timer_id);
@@ -128,15 +128,15 @@ pub fn clear(self: *Timers, id: u32) void {
 // compiled into an anonymous function body, matching how legacy browsers
 // (and all current UAs) interpret `setTimeout("foo()", 100)`.
 pub const LegacyHandler = union(enum) {
-    function: js.Function.Temp,
+    function: js.Function.Global,
     string: js.String,
 
-    pub fn resolve(handler: LegacyHandler, exec: *js.Execution) !js.Function.Temp {
+    pub fn resolve(handler: LegacyHandler, exec: *js.Execution) !js.Function.Global {
         switch (handler) {
             .function => |fun| return fun,
             .string => |str| {
                 const fun = try exec.js.local.?.compileFunction(str, &.{}, &.{});
-                return fun.temp();
+                return fun.persist();
             },
         }
     }
@@ -152,14 +152,14 @@ const ScheduleCallback = struct {
     // delay, in ms, to repeat. When null, removed after first invocation.
     repeat_ms: ?u32,
 
-    cb: js.Function.Temp,
+    cb: js.Function.Global,
 
     mode: Mode,
     exec: *js.Execution,
     timers: *Timers,
     arena: Allocator,
     removed: bool = false,
-    params: []const js.Value.Temp,
+    params: []const js.Value.Global,
 
     fn cancelled(ptr: *anyopaque) void {
         var self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
