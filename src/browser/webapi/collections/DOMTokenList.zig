@@ -78,7 +78,7 @@ pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bo
         return error.TypeError;
     }
     const supported = [_][]const u8{ "stylesheet", "preload", "modulepreload" };
-    const lower = try std.ascii.allocLowerString(frame.call_arena, token);
+    const lower = try std.ascii.allocLowerString(frame.local_arena, token);
     for (supported) |s| {
         if (std.mem.eql(u8, lower, s)) return true;
     }
