@@ -118,24 +118,22 @@ fn _reject(self: PromiseResolver, value: anytype) !void {
 }
 
 pub fn persist(self: PromiseResolver) !Global {
-    var ctx = self.local.ctx;
-    var global: v8.Global = undefined;
-    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-    try ctx.trackGlobal(global);
-    return .{ .handle = global };
+    return .{ .slot = try js.newTrackedSlot(self.local.ctx, self.handle) };
 }
 
 pub const Global = struct {
-    handle: v8.Global,
+    slot: *js.GlobalSlot,
 
-    pub fn deinit(self: *Global) void {
-        v8.v8__Global__Reset(&self.handle);
+    pub fn deinit(self: Global) void {
+        self.slot.release();
     }
 
-    pub fn local(self: *const Global, l: *const js.Local) PromiseResolver {
+    pub const release = deinit;
+
+    pub fn local(self: Global, l: *const js.Local) PromiseResolver {
         return .{
             .local = l,
-            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
+            .handle = @ptrCast(v8.v8__Global__Get(&self.slot.handle, l.isolate.handle)),
         };
     }
 };

@@ -41,7 +41,7 @@ const IntersectionObserver = @This();
 
 _rc: lp.RC(u8) = .{},
 _arena: Allocator,
-_callback: js.Function.Temp,
+_callback: js.Function.Global,
 _observing: std.ArrayList(*Element) = .{},
 _root: ?*Element = null,
 _root_margin: []const u8 = "0px",
@@ -69,7 +69,7 @@ pub const ObserverInit = struct {
     };
 };
 
-pub fn init(callback: js.Function.Temp, options: ?ObserverInit, frame: *Frame) !*IntersectionObserver {
+pub fn init(callback: js.Function.Global, options: ?ObserverInit, frame: *Frame) !*IntersectionObserver {
     const arena = try frame.getArena(.small, "IntersectionObserver");
     errdefer frame.releaseArena(arena);
 

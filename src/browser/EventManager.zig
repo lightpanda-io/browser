@@ -124,7 +124,7 @@ pub const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
 
 // Direct dispatch for non-DOM targets (Window, XHR, AbortSignal) or DOM nodes with
 // property handlers. No propagation - just calls the handler and registered listeners.
-// Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
+// Handler can be: null, ?js.Function.Global or js.Function
 pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, handler: anytype, comptime opts: DispatchDirectOptions) !void {
     const frame = self.frame;
 
