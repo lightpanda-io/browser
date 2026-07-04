@@ -222,6 +222,9 @@ const synthesis_prompt =
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 model_credentials: ?Credentials,
+/// Allocated credentials key (Vertex gcloud token) — other keys are unowned
+/// env pointers. The AI client references it: free only after client deinit.
+owned_key: ?[:0]const u8,
 /// True when the no-LLM state is a persisted preference (remembered null
 /// provider or runtime `/provider null`), so `reportSaved` writes
 /// `provider = null`. A transient `--no-llm` run leaves it false so saving
@@ -340,6 +343,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (banner_before) welcome.print(resolve);
 
     const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
+    // Before the ai_client errdefer, so on unwind the client goes first.
+    errdefer if (resolved) |r| if (r.key_owned) allocator.free(r.credentials.key);
 
     if (will_repl and !banner_before and resolved != null) welcome.print(resolve);
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
@@ -394,6 +399,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .allocator = allocator,
         .ai_client = null,
         .model_credentials = llm,
+        .owned_key = if (resolved) |r| (if (r.key_owned) r.credentials.key else null) else null,
         .no_llm_persisted = remembered_no_llm,
         .model_base_url = opts.base_url,
         .model_completions = null,
@@ -455,6 +461,7 @@ pub fn deinit(self: *Agent) void {
     self.browser.deinit();
     self.notification.deinit();
     if (self.ai_client) |ai_client| ai_client.deinit(self.allocator);
+    if (self.owned_key) |k| self.allocator.free(k);
     self.allocator.free(self.model);
     for (self.available_providers) |p| self.allocator.free(p);
     self.allocator.free(self.available_providers);
@@ -915,11 +922,28 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("unknown provider: {s} (or 'null' to disable the LLM)", .{trimmed});
         return;
     };
-    if (self.model_credentials) |current| if (provider == current.provider) {
+    // Re-selecting vertex falls through — that's the token-refresh path.
+    const vertex_project = provider == .vertex and settings.vertexProjectMode();
+    if (self.model_credentials) |current| if (provider == current.provider and !vertex_project) {
         self.terminal.printInfo("provider: {s}", .{@tagName(provider)});
         return;
     };
+    if (vertex_project) {
+        const token = settings.gcloudAccessToken(self.allocator) catch |err| {
+            self.terminal.printError("could not obtain a Vertex access token: {s} (details above)", .{@errorName(err)});
+            return;
+        };
+        self.setProvider(.{ .provider = .vertex, .key = token }, token) catch |err| {
+            self.allocator.free(token);
+            self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
+        };
+        return;
+    }
     const key = zenai.provider.envApiKey(provider) orelse {
+        if (provider == .vertex) {
+            self.terminal.printError("vertex needs VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud)", .{});
+            return;
+        }
         self.terminal.printError("no API key for {s}; set {s}", .{ @tagName(provider), zenai.provider.envVarName(provider) });
         return;
     };
@@ -932,7 +956,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
         return;
     }
-    self.setProvider(.{ .provider = provider, .key = key }) catch |err| {
+    self.setProvider(.{ .provider = provider, .key = key }, null) catch |err| {
         self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
     };
 }
@@ -942,6 +966,8 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
 fn disableProvider(self: *Agent) void {
     if (self.ai_client) |client| client.deinit(self.allocator);
     self.ai_client = null;
+    if (self.owned_key) |k| self.allocator.free(k);
+    self.owned_key = null;
     self.model_credentials = null;
     self.model_completions = null;
     self.no_llm_persisted = true;
@@ -955,12 +981,18 @@ fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
     return std.posix.getenv("HF_BILL_TO");
 }
 
-fn setProvider(self: *Agent, credentials: Credentials) !void {
+/// `owned_key` transfers ownership of an allocated `credentials.key` (Vertex
+/// gcloud token) on success; on error the caller still owns it.
+fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8) !void {
     const new_client = try zenai.provider.Client.init(self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider) });
     errdefer new_client.deinit(self.allocator);
 
-    const new_model = try self.allocator.dupe(u8, zenai.provider.defaultModel(credentials.provider));
+    // A same-provider re-select (vertex token refresh) must not reset the model.
+    const same_provider = if (self.model_credentials) |c| c.provider == credentials.provider else false;
+    const new_model = try self.allocator.dupe(u8, if (same_provider) self.model else zenai.provider.defaultModel(credentials.provider));
     if (self.ai_client) |client| client.deinit(self.allocator);
+    if (self.owned_key) |k| self.allocator.free(k);
+    self.owned_key = owned_key;
     new_client.setInterrupt(&self.http_interrupt);
     self.ai_client = new_client;
     self.model_credentials = credentials;
@@ -1527,10 +1559,17 @@ fn recordSlashToolCall(
 fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []const u8 {
     const e = client.lastError();
     const status = e.status orelse return @errorName(err);
+    const hint = if (status == 401 and client == .vertex)
+        if (self.owned_key != null)
+            " (Vertex token may have expired; run /provider vertex to refresh)"
+        else
+            " (Vertex express mode needs an express API key — a Gemini Developer key won't work)"
+    else
+        "";
     if (e.message) |m| {
-        if (std.fmt.bufPrint(&self.api_error_buf, "HTTP {d} — {s}", .{ status, m })) |s| return s else |_| {}
+        if (std.fmt.bufPrint(&self.api_error_buf, "HTTP {d} — {s}{s}", .{ status, m, hint })) |s| return s else |_| {}
     }
-    return std.fmt.bufPrint(&self.api_error_buf, "HTTP {d}", .{status}) catch @errorName(err);
+    return std.fmt.bufPrint(&self.api_error_buf, "HTTP {d}{s}", .{ status, hint }) catch @errorName(err);
 }
 
 /// Returned text lives in `conversation.arena`, valid only until the next prune.
@@ -1797,10 +1836,16 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     }
     const resolved = (try settings.resolveCredentials(allocator, opts, null, false)) orelse return error.MissingProvider;
     const llm = resolved.credentials;
+    defer if (resolved.key_owned) allocator.free(llm.key);
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = try zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, opts.base_url);
+    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, opts.base_url) catch |err| {
+        if (llm.provider == .vertex and !settings.vertexProjectMode()) {
+            std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
+        }
+        return err;
+    };
 
     var stdout_file = std.fs.File.stdout().writer(&.{});
     const w = &stdout_file.interface;
