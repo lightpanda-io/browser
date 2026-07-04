@@ -233,6 +233,24 @@ pub fn deinit(self: *Context) void {
     v8.v8__MicrotaskQueue__DELETE(self.microtask_queue);
 }
 
+// The global (e.g. Window) can be reused across contexts. If you do:
+//
+// var w = iframe.contentWindow;
+// iframe.src = 'two.html';
+// w === iframe.contentWindow  (must be true)
+//
+// so when we navigate, the Window/Global is re-used. That's fine with v8, but
+// we need to explicitly detach it from the original before we can safely attach
+// it to the new
+pub fn detachGlobal(self: *Context) void {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.isolate);
+    defer hs.deinit();
+
+    const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, self.isolate.handle));
+    v8.v8__Context__DetachGlobal(local_v8_context);
+}
+
 // setOrigin is called at navigation (opaque -> real origin) and again when a
 // script sets document.domain (real origin -> '!'-marked effective domain).
 pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
