@@ -757,10 +757,6 @@ fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE
             defer bundle.deinit(allocator);
 
             const bytes = bundle.bytes.items;
-            if (bytes.len == 0) {
-                log.warn(.app, "No system certificates", .{});
-                return store;
-            }
             var it = bundle.map.valueIterator();
             while (it.next()) |index| {
                 // d2i_X509 reads the cert's own DER length header to find its end and
