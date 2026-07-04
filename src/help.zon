@@ -4,12 +4,12 @@
     \\usage: {0s} <command> [arguments]
     \\
     \\The commands are:
-    \\  serve       starts a WebSocket CDP server
-    \\  fetch       fetches the specified URL
-    \\  mcp         starts an MCP (Model Context Protocol) server over stdio
     \\  agent       starts an interactive AI agent that can browse the web
-    \\  version     displays the version of {0s}
+    \\  fetch       fetches the specified URL
     \\  help        displays this message
+    \\  mcp         starts an MCP (Model Context Protocol) server over stdio
+    \\  serve       starts a WebSocket CDP server
+    \\  version     displays the version of {0s}
     \\
     \\Use "{0s} help <command>" for more information about a command.
     ,
@@ -19,12 +19,6 @@
     \\Starts a WebSocket CDP server.
     \\
     \\options:
-    \\  --host <HOST>
-    \\          Host of the CDP server.
-    \\          Defaults to "127.0.0.1".
-    \\  --port <INT>
-    \\          Port of the CDP server.
-    \\          Defaults to 9222.
     \\  --advertise-host <HOST>
     \\          The host to advertise, e.g. in the /json/version response. Useful,
     \\          for example, when --host is 0.0.0.0.
@@ -32,18 +26,24 @@
     \\  --cdp-max-connections <INT>
     \\          Maximum number of simultaneous CDP connections.
     \\          Defaults to 16.
-    \\  --cdp-max-pending-connections <INT>
-    \\          Maximum pending connections in the accept queue.
-    \\          Defaults to 128.
-    \\  --cdp-max-message-size <INT>
-    \\          Maximum allowed incoming websocket message size.
-    \\          Defaults to 1048576 (1MB)
     \\  --cdp-max-http-message-size <INT>
     \\          Maximum allowed HTTP request size
     \\          Defaults to 4096 (maximum allowed: 16383)
+    \\  --cdp-max-message-size <INT>
+    \\          Maximum allowed incoming websocket message size.
+    \\          Defaults to 1048576 (1MB)
+    \\  --cdp-max-pending-connections <INT>
+    \\          Maximum pending connections in the accept queue.
+    \\          Defaults to 128.
     \\  --cookie <PATH>
     \\          Path to a JSON file to load cookies from (read-only).
     \\          Defaults to no cookie loading.
+    \\  --host <HOST>
+    \\          Host of the CDP server.
+    \\          Defaults to "127.0.0.1".
+    \\  --port <INT>
+    \\          Port of the CDP server.
+    \\          Defaults to 9222.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
@@ -52,6 +52,12 @@
     \\than one URL requires --json.
     \\
     \\options:
+    \\  --cookie <PATH>
+    \\          Path to a JSON file to load cookies from (read-only).
+    \\          Defaults to no cookie loading.
+    \\  --cookie-jar <PATH>
+    \\          Path to a JSON file to save cookies to on exit (write-only).
+    \\          Defaults to no cookie saving.
     \\  --dump <DUMP>
     \\          Dumps the document to stdout.
     \\          Defaults to no dump.
@@ -60,6 +66,18 @@
     \\              markdown           Converts content to Markdown.
     \\              semantic_tree      JSON-serialized semantic tree.
     \\              semantic_tree_text Pruned plain-text semantic tree.
+    \\  --inject-script <EXPR>
+    \\          JavaScript to execute as the document's <head> is parsed, before any
+    \\          other scripts in the page run. Can be passed multiple times; scripts
+    \\          run in order.
+    \\  --inject-script-file <PATH>
+    \\          Like --inject-script, but reads the script from a file. Can be passed
+    \\          multiple times; can be mixed with --inject-script and runs in CLI order.
+    \\  --json
+    \\          Capture and print the status of the fetch as JSON. A single URL
+    \\          prints one object; multiple URLs print {{"results": [ ... ]}} with
+    \\          one object per URL. When used with --dump <MODE> the dumped
+    \\          content is wrapped within each object.
     \\  --strip-mode <STRIP>
     \\          Comma-separated list of tag groups to remove from dump.
     \\          Defaults to no-strip.
@@ -69,53 +87,35 @@
     \\              css       Includes style and link[rel=stylesheet].
     \\              invisible Best-effort (e.g. display:none) hidden elements
     \\              full      Strip everything.
-    \\  --json
-    \\          Capture and print the status of the fetch as JSON. A single URL
-    \\          prints one object; multiple URLs print {{"results": [ ... ]}} with
-    \\          one object per URL. When used with --dump <MODE> the dumped
-    \\          content is wrapped within each object.
-    \\  --with-base
-    \\          Add a <base> tag in dump.
-    \\          Defaults to false.
-    \\  --with-frames
-    \\          Includes the contents of iframes.
-    \\          Defaults to false.
-    \\  --wait-ms <INT>
-    \\          Wait time in milliseconds. Supersedes all other --wait parameters.
-    \\          Defaults to 5000.
-    \\  --wait-until <UNTIL>
-    \\          Wait until the specified event. Checked before other --wait-* options.
-    \\          Defaults to 'done'. If --wait-selector, --wait-script or
-    \\          --wait-script-file specified, defaults to none.
-    \\          Allowed values: "load", "domcontentloaded", "networkalmostidle",
-    \\          "networkidle", "done".
-    \\  --wait-selector <QUERY>
-    \\          Wait for an element matching the CSS selector to appear. Checked after
-    \\          --wait-until condition is met.
-    \\  --wait-script <EXPR>
-    \\          Wait for a JavaScript expression to return truthy. Checked after
-    \\          --wait-until condition is met.
-    \\  --wait-script-file <PATH>
-    \\          Like --wait-script, but reads the script from a file.
-    \\  --inject-script <EXPR>
-    \\          JavaScript to execute as the document's <head> is parsed, before any
-    \\          other scripts in the page run. Can be passed multiple times; scripts
-    \\          run in order.
-    \\  --inject-script-file <PATH>
-    \\          Like --inject-script, but reads the script from a file. Can be passed
-    \\          multiple times; can be mixed with --inject-script and runs in CLI order.
     \\  --terminate-ms <INT>
     \\          Hard deadline in milliseconds. After this time elapses, JavaScript
     \\          execution is forcibly terminated (e.g. for pages with endless scripts).
     \\          Unlike --wait-ms, which only stops waiting, --terminate-ms aborts the
     \\          page.
     \\          Defaults to no terminate.
-    \\  --cookie <PATH>
-    \\          Path to a JSON file to load cookies from (read-only).
-    \\          Defaults to no cookie loading.
-    \\  --cookie-jar <PATH>
-    \\          Path to a JSON file to save cookies to on exit (write-only).
-    \\          Defaults to no cookie saving.
+    \\  --wait-ms <INT>
+    \\          Wait time in milliseconds. Supersedes all other --wait parameters.
+    \\          Defaults to 5000.
+    \\  --wait-script <EXPR>
+    \\          Wait for a JavaScript expression to return truthy. Checked after
+    \\          --wait-until condition is met.
+    \\  --wait-script-file <PATH>
+    \\          Like --wait-script, but reads the script from a file.
+    \\  --wait-selector <QUERY>
+    \\          Wait for an element matching the CSS selector to appear. Checked after
+    \\          --wait-until condition is met.
+    \\  --wait-until <UNTIL>
+    \\          Wait until the specified event. Checked before other --wait-* options.
+    \\          Defaults to 'done'. If --wait-selector, --wait-script or
+    \\          --wait-script-file specified, defaults to none.
+    \\          Allowed values: "load", "domcontentloaded", "networkalmostidle",
+    \\          "networkidle", "done".
+    \\  --with-base
+    \\          Add a <base> tag in dump.
+    \\          Defaults to false.
+    \\  --with-frames
+    \\          Includes the contents of iframes.
+    \\          Defaults to false.
     ,
     .mcp =
     \\usage: {0s} mcp [OPTIONS] [COMMON_OPTIONS]
@@ -147,107 +147,87 @@
     \\  {0s} agent --task "..." --save out.js      (synthesize a replayable script)
     \\
     \\Arguments:
-    \\[SCRIPT]                   Optional path to a .js script. Runs the script
-    \\                           (no LLM calls) and exits. With no script and no
-    \\                           --task, the REPL starts; from there /load runs a
-    \\                           script and /save exports the session to a file.
-    \\                           Caution: .js files can contain evaluate(...) calls
-    \\                           that run arbitrary JavaScript in the page. Only run
-    \\                           scripts you trust, the same way you would a shell
-    \\                           script.
+    \\[SCRIPT]
+    \\          Optional path to a .js script. Runs the script (no LLM calls) and
+    \\          exits. With no script and no --task, the REPL starts; from there
+    \\          /load runs a script and /save exports the session to a file.
+    \\          Caution: .js files can contain evaluate(...) calls that run
+    \\          arbitrary JavaScript in the page. Only run scripts you trust, the
+    \\          same way you would a shell script.
     \\
     \\Options:
-    \\--provider <PROVIDER>      The AI provider.
-    \\                           When omitted, lightpanda auto-detects an API key
-    \\                           from your environment (ANTHROPIC_API_KEY,
-    \\                           OPENAI_API_KEY, GOOGLE_API_KEY/GEMINI_API_KEY,
-    \\                           HF_TOKEN, AI_GATEWAY_API_KEY, MISTRAL_API_KEY).
-    \\                           With exactly one key set: that provider is used.
-    \\                           With multiple keys on a TTY: you'll be prompted
-    \\                           to pick; in non-interactive contexts, pass
-    \\                           --provider explicitly. With no keys set: falls
-    \\                           back to the basic REPL (slash commands only, no
-    \\                           natural-language input, no LOGIN /
-    \\                           ACCEPT_COOKIES keywords).
+    \\  -a, --attach <PATH>
+    \\          Feed a local file to the model alongside --task. Repeatable, one
+    \\          file per flag. Text files are inlined (max 512 KiB each);
+    \\          images/audio/pdf are base64-encoded (max 20 MiB each).
+    \\          Requires --task.
+    \\  --base-url <URL>
+    \\          Override the API base URL for the provider. Defaults to the
+    \\          provider's standard endpoint.
+    \\          Ollama default: http://localhost:11434/v1.
+    \\          llama.cpp default: http://localhost:8080/v1.
+    \\          Hugging Face default is the serverless router
+    \\              (https://router.huggingface.co/v1);
+    \\              point this at a dedicated Inference Endpoint to use one.
+    \\  --effort <LEVEL>
+    \\          Per-turn reasoning budget, mapped to each provider's native
+    \\          thinking/reasoning knob. Default: low in the REPL (snappy turns),
+    \\          medium in one-shot --task mode, unless the provider sets its own
+    \\          default (Mistral defaults to none, as its default model rejects
+    \\          effort). In the REPL, use /effort to change it.
+    \\          Allowed values: none, minimal, low, medium, high, xhigh.
+    \\  --list-models
+    \\          Print the model IDs usable with `agent` for --provider, one per
+    \\          line, sorted, and exit. Auto-detects the provider from env when
+    \\          --provider is omitted.
+    \\  --model <MODEL>
+    \\          The model name to use. Defaults to a sensible default per
+    \\          provider. In the REPL, use /model to list and change models for
+    \\          the active provider.
+    \\  --no-llm
+    \\          Force the basic REPL even when an API key is present or
+    \\          --provider is set. Useful for testing slash commands without
+    \\          burning tokens, or for disabling the LLM in a saved command
+    \\          without editing the existing flags. Wins over --provider.
+    \\  --provider <PROVIDER>
+    \\          The AI provider. When omitted, lightpanda auto-detects an API
+    \\          key from your environment (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+    \\          GOOGLE_API_KEY/GEMINI_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY,
+    \\          MISTRAL_API_KEY). With exactly one key set: that provider is
+    \\          used. With multiple keys on a TTY: you'll be prompted to pick;
+    \\          in non-interactive contexts, pass --provider explicitly. With
+    \\          no keys set: falls back to the basic REPL (slash commands only,
+    \\          no natural-language input, no LOGIN / ACCEPT_COOKIES keywords).
     \\
-    \\                           Local servers (ollama, llama_cpp) are never
-    \\                           auto-detected (they need no key); select them
-    \\                           explicitly with --provider ollama / --provider
-    \\                           llama_cpp.
+    \\          Local servers (ollama, llama_cpp) are never auto-detected (they
+    \\          need no key); select them explicitly with --provider ollama /
+    \\          --provider llama_cpp.
     \\
-    \\                           Allowed values:
-    \\                             "anthropic", "openai", "gemini",
-    \\                             "huggingface", "vercel", "mistral",
-    \\                             "ollama", "llama_cpp".
-    \\                           In the REPL, use /provider to list and change
-    \\                           providers.
-    \\
-    \\--no-llm                   Force the basic REPL even when an API key is
-    \\                           present or --provider is set. Useful for testing
-    \\                           slash commands without burning tokens, or for
-    \\                           disabling the LLM in a saved command without
-    \\                           editing the existing flags. Wins over --provider.
-    \\
-    \\--model <MODEL>            The model name to use.
-    \\                           Defaults to a sensible default per provider.
-    \\                           In the REPL, use /model to list and change
-    \\                           models for the active provider.
-    \\
-    \\--base-url <URL>           Override the API base URL for the provider.
-    \\                           Defaults to the provider's standard endpoint.
-    \\                           Ollama default: http://localhost:11434/v1.
-    \\                           llama.cpp default: http://localhost:8080/v1.
-    \\                           Hugging Face default is the serverless router
-    \\                           (https://router.huggingface.co/v1); point this
-    \\                           at a dedicated Inference Endpoint to use one.
-    \\
-    \\--system-prompt <STRING>   Override the default system prompt.
-    \\
-    \\--task <STRING>            One-shot mode: run a single user turn, print the
-    \\                           final answer to stdout, and exit. Conflicts with
-    \\                           the positional script. With --save, the answer is
-    \\                           suppressed and a script is written instead.
-    \\
-    \\--save <PATH>              Synthesize a replayable .js script from the --task
-    \\                           run and write it to PATH, instead of printing the
-    \\                           answer. Replay it later with `agent PATH` (no LLM
-    \\                           calls). Overwrites PATH if it exists. Requires
-    \\                           --task.
-    \\
-    \\-a, --attach <PATH>        Feed a local file to the model alongside --task.
-    \\                           Repeatable, one file per flag. Text files are
-    \\                           inlined (max 512 KiB each); images/audio/pdf are
-    \\                           base64-encoded (max 20 MiB each). Requires --task.
-    \\
-    \\--list-models              Print the model IDs usable with `agent` for
-    \\                           --provider, one per line, sorted, and exit.
-    \\                           Auto-detects the provider from env when
-    \\                           --provider is omitted.
-    \\
-    \\--verbosity <LEVEL>        Stderr chatter level.
-    \\                           Default: high when --task captures stderr to a
-    \\                           pipe or file; low otherwise. low/medium also
-    \\                           raise --log-level to err (mutes page-side
-    \\                           console.error spam) unless --log-level is set
-    \\                           explicitly.
-    \\
-    \\                           Allowed values:
-    \\                             low     Silent in --task mode (final answer to
-    \\                                     stdout only); spinner + summary in REPL.
-    \\                             medium  + one `● [tool: ...]` line per call.
-    \\                             high    + the matching `[result: ...]` body
-    \\                                     (required by the benchmarks harness).
-    \\
-    \\--effort <LEVEL>           Per-turn reasoning budget, mapped to each
-    \\                           provider's native thinking/reasoning knob.
-    \\                           Default: low in the REPL (snappy turns),
-    \\                           medium in one-shot --task mode, unless the
-    \\                           provider sets its own default (Mistral defaults
-    \\                           to none, as its default model rejects effort).
-    \\                           In the REPL, use /effort to change it.
-    \\
-    \\                           Allowed values:
-    \\                             none, minimal, low, medium, high, xhigh.
+    \\          Allowed values: "anthropic", "openai", "gemini", "huggingface",
+    \\                          "vercel", "mistral", "ollama", "llama_cpp".
+    \\          In the REPL, use /provider to list and change providers.
+    \\  --save <PATH>
+    \\          Synthesize a replayable .js script from the --task run and write
+    \\          it to PATH, instead of printing the answer. Replay it later with
+    \\          `agent PATH` (no LLM calls). Overwrites PATH if it exists.
+    \\          Requires --task.
+    \\  --system-prompt <STRING>
+    \\          Override the default system prompt.
+    \\  --task <STRING>
+    \\           One-shot mode: run a single user turn, print the final answer
+    \\           to stdout, and exit. Conflicts with the positional script. With
+    \\           --save, the answer is suppressed and a script is written instead.
+    \\  --verbosity <LEVEL>
+    \\          Stderr chatter level. Default: high when --task captures stderr
+    \\          to a pipe or file; low otherwise. low/medium also raise
+    \\          --log-level to err (mutes page-side console.error spam) unless
+    \\          --log-level is set explicitly.
+    \\          Allowed values:
+    \\              low  silent in --task mode (final answer to stdout only);
+    \\                   spinner + summary in REPL.
+    \\              medium  + one `● [tool: ...]` line per call.
+    \\              high    + the matching `[result: ...]` body (required by the
+    \\                        benchmarks harness).
     \\
     \\The provider, model, effort, and verbosity you choose in the REPL are
     \\remembered per-directory in .lp-agent.zon and reused on the next run.
@@ -269,12 +249,21 @@
     ,
     .common_options =
     \\common options:
-    \\  --insecure-disable-tls-host-verification
-    \\          Disables host verification on all HTTP requests.
-    \\          Only set this if you understand and accept the risk.
-    \\  --obey-robots
-    \\          Fetches and obeys robots.txt of the target page.
+    \\  --block-cidrs <LIST>
+    \\          Additional CIDR ranges to block, comma-separated.
+    \\          Prefix with '-' to allow (exempt from blocking).
+    \\          e.g. --block-cidrs 10.0.0.0/8,-10.0.0.42/32
+    \\          Can be combined with --block-private-networks.
+    \\  --block-private-networks
+    \\          Block HTTP requests to private/internal IP addresses after DNS
+    \\          resolution.
     \\          Defaults to false.
+    \\  --cookie <PATH>
+    \\          Path to a JSON file to load cookies from (read-only).
+    \\          Defaults to no cookie loading.
+    \\  --cookie-jar <PATH>
+    \\          Path to a JSON file to save cookies to on exit (write-only).
+    \\          Defaults to no cookie saving.
     \\  --disable-subframes
     \\          Skip loading <iframe> elements. The parser still registers them in the
     \\          DOM, but no child frame or Page.frameAttached events are produced.
@@ -289,77 +278,53 @@
     \\          contribute to computed styles (and therefore to visibility checks like
     \\          display, visibility, opacity, pointer-events).
     \\          Defaults to false, except in agent mode with an LLM, where it is on.
-    \\  --block-private-networks
-    \\          Block HTTP requests to private/internal IP addresses after DNS
-    \\          resolution.
-    \\          Defaults to false.
-    \\  --block-cidrs <LIST>
-    \\          Additional CIDR ranges to block, comma-separated.
-    \\          Prefix with '-' to allow (exempt from blocking).
-    \\          e.g. --block-cidrs 10.0.0.0/8,-10.0.0.42/32
-    \\          Can be combined with --block-private-networks.
-    \\  --http-proxy <URL>
-    \\          HTTP proxy for all HTTP requests.
-    \\          username:password may be included for basic auth.
-    \\          Defaults to none.
-    \\  --proxy-bearer-token <TOKEN>
-    \\          Token sent for bearer authentication with the proxy:
-    \\          Proxy-Authorization: Bearer <token>.
+    \\  --http-cache-dir <PATH>
+    \\          Directory used as a filesystem cache for network resources. Omitting
+    \\          this disables caching.
+    \\          Defaults to no caching.
+    \\  --http-connect-timeout <INT>
+    \\          Time in ms to establish an HTTP connection before timing out. 0 means
+    \\          never.
+    \\          Defaults to 0.
     \\  --http-max-concurrent <INT>
     \\          Maximum number of concurrent HTTP requests.
     \\          Defaults to 40.
     \\  --http-max-host-open <INT>
     \\          Maximum open connections to a given host:port.
     \\          Defaults to 6.
-    \\  --http-connect-timeout <INT>
-    \\          Time in ms to establish an HTTP connection before timing out. 0 means
-    \\          never.
-    \\          Defaults to 0.
-    \\  --http-timeout <INT>
-    \\          Maximum time in ms the transfer is allowed to complete. 0 means never.
-    \\          Defaults to 10000.
     \\  --http-max-response-size <INT>
     \\          Limits the acceptable response size for any request
     \\          e.g. XHR, fetch, script loading.
     \\          Defaults to no limit.
-    \\  --ws-max-concurrent <INT>
-    \\          Maximum number of concurrent WebSocket connections.
-    \\          Defaults to 8.
-    \\  --log-level <LEVEL>
-    \\          The log level.
-    \\          Defaults to {1s}.
-    \\          Allowed values: "debug", "info", "warn", "error", "fatal".
-    \\  --log-format <FORMAT>
-    \\          The log format.
-    \\          Defaults to {2s}.
-    \\          Allowed values: "pretty", "logfmt".
+    \\  --http-proxy <URL>
+    \\          HTTP proxy for all HTTP requests.
+    \\          username:password may be included for basic auth.
+    \\          Defaults to none.
+    \\  --http-timeout <INT>
+    \\          Maximum time in ms the transfer is allowed to complete. 0 means never.
+    \\          Defaults to 10000.
+    \\  --insecure-disable-tls-host-verification
+    \\          Disables host verification on all HTTP requests.
+    \\          Only set this if you understand and accept the risk.
     \\  --log-filter-scopes <SCOPES>
     \\          Filter logs per scope, comma-separated, applied left-to-right.
     \\          "-X" (or bare "X") filters out a scope, "+X" filters it in, and
     \\          "all" targets every scope. e.g. "http,unknown_prop" hides those
     \\          two; "-all,+cdp" hides everything except cdp.
-    \\  --user-agent <STRING>
-    \\          Override the User-Agent header entirely. Must not impersonate other
-    \\          browsers; any value containing "Mozilla" is forbidden. The browser
-    \\          still sends Sec-Ch-Ua. Incompatible with --user-agent-suffix.
-    \\  --user-agent-suffix <STRING>
-    \\          Suffix appended to the Lightpanda/X.Y User-Agent.
-    \\  --web-bot-auth-key-file <PATH>
-    \\          Path to the Ed25519 private key PEM file.
-    \\  --web-bot-auth-keyid <STRING>
-    \\          The JWK thumbprint of your public key.
-    \\  --web-bot-auth-domain <DOMAIN>
-    \\          Your domain, e.g. yourdomain.com.
-    \\  --http-cache-dir <PATH>
-    \\          Directory used as a filesystem cache for network resources. Omitting
-    \\          this disables caching.
-    \\          Defaults to no caching.
-    \\  --cookie <PATH>
-    \\          Path to a JSON file to load cookies from (read-only).
-    \\          Defaults to no cookie loading.
-    \\  --cookie-jar <PATH>
-    \\          Path to a JSON file to save cookies to on exit (write-only).
-    \\          Defaults to no cookie saving.
+    \\  --log-format <FORMAT>
+    \\          The log format.
+    \\          Defaults to {2s}.
+    \\          Allowed values: "pretty", "logfmt".
+    \\  --log-level <LEVEL>
+    \\          The log level.
+    \\          Defaults to {1s}.
+    \\          Allowed values: "debug", "info", "warn", "error", "fatal".
+    \\  --obey-robots
+    \\          Fetches and obeys robots.txt of the target page.
+    \\          Defaults to false.
+    \\  --proxy-bearer-token <TOKEN>
+    \\          Token sent for bearer authentication with the proxy:
+    \\          Proxy-Authorization: Bearer <token>.
     \\  --storage-engine <ENGINE>
     \\          The storage engine to use.
     \\          Defaults to none.
@@ -367,5 +332,20 @@
     \\  --storage-sqlite-path <PATH>
     \\          Path to the SQLite database file for persistent storage.
     \\          Use ":memory:" for in-memory storage.
+    \\  --user-agent <STRING>
+    \\          Override the User-Agent header entirely. Must not impersonate other
+    \\          browsers; any value containing "Mozilla" is forbidden. The browser
+    \\          still sends Sec-Ch-Ua. Incompatible with --user-agent-suffix.
+    \\  --user-agent-suffix <STRING>
+    \\          Suffix appended to the Lightpanda/X.Y User-Agent.
+    \\  --web-bot-auth-domain <DOMAIN>
+    \\          Your domain, e.g. yourdomain.com.
+    \\  --web-bot-auth-key-file <PATH>
+    \\          Path to the Ed25519 private key PEM file.
+    \\  --web-bot-auth-keyid <STRING>
+    \\          The JWK thumbprint of your public key.
+    \\  --ws-max-concurrent <INT>
+    \\          Maximum number of concurrent WebSocket connections.
+    \\          Defaults to 8.
     ,
 }
