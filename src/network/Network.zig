@@ -183,7 +183,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     const x509_store = blk: {
         if (config.tlsVerifyHost()) {
-            break :blk try createX509Store(allocator);
+            break :blk try createX509Store(allocator, config);
         }
         break :blk crypto.X509_STORE_new() orelse {
             return error.FailedToCreateX509Store;
@@ -734,9 +734,37 @@ const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{
 
 /// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
 /// Allocations made through passed `allocator` are freed before this function returns.
-pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE {
+fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreError!*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
+
+    switch (config.mode) {
+        // Load custom CA if provided.
+        inline .serve, .fetch, .mcp, .agent => |opts| {
+            const files = opts.ca_cert.items;
+            const directories = opts.ca_path.items;
+
+            for (directories) |ca_path| {
+                if (crypto.X509_STORE_load_locations(store, null, ca_path) != 1) {
+                    log.warn(.app, "Invalid CA path", .{ .ca_path = ca_path });
+                }
+            }
+
+            for (files) |ca_cert| {
+                if (crypto.X509_STORE_load_locations(store, ca_cert, null) != 1) {
+                    log.warn(.app, "Invalid CA cert", .{ .ca_cert = ca_cert });
+                }
+            }
+        },
+        .help => unreachable,
+        .version => {}, // Don't load custom CA for version command.
+    }
+
+    // Early return if root certificates are unwanted.
+    if (config.disableRootCertificates()) {
+        log.warn(.app, "Root certificates are disabled", .{});
+        return store;
+    }
 
     switch (comptime builtin.os.tag) {
         .linux, .openbsd, .netbsd, .freebsd => blk: {
