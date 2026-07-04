@@ -1856,7 +1856,8 @@ pub fn startGoto(
     arguments: ?std.json.Value,
     receiver_frame_id: ?u32,
 ) ToolError!StartedGoto {
-    const args = try parseArgs(GotoParams, arena, arguments);
+    // This path bypasses `call`, so it needs its own `$LP_*` substitution pass.
+    const args = try parseArgs(GotoParams, arena, try substituteStringArgs(arena, .goto, arguments));
     if (receiver_frame_id) |fid| {
         if (session.livePage(fid)) |page| {
             registry.resetFrame(arena, &page.frame);
