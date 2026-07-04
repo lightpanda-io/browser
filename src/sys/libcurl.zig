@@ -601,7 +601,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .proxy_ssl_verify_peer,
         => @as(c_long, @intFromBool(value)),
 
-        // VERIFYHOST takes 0 or 2 (1 is rejected since curl 7.66).
+        // VERIFYHOST expects 0 or 2 (since 7.66.0, 1 is treated the same as 2).
         // https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html
         .ssl_verify_host,
         .proxy_ssl_verify_host,
