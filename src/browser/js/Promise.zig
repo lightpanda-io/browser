@@ -74,57 +74,21 @@ pub fn markAsHandled(self: Promise) void {
 }
 
 pub fn persist(self: Promise) !Global {
-    return self._persist(true);
+    return .{ .slot = try js.newTrackedSlot(self.local.ctx, self.handle) };
 }
 
-pub fn temp(self: Promise) !Temp {
-    return self._persist(false);
-}
+pub const Global = struct {
+    slot: *js.GlobalSlot,
 
-fn _persist(self: *const Promise, comptime is_global: bool) !(if (is_global) Global else Temp) {
-    var ctx = self.local.ctx;
-
-    var global: v8.Global = undefined;
-    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-    if (comptime is_global) {
-        try ctx.trackGlobal(global);
-        return .{ .handle = global, .temps = {} };
+    pub fn deinit(self: Global) void {
+        self.slot.release();
     }
-    try ctx.trackTemp(global);
-    return .{ .handle = global, .temps = &ctx.page.temps };
-}
+    pub const release = deinit;
 
-pub const Temp = G(.temp);
-pub const Global = G(.global);
-
-const GlobalType = enum(u8) {
-    temp,
-    global,
+    pub fn local(self: Global, l: *const js.Local) Promise {
+        return .{
+            .local = l,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.slot.handle, l.isolate.handle)),
+        };
+    }
 };
-
-fn G(comptime global_type: GlobalType) type {
-    return struct {
-        handle: v8.Global,
-        temps: if (global_type == .temp) *std.AutoHashMapUnmanaged(usize, v8.Global) else void,
-
-        const Self = @This();
-
-        pub fn deinit(self: *Self) void {
-            v8.v8__Global__Reset(&self.handle);
-        }
-
-        pub fn local(self: *const Self, l: *const js.Local) Promise {
-            return .{
-                .local = l,
-                .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
-            };
-        }
-
-        pub fn release(self: *const Self) void {
-            if (self.temps.fetchRemove(self.handle.data_ptr)) |kv| {
-                var g = kv.value;
-                v8.v8__Global__Reset(&g);
-            }
-        }
-    };
-}

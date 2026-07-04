@@ -43,7 +43,7 @@ _timeline: ?js.Object.Global = null,
 _ready_resolver: ?js.PromiseResolver.Global = null,
 _finished_resolver: ?js.PromiseResolver.Global = null,
 _startTime: ?f64 = null,
-_onFinish: ?js.Function.Temp = null,
+_onFinish: ?js.Function.Global = null,
 _playState: PlayState = .idle,
 
 // Fake the animation by passing the states:
@@ -179,7 +179,7 @@ pub fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
     return self.play(frame);
 }
 
-pub fn getOnFinish(self: *const Animation) ?js.Function.Temp {
+pub fn getOnFinish(self: *const Animation) ?js.Function.Global {
     return self._onFinish;
 }
 
@@ -215,7 +215,7 @@ fn update(ctx: *anyopaque) !?u32 {
     return null;
 }
 
-pub fn setOnFinish(self: *Animation, cb: ?js.Function.Temp) !void {
+pub fn setOnFinish(self: *Animation, cb: ?js.Function.Global) !void {
     self._onFinish = cb;
 }
 

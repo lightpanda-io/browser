@@ -54,7 +54,7 @@ pub fn registerTypes() []const type {
 // the keyPath attribute need identity equality. For a compound key (an array)
 // we have to return the same v8::rray on every reach. So users of KeyPath will
 // cache it locally, and store it in the Transaction's globals list for cleanup.
-pub fn cachedKeyPathJs(cache: *?*js.Value.BareGlobal, txn: *IDBTransaction, kp: ?Key.KeyPath, exec: *js.Execution) !js.Value {
+pub fn cachedKeyPathJs(cache: *?*js.GlobalSlot, txn: *IDBTransaction, kp: ?Key.KeyPath, exec: *js.Execution) !js.Value {
     const local = exec.js.local.?;
     if (kp) |path| {
         if (std.meta.activeTag(path) == .list) {

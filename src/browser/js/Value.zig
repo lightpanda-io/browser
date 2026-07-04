@@ -622,34 +622,17 @@ const CloneDelegate = struct {
 };
 
 pub fn persist(self: Value) !Global {
-    return self._persist(true);
+    return .{ .slot = try js.newTrackedSlot(self.local.ctx, self.handle) };
 }
 
-pub fn temp(self: Value) !Temp {
-    return self._persist(false);
-}
-
-// Like persist(), but not tracked on the context: the caller owns the handle
-// and must deinit (Reset) it. A reset is only idempotent through the same
-// instance — copies alias one v8 slot, so keep a single canonical instance and
-// reset through it.
-pub fn bare(self: Value) BareGlobal {
+// like persist, but not tracked by the page. Caller takes responsibility for
+// resetting and freeing the allocation.
+pub fn persistBare(self: Value, arena: std.mem.Allocator) !*js.GlobalSlot {
+    const slot = try arena.create(js.GlobalSlot);
     var global: v8.Global = undefined;
     v8.v8__Global__New(self.local.ctx.isolate.handle, self.handle, &global);
-    return .{ .handle = global, .temps = {} };
-}
-
-fn _persist(self: *const Value, comptime is_global: bool) !(if (is_global) Global else Temp) {
-    var ctx = self.local.ctx;
-
-    var global: v8.Global = undefined;
-    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-    if (comptime is_global) {
-        try ctx.trackGlobal(global);
-        return .{ .handle = global, .temps = {} };
-    }
-    try ctx.trackTemp(global);
-    return .{ .handle = global, .temps = &ctx.page.temps };
+    slot.* = .{ .handle = global, .tracker = null, .gindex = undefined };
+    return slot;
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {
@@ -696,48 +679,71 @@ pub fn format(self: Value, writer: *std.Io.Writer) !void {
     return js_str.format(writer);
 }
 
-pub const Temp = G(.temp);
-pub const Global = G(.global);
-pub const BareGlobal = G(.bare);
+// Copyable handle to our v8::Global wrapper so that releasing a copy resets
+// the underlying v8::Global
+pub const Global = struct {
+    slot: *js.GlobalSlot,
 
-const GlobalType = enum(u8) {
-    temp,
-    global,
-    bare,
+    pub fn deinit(self: Global) void {
+        self.slot.release();
+    }
+    pub const release = deinit;
+
+    pub fn local(self: Global, l: *const js.Local) Value {
+        return .{
+            .local = l,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.slot.handle, l.isolate.handle)),
+        };
+    }
+
+    pub fn isEqual(self: Global, other: Value) bool {
+        return v8.v8__Global__IsEqual(&self.slot.handle, other.handle);
+    }
 };
 
-fn G(comptime global_type: GlobalType) type {
-    return struct {
-        handle: v8.Global,
-        temps: if (global_type == .temp) *std.AutoHashMapUnmanaged(usize, v8.Global) else void,
+const testing = @import("../../testing.zig");
+test "Value: persisted handle early-release swap-removes and fixes up indices" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
-        const Self = @This();
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
 
-        pub fn deinit(self: *Self) void {
-            v8.v8__Global__Reset(&self.handle);
-        }
+    const tracker = &frame.js.page.globals;
+    const base = tracker.list.items.len;
 
-        pub fn local(self: *const Self, l: *const js.Local) Value {
-            return .{
-                .local = l,
-                .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
-            };
-        }
+    var a = try (try ls.local.exec("({a:1})", null)).persist();
+    var b = try (try ls.local.exec("({b:2})", null)).persist();
+    var c = try (try ls.local.exec("({c:3})", null)).persist();
 
-        pub fn isEqual(self: *const Self, other: Value) bool {
-            return v8.v8__Global__IsEqual(&self.handle, other.handle);
-        }
+    try testing.expectEqual(base + 3, tracker.list.items.len);
+    try testing.expectEqual(base + 0, a.slot.gindex);
+    try testing.expectEqual(base + 1, b.slot.gindex);
+    try testing.expectEqual(base + 2, c.slot.gindex);
 
-        pub fn release(self: *const Self) void {
-            if (self.temps.fetchRemove(self.handle.data_ptr)) |kv| {
-                var g = kv.value;
-                v8.v8__Global__Reset(&g);
-            }
-        }
-    };
+    // Release the middle one: the last live slot (c) must move into b's spot and
+    // have its stored index rewritten to match, or a later release corrupts.
+    b.deinit();
+    try testing.expectEqual(base + 2, tracker.list.items.len);
+    try testing.expectEqual(base + 1, c.slot.gindex);
+    try testing.expectEqual(c.slot, tracker.list.items[base + 1]);
+    try testing.expectEqual(a.slot, tracker.list.items[base + 0]);
+
+    // a and c are still usable (right handle, not b's).
+    try testing.expect(a.local(&ls.local).isObject());
+    try testing.expect(c.local(&ls.local).isObject());
+
+    // Release the remaining two via the moved indices — must not corrupt.
+    a.deinit();
+    try testing.expectEqual(base + 1, tracker.list.items.len);
+    try testing.expectEqual(base + 0, c.slot.gindex);
+    try testing.expectEqual(c.slot, tracker.list.items[base + 0]);
+
+    c.deinit();
+    try testing.expectEqual(base, tracker.list.items.len);
 }
 
-const testing = @import("../../testing.zig");
 test "Value: jsonStringify maps unserializable JS values to null" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();

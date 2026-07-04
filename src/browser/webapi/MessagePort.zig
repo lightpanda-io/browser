@@ -78,7 +78,7 @@ pub fn postMessage(self: *MessagePort, message: js.Value, exec: *Execution) !voi
         const c = message.structuredCloneTo(&ls.local) catch {
             return error.DataClone;
         };
-        break :blk try c.temp();
+        break :blk try c.persist();
     };
     errdefer cloned.release();
 

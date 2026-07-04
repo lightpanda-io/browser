@@ -50,7 +50,7 @@ _index_id: ?i64 = null,
 
 // the JS value of this Cursor, pre-converted and cached as an optimization
 // since this cursor will be the request value on every iteration.
-_js: *js.Value.BareGlobal,
+_js: *js.GlobalSlot,
 
 // Encoded current key; null before iteration and at the end. For an index cursor
 // this is the index key; for an object store it equals the primary key.
@@ -62,7 +62,7 @@ _primary_key: ?[]const u8 = null,
 _value: ?[]const u8 = null,
 // The deserialized JS value, cached so repeated `.value` reads return the same
 // object (and observe mutations to it). Reset whenever the cursor repositions.
-_value_js: ?*js.Value.BareGlobal = null,
+_value_js: ?*js.GlobalSlot = null,
 
 // Backing storage for _key/_primary_key/_value, reused across positions so a
 // long scan holds one record's worth of memory, not the whole traversal.
@@ -384,7 +384,7 @@ fn exhaust(self: *IDBCursor) void {
 // value until transaction teardown.
 fn invalidateValue(self: *IDBCursor) void {
     if (self._value_js) |slot| {
-        slot.deinit();
+        slot.reset();
         self._value_js = null;
     }
 }
