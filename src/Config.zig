@@ -85,6 +85,37 @@ fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator) !?log.Level
     };
 }
 
+pub fn isHashedDirectory(dir: []const u8) bool {
+    var handle = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch return false;
+    defer handle.close();
+
+    var hashed = false;
+    var it = handle.iterate();
+    while (it.next() catch return false) |entry| {
+        if (std.mem.endsWith(u8, entry.name, ".0")) {
+            hashed = true;
+            break;
+        }
+    }
+    return hashed;
+}
+
+fn caPathValidator(
+    allocator: Allocator,
+    args: *std.process.ArgIterator,
+    list: *std.ArrayList([:0]const u8),
+) !void {
+    const dir = args.next() orelse return error.MissingArgument;
+    if (!isHashedDirectory(dir)) {
+        log.fatal(.app, "invalid CA path", .{ .arg = "--ca-path", .value = dir });
+        return error.InvalidArgument;
+    }
+
+    return list.append(allocator, dir);
+}
+
+const crypto = @import("sys/libcrypto.zig");
+
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
@@ -119,7 +150,7 @@ const CommonOptions = .{
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },
     .{ .name = "ca_cert", .type = [:0]const u8, .multiple = true },
-    .{ .name = "ca_path", .type = [:0]const u8, .multiple = true },
+    .{ .name = "ca_path", .type = [:0]const u8, .multiple = true, .validator = caPathValidator },
     .{ .name = "disable_root_certificates", .type = bool },
 };
 
