@@ -828,18 +828,8 @@ fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreE
 }
 
 fn loadHashedDirectory(store: *crypto.X509_STORE, dir: [:0]const u8) bool {
-    var handle = std.Io.Dir.openDirAbsolute(lp.io, dir, .{ .iterate = true }) catch return false;
-    defer handle.close(lp.io);
-
-    var hashed = false;
-    var it = handle.iterate();
-    while (it.next(lp.io) catch return false) |entry| {
-        if (std.mem.endsWith(u8, entry.name, ".0")) {
-            hashed = true;
-            break;
-        }
+    if (Config.isHashedDirectory(dir)) {
+        return crypto.X509_STORE_load_locations(store, null, dir.ptr) == 1;
     }
-    if (!hashed) return false;
-
-    return crypto.X509_STORE_load_locations(store, null, dir.ptr) == 1;
+    return false;
 }
