@@ -114,8 +114,6 @@ fn caPathValidator(
     return list.append(allocator, dir);
 }
 
-const crypto = @import("sys/libcrypto.zig");
-
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
