@@ -69,6 +69,22 @@ pub fn item(self: *const DOMTokenList, index: usize, frame: *Frame) !?[]const u8
     return null;
 }
 
+/// https://dom.spec.whatwg.org/#dom-domtokenlist-supports
+/// Only `rel` defines supported tokens here; per spec every other backing
+/// attribute throws. Loaders probe `relList.supports("modulepreload")` and
+/// fall back to fetch()-based legacy loading when it fails.
+pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bool {
+    if (!std.ascii.eqlIgnoreCase(self._attribute_name.str(), "rel")) {
+        return error.TypeError;
+    }
+    const supported = [_][]const u8{ "stylesheet", "preload", "modulepreload" };
+    const lower = try std.ascii.allocLowerString(frame.local_arena, token);
+    for (supported) |s| {
+        if (std.mem.eql(u8, lower, s)) return true;
+    }
+    return false;
+}
+
 pub fn contains(self: *const DOMTokenList, search: []const u8) !bool {
     var it = std.mem.tokenizeAny(u8, self.getValue(), WHITESPACE);
     while (it.next()) |token| {
@@ -310,6 +326,7 @@ pub const JsApi = struct {
     }
 
     pub const contains = bridge.function(DOMTokenList.contains, .{ .dom_exception = true });
+    pub const supports = bridge.function(DOMTokenList.supports, .{ .dom_exception = true });
     pub const add = bridge.function(DOMTokenList.add, .{ .dom_exception = true, .ce_reactions = true });
     pub const remove = bridge.function(DOMTokenList.remove, .{ .dom_exception = true, .ce_reactions = true });
     pub const toggle = bridge.function(DOMTokenList.toggle, .{ .dom_exception = true, .ce_reactions = true });

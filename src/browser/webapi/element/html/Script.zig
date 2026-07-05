@@ -115,6 +115,17 @@ pub fn setInnerText(self: *Script, text: []const u8, frame: *Frame) !void {
     try self.asNode().setTextContent(text, frame);
 }
 
+/// https://html.spec.whatwg.org/multipage/scripting.html#dom-script-supports
+/// Only the types this engine actually loads; loaders feature-detect module
+/// support here and fall back to fetch()-based legacy loading when it fails.
+pub fn supports(value: []const u8) bool {
+    const supported = [_][]const u8{ "classic", "module", "importmap" };
+    for (supported) |s| {
+        if (std.mem.eql(u8, value, s)) return true;
+    }
+    return false;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Script);
 
@@ -131,6 +142,7 @@ pub const JsApi = struct {
     pub const nonce = bridge.accessor(Script.getNonce, Script.setNonce, .{ .ce_reactions = true });
     pub const charset = bridge.accessor(Script.getCharset, Script.setCharset, .{ .ce_reactions = true });
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
+    pub const supports = bridge.function(Script.supports, .{ .static = true });
     pub const innerText = bridge.accessor(_innerText, Script.setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *Script, frame: *const Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
