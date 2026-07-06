@@ -21,9 +21,12 @@ const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const Inbox = @import("../Inbox.zig");
-const Network = @import("../network/Network.zig");
 const Notification = @import("../Notification.zig");
+
 const WS = @import("../network/WS.zig");
+const Network = @import("../network/Network.zig");
+const Transfer = @import("../network/HttpClient.zig").Transfer;
+
 const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
@@ -32,7 +35,6 @@ const Page = @import("../browser/Page.zig");
 const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
-const Transfer = @import("../browser/HttpClient.zig").Transfer;
 
 const Connection = @import("Connection.zig");
 const Incrementing = @import("id.zig").Incrementing;
@@ -981,8 +983,7 @@ pub const BrowserContext = struct {
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.
                 .must_encode = blk: {
-                    const response = msg.response;
-                    if (response.contentType()) |ct| {
+                    if (msg.transfer.contentType()) |ct| {
                         const mime = try Mime.parse(ct);
 
                         if (!mime.isText()) {
@@ -1458,5 +1459,6 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .cookie_origin = "",
         .resource_type = .fetch,
         .notification = undefined,
+        .shutdown_callback = @import("../network/HttpClient.zig").noopShutdown,
     }));
 }

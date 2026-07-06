@@ -28,7 +28,7 @@ const Watchdog = @import("../Watchdog.zig");
 const Session = @import("Session.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 const Viewport = @import("Viewport.zig");
-const HttpClient = @import("HttpClient.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
 
 const ArenaPool = App.ArenaPool;
