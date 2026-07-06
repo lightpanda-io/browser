@@ -208,16 +208,16 @@ pub const JsApi = struct {
         return self.getElementById(try value.toZig([]const u8));
     }
 
-    pub const querySelector = bridge.function(DocumentFragment.querySelector, .{ .dom_exception = true });
-    pub const querySelectorAll = bridge.function(DocumentFragment.querySelectorAll, .{ .dom_exception = true });
+    pub const querySelector = bridge.function(DocumentFragment.querySelector, .{});
+    pub const querySelectorAll = bridge.function(DocumentFragment.querySelectorAll, .{});
     pub const children = bridge.accessor(DocumentFragment.getChildren, null, .{});
     pub const childElementCount = bridge.accessor(DocumentFragment.getChildElementCount, null, .{});
     pub const firstElementChild = bridge.accessor(DocumentFragment.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(DocumentFragment.lastElementChild, null, .{});
-    pub const append = bridge.function(DocumentFragment.append, .{ .dom_exception = true, .ce_reactions = true });
-    pub const prepend = bridge.function(DocumentFragment.prepend, .{ .dom_exception = true, .ce_reactions = true });
-    pub const moveBefore = bridge.function(DocumentFragment.moveBefore, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
+    pub const append = bridge.function(DocumentFragment.append, .{ .ce_reactions = true });
+    pub const prepend = bridge.function(DocumentFragment.prepend, .{ .ce_reactions = true });
+    pub const moveBefore = bridge.function(DocumentFragment.moveBefore, .{ .ce_reactions = true });
+    pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .ce_reactions = true });
 
     pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
     fn _getInnerHTML(self: *DocumentFragment, frame: *Frame) ![]const u8 {

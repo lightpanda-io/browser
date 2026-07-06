@@ -204,7 +204,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(EventTarget.init, .{});
-    pub const dispatchEvent = bridge.function(EventTarget.dispatchEvent, .{ .dom_exception = true });
+    pub const dispatchEvent = bridge.function(EventTarget.dispatchEvent, .{});
     pub const addEventListener = bridge.function(EventTarget.addEventListener, .{});
     pub const removeEventListener = bridge.function(EventTarget.removeEventListener, .{});
 };

@@ -233,10 +233,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const registerTool = bridge.function(
-        ModelContext.registerTool,
-        .{ .dom_exception = true },
-    );
+    pub const registerTool = bridge.function(ModelContext.registerTool, .{});
 };
 
 const testing = @import("../../testing.zig");

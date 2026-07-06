@@ -118,7 +118,6 @@ pub fn deinit(self: *Caller) void {
 }
 
 pub const CallOpts = struct {
-    dom_exception: bool = false,
     null_as_undefined: bool = false,
     as_typed_array: bool = false,
     // Constructor-only. When true, `new.target` is pulled from the
@@ -137,12 +136,12 @@ pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *cons
     const info = FunctionCallbackInfo{ .handle = handle };
 
     if (!info.isConstructCall()) {
-        handleError(T, @TypeOf(func), local, error.InvalidArgument, info, opts);
+        handleError(T, @TypeOf(func), local, error.InvalidArgument, info);
         return;
     }
 
     self._constructor(func, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(T, @TypeOf(func), local, err, info);
     };
 }
 
@@ -193,7 +192,7 @@ pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndex(T, local, func, idx, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(T, @TypeOf(func), local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -219,7 +218,7 @@ pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedIndex(T, local, func, name, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(T, @TypeOf(func), local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -245,7 +244,7 @@ pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setNamedIndex(T, local, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(T, @TypeOf(func), local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -272,7 +271,7 @@ pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *c
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _deleteNamedIndex(T, local, func, name, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(T, @TypeOf(func), local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -298,7 +297,7 @@ pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *co
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getEnumerator(T, local, func, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(T, @TypeOf(func), local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -328,7 +327,7 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
                         return js.Intercepted.no;
                     }
                 }
-                handleError(T, F, local, err, info, opts);
+                handleError(T, F, local, err, info);
                 return js.Intercepted.no;
             };
         },
@@ -359,7 +358,7 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
     return try js.String.toSlice(.{ .local = local, .handle = handle });
 }
 
-fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype, comptime opts: CallOpts) void {
+fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype) void {
     const isolate = local.isolate;
 
     if (comptime IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
@@ -379,20 +378,19 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         error.RangeError => isolate.createRangeError(""),
         error.OutOfMemory => isolate.createError("out of memory"),
         error.IllegalConstructor => isolate.createError("Illegal Constructor"),
-        else => blk: {
-            if (comptime opts.dom_exception) {
-                const DOMException = @import("../webapi/DOMException.zig");
-                if (DOMException.fromError(err)) |ex| {
-                    const value = local.zigValueToJs(ex, .{}) catch break :blk isolate.createError("internal error");
-                    break :blk value.handle;
-                }
-            }
-            break :blk isolate.createError(@errorName(err));
-        },
+        else => domExceptionToJs(local, err) orelse isolate.createError(@errorName(err)),
     };
 
     const js_exception = isolate.throwException(js_err);
     info.getReturnValue().setValueHandle(js_exception);
+}
+
+// Convert a Zig error to a DOMException. If the error is unknown, return null.
+fn domExceptionToJs(local: *const Local, err: anyerror) ?*const v8.Value {
+    const DOMException = @import("../webapi/DOMException.zig");
+    const ex = DOMException.fromError(err) orelse return null;
+    const value = local.zigValueToJs(ex, .{}) catch return local.isolate.createError("internal error");
+    return value.handle;
 }
 
 // This is extracted to speed up compilation. When left inlined in handleError,
@@ -568,7 +566,6 @@ pub const Function = struct {
         static: bool = false,
         wpt_only: bool = false,
         deletable: bool = true,
-        dom_exception: bool = false,
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
         cache: ?Caching = null,
@@ -650,11 +647,7 @@ pub const Function = struct {
         };
 
         const js_value = _call(T, &caller.local, info, func, opts) catch |err| {
-            handleError(T, @TypeOf(func), &caller.local, err, info, .{
-                .dom_exception = opts.dom_exception,
-                .as_typed_array = opts.as_typed_array,
-                .null_as_undefined = opts.null_as_undefined,
-            });
+            handleError(T, @TypeOf(func), &caller.local, err, info);
             return;
         };
 
@@ -677,7 +670,6 @@ pub const Function = struct {
         }
         const res = @call(.auto, func, args);
         const js_value = try local.zigValueToJs(res, .{
-            .dom_exception = opts.dom_exception,
             .as_typed_array = opts.as_typed_array,
             .null_as_undefined = opts.null_as_undefined,
         });
@@ -883,12 +875,6 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch |err| {
                 const DOMException = @import("../webapi/DOMException.zig");
                 if (DOMException.fromError(err) != null) {
-                    // I don't love this. But we have [a few] cases when trying to
-                    // map a JS Value that we have a specific DOMException to throw.
-                    // Ideally we should only do this if dom_exception = true in the
-                    // bridge definition. But we don't have access to that here.
-                    // Instead, we just rely on the fact that local.jsValueToZig
-                    // only throws a DOMException-known error when it should.
                     return err;
                 }
                 return error.InvalidArgument;

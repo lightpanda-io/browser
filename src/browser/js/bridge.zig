@@ -110,7 +110,6 @@ pub const Constructor = struct {
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
-        dom_exception: bool = false,
         // When true, the constructor function receives `new.target` (as a
         // js.Function) as its first parameter. Used by HTMLElement to support
         // direct instantiation of custom elements via `new MyElement()`.
@@ -142,7 +141,6 @@ pub const Constructor = struct {
                     defer if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
 
                     caller.constructor(T, func, handle.?, .{
-                        .dom_exception = opts.dom_exception,
                         .new_target = opts.new_target,
                     });
                 }

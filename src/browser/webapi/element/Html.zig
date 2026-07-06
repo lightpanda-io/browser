@@ -1654,11 +1654,11 @@ pub const JsApi = struct {
         // `[LegacyNullToEmptyString]`: a JS null becomes "", not "null".
         return self.setInnerText(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
-    pub const outerText = bridge.accessor(_innerText, _setOuterText, .{ .ce_reactions = true, .dom_exception = true });
+    pub const outerText = bridge.accessor(_innerText, _setOuterText, .{ .ce_reactions = true });
     fn _setOuterText(self: *HtmlElement, value: js.Value, frame: *Frame) !void {
         return self.setOuterText(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
-    pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
+    pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .ce_reactions = true });
     pub const click = bridge.function(HtmlElement.click, .{});
 
     pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
@@ -1666,9 +1666,9 @@ pub const JsApi = struct {
     pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
-    pub const showPopover = bridge.function(HtmlElement.showPopover, .{ .dom_exception = true });
-    pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{ .dom_exception = true });
-    pub const togglePopover = bridge.function(HtmlElement.togglePopover, .{ .dom_exception = true });
+    pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
+    pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{});
+    pub const togglePopover = bridge.function(HtmlElement.togglePopover, .{});
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{ .ce_reactions = true });
     pub const nonce = bridge.accessor(HtmlElement.getNonce, HtmlElement.setNonce, .{ .ce_reactions = true });

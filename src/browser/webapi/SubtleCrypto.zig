@@ -569,14 +569,14 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
     };
 
-    pub const generateKey = bridge.function(SubtleCrypto.generateKey, .{ .dom_exception = true });
-    pub const importKey = bridge.function(SubtleCrypto.importKey, .{ .dom_exception = true });
-    pub const exportKey = bridge.function(SubtleCrypto.exportKey, .{ .dom_exception = true });
-    pub const encrypt = bridge.function(SubtleCrypto.encrypt, .{ .dom_exception = true });
-    pub const decrypt = bridge.function(SubtleCrypto.decrypt, .{ .dom_exception = true });
-    pub const sign = bridge.function(SubtleCrypto.sign, .{ .dom_exception = true });
-    pub const verify = bridge.function(SubtleCrypto.verify, .{ .dom_exception = true });
-    pub const deriveBits = bridge.function(SubtleCrypto.deriveBits, .{ .dom_exception = true });
-    pub const deriveKey = bridge.function(SubtleCrypto.deriveKey, .{ .dom_exception = true });
-    pub const digest = bridge.function(SubtleCrypto.digest, .{ .dom_exception = true });
+    pub const generateKey = bridge.function(SubtleCrypto.generateKey, .{});
+    pub const importKey = bridge.function(SubtleCrypto.importKey, .{});
+    pub const exportKey = bridge.function(SubtleCrypto.exportKey, .{});
+    pub const encrypt = bridge.function(SubtleCrypto.encrypt, .{});
+    pub const decrypt = bridge.function(SubtleCrypto.decrypt, .{});
+    pub const sign = bridge.function(SubtleCrypto.sign, .{});
+    pub const verify = bridge.function(SubtleCrypto.verify, .{});
+    pub const deriveBits = bridge.function(SubtleCrypto.deriveBits, .{});
+    pub const deriveKey = bridge.function(SubtleCrypto.deriveKey, .{});
+    pub const digest = bridge.function(SubtleCrypto.digest, .{});
 };

@@ -530,10 +530,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const get = bridge.function(CookieStore.get, .{ .dom_exception = true });
-    pub const getAll = bridge.function(CookieStore.getAll, .{ .dom_exception = true });
-    pub const set = bridge.function(CookieStore.set, .{ .dom_exception = true });
-    pub const delete = bridge.function(CookieStore.delete, .{ .dom_exception = true });
+    pub const get = bridge.function(CookieStore.get, .{});
+    pub const getAll = bridge.function(CookieStore.getAll, .{});
+    pub const set = bridge.function(CookieStore.set, .{});
+    pub const delete = bridge.function(CookieStore.delete, .{});
     pub const onchange = bridge.accessor(CookieStore.getOnChange, CookieStore.setOnChange, .{});
 };
 

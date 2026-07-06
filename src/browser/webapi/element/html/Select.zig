@@ -371,7 +371,7 @@ pub const JsApi = struct {
     pub const willValidate = bridge.accessor(Select.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Select.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Select.getValidationMessage, null, .{});
-    pub const add = bridge.function(Select.add, .{ .dom_exception = true, .ce_reactions = true });
+    pub const add = bridge.function(Select.add, .{ .ce_reactions = true });
     pub const checkValidity = bridge.function(Select.checkValidity, .{});
     pub const reportValidity = bridge.function(Select.reportValidity, .{});
     pub const setCustomValidity = bridge.function(Select.setCustomValidity, .{});

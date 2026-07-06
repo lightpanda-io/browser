@@ -137,10 +137,10 @@ pub const JsApi = struct {
     pub const textBaseline = bridge.property("alphabetic", .{ .template = false, .readonly = false });
 
     pub const fillStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getFillStyle, OffscreenCanvasRenderingContext2D.setFillStyle, .{});
-    pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
+    pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{});
 
     pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{ .noop = true });
-    pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
+    pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{});
     pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{ .noop = true });
     pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{ .noop = true });

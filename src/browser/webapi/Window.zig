@@ -1045,9 +1045,9 @@ pub const JsApi = struct {
     pub const requestIdleCallback = bridge.function(Window.requestIdleCallback, .{});
     pub const cancelIdleCallback = bridge.function(Window.cancelIdleCallback, .{});
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
-    pub const postMessage = bridge.function(Window.postMessage, .{ .dom_exception = true });
-    pub const btoa = bridge.function(Window.btoa, .{ .dom_exception = true });
-    pub const atob = bridge.function(Window.atob, .{ .dom_exception = true });
+    pub const postMessage = bridge.function(Window.postMessage, .{});
+    pub const btoa = bridge.function(Window.btoa, .{});
+    pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const structuredClone = bridge.function(Window.structuredClone, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
@@ -1081,7 +1081,7 @@ pub const JsApi = struct {
     pub const opener = bridge.accessor(Window.getOpener, null, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});
     pub const name = bridge.accessor(Window.getName, Window.setName, .{});
-    pub const open = bridge.function(Window.open, .{ .dom_exception = true });
+    pub const open = bridge.function(Window.open, .{});
     pub const close = bridge.function(Window.close, .{});
 
     pub const alert = bridge.function(struct {
@@ -1159,7 +1159,7 @@ const CrossOriginWindow = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{ .dom_exception = true });
+        pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{});
         pub const top = bridge.accessor(CrossOriginWindow.getTop, null, .{});
         pub const parent = bridge.accessor(CrossOriginWindow.getParent, null, .{});
         pub const length = bridge.accessor(CrossOriginWindow.getFramesLength, null, .{});

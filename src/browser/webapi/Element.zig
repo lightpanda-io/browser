@@ -1958,12 +1958,12 @@ pub const JsApi = struct {
 
     pub const prefix = bridge.accessor(Element._prefix, null, .{});
 
-    pub const setAttribute = bridge.function(_setAttribute, .{ .dom_exception = true, .ce_reactions = true });
+    pub const setAttribute = bridge.function(_setAttribute, .{ .ce_reactions = true });
     fn _setAttribute(self: *Element, name: String, value: js.Value, frame: *Frame) !void {
         return self.setAttribute(name, .wrap(try value.toStringSlice()), frame);
     }
 
-    pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .dom_exception = true, .ce_reactions = true });
+    pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .ce_reactions = true });
     fn _setAttributeNS(self: *Element, maybe_ns: ?[]const u8, qn: []const u8, value: js.Value, frame: *Frame) !void {
         return self.setAttributeNS(maybe_ns, qn, .wrap(try value.toStringSlice()), frame);
     }
@@ -1986,16 +1986,16 @@ pub const JsApi = struct {
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{ .ce_reactions = true });
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{ .ce_reactions = true });
-    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .dom_exception = true, .ce_reactions = true });
+    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .ce_reactions = true });
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
-    pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true, .ce_reactions = true });
+    pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .ce_reactions = true });
     pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
     pub const assignedSlot = bridge.accessor(Element.getAssignedSlot, null, .{});
-    pub const attachShadow = bridge.function(_attachShadow, .{ .dom_exception = true });
-    pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
-    pub const setHTMLUnsafe = bridge.function(Element.setHTMLUnsafe, .{ .dom_exception = true, .ce_reactions = true });
-    pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .dom_exception = true, .ce_reactions = true });
-    pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .dom_exception = true, .ce_reactions = true });
+    pub const attachShadow = bridge.function(_attachShadow, .{});
+    pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .ce_reactions = true });
+    pub const setHTMLUnsafe = bridge.function(Element.setHTMLUnsafe, .{ .ce_reactions = true });
+    pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .ce_reactions = true });
+    pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .ce_reactions = true });
 
     const ShadowRootInit = struct {
         mode: String,
@@ -2024,23 +2024,23 @@ pub const JsApi = struct {
             .serializable = init.serializable,
         }, frame);
     }
-    pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replaceWith = bridge.function(Element.replaceWith, .{ .dom_exception = true, .ce_reactions = true });
+    pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .ce_reactions = true });
+    pub const replaceWith = bridge.function(Element.replaceWith, .{ .ce_reactions = true });
     pub const remove = bridge.function(Element.remove, .{ .ce_reactions = true });
-    pub const append = bridge.function(Element.append, .{ .dom_exception = true, .ce_reactions = true });
-    pub const prepend = bridge.function(Element.prepend, .{ .dom_exception = true, .ce_reactions = true });
-    pub const moveBefore = bridge.function(Element.moveBefore, .{ .dom_exception = true, .ce_reactions = true });
-    pub const before = bridge.function(Element.before, .{ .dom_exception = true, .ce_reactions = true });
-    pub const after = bridge.function(Element.after, .{ .dom_exception = true, .ce_reactions = true });
+    pub const append = bridge.function(Element.append, .{ .ce_reactions = true });
+    pub const prepend = bridge.function(Element.prepend, .{ .ce_reactions = true });
+    pub const moveBefore = bridge.function(Element.moveBefore, .{ .ce_reactions = true });
+    pub const before = bridge.function(Element.before, .{ .ce_reactions = true });
+    pub const after = bridge.function(Element.after, .{ .ce_reactions = true });
     pub const firstElementChild = bridge.accessor(Element.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Element.lastElementChild, null, .{});
     pub const nextElementSibling = bridge.accessor(Element.nextElementSibling, null, .{});
     pub const previousElementSibling = bridge.accessor(Element.previousElementSibling, null, .{});
     pub const childElementCount = bridge.accessor(Element.getChildElementCount, null, .{});
-    pub const matches = bridge.function(Element.matches, .{ .dom_exception = true });
-    pub const querySelector = bridge.function(Element.querySelector, .{ .dom_exception = true });
-    pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{ .dom_exception = true });
-    pub const closest = bridge.function(Element.closest, .{ .dom_exception = true });
+    pub const matches = bridge.function(Element.matches, .{});
+    pub const querySelector = bridge.function(Element.querySelector, .{});
+    pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{});
+    pub const closest = bridge.function(Element.closest, .{});
     pub const getAnimations = bridge.function(Element.getAnimations, .{});
     pub const animate = bridge.function(Element.animate, .{});
     pub const checkVisibility = bridge.function(Element.checkVisibility, .{});

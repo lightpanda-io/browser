@@ -553,12 +553,12 @@ pub const JsApi = struct {
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});
     pub const onunhandledrejection = bridge.accessor(WorkerGlobalScope.getOnUnhandledRejection, WorkerGlobalScope.setOnUnhandledRejection, .{});
 
-    pub const btoa = bridge.function(WorkerGlobalScope.btoa, .{ .dom_exception = true });
-    pub const atob = bridge.function(WorkerGlobalScope.atob, .{ .dom_exception = true });
+    pub const btoa = bridge.function(WorkerGlobalScope.btoa, .{});
+    pub const atob = bridge.function(WorkerGlobalScope.atob, .{});
     pub const structuredClone = bridge.function(WorkerGlobalScope.structuredClone, .{});
     pub const reportError = bridge.function(WorkerGlobalScope.reportError, .{});
     pub const fetch = bridge.function(WorkerGlobalScope.fetch, .{});
-    pub const importScripts = bridge.function(WorkerGlobalScope.importScripts, .{ .dom_exception = true });
+    pub const importScripts = bridge.function(WorkerGlobalScope.importScripts, .{});
     pub const queueMicrotask = bridge.function(WorkerGlobalScope.queueMicrotask, .{});
     pub const setTimeout = bridge.function(WorkerGlobalScope.setTimeout, .{});
     pub const clearTimeout = bridge.function(WorkerGlobalScope.clearTimeout, .{});

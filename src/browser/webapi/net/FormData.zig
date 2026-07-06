@@ -503,7 +503,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(FormData.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(FormData.init, .{});
     pub const has = bridge.function(FormData.has, .{});
     pub const get = bridge.function(FormData.get, .{});
     pub const set = bridge.function(FormData.set, .{});

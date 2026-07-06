@@ -101,7 +101,7 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const createDocumentType = bridge.function(DOMImplementation.createDocumentType, .{ .dom_exception = true });
+    pub const createDocumentType = bridge.function(DOMImplementation.createDocumentType, .{});
     pub const createDocument = bridge.function(DOMImplementation.createDocument, .{});
     pub const createHTMLDocument = bridge.function(DOMImplementation.createHTMLDocument, .{});
     pub const hasFeature = bridge.function(DOMImplementation.hasFeature, .{});

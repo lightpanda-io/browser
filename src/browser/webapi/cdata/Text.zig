@@ -83,5 +83,5 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(Text.init, .{});
     pub const wholeText = bridge.accessor(Text.getWholeText, null, .{});
     pub const assignedSlot = bridge.accessor(Text.getAssignedSlot, null, .{});
-    pub const splitText = bridge.function(Text.splitText, .{ .dom_exception = true });
+    pub const splitText = bridge.function(Text.splitText, .{});
 };

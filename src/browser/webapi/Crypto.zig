@@ -82,7 +82,7 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const getRandomValues = bridge.function(Crypto.getRandomValues, .{ .dom_exception = true });
+    pub const getRandomValues = bridge.function(Crypto.getRandomValues, .{});
     pub const randomUUID = bridge.function(Crypto.randomUUID, .{});
     pub const subtle = bridge.accessor(Crypto.getSubtle, null, .{});
 };

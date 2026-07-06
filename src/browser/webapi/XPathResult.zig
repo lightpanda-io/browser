@@ -27,10 +27,10 @@
 //! `deinit` once the JS wrapper's refcount hits zero.
 //!
 //! Type-mismatch accessor calls return `error.InvalidStateError` —
-//! translated to a `DOMException` by `bridge.function(.., .{
-//! .dom_exception = true })`. The WHATWG IDL technically specifies
-//! `TypeError` for type mismatches, but `InvalidStateError` is what
-//! decision #4 captures and what most legacy XPath consumers expect.
+//! translated to a `DOMException` by the bridge. The WHATWG IDL
+//! technically specifies `TypeError` for type mismatches, but
+//! `InvalidStateError` is what decision #4 captures and what most
+//! legacy XPath consumers expect.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -261,15 +261,15 @@ pub const JsApi = struct {
     pub const FIRST_ORDERED_NODE_TYPE = bridge.property(XPathResult.FIRST_ORDERED_NODE_TYPE, .{ .template = true });
 
     pub const resultType = bridge.accessor(XPathResult.getResultType, null, .{});
-    pub const numberValue = bridge.accessor(XPathResult.getNumberValue, null, .{ .dom_exception = true });
-    pub const stringValue = bridge.accessor(XPathResult.getStringValue, null, .{ .dom_exception = true });
-    pub const booleanValue = bridge.accessor(XPathResult.getBooleanValue, null, .{ .dom_exception = true });
-    pub const singleNodeValue = bridge.accessor(XPathResult.getSingleNodeValue, null, .{ .dom_exception = true });
-    pub const snapshotLength = bridge.accessor(XPathResult.getSnapshotLength, null, .{ .dom_exception = true });
+    pub const numberValue = bridge.accessor(XPathResult.getNumberValue, null, .{});
+    pub const stringValue = bridge.accessor(XPathResult.getStringValue, null, .{});
+    pub const booleanValue = bridge.accessor(XPathResult.getBooleanValue, null, .{});
+    pub const singleNodeValue = bridge.accessor(XPathResult.getSingleNodeValue, null, .{});
+    pub const snapshotLength = bridge.accessor(XPathResult.getSnapshotLength, null, .{});
     pub const invalidIteratorState = bridge.accessor(XPathResult.getInvalidIteratorState, null, .{});
 
-    pub const iterateNext = bridge.function(XPathResult.iterateNext, .{ .dom_exception = true });
-    pub const snapshotItem = bridge.function(XPathResult.snapshotItem, .{ .dom_exception = true });
+    pub const iterateNext = bridge.function(XPathResult.iterateNext, .{});
+    pub const snapshotItem = bridge.function(XPathResult.snapshotItem, .{});
 };
 
 const testing = @import("../../testing.zig");
