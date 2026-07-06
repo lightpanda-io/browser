@@ -89,15 +89,13 @@ pub fn isHashedDirectory(dir: []const u8) bool {
     var handle = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch return false;
     defer handle.close();
 
-    var hashed = false;
     var it = handle.iterate();
     while (it.next() catch return false) |entry| {
         if (std.mem.endsWith(u8, entry.name, ".0")) {
-            hashed = true;
-            break;
+            return true;
         }
     }
-    return hashed;
+    return false;
 }
 
 fn caPathValidator(
