@@ -316,6 +316,18 @@ pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@Type
     return l.toLocal(global);
 }
 
+// This context's global (proxy) object, bound to an already-active local.
+// Lets a caller running in a different context — e.g. a [Replaceable] setter
+// invoked on another same-origin window — target this context's global rather
+// than its own.
+pub fn globalObject(self: *Context, local: *const js.Local) js.Object {
+    const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, self.isolate.handle));
+    return .{
+        .local = local,
+        .handle = v8.v8__Context__Global(local_v8_context).?,
+    };
+}
+
 pub fn getIncumbent(self: *Context) *Frame {
     const ctx = fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).?;
     return switch (ctx.global) {
