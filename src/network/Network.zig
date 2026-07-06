@@ -718,41 +718,86 @@ pub fn newConnection(self: *Network) ?*http.Connection {
 
 const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{FailedToCreateX509Store};
 
-// TODO: on BSD / Linux, we could just read the PEM file directly.
-// This whole rescan + decode is really just needed for MacOS. On Linux
-// bundle.rescan does find the .pem file(s) which could be in a few different
-// places, so it's still useful, just not efficient.
-//
-/// NEVER give full ownership of store to SSL_CTX, always rely on ref counting.
+/// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
+/// Allocations made through passed `allocator` are freed before this function returns.
 fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
 
-    var bundle: std.crypto.Certificate.Bundle = .{};
-    try bundle.rescan(allocator);
-    defer bundle.deinit(allocator);
+    switch (comptime builtin.os.tag) {
+        .linux, .openbsd, .netbsd, .freebsd => blk: {
+            // Iterate over known directories.
+            inline for ([_][:0]const u8{
+                "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
+                "/etc/pki/tls/certs", // Fedora/RHEL
+            }) |dir| {
+                if (loadHashedDirectory(store, dir)) {
+                    break :blk;
+                }
+            }
 
-    const bytes = bundle.bytes.items;
-    if (bytes.len == 0) {
-        log.warn(.app, "No system certificates", .{});
-        return store;
-    }
-    var it = bundle.map.valueIterator();
-    while (it.next()) |index| {
-        // d2i_X509 reads the cert's own DER length header to find its end and
-        // advances `ptr` past it, so we just hand it the rest of the buffer.
-        var ptr: [*]const u8 = bytes.ptr + index.*;
-        const x509 = crypto.d2i_X509(null, &ptr, @intCast(bytes.len - index.*)) orelse {
-            log.warn(.app, "Skipping unparseable system cert", .{});
-            continue;
-        };
-        defer crypto.X509_free(x509); // add_cert takes its own ref; drop ours.
-        // TODO: Handle error.
-        const result = crypto.X509_STORE_add_cert(store, x509);
-        if (result != 1) {
-            log.warn(.app, "Failed to add X509 cert to store", .{});
-        }
+            // Iterate over known files.
+            inline for ([_][*:0]const u8{
+                "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu/Gentoo
+                "/etc/pki/tls/certs/ca-bundle.crt", // Fedora/RHEL 6
+                "/etc/ssl/ca-bundle.pem", // OpenSUSE
+                "/etc/pki/tls/cacert.pem", // OpenELEC
+                "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS/RHEL 7
+                "/etc/ssl/cert.pem", // Alpine, *BSD
+            }) |file| {
+                if (crypto.X509_STORE_load_locations(store, file, null) == 1) {
+                    break :blk;
+                }
+            }
+
+            log.warn(.app, "No system certificates", .{});
+        },
+        else => {
+            // Prefer stdlib's cert scanner.
+            var bundle: std.crypto.Certificate.Bundle = .{};
+            try bundle.rescan(allocator);
+            defer bundle.deinit(allocator);
+
+            const bytes = bundle.bytes.items;
+            if (bytes.len == 0) {
+                log.warn(.app, "No system certificates", .{});
+                return store;
+            }
+            var it = bundle.map.valueIterator();
+            while (it.next()) |index| {
+                // d2i_X509 reads the cert's own DER length header to find its end and
+                // advances `ptr` past it, so we just hand it the rest of the buffer.
+                var ptr: [*]const u8 = bytes.ptr + index.*;
+                const x509 = crypto.d2i_X509(null, &ptr, @intCast(bytes.len - index.*)) orelse {
+                    log.warn(.app, "Skipping unparseable system cert", .{});
+                    continue;
+                };
+                defer crypto.X509_free(x509); // add_cert takes its own ref; drop ours.
+
+                const result = crypto.X509_STORE_add_cert(store, x509);
+                if (result != 1) {
+                    log.warn(.app, "Failed to add X509 cert to store", .{});
+                }
+            }
+        },
     }
 
     return store;
+}
+
+fn loadHashedDirectory(store: *crypto.X509_STORE, dir: [:0]const u8) bool {
+    var handle = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch return false;
+    defer handle.close();
+
+    var hashed = false;
+    var it = handle.iterate();
+    while (it.next() catch return false) |entry| {
+        if (std.mem.endsWith(u8, entry.name, ".0")) {
+            hashed = true;
+            break;
+        }
+    }
+    if (!hashed) return false;
+
+    return crypto.X509_STORE_load_locations(store, null, dir.ptr) == 1;
 }
