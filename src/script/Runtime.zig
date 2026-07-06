@@ -495,12 +495,15 @@ fn invokeGoto(
     // Non-null on a re-goto: startGoto replaces only that page, not its siblings.
     const receiver_frame_id = self.receiverFrameId(context, info);
     // startGoto is browser-side work; run it under the browser's isolate.
-    const started = blk: {
+    // Settle the resolver only after the block: a `return` inside it runs
+    // script-isolate work before the deferred exit.
+    const maybe_started: ?browser_tools.StartedGoto = blk: {
         self.session.browser.env.isolate.enter();
         defer self.session.browser.env.isolate.exit();
-        break :blk browser_tools.startGoto(arena, self.session, self.registry, args, receiver_frame_id) catch
-            return self.rejectResolver(context, resolver, "navigation failed");
+        break :blk browser_tools.startGoto(arena, self.session, self.registry, args, receiver_frame_id) catch null;
     };
+    const started = maybe_started orelse
+        return self.rejectResolver(context, resolver, "navigation failed");
 
     var pending: PendingGoto = .{
         .frame_id = started.frame_id,
@@ -1106,6 +1109,26 @@ test "agent script runtime: goto resolves $LP_* placeholders" {
 
 extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
 extern fn unsetenv(name: [*:0]u8) c_int;
+
+test "agent script runtime: goto with invalid arguments rejects instead of crashing" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // A goto that fails to start (vs. mid-flight) settles on the startGoto
+    // error path.
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\let caught = "";
+        \\try { await page.goto(null); } catch (e) { caught = String(e); }
+        \\if (!caught.toLowerCase().includes("navigation")) throw new Error("expected a navigation rejection, got: " + caught);
+    );
+}
 
 test "agent script runtime: a tool-triggered navigation keeps the handle routable" {
     defer testing.reset();
