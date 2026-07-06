@@ -74,7 +74,7 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
 fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Transfer) !void {
     const entry = try self.pending.getOrPut(self.allocator, robots_url);
 
-    if (entry.found_existing == false) {
+    if (entry.found_existing) {
         // A fetch for this robots.txt is already in flight, queue behind it.
         try entry.value_ptr.append(self.allocator, transfer);
         transfer.park(.robots);
