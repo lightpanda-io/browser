@@ -99,13 +99,38 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
             if (self._element) |element| {
                 // Resolve inline `style=` declarations through the element's
                 // parsed inline style, so computed values match `el.style`.
-                if (frame._style_manager.inlineStyleValue(element, wrapped)) |value| return value;
+                if (frame._style_manager.inlineStyleValue(element, wrapped)) |value| {
+                    return value;
+                }
+
+                // Computed width/height must agree with the synthetic layout
+                // metrics (offsetWidth/getBoundingClientRect). Returning ""
+                // makes measurement code see contradictory sizes — jQuery's
+                // "shrink text until it fits" loops then never terminate.
+                if (wrapped.eql(comptime .wrap("width"))) {
+                    return resolvedDimension(element, .width, frame);
+                }
+                if (wrapped.eql(comptime .wrap("height"))) {
+                    return resolvedDimension(element, .height, frame);
+                }
             }
             return getDefaultPropertyValue(self, wrapped);
         }
         return "";
     };
     return prop._value.str();
+}
+
+fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
+    if (!element.checkVisibilityCached(null, frame)) {
+        return "auto";
+    }
+    const dims = element.getElementDimensions(frame);
+    const value = switch (dimension) {
+        .width => dims.width,
+        .height => dims.height,
+    };
+    return std.fmt.allocPrint(frame.local_arena, "{d}px", .{value}) catch "auto";
 }
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
