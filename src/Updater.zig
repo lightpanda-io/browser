@@ -31,21 +31,16 @@ const log = @import("log.zig");
 
 /// Sole purpose of this client is to do updates; hence, its very minimal.
 const Updater = @This();
-arena: std.heap.ArenaAllocator,
 x509_store: *crypto.X509_STORE,
 config: *const Config,
 
 /// Initializes the update client; meant to be used as singleton.
 pub fn init(allocator: Allocator, config: *const Config) !Updater {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-
     Network.globalInit(allocator);
     errdefer Network.globalDeinit();
-    const x509_store = try Network.createX509Store(arena.allocator());
+    const x509_store = try Network.createX509Store(allocator);
 
     return .{
-        .arena = arena,
         .x509_store = x509_store,
         .config = config,
     };
@@ -54,7 +49,6 @@ pub fn init(allocator: Allocator, config: *const Config) !Updater {
 pub fn deinit(self: *Updater) void {
     Network.globalDeinit();
     crypto.X509_STORE_free(self.x509_store);
-    self.arena.deinit();
 }
 
 fn versioning() []const u8 {
@@ -67,6 +61,7 @@ fn versioning() []const u8 {
 }
 
 /// Sends running Lightpanda version to remote to get update information.
+/// Outputs directly to given `Writer`.
 pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
     const kind = comptime versioning();
     if (comptime std.mem.eql(u8, "dev", kind)) {
@@ -81,15 +76,7 @@ pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
     const conn = try http.Connection.init(self.x509_store, self.config, null);
     defer conn.deinit();
 
-    const allocator = self.arena.allocator();
-    const url = try std.fmt.allocPrintSentinel(
-        allocator,
-        "https://telemetry.lightpanda.io/v/{s}",
-        .{lp.build_config.version},
-        0,
-    );
-    defer allocator.free(url);
-
+    const url = std.fmt.comptimePrint("https://telemetry.lightpanda.io/v/{s}", .{lp.build_config.version});
     // Prepare the request.
     try conn.setURL(url);
     try conn.setGetMode();
@@ -97,26 +84,26 @@ pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
 
     // Wraps everything needed to receive bytes.
     const ReceiverContext = struct {
-        allocator: std.mem.Allocator,
-        buffer: std.ArrayList(u8) = .empty,
-        err: Allocator.Error!void = {},
+        writer: *std.Io.Writer,
+        err: std.Io.Writer.Error!void = {},
 
-        fn onBytes(buffer: [*]const u8, buf_count: usize, buf_len: usize, raw_ctx: ?*anyopaque) usize {
+        /// curl -> writer.
+        fn drain(buffer: [*]const u8, buf_count: usize, buf_len: usize, raw_ctx: ?*anyopaque) usize {
             const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
             const chunk = buffer[0 .. buf_count * buf_len];
-            ctx.buffer.appendSlice(ctx.allocator, chunk) catch |err| {
+            ctx.writer.writeAll(chunk) catch |err| {
                 ctx.err = err;
                 return 0;
             };
+
             return chunk.len;
         }
     };
 
-    try libcurl.curl_easy_setopt(conn._easy, .write_function, ReceiverContext.onBytes);
     // Set receiver context.
-    var ctx = ReceiverContext{ .allocator = allocator };
-    defer ctx.buffer.deinit(allocator);
+    var ctx = ReceiverContext{ .writer = writer };
     try libcurl.curl_easy_setopt(conn._easy, .write_data, &ctx);
+    try libcurl.curl_easy_setopt(conn._easy, .write_function, ReceiverContext.drain);
 
     // Make a request.
     const status_int = conn.perform() catch |err| {
@@ -124,17 +111,13 @@ pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
         return err;
     };
     const status: std.http.Status = @enumFromInt(status_int);
-    switch (status) {
-        // Write what's received.
-        .ok => try writer.writeAll(ctx.buffer.items),
-        // Client failed.
-        .bad_request => try writer.writeAll("Versions format is invalid.\n"),
-        // Server failed.
+    return switch (status) {
+        // We expect any of those.
+        .ok,
+        .bad_request,
         .internal_server_error,
         .service_unavailable,
-        => try writer.writeAll("Couldn't get the versions list from remote.\n"),
-        else => return error.UnexpectedStatus,
-    }
-
-    return writer.flush();
+        => writer.flush(),
+        else => error.UnexpectedStatus,
+    };
 }
