@@ -254,16 +254,16 @@ pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
     return self;
 }
 
-pub fn setSelf(_: *WorkerGlobalScope, value: JS.Value) void {
-    replaceGlobalProperty(value, "self");
+pub fn setSelf(self: *WorkerGlobalScope, value: JS.Value) void {
+    self.replaceGlobalProperty(value, "self");
 }
 
 pub fn getConsole(self: *WorkerGlobalScope) *Console {
     return &self._console;
 }
 
-pub fn setConsole(_: *WorkerGlobalScope, value: JS.Value) void {
-    replaceGlobalProperty(value, "console");
+pub fn setConsole(self: *WorkerGlobalScope, value: JS.Value) void {
+    self.replaceGlobalProperty(value, "console");
 }
 
 pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
@@ -503,11 +503,11 @@ pub fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-// `console` and `self` are [Replaceable]: assignment redefines them as own data
-// properties on the global rather than throwing through the getter-only accessor
-// in strict mode. Used here (console) and by DedicatedWorkerGlobalScope (self).
-pub fn replaceGlobalProperty(value: JS.Value, comptime name: []const u8) void {
-    const global = value.local.getGlobal();
+// Some properties are readonly but [Replaceable]. They get assigned as own
+// data properties on the underlying v8::object that represents the global (the
+// WorkerGlobalScope)
+fn replaceGlobalProperty(self: *WorkerGlobalScope, value: JS.Value, comptime name: []const u8) void {
+    const global = self.js.globalObject(value.local);
     _ = global.defineOwnProperty(name, value, 0);
 }
 
