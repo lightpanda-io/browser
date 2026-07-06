@@ -418,6 +418,8 @@ const cloneable_types = .{
     @import("../webapi/File.zig"),
     @import("../webapi/FileList.zig"),
     @import("../webapi/ImageData.zig"),
+    @import("../webapi/DOMPointReadOnly.zig"),
+    @import("../webapi/DOMPoint.zig"),
 };
 
 // Passed to a type's structuredSerialize hook to write its payload into the
