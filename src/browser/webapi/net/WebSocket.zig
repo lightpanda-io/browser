@@ -774,7 +774,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(WebSocket.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(WebSocket.init, .{});
 
     pub const CONNECTING = bridge.property(@intFromEnum(ReadyState.connecting), .{ .template = true });
     pub const OPEN = bridge.property(@intFromEnum(ReadyState.open), .{ .template = true });
@@ -794,8 +794,8 @@ pub const JsApi = struct {
     pub const onerror = bridge.accessor(WebSocket.getOnError, WebSocket.setOnError, .{});
     pub const onclose = bridge.accessor(WebSocket.getOnClose, WebSocket.setOnClose, .{});
 
-    pub const send = bridge.function(WebSocket.send, .{ .dom_exception = true });
-    pub const close = bridge.function(WebSocket.close, .{ .dom_exception = true });
+    pub const send = bridge.function(WebSocket.send, .{});
+    pub const close = bridge.function(WebSocket.close, .{});
 };
 
 const testing = @import("../../../testing.zig");

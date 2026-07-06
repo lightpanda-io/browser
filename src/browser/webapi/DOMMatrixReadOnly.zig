@@ -803,7 +803,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(DOMMatrixReadOnly.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(DOMMatrixReadOnly.init, .{});
 
     pub const fromMatrix = bridge.function(DOMMatrixReadOnly.fromMatrix, .{ .static = true });
     pub const fromFloat32Array = bridge.function(DOMMatrixReadOnly.fromFloat32Array, .{ .static = true });
@@ -852,7 +852,7 @@ pub const JsApi = struct {
     pub const toFloat32Array = bridge.function(DOMMatrixReadOnly.toFloat32Array, .{});
     pub const toFloat64Array = bridge.function(DOMMatrixReadOnly.toFloat64Array, .{});
     // The stringifier depends on CSS serialization and is Window-only.
-    pub const toString = bridge.function(DOMMatrixReadOnly.toString, .{ .dom_exception = true, .exposed = .window });
+    pub const toString = bridge.function(DOMMatrixReadOnly.toString, .{ .exposed = .window });
 
     // m11..m44 getters are generated from the storage index.
     fn getM(comptime idx: usize) fn (*const DOMMatrixReadOnly) f64 {

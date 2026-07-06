@@ -197,11 +197,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(PerformanceObserver.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(PerformanceObserver.init, .{});
 
-    pub const observe = bridge.function(PerformanceObserver.observe, .{ .dom_exception = true });
+    pub const observe = bridge.function(PerformanceObserver.observe, .{});
     pub const disconnect = bridge.function(PerformanceObserver.disconnect, .{});
-    pub const takeRecords = bridge.function(PerformanceObserver.takeRecords, .{ .dom_exception = true });
+    pub const takeRecords = bridge.function(PerformanceObserver.takeRecords, .{});
     pub const supportedEntryTypes = bridge.accessor(PerformanceObserver.getSupportedEntryTypes, null, .{ .static = true });
 };
 

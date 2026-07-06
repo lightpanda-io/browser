@@ -192,7 +192,7 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
     };
 
-    pub const postMessage = bridge.function(MessagePort.postMessage, .{ .dom_exception = true });
+    pub const postMessage = bridge.function(MessagePort.postMessage, .{});
     pub const start = bridge.function(MessagePort.start, .{});
     pub const close = bridge.function(MessagePort.close, .{});
 

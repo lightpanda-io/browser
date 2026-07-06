@@ -1408,7 +1408,7 @@ pub const JsApi = struct {
 
     pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{ .ce_reactions = true });
-    pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .dom_exception = true, .ce_reactions = true });
+    pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .ce_reactions = true });
     pub const files = bridge.accessor(Input.getFiles, null, .{});
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{ .ce_reactions = true });
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
@@ -1419,8 +1419,8 @@ pub const JsApi = struct {
     pub const accept = bridge.accessor(Input.getAccept, Input.setAccept, .{ .ce_reactions = true });
     pub const readOnly = bridge.accessor(Input.getReadonly, Input.setReadonly, .{ .ce_reactions = true });
     pub const alt = bridge.accessor(Input.getAlt, Input.setAlt, .{ .ce_reactions = true });
-    pub const maxLength = bridge.accessor(Input.getMaxLength, Input.setMaxLength, .{ .dom_exception = true, .ce_reactions = true });
-    pub const minLength = bridge.accessor(Input.getMinLength, Input.setMinLength, .{ .dom_exception = true, .ce_reactions = true });
+    pub const maxLength = bridge.accessor(Input.getMaxLength, Input.setMaxLength, .{ .ce_reactions = true });
+    pub const minLength = bridge.accessor(Input.getMinLength, Input.setMinLength, .{ .ce_reactions = true });
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{ .ce_reactions = true });
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{ .ce_reactions = true });
     pub const form = bridge.accessor(Input.getForm, null, .{});
@@ -1451,7 +1451,7 @@ pub const JsApi = struct {
     pub const selectionStart = bridge.accessor(Input.getSelectionStart, Input.setSelectionStart, .{});
     pub const selectionEnd = bridge.accessor(Input.getSelectionEnd, Input.setSelectionEnd, .{});
     pub const selectionDirection = bridge.accessor(Input.getSelectionDirection, null, .{});
-    pub const setSelectionRange = bridge.function(Input.setSelectionRange, .{ .dom_exception = true });
+    pub const setSelectionRange = bridge.function(Input.setSelectionRange, .{});
 };
 
 pub const Build = struct {

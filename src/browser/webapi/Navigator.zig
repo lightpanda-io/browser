@@ -254,8 +254,8 @@ pub const JsApi = struct {
     // window only
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
-    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true, .exposed = .window });
-    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true, .exposed = .window });
+    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });
+    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .exposed = .window });
 };
 
 const testing = @import("../../testing.zig");

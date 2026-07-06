@@ -199,7 +199,7 @@ pub const JsApi = struct {
     pub const whatToShow = bridge.accessor(DOMNodeIterator.getWhatToShow, null, .{});
     pub const filter = bridge.accessor(DOMNodeIterator.getFilter, null, .{});
 
-    pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{ .dom_exception = true });
-    pub const previousNode = bridge.function(DOMNodeIterator.previousNode, .{ .dom_exception = true });
+    pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{});
+    pub const previousNode = bridge.function(DOMNodeIterator.previousNode, .{});
     pub const detach = bridge.function(DOMNodeIterator.detach, .{});
 };

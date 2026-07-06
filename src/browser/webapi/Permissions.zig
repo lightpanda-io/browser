@@ -108,5 +108,5 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const query = bridge.function(Permissions.query, .{ .dom_exception = true });
+    pub const query = bridge.function(Permissions.query, .{});
 };

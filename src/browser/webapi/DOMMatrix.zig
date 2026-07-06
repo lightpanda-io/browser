@@ -224,7 +224,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(DOMMatrix.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(DOMMatrix.init, .{});
 
     pub const fromMatrix = bridge.function(DOMMatrix.fromMatrix, .{ .static = true });
     pub const fromFloat32Array = bridge.function(DOMMatrix.fromFloat32Array, .{ .static = true });
@@ -268,7 +268,7 @@ pub const JsApi = struct {
     pub const preMultiplySelf = bridge.function(DOMMatrix.preMultiplySelf, .{});
     pub const invertSelf = bridge.function(DOMMatrix.invertSelf, .{});
     // setMatrixValue parses a CSS transform string; Window-only.
-    pub const setMatrixValue = bridge.function(DOMMatrix.setMatrixValue, .{ .dom_exception = true, .exposed = .window });
+    pub const setMatrixValue = bridge.function(DOMMatrix.setMatrixValue, .{ .exposed = .window });
 
     fn getM(comptime idx: usize) fn (*const DOMMatrix) f64 {
         return struct {

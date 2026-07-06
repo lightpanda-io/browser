@@ -730,21 +730,21 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Selection.getType, null, .{});
 
     pub const addRange = bridge.function(Selection.addRange, .{});
-    pub const collapse = bridge.function(Selection.collapse, .{ .dom_exception = true });
+    pub const collapse = bridge.function(Selection.collapse, .{});
     pub const collapseToEnd = bridge.function(Selection.collapseToEnd, .{});
-    pub const collapseToStart = bridge.function(Selection.collapseToStart, .{ .dom_exception = true });
+    pub const collapseToStart = bridge.function(Selection.collapseToStart, .{});
     pub const containsNode = bridge.function(Selection.containsNode, .{});
     pub const deleteFromDocument = bridge.function(Selection.deleteFromDocument, .{ .ce_reactions = true });
     pub const empty = bridge.function(Selection.removeAllRanges, .{});
-    pub const extend = bridge.function(Selection.extend, .{ .dom_exception = true });
+    pub const extend = bridge.function(Selection.extend, .{});
     // unimplemented: getComposedRanges
-    pub const getRangeAt = bridge.function(Selection.getRangeAt, .{ .dom_exception = true });
+    pub const getRangeAt = bridge.function(Selection.getRangeAt, .{});
     pub const modify = bridge.function(Selection.modify, .{});
     pub const removeAllRanges = bridge.function(Selection.removeAllRanges, .{});
-    pub const removeRange = bridge.function(Selection.removeRange, .{ .dom_exception = true });
-    pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{ .dom_exception = true });
-    pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{ .dom_exception = true });
-    pub const setPosition = bridge.function(Selection.collapse, .{ .dom_exception = true });
+    pub const removeRange = bridge.function(Selection.removeRange, .{});
+    pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
+    pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{});
+    pub const setPosition = bridge.function(Selection.collapse, .{});
     pub const toString = bridge.function(Selection.toString, .{});
 };
 

@@ -325,12 +325,12 @@ pub const JsApi = struct {
         return self.item(@intCast(index), frame);
     }
 
-    pub const contains = bridge.function(DOMTokenList.contains, .{ .dom_exception = true });
-    pub const supports = bridge.function(DOMTokenList.supports, .{ .dom_exception = true });
-    pub const add = bridge.function(DOMTokenList.add, .{ .dom_exception = true, .ce_reactions = true });
-    pub const remove = bridge.function(DOMTokenList.remove, .{ .dom_exception = true, .ce_reactions = true });
-    pub const toggle = bridge.function(DOMTokenList.toggle, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replace = bridge.function(DOMTokenList.replace, .{ .dom_exception = true, .ce_reactions = true });
+    pub const contains = bridge.function(DOMTokenList.contains, .{});
+    pub const supports = bridge.function(DOMTokenList.supports, .{});
+    pub const add = bridge.function(DOMTokenList.add, .{ .ce_reactions = true });
+    pub const remove = bridge.function(DOMTokenList.remove, .{ .ce_reactions = true });
+    pub const toggle = bridge.function(DOMTokenList.toggle, .{ .ce_reactions = true });
+    pub const replace = bridge.function(DOMTokenList.replace, .{ .ce_reactions = true });
     pub const value = bridge.accessor(DOMTokenList.getValue, DOMTokenList.setValue, .{ .ce_reactions = true });
     pub const toString = bridge.function(DOMTokenList.getValue, .{});
     pub const keys = bridge.function(DOMTokenList.keys, .{});
