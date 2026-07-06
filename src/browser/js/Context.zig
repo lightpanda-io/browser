@@ -746,8 +746,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
         specifier,
     );
 
-    const entry = self.module_cache.getPtr(normalized_specifier).?;
-    if (entry.module) |m| {
+    if (self.module_cache.getPtr(normalized_specifier).?.module) |m| {
         // This import registered a waiter via preloadImport when it was discovered
         // but the compiled module is already cached so we don't have to call
         // waitForImport. Release our waiter so we no longer hold on waiter on
@@ -773,6 +772,9 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
 
     const mod = try compileModule(local, source.src(), normalized_specifier);
     try self.postCompileModule(mod, normalized_specifier, local);
+    // waitForImport can cause module_cache to be mutated (via HttpClient.tick),
+    // so we need to refetch this incase the hashmap changed
+    const entry = self.module_cache.getPtr(normalized_specifier).?;
     entry.module = try mod.persist();
     // Note: We don't instantiate/evaluate here - V8 will handle instantiation
     // as part of the parent module's dependency chain. If there's a resolver
