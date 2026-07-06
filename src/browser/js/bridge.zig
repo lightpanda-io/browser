@@ -154,6 +154,7 @@ pub const Function = struct {
     arity: usize,
     noop: bool = false,
     wpt_only: bool = false,
+    js_name: ?[:0]const u8 = null,
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
@@ -163,6 +164,7 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .wpt_only = opts.wpt_only,
+            .js_name = opts.js_name,
             .exposed = opts.exposed,
             // Non-static methods receive `self` as their first param; static
             // methods don't, so don't skip the first param for them.

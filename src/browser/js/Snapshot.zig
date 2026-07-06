@@ -776,7 +776,9 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     .length = value.arity,
                     .signature = func_signature,
                 }).?;
-                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+                // A member may override its JS-visible name (see Response.json_static)
+                const fn_name = value.js_name orelse name;
+                const js_name = v8.v8__String__NewFromUtf8(isolate, fn_name.ptr, v8.kNormal, @intCast(fn_name.len));
                 v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
                 if (value.static and !own_properties) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
