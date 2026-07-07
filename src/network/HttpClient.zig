@@ -527,7 +527,7 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
         return error.ClientDisconnected;
     }
 
-    self.dispatchCompleted();
+    self.dispatchCompleted(mode);
 
     // settle upfront so that we return any completed connections back to the pool
     try self.settleConns();
@@ -564,7 +564,7 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
 
     try self.startPending();
 
-    self.dispatchCompleted();
+    self.dispatchCompleted(mode);
 
     // dispatch CDP commands
     try self.drainInbox(mode);
@@ -618,12 +618,28 @@ fn settleConns(self: *Client) !void {
 // from the `dispatch_queue` to the `gated_queue`. That way, every call to
 // `dispatchCompleted` doesn't keep checking the same gated transfers over and
 // over.
-fn dispatchCompleted(self: *Client) void {
+fn dispatchCompleted(self: *Client, mode: DrainMode) void {
+    if (mode == .all) {
+        if (comptime IS_DEBUG) {
+            std.debug.assert(self.blocking_requests.count() == 0);
+        }
+        // Called from the top; not inside a syncRequest. There cannot be a
+        // blocking request, so this is the time to process any gated requests.
+        var node = self.gated_queue.last;
+        while (node) |n| {
+            node = n.prev;
+            const transfer: *Transfer = @fieldParentPtr("_queue_node", n);
+            transfer._gated = false;
+            self.gated_queue.remove(n);
+            self.dispatch_queue.prepend(n);
+        }
+    }
+
     // pop is safest as it allows anything to manipulate the queue as necessary
     // (e.g. a frame could be aborted)s
     while (self.dispatch_queue.popFirst()) |n| {
         const transfer: *Transfer = @fieldParentPtr("_queue_node", n);
-        if (self.isGated(transfer)) {
+        if (mode == .sync_wait and self.isGated(transfer)) {
             transfer._gated = true;
             self.gated_queue.append(n);
             continue;
@@ -638,6 +654,16 @@ fn isGated(self: *const Client, transfer: *const Transfer) bool {
     if (transfer.req.internal) {
         // internal transfers are never blocked (e.g. robots.txt)
         return false;
+    }
+    if (transfer.req.resource_type == .document) {
+        // isGated is only ever called during a syncRequest, so if we're here,
+        // we know we're trying to load a blocking request. We don't want to
+        // deliver a document here, even on a different frame, because that
+        // will start the parser, which can trigger more sync blocks. That
+        // sounds fine, but we're on the stack of the sync request, and this
+        // can easily end up overflowing v8's stack if we have a lot of nested
+        // or even sibling blocking scripts to fetch.
+        return true;
     }
     if (self.blocking_requests.count() == 0) {
         // O(1) quick check.
@@ -2873,7 +2899,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
     try testing.expectEqual(false, ctx.done_called);
     try testing.expectEqual(1, client.dispatch_count);
 
-    client.dispatchCompleted();
+    client.dispatchCompleted(.all);
 
     try testing.expect(ctx.done_called);
     // The transfer was freed exactly once: counter back to 0, dropped from the
@@ -3048,7 +3074,7 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
     client.intercepted += 1;
 
     try client.fulfillIntercepted(transfer, 302, &.{}, "body");
-    client.dispatchCompleted();
+    client.dispatchCompleted(.all);
 
     // Delivered (done_callback ran) and freed exactly once.
     try testing.expect(ctx.done_called);
