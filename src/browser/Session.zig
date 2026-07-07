@@ -655,14 +655,13 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
 
     errdefer iframe._window = null;
 
-    // Should this frame's navigation delay the parent's load event? If it was
-    // already holding it, then that just carries over. If it wasn't delaying
-    // it (maybe because it completed already), then it should start, UNLESS
-    // the iframe is lazy loaded.
-    const had_hold = !frame._parent_notified and frame._delays_parent_load;
-    const delays_load = had_hold or !iframe.isLazyLoading();
-    const new_hold = delays_load and !had_hold;
-    if (new_hold) {
+    // was the previous navigation of this frame delaying the paren't load event?
+    const was_delaying = frame._delays_parent_load and !frame._parent_notified;
+
+    // we weren't delaying the parent' load navigation, but now we should
+    const starts_delaying = !was_delaying and !iframe.isLazyLoading();
+
+    if (starts_delaying) {
         parent._pending_loads += 1;
     }
 
@@ -687,14 +686,18 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
 
     try Frame.init(frame, frame_id, page, .{ .parent = parent, .reuse_window = reuse_window });
     errdefer {
-        if (new_hold) {
+        if (starts_delaying) {
             parent._pending_loads -= 1;
         }
         frame.deinit();
     }
 
     frame.iframe = iframe;
-    frame._delays_parent_load = delays_load;
+    // If we transition from was_delaying to !starts_delaying, we could potentially
+    // call `parent._pending_loads -= 1;` but it's hard to reason through the
+    // edge cases. So instead we carry it over, at worse delaying the parent's load
+    // in the very unlikely case that the iframe was switch from non-lazy to lazy.
+    frame._delays_parent_load = was_delaying or starts_delaying;
     iframe._window = frame.window;
 
     frame.navigate(qn.url, qn.opts) catch |err| {
