@@ -655,9 +655,14 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
 
     errdefer iframe._window = null;
 
-    const parent_notified = frame._parent_notified;
-    if (parent_notified) {
-        // we already notified the parent that we had loaded
+    // Should this frame's navigation delay the parent's load event? If it was
+    // already holding it, then that just carries over. If it wasn't delaying
+    // it (maybe because it completed already), then it should start, UNLESS
+    // the iframe is lazy loaded.
+    const had_hold = !frame._parent_notified and frame._delays_parent_load;
+    const delays_load = had_hold or !iframe.isLazyLoading();
+    const new_hold = delays_load and !had_hold;
+    if (new_hold) {
         parent._pending_loads += 1;
     }
 
@@ -682,13 +687,14 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
 
     try Frame.init(frame, frame_id, page, .{ .parent = parent, .reuse_window = reuse_window });
     errdefer {
-        if (parent_notified) {
+        if (new_hold) {
             parent._pending_loads -= 1;
         }
         frame.deinit();
     }
 
     frame.iframe = iframe;
+    frame._delays_parent_load = delays_load;
     iframe._window = frame.window;
 
     frame.navigate(qn.url, qn.opts) catch |err| {

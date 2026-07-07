@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Window = @import("../../Window.zig");
@@ -45,6 +47,12 @@ pub fn getContentWindow(self: *const IFrame, frame: *Frame) ?Window.Access {
 pub fn getContentDocument(self: *const IFrame) ?*Document {
     const window = self._window orelse return null;
     return window._document;
+}
+
+// loading=lazy iframes are still but don't delay the page's "load" event
+pub fn isLazyLoading(self: *IFrame) bool {
+    const loading = self.asElement().getAttributeSafe(comptime .wrap("loading")) orelse return false;
+    return std.ascii.eqlIgnoreCase(loading, "lazy");
 }
 
 pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {

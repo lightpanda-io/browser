@@ -859,6 +859,13 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
+        if (std.mem.indexOf(u8, path, "delay_ms=")) |pos| {
+            const digits_start = pos + "delay_ms=".len;
+            var end = digits_start;
+            while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
+            const delay_ms = std.fmt.parseInt(u64, path[digits_start..end], 10) catch 0;
+            std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+        }
         // strip off leading / so that it's relative to CWD
         return TestHTTPServer.sendFile(req, path[1..]);
     }
