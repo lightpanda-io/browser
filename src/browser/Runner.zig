@@ -205,6 +205,10 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const browser = self.browser;
     const http_client = self.http_client;
 
+    // Arms the watchdog (and proves liveness): a stall anywhere in this tick
+    // ages this stamp until the watchdog fires.
+    http_client.heartbeat.touch();
+
     // Drain queued navigations across every live page (one page per call)
     // A navigation can swap a frame pointer or the page set,
     // so restart the tick to re-resolve cleanly.
@@ -229,6 +233,10 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     // wait for them. Don't do this for CDP, since new CDP messages can always
     // come in at any time.
     if ((comptime is_cdp) == false and network_idle and browser.hasBackgroundTasks()) {
+        // We _are_ calling into v8, but these background tasks are v8-specific,
+        // meaning v8 is working, not stuck. We don't want the watchdog to kill this.
+        http_client.heartbeat.enterWait();
+        defer http_client.heartbeat.exitWait();
         browser.waitForBackgroundTasks();
         return .{ .ok = 0 };
     }

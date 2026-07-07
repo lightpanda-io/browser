@@ -32,6 +32,7 @@ const Network = @import("../network/Network.zig");
 
 const CDP = @import("../cdp/CDP.zig");
 const Inbox = @import("../Inbox.zig");
+const Watchdog = @import("../Watchdog.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -80,6 +81,12 @@ dirty: std.DoublyLinkedList = .{},
 
 // Whether we're currently inside a curl_multi_perform call.
 performing: bool = false,
+
+// Watchdog instrumentation for this client's worker thread. Wraps the poll
+// in perform (and the background-task wait in Runner) so the watchdog can
+// tell "parked, waiting for work" from "stuck between waits". Registered
+// with App.watchdog by Browser.init.
+heartbeat: Watchdog.Heartbeat = .{},
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -967,6 +974,8 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     if (running > 0 or self.cdp_link_active) {
         // when cdp_link_active == true, the network thread will unblock this
         // by calling wakup on our multi.
+        self.heartbeat.enterWait();
+        defer self.heartbeat.exitWait();
         try self.handles.poll(&.{}, timeout_ms);
     }
 

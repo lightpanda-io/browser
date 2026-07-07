@@ -24,6 +24,7 @@ const Notification = @import("../Notification.zig");
 
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
+const Watchdog = @import("../Watchdog.zig");
 const Session = @import("Session.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 const Viewport = @import("Viewport.zig");
@@ -65,6 +66,10 @@ viewport_override: ?Viewport = null,
 
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
+
+// Registered with App.watchdog for the lifetime of the env. The watchdog
+// checker thread reads it until Browser.deinit unregisters.
+watchdog_entry: Watchdog.Entry,
 
 // Pool for FinalizerCallback.Identity structs — the records V8 weak-callback
 // parameters point at. Scoped to the Browser (i.e. the V8 Isolate's lifetime)
@@ -114,13 +119,23 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .page_pool = std.heap.MemoryPool(Page).init(allocator),
         .fc_identity_pool = .init(allocator),
         .selector_cache = .init(allocator),
+        .watchdog_entry = undefined,
     };
     self.env.protectHeapLimit();
     try self.http_client.init(allocator, &app.network, cdp);
+
+    self.watchdog_entry = .{
+        .env = &self.env,
+        .heartbeat = &self.http_client.heartbeat,
+    };
+    app.watchdog.register(&self.watchdog_entry);
 }
 
 pub fn deinit(self: *Browser) void {
     self.closeSession();
+    // After this returns, the watchdog thread holds no reference to our env
+    // or http_client — required before either is torn down.
+    self.app.watchdog.unregister(&self.watchdog_entry);
     self.env.deinit();
     // After env.deinit() the Isolate is gone, so no further weak finalizer can
     // fire — only now is it safe to free the pool backing their parameters.
