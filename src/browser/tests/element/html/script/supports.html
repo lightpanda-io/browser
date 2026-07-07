@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<script id=supports>
+{
+  testing.expectEqual(true, HTMLScriptElement.supports('classic'));
+  testing.expectEqual(true, HTMLScriptElement.supports('module'));
+  testing.expectEqual(true, HTMLScriptElement.supports('importmap'));
+  testing.expectEqual(false, HTMLScriptElement.supports('speculationrules'));
+  testing.expectEqual(false, HTMLScriptElement.supports('Module'));
+}
+</script>

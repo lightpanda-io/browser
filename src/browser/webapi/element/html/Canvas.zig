@@ -49,7 +49,7 @@ pub fn getWidth(self: *const Canvas) u32 {
 }
 
 pub fn setWidth(self: *Canvas, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    const str = try std.fmt.allocPrint(frame.local_arena, "{d}", .{value});
     try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), frame);
 }
 
@@ -59,7 +59,7 @@ pub fn getHeight(self: *const Canvas) u32 {
 }
 
 pub fn setHeight(self: *Canvas, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    const str = try std.fmt.allocPrint(frame.local_arena, "{d}", .{value});
     try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), frame);
 }
 

@@ -102,7 +102,7 @@ fn normalizeFormat(arena: Allocator, format: []const u8) ![]const u8 {
 }
 
 pub fn getData(self: *const DataTransfer, format: []const u8, frame: *Frame) ![]const u8 {
-    const norm = try normalizeFormat(frame.call_arena, format);
+    const norm = try normalizeFormat(frame.local_arena, format);
     for (self._items.items) |it| {
         if (it._kind == .string and std.mem.eql(u8, it._type, norm)) {
             return it._payload.string;
@@ -127,7 +127,7 @@ pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void 
 
 pub fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void {
     if (format_) |format| {
-        const norm = try normalizeFormat(frame.call_arena, format);
+        const norm = try normalizeFormat(frame.local_arena, format);
         var i: usize = 0;
         while (i < self._items.items.len) {
             const it = self._items.items[i];
@@ -222,14 +222,14 @@ pub fn getTypes(self: *DataTransfer, frame: *Frame) ![][]const u8 {
     var has_files = false;
     for (self._items.items) |it| {
         switch (it._kind) {
-            .string => try out.append(frame.call_arena, it._type),
+            .string => try out.append(frame.local_arena, it._type),
             .file => has_files = true,
         }
     }
     if (has_files) {
-        try out.append(frame.call_arena, "Files");
+        try out.append(frame.local_arena, "Files");
     }
-    return out.toOwnedSlice(frame.call_arena);
+    return out.toOwnedSlice(frame.local_arena);
 }
 
 pub fn getDropEffect(self: *const DataTransfer) []const u8 {

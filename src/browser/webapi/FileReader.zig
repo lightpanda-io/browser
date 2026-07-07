@@ -342,10 +342,10 @@ pub const JsApi = struct {
     pub const onprogress = bridge.accessor(FileReader.getOnProgress, FileReader.setOnProgress, .{});
 
     // Methods
-    pub const readAsArrayBuffer = bridge.function(FileReader.readAsArrayBuffer, .{ .dom_exception = true });
-    pub const readAsBinaryString = bridge.function(FileReader.readAsBinaryString, .{ .dom_exception = true });
-    pub const readAsText = bridge.function(FileReader.readAsText, .{ .dom_exception = true });
-    pub const readAsDataURL = bridge.function(FileReader.readAsDataURL, .{ .dom_exception = true });
+    pub const readAsArrayBuffer = bridge.function(FileReader.readAsArrayBuffer, .{});
+    pub const readAsBinaryString = bridge.function(FileReader.readAsBinaryString, .{});
+    pub const readAsText = bridge.function(FileReader.readAsText, .{});
+    pub const readAsDataURL = bridge.function(FileReader.readAsDataURL, .{});
     pub const abort = bridge.function(FileReader.abort, .{});
 };
 

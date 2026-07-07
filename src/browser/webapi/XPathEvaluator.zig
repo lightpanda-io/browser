@@ -83,8 +83,8 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(XPathEvaluator.init, .{});
-    pub const evaluate = bridge.function(XPathEvaluator.evaluate, .{ .dom_exception = true });
-    pub const createExpression = bridge.function(XPathEvaluator.createExpression, .{ .dom_exception = true });
+    pub const evaluate = bridge.function(XPathEvaluator.evaluate, .{});
+    pub const createExpression = bridge.function(XPathEvaluator.createExpression, .{});
     pub const createNSResolver = bridge.function(XPathEvaluator.createNSResolver, .{});
 };
 

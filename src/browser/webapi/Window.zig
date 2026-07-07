@@ -125,6 +125,10 @@ pub fn getEvent(self: *const Window) ?*Event {
     return self._current_event;
 }
 
+pub fn setEvent(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "event");
+}
+
 pub fn getSelf(self: *Window) *Window {
     return self;
 }
@@ -137,6 +141,17 @@ pub fn getOpener(self: *Window, frame: *Frame) ?Access {
     const opener = self._opener orelse return null;
     if (opener._closed) return null;
     return Access.init(frame.window, opener);
+}
+
+// Per the HTML spec's opener setter: null disowns the opener (the accessor
+// stays in place and the getter now returns null); any other value redefines
+// the property as an own data property, like [Replaceable].
+pub fn setOpener(self: *Window, value: js.Value) void {
+    if (value.isNull()) {
+        self._opener = null;
+        return;
+    }
+    self.replaceGlobalProperty(value, "opener");
 }
 
 pub fn getClosed(self: *const Window) bool {
@@ -175,48 +190,48 @@ pub fn getConsole(self: *Window) *Console {
     return &self._console;
 }
 
-pub fn setConsole(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "console");
+pub fn setConsole(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "console");
 }
 
-pub fn setSelf(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "self");
+pub fn setSelf(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "self");
 }
 
-pub fn setFrames(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "frames");
+pub fn setFrames(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "frames");
 }
 
-pub fn setParent(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "parent");
+pub fn setParent(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "parent");
 }
 
-pub fn setLength(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "length");
+pub fn setLength(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "length");
 }
 
-pub fn setInnerWidth(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "innerWidth");
+pub fn setInnerWidth(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "innerWidth");
 }
 
-pub fn setInnerHeight(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "innerHeight");
+pub fn setInnerHeight(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "innerHeight");
 }
 
-pub fn setScrollX(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "scrollX");
+pub fn setScrollX(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "scrollX");
 }
 
-pub fn setScrollY(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "scrollY");
+pub fn setScrollY(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "scrollY");
 }
 
-pub fn setPageXOffset(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "pageXOffset");
+pub fn setPageXOffset(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "pageXOffset");
 }
 
-pub fn setPageYOffset(_: *Window, value: js.Value) void {
-    replaceGlobalProperty(value, "pageYOffset");
+pub fn setPageYOffset(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "pageYOffset");
 }
 
 pub fn getNavigator(self: *Window) *Navigator {
@@ -231,8 +246,16 @@ pub fn getScreen(self: *Window) *Screen {
     return self._screen;
 }
 
+pub fn setScreen(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "screen");
+}
+
 pub fn getVisualViewport(self: *const Window) *VisualViewport {
     return self._visual_viewport;
+}
+
+pub fn setVisualViewport(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "visualViewport");
 }
 
 pub fn getCrypto(self: *Window) *Crypto {
@@ -245,6 +268,10 @@ pub fn getCSS(self: *Window) *CSS {
 
 pub fn getPerformance(self: *Window) *Performance {
     return &self._performance;
+}
+
+pub fn setPerformance(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "performance");
 }
 
 fn bucketForOrigin(self: *Window) *storage.Bucket {
@@ -274,6 +301,10 @@ pub fn getOrigin(self: *const Window) []const u8 {
     return self._frame.origin orelse "null";
 }
 
+pub fn setOrigin(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "origin");
+}
+
 pub fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
 }
@@ -296,6 +327,10 @@ pub fn getHistory(_: *Window, frame: *Frame) *History {
 
 pub fn getNavigation(_: *Window, frame: *Frame) *Navigation {
     return &frame._session.navigation;
+}
+
+pub fn setNavigation(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "navigation");
 }
 
 pub fn getCustomElements(self: *Window) *CustomElementRegistry {
@@ -506,9 +541,16 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
     if (pseudo_element) |pe| {
         if (pe.len != 0) {
             log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pe });
+            // Chrome hands out a distinct object per pseudo-element, so these
+            // can't share the per-element cache entry.
+            return CSSStyleProperties.init(element, true, frame);
         }
     }
-    return CSSStyleProperties.init(element, true, frame);
+    const gop = try frame._element_computed_styles.getOrPut(frame.arena, element);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try CSSStyleProperties.init(element, true, frame);
+    }
+    return gop.value_ptr.*;
 }
 
 // window.open(url?, target?, features?) — v1 scope:
@@ -696,16 +738,17 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
 
 const base64 = @import("encoding/base64.zig");
 pub fn btoa(_: *const Window, input: base64.BinInput, frame: *Frame) ![]const u8 {
-    return base64.encode(frame.call_arena, input);
+    return base64.encode(frame.local_arena, input);
 }
 
 pub fn atob(_: *const Window, input: base64.BinInput, frame: *Frame) !js.String.OneByte {
-    const decoded = try base64.decode(frame.call_arena, input);
+    const decoded = try base64.decode(frame.local_arena, input);
     return .{ .bytes = decoded };
 }
 
 pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
-    return value.structuredClone();
+    // the serializer already threw (e.g. a DataCloneError); keep it
+    return value.structuredClone() catch error.TryCatchRethrow;
 }
 
 pub fn getFrame(self: *Window, idx: usize) !?*Window {
@@ -878,11 +921,11 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
     }
 }
 
-// `console` and a handful of other Window attributes are [Replaceable]: assigning
-// to them redefines the attribute as an own data property on the global instead
-// of throwing (which a getter-only accessor does in strict mode / modules).
-fn replaceGlobalProperty(value: js.Value, comptime name: []const u8) void {
-    const global = value.local.getGlobal();
+// Some properties are readonly but [Replaceable]. They get assigned as own
+// data properties on the underlying v8::object that represents the global (the
+// Window)
+fn replaceGlobalProperty(self: *Window, value: js.Value, comptime name: []const u8) void {
+    const global = self._frame.js.globalObject(value.local);
     _ = global.defineOwnProperty(name, value, 0);
 }
 
@@ -1002,16 +1045,16 @@ pub const JsApi = struct {
     pub const window = bridge.accessor(Window.getWindow, null, .{});
     pub const parent = bridge.accessor(Window.getParent, Window.setParent, .{});
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
-    pub const screen = bridge.accessor(Window.getScreen, null, .{});
-    pub const visualViewport = bridge.accessor(Window.getVisualViewport, null, .{});
-    pub const performance = bridge.accessor(Window.getPerformance, null, .{});
+    pub const screen = bridge.accessor(Window.getScreen, Window.setScreen, .{});
+    pub const visualViewport = bridge.accessor(Window.getVisualViewport, Window.setVisualViewport, .{});
+    pub const performance = bridge.accessor(Window.getPerformance, Window.setPerformance, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
     pub const cookieStore = bridge.accessor(Window.getCookieStore, null, .{});
-    pub const origin = bridge.accessor(Window.getOrigin, null, .{});
+    pub const origin = bridge.accessor(Window.getOrigin, Window.setOrigin, .{});
     pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .deletable = false });
     pub const history = bridge.accessor(Window.getHistory, null, .{});
-    pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
+    pub const navigation = bridge.accessor(Window.getNavigation, Window.setNavigation, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{});
     pub const CSS = bridge.accessor(Window.getCSS, null, .{});
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{});
@@ -1023,7 +1066,7 @@ pub const JsApi = struct {
     pub const onmessage = bridge.accessor(Window.getOnMessage, Window.setOnMessage, .{});
     pub const onrejectionhandled = bridge.accessor(Window.getOnRejectionHandled, Window.setOnRejectionHandled, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
-    pub const event = bridge.accessor(Window.getEvent, null, .{ .null_as_undefined = true });
+    pub const event = bridge.accessor(Window.getEvent, Window.setEvent, .{ .null_as_undefined = true });
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});
@@ -1037,9 +1080,9 @@ pub const JsApi = struct {
     pub const requestIdleCallback = bridge.function(Window.requestIdleCallback, .{});
     pub const cancelIdleCallback = bridge.function(Window.cancelIdleCallback, .{});
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
-    pub const postMessage = bridge.function(Window.postMessage, .{ .dom_exception = true });
-    pub const btoa = bridge.function(Window.btoa, .{ .dom_exception = true });
-    pub const atob = bridge.function(Window.atob, .{ .dom_exception = true });
+    pub const postMessage = bridge.function(Window.postMessage, .{});
+    pub const btoa = bridge.function(Window.btoa, .{});
+    pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const structuredClone = bridge.function(Window.structuredClone, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
@@ -1070,10 +1113,10 @@ pub const JsApi = struct {
     pub const innerHeight = bridge.accessor(Window.getInnerHeight, Window.setInnerHeight, .{});
     pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
 
-    pub const opener = bridge.accessor(Window.getOpener, null, .{});
+    pub const opener = bridge.accessor(Window.getOpener, Window.setOpener, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});
     pub const name = bridge.accessor(Window.getName, Window.setName, .{});
-    pub const open = bridge.function(Window.open, .{ .dom_exception = true });
+    pub const open = bridge.function(Window.open, .{});
     pub const close = bridge.function(Window.close, .{});
 
     pub const alert = bridge.function(struct {
@@ -1151,7 +1194,7 @@ const CrossOriginWindow = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{ .dom_exception = true });
+        pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{});
         pub const top = bridge.accessor(CrossOriginWindow.getTop, null, .{});
         pub const parent = bridge.accessor(CrossOriginWindow.getParent, null, .{});
         pub const length = bridge.accessor(CrossOriginWindow.getFramesLength, null, .{});

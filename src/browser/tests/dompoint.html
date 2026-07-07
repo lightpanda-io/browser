@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<head>
+  <title>DOMPoint Test</title>
+  <script src="testing.js"></script>
+</head>
+
+<body>
+</body>
+
+<script id=default_construct>
+  {
+    const p = new DOMPoint();
+    testing.expectEqual(0, p.x);
+    testing.expectEqual(0, p.y);
+    testing.expectEqual(0, p.z);
+    testing.expectEqual(1, p.w);
+  }
+</script>
+
+<script id=construct_with_args>
+  {
+    const p = new DOMPoint(1, 2, 3, 4);
+    testing.expectEqual(1, p.x);
+    testing.expectEqual(2, p.y);
+    testing.expectEqual(3, p.z);
+    testing.expectEqual(4, p.w);
+  }
+</script>
+
+<script id=readonly_default>
+  {
+    const p = new DOMPointReadOnly(5, 6);
+    testing.expectEqual(5, p.x);
+    testing.expectEqual(6, p.y);
+    testing.expectEqual(0, p.z);
+    testing.expectEqual(1, p.w);
+  }
+</script>
+
+<script id=mutable_setters>
+  {
+    const p = new DOMPoint(1, 1, 1, 1);
+    p.x = 10;
+    p.y = 20;
+    p.z = 30;
+    p.w = 40;
+    testing.expectEqual(10, p.x);
+    testing.expectEqual(20, p.y);
+    testing.expectEqual(30, p.z);
+    testing.expectEqual(40, p.w);
+  }
+</script>
+
+<script id=readonly_is_not_writable>
+  {
+    const p = new DOMPointReadOnly(1, 2, 3, 4);
+    // Non-strict assignment to an accessor without a setter is a silent no-op.
+    p.x = 99;
+    testing.expectEqual(1, p.x);
+  }
+</script>
+
+<script id=prototype_chain>
+  {
+    const p = new DOMPoint(1, 2, 3, 4);
+    testing.expectTrue(p instanceof DOMPoint);
+    testing.expectTrue(p instanceof DOMPointReadOnly);
+
+    const ro = new DOMPointReadOnly(1, 2, 3, 4);
+    testing.expectTrue(ro instanceof DOMPointReadOnly);
+    testing.expectFalse(ro instanceof DOMPoint);
+  }
+</script>
+
+<script id=from_point>
+  {
+    const p = DOMPoint.fromPoint({ x: 7, y: 8, z: 9 });
+    testing.expectTrue(p instanceof DOMPoint);
+    testing.expectEqual(7, p.x);
+    testing.expectEqual(8, p.y);
+    testing.expectEqual(9, p.z);
+    testing.expectEqual(1, p.w);
+
+    const ro = DOMPointReadOnly.fromPoint({ x: 1, w: 5 });
+    testing.expectTrue(ro instanceof DOMPointReadOnly);
+    testing.expectFalse(ro instanceof DOMPoint);
+    testing.expectEqual(1, ro.x);
+    testing.expectEqual(5, ro.w);
+  }
+</script>
+
+<script id=from_point_empty>
+  {
+    const p = DOMPoint.fromPoint();
+    testing.expectEqual(0, p.x);
+    testing.expectEqual(1, p.w);
+  }
+</script>
+
+<script id=to_json>
+  {
+    const p = new DOMPoint(1, 2, 3, 4);
+    const j = p.toJSON();
+    testing.expectEqual(1, j.x);
+    testing.expectEqual(2, j.y);
+    testing.expectEqual(3, j.z);
+    testing.expectEqual(4, j.w);
+  }
+</script>
+
+<script id=matrix_transform_translate>
+  {
+    const p = new DOMPoint(1, 2, 0, 1);
+    const t = p.matrixTransform(new DOMMatrix().translate(10, 20));
+    testing.expectTrue(t instanceof DOMPoint);
+    testing.expectEqual(11, t.x);
+    testing.expectEqual(22, t.y);
+    testing.expectEqual(0, t.z);
+    testing.expectEqual(1, t.w);
+    // Original is unchanged.
+    testing.expectEqual(1, p.x);
+    testing.expectEqual(2, p.y);
+  }
+</script>
+
+<script id=matrix_transform_scale>
+  {
+    const p = new DOMPointReadOnly(2, 3, 4, 1);
+    const t = p.matrixTransform(new DOMMatrix().scale(2, 3));
+    testing.expectEqual(4, t.x);
+    testing.expectEqual(9, t.y);
+  }
+</script>
+
+<script id=matrix_transform_dict>
+  {
+    const p = new DOMPoint(1, 0, 0, 1);
+    // matrix(a,b,c,d,e,f) = scaleX 2, translateX 5
+    const t = p.matrixTransform({ a: 2, e: 5 });
+    testing.expectEqual(7, t.x);
+  }
+</script>
+
+<script id=structured_clone_readonly>
+  {
+    const p = new DOMPointReadOnly(1.5, 2.5, 3.5, 4.5);
+    const c = structuredClone(p);
+    testing.expectTrue(c instanceof DOMPointReadOnly);
+    testing.expectFalse(c instanceof DOMPoint);
+    testing.expectEqual(1.5, c.x);
+    testing.expectEqual(2.5, c.y);
+    testing.expectEqual(3.5, c.z);
+    testing.expectEqual(4.5, c.w);
+    testing.expectFalse(c === p);
+  }
+</script>
+
+<script id=structured_clone_mutable>
+  {
+    const p = new DOMPoint(-1, -2, -3, -4);
+    const c = structuredClone(p);
+    testing.expectTrue(c instanceof DOMPoint);
+    testing.expectTrue(c instanceof DOMPointReadOnly);
+    testing.expectEqual(-1, c.x);
+    testing.expectEqual(-2, c.y);
+    testing.expectEqual(-3, c.z);
+    testing.expectEqual(-4, c.w);
+    // The clone is independent and writable.
+    c.x = 100;
+    testing.expectEqual(100, c.x);
+    testing.expectEqual(-1, p.x);
+  }
+</script>

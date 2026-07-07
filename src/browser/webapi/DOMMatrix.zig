@@ -58,9 +58,12 @@ pub fn fromFloat64Array(array: js.TypedArray(f64), page: *Page) !*DOMMatrix {
     return create(parsed.m, parsed.is_2d, page);
 }
 
-// The base already exposes read-only getters, but a redeclared accessor's
-// getter must be typed to this (owner) struct, so we provide DOMMatrix-typed
-// getters that read through `_proto`.
+// DOMMatrix redeclares a/b/.../m44 as writable, so DOMMatrix.prototype needs
+// its own read-write accessors, distinct from the read-only ones on
+// DOMMatrixReadOnly.prototype. The setters are the point; each accessor bundles
+// a getter too, so we pair them with DOMMatrix-typed getters that read through
+// `_proto` (they could reuse the base getters — the receiver unwraps down the
+// prototype chain either way — but keeping the pair symmetric reads cleaner).
 
 pub fn getA(self: *const DOMMatrix) f64 {
     return self._proto._m[0];
@@ -224,7 +227,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(DOMMatrix.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(DOMMatrix.init, .{});
 
     pub const fromMatrix = bridge.function(DOMMatrix.fromMatrix, .{ .static = true });
     pub const fromFloat32Array = bridge.function(DOMMatrix.fromFloat32Array, .{ .static = true });
@@ -268,7 +271,7 @@ pub const JsApi = struct {
     pub const preMultiplySelf = bridge.function(DOMMatrix.preMultiplySelf, .{});
     pub const invertSelf = bridge.function(DOMMatrix.invertSelf, .{});
     // setMatrixValue parses a CSS transform string; Window-only.
-    pub const setMatrixValue = bridge.function(DOMMatrix.setMatrixValue, .{ .dom_exception = true, .exposed = .window });
+    pub const setMatrixValue = bridge.function(DOMMatrix.setMatrixValue, .{ .exposed = .window });
 
     fn getM(comptime idx: usize) fn (*const DOMMatrix) f64 {
         return struct {

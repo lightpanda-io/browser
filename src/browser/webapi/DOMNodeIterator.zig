@@ -191,7 +191,6 @@ pub const JsApi = struct {
         pub const name = "NodeIterator";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const root = bridge.accessor(DOMNodeIterator.getRoot, null, .{});
@@ -200,7 +199,7 @@ pub const JsApi = struct {
     pub const whatToShow = bridge.accessor(DOMNodeIterator.getWhatToShow, null, .{});
     pub const filter = bridge.accessor(DOMNodeIterator.getFilter, null, .{});
 
-    pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{ .dom_exception = true });
-    pub const previousNode = bridge.function(DOMNodeIterator.previousNode, .{ .dom_exception = true });
+    pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{});
+    pub const previousNode = bridge.function(DOMNodeIterator.previousNode, .{});
     pub const detach = bridge.function(DOMNodeIterator.detach, .{});
 };

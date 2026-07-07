@@ -76,7 +76,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(StaticRange.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(StaticRange.init, .{});
 };
 
 const testing = @import("../../testing.zig");

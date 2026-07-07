@@ -78,11 +78,10 @@ pub const JsApi = struct {
         pub const name = "Text";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const constructor = bridge.constructor(Text.init, .{});
     pub const wholeText = bridge.accessor(Text.getWholeText, null, .{});
     pub const assignedSlot = bridge.accessor(Text.getAssignedSlot, null, .{});
-    pub const splitText = bridge.function(Text.splitText, .{ .dom_exception = true });
+    pub const splitText = bridge.function(Text.splitText, .{});
 };

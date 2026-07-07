@@ -188,7 +188,7 @@ pub fn disconnect(self: *MutationObserver, frame: *Frame) void {
 }
 
 pub fn takeRecords(self: *MutationObserver, frame: *Frame) ![]*MutationRecord {
-    const records = try frame.call_arena.dupe(*MutationRecord, self._pending_records.items);
+    const records = try frame.local_arena.dupe(*MutationRecord, self._pending_records.items);
     self._pending_records.clearRetainingCapacity();
     return records;
 }

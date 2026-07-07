@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Node = @import("../Node.zig");
 const Frame = @import("../../Frame.zig");
+const Browser = @import("../../Browser.zig");
 
 const Parser = @import("Parser.zig");
 pub const List = @import("List.zig");
@@ -44,16 +45,16 @@ pub fn mapErrorToDOM(err: anyerror) anyerror {
     };
 }
 
-pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {
+pub fn parseLeaky(arena: Allocator, input: []const u8) ![]const Selector {
     if (input.len == 0) {
         return error.SyntaxError;
     }
-    return .{ .selectors = try Parser.parseList(arena, input) };
+    return Parser.parseList(arena, input);
 }
 
 /// One-off synthesized selectors use the `*Uncached` variants instead.
-fn cachedParse(frame: *Frame, input: []const u8) ![]const Selector {
-    return frame._session.browser.selector_cache.parse(input);
+pub fn cachedParse(browser: *Browser, input: []const u8) ![]const Selector {
+    return browser.selector_cache.parse(input);
 }
 
 /// On the Browser because a parsed selector references no Frame/Context, so
@@ -136,24 +137,23 @@ fn matchesAny(selectors: []const Selector, el: *Node.Element, scope: *Node, fram
 }
 
 pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
-    const parsed = Parsed{ .selectors = try cachedParse(frame, input) };
-    return parsed.query(root, frame);
+    return query(try cachedParse(frame._session.browser, input), root, frame);
 }
 
 pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
     const arena = try frame.getArena(.small, "querySelectorAll");
     errdefer frame.releaseArena(arena);
-    return collectAll(arena, try cachedParse(frame, input), root, frame);
+    return collectAll(arena, try cachedParse(frame._session.browser, input), root, frame);
 }
 
 pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
-    return matchesAny(try cachedParse(frame, input), el, el.asNode(), frame);
+    return matchesAny(try cachedParse(frame._session.browser, input), el, el.asNode(), frame);
 }
 
 // Like matches, but allows the caller to specify a scope node distinct from el.
 // Used by closest() so that :scope always refers to the original context element.
-pub fn matchesWithScope(el: *Node.Element, input: []const u8, scope: *Node.Element, frame: *Frame) !bool {
-    return matchesAny(try cachedParse(frame, input), el, scope.asNode(), frame);
+pub fn matchesWithScope(el: *Node.Element, selector: []const Selector, scope: *Node.Element, frame: *Frame) !bool {
+    return matchesAny(selector, el, scope.asNode(), frame);
 }
 
 /// Uncached counterparts for one-off selectors (SelectorPath): parse into
@@ -163,8 +163,7 @@ pub fn querySelectorUncached(arena: Allocator, root: *Node, input: []const u8, f
     if (input.len == 0) {
         return error.SyntaxError;
     }
-    const parsed = Parsed{ .selectors = try Parser.parseList(arena, input) };
-    return parsed.query(root, frame);
+    return query(try Parser.parseList(arena, input), root, frame);
 }
 
 pub fn querySelectorAllUncached(root: *Node, input: []const u8, frame: *Frame) !*List {
@@ -363,31 +362,27 @@ pub const Selector = struct {
     }
 };
 
-pub const Parsed = struct {
-    selectors: []const Selector,
-
-    pub fn query(self: Parsed, root: *Node, frame: *Frame) !?*Node.Element {
-        for (self.selectors) |selector| {
-            // Fast path: single compound with only an ID selector
-            if (selector.segments.len == 0 and selector.first.parts.len == 1) {
-                const first = selector.first.parts[0];
-                if (first == .id) {
-                    const el = frame.getElementByIdFromNode(root, first.id) orelse continue;
-                    // Check if the element is within the root subtree
-                    const node = el.asNode();
-                    if (node != root and root.contains(node)) {
-                        return el;
-                    }
-                    continue;
-                }
-            }
-
-            if (List.initOne(root, selector, frame)) |node| {
-                if (node.is(Node.Element)) |el| {
+pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.Element {
+    for (selectors) |selector| {
+        // Fast path: single compound with only an ID selector
+        if (selector.segments.len == 0 and selector.first.parts.len == 1) {
+            const first = selector.first.parts[0];
+            if (first == .id) {
+                const el = frame.getElementByIdFromNode(root, first.id) orelse continue;
+                // Check if the element is within the root subtree
+                const node = el.asNode();
+                if (node != root and root.contains(node)) {
                     return el;
                 }
+                continue;
             }
         }
-        return null;
+
+        if (List.initOne(root, selector, frame)) |node| {
+            if (node.is(Node.Element)) |el| {
+                return el;
+            }
+        }
     }
-};
+    return null;
+}

@@ -110,7 +110,6 @@ pub const Constructor = struct {
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
-        dom_exception: bool = false,
         // When true, the constructor function receives `new.target` (as a
         // js.Function) as its first parameter. Used by HTMLElement to support
         // direct instantiation of custom elements via `new MyElement()`.
@@ -142,7 +141,6 @@ pub const Constructor = struct {
                     defer if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
 
                     caller.constructor(T, func, handle.?, .{
-                        .dom_exception = opts.dom_exception,
                         .new_target = opts.new_target,
                     });
                 }
@@ -156,6 +154,7 @@ pub const Function = struct {
     arity: usize,
     noop: bool = false,
     wpt_only: bool = false,
+    js_name: ?[:0]const u8 = null,
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
@@ -165,6 +164,7 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .wpt_only = opts.wpt_only,
+            .js_name = opts.js_name,
             .exposed = opts.exposed,
             // Non-static methods receive `self` as their first param; static
             // methods don't, so don't skip the first param for them.
@@ -822,6 +822,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/DOMRect.zig"),
     @import("../webapi/DOMMatrixReadOnly.zig"),
     @import("../webapi/DOMMatrix.zig"),
+    @import("../webapi/DOMPointReadOnly.zig"),
+    @import("../webapi/DOMPoint.zig"),
     @import("../webapi/DOMParser.zig"),
     @import("../webapi/XMLSerializer.zig"),
     @import("../webapi/AbstractRange.zig"),
@@ -1021,6 +1023,8 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/DOMException.zig"),
     @import("../webapi/DOMMatrixReadOnly.zig"),
     @import("../webapi/DOMMatrix.zig"),
+    @import("../webapi/DOMPointReadOnly.zig"),
+    @import("../webapi/DOMPoint.zig"),
     @import("../webapi/net/URLSearchParams.zig"),
     @import("../webapi/encoding/TextEncoder.zig"),
     @import("../webapi/encoding/TextDecoder.zig"),
@@ -1059,6 +1063,12 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/storage/CookieStore.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/BroadcastChannel.zig"),
+    @import("../webapi/event/CustomEvent.zig"),
+    @import("../webapi/event/ProgressEvent.zig"),
+    @import("../webapi/Notification.zig"),
+    @import("../webapi/FileList.zig"),
+    @import("../webapi/MessageChannel.zig"),
+    @import("../webapi/MessagePort.zig"),
 });
 
 // Master list of ALL JS APIs across all contexts.

@@ -34,7 +34,7 @@ pub fn init() XMLSerializer {
 
 pub fn serializeToString(self: *const XMLSerializer, node: *Node, frame: *Frame) ![]const u8 {
     _ = self;
-    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     if (node.is(Node.Document)) |doc| {
         try dump.root(doc, .{ .shadow = .skip }, &buf.writer, frame);
     } else {

@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
-const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 const MessagePort = @import("../MessagePort.zig");
@@ -29,6 +28,7 @@ const Window = @import("../Window.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const MessageEvent = @This();
 
@@ -117,9 +117,20 @@ pub fn getOrigin(self: *const MessageEvent) []const u8 {
     return self._origin;
 }
 
-pub fn getSource(self: *const MessageEvent, frame: *Frame) ?Window.Access {
-    const source = self._source orelse return null;
-    return Window.Access.init(frame.window, source);
+pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?Window.Access {
+    switch (exec.js.global) {
+        .frame => |frame| {
+            const source = self._source orelse return null;
+            return Window.Access.init(frame.window, source);
+        },
+        .worker => {
+            // source for worker should always be null
+            if (comptime IS_DEBUG) {
+                std.debug.assert(self._source == null);
+            }
+            return null;
+        },
+    }
 }
 
 pub fn getPorts(self: *const MessageEvent) []const *MessagePort {

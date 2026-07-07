@@ -32,7 +32,7 @@ pub fn getHref(self: *Base, frame: *Frame) ![]const u8 {
         return "";
     }
     const owner = element.asConstNode().ownerFrame(frame);
-    return URL.resolve(frame.call_arena, owner.url, href, .{});
+    return URL.resolve(frame.local_arena, owner.url, href, .{});
 }
 
 pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {

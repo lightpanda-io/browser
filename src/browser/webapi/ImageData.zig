@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 
 const String = lp.String;
 const Execution = js.Execution;
@@ -84,6 +85,27 @@ pub fn init(
     });
 }
 
+pub fn structuredSerialize(self: *const ImageData, writer: *js.StructuredWriter) !void {
+    writer.writeUint32(self._width);
+    writer.writeUint32(self._height);
+    writer.writeBytes(self._data.local(writer.local).slice());
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*ImageData {
+    const width = try reader.readUint32();
+    const height = try reader.readUint32();
+    const bytes = try reader.readBytes();
+
+    const data = reader.local.createTypedArray(.uint8_clamped, bytes.len);
+    @memcpy(data.slice(), bytes);
+
+    return page.factory.create(ImageData{
+        ._width = width,
+        ._height = height,
+        ._data = try data.persist(),
+    });
+}
+
 pub fn getWidth(self: *const ImageData) u32 {
     return self._width;
 }
@@ -105,7 +127,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(ImageData.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(ImageData.init, .{});
 
     pub const colorSpace = bridge.property("srgb", .{ .template = false, .readonly = true });
     pub const pixelFormat = bridge.property("rgba-unorm8", .{ .template = false, .readonly = true });

@@ -51,6 +51,7 @@ js: *Context,
 buf: []u8,
 arena: Allocator,
 call_arena: Allocator,
+local_arena: Allocator,
 
 page: *Page,
 session: *Session,

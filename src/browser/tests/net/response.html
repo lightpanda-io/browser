@@ -251,3 +251,53 @@
     testing.expectTrue(new Response(new Uint8Array([1, 2, 3])).headers.get('content-type') === null);
   }
 </script>
+
+<script id=static_error>
+  {
+    const r = Response.error();
+    testing.expectEqual('error', r.type);
+    testing.expectEqual(0, r.status);
+    testing.expectEqual('', r.statusText);
+    testing.expectEqual(false, r.ok);
+    testing.expectEqual(null, r.body);
+  }
+</script>
+
+<script id=static_redirect>
+  {
+    const r = Response.redirect('https://example.com/a');
+    testing.expectEqual(302, r.status);
+    testing.expectEqual('https://example.com/a', r.headers.get('location'));
+    testing.expectEqual('default', r.type);
+  }
+  {
+    const r = Response.redirect('https://example.com/a', 301);
+    testing.expectEqual(301, r.status);
+  }
+  {
+    let threw = false;
+    try { Response.redirect('https://example.com/a', 200); } catch (e) { threw = e instanceof RangeError; }
+    testing.expectTrue(threw);
+  }
+</script>
+
+<script id=static_json type=module>
+  {
+    const r = Response.json({ a: 1, b: 'two' });
+    testing.expectEqual(200, r.status);
+    testing.expectEqual('application/json', r.headers.get('content-type'));
+    testing.expectEqual('{"a":1,"b":"two"}', await r.text());
+  }
+  {
+    const r = Response.json([1, 2], { status: 201, headers: { 'content-type': 'application/vnd.api+json' } });
+    testing.expectEqual(201, r.status);
+    // An explicit content-type is not overridden.
+    testing.expectEqual('application/vnd.api+json', r.headers.get('content-type'));
+    testing.expectEqual('[1,2]', await r.text());
+  }
+  {
+    let threw = false;
+    try { Response.json(undefined); } catch (e) { threw = e instanceof TypeError; }
+    testing.expectTrue(threw);
+  }
+</script>

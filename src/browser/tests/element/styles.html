@@ -216,6 +216,14 @@
   document.body.appendChild(plainDiv);
   testing.expectEqual('block', window.getComputedStyle(plainDiv).getPropertyValue('display'));
 
+  // Repeated calls return the same object (as in Chrome); distinct per element.
+  testing.expectTrue(window.getComputedStyle(div) === window.getComputedStyle(div));
+  testing.expectTrue(window.getComputedStyle(div) === cs);
+  testing.expectFalse(window.getComputedStyle(div) === window.getComputedStyle(plainDiv));
+  // The cached object stays a live view.
+  div.style.setProperty('text-transform', 'lowercase');
+  testing.expectEqual('lowercase', window.getComputedStyle(div).getPropertyValue('text-transform'));
+
   // A normal declaration must not override an earlier !important one, and the
   // computed and inline (el.style) paths must agree on the resolved value.
   const impDiv = document.createElement('div');

@@ -545,7 +545,7 @@ fn dispatchCloseEvent(self: *WebSocket, code: u16, reason: []const u8, was_clean
     }
 }
 
-fn sendDataCallback(buffer: [*]u8, buf_count: usize, buf_len: usize, data: *anyopaque) usize {
+fn sendDataCallback(buffer: [*]u8, buf_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
     if (comptime IS_DEBUG) {
         std.debug.assert(buf_count == 1);
     }
@@ -624,7 +624,7 @@ fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: M
     return to_copy;
 }
 
-fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, data: *anyopaque) usize {
+fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
     if (comptime IS_DEBUG) {
         std.debug.assert(buf_count == 1);
     }
@@ -695,7 +695,7 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
 
 // libcurl has no mechanism to signal that the connection is established. The
 // best option I could come up with was looking for an upgrade header response.
-fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) usize {
+fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
     if (comptime IS_DEBUG) {
         std.debug.assert(header_count == 1);
     }
@@ -774,7 +774,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(WebSocket.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(WebSocket.init, .{});
 
     pub const CONNECTING = bridge.property(@intFromEnum(ReadyState.connecting), .{ .template = true });
     pub const OPEN = bridge.property(@intFromEnum(ReadyState.open), .{ .template = true });
@@ -794,8 +794,8 @@ pub const JsApi = struct {
     pub const onerror = bridge.accessor(WebSocket.getOnError, WebSocket.setOnError, .{});
     pub const onclose = bridge.accessor(WebSocket.getOnClose, WebSocket.setOnClose, .{});
 
-    pub const send = bridge.function(WebSocket.send, .{ .dom_exception = true });
-    pub const close = bridge.function(WebSocket.close, .{ .dom_exception = true });
+    pub const send = bridge.function(WebSocket.send, .{});
+    pub const close = bridge.function(WebSocket.close, .{});
 };
 
 const testing = @import("../../../testing.zig");

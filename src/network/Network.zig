@@ -25,6 +25,7 @@ const Config = @import("../Config.zig");
 
 const CDP = @import("../cdp/CDP.zig");
 const libcurl = @import("../sys/libcurl.zig");
+const crypto = @import("../sys/libcrypto.zig");
 
 const http = @import("http.zig");
 const IpFilter = @import("IpFilter.zig");
@@ -86,7 +87,8 @@ allocator: Allocator,
 app: *App,
 cache: ?Cache,
 config: *const Config,
-ca_blob: ?http.Blob,
+/// Holds certificate bundle.
+x509_store: *crypto.X509_STORE,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
 
@@ -175,10 +177,15 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
     pollfds[0] = .{ .fd = pipe[0], .events = posix.POLL.IN, .revents = 0 };
 
-    var ca_blob: ?http.Blob = null;
-    if (config.tlsVerifyHost()) {
-        ca_blob = try loadCerts(allocator);
-    }
+    const x509_store = blk: {
+        if (config.tlsVerifyHost()) {
+            break :blk try createX509Store(allocator);
+        }
+        break :blk crypto.X509_STORE_new() orelse {
+            return error.FailedToCreateX509Store;
+        };
+    };
+    errdefer crypto.X509_STORE_free(x509_store);
 
     // IP filter for blocking requests to private/internal networks.
     const block_private = config.blockPrivateNetworks();
@@ -204,7 +211,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     var available: DoublyLinkedList = .{};
     for (0..count) |i| {
-        connections[i] = try http.Connection.init(ca_blob, config, ip_filter);
+        connections[i] = try http.Connection.init(x509_store, config, ip_filter);
         available.append(&connections[i].node);
     }
 
@@ -232,7 +239,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     return .{
         .allocator = allocator,
         .config = config,
-        .ca_blob = ca_blob,
+        .x509_store = x509_store,
 
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
@@ -266,10 +273,7 @@ pub fn deinit(self: *Network) void {
     self.allocator.free(self.pollfds);
     self.allocator.free(self.cdp_poll_snapshot);
 
-    if (self.ca_blob) |ca_blob| {
-        const data: [*]u8 = @ptrCast(ca_blob.data);
-        self.allocator.free(data[0..ca_blob.len]);
-    }
+    crypto.X509_STORE_free(self.x509_store);
 
     for (self.connections) |*conn| {
         conn.deinit();
@@ -675,7 +679,7 @@ pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
             self.ws_count -= 1;
         },
         else => {
-            conn.reset(self.config, self.ca_blob, self.ip_filter) catch |err| {
+            conn.reset(self.config, self.x509_store, self.ip_filter) catch |err| {
                 lp.assert(false, "couldn't reset curl easy", .{ .err = err });
             };
             self.conn_mutex.lock();
@@ -700,7 +704,7 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     };
 
     // don't do this under lock
-    conn.* = http.Connection.init(self.ca_blob, self.config, self.ip_filter) catch {
+    conn.* = http.Connection.init(self.x509_store, self.config, self.ip_filter) catch {
         self.ws_mutex.lock();
         defer self.ws_mutex.unlock();
         self.ws_pool.destroy(conn);
@@ -712,89 +716,88 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     return conn;
 }
 
-// Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is
-// what Zig has), with lines wrapped at 64 characters and with a basic header
-// and footer
-const LineWriter = struct {
-    col: usize = 0,
-    inner: std.ArrayList(u8).Writer,
+const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{FailedToCreateX509Store};
 
-    pub fn writeAll(self: *LineWriter, data: []const u8) !void {
-        var writer = self.inner;
+/// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
+/// Allocations made through passed `allocator` are freed before this function returns.
+fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE {
+    const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
+    errdefer crypto.X509_STORE_free(store);
 
-        var col = self.col;
-        const len = 64 - col;
+    switch (comptime builtin.os.tag) {
+        .linux, .openbsd, .netbsd, .freebsd => blk: {
+            // Iterate over known directories.
+            inline for ([_][:0]const u8{
+                "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
+                "/etc/pki/tls/certs", // Fedora/RHEL
+            }) |dir| {
+                if (loadHashedDirectory(store, dir)) {
+                    break :blk;
+                }
+            }
 
-        var remain = data;
-        if (remain.len > len) {
-            col = 0;
-            try writer.writeAll(data[0..len]);
-            try writer.writeByte('\n');
-            remain = data[len..];
+            // Iterate over known files.
+            inline for ([_][*:0]const u8{
+                "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu/Gentoo
+                "/etc/pki/tls/certs/ca-bundle.crt", // Fedora/RHEL 6
+                "/etc/ssl/ca-bundle.pem", // OpenSUSE
+                "/etc/pki/tls/cacert.pem", // OpenELEC
+                "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS/RHEL 7
+                "/etc/ssl/cert.pem", // Alpine, *BSD
+            }) |file| {
+                if (crypto.X509_STORE_load_locations(store, file, null) == 1) {
+                    break :blk;
+                }
+            }
+
+            log.warn(.app, "No system certificates", .{});
+        },
+        else => {
+            // Prefer stdlib's cert scanner.
+            var bundle: std.crypto.Certificate.Bundle = .{};
+            try bundle.rescan(allocator);
+            defer bundle.deinit(allocator);
+
+            const bytes = bundle.bytes.items;
+            if (bytes.len == 0) {
+                log.warn(.app, "No system certificates", .{});
+                return store;
+            }
+            var it = bundle.map.valueIterator();
+            while (it.next()) |index| {
+                // d2i_X509 reads the cert's own DER length header to find its end and
+                // advances `ptr` past it, so we just hand it the rest of the buffer.
+                var ptr: [*]const u8 = bytes.ptr + index.*;
+                const x509 = crypto.d2i_X509(null, &ptr, @intCast(bytes.len - index.*)) orelse {
+                    log.warn(.app, "Skipping unparseable system cert", .{});
+                    continue;
+                };
+                defer crypto.X509_free(x509); // add_cert takes its own ref; drop ours.
+
+                const result = crypto.X509_STORE_add_cert(store, x509);
+                if (result != 1) {
+                    log.warn(.app, "Failed to add X509 cert to store", .{});
+                }
+            }
+        },
+    }
+
+    return store;
+}
+
+fn loadHashedDirectory(store: *crypto.X509_STORE, dir: [:0]const u8) bool {
+    var handle = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch return false;
+    defer handle.close();
+
+    var hashed = false;
+    var it = handle.iterate();
+    while (it.next() catch return false) |entry| {
+        if (std.mem.endsWith(u8, entry.name, ".0")) {
+            hashed = true;
+            break;
         }
-
-        while (remain.len > 64) {
-            try writer.writeAll(remain[0..64]);
-            try writer.writeByte('\n');
-            remain = remain[64..];
-        }
-        try writer.writeAll(remain);
-        self.col = col + remain.len;
     }
-};
+    if (!hashed) return false;
 
-// TODO: on BSD / Linux, we could just read the PEM file directly.
-// This whole rescan + decode is really just needed for MacOS. On Linux
-// bundle.rescan does find the .pem file(s) which could be in a few different
-// places, so it's still useful, just not efficient.
-fn loadCerts(allocator: Allocator) !libcurl.CurlBlob {
-    var bundle: std.crypto.Certificate.Bundle = .{};
-    try bundle.rescan(allocator);
-    defer bundle.deinit(allocator);
-
-    const bytes = bundle.bytes.items;
-    if (bytes.len == 0) {
-        lp.log.warn(.app, "No system certificates", .{});
-        return .{
-            .len = 0,
-            .flags = 0,
-            .data = bytes.ptr,
-        };
-    }
-
-    const encoder = std.base64.standard.Encoder;
-    var arr: std.ArrayList(u8) = .empty;
-
-    const encoded_size = encoder.calcSize(bytes.len);
-    const buffer_size = encoded_size +
-        (bundle.map.count() * 75) + // start / end per certificate + extra, just in case
-        (encoded_size / 64) // newline per 64 characters
-    ;
-    try arr.ensureTotalCapacity(allocator, buffer_size);
-    errdefer arr.deinit(allocator);
-    var writer = arr.writer(allocator);
-
-    var it = bundle.map.valueIterator();
-    while (it.next()) |index| {
-        const cert = try std.crypto.Certificate.der.Element.parse(bytes, index.*);
-
-        try writer.writeAll("-----BEGIN CERTIFICATE-----\n");
-        var line_writer = LineWriter{ .inner = writer };
-        try encoder.encodeWriter(&line_writer, bytes[index.*..cert.slice.end]);
-        try writer.writeAll("\n-----END CERTIFICATE-----\n");
-    }
-
-    // Final encoding should not be larger than our initial size estimate
-    lp.assert(buffer_size > arr.items.len, "Http loadCerts", .{ .estimate = buffer_size, .len = arr.items.len });
-
-    // Allocate exactly the size needed and copy the data
-    const result = try allocator.dupe(u8, arr.items);
-    // Free the original oversized allocation
-    arr.deinit(allocator);
-
-    return .{
-        .len = result.len,
-        .data = result.ptr,
-        .flags = 0,
-    };
+    return crypto.X509_STORE_load_locations(store, null, dir.ptr) == 1;
 }

@@ -100,6 +100,10 @@ arena: Allocator,
 // owned by the IsolatedWorld.
 call_arena: Allocator,
 
+// Like call_arena, but reset on _every_ Caller.deinit rather than only at
+// call_depth 0.
+local_arena: Allocator,
+
 // Because calls can be nested (i.e.a function calling a callback),
 // we can only reset the call_arena when call_depth == 0. If we were
 // to reset it within a callback, it would invalidate the data of
@@ -229,6 +233,24 @@ pub fn deinit(self: *Context) void {
     v8.v8__MicrotaskQueue__DELETE(self.microtask_queue);
 }
 
+// The global (e.g. Window) can be reused across contexts. If you do:
+//
+// var w = iframe.contentWindow;
+// iframe.src = 'two.html';
+// w === iframe.contentWindow  (must be true)
+//
+// so when we navigate, the Window/Global is re-used. That's fine with v8, but
+// we need to explicitly detach it from the original before we can safely attach
+// it to the new
+pub fn detachGlobal(self: *Context) void {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.isolate);
+    defer hs.deinit();
+
+    const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, self.isolate.handle));
+    v8.v8__Context__DetachGlobal(local_v8_context);
+}
+
 // setOrigin is called at navigation (opaque -> real origin) and again when a
 // script sets document.domain (real origin -> '!'-marked effective domain).
 pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
@@ -292,6 +314,18 @@ pub fn localScope(self: *Context, ls: *js.Local.Scope) void {
 pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@TypeOf(global)) {
     const l = self.local orelse @panic("toLocal called without active Caller context");
     return l.toLocal(global);
+}
+
+// This context's global (proxy) object, bound to an already-active local.
+// Lets a caller running in a different context — e.g. a [Replaceable] setter
+// invoked on another same-origin window — target this context's global rather
+// than its own.
+pub fn globalObject(self: *Context, local: *const js.Local) js.Object {
+    const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, self.isolate.handle));
+    return .{
+        .local = local,
+        .handle = v8.v8__Context__Global(local_v8_context).?,
+    };
 }
 
 pub fn getIncumbent(self: *Context) *Frame {
@@ -700,7 +734,7 @@ fn importMetaResolveCallback(callback_handle: ?*const v8.FunctionCallbackInfo) c
         return;
     };
 
-    const resolved = ctx.script_manager.resolveSpecifier(ctx.call_arena, data.base, specifier) catch {
+    const resolved = ctx.script_manager.resolveSpecifier(ctx.local_arena, data.base, specifier) catch {
         _ = isolate.throwException(isolate.createTypeError("failed to resolve module specifier"));
         return;
     };
@@ -724,8 +758,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
         specifier,
     );
 
-    const entry = self.module_cache.getPtr(normalized_specifier).?;
-    if (entry.module) |m| {
+    if (self.module_cache.getPtr(normalized_specifier).?.module) |m| {
         // This import registered a waiter via preloadImport when it was discovered
         // but the compiled module is already cached so we don't have to call
         // waitForImport. Release our waiter so we no longer hold on waiter on
@@ -751,6 +784,9 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
 
     const mod = try compileModule(local, source.src(), normalized_specifier);
     try self.postCompileModule(mod, normalized_specifier, local);
+    // waitForImport can cause module_cache to be mutated (via HttpClient.tick),
+    // so we need to refetch this incase the hashmap changed
+    const entry = self.module_cache.getPtr(normalized_specifier).?;
     entry.module = try mod.persist();
     // Note: We don't instantiate/evaluate here - V8 will handle instantiation
     // as part of the parent module's dependency chain. If there's a resolver
@@ -904,7 +940,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
         defer try_catch.deinit();
 
         break :blk self.module(true, local, ms.src(), state.specifier, true) catch |err| {
-            const caught = try_catch.caughtOrError(self.call_arena, err);
+            const caught = try_catch.caughtOrError(self.local_arena, err);
             log.err(.js, "module compilation failed", .{
                 .caught = caught,
                 .specifier = state.specifier,

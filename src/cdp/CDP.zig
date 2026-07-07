@@ -691,10 +691,14 @@ pub const BrowserContext = struct {
         const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
         errdefer browser.arena_pool.release(call_arena);
 
+        const local_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.local_arena");
+        errdefer browser.arena_pool.release(local_arena);
+
         const world = try arena.create(IsolatedWorld);
         world.* = .{
             .arena = arena,
             .call_arena = call_arena,
+            .local_arena = local_arena,
             .context = null,
             .browser = browser,
             .name = try arena.dupe(u8, world_name),
@@ -1118,6 +1122,7 @@ const ScriptOnNewDocument = struct {
 const IsolatedWorld = struct {
     arena: Allocator,
     call_arena: Allocator,
+    local_arena: Allocator,
     browser: *Browser,
     name: []const u8,
     context: ?*js.Context = null,
@@ -1130,6 +1135,7 @@ const IsolatedWorld = struct {
     pub fn deinit(self: *IsolatedWorld) void {
         self.removeContext();
         self.browser.arena_pool.release(self.call_arena);
+        self.browser.arena_pool.release(self.local_arena);
         self.browser.arena_pool.release(self.arena);
     }
 
@@ -1155,6 +1161,7 @@ const IsolatedWorld = struct {
                 .identity = &self.identity,
                 .identity_arena = self.arena,
                 .call_arena = self.call_arena,
+                .local_arena = self.local_arena,
                 .debug_name = "IsolatedContext",
             });
             self.context = ctx;

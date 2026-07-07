@@ -908,7 +908,7 @@ pub fn setData(self: *Node, data: []const u8, frame: *Frame) !void {
 
 pub fn normalize(self: *Node, frame: *Frame) !void {
     var buffer: std.ArrayList(u8) = .empty;
-    return self._normalize(frame.call_arena, &buffer, frame);
+    return self._normalize(frame.local_arena, &buffer, frame);
 }
 
 const CloneError = error{
@@ -1276,7 +1276,6 @@ pub const JsApi = struct {
         pub const name = "Node";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const ELEMENT_NODE = bridge.property(1, .{ .template = true });
@@ -1311,7 +1310,9 @@ pub const JsApi = struct {
         // cdata and attributes can return value directly, avoiding the copy
         switch (self._type) {
             .element, .document_fragment => {
-                var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+                // local_arena: read-only text collection, result converted to
+                // v8 before returning; no JS runs in between.
+                var buf = std.Io.Writer.Allocating.init(frame.local_arena);
                 try self.getTextContent(&buf.writer);
                 return buf.written();
             },
@@ -1328,19 +1329,19 @@ pub const JsApi = struct {
     pub const previousSibling = bridge.accessor(Node.previousSibling, null, .{});
     pub const parentNode = bridge.accessor(Node.parentNode, null, .{});
     pub const parentElement = bridge.accessor(Node.parentElement, null, .{});
-    pub const appendChild = bridge.function(Node.appendChild, .{ .dom_exception = true, .ce_reactions = true });
+    pub const appendChild = bridge.function(Node.appendChild, .{ .ce_reactions = true });
     pub const childNodes = bridge.accessor(Node.childNodes, null, .{ .cache = .{ .private = "child_nodes" } });
     pub const isConnected = bridge.accessor(Node.isConnected, null, .{});
     pub const ownerDocument = bridge.accessor(Node.ownerDocument, null, .{});
     pub const hasChildNodes = bridge.function(Node.hasChildNodes, .{});
     pub const isSameNode = bridge.function(Node.isSameNode, .{});
     pub const contains = bridge.function(Node.contains, .{});
-    pub const removeChild = bridge.function(Node.removeChild, .{ .dom_exception = true, .ce_reactions = true });
+    pub const removeChild = bridge.function(Node.removeChild, .{ .ce_reactions = true });
     pub const nodeValue = bridge.accessor(Node.getNodeValue, Node.setNodeValue, .{ .ce_reactions = true });
-    pub const insertBefore = bridge.function(Node.insertBefore, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replaceChild = bridge.function(Node.replaceChild, .{ .dom_exception = true, .ce_reactions = true });
+    pub const insertBefore = bridge.function(Node.insertBefore, .{ .ce_reactions = true });
+    pub const replaceChild = bridge.function(Node.replaceChild, .{ .ce_reactions = true });
     pub const normalize = bridge.function(Node.normalize, .{ .ce_reactions = true });
-    pub const cloneNode = bridge.function(Node.cloneNode, .{ .dom_exception = true, .ce_reactions = true });
+    pub const cloneNode = bridge.function(Node.cloneNode, .{ .ce_reactions = true });
     pub const compareDocumentPosition = bridge.function(Node.compareDocumentPosition, .{});
     pub const getRootNode = bridge.function(_getRootNode, .{});
     // The `options` argument is optional in JS; default it before calling the

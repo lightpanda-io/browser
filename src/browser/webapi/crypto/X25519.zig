@@ -138,8 +138,8 @@ pub fn deriveBits(
         return error.Internal;
     }
 
-    const derived_key = try exec.call_arena.alloc(u8, 32);
-    errdefer exec.call_arena.free(derived_key);
+    const derived_key = try exec.local_arena.alloc(u8, 32);
+    errdefer exec.local_arena.free(derived_key);
 
     var out_key_len: usize = derived_key.len;
     const result = crypto.EVP_PKEY_derive(ctx, derived_key.ptr, &out_key_len);

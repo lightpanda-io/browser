@@ -236,7 +236,7 @@ pub fn deriveBits(
     if (crypto.EVP_PKEY_derive(ctx, null, &secret_len) != 1 or secret_len == 0) {
         return error.OperationError;
     }
-    const secret = try exec.call_arena.alloc(u8, secret_len);
+    const secret = try exec.local_arena.alloc(u8, secret_len);
     if (crypto.EVP_PKEY_derive(ctx, secret.ptr, &secret_len) != 1) {
         return error.OperationError;
     }

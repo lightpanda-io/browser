@@ -489,23 +489,30 @@
 }
 </script>
 
-<script id=prototypeMembersAreNonEnumerable>
+<script id=prototypeMembersAreEnumerable>
 {
-  // Per WebIDL, interface prototype members are non-enumerable. Several
-  // libraries iterate caller-supplied objects with `for..in` or
-  // `Object.keys` to build querystrings; if prototype methods leak in,
-  // they end up serialized as URL params with values like
-  // "function has() { [native code] }". Real Chrome/Firefox return [].
-  testing.expectEqual([], Object.keys(URLSearchParams.prototype));
+  // Per WebIDL, operations and attributes on an interface prototype object
+  // are enumerable (unlike ES class methods). Real Chrome/Firefox list them
+  // in Object.keys(URLSearchParams.prototype) and in for..in over instances.
+  const proto_keys = Object.keys(URLSearchParams.prototype);
+  testing.expectEqual(true, proto_keys.includes('append'));
+  testing.expectEqual(true, proto_keys.includes('has'));
+  testing.expectEqual(true, proto_keys.includes('size'));
 
   const usp = new URLSearchParams('a=1&b=2');
   const keys = [];
   for (const k in usp) keys.push(k);
-  testing.expectEqual([], keys);
+  testing.expectEqual(true, keys.includes('get'));
 
-  // Sanity: instance own enumerable keys are still empty (entries live in
-  // the C++ side, exposed only via the iterator protocol).
+  // Instance own enumerable keys are still empty (entries live in the
+  // native side, exposed only via the iterator protocol).
   testing.expectEqual([], Object.keys(usp));
+
+  // But @@iterator and the interface object itself are non-enumerable.
+  const it_desc = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, Symbol.iterator);
+  testing.expectEqual(false, it_desc.enumerable);
+  const iface_desc = Object.getOwnPropertyDescriptor(window, 'URLSearchParams');
+  testing.expectEqual(false, iface_desc.enumerable);
 }
 </script>
 

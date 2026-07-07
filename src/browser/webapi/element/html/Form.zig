@@ -258,7 +258,7 @@ pub const JsApi = struct {
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
-    pub const requestSubmit = bridge.function(Form.requestSubmit, .{ .dom_exception = true });
+    pub const requestSubmit = bridge.function(Form.requestSubmit, .{});
     pub const checkValidity = bridge.function(Form.checkValidity, .{});
     pub const reportValidity = bridge.function(Form.reportValidity, .{});
 };

@@ -96,7 +96,8 @@ pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob 
 
 /// Creates a new Blob from raw byte slices (for internal Zig use).
 pub fn initFromBytes(data: []const u8, content_type: []const u8, page: *Page) !*Blob {
-    const arena = try page.getArena(.large, "Blob");
+    // + 256 because the arena might also be used by File
+    const arena = try page.getArena(data.len + content_type.len + 256, "Blob");
     errdefer page.releaseArena(arena);
 
     const mime = try Mime.serialize(arena, content_type);
@@ -122,6 +123,30 @@ pub fn releaseRef(self: *Blob, page: *Page) void {
 
 pub fn acquireRef(self: *Blob) void {
     self._rc.acquire();
+}
+
+pub fn structuredSerialize(self: *const Blob, writer: *js.StructuredWriter) !void {
+    writer.writeBytes(self._mime);
+    writer.writeBytes(self._slice);
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*Blob {
+    const mime = try reader.readBytes();
+    const data = try reader.readBytes();
+
+    const arena = try page.getArena(data.len + mime.len + 256, "Blob.clone");
+    errdefer page.releaseArena(arena);
+
+    const self = try arena.create(Blob);
+    self.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._type = .generic,
+        ._slice = try arena.dupe(u8, data),
+        // the serialized mime is already in normalized form; copy it verbatim
+        ._mime = try arena.dupe(u8, mime),
+    };
+    return self;
 }
 
 const largest_vector = @max(std.simd.suggestVectorLength(u8) orelse 1, 8);

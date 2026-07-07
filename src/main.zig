@@ -27,6 +27,16 @@ const Config = lp.Config;
 const SigHandler = @import("Sighandler.zig");
 pub const panic = lp.crash_handler.panic;
 
+pub const std_options: std.Options = .{
+    // std.crypto.random's default backend mmaps a thread-local 528-byte state
+    // page on first use and never unmaps it — there is no thread-exit hook.
+    // With one detached thread per CDP connection (Server.handleConnection),
+    // that leaks one resident page per connection (uuidv4 in
+    // Page.getOrCreateOrigin touches it), ~4KB/conn of unbounded RSS growth.
+    // Route every std.crypto.random call to the getrandom syscall instead.
+    .crypto_always_getrandom = true,
+};
+
 pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks

@@ -306,18 +306,19 @@ pub fn preloadModuleHint(self: *ScriptManagerBase, element: *Element.Html, url: 
 }
 
 pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource {
-    const entry = self.imported_modules.getEntry(url) orelse {
-        // It shouldn't be possible for v8 to ask for a module that we didn't
-        // `preloadImport` above.
-        return error.UnknownModule;
-    };
-
     const was_evaluating = self.is_evaluating;
     self.is_evaluating = true;
     defer self.endEvaluationWindow(was_evaluating);
 
     var client = self.client;
     while (true) {
+        // imported_modules can be mutated by client.tick, so we need to lookup
+        // the entry on each iteration.
+        const entry = self.imported_modules.getEntry(url) orelse {
+            // It shouldn't be possible for v8 to ask for a module that we
+            // didn't `preloadImport` above.
+            return error.UnknownModule;
+        };
         switch (entry.value_ptr.state) {
             .loading => {
                 _ = try client.tick(200, .sync_wait);
@@ -935,7 +936,7 @@ pub const Script = struct {
             return;
         }
 
-        const caught = try_catch.caughtOrError(frame.call_arena, error.Unknown);
+        const caught = try_catch.caughtOrError(frame.local_arena, error.Unknown);
         log.warn(.js, "eval script", .{
             .url = url,
             .caught = caught,

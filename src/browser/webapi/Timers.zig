@@ -29,10 +29,20 @@ const js = @import("../js/js.zig");
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 
+const CLAMP_MS = 4;
+const CLAMP_NESTING = 5;
+
 const Timers = @This();
 
 _timer_id: u30 = 0,
 _callbacks: CallbackHashMap = .{},
+
+// We keep the depth of the timers (a setTimeout calling a setTimeout). When
+// the depth reaches CLAMP_NESTING, the minimum timeout is 4ms. This is per-
+// spec and it's necessary to prevent some sites from virtually breaking because
+// they repeatedly do heavy work in endlessly looping setTimeout with a short
+// timeout (often of 0ms)
+_nesting_level: u8 = 0,
 
 const Key = u32;
 const CallbackHashMap = std.HashMapUnmanaged(
@@ -82,6 +92,9 @@ pub fn schedule(
     const timer_id = self._timer_id +% 1;
     self._timer_id = timer_id;
 
+    const nesting = @min(self._nesting_level + 1, CLAMP_NESTING + 1);
+    const delay = if (nesting > CLAMP_NESTING and delay_ms < CLAMP_MS) CLAMP_MS else delay_ms;
+
     var persisted_params: []js.Value.Temp = &.{};
     if (opts.params.len > 0) {
         persisted_params = try arena.dupe(js.Value.Temp, opts.params);
@@ -102,13 +115,14 @@ pub fn schedule(
         .arena = arena,
         .mode = opts.mode,
         .name = opts.name,
+        .nesting = nesting,
         .timer_id = timer_id,
         .params = persisted_params,
-        .repeat_ms = if (opts.repeat) if (delay_ms == 0) 1 else delay_ms else null,
+        .repeat_ms = if (opts.repeat) if (delay == 0) 1 else delay else null,
     };
     gop.value_ptr.* = callback;
 
-    try exec.js.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
+    try exec.js.scheduler.add(callback, ScheduleCallback.run, delay, .{
         .name = opts.name,
         .low_priority = opts.low_priority,
         .finalizer = ScheduleCallback.cancelled,
@@ -152,6 +166,10 @@ const ScheduleCallback = struct {
     // delay, in ms, to repeat. When null, removed after first invocation.
     repeat_ms: ?u32,
 
+    // The nesting of this task. When it executes, this nesting will become
+    // the Timer's _nesting_level so that any new timers will become nesting + 1
+    nesting: u8,
+
     cb: js.Function.Temp,
 
     mode: Mode,
@@ -185,6 +203,11 @@ const ScheduleCallback = struct {
         self.exec.js.localScope(&ls);
         defer ls.deinit();
 
+        const timers = self.timers;
+        const prev_nesting = timers._nesting_level;
+        timers._nesting_level = self.nesting;
+        defer timers._nesting_level = prev_nesting;
+
         switch (self.mode) {
             .idle => {
                 const IdleDeadline = @import("IdleDeadline.zig");
@@ -210,6 +233,12 @@ const ScheduleCallback = struct {
         ls.local.runMicrotasks();
 
         if (self.repeat_ms) |ms| {
+            // each repeat re-enters the timer initialization steps, so the
+            // nesting level keeps growing and sub-4ms intervals get clamped.
+            self.nesting = @min(self.nesting + 1, CLAMP_NESTING + 1);
+            if (self.nesting > CLAMP_NESTING and ms < CLAMP_MS) {
+                return CLAMP_MS;
+            }
             return ms;
         }
         defer self.deinit();

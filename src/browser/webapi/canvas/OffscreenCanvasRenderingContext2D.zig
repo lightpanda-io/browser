@@ -34,7 +34,7 @@ const OffscreenCanvasRenderingContext2D = @This();
 _fill_style: color.RGBA = color.RGBA.Named.black,
 
 pub fn getFillStyle(self: *const OffscreenCanvasRenderingContext2D, exec: *Execution) ![]const u8 {
-    var w = std.Io.Writer.Allocating.init(exec.call_arena);
+    var w = std.Io.Writer.Allocating.init(exec.local_arena);
     try self._fill_style.format(&w.writer);
     return w.written();
 }
@@ -137,10 +137,10 @@ pub const JsApi = struct {
     pub const textBaseline = bridge.property("alphabetic", .{ .template = false, .readonly = false });
 
     pub const fillStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getFillStyle, OffscreenCanvasRenderingContext2D.setFillStyle, .{});
-    pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
+    pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{});
 
     pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{ .noop = true });
-    pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
+    pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{});
     pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{ .noop = true });
     pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{ .noop = true });

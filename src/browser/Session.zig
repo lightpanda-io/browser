@@ -72,7 +72,10 @@ _nav_cursor: usize = 0,
 
 // Set by the agent script Runtime around one tool call so each `Page` handle's
 // tools act on its own frame, not `pages[0]`. Null for all other callers.
-_tool_frame_override: ?*Frame = null,
+// A frame id, not a pointer: a tool-triggered navigation commits a replacement
+// Page mid-call, freeing the old Frame while keeping its frame id (see
+// `commitPendingPage`).
+_tool_frame_override: ?u32 = null,
 
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
@@ -444,8 +447,9 @@ pub fn primaryPage(self: *Session) ?PageHandle {
 
 // DEPRECATED. Exists during our transition to multi-page sessions.
 pub fn currentFrame(self: *Session) ?*Frame {
-    if (self._tool_frame_override) |frame| {
-        return frame;
+    if (self._tool_frame_override) |frame_id| {
+        // No pages[0] fallthrough: the override targets one specific page.
+        return self.findFrameByFrameId(frame_id);
     }
     if (self.pages.items.len == 0) {
         return null;
@@ -458,8 +462,8 @@ pub fn currentFrame(self: *Session) ?*Frame {
 }
 
 /// See `_tool_frame_override`. Pass null to clear.
-pub fn setToolFrameOverride(self: *Session, frame: ?*Frame) void {
-    self._tool_frame_override = frame;
+pub fn setToolFrameOverride(self: *Session, frame_id: ?u32) void {
+    self._tool_frame_override = frame_id;
 }
 
 // Multi-page aware: frame ids are globally unique (monotonic on `Browser`).
@@ -660,6 +664,7 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
     const frame_id = frame._frame_id;
     const reuse_window = frame.window;
     const page = frame._page;
+    frame.js.detachGlobal();
     frame.deinit();
     frame.* = undefined;
 
@@ -705,6 +710,7 @@ fn processPopupNavigation(_: *Session, frame: *Frame, qn: *QueuedNavigation) !vo
     const frame_id = frame._frame_id;
     const page = frame._page;
 
+    frame.js.detachGlobal();
     frame.deinit();
     frame.* = undefined;
 

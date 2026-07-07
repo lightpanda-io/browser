@@ -353,14 +353,14 @@ pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 10,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 40,
         else => unreachable,
     };
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 4,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 6,
         else => unreachable,
     };
 }

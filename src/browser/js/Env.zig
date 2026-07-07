@@ -229,6 +229,7 @@ pub const ContextParams = struct {
     identity: *js.Identity,
     identity_arena: Allocator,
     call_arena: Allocator,
+    local_arena: Allocator,
     debug_name: []const u8 = "Context",
 };
 
@@ -315,6 +316,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .handle = context_global,
         .templates = self.templates,
         .call_arena = params.call_arena,
+        .local_arena = params.local_arena,
         .microtask_queue = microtask_queue,
         .script_manager = if (comptime is_frame) &global._script_manager.base else &global._script_manager,
         .scheduler = .init(context_arena),
@@ -332,6 +334,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .page = context.page,
         .session = page.session,
         .call_arena = params.call_arena,
+        .local_arena = params.local_arena,
         ._factory = global._factory,
         ._scheduler = &context.scheduler,
     };

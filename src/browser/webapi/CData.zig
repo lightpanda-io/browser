@@ -420,17 +420,16 @@ pub const JsApi = struct {
         pub const name = "CharacterData";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const data = bridge.accessor(CData.getData, CData._setData, .{ .ce_reactions = true });
     pub const length = bridge.accessor(CData.getLength, null, .{});
 
     pub const appendData = bridge.function(CData.appendData, .{ .ce_reactions = true });
-    pub const deleteData = bridge.function(CData.deleteData, .{ .dom_exception = true, .ce_reactions = true });
-    pub const insertData = bridge.function(CData.insertData, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replaceData = bridge.function(CData.replaceData, .{ .dom_exception = true, .ce_reactions = true });
-    pub const substringData = bridge.function(CData.substringData, .{ .dom_exception = true });
+    pub const deleteData = bridge.function(CData.deleteData, .{ .ce_reactions = true });
+    pub const insertData = bridge.function(CData.insertData, .{ .ce_reactions = true });
+    pub const replaceData = bridge.function(CData.replaceData, .{ .ce_reactions = true });
+    pub const substringData = bridge.function(CData.substringData, .{});
 
     pub const remove = bridge.function(CData.remove, .{ .ce_reactions = true });
     pub const before = bridge.function(CData.before, .{ .ce_reactions = true });

@@ -84,7 +84,7 @@ pub const JsApi = struct {
     pub const returnValue = bridge.accessor(Dialog.getReturnValue, Dialog.setReturnValue, .{});
 
     pub const show = bridge.function(Dialog.show, .{});
-    pub const showModal = bridge.function(Dialog.showModal, .{ .dom_exception = true });
+    pub const showModal = bridge.function(Dialog.showModal, .{});
     pub const close = bridge.function(Dialog.close, .{});
 };
 

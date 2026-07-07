@@ -30,7 +30,7 @@ const Terminal = @import("Terminal.zig");
 const string = @import("../string.zig");
 const Credentials = zenai.provider.Credentials;
 
-pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY";
+pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud)";
 
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
@@ -38,6 +38,9 @@ pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF
 pub const ResolvedProvider = struct {
     credentials: Credentials,
     source: enum { flag, remembered, detected, picked },
+    /// Key allocated (Vertex gcloud token) rather than an env pointer; the
+    /// caller frees it, only after the client that references it is gone.
+    key_owned: bool = false,
 };
 
 /// Probe a keyless local provider (Ollama, llama.cpp): its env key is a
@@ -52,21 +55,69 @@ pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider,
     return .{ .provider = tag, .key = key };
 }
 
+/// With GOOGLE_CLOUD_PROJECT set, zenai's client always sends Bearer auth —
+/// an API key can never work, so the credential must be an OAuth token.
+pub fn vertexProjectMode() bool {
+    return std.posix.getenv("GOOGLE_CLOUD_PROJECT") != null;
+}
+
+/// Caller owns the result. Failure prints gcloud's own stderr so the real
+/// cause (not logged in, missing SDK) reaches the user.
+pub fn gcloudAccessToken(allocator: std.mem.Allocator) ![:0]const u8 {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "gcloud", "auth", "print-access-token" },
+        .max_output_bytes = 64 * 1024,
+    }) catch |err| {
+        if (err == error.FileNotFound) {
+            std.debug.print("gcloud not found on PATH; install the Google Cloud SDK, or unset GOOGLE_CLOUD_PROJECT to use Vertex express mode with GOOGLE_API_KEY.\n", .{});
+            return error.GcloudNotFound;
+        }
+        return err;
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    const failed = switch (result.term) {
+        .Exited => |code| code != 0,
+        else => true,
+    };
+    const token = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
+    if (failed or token.len == 0) {
+        std.debug.print("`gcloud auth print-access-token` failed:\n{s}", .{result.stderr});
+        return error.GcloudTokenFailed;
+    }
+    return allocator.dupeZ(u8, token);
+}
+
 /// True when a non-Ollama provider key is available (flag, remembered, or
 /// env-detected). Skips the Ollama probe so it isn't run twice at startup; the
 /// interactive picker only fires on detected keys, which this still catches.
 pub fn hasDetectableKey(opts: Config.Agent, remembered: ?Remembered) bool {
-    if (opts.provider) |p| return zenai.provider.envApiKey(p) != null;
-    if (remembered) |r| if (r.provider) |p| if (zenai.provider.envApiKey(p)) |_| return true;
+    if (opts.provider) |p| return zenai.provider.envApiKey(p) != null or (p == .vertex and vertexProjectMode());
+    if (remembered) |r| if (r.provider) |p| {
+        if (zenai.provider.envApiKey(p) != null) return true;
+        if (p == .vertex and vertexProjectMode()) return true;
+    };
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
-    return zenai.provider.detectKeys(&buf, zenai.provider.default_candidates).len > 0;
+    return availableProviders(&buf).len > 0;
 }
 
 /// Precedence: `--provider` > remembered (if its key is still set) > first
 /// detected. Null means no key at all (the reason is already printed).
 pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, remembered: ?Remembered, allow_pick: bool) !?ResolvedProvider {
     if (opts.provider) |p| {
+        if (p == .vertex and vertexProjectMode()) {
+            const token = try gcloudAccessToken(allocator);
+            return .{ .credentials = .{ .provider = p, .key = token }, .source = .flag, .key_owned = true };
+        }
         const key = zenai.provider.envApiKey(p) orelse {
+            if (p == .vertex) {
+                std.debug.print(
+                    "Vertex needs VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud) — or pass --no-llm for the basic REPL.\n",
+                    .{},
+                );
+                return error.MissingApiKey;
+            }
             std.debug.print(
                 "Missing API key for --provider {s}: set {s} — or pass --no-llm for the basic REPL.\n",
                 .{ @tagName(p), zenai.provider.envVarName(p) },
@@ -76,12 +127,19 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
         return .{ .credentials = .{ .provider = p, .key = key }, .source = .flag };
     }
 
-    if (remembered) |r| if (r.provider) |p| if (zenai.provider.envApiKey(p)) |key| {
-        return .{ .credentials = .{ .provider = p, .key = key }, .source = .remembered };
+    if (remembered) |r| if (r.provider) |p| {
+        if (p == .vertex and vertexProjectMode()) {
+            // On failure the reason is already printed; fall through to detection.
+            if (gcloudAccessToken(allocator)) |token| {
+                return .{ .credentials = .{ .provider = p, .key = token }, .source = .remembered, .key_owned = true };
+            } else |_| {}
+        } else if (zenai.provider.envApiKey(p)) |key| {
+            return .{ .credentials = .{ .provider = p, .key = key }, .source = .remembered };
+        }
     };
 
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
-    const found = zenai.provider.detectKeys(&buf, zenai.provider.default_candidates);
+    const found = availableProviders(&buf);
     if (found.len == 0) {
         if (detectLocalProvider(allocator, .ollama, opts.base_url)) |creds| {
             return .{ .credentials = creds, .source = .detected };
@@ -99,16 +157,26 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     // A single key needs no choice; non-interactive callers (--list-models,
     // one-shot tasks, pipes) must not block on a prompt — take the first.
     if (!allow_pick or found.len == 1 or !Terminal.interactiveTty()) {
-        return .{ .credentials = found[0], .source = .detected };
+        return try finishResolved(allocator, found[0], .detected);
     }
 
     var names: [zenai.provider.default_candidates.len][:0]const u8 = undefined;
     for (found, 0..) |cred, i| names[i] = @tagName(cred.provider);
     std.debug.print("\n", .{});
     const idx = Terminal.promptNumberedChoice("  Select a provider:", names[0..found.len], 0) catch {
-        return .{ .credentials = found[0], .source = .detected };
+        return try finishResolved(allocator, found[0], .detected);
     };
-    return .{ .credentials = found[idx], .source = .picked };
+    return try finishResolved(allocator, found[idx], .picked);
+}
+
+/// Swaps the placeholder key of a detected project-mode Vertex for a real
+/// gcloud token.
+fn finishResolved(allocator: std.mem.Allocator, credentials: Credentials, source: @FieldType(ResolvedProvider, "source")) !ResolvedProvider {
+    if (credentials.provider == .vertex and vertexProjectMode()) {
+        const token = try gcloudAccessToken(allocator);
+        return .{ .credentials = .{ .provider = .vertex, .key = token }, .source = source, .key_owned = true };
+    }
+    return .{ .credentials = credentials, .source = source };
 }
 
 pub const remembered_path = ".lp-agent.zon";
@@ -157,8 +225,15 @@ pub fn saveRemembered(remembered: Remembered) !void {
 
 /// Cloud providers with a key set. Ollama is excluded — its availability needs
 /// a live probe (`detectLocalProvider`), too costly for an unconditional startup scan.
+/// Vertex project mode joins with a placeholder key — no subprocess during a
+/// scan; the gcloud token is fetched on selection (`finishResolved`).
 pub fn availableProviders(buf: []Credentials) []Credentials {
-    return zenai.provider.detectKeys(buf, zenai.provider.default_candidates);
+    const found = zenai.provider.detectKeys(buf, zenai.provider.default_candidates);
+    if (zenai.provider.useVertex() and vertexProjectMode() and found.len < buf.len) {
+        buf[found.len] = .{ .provider = .vertex, .key = "" };
+        return buf[0 .. found.len + 1];
+    }
+    return found;
 }
 
 pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembered: ?Remembered) []const u8 {
