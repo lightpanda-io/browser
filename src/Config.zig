@@ -114,6 +114,8 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
+    .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
+    .{ .name = "v8_max_heap_mb", .type = ?u32 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -333,6 +335,20 @@ pub fn disableWorkers(self: *const Config) bool {
 pub fn enableExternalStylesheets(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.enable_external_stylesheets,
+        else => unreachable,
+    };
+}
+
+pub fn v8Flags(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_flags_unsafe,
+        else => unreachable,
+    };
+}
+
+pub fn v8MaxHeapMb(self: *const Config) ?u32 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_max_heap_mb,
         else => unreachable,
     };
 }

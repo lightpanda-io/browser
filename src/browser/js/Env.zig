@@ -132,6 +132,14 @@ pub fn init(app: *App, opts: InitOpts) !Env {
 
     params.external_references = &snapshot.external_references;
 
+    if (app.config.v8MaxHeapMb()) |mb| {
+        v8.v8__ResourceConstraints__ConfigureDefaultsFromHeapSize(
+            &params.constraints,
+            0,
+            @as(usize, mb) * 1024 * 1024,
+        );
+    }
+
     var isolate = js.Isolate.init(params);
     errdefer isolate.deinit();
     const isolate_handle = isolate.handle;
@@ -391,7 +399,7 @@ pub fn runMicrotasks(self: *Env) void {
 
         const v8_isolate = self.isolate.handle;
 
-        if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
+        if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate) or self.terminatePending()) {
             return;
         }
 
@@ -409,7 +417,7 @@ pub fn runMicrotasks(self: *Env) void {
 }
 
 pub fn runMacrotasks(self: *Env) !void {
-    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) {
+    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle) or self.terminatePending()) {
         return;
     }
 
@@ -540,6 +548,34 @@ pub fn terminate(self: *Env) void {
     self.terminate_mutex.lock();
     defer self.terminate_mutex.unlock();
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
+}
+
+// We need a stable pointer for *Env, so can't be setup in init.
+pub fn protectHeapLimit(self: *Env) void {
+    v8.v8__Isolate__AddNearHeapLimitCallback(self.isolate.handle, nearHeapLimit, self);
+}
+
+// v8 is telling us it's about to run out of memory for this isolate. We'll
+// do two things:
+// 1 - Terminate the execution (attempting to prevent v8 from OOM'ing the process)
+// 2 - Tell v8 that it can use 8MB more memory, hopefully giving it enough memory
+//     to properly shutdown
+//
+// The terminate must go through requestTerminate (RequestInterrupt), NOT a
+// direct TerminateExecution: we're mid-GC, which is an arbitrary point —
+// possibly inside a microtask run — and flagging termination there lets the
+// run complete with a result while the isolate is terminating, tripping
+// V8's DCHECK(maybe_result.is_null()) in MicrotaskQueue::RunMicrotasks. The
+// interrupt lands at a stack-guard check, where termination unwinds the way
+// V8 expects.
+fn nearHeapLimit(data: ?*anyopaque, current_limit: usize, initial_limit: usize) callconv(.c) usize {
+    const self: *Env = @ptrCast(@alignCast(data.?));
+    log.err(.app, "JS heap limit reached", .{
+        .initial_limit = initial_limit,
+        .current_limit = current_limit,
+    });
+    self.requestTerminate();
+    return current_limit + 8 * 1024 * 1024;
 }
 
 // Called from the network thread, caused v8 to eventually call terminateInterrupt

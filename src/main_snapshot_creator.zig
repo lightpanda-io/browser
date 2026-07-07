@@ -22,7 +22,26 @@ const lp = @import("lightpanda");
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
-    var platform = try lp.js.Platform.init();
+    // usage: snapshot_creator [--v8-flags-unsafe "<flags>"] [outfile]
+    // A snapshot only deserializes correctly under the flags it was created
+    // with, so a runtime using --v8-flags-unsafe needs a snapshot built with
+    // the same value.
+    var v8_flags: ?[]const u8 = null;
+    var out_path: ?[]const u8 = null;
+    var args = try std.process.argsWithAllocator(allocator);
+    _ = args.next(); // executable name
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--v8-flags-unsafe")) {
+            v8_flags = args.next() orelse {
+                std.debug.print("--v8-flags-unsafe requires a value\n", .{});
+                return error.MissingArgument;
+            };
+        } else {
+            out_path = arg;
+        }
+    }
+
+    var platform = try lp.js.Platform.init(v8_flags);
     defer platform.deinit();
 
     const snapshot = try lp.js.Snapshot.create();
@@ -30,9 +49,7 @@ pub fn main() !void {
 
     var is_stdout = true;
     var file = std.fs.File.stdout();
-    var args = try std.process.argsWithAllocator(allocator);
-    _ = args.next(); // executable name
-    if (args.next()) |n| {
+    if (out_path) |n| {
         is_stdout = false;
         file = try std.fs.cwd().createFile(n, .{});
     }

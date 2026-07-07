@@ -143,6 +143,7 @@ pub fn init(
     // + terminate/microtask carrier; the agent context is bare (no WebAPIs).
     self.env = lp.js.Env.init(app, .{}) catch return error.RuntimeInitFailed;
     errdefer self.env.deinit();
+    self.env.protectHeapLimit();
 
     try self.createContext();
     errdefer self.resetContext();
