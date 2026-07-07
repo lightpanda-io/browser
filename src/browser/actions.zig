@@ -189,23 +189,24 @@ pub fn setChecked(node: *DOMNode, checked: bool, frame: *Frame) !void {
         return error.InvalidNodeType;
     }
 
-    input.setChecked(checked, frame) catch |err| {
-        lp.log.err(.app, "setChecked failed", .{ .err = err });
+    if (input.getChecked() == checked) {
+        return;
+    }
+    if (input._input_type == .radio and !checked) {
+        // A click can never uncheck a radio.
+        return error.InvalidNodeType;
+    }
+
+    // The click's activation behavior (EventManager.ActivationState) toggles
+    // the state and fires input and change; setting the state up front would
+    // make the click undo it, and dispatching input/change here would double
+    // them up.
+    try click(node, frame);
+
+    if (input.getChecked() != checked) {
+        lp.log.err(.app, "setChecked click prevented", .{});
         return error.ActionFailed;
-    };
-
-    // Match browser event order: click fires first, then input and change.
-    const click_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-    }, frame);
-
-    frame._event_manager.dispatch(el.asEventTarget(), click_event.asEvent()) catch |err| {
-        lp.log.err(.app, "dispatch click event failed", .{ .err = err });
-    };
-
-    try dispatchInputAndChangeEvents(el, frame);
+    }
 }
 
 pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
