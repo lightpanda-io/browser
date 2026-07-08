@@ -69,7 +69,12 @@ pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
         err: std.Io.Writer.Error!void = {},
 
         /// curl -> writer.
-        fn drain(buffer: [*]const u8, buf_count: usize, buf_len: usize, raw_ctx: ?*anyopaque) usize {
+        fn drain(
+            buffer: [*]const u8,
+            buf_count: usize,
+            buf_len: usize,
+            raw_ctx: *anyopaque,
+        ) callconv(.c) usize {
             const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
             const chunk = buffer[0 .. buf_count * buf_len];
             ctx.writer.writeAll(chunk) catch |err| {
