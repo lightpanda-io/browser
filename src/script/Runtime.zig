@@ -1471,11 +1471,14 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
         \\if (page.evaluate("window.inputVal") !== "hello") throw new Error("fill two-positional failed");
         \\page.selectOption("#sel", "opt2");
         \\if (page.evaluate("window.selChanged") !== "opt2") throw new Error("selectOption two-positional failed");
-        \\// Bool positional, and the default-true shorthand when omitted. Assert via the
-        \\// tool's own report (the synthetic click toggles the DOM state, so .checked is
-        \\// not a reliable observation of the `checked` argument).
+        \\// Bool positional, and the default-true shorthand when omitted.
         \\if (!page.setChecked("#chk").includes("to checked")) throw new Error("setChecked default-true failed");
+        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "true") throw new Error("setChecked(true) did not check the box");
         \\if (!page.setChecked("#chk", false).includes("to unchecked")) throw new Error("setChecked bool positional failed");
+        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "false") throw new Error("setChecked(false) did not uncheck the box");
+        \\// Repeat call to the same state is an idempotent no-op, not a toggle.
+        \\page.setChecked("#chk", false);
+        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "false") throw new Error("setChecked no-op toggled the box");
         \\// Selector-first press, and a null selector for a page/focused key press.
         \\page.press("#keyTarget", "Enter");
         \\if (page.evaluate("window.keyPressed") !== "Enter") throw new Error("selector-first press failed");

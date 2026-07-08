@@ -402,6 +402,35 @@ jobs:
 
       - run: ./lightpanda fetch https://demo-browser.lightpanda.io/campfire-commerce/
 
+  agent-deterministic:
+    name: agent deterministic replay
+    needs: zig-build-release
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - name: download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: lightpanda-build-release
+          path: bin
+
+      - run: chmod a+x bin/lightpanda
+
+      # No API key: replays golden PandaScripts against the demo sites and
+      # diffs the returned JSON against agent/golden/. The keyed live layer
+      # runs separately in agent-regression.yml.
+      - name: deterministic agent replay
+        env:
+          LPD_PATH: ${{ github.workspace }}/bin/lightpanda
+        run: ./agent/run.sh deterministic
+
   mcp-smoke:
     name: mcp smoke
     needs: zig-build-release

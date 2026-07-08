@@ -1,0 +1,67 @@
+name: agent-regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Gemini model id for the live layer (empty = suite default, see agent/run.sh in lightpanda-io/demo)"
+        required: false
+
+jobs:
+  # Keep identical to e2e-test.yml's zig-build-release so the nightly suite
+  # exercises the same build variant that gates PRs.
+  zig-build-release:
+    name: zig build release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/install
+      - uses: ./.github/actions/v8-snapshot
+
+      - name: zig build release
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: lightpanda-build-release
+          path: |
+            zig-out/bin/lightpanda
+          retention-days: 1
+
+  agent-regression:
+    name: agent-regression
+    needs: zig-build-release
+    runs-on: ubuntu-latest
+    # The live HN save task drives the LLM through many turns (~7 min); give
+    # the whole suite generous headroom.
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - name: download lightpanda release
+        uses: actions/download-artifact@v8
+        with:
+          name: lightpanda-build-release
+          path: bin
+
+      - run: chmod a+x bin/lightpanda
+
+      - name: run agent regression suite (deterministic + live)
+        env:
+          LPD_PATH: ${{ github.workspace }}/bin/lightpanda
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LP_MODEL: ${{ github.event.inputs.model }}
+          # Optional: news.ycombinator.com often blocks datacenter IPs. Reuse
+          # the residential proxy secret if present; empty is fine locally.
+          LP_HTTP_PROXY: ${{ secrets.MASSIVE_PROXY_RESIDENTIAL_US }}
+        run: ./agent/run.sh all
