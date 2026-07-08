@@ -249,6 +249,7 @@ model: []u8,
 /// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
 effort: Config.Effort,
 script_file: ?[]const u8,
+heal: bool,
 one_shot_task: ?[]const u8,
 one_shot_save: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
@@ -305,6 +306,20 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             return error.InvalidFilename;
         }
     }
+    if (opts.heal) {
+        if (opts.script_file == null) {
+            log.fatal(.app, "conflicting flags", .{
+                .hint = "--heal repairs a failing script run; pass a script positional",
+            });
+            return error.ConflictingFlags;
+        }
+        if (opts.no_llm) {
+            log.fatal(.app, "conflicting flags", .{
+                .hint = "--heal needs an LLM to repair the script; drop --no-llm",
+            });
+            return error.ConflictingFlags;
+        }
+    }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
     }
@@ -314,10 +329,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const is_one_shot = opts.task != null;
     const will_repl = !is_one_shot and opts.script_file == null;
+    // One-shot --task and --heal both need a model before any interaction.
+    const needs_llm_upfront = is_one_shot or opts.heal;
 
     // Load remembered selection up front so a saved null provider can flip the
     // REPL into basic mode before resolution. Pure script runs need nothing.
-    const remembered: ?settings.Remembered = if (will_repl or is_one_shot) settings.loadRemembered(allocator) else null;
+    const remembered: ?settings.Remembered = if (will_repl or needs_llm_upfront) settings.loadRemembered(allocator) else null;
     defer if (remembered) |r| std.zon.parse.free(allocator, r);
 
     // A remembered null provider means the user disabled the LLM via
@@ -330,7 +347,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // null provider. Without it the REPL accepts natural language, so an absent
     // API key would only surface at the first non-slash-command line — too late.
     // Pure JavaScript script runs stay allowed: no REPL, no LLM.
-    const requires_llm = is_one_shot or (will_repl and !opts.no_llm and !remembered_no_llm);
+    const requires_llm = needs_llm_upfront or (will_repl and !opts.no_llm and !remembered_no_llm);
 
     // Skip resolve when no client is wanted — else resolveCredentials prints
     // "No API key detected" for a run that does not need one.
@@ -415,6 +432,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .model = model,
         .effort = effort,
         .script_file = opts.script_file,
+        .heal = opts.heal,
         .one_shot_task = opts.task,
         .one_shot_save = opts.save,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
@@ -480,6 +498,8 @@ fn startSession(self: *Agent) !void {
     self.session = try self.browser.newSession(self.notification);
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
     try self.session.enableConsoleCapture();
+    // Node IDs are session-scoped; drop them with the session they point into.
+    self.node_registry.reset();
 }
 
 // Compile-time constant; projected once per process to avoid rebuilding per call.
@@ -587,6 +607,7 @@ pub fn run(self: *Agent) bool {
         return ok;
     }
     if (self.script_file) |path| {
+        if (self.heal) return self.runScriptWithHeal(path);
         return self.runScript(path);
     }
     self.runRepl();
@@ -834,7 +855,30 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
         self.terminal.printError("usage: /load <path>", .{});
         return;
     }
-    _ = self.runScript(path);
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    switch (self.runScriptOutcome(arena.allocator(), path)) {
+        .ok, .fatal => {},
+        .script_error => |script_error| {
+            if (self.ai_client == null) return;
+            if (!promptHeal(path)) return;
+            _ = self.healLoop(arena.allocator(), path, script_error);
+        },
+    }
+}
+
+/// Defaults to no: healing spends tokens and its validation step resets the
+/// browser session.
+fn promptHeal(path: []const u8) bool {
+    var header_buf: [256]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, "{s} failed. Heal it with the model?", .{path}) catch
+        "Script failed. Heal it with the model?";
+    const labels: []const [:0]const u8 = &.{
+        "heal — diagnose and fix, then validate in a fresh session (drops page/cookies like /reset)",
+        "no — leave the script and session as they are",
+    };
+    const idx = Terminal.promptNumberedChoice(header, labels, 1) catch return false;
+    return idx == 0;
 }
 
 const api_keys_hint = settings.api_keys_hint;
@@ -1117,15 +1161,17 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
     return modes[idx];
 }
 
-fn failSave(self: *Agent, reason: []const u8) void {
-    self.terminal.printError("save failed: {s}", .{reason});
+fn failSynthesis(self: *Agent, label: []const u8, reason: []const u8) ?[]const u8 {
+    self.terminal.printError("{s} failed: {s}", .{ label, reason });
+    return null;
 }
 
-/// Roll the in-flight save turn back out of the conversation, then report the
-/// failure — so a doomed `/save` synthesis never leaks its messages into history.
-fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
+/// Roll the in-flight synthesis turn back out of the conversation, then report
+/// the failure — so a doomed `/save` or heal synthesis never leaks its messages
+/// into history.
+fn abortSynthesis(self: *Agent, label: []const u8, baseline: usize, reason: []const u8) ?[]const u8 {
     self.conversation.rollback(baseline);
-    self.failSave(reason);
+    return self.failSynthesis(label, reason);
 }
 
 /// Save synthesis warrants more reasoning than a normal turn. `.none` stays off
@@ -1171,8 +1217,6 @@ fn saveOneShot(self: *Agent) void {
 /// LLM synthesis + write for an already-resolved destination. Shared by the
 /// interactive `/save` and one-shot `--save`.
 fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mode: save.Mode, prompt: ?[]const u8) void {
-    const provider_client = self.ai_client.?;
-
     // Only update feeds the saved script back to the model; append stays
     // blind — the script is synthesized from this session alone and written
     // after the existing content.
@@ -1184,7 +1228,27 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     else
         null;
 
-    self.conversation.ensureSystemPrompt() catch return self.failSave("out of memory");
+    const script = self.synthesizeScriptText(arena, "save", path, previous_script, prompt) orelse return;
+
+    save.writeContentFile(path, script, mode) catch |err| {
+        self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
+        return;
+    };
+
+    self.rememberSavePath(path);
+    self.save_buffer.reset();
+    self.terminal.printInfo("Saved synthesized script to {s}", .{path});
+}
+
+/// The synthesis turn shared by `/save` and `--heal`: hand the model the
+/// conversation, the deterministic record of what ran, and the previous script
+/// when revising, then return the scrubbed script text (arena-owned). Reports
+/// the failure under `label` and returns null on any error or cancellation;
+/// the synthesis turn never stays in history.
+fn synthesizeScriptText(self: *Agent, arena: std.mem.Allocator, label: []const u8, path: []const u8, previous_script: ?[]const u8, prompt: ?[]const u8) ?[]const u8 {
+    const provider_client = self.ai_client.?;
+
+    self.conversation.ensureSystemPrompt() catch return self.failSynthesis(label, "out of memory");
 
     // Swap the dedicated save_system_prompt in as the system prompt for this one turn;
     // regular turns keep the driver prompt. (`messages[0]` is the system
@@ -1196,8 +1260,8 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     const ma = self.conversation.arena.allocator();
     const baseline = self.conversation.messages.items.len;
 
-    const user_msg = self.buildSaveSynthesisMessage(ma, path, previous_script, prompt) catch return self.failSave("out of memory");
-    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
+    const user_msg = self.buildSaveSynthesisMessage(ma, path, previous_script, prompt) catch return self.failSynthesis(label, "out of memory");
+    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSynthesis(label, "out of memory");
 
     self.http_interrupt.reset();
     self.terminal.spinner.start();
@@ -1219,10 +1283,10 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
         self.terminal.spinner.cancel();
         if (self.cancel_requested.load(.acquire)) {
             self.resetAfterCancel(baseline);
-            return;
+            return null;
         }
-        log.err(.app, "AI save synthesis error", .{ .err = err });
-        return self.abortSave(baseline, @errorName(err));
+        log.err(.app, "AI synthesis error", .{ .label = label, .err = err });
+        return self.abortSynthesis(label, baseline, @errorName(err));
     };
     self.terminal.spinner.stop();
     defer result.deinit();
@@ -1230,28 +1294,20 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
 
     if (result.cancelled) {
         self.resetAfterCancel(baseline);
-        return;
+        return null;
     }
 
-    const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
+    const raw = result.text orelse return self.abortSynthesis(label, baseline, "the model returned no script");
 
     // `result.text` lives in the conversation arena, freed by the rollback
-    // below; copy into the command arena first (scrubbing may return its input
+    // below; copy into the caller's arena first (scrubbing may return its input
     // as-is).
-    const owned = arena.dupe(u8, save.stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
-    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
+    const owned = arena.dupe(u8, save.stripCodeFence(raw)) catch return self.abortSynthesis(label, baseline, "out of memory");
+    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSynthesis(label, baseline, "out of memory");
 
-    // The save turn is a meta-action; keep it out of the ongoing conversation.
+    // The synthesis turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
-
-    save.writeContentFile(path, script, mode) catch |err| {
-        self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
-        return;
-    };
-
-    self.rememberSavePath(path);
-    self.save_buffer.reset();
-    self.terminal.printInfo("Saved synthesized script to {s}", .{path});
+    return script;
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
@@ -1452,18 +1508,41 @@ const ScriptOutput = struct {
     }
 };
 
+/// `fatal` covers setup failures (unreadable file, runtime init, OOM) that a
+/// retry can't help.
+const ScriptRunOutcome = union(enum) {
+    ok,
+    fatal,
+    script_error: ScriptError,
+};
+
+/// Both slices are duped into the caller's arena. `source` is the exact text
+/// that ran, so a heal diagnoses what actually failed instead of re-reading a
+/// possibly-changed file.
+const ScriptError = struct {
+    /// Formatted error (line, stack).
+    detail: []const u8,
+    source: []const u8,
+};
+
 fn runScript(self: *Agent, path: []const u8) bool {
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    return self.runScriptOutcome(arena.allocator(), path) == .ok;
+}
+
+fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ScriptRunOutcome {
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
 
     const content = std.fs.cwd().readFileAlloc(script_arena.allocator(), path, 10 * 1024 * 1024) catch |err| {
         self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
-        return false;
+        return .fatal;
     };
 
     const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch |err| {
         self.terminal.printError("Failed to initialize script runtime: {s}", .{@errorName(err)});
-        return false;
+        return .fatal;
     };
     defer runtime.deinit();
     self.script_runtime_mutex.lock();
@@ -1486,16 +1565,147 @@ fn runScript(self: *Agent, path: []const u8) bool {
 
     if (result catch |err| {
         self.terminal.printError("Script failed: {s}", .{@errorName(err)});
-        return false;
+        return .fatal;
     }) |message| {
         self.terminal.printError("{s}", .{message});
-        return false;
+        // A Ctrl-C termination is not a script defect — never heal it.
+        if (self.cancel_requested.load(.acquire)) return .fatal;
+        // The message lives in the runtime's call arena and the source in
+        // script_arena; both are freed by the defers above — dupe first.
+        return .{ .script_error = .{
+            .detail = arena.dupe(u8, message) catch return .fatal,
+            .source = arena.dupe(u8, content) catch return .fatal,
+        } };
     }
 
     // A script that printed nothing leaves no trace, so freeze the spinner into
     // a green bullet (like /goto); one that printed already showed its result.
     if (!output.emitted) self.terminal.printScriptDone("script", path);
-    return true;
+    return .ok;
+}
+
+/// One-shot `--heal` run; counterpart of the REPL's `/load` heal offer.
+fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+
+    switch (self.runScriptOutcome(arena.allocator(), path)) {
+        .ok => return true,
+        .fatal => return false,
+        .script_error => |script_error| {
+            // Healing spends tokens; report the cost the way --task does.
+            defer self.printUsageSummary();
+            return self.healLoop(arena.allocator(), path, script_error);
+        },
+    }
+}
+
+const max_heal_attempts = 2;
+
+fn buildHealDiagnoseMessage(arena: std.mem.Allocator, path: []const u8, source: []const u8, error_detail: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena,
+        \\Replaying the saved script {s} failed. The browser session is still
+        \\at the failure state.
+        \\
+        \\The script (its comments and structure carry the intent):
+        \\```js
+        \\{s}
+        \\```
+        \\
+        \\The error:
+        \\{s}
+        \\
+        \\Diagnose the failure: inspect the live page (tree, findElement,
+        \\markdown) to see how the site differs from what the script expects,
+        \\then perform the corrected step(s) with tools to prove they work —
+        \\verify selectors against the live page, never guess. If the failing
+        \\step gated the rest of the script (a login, a navigation), carry on
+        \\far enough to show the script's goal is reachable again.
+    , .{ path, source, error_detail });
+}
+
+/// Heal synthesis instruction; rides on the regular save revision system prompt.
+const heal_revision_prompt =
+    \\Fix the script so it replays successfully against the current site: the
+    \\error and this session's working tool calls identify the repair. Keep
+    \\every step, selector, and output shape that still works unchanged.
+;
+
+/// Only a revision that passed validation in a fresh session replaces `path`;
+/// the original survives a failed heal.
+fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: ScriptError) bool {
+    var source = first.source;
+    var error_detail = first.detail;
+
+    const tmp_path = std.fmt.allocPrint(arena, "{s}.heal.js", .{path}) catch {
+        self.terminal.printError("heal failed: out of memory", .{});
+        return false;
+    };
+
+    // The recorder is /save's stream: heal must neither synthesize from the
+    // REPL's prior recordings nor leak its diagnose actions into a later /save.
+    const recorded = self.save_buffer.snapshot(arena) catch {
+        self.terminal.printError("heal failed: out of memory", .{});
+        return false;
+    };
+    self.save_buffer.reset();
+    defer self.save_buffer.restore(recorded) catch {
+        self.terminal.printWarning("commands recorded before the heal were lost (out of memory)", .{});
+    };
+
+    var attempt: usize = 1;
+    while (attempt <= max_heal_attempts) : (attempt += 1) {
+        self.terminal.printInfo("Healing {s} (attempt {d}/{d})", .{ path, attempt, max_heal_attempts });
+
+        const diagnose = buildHealDiagnoseMessage(arena, path, source, error_detail) catch {
+            self.terminal.printError("heal failed: out of memory", .{});
+            return false;
+        };
+        if (!self.runTurn(.{ .prompt = diagnose, .capture_for_save = true, .label = "Heal" })) return false;
+
+        const revised = self.synthesizeScriptText(arena, "heal", path, source, heal_revision_prompt) orelse return false;
+
+        save.writeContentFile(tmp_path, revised, .replace) catch |err| {
+            self.terminal.printError("heal failed: could not write {s}: {s}", .{ tmp_path, @errorName(err) });
+            return false;
+        };
+
+        // Validate in a fresh session so failure-state cookies and pages can't
+        // mask a still-broken script.
+        self.startSession() catch |err| {
+            self.removeTempScript(tmp_path);
+            self.terminal.printError("heal failed: could not start a fresh session: {s}", .{@errorName(err)});
+            return false;
+        };
+
+        switch (self.runScriptOutcome(arena, tmp_path)) {
+            .ok => {
+                std.fs.cwd().rename(tmp_path, path) catch |err| {
+                    self.terminal.printError("healed script validated but replacing {s} failed: {s} (revision left at {s})", .{ path, @errorName(err), tmp_path });
+                    return false;
+                };
+                self.terminal.printInfo("Healed {s}: the revised script validated in a fresh session.", .{path});
+                return true;
+            },
+            .fatal => {
+                self.removeTempScript(tmp_path);
+                return false;
+            },
+            .script_error => |script_error| {
+                source = revised;
+                error_detail = script_error.detail;
+            },
+        }
+    }
+    self.removeTempScript(tmp_path);
+    self.terminal.printError("heal gave up after {d} attempts; {s} is unchanged", .{ max_heal_attempts, path });
+    return false;
+}
+
+fn removeTempScript(self: *Agent, tmp_path: []const u8) void {
+    std.fs.cwd().deleteFile(tmp_path) catch |err| {
+        self.terminal.printWarning("could not remove temp script {s}: {s}", .{ tmp_path, @errorName(err) });
+    };
 }
 
 /// Mirror a user-typed slash command into `self.conversation.messages` as if the
