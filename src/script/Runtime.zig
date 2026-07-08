@@ -274,6 +274,44 @@ pub const Completion = struct {
     empty: bool,
 };
 
+/// One top-level field of a parsed extract result: an object yields an entry
+/// per key, an array (a `__root` schema) the single null field. Slices
+/// reference the parsed value.
+pub const ExtractField = struct {
+    field: ?[]const u8,
+    is_list: bool,
+    empty: bool,
+};
+
+pub fn classifyExtractFields(arena: std.mem.Allocator, result: std.json.Value) error{OutOfMemory}![]const ExtractField {
+    switch (result) {
+        .array => {
+            const out = try arena.alloc(ExtractField, 1);
+            out[0] = .{ .field = null, .is_list = true, .empty = jsonIsEmpty(result) };
+            return out;
+        },
+        .object => |obj| {
+            const out = try arena.alloc(ExtractField, obj.count());
+            var it = obj.iterator();
+            var i: usize = 0;
+            while (it.next()) |entry| : (i += 1) {
+                out[i] = .{
+                    .field = entry.key_ptr.*,
+                    .is_list = entry.value_ptr.* == .array,
+                    .empty = jsonIsEmpty(entry.value_ptr.*),
+                };
+            }
+            return out;
+        },
+        else => return &.{},
+    }
+}
+
+pub fn fieldEql(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a) |x| return b != null and std.mem.eql(u8, x, b.?);
+    return b == null;
+}
+
 /// One extract schema's top-level result field, tallied across the run.
 pub const ExtractStat = struct {
     /// Schema JSON as the script wrote it (array schemas are shown without the
@@ -558,7 +596,7 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
                 // inner-then-outer; the map is append-only. Failed extracts
                 // threw above and are intentionally not counted.
                 if (normalized.parsed) |parsed| {
-                    self.recordExtractStats(args, parsed) catch
+                    self.recordExtractStats(arena, args, parsed) catch
                         return self.throwError("out of memory");
                 }
                 self.setReturnJson(context, info, normalized.text);
@@ -570,31 +608,22 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
 }
 
 /// Tally each top-level field of an extract result; the Agent's heal policy
-/// decides which stats can trigger. A whole-array result (`__root` schema)
-/// tallies as the single null field.
-fn recordExtractStats(self: *Runtime, args: ?std.json.Value, result: std.json.Value) error{OutOfMemory}!void {
+/// decides which stats can trigger.
+fn recordExtractStats(self: *Runtime, arena: std.mem.Allocator, args: ?std.json.Value, result: std.json.Value) error{OutOfMemory}!void {
     const raw_schema = switch ((args orelse return).object.get("schema") orelse return) {
         .string => |s| s,
         else => return,
     };
     const schema = stripExtractSchemaRoot(raw_schema);
-    switch (result) {
-        .array => try self.bumpExtractStat(schema, null, true, jsonIsEmpty(result)),
-        .object => |obj| {
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                try self.bumpExtractStat(schema, entry.key_ptr.*, entry.value_ptr.* == .array, jsonIsEmpty(entry.value_ptr.*));
-            }
-        },
-        else => {},
+    for (try classifyExtractFields(arena, result)) |fc| {
+        try self.bumpExtractStat(schema, fc.field, fc.is_list, fc.empty);
     }
 }
 
 fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_list: bool, is_empty: bool) error{OutOfMemory}!void {
     for (self.extract_stats.items) |*stat| {
         if (!std.mem.eql(u8, stat.schema, schema)) continue;
-        const same_field = if (stat.field) |f| field != null and std.mem.eql(u8, f, field.?) else field == null;
-        if (!same_field) continue;
+        if (!fieldEql(stat.field, field)) continue;
         stat.calls += 1;
         if (is_list) stat.is_list = true;
         if (is_empty) stat.empty += 1;

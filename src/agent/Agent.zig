@@ -1751,24 +1751,25 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
-    switch (self.runScriptOutcome(arena.allocator(), path)) {
-        .ok => return true,
-        .fatal => return false,
-        .script_error => {},
+    for (0..2) |attempt| {
+        switch (self.runScriptOutcome(arena.allocator(), path)) {
+            .ok => return true,
+            .fatal => return false,
+            .script_error => |script_error| {
+                if (attempt == 0) {
+                    // A re-run is free; healing is not — one retry filters
+                    // transient failures (a flaky page load) before the model
+                    // is asked to fix a correct script.
+                    self.terminal.printInfo("Script failed; retrying once before healing.", .{});
+                    continue;
+                }
+                // Healing spends tokens; report the cost the way --task does.
+                defer self.printUsageSummary();
+                return self.healLoop(arena.allocator(), path, script_error);
+            },
+        }
     }
-
-    // A re-run is free; healing is not. One retry filters transient failures
-    // (a flaky page load) before the model is asked to fix a correct script.
-    self.terminal.printInfo("Script failed; retrying once before healing.", .{});
-    switch (self.runScriptOutcome(arena.allocator(), path)) {
-        .ok => return true,
-        .fatal => return false,
-        .script_error => |script_error| {
-            // Healing spends tokens; report the cost the way --task does.
-            defer self.printUsageSummary();
-            return self.healLoop(arena.allocator(), path, script_error);
-        },
-    }
+    unreachable;
 }
 
 const max_heal_attempts = 2;
@@ -1903,11 +1904,7 @@ fn cureFailure(arena: std.mem.Allocator, first: ScriptError, facts: RunFacts) er
         .dry_extracts => {
             for (first.dry_fields) |dry| {
                 const cured = for (facts.extract_stats) |stat| {
-                    const same = if (dry) |d|
-                        stat.field != null and std.mem.eql(u8, stat.field.?, d)
-                    else
-                        stat.field == null;
-                    if (same and stat.empty < stat.calls) break true;
+                    if (ScriptRuntime.fieldEql(stat.field, dry) and stat.empty < stat.calls) break true;
                 } else false;
                 if (!cured) return try std.fmt.allocPrint(arena, "The revised script ran, but the \"{s}\" extract still came back empty on every call (or was removed) — keep it and fix its selector.", .{dry orelse "<whole result>"});
             }
@@ -2241,7 +2238,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result| blk: {
         // Pre-cap text: a truncated result would parse as malformed and
         // record nothing.
-        if (std.mem.eql(u8, tool_name, "extract") and !result.is_error) {
+        if (std.mem.eql(u8, tool_name, @tagName(BrowserTool.extract)) and !result.is_error) {
             self.baseline.noteExtractResult(result.text) catch {};
         }
         break :blk .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error };

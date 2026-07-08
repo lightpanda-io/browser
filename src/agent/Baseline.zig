@@ -38,14 +38,18 @@ pub const FieldStat = struct {
 pub const Fields = std.StringArrayHashMapUnmanaged(FieldStat);
 
 arena: std.heap.ArenaAllocator,
+/// Reused per `noteExtractResult` for the transient parse tree; keeps pages
+/// warm on the every-tool-call path instead of an init/deinit pair each time.
+scratch: std.heap.ArenaAllocator,
 fields: Fields = .empty,
 
 pub fn init(allocator: std.mem.Allocator) Baseline {
-    return .{ .arena = .init(allocator) };
+    return .{ .arena = .init(allocator), .scratch = .init(allocator) };
 }
 
 pub fn deinit(self: *Baseline) void {
     self.arena.deinit();
+    self.scratch.deinit();
 }
 
 pub fn reset(self: *Baseline) void {
@@ -56,21 +60,14 @@ pub fn reset(self: *Baseline) void {
 /// Tally one successful extract result (the tool's JSON output). Malformed
 /// output records nothing — this is best-effort telemetry.
 pub fn noteExtractResult(self: *Baseline, result_text: []const u8) error{OutOfMemory}!void {
-    var scratch: std.heap.ArenaAllocator = .init(self.arena.child_allocator);
-    defer scratch.deinit();
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, scratch.allocator(), result_text, .{}) catch |err| switch (err) {
+    _ = self.scratch.reset(.retain_capacity);
+    const scratch = self.scratch.allocator();
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, scratch, result_text, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return,
     };
-    switch (parsed) {
-        .array => try self.bump("", !ScriptRuntime.jsonIsEmpty(parsed)),
-        .object => |obj| {
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                try self.bump(entry.key_ptr.*, !ScriptRuntime.jsonIsEmpty(entry.value_ptr.*));
-            }
-        },
-        else => {},
+    for (try ScriptRuntime.classifyExtractFields(scratch, parsed)) |fc| {
+        try self.bump(fc.field orelse "", !fc.empty);
     }
 }
 
@@ -161,24 +158,24 @@ fn intField(obj: std.json.ObjectMap, key: []const u8) ?u32 {
 /// `script` with any existing baseline lines dropped and `line` (a full
 /// baseline line, or null) appended — synthesis may have copied a stale
 /// baseline from the previous script verbatim.
-pub fn withBaseline(arena: std.mem.Allocator, script: []const u8, line: ?[]const u8) error{OutOfMemory}![]const u8 {
+pub fn withBaseline(arena: std.mem.Allocator, script: []const u8, line: ?[]const u8) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     var lines = std.mem.splitScalar(u8, script, '\n');
     var pending_newline = false;
     while (lines.next()) |script_line| {
         if (std.mem.startsWith(u8, std.mem.trim(u8, script_line, " \t\r"), marker)) continue;
-        if (pending_newline) aw.writer.writeByte('\n') catch return error.OutOfMemory;
-        aw.writer.writeAll(script_line) catch return error.OutOfMemory;
+        if (pending_newline) try aw.writer.writeByte('\n');
+        try aw.writer.writeAll(script_line);
         pending_newline = true;
     }
     if (line) |l| {
         // A split of "a\nb\n" ends with an empty segment, so the writer is
         // already newline-terminated in the common case.
         if (aw.written().len != 0 and aw.written()[aw.written().len - 1] != '\n') {
-            aw.writer.writeByte('\n') catch return error.OutOfMemory;
+            try aw.writer.writeByte('\n');
         }
-        aw.writer.writeAll(l) catch return error.OutOfMemory;
-        aw.writer.writeByte('\n') catch return error.OutOfMemory;
+        try aw.writer.writeAll(l);
+        try aw.writer.writeByte('\n');
     }
     return aw.written();
 }
