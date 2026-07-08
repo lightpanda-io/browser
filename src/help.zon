@@ -318,10 +318,6 @@
     \\  --cookie-jar <PATH>
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
-    \\  --disable-root-certificates
-    \\          Skip loading the system trust store; only certificates given via
-    \\          --ca-cert and --ca-path are trusted.
-    \\          Defaults to false.
     \\  --disable-subframes
     \\          Skip loading <iframe> elements. The parser still registers them in the
     \\          DOM, but no child frame or Page.frameAttached events are produced.

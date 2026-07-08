@@ -147,7 +147,6 @@ const CommonOptions = .{
     .{ .name = "watchdog_ms", .type = ?u32 },
     .{ .name = "ca_cert", .type = [:0]const u8, .multiple = true },
     .{ .name = "ca_path", .type = [:0]const u8, .multiple = true, .validator = caPathValidator },
-    .{ .name = "disable_root_certificates", .type = bool },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator) !?DumpFormat {
@@ -414,14 +413,6 @@ pub fn v8Flags(self: *const Config) ?[]const u8 {
 pub fn v8MaxHeapMb(self: *const Config) ?u32 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_max_heap_mb,
-        else => unreachable,
-    };
-}
-
-pub fn disableRootCertificates(self: *const Config) bool {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_root_certificates,
-        .version => false,
         else => unreachable,
     };
 }

@@ -760,12 +760,6 @@ fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreE
         .version => {}, // Don't load custom CA for version command.
     }
 
-    // Early return if root certificates are unwanted.
-    if (config.disableRootCertificates()) {
-        log.warn(.app, "Root certificates are disabled", .{});
-        return store;
-    }
-
     switch (comptime builtin.os.tag) {
         .linux, .openbsd, .netbsd, .freebsd => blk: {
             // Iterate over known directories.
