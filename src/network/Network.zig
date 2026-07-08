@@ -737,6 +737,13 @@ const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{
 fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreError!*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
+    // Report back if no certificates loaded.
+    defer {
+        const num_of_certs = crypto.getCertCount(store);
+        if (num_of_certs == 0) {
+            log.warn(.app, "No certificates loaded", .{});
+        }
+    }
 
     load_custom_ca: switch (config.mode) {
         // Load custom CA if provided.
@@ -790,8 +797,6 @@ fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreE
                     break :blk;
                 }
             }
-
-            log.warn(.app, "No system certificates", .{});
         },
         else => {
             // Prefer stdlib's cert scanner.
@@ -800,10 +805,6 @@ fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreE
             defer bundle.deinit(allocator);
 
             const bytes = bundle.bytes.items;
-            if (bytes.len == 0) {
-                log.warn(.app, "No system certificates", .{});
-                return store;
-            }
             var it = bundle.map.valueIterator();
             while (it.next()) |index| {
                 // d2i_X509 reads the cert's own DER length header to find its end and
