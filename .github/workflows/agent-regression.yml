@@ -1,6 +1,10 @@
 name: agent-regression
 
 on:
+  schedule:
+    # Offset from wpt's 02:21 nightly.
+    - cron: "37 3 * * *"
+
   workflow_dispatch:
     inputs:
       model:
@@ -57,6 +61,8 @@ jobs:
       - run: chmod a+x bin/lightpanda
 
       - name: run agent regression suite (deterministic + live)
+        # Explicit bash gets pipefail, so tee doesn't mask the suite's exit code.
+        shell: bash
         env:
           LPD_PATH: ${{ github.workspace }}/bin/lightpanda
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -64,4 +70,27 @@ jobs:
           # Optional: news.ycombinator.com often blocks datacenter IPs. Reuse
           # the residential proxy secret if present; empty is fine locally.
           LP_HTTP_PROXY: ${{ secrets.MASSIVE_PROXY_RESIDENTIAL_US }}
-        run: ./agent/run.sh all
+        run: ./agent/run.sh all 2>&1 | tee result.log
+
+      # run.sh colors its output unconditionally; strip the ANSI codes for
+      # Slack (the Actions log above keeps them).
+      - name: prepare slack log
+        id: log
+        if: ${{ !cancelled() }}
+        run: |
+          sed 's/\x1b\[[0-9;]*m//g' result.log > slack.log 2>/dev/null \
+            || echo "suite produced no output (earlier step failed)" > slack.log
+          echo "summary=$(grep -o 'SUMMARY: .*' slack.log | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Send result to slack
+        if: ${{ !cancelled() }}
+        uses: slackapi/slack-github-action@v3.0.1
+        with:
+          errors: true
+          method: files.uploadV2
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          payload: |
+            channel_id: ${{ vars.AGENT_SLACK_CHANNEL_ID }}
+            initial_comment: "Agent regression — ${{ steps.log.outputs.summary || 'no summary (suite crashed?)' }}"
+            file: "./slack.log"
+            filename: "agent-regression-${{ github.sha }}.txt"
