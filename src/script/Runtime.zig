@@ -274,13 +274,17 @@ pub const Completion = struct {
     empty: bool,
 };
 
-/// One extract schema's top-level list field, tallied across the run.
+/// One extract schema's top-level result field, tallied across the run.
 pub const ExtractStat = struct {
     /// Schema JSON as the script wrote it (array schemas are shown without the
     /// internal `__root` wrapper).
     schema: []const u8,
-    /// Top-level list field of the result; null when the schema itself is a list.
+    /// Top-level field of the result; null when the schema itself is a list.
     field: ?[]const u8,
+    /// The field's value was an array on some call. Consumers gate the
+    /// no-baseline heal policy on this: lists signal collection intent,
+    /// scalars are legitimately sparse.
+    is_list: bool,
     calls: u32,
     empty: u32,
 };
@@ -430,7 +434,7 @@ fn isEmptyValue(self: *Runtime, value: *const v8.Value, text: []const u8) bool {
 
 /// Null, "", and arrays/objects all of whose members are empty carry no data;
 /// numbers and booleans always do (0 and false are answers).
-fn jsonIsEmpty(value: std.json.Value) bool {
+pub fn jsonIsEmpty(value: std.json.Value) bool {
     switch (value) {
         .null => return true,
         .string => |s| return s.len == 0,
@@ -565,10 +569,9 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     }
 }
 
-/// Tally each top-level list field of an extract result: a field that stays
-/// empty across every call of its schema is the heal trigger's signal, while
-/// scalar fields (legitimately sparse) are never tracked. A whole-array result
-/// (`__root` schema) tallies as the single null field.
+/// Tally each top-level field of an extract result; the Agent's heal policy
+/// decides which stats can trigger. A whole-array result (`__root` schema)
+/// tallies as the single null field.
 fn recordExtractStats(self: *Runtime, args: ?std.json.Value, result: std.json.Value) error{OutOfMemory}!void {
     const raw_schema = switch ((args orelse return).object.get("schema") orelse return) {
         .string => |s| s,
@@ -576,24 +579,24 @@ fn recordExtractStats(self: *Runtime, args: ?std.json.Value, result: std.json.Va
     };
     const schema = stripExtractSchemaRoot(raw_schema);
     switch (result) {
-        .array => try self.bumpExtractStat(schema, null, jsonIsEmpty(result)),
+        .array => try self.bumpExtractStat(schema, null, true, jsonIsEmpty(result)),
         .object => |obj| {
             var it = obj.iterator();
             while (it.next()) |entry| {
-                if (entry.value_ptr.* != .array) continue;
-                try self.bumpExtractStat(schema, entry.key_ptr.*, jsonIsEmpty(entry.value_ptr.*));
+                try self.bumpExtractStat(schema, entry.key_ptr.*, entry.value_ptr.* == .array, jsonIsEmpty(entry.value_ptr.*));
             }
         },
         else => {},
     }
 }
 
-fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_empty: bool) error{OutOfMemory}!void {
+fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_list: bool, is_empty: bool) error{OutOfMemory}!void {
     for (self.extract_stats.items) |*stat| {
         if (!std.mem.eql(u8, stat.schema, schema)) continue;
         const same_field = if (stat.field) |f| field != null and std.mem.eql(u8, f, field.?) else field == null;
         if (!same_field) continue;
         stat.calls += 1;
+        if (is_list) stat.is_list = true;
         if (is_empty) stat.empty += 1;
         return;
     }
@@ -602,6 +605,7 @@ fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_em
     try self.extract_stats.append(arena, .{
         .schema = try arena.dupe(u8, schema),
         .field = if (field) |f| try arena.dupe(u8, f) else null,
+        .is_list = is_list,
         .calls = 1,
         .empty = @intFromBool(is_empty),
     });
@@ -1736,25 +1740,32 @@ test "agent script runtime: extract stats tally list-field emptiness" {
     , "agent-runtime-extract-stats.js");
 
     const stats = result.ok.extract_stats;
-    try testing.expectEqual(4, stats.len);
+    try testing.expectEqual(5, stats.len);
 
-    // Scalar `btn` never records a stat.
     try testing.expectString("items", stats[0].field.?);
+    try testing.expectEqual(true, stats[0].is_list);
     try testing.expectEqual(2, stats[0].calls);
     try testing.expectEqual(2, stats[0].empty);
 
-    try testing.expectString("buttons", stats[1].field.?);
+    try testing.expectString("btn", stats[1].field.?);
+    try testing.expectEqual(false, stats[1].is_list);
     try testing.expectEqual(1, stats[1].calls);
     try testing.expectEqual(0, stats[1].empty);
 
-    try testing.expectEqual(null, stats[2].field);
-    try testing.expectString("[\".no-such-root\"]", stats[2].schema);
+    try testing.expectString("buttons", stats[2].field.?);
+    try testing.expectEqual(true, stats[2].is_list);
     try testing.expectEqual(1, stats[2].calls);
-    try testing.expectEqual(1, stats[2].empty);
+    try testing.expectEqual(0, stats[2].empty);
 
-    try testing.expectString("sel", stats[3].field.?);
-    try testing.expectEqual(2, stats[3].calls);
+    try testing.expectEqual(null, stats[3].field);
+    try testing.expectEqual(true, stats[3].is_list);
+    try testing.expectString("[\".no-such-root\"]", stats[3].schema);
+    try testing.expectEqual(1, stats[3].calls);
     try testing.expectEqual(1, stats[3].empty);
+
+    try testing.expectString("sel", stats[4].field.?);
+    try testing.expectEqual(2, stats[4].calls);
+    try testing.expectEqual(1, stats[4].empty);
 
     const rerun = try runtime.runSource("return 1;", "agent-runtime-extract-stats.js");
     try testing.expectEqual(0, rerun.ok.extract_stats.len);

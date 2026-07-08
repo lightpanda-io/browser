@@ -29,6 +29,7 @@ const Command = lp.Command;
 const Schema = lp.Schema;
 const Recorder = lp.Recorder;
 const ScriptRuntime = lp.Runtime;
+const Baseline = @import("Baseline.zig");
 const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
@@ -241,6 +242,7 @@ session: *lp.Session,
 node_registry: CDPNode.Registry,
 terminal: Terminal,
 save_buffer: Recorder,
+baseline: Baseline,
 save_path: ?[]u8,
 script_runtime_mutex: std.Thread.Mutex = .{},
 active_script_runtime: ?*ScriptRuntime = null,
@@ -427,6 +429,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .node_registry = .init(allocator),
         .terminal = .init(allocator, history_paths, verbosity, will_repl),
         .save_buffer = .init(allocator),
+        .baseline = .init(allocator),
         .save_path = null,
         .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
         .model = model,
@@ -471,6 +474,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 pub fn deinit(self: *Agent) void {
     self.terminal.uninstallLogSink();
     self.save_buffer.deinit();
+    self.baseline.deinit();
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
     self.conversation.deinit();
@@ -825,6 +829,7 @@ fn handleUsage(self: *Agent) void {
 fn clearConversation(self: *Agent) void {
     self.conversation.rollback(0);
     self.save_buffer.reset();
+    self.baseline.reset();
     if (self.save_path) |p| self.allocator.free(p);
     self.save_path = null;
     self.total_usage = .{};
@@ -857,19 +862,30 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
     }
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
-    switch (self.runScriptOutcome(arena.allocator(), path)) {
-        .ok, .fatal => {},
-        .script_error => |script_error| {
-            if (self.ai_client == null) return;
-            if (!promptHeal(path, script_error.kind)) return;
-            _ = self.healLoop(arena.allocator(), path, script_error);
-        },
+    while (true) {
+        switch (self.runScriptOutcome(arena.allocator(), path)) {
+            .ok, .fatal => return,
+            .script_error => |script_error| {
+                if (self.ai_client == null) return;
+                switch (promptHeal(path, script_error.kind)) {
+                    .no => return,
+                    .retry => {},
+                    .heal => {
+                        _ = self.healLoop(arena.allocator(), path, script_error);
+                        return;
+                    },
+                }
+            },
+        }
     }
 }
 
+const HealChoice = enum { heal, retry, no };
+
 /// Defaults to no: healing spends tokens and its validation step resets the
-/// browser session.
-fn promptHeal(path: []const u8, kind: ScriptError.Kind) bool {
+/// browser session. Retry is the antidote to a transient failure (a flaky
+/// page load) that would otherwise send a correct script to the model.
+fn promptHeal(path: []const u8, kind: ScriptError.Kind) HealChoice {
     const symptom = switch (kind) {
         .threw => "failed",
         .empty => "ran but returned no data",
@@ -880,12 +896,17 @@ fn promptHeal(path: []const u8, kind: ScriptError.Kind) bool {
         "Script failed. Heal it with the model?";
     const labels: []const [:0]const u8 = &.{
         "heal — diagnose and fix, then validate in a fresh session (drops page/cookies like /reset)",
+        "retry — run the script again, in case the failure was transient (no tokens)",
         "no — leave the script and session as they are",
     };
     // Blank line so the question doesn't run into the script's output dump.
     std.debug.print("\n", .{});
-    const idx = Terminal.promptNumberedChoice(header, labels, 1) catch return false;
-    return idx == 0;
+    const idx = Terminal.promptNumberedChoice(header, labels, 2) catch return .no;
+    return switch (idx) {
+        0 => .heal,
+        1 => .retry,
+        else => .no,
+    };
 }
 
 const api_keys_hint = settings.api_keys_hint;
@@ -1127,7 +1148,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         null;
     defer if (new_save_path) |p| self.allocator.free(p);
 
-    save.writeContentFile(path, self.save_buffer.bytes(), mode) catch |err| {
+    save.writeContentFile(path, self.appendSessionBaseline(arena, self.save_buffer.bytes()), mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1139,6 +1160,14 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     const saved_lines = self.save_buffer.lines;
     self.save_buffer.reset();
     self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, self.save_path.? });
+}
+
+/// `script` with the session's extract baseline as its trailing comment (stale
+/// baseline lines stripped); the script itself on any failure — the baseline
+/// is telemetry, never worth failing a save over.
+fn appendSessionBaseline(self: *Agent, arena: std.mem.Allocator, script: []const u8) []const u8 {
+    const line = self.baseline.serialize(arena) catch return script;
+    return Baseline.withBaseline(arena, script, line) catch script;
 }
 
 fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
@@ -1237,7 +1266,8 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
 
     const script = self.synthesizeScriptText(arena, "save", path, previous_script, prompt) orelse return;
 
-    save.writeContentFile(path, script, mode) catch |err| {
+    const content = self.appendSessionBaseline(arena, script);
+    save.writeContentFile(path, content, mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1464,7 +1494,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .tool_call => |t| t,
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
-    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| .{
+    const result = browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| return .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1472,6 +1502,8 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         },
         .is_error = true,
     };
+    if (tc.tool == .extract and !result.is_error) self.baseline.noteExtractResult(result.text) catch {};
+    return result;
 }
 
 /// Data output (/extract, /evaluate, /markdown, /tree, …) → plain stdout on
@@ -1518,9 +1550,17 @@ const ScriptOutput = struct {
 /// `fatal` covers setup failures (unreadable file, runtime init, OOM) that a
 /// retry can't help.
 const ScriptRunOutcome = union(enum) {
-    ok,
+    ok: RunFacts,
     fatal,
     script_error: ScriptError,
+};
+
+/// Facts about a passing run, for heal validation's cure check. Duped into the
+/// caller's arena — the runtime dies with `runScriptOutcome`.
+const RunFacts = struct {
+    /// The script returned a value that carries data.
+    returned_data: bool,
+    extract_stats: []const ScriptRuntime.ExtractStat,
 };
 
 /// Both slices are duped into the caller's arena. `source` is the exact text
@@ -1531,6 +1571,10 @@ const ScriptError = struct {
     /// Formatted error (line, stack) — or, for `empty`, what came back.
     detail: []const u8,
     source: []const u8,
+    /// For `dry_extracts`: the field names that were empty on every call
+    /// (null = a whole-array schema). The cure check requires each one to
+    /// come back with data before a heal may replace the file.
+    dry_fields: []const ?[]const u8 = &.{},
 
     /// `empty` is a run that completed but returned a value with no data in
     /// it; `dry_extracts` one whose return value had data, but where some
@@ -1559,6 +1603,7 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
         self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
         return .fatal;
     };
+    const baseline = Baseline.parse(script_arena.allocator(), content);
 
     const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch |err| {
         self.terminal.printError("Failed to initialize script runtime: {s}", .{@errorName(err)});
@@ -1583,7 +1628,7 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
     const result = runtime.runSource(content, path);
     self.terminal.endTool();
 
-    switch (result catch |err| {
+    const ok = switch (result catch |err| {
         self.terminal.printError("Script failed: {s}", .{@errorName(err)});
         return .fatal;
     }) {
@@ -1599,55 +1644,106 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
                 .source = arena.dupe(u8, content) catch return .fatal,
             } };
         },
-        .ok => |ok| {
+        .ok => |ok| blk: {
             if (ok.completion) |completion| {
-                if (completion.empty) return .{ .script_error = .{
-                    .kind = .empty,
-                    .detail = std.fmt.allocPrint(arena, "The script completed without throwing, but its return value carries no data: {s}\n" ++
-                        "A selector probably no longer matches anything on the page.", .{completion.text}) catch return .fatal,
-                    .source = arena.dupe(u8, content) catch return .fatal,
-                } };
+                if (completion.empty) {
+                    const value = capDetail(arena, completion.text) catch return .fatal;
+                    return .{ .script_error = .{
+                        .kind = .empty,
+                        .detail = std.fmt.allocPrint(arena, "The script completed without throwing, but its return value carries no data: {s}\n" ++
+                            "A selector probably no longer matches anything on the page.", .{value}) catch return .fatal,
+                        .source = arena.dupe(u8, content) catch return .fatal,
+                    } };
+                }
             }
             // Checked even without a completion: a no-`return` script can
             // still have dry extracts.
-            if (dryExtractsDetail(arena, ok.extract_stats) catch return .fatal) |detail| {
+            if (dryExtractsFinding(arena, ok.extract_stats, baseline) catch return .fatal) |finding| {
                 return .{ .script_error = .{
                     .kind = .dry_extracts,
-                    .detail = detail,
+                    .detail = finding.detail,
                     .source = arena.dupe(u8, content) catch return .fatal,
+                    .dry_fields = finding.fields,
                 } };
             }
+            break :blk ok;
         },
-    }
+    };
 
     // A script that printed nothing leaves no trace, so freeze the spinner into
     // a green bullet (like /goto); one that printed already showed its result.
     if (!output.emitted) self.terminal.printScriptDone("script", path);
-    return .ok;
+    return .{ .ok = .{
+        .returned_data = ok.completion != null,
+        .extract_stats = dupeExtractStats(arena, ok.extract_stats) catch return .fatal,
+    } };
 }
 
-/// Detail for `.dry_extracts`: one line per extract list field that came back
-/// empty on every call, or null when none did.
-fn dryExtractsDetail(arena: std.mem.Allocator, stats: []const ScriptRuntime.ExtractStat) !?[]const u8 {
+fn dupeExtractStats(arena: std.mem.Allocator, stats: []const ScriptRuntime.ExtractStat) error{OutOfMemory}![]const ScriptRuntime.ExtractStat {
+    const out = try arena.alloc(ScriptRuntime.ExtractStat, stats.len);
+    for (stats, out) |stat, *o| {
+        o.* = .{
+            .schema = try arena.dupe(u8, stat.schema),
+            .field = if (stat.field) |f| try arena.dupe(u8, f) else null,
+            .is_list = stat.is_list,
+            .calls = stat.calls,
+            .empty = stat.empty,
+        };
+    }
+    return out;
+}
+
+/// Bound a value or schema echoed into a heal message; a degenerate empty-ish
+/// result (hundreds of all-null rows) would otherwise bloat the LLM turn.
+const detail_max_bytes: usize = 2048;
+
+fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
+    if (text.len <= detail_max_bytes) return text;
+    return std.mem.concat(arena, u8, &.{ string.truncateUtf8(text, detail_max_bytes), "…[truncated]" });
+}
+
+const DryFinding = struct {
+    detail: []const u8,
+    fields: []const ?[]const u8,
+};
+
+/// The `.dry_extracts` finding: one detail line per extract field that came
+/// back empty on every call, plus the field names for the cure check.
+/// Null when no field was dry.
+fn dryExtractsFinding(arena: std.mem.Allocator, stats: []const ScriptRuntime.ExtractStat, baseline: ?Baseline.Fields) !?DryFinding {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    var any = false;
+    var fields: std.ArrayList(?[]const u8) = .empty;
     for (stats) |stat| {
         if (stat.empty != stat.calls) continue;
-        if (!any) {
+        if (!dryCanTrigger(stat, baseline)) continue;
+        if (fields.items.len == 0) {
             try aw.writer.writeAll("The script completed without throwing, but some extracts came back empty on every call:\n");
-            any = true;
         }
+        try fields.append(arena, if (stat.field) |f| try arena.dupe(u8, f) else null);
+        const schema = try capDetail(arena, stat.schema);
         if (stat.field) |field| {
-            try aw.writer.print("- the \"{s}\" list in extract({s}) came back empty", .{ field, stat.schema });
+            const shape: []const u8 = if (stat.is_list) "list" else "field";
+            try aw.writer.print("- the \"{s}\" {s} in extract({s}) came back empty", .{ field, shape, schema });
         } else {
-            try aw.writer.print("- extract({s}) returned no data", .{stat.schema});
+            try aw.writer.print("- extract({s}) returned no data", .{schema});
         }
         if (stat.calls != 1) try aw.writer.print(" in all {d} calls", .{stat.calls});
         try aw.writer.writeAll("\n");
     }
-    if (!any) return null;
-    try aw.writer.writeAll("A selector probably no longer matches the page — but an empty list can also be legitimate; verify against the live page before changing anything.");
-    return aw.written();
+    if (fields.items.len == 0) return null;
+    try aw.writer.writeAll("A selector probably no longer matches the page — but an empty result can also be legitimate; verify against the live page before changing anything.");
+    return .{ .detail = aw.written(), .fields = fields.items };
+}
+
+/// Whether an all-empty stat is heal-worthy. With a baseline, record-time
+/// reality decides: a field that carried data then is a finding now (scalars
+/// included), one that was already empty then is legitimately sparse. Without
+/// one, only list fields qualify — lists signal collection intent.
+fn dryCanTrigger(stat: ScriptRuntime.ExtractStat, baseline: ?Baseline.Fields) bool {
+    if (baseline) |b| {
+        if (b.get(stat.field orelse "")) |base| return base.nonempty > 0;
+    }
+    return stat.is_list;
 }
 
 /// One-shot `--heal` run; counterpart of the REPL's `/load` heal offer.
@@ -1655,6 +1751,15 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
+    switch (self.runScriptOutcome(arena.allocator(), path)) {
+        .ok => return true,
+        .fatal => return false,
+        .script_error => {},
+    }
+
+    // A re-run is free; healing is not. One retry filters transient failures
+    // (a flaky page load) before the model is asked to fix a correct script.
+    self.terminal.printInfo("Script failed; retrying once before healing.", .{});
     switch (self.runScriptOutcome(arena.allocator(), path)) {
         .ok => return true,
         .fatal => return false,
@@ -1745,13 +1850,29 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
         };
 
         switch (self.runScriptOutcome(arena, tmp_path)) {
-            .ok => {
-                std.fs.cwd().rename(tmp_path, path) catch |err| {
-                    self.terminal.printError("healed script validated but replacing {s} failed: {s} (revision left at {s})", .{ path, @errorName(err), tmp_path });
+            .ok => |facts| {
+                if (cureFailure(arena, first, facts) catch {
+                    self.removeTempScript(tmp_path);
+                    self.terminal.printError("heal failed: out of memory", .{});
                     return false;
-                };
-                self.terminal.printInfo("Healed {s}: the revised script validated in a fresh session.", .{path});
-                return true;
+                }) |failure| {
+                    self.terminal.printWarning("{s}", .{failure});
+                    source = revised;
+                    error_detail = failure;
+                } else {
+                    // Refresh the baseline from the validation run — synthesis
+                    // may have copied the stale one from the broken script.
+                    // Best-effort: the validated revision is already on disk.
+                    if (refreshedBaselineScript(arena, revised, facts.extract_stats)) |updated| {
+                        save.writeContentFile(tmp_path, updated, .replace) catch {};
+                    }
+                    std.fs.cwd().rename(tmp_path, path) catch |err| {
+                        self.terminal.printError("healed script validated but replacing {s} failed: {s} (revision left at {s})", .{ path, @errorName(err), tmp_path });
+                        return false;
+                    };
+                    self.terminal.printInfo("Healed {s}: the revised script validated in a fresh session.", .{path});
+                    return true;
+                }
             },
             .fatal => {
                 self.removeTempScript(tmp_path);
@@ -1766,6 +1887,38 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
     self.removeTempScript(tmp_path);
     self.terminal.printError("heal gave up after {d} attempts; {s} is unchanged", .{ max_heal_attempts, path });
     return false;
+}
+
+/// Null when the validation run cured the original finding; otherwise the
+/// message fed to the next heal attempt. Running clean is not a cure on its
+/// own — a revision that deletes the failing extract (or the `return`) also
+/// runs clean.
+fn cureFailure(arena: std.mem.Allocator, first: ScriptError, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
+    switch (first.kind) {
+        .threw => return null,
+        .empty => return if (facts.returned_data)
+            null
+        else
+            "The revised script ran, but still returns no data (or no longer returns anything) — the original returned a value.",
+        .dry_extracts => {
+            for (first.dry_fields) |dry| {
+                const cured = for (facts.extract_stats) |stat| {
+                    const same = if (dry) |d|
+                        stat.field != null and std.mem.eql(u8, stat.field.?, d)
+                    else
+                        stat.field == null;
+                    if (same and stat.empty < stat.calls) break true;
+                } else false;
+                if (!cured) return try std.fmt.allocPrint(arena, "The revised script ran, but the \"{s}\" extract still came back empty on every call (or was removed) — keep it and fix its selector.", .{dry orelse "<whole result>"});
+            }
+            return null;
+        },
+    }
+}
+
+fn refreshedBaselineScript(arena: std.mem.Allocator, revised: []const u8, stats: []const ScriptRuntime.ExtractStat) ?[]const u8 {
+    const line = Baseline.serializeStats(arena, stats) catch return null;
+    return Baseline.withBaseline(arena, revised, line) catch null;
 }
 
 fn removeTempScript(self: *Agent, tmp_path: []const u8) void {
@@ -2085,10 +2238,14 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
-        .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error }
-    else |err|
-        .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
+    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result| blk: {
+        // Pre-cap text: a truncated result would parse as malformed and
+        // record nothing.
+        if (std.mem.eql(u8, tool_name, "extract") and !result.is_error) {
+            self.baseline.noteExtractResult(result.text) catch {};
+        }
+        break :blk .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error };
+    } else |err| .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
@@ -2186,6 +2343,67 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
 test {
     _ = save;
     _ = settings;
+    _ = Baseline;
+}
+
+test "cureFailure: running clean is not a cure" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const dry: ScriptError = .{
+        .kind = .dry_extracts,
+        .detail = "",
+        .source = "",
+        .dry_fields = &.{ @as(?[]const u8, "comments"), null },
+    };
+    const cured_stats: []const ScriptRuntime.ExtractStat = &.{
+        .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 5, .empty = 2 },
+        .{ .schema = "[]", .field = null, .is_list = true, .calls = 1, .empty = 0 },
+    };
+    try std.testing.expectEqual(null, try cureFailure(aa, dry, .{ .returned_data = true, .extract_stats = cured_stats }));
+
+    // Fix-by-deletion: the dry field is simply gone from the revised run.
+    const deleted = (try cureFailure(aa, dry, .{ .returned_data = true, .extract_stats = cured_stats[1..] })).?;
+    try std.testing.expect(std.mem.indexOf(u8, deleted, "\"comments\"") != null);
+
+    // Still dry counts as uncured.
+    const still_dry_stats: []const ScriptRuntime.ExtractStat = &.{
+        .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 5, .empty = 5 },
+        cured_stats[1],
+    };
+    try std.testing.expect((try cureFailure(aa, dry, .{ .returned_data = true, .extract_stats = still_dry_stats })) != null);
+
+    // .empty is cured only by a data-carrying return.
+    const empty: ScriptError = .{ .kind = .empty, .detail = "", .source = "" };
+    try std.testing.expectEqual(null, try cureFailure(aa, empty, .{ .returned_data = true, .extract_stats = &.{} }));
+    try std.testing.expect((try cureFailure(aa, empty, .{ .returned_data = false, .extract_stats = &.{} })) != null);
+
+    // .threw needs nothing beyond running clean.
+    const threw: ScriptError = .{ .kind = .threw, .detail = "", .source = "" };
+    try std.testing.expectEqual(null, try cureFailure(aa, threw, .{ .returned_data = false, .extract_stats = &.{} }));
+}
+
+test "dryCanTrigger: baseline overrides the list-only rule" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const scalar: ScriptRuntime.ExtractStat = .{ .schema = "{}", .field = "title", .is_list = false, .calls = 3, .empty = 3 };
+    const list: ScriptRuntime.ExtractStat = .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 3, .empty = 3 };
+
+    // No baseline: list-only.
+    try std.testing.expectEqual(false, dryCanTrigger(scalar, null));
+    try std.testing.expectEqual(true, dryCanTrigger(list, null));
+
+    var fields: Baseline.Fields = .empty;
+    try fields.put(aa, "title", .{ .calls = 2, .nonempty = 2 });
+    try fields.put(aa, "comments", .{ .calls = 2, .nonempty = 0 });
+
+    // Baseline: a scalar that carried data at record time triggers; a list
+    // that was already empty then is legitimately sparse.
+    try std.testing.expectEqual(true, dryCanTrigger(scalar, fields));
+    try std.testing.expectEqual(false, dryCanTrigger(list, fields));
 }
 
 test "capToolOutput: passes through when under cap" {
