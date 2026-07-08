@@ -110,14 +110,6 @@ pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
         ctx.err catch |ctx_err| return ctx_err;
         return err;
     };
-    const status: std.http.Status = @enumFromInt(status_int);
-    return switch (status) {
-        // We expect any of those.
-        .ok,
-        .bad_request,
-        .internal_server_error,
-        .service_unavailable,
-        => writer.flush(),
-        else => error.UnexpectedStatus,
-    };
+    _ = status_int;
+    return writer.flush();
 }
