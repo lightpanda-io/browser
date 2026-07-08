@@ -738,11 +738,16 @@ fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreE
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
 
-    switch (config.mode) {
+    load_custom_ca: switch (config.mode) {
         // Load custom CA if provided.
         inline .serve, .fetch, .mcp, .agent => |opts| {
-            const files = opts.ca_cert.items;
             const directories = opts.ca_path.items;
+            const files = opts.ca_cert.items;
+            // Don't try loading custom CA.
+            const no_custom_ca = directories.len == 0 and files.len == 0;
+            if (no_custom_ca) {
+                break :load_custom_ca;
+            }
 
             for (directories) |ca_path| {
                 if (crypto.X509_STORE_load_locations(store, null, ca_path) != 1) {
