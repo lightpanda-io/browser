@@ -51,28 +51,9 @@ pub fn deinit(self: *Updater) void {
     crypto.X509_STORE_free(self.x509_store);
 }
 
-fn versioning() []const u8 {
-    comptime {
-        const version = SemanticVersion.parse(lp.build_config.version) catch unreachable;
-        const pre = version.pre orelse return "";
-        const index = std.mem.indexOfScalar(u8, pre, '.') orelse pre.len;
-        return pre[0..index];
-    }
-}
-
 /// Sends running Lightpanda version to remote to get update information.
 /// Outputs directly to given `Writer`.
 pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
-    const kind = comptime versioning();
-    if (comptime std.mem.eql(u8, "dev", kind)) {
-        try writer.print("Running a development version of Lightpanda ({s}).\n", .{lp.build_config.version});
-        return writer.flush();
-    }
-    if (comptime std.mem.eql(u8, "nightly", kind)) {
-        try writer.print("Running a nightly version of Lightpanda ({s}).\n", .{lp.build_config.version});
-        return writer.flush();
-    }
-
     const conn = try http.Connection.init(self.x509_store, self.config, null);
     defer conn.deinit();
 
