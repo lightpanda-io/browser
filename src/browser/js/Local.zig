@@ -275,10 +275,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
             const gop = try ctx.addIdentity(resolved_ptr_id);
             if (gop.found_existing) {
                 // we've seen this instance before, return the same object
-                return .{
-                    .local = self,
-                    .handle = @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle)),
-                };
+                return (js.Object.Global{ .handle = gop.value_ptr.* }).local(self);
             }
 
             const isolate = self.isolate;
@@ -471,9 +468,12 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
 
                 inline
                 js.Function.Global,
+                js.Function.Temp,
                 js.Value.Global,
+                js.Value.Temp,
                 js.Object.Global,
                 js.Promise.Global,
+                js.Promise.Temp,
                 js.PromiseResolver.Global,
                 js.Module.Global => return .{ .local = self, .handle = @ptrCast(value.local(self).handle) },
 
@@ -743,13 +743,14 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
 // probeJsValueToZig. Avoids having to duplicate this logic when probing.
 fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
     return switch (T) {
-        js.Function, js.Function.Global => {
+        js.Function, js.Function.Global, js.Function.Temp => {
             if (!js_val.isFunction()) {
                 return null;
             }
             const js_func = js.Function{ .local = self, .handle = @ptrCast(js_val.handle) };
             return switch (T) {
                 js.Function => js_func,
+                js.Function.Temp => try js_func.temp(),
                 js.Function.Global => try js_func.persist(),
                 else => unreachable,
             };
@@ -766,6 +767,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
         },
         js.Value => js_val,
         js.Value.Global => return try js_val.persist(),
+        js.Value.Temp => return try js_val.temp(),
         js.Object => {
             if (!js_val.isObject()) {
                 return null;
@@ -786,7 +788,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             return try obj.persist();
         },
 
-        js.Promise.Global => {
+        js.Promise.Global, js.Promise.Temp => {
             if (!js_val.isPromise()) {
                 return null;
             }
@@ -794,7 +796,11 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
                 .local = self,
                 .handle = @ptrCast(js_val.handle),
             };
-            return try js_promise.persist();
+            return switch (T) {
+                js.Promise.Temp => try js_promise.temp(),
+                js.Promise.Global => try js_promise.persist(),
+                else => unreachable,
+            };
         },
         js.String => return js_val.isString(),
         js.String.OneByte => {

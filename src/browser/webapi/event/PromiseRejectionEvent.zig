@@ -27,12 +27,12 @@ const String = lp.String;
 const PromiseRejectionEvent = @This();
 
 _proto: *Event,
-_reason: ?js.Value.Global = null,
-_promise: ?js.Promise.Global = null,
+_reason: ?js.Value.Temp = null,
+_promise: ?js.Promise.Temp = null,
 
 const PromiseRejectionEventOptions = struct {
-    reason: ?js.Value.Global = null,
-    promise: ?js.Promise.Global = null,
+    reason: ?js.Value.Temp = null,
+    promise: ?js.Promise.Temp = null,
 };
 
 const Options = Event.inheritOptions(PromiseRejectionEvent, PromiseRejectionEventOptions);
@@ -79,11 +79,11 @@ pub fn asEvent(self: *PromiseRejectionEvent) *Event {
     return self._proto;
 }
 
-pub fn getReason(self: *const PromiseRejectionEvent) ?js.Value.Global {
+pub fn getReason(self: *const PromiseRejectionEvent) ?js.Value.Temp {
     return self._reason;
 }
 
-pub fn getPromise(self: *const PromiseRejectionEvent) ?js.Promise.Global {
+pub fn getPromise(self: *const PromiseRejectionEvent) ?js.Promise.Temp {
     return self._promise;
 }
 

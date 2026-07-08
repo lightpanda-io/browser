@@ -46,7 +46,7 @@ const MessageEventOptions = struct {
 };
 
 pub const Data = union(enum) {
-    value: js.Value.Global,
+    value: js.Value.Temp,
     string: []const u8,
     arraybuffer: js.ArrayBuffer,
     blob: *@import("../Blob.zig"),
