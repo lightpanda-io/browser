@@ -115,6 +115,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .fc_identity_pool = .init(allocator),
         .selector_cache = .init(allocator),
     };
+    self.env.protectHeapLimit();
     try self.http_client.init(allocator, &app.network, cdp);
 }
 

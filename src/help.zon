@@ -338,6 +338,16 @@
     \\          still sends Sec-Ch-Ua. Incompatible with --user-agent-suffix.
     \\  --user-agent-suffix <STRING>
     \\          Suffix appended to the Lightpanda/X.Y User-Agent.
+    \\  --v8-flags-unsafe <FLAGS>
+    \\          Flags passed as-is to the V8 JavaScript engine, space-separated.
+    \\          e.g. --v8-flags-unsafe "--expose-gc --stack-size 1000".
+    \\          Unsupported escape hatch: V8 does not validate flags against the
+    \\          prebuilt snapshot, so an incompatible flag can misbehave or
+    \\          crash at any point.
+    \\  --v8-max-heap-mb <INT>
+    \\          Maximum V8 heap size in megabytes, per browser instance. Values
+    \\          below ~16 are clamped by V8 and all behave the same.
+    \\          Defaults to the V8 default (based on available memory).
     \\  --web-bot-auth-domain <DOMAIN>
     \\          Your domain, e.g. yourdomain.com.
     \\  --web-bot-auth-key-file <PATH>

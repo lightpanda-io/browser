@@ -22,7 +22,11 @@ const v8 = js.v8;
 const Platform = @This();
 handle: *v8.Platform,
 
-pub fn init() !Platform {
+pub fn init(v8_flags: ?[]const u8) !Platform {
+    if (v8_flags) |flags| {
+        v8.v8__V8__SetFlagsFromString(flags.ptr, flags.len);
+    }
+
     if (v8.v8__V8__InitializeICU() == false) {
         return error.FailedToInitializeICU;
     }

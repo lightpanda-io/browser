@@ -44,7 +44,7 @@ arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
-    const platform = try Platform.init();
+    const platform = try Platform.init(config.v8Flags());
     errdefer platform.deinit();
 
     const snapshot = try Snapshot.load();

@@ -239,6 +239,14 @@ pub fn sendJSON(self: *CDP, message: anytype) !void {
 }
 
 pub fn tick(self: *CDP) !bool {
+    // terminatePending means someone decided this browser must die (e.g. the
+    // heap limit was reached). Nothing in the CDP path ever calls cancelTerminate
+    // so the flag can't be a stale leftover here. Exit.
+    if (self.browser.env.terminatePending()) {
+        log.warn(.cdp, "closing connection", .{ .reason = "pending terminate" });
+        return false;
+    }
+
     // Liveness is enforced by TCP keepalive configured in
     // Server.configureSocket; the wakeup lets V8 run or terminate.
     const wait_ms: u32 = 1000; // 1s
