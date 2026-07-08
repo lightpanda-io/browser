@@ -353,6 +353,19 @@ pub extern fn X509_STORE_new() ?*X509_STORE;
 pub extern fn X509_STORE_free(store: *X509_STORE) void;
 pub extern fn X509_STORE_add_cert(store: ?*X509_STORE, x: ?*X509) c_int;
 pub extern fn X509_STORE_load_locations(store: *X509_STORE, file: ?[*:0]const u8, dir: ?[*:0]const u8) c_int;
+pub const struct_stack_st_X509_OBJECT = opaque {};
+pub extern fn X509_STORE_get0_objects(st: ?*X509_STORE) ?*struct_stack_st_X509_OBJECT;
+
+pub const OPENSSL_sk_cmp_func = ?*const fn ([*c]?*const anyopaque, [*c]?*const anyopaque) callconv(.c) c_int;
+pub const struct_stack_st = extern struct {
+    num: usize,
+    data: [*c]?*anyopaque,
+    sorted: c_int,
+    num_alloc: usize,
+    comp: OPENSSL_sk_cmp_func,
+};
+pub const _STACK = struct_stack_st;
+pub extern fn sk_num(sk: [*c]const _STACK) usize;
 
 pub const struct_ssl_ctx_st = opaque {};
 pub const SSL_CTX = struct_ssl_ctx_st;
@@ -377,4 +390,14 @@ pub fn findDigest(name: []const u8) error{Invalid}!*const EVP_MD {
     }
 
     return error.Invalid;
+}
+
+pub fn sk_X509_OBJECT_num(arg_sk: ?*const struct_stack_st_X509_OBJECT) callconv(.c) usize {
+    const sk = arg_sk;
+    return sk_num(@as([*c]const _STACK, @ptrCast(@alignCast(sk))));
+}
+
+pub fn getCertCount(store: *X509_STORE) usize {
+    const objects = X509_STORE_get0_objects(store);
+    return sk_X509_OBJECT_num(objects);
 }
