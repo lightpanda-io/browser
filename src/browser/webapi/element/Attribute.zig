@@ -135,24 +135,13 @@ pub const List = struct {
 
     const empty_entries: [0]Entry = .{};
 
-    pub const Lookup = std.HashMapUnmanaged(LookupKey, *Attribute, LookupContext, std.hash_map.default_max_load_percentage);
+    pub const Lookup = std.AutoHashMapUnmanaged(LookupKey, *Attribute);
 
     // for Frame._attribute_lookup which is our identity map for attributes
     pub const LookupKey = struct {
         list: *const List,
-        // Owned by the frame arena (an entry's name)
-        name: []const u8,
-    };
-
-    const LookupContext = struct {
-        pub fn hash(_: LookupContext, key: LookupKey) u64 {
-            var h = std.hash.Wyhash.init(@intFromPtr(key.list));
-            h.update(key.name);
-            return h.final();
-        }
-        pub fn eql(_: LookupContext, a: LookupKey, b: LookupKey) bool {
-            return a.list == b.list and std.mem.eql(u8, a.name, b.name);
-        }
+        // canonical (see canonicalizeName), so identity is the address
+        name: [*]const u8,
     };
 
     pub fn entries(self: *const List) []const Entry {
@@ -169,7 +158,7 @@ pub const List = struct {
 
     pub fn get(self: *const List, name: String, frame: *Frame) !?String {
         const entry = (try self.getEntry(name, frame)) orelse return null;
-        return .wrap(entry._value);
+        return .wrap(entry.value());
     }
 
     pub fn eql(self: *const List, other: *const List) bool {
@@ -192,7 +181,7 @@ pub const List = struct {
     // meant for internal usage, where the name is known to be properly cased
     pub fn getSafe(self: *const List, name: String) ?[]const u8 {
         const entry = self.getEntryWithNormalizedName(name) orelse return null;
-        return entry._value;
+        return entry.value();
     }
 
     // meant for internal usage, where the name is known to be properly cased
@@ -208,7 +197,7 @@ pub const List = struct {
     // Identity map access: a given (list, name) always yields the same
     // *Attribute until the attribute is removed.
     pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-        const gop = try frame._attribute_lookup.getOrPut(frame.arena, .{ .list = self, .name = entry._name });
+        const gop = try frame._attribute_lookup.getOrPut(frame.arena, .{ .list = self, .name = entry._name_ptr });
         if (!gop.found_existing) {
             gop.value_ptr.* = try entry.toAttribute(element, frame);
         }
@@ -233,19 +222,19 @@ pub const List = struct {
         var old_value: ?String = null;
         if (result.entry) |e| {
             // the old bytes are arena-owned or static; they outlive this update
-            old_value = String.wrap(e._value);
+            old_value = String.wrap(e.value());
             if (is_id) {
-                frame.removeElementId(element, e._value);
+                frame.removeElementId(element, e.value());
             }
-            e._value = try frame.dupeString(value.str());
+            e.setValue(try frame.dupeString(value.str()));
             entry = e;
         } else {
             try self.ensureUnusedCapacity(1, frame);
             entry = &self._entries[self._len];
-            entry.* = .{
-                ._name = try frame.dupeString(result.normalized.str()),
-                ._value = try frame.dupeString(value.str()),
-            };
+            entry.* = .init(
+                try canonicalizeName(result.normalized.str(), frame),
+                try frame.dupeString(value.str()),
+            );
             self._len += 1;
         }
 
@@ -253,10 +242,10 @@ pub const List = struct {
             const parent = element.asNode()._parent orelse {
                 return entry;
             };
-            try frame.addElementId(parent, element, entry._value);
+            try frame.addElementId(parent, element, entry.value());
         }
         frame.domChanged();
-        frame.attributeChange(element, result.normalized, .wrap(entry._value), old_value);
+        frame.attributeChange(element, result.normalized, .wrap(entry.value()), old_value);
         return entry;
     }
 
@@ -267,10 +256,11 @@ pub const List = struct {
         try self.ensureTotalCapacity(other._len, frame);
         for (other.entries()) |*e| {
             const len = self._len;
-            self._entries[len] = .{
-                ._name = try frame.dupeString(e._name),
-                ._value = try frame.dupeString(e._value),
-            };
+            // re-canonicalize: `other` can belong to a different frame
+            self._entries[len] = .init(
+                try canonicalizeName(e.name(), frame),
+                try frame.dupeString(e.value()),
+            );
             self._len = len + 1;
         }
     }
@@ -293,7 +283,7 @@ pub const List = struct {
 
         const entry = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
-        try frame._attribute_lookup.put(frame.arena, .{ .list = self, .name = entry._name }, attribute);
+        try frame._attribute_lookup.put(frame.arena, .{ .list = self, .name = entry._name_ptr }, attribute);
         return existing_attribute;
     }
 
@@ -305,16 +295,16 @@ pub const List = struct {
             return;
         }
         const len = self._len;
-        if (len == std.math.maxInt(u16)) {
+        if (len == std.math.maxInt(u16) or name.len > std.math.maxInt(u32) or value.len > std.math.maxInt(u32)) {
             // Bad input. Drop rather than fail the parse
             return;
         }
 
         try self.ensureUnusedCapacity(1, frame);
-        self._entries[len] = .{
-            ._name = try frame.dupeString(name),
-            ._value = try frame.dupeString(value),
-        };
+        self._entries[len] = .init(
+            try canonicalizeName(name, frame),
+            try frame.dupeString(value),
+        );
         self._len = len + 1;
     }
 
@@ -323,15 +313,15 @@ pub const List = struct {
         const entry = result.entry orelse return;
 
         const is_id = shouldAddToIdMap(result.normalized, element);
-        const old_value = entry._value;
+        const old_value = entry.value();
 
         if (is_id) {
-            frame.removeElementId(element, entry._value);
+            frame.removeElementId(element, old_value);
         }
 
         // remove this BEFORE triggering anything, incase that re-enters delete
         // or some other callback.
-        _ = frame._attribute_lookup.remove(.{ .list = self, .name = entry._name });
+        _ = frame._attribute_lookup.remove(.{ .list = self, .name = entry._name_ptr });
         const index = (@intFromPtr(entry) - @intFromPtr(self._entries)) / @sizeOf(Entry);
         const list_entries = self._entries[0..self._len];
         std.mem.copyForwards(Entry, list_entries[index .. list_entries.len - 1], list_entries[index + 1 ..]);
@@ -345,7 +335,7 @@ pub const List = struct {
         var arr: std.ArrayList([]const u8) = .empty;
         try arr.ensureTotalCapacity(allocator, self._len);
         for (self.entries()) |*e| {
-            arr.appendAssumeCapacity(e._name);
+            arr.appendAssumeCapacity(e.name());
         }
         return arr.items;
     }
@@ -395,45 +385,89 @@ pub const List = struct {
         const normalized =
             if (self.normalize) try normalizeNameForLookup(name, frame) else name;
 
+        // A name that was never canonicalized can't be in any list.
+        const canonical = lookupCanonicalName(normalized.str(), frame) orelse {
+            return .{ .normalized = normalized, .entry = null };
+        };
         return .{
             .normalized = normalized,
-            .entry = self.getEntryWithNormalizedName(normalized),
+            .entry = self.getEntryWithCanonicalName(canonical.ptr),
         };
     }
 
-    fn getEntryWithNormalizedName(self: *const List, name: String) ?*Entry {
-        const name_str = name.str();
+    // This is one of the wins of the canonical names...we can compare strings
+    // as a single pointer comparison. By applying the same canonicalization to
+    // the lists attributes name and to an input, we get the same pointer for
+    // a given string.
+    fn getEntryWithCanonicalName(self: *const List, name_ptr: [*]const u8) ?*Entry {
         for (self._entries[0..self._len]) |*e| {
-            if (std.mem.eql(u8, e._name, name_str)) {
+            if (e._name_ptr == name_ptr) {
                 return e;
             }
         }
         return null;
     }
 
-    pub const Entry = struct {
-        // Arena-owned or interned static bytes. Stable for the frame's
-        // lifetime, unlike the entry itself.
-        _name: []const u8,
-        _value: []const u8,
+    fn getEntryWithNormalizedName(self: *const List, name: String) ?*Entry {
+        const name_str = name.str();
+        for (self._entries[0..self._len]) |*e| {
+            if (std.mem.eql(u8, e.name(), name_str)) {
+                return e;
+            }
+        }
+        return null;
+    }
 
-        /// Returns true if 2 entries are equal.
+    // Two []const u8 would be 32 bytes. Packed like this, it's 24.
+    pub const Entry = struct {
+        _name_ptr: [*]const u8,
+        _value_ptr: [*]const u8,
+        _name_len: u32,
+        _value_len: u32,
+
+        fn init(canonical_name: []const u8, value_: []const u8) Entry {
+            return .{
+                ._name_ptr = canonical_name.ptr,
+                ._value_ptr = value_.ptr,
+                ._name_len = @intCast(canonical_name.len),
+                ._value_len = @intCast(value_.len),
+            };
+        }
+
+        pub fn name(self: *const Entry) []const u8 {
+            return self._name_ptr[0..self._name_len];
+        }
+
+        pub fn value(self: *const Entry) []const u8 {
+            return self._value_ptr[0..self._value_len];
+        }
+
+        fn setValue(self: *Entry, value_: []const u8) void {
+            self._value_ptr = value_.ptr;
+            self._value_len = @intCast(value_.len);
+        }
+
+        /// Returns true if 2 entries are equal. Names can't be compared by
+        /// pointer alone: the entries can belong to different frames.
         pub fn eql(self: *const Entry, other: *const Entry) bool {
-            return std.mem.eql(u8, self._name, other._name) and std.mem.eql(u8, self._value, other._value);
+            if (self._name_ptr != other._name_ptr and !std.mem.eql(u8, self.name(), other.name())) {
+                return false;
+            }
+            return std.mem.eql(u8, self.value(), other.value());
         }
 
         pub fn format(self: *const Entry, writer: *std.Io.Writer) !void {
-            return formatAttribute(self._name, self._value, writer);
+            return formatAttribute(self.name(), self.value(), writer);
         }
 
         pub fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
             return frame._factory.node(Attribute{
                 ._proto = undefined,
                 ._element = element,
-                // The entry's arena-owned bytes outlive the entry itself, so
-                // the Attribute can wrap them without duping.
-                ._name = .wrap(self._name),
-                ._value = .wrap(self._value),
+                // The entry's bytes outlive the entry itself, so the
+                // Attribute can wrap them without duping.
+                ._name = .wrap(self.name()),
+                ._value = .wrap(self.value()),
             });
         }
     };
@@ -477,6 +511,35 @@ pub fn validateAttributeName(name: String) !void {
             return error.InvalidCharacterError;
         }
     }
+}
+
+// Every stored entry name either comes from the static String.intern or from
+// the frame._attribute_names. This doesn't just avoid extra dupes/allocations,
+// it gives us comparable pointer.
+// For the lifetime of a frame:
+//    canonicalizeName("attrx").ptr == canonicalizeName("attrx").ptr
+fn canonicalizeName(name: []const u8, frame: *Frame) ![]const u8 {
+    if (String.intern(name)) |static| {
+        return static;
+    }
+    const gop = try frame._attribute_names.getOrPut(frame.arena, name);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = try frame.arena.dupe(u8, name);
+    }
+    return gop.key_ptr.*;
+}
+
+// Let's say you want to find an attribute name "attrx". We could iterate an
+// attribute list to do the string comparison. OR, we could run "attrx" through
+// the same canonicalization as we applied to the attribute's names. If we don't
+// find a canonical value, then it's then this attribute was never canonicalized
+// before (and thus, we can shortcircuit a search). If we DO canonicalize it
+// the we get do a pointer comparison rather than a full string comparison.
+fn lookupCanonicalName(name: []const u8, frame: *const Frame) ?[]const u8 {
+    if (String.intern(name)) |static| {
+        return static;
+    }
+    return frame._attribute_names.getKey(name);
 }
 
 fn normalizeNameForLookup(name: String, frame: *Frame) !String {

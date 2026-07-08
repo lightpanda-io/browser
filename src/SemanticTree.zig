@@ -194,7 +194,7 @@ fn walk(
     var name = try axn.getName(self.frame, self.arena);
 
     const has_explicit_label = if (node.is(Element)) |el|
-        el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
+        el.getAttributeSafe(comptime .wrap("aria-label")) != null or el.getAttributeSafe(comptime .wrap("title")) != null
     else
         false;
 
@@ -384,8 +384,8 @@ const JsonVisitor = struct {
                 try self.jw.objectField("attributes");
                 try self.jw.beginObject();
                 for (el.attributeEntries()) |*attr| {
-                    try self.jw.objectField(attr._name);
-                    try self.jw.write(attr._value);
+                    try self.jw.objectField(attr.name());
+                    try self.jw.write(attr.value());
                 }
                 try self.jw.endObject();
             }

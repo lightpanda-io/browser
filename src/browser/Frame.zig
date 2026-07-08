@@ -113,6 +113,12 @@ _fragment_scripts_runnable: bool = false,
 // actual *Attributes.
 _attribute_lookup: Element.Attribute.List.Lookup = .empty,
 
+// Canonical pool for attribute names that aren't in String.intern's.
+// Every Attribute's entry's name is either a String intern or held here.
+// This is both a memory optimization (deduping attribute names) and a performance
+// optimization (since we can compare strings by just their pointer)
+_attribute_names: std.StringHashMapUnmanaged(void) = .empty,
+
 // Same as _atlribute_lookup, but instead of individual attributes, this is for
 // the return of elements.attributes.
 _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute.NamedNodeMap) = .empty,

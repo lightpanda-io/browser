@@ -374,15 +374,15 @@ pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, frame: 
     // Step 2: search xmlns attributes
     for (self._attributes.entries()) |*entry| {
         if (prefix == null) {
-            if (std.mem.eql(u8, entry._name, "xmlns")) {
-                const val = entry._value;
+            if (std.mem.eql(u8, entry.name(), "xmlns")) {
+                const val = entry.value();
                 return if (val.len == 0) null else val;
             }
         } else {
-            const name = entry._name;
+            const name = entry.name();
             if (std.mem.startsWith(u8, name, "xmlns:")) {
                 if (std.mem.eql(u8, name["xmlns:".len..], prefix.?)) {
-                    const val = entry._value;
+                    const val = entry.value();
                     return if (val.len == 0) null else val;
                 }
             }
@@ -408,8 +408,8 @@ pub fn lookupPrefixForElement(self: *Element, namespace: []const u8, frame: *Fra
 
     // Step 2: search xmlns: attribute declarations for one whose value is the namespace
     for (self._attributes.entries()) |*entry| {
-        const name = entry._name;
-        if (std.mem.startsWith(u8, name, "xmlns:") and std.mem.eql(u8, entry._value, namespace)) {
+        const name = entry.name();
+        if (std.mem.startsWith(u8, name, "xmlns:") and std.mem.eql(u8, entry.value(), namespace)) {
             return name["xmlns:".len..];
         }
     }

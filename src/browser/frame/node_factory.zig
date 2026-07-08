@@ -865,9 +865,9 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                 for (element.attributeEntries()) |*attr| {
                     Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(
                         element,
-                        .wrap(attr._name),
+                        .wrap(attr.name()),
                         null, // old_value is null for initial attributes
-                        .wrap(attr._value),
+                        .wrap(attr.value()),
                         null,
                         frame,
                     );

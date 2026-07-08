@@ -307,8 +307,8 @@ pub const Writer = struct {
                 try w.objectField("attributes");
                 try w.beginArray();
                 for (element.attributeEntries()) |*attr| {
-                    try w.write(attr._name);
-                    try w.write(attr._value);
+                    try w.write(attr.name());
+                    try w.write(attr.value());
                 }
                 try w.endArray();
             }
