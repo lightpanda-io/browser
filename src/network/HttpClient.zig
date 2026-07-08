@@ -649,7 +649,7 @@ fn dispatchCompleted(self: *Client, mode: DrainMode) void {
     }
 }
 
-// Is this transfer gated behind a blockig request
+// Is this transfer gated behind a blocking request
 fn isGated(self: *const Client, transfer: *const Transfer) bool {
     if (transfer.req.internal) {
         // internal transfers are never blocked (e.g. robots.txt)
@@ -1169,7 +1169,7 @@ fn isTeardownMethod(method: []const u8) bool {
         std.mem.eql(u8, method, "Page.close");
 }
 
-fn isRedirectStatus(status: u16) bool {
+pub fn isRedirectStatus(status: u16) bool {
     return switch (status) {
         301, 302, 303, 307, 308 => true,
         else => false,
@@ -1727,7 +1727,7 @@ pub const Transfer = struct {
     // this will become more dynamic.
     _events: std.ArrayList(Event) = .{},
 
-    // controls if _queue_node is in client.dispatch_queu (false) or
+    // controls if _queue_node is in client.dispatch_queue (false) or
     // client.gated_queue (true)
     _gated: bool = false,
 

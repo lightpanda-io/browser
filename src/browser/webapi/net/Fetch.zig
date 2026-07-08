@@ -21,15 +21,17 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
-const Transfer = @import("../../../network/HttpClient.zig").Transfer;
+const HttpClient = @import("../../../network/HttpClient.zig");
 
-const Request = @import("Request.zig");
-const Response = @import("Response.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 const DOMException = @import("../DOMException.zig");
 
+const Request = @import("Request.zig");
+const Response = @import("Response.zig");
+
 const log = lp.log;
 const Execution = js.Execution;
+const Transfer = HttpClient.Transfer;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();
