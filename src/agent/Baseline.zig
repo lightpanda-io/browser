@@ -17,9 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Session-scoped record of what the agent's extract calls actually returned.
-//! `/save` persists it into the script as a `// lp:baseline {...}` comment, so
-//! a replay compares its own extract results against record-time reality —
-//! which fields carried data when the script was made — instead of guessing.
+//! `/save` persists it into the script as a `// lp:baseline {...}` comment —
+//! evidence for the replay verdict turn, which reads it in the script source
+//! to judge whether empty output is breakage or record-time-normal sparseness.
+//! Nothing parses it programmatically; the model is the only consumer.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -118,43 +119,6 @@ fn fieldsToLine(arena: std.mem.Allocator, fields: *const Fields) error{OutOfMemo
     return try std.mem.concat(arena, u8, &.{ marker, json });
 }
 
-/// Parse the baseline comment out of script source; null when absent or
-/// malformed (a hand-written script simply has none). Field-name strings may
-/// reference `source` — keep it alive as long as the result.
-pub fn parse(arena: std.mem.Allocator, source: []const u8) ?Fields {
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (!std.mem.startsWith(u8, trimmed, marker)) continue;
-        return parseJson(arena, trimmed[marker.len..]);
-    }
-    return null;
-}
-
-fn parseJson(arena: std.mem.Allocator, json_text: []const u8) ?Fields {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, json_text, .{}) catch return null;
-    if (parsed != .object) return null;
-    const fields_value = parsed.object.get("fields") orelse return null;
-    if (fields_value != .object) return null;
-
-    var out: Fields = .empty;
-    var it = fields_value.object.iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.* != .object) return null;
-        const calls = intField(entry.value_ptr.object, "calls") orelse return null;
-        const nonempty = intField(entry.value_ptr.object, "nonempty") orelse return null;
-        out.put(arena, entry.key_ptr.*, .{ .calls = calls, .nonempty = nonempty }) catch return null;
-    }
-    return out;
-}
-
-fn intField(obj: std.json.ObjectMap, key: []const u8) ?u32 {
-    const value = obj.get(key) orelse return null;
-    if (value != .integer) return null;
-    if (value.integer < 0 or value.integer > std.math.maxInt(u32)) return null;
-    return @intCast(value.integer);
-}
-
 /// `script` with any existing baseline lines dropped and `line` (a full
 /// baseline line, or null) appended — synthesis may have copied a stale
 /// baseline from the previous script verbatim.
@@ -180,27 +144,22 @@ pub fn withBaseline(arena: std.mem.Allocator, script: []const u8, line: ?[]const
     return aw.written();
 }
 
-test "baseline: note, serialize, parse round-trip" {
+test "baseline: note and serialize tally per-field data presence" {
     var baseline: Baseline = .init(std.testing.allocator);
     defer baseline.deinit();
 
     try baseline.noteExtractResult("{\"stories\":[{\"title\":\"a\"}],\"empty_list\":[],\"scalar\":\"x\"}");
     try baseline.noteExtractResult("{\"stories\":[],\"empty_list\":[]}");
+    // Malformed results record nothing.
+    try baseline.noteExtractResult("not json");
 
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const line = (try baseline.serialize(arena.allocator())).?;
-    try std.testing.expect(std.mem.startsWith(u8, line, marker));
-
-    const parsed = Baseline.parse(arena.allocator(), line).?;
-    try std.testing.expectEqual(FieldStat{ .calls = 2, .nonempty = 1 }, parsed.get("stories").?);
-    try std.testing.expectEqual(FieldStat{ .calls = 2, .nonempty = 0 }, parsed.get("empty_list").?);
-    try std.testing.expectEqual(FieldStat{ .calls = 1, .nonempty = 1 }, parsed.get("scalar").?);
-
-    // Malformed results record nothing; malformed baselines parse to null.
-    try baseline.noteExtractResult("not json");
-    try std.testing.expectEqual(null, Baseline.parse(arena.allocator(), "// lp:baseline {broken"));
-    try std.testing.expectEqual(null, Baseline.parse(arena.allocator(), "const x = 1;"));
+    try std.testing.expectEqualStrings(
+        marker ++ "{\"fields\":{\"stories\":{\"calls\":2,\"nonempty\":1},\"empty_list\":{\"calls\":2,\"nonempty\":0},\"scalar\":{\"calls\":1,\"nonempty\":1}}}",
+        line,
+    );
 }
 
 test "baseline: withBaseline strips stale lines and appends" {
