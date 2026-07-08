@@ -618,7 +618,7 @@ pub const JsApi = struct {
     pub const openCursor = bridge.function(IDBObjectStore.openCursor, .{});
     pub const openKeyCursor = bridge.function(IDBObjectStore.openKeyCursor, .{});
     pub const indexNames = bridge.accessor(IDBObjectStore.getIndexNames, null, .{});
-    pub const createIndex = bridge.function(IDBObjectStore.createIndex, .{ });
-    pub const deleteIndex = bridge.function(IDBObjectStore.deleteIndex, .{ });
-    pub const index = bridge.function(IDBObjectStore.index, .{ });
+    pub const createIndex = bridge.function(IDBObjectStore.createIndex, .{});
+    pub const deleteIndex = bridge.function(IDBObjectStore.deleteIndex, .{});
+    pub const index = bridge.function(IDBObjectStore.index, .{});
 };

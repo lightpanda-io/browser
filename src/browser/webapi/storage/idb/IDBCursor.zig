@@ -439,9 +439,9 @@ pub const JsApi = struct {
     pub const primaryKey = bridge.accessor(IDBCursor.getPrimaryKey, null, .{ .null_as_undefined = true });
     pub const direction = bridge.accessor(IDBCursor.getDirection, null, .{});
     pub const source = bridge.accessor(IDBCursor.getSource, null, .{});
-    pub const @"continue" = bridge.function(IDBCursor.@"continue", .{ });
-    pub const continuePrimaryKey = bridge.function(IDBCursor.continuePrimaryKey, .{ });
-    pub const advance = bridge.function(IDBCursor.advance, .{ });
-    pub const update = bridge.function(IDBCursor.update, .{ });
-    pub const delete = bridge.function(IDBCursor.delete, .{ });
+    pub const @"continue" = bridge.function(IDBCursor.@"continue", .{});
+    pub const continuePrimaryKey = bridge.function(IDBCursor.continuePrimaryKey, .{});
+    pub const advance = bridge.function(IDBCursor.advance, .{});
+    pub const update = bridge.function(IDBCursor.update, .{});
+    pub const delete = bridge.function(IDBCursor.delete, .{});
 };
