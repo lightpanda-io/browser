@@ -380,13 +380,12 @@ const JsonVisitor = struct {
                 try self.jw.write(value);
             }
 
-            if (el._attributes) |attrs| {
+            if (!el._attributes.isEmpty()) {
                 try self.jw.objectField("attributes");
                 try self.jw.beginObject();
-                var iter = attrs.iterator();
-                while (iter.next()) |attr| {
-                    try self.jw.objectField(attr._name.str());
-                    try self.jw.write(attr._value.str());
+                for (el.attributeEntries()) |*attr| {
+                    try self.jw.objectField(attr._name);
+                    try self.jw.write(attr._value);
                 }
                 try self.jw.endObject();
             }

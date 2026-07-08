@@ -35,12 +35,11 @@ pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {
     const node = try Frame.node_factory.createElementNS(frame, .html, "audio", null);
     const el = node.as(Element);
 
-    const list = try el.getOrCreateAttributeList(frame);
     // Always set to "auto" initially.
-    _ = try list.putSafe(comptime .wrap("preload"), comptime .wrap("auto"), el, frame);
+    try el.setAttributeSafe(comptime .wrap("preload"), comptime .wrap("auto"), frame);
     // Set URL if provided.
     if (maybe_url) |url| {
-        _ = try list.putSafe(comptime .wrap("src"), url, el, frame);
+        try el.setAttributeSafe(comptime .wrap("src"), url, frame);
     }
 
     return node.as(Media);
