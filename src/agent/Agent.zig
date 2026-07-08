@@ -861,7 +861,7 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
         .ok, .fatal => {},
         .script_error => |script_error| {
             if (self.ai_client == null) return;
-            if (!promptHeal(path)) return;
+            if (!promptHeal(path, script_error.kind)) return;
             _ = self.healLoop(arena.allocator(), path, script_error);
         },
     }
@@ -869,9 +869,13 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
 
 /// Defaults to no: healing spends tokens and its validation step resets the
 /// browser session.
-fn promptHeal(path: []const u8) bool {
+fn promptHeal(path: []const u8, kind: ScriptError.Kind) bool {
+    const symptom = switch (kind) {
+        .threw => "failed",
+        .empty => "ran but returned no data",
+    };
     var header_buf: [256]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "{s} failed. Heal it with the model?", .{path}) catch
+    const header = std.fmt.bufPrint(&header_buf, "{s} {s}. Heal it with the model?", .{ path, symptom }) catch
         "Script failed. Heal it with the model?";
     const labels: []const [:0]const u8 = &.{
         "heal — diagnose and fix, then validate in a fresh session (drops page/cookies like /reset)",
@@ -1520,15 +1524,26 @@ const ScriptRunOutcome = union(enum) {
 /// that ran, so a heal diagnoses what actually failed instead of re-reading a
 /// possibly-changed file.
 const ScriptError = struct {
-    /// Formatted error (line, stack).
+    kind: Kind,
+    /// Formatted error (line, stack) — or, for `empty`, what came back.
     detail: []const u8,
     source: []const u8,
+
+    /// `empty` is a run that completed but returned a value with no data in
+    /// it — the usual symptom of a stale selector, which matches nothing
+    /// instead of throwing. Only heal treats it as a failure; a plain replay
+    /// still exits 0, since an empty answer can be the right answer.
+    const Kind = enum { threw, empty };
 };
 
 fn runScript(self: *Agent, path: []const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
-    return self.runScriptOutcome(arena.allocator(), path) == .ok;
+    return switch (self.runScriptOutcome(arena.allocator(), path)) {
+        .ok => true,
+        .fatal => false,
+        .script_error => |script_error| script_error.kind == .empty,
+    };
 }
 
 fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ScriptRunOutcome {
@@ -1563,19 +1578,32 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
     const result = runtime.runSource(content, path);
     self.terminal.endTool();
 
-    if (result catch |err| {
+    switch (result catch |err| {
         self.terminal.printError("Script failed: {s}", .{@errorName(err)});
         return .fatal;
-    }) |message| {
-        self.terminal.printError("{s}", .{message});
-        // A Ctrl-C termination is not a script defect — never heal it.
-        if (self.cancel_requested.load(.acquire)) return .fatal;
-        // The message lives in the runtime's call arena and the source in
-        // script_arena; both are freed by the defers above — dupe first.
-        return .{ .script_error = .{
-            .detail = arena.dupe(u8, message) catch return .fatal,
-            .source = arena.dupe(u8, content) catch return .fatal,
-        } };
+    }) {
+        .err => |message| {
+            self.terminal.printError("{s}", .{message});
+            // A Ctrl-C termination is not a script defect — never heal it.
+            if (self.cancel_requested.load(.acquire)) return .fatal;
+            // The message lives in the runtime's call arena and the source in
+            // script_arena; both are freed by the defers above — dupe first.
+            return .{ .script_error = .{
+                .kind = .threw,
+                .detail = arena.dupe(u8, message) catch return .fatal,
+                .source = arena.dupe(u8, content) catch return .fatal,
+            } };
+        },
+        .ok => |maybe_completion| {
+            if (maybe_completion) |completion| {
+                if (completion.empty) return .{ .script_error = .{
+                    .kind = .empty,
+                    .detail = std.fmt.allocPrint(arena, "The script completed without throwing, but its return value carries no data: {s}\n" ++
+                        "A selector probably no longer matches anything on the page.", .{completion.text}) catch return .fatal,
+                    .source = arena.dupe(u8, content) catch return .fatal,
+                } };
+            }
+        },
     }
 
     // A script that printed nothing leaves no trace, so freeze the spinner into

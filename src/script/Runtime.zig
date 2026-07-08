@@ -262,19 +262,35 @@ fn setObjectProperty(
     if (!out.has_value or !out.value) return error.RuntimeInitFailed;
 }
 
-/// Run script source in the agent context. Returns null on success; on a JS
-/// compile/runtime exception returns a formatted error allocated in this
-/// runtime's call arena and valid until deinit or the next run.
-pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
+/// The value a script ran to completion with.
+pub const Completion = struct {
+    /// Display form of the returned value: objects and arrays as JSON.
+    text: []const u8,
+    /// True when the value carries no data — null, "", or an array/object all
+    /// of whose members are empty.
+    empty: bool,
+};
+
+/// A script run's outcome. `err` is a formatted JS compile/runtime exception;
+/// `ok` carries the value the script returned, null when it returned
+/// `undefined`. All slices are allocated in this runtime's call arena and
+/// valid until deinit or the next run.
+pub const RunResult = union(enum) {
+    ok: ?Completion,
+    err: []const u8,
+};
+
+/// Run script source in the agent context.
+pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!RunResult {
     _ = self.call_arena.reset(.retain_capacity);
-    self.run_timer = std.time.Timer.start() catch return try self.dupeError("internal: timer unavailable");
+    self.run_timer = std.time.Timer.start() catch return .{ .err = try self.dupeError("internal: timer unavailable") };
 
     var hs: lp.js.HandleScope = undefined;
     hs.init(self.env.isolate);
     defer hs.deinit();
 
     const context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.context, self.env.isolate.handle) orelse
-        return try self.dupeError("agent script context is not available"));
+        return .{ .err = try self.dupeError("agent script context is not available") });
     v8.v8__Context__Enter(context);
     defer v8.v8__Context__Exit(context);
 
@@ -289,7 +305,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     // trailing expression no longer auto-prints — `await` and a script
     // completion value are mutually exclusive in JS.)
     const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
-        return try self.dupeError("out of memory");
+        return .{ .err = try self.dupeError("out of memory") };
     const script_source = self.env.isolate.initStringHandle(wrapped);
 
     var origin: v8.ScriptOrigin = undefined;
@@ -304,27 +320,26 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
         &compiler_source,
         v8.kNoCompileOptions,
         v8.kNoCacheNoReason,
-    ) orelse return try self.formatCaught(context, &try_catch, "compile failed");
+    ) orelse return .{ .err = try self.formatCaught(context, &try_catch, "compile failed") };
 
-    const completion = v8.v8__Script__Run(script, context) orelse
-        return try self.formatCaught(context, &try_catch, "script failed");
+    const completion_promise = v8.v8__Script__Run(script, context) orelse
+        return .{ .err = try self.formatCaught(context, &try_catch, "script failed") };
 
     // `goto` only *starts* a navigation, so the root Promise is usually still
     // pending; drive the in-flight ones to completion.
-    const root: *const v8.Promise = @ptrCast(completion);
+    const root: *const v8.Promise = @ptrCast(completion_promise);
     self.driveAsync(context, &try_catch, root);
     if (v8.v8__TryCatch__HasCaught(&try_catch)) {
-        return try self.formatCaught(context, &try_catch, "script failed");
+        return .{ .err = try self.formatCaught(context, &try_catch, "script failed") };
     }
 
     // A still-pending root means the script awaited something we can't settle
     // (no async navigation is in flight) — stay silent.
     const state = promiseState(root);
-    if (state != v8.kFulfilled and state != v8.kRejected) return null;
-    const completion_value = v8.v8__Promise__Result(root) orelse return null;
-    if (state == v8.kRejected) return try self.formatRejection(context, completion_value);
-    self.printCompletion(context, completion_value);
-    return null;
+    if (state != v8.kFulfilled and state != v8.kRejected) return .{ .ok = null };
+    const completion_value = v8.v8__Promise__Result(root) orelse return .{ .ok = null };
+    if (state == v8.kRejected) return .{ .err = try self.formatRejection(context, completion_value) };
+    return .{ .ok = try self.completion(context, completion_value) };
 }
 
 /// `v8__Promise__State` returns the `c_uint` `PromiseState`, but the `k*`
@@ -353,15 +368,55 @@ fn errorMessage(self: *Runtime, context: *const v8.Context, reason: *const v8.Va
 }
 
 /// Echo a script's output — the value it `return`s from the async wrapper, so a
-/// script ending in `return page.extract(...)` prints without `console.log`.
-/// `undefined` — no `return`, or a bare trailing expression — stays silent.
-fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) void {
-    if (v8.v8__Value__IsUndefined(value)) return;
+/// script ending in `return page.extract(...)` prints without `console.log` —
+/// and hand it back to the caller. `undefined` — no `return`, or a bare
+/// trailing expression — stays silent and yields null, as does a value whose
+/// display form can't be computed.
+fn completion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) error{OutOfMemory}!?Completion {
+    if (v8.v8__Value__IsUndefined(value)) return null;
 
-    var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
-    defer arena_state.deinit();
-    const text = self.displayString(arena_state.allocator(), context, value) catch return;
+    const arena = self.call_arena.allocator();
+    const text = self.displayString(arena, context, value) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.JsException => return null,
+    };
     self.writeConsoleLine(.log, text);
+    return .{ .text = text, .empty = self.isEmptyValue(value, text) };
+}
+
+/// Whether a completion value carries no data. `text` is the value's display
+/// form: JSON for objects and arrays (a fallback coercion — function, circular
+/// reference — won't parse and counts as data), plain coercion otherwise.
+fn isEmptyValue(self: *Runtime, value: *const v8.Value, text: []const u8) bool {
+    if (v8.v8__Value__IsNull(value)) return true;
+    if (v8.v8__Value__IsObject(value)) {
+        // Scratch arena: the parse tree is as large as the extract output and
+        // must not sit in the call arena until the next run.
+        var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
+        defer arena_state.deinit();
+        const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena_state.allocator(), text, .{}) catch return false;
+        return jsonIsEmpty(parsed);
+    }
+    return text.len == 0;
+}
+
+/// Null, "", and arrays/objects all of whose members are empty carry no data;
+/// numbers and booleans always do (0 and false are answers).
+fn jsonIsEmpty(value: std.json.Value) bool {
+    switch (value) {
+        .null => return true,
+        .string => |s| return s.len == 0,
+        .array => |a| {
+            for (a.items) |item| if (!jsonIsEmpty(item)) return false;
+            return true;
+        },
+        .object => |o| {
+            var it = o.iterator();
+            while (it.next()) |entry| if (!jsonIsEmpty(entry.value_ptr.*)) return false;
+            return true;
+        },
+        else => return false,
+    }
 }
 
 /// Unwrap a callback's info handle and its `External` payload (the `*T` passed
@@ -979,9 +1034,12 @@ fn dupeError(self: *Runtime, message: []const u8) RunError![]const u8 {
 const testing = @import("../testing.zig");
 
 fn runTestScript(runtime: *Runtime, source: []const u8) !void {
-    if (try runtime.runSource(source, "agent-runtime-test.js")) |message| {
-        std.debug.print("agent script failed:\n{s}\n", .{message});
-        return error.AgentScriptFailed;
+    switch (try runtime.runSource(source, "agent-runtime-test.js")) {
+        .ok => {},
+        .err => |message| {
+            std.debug.print("agent script failed:\n{s}\n", .{message});
+            return error.AgentScriptFailed;
+        },
     }
 }
 
@@ -1021,7 +1079,7 @@ test "agent script runtime: Page must be called with new" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    const message = (try runtime.runSource("Page();", "agent-runtime-page-no-new.js")).?;
+    const message = (try runtime.runSource("Page();", "agent-runtime-page-no-new.js")).err;
     try testing.expect(std.mem.indexOf(u8, message, "must be called with new") != null);
 }
 
@@ -1037,7 +1095,7 @@ test "agent script runtime: a method on an un-navigated page errors" {
     const message = (try runtime.runSource(
         \\const page = new Page();
         \\page.extract({ btn: "#btn" });
-    , "agent-runtime-not-navigated.js")).?;
+    , "agent-runtime-not-navigated.js")).err;
     try testing.expect(std.mem.indexOf(u8, message, "not navigated") != null);
 }
 
@@ -1058,7 +1116,7 @@ test "agent script runtime: page.close stales the handle" {
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\page.close();
         \\page.extract({ btn: "#btn" });
-    , "agent-runtime-close.js")).?;
+    , "agent-runtime-close.js")).err;
     try testing.expect(std.mem.indexOf(u8, message, "closed") != null);
 }
 
@@ -1353,8 +1411,8 @@ test "agent script runtime: terminate interrupts local JavaScript" {
     defer runtime.cancelTerminate();
     defer thread.join();
 
-    const message = try runtime.runSource("while (true) {}", "agent-runtime-terminate-test.js");
-    try testing.expect(message != null);
+    const result = try runtime.runSource("while (true) {}", "agent-runtime-terminate-test.js");
+    try testing.expect(result == .err);
 }
 
 test "agent script runtime: agent variables persist and page globals are isolated" {
@@ -1434,7 +1492,7 @@ test "agent script runtime: tool errors throw and stop execution" {
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\page.click({ selector: "#does-not-exist" });
         \\globalThis.marker = "after";
-    , "agent-runtime-failure.js")).?;
+    , "agent-runtime-failure.js")).err;
 
     try testing.expect(std.mem.indexOf(u8, message, "click") != null or
         std.mem.indexOf(u8, message, "NodeNotFound") != null or
@@ -1489,7 +1547,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
     {
         const message = (try runtime.runSource(
             \\await new Page().goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
-        , "agent-runtime-conflict.js")).?;
+        , "agent-runtime-conflict.js")).err;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
 
@@ -1499,7 +1557,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
             \\const page = new Page();
             \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
             \\page.click("#btn", "#extra");
-        , "agent-runtime-arity.js")).?;
+        , "agent-runtime-arity.js")).err;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
 }
@@ -1520,4 +1578,36 @@ test "agent script runtime: top-level await runs in an async wrapper" {
         \\if (x + 2 !== 42) throw new Error("top-level await did not resolve: " + x);
         \\return x + 2;
     );
+}
+
+test "agent script runtime: completion value emptiness" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const cases = [_]struct { source: []const u8, empty: bool }{
+        // The shapes a stale extract selector produces: an empty list, or rows
+        // whose every field missed.
+        .{ .source = "return [];", .empty = true },
+        .{ .source = "return {};", .empty = true },
+        .{ .source = "return null;", .empty = true },
+        .{ .source = "return { stories: [] };", .empty = true },
+        .{ .source = "return [{ id: null, title: \"\" }];", .empty = true },
+        .{ .source = "return [{ id: null, title: \"HN\" }];", .empty = false },
+        .{ .source = "return \"text\";", .empty = false },
+        .{ .source = "return 0;", .empty = false },
+        .{ .source = "return false;", .empty = false },
+    };
+    for (cases) |case| {
+        const result = try runtime.runSource(case.source, "agent-runtime-emptiness.js");
+        try testing.expectEqual(case.empty, result.ok.?.empty);
+    }
+
+    // No `return` — nothing to classify, nothing to heal.
+    const silent = try runtime.runSource("const x = 1;", "agent-runtime-emptiness.js");
+    try testing.expectEqual(null, silent.ok);
 }
