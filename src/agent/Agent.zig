@@ -873,6 +873,7 @@ fn promptHeal(path: []const u8, kind: ScriptError.Kind) bool {
     const symptom = switch (kind) {
         .threw => "failed",
         .empty => "ran but returned no data",
+        .dry_extracts => "ran but some extracts came back empty",
     };
     var header_buf: [256]u8 = undefined;
     const header = std.fmt.bufPrint(&header_buf, "{s} {s}. Heal it with the model?", .{ path, symptom }) catch
@@ -881,6 +882,8 @@ fn promptHeal(path: []const u8, kind: ScriptError.Kind) bool {
         "heal — diagnose and fix, then validate in a fresh session (drops page/cookies like /reset)",
         "no — leave the script and session as they are",
     };
+    // Blank line so the question doesn't run into the script's output dump.
+    std.debug.print("\n", .{});
     const idx = Terminal.promptNumberedChoice(header, labels, 1) catch return false;
     return idx == 0;
 }
@@ -1530,10 +1533,12 @@ const ScriptError = struct {
     source: []const u8,
 
     /// `empty` is a run that completed but returned a value with no data in
-    /// it — the usual symptom of a stale selector, which matches nothing
-    /// instead of throwing. Only heal treats it as a failure; a plain replay
-    /// still exits 0, since an empty answer can be the right answer.
-    const Kind = enum { threw, empty };
+    /// it; `dry_extracts` one whose return value had data, but where some
+    /// extract list field came back empty on every call. Both are the usual
+    /// symptom of a stale selector, which matches nothing instead of throwing.
+    /// Only heal treats them as failures; a plain replay still exits 0, since
+    /// an empty answer can be the right answer.
+    const Kind = enum { threw, empty, dry_extracts };
 };
 
 fn runScript(self: *Agent, path: []const u8) bool {
@@ -1542,7 +1547,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
     return switch (self.runScriptOutcome(arena.allocator(), path)) {
         .ok => true,
         .fatal => false,
-        .script_error => |script_error| script_error.kind == .empty,
+        .script_error => |script_error| script_error.kind != .threw,
     };
 }
 
@@ -1594,12 +1599,21 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
                 .source = arena.dupe(u8, content) catch return .fatal,
             } };
         },
-        .ok => |maybe_completion| {
-            if (maybe_completion) |completion| {
+        .ok => |ok| {
+            if (ok.completion) |completion| {
                 if (completion.empty) return .{ .script_error = .{
                     .kind = .empty,
                     .detail = std.fmt.allocPrint(arena, "The script completed without throwing, but its return value carries no data: {s}\n" ++
                         "A selector probably no longer matches anything on the page.", .{completion.text}) catch return .fatal,
+                    .source = arena.dupe(u8, content) catch return .fatal,
+                } };
+            }
+            // Checked even without a completion: a no-`return` script can
+            // still have dry extracts.
+            if (dryExtractsDetail(arena, ok.extract_stats) catch return .fatal) |detail| {
+                return .{ .script_error = .{
+                    .kind = .dry_extracts,
+                    .detail = detail,
                     .source = arena.dupe(u8, content) catch return .fatal,
                 } };
             }
@@ -1610,6 +1624,30 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
     // a green bullet (like /goto); one that printed already showed its result.
     if (!output.emitted) self.terminal.printScriptDone("script", path);
     return .ok;
+}
+
+/// Detail for `.dry_extracts`: one line per extract list field that came back
+/// empty on every call, or null when none did.
+fn dryExtractsDetail(arena: std.mem.Allocator, stats: []const ScriptRuntime.ExtractStat) !?[]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    var any = false;
+    for (stats) |stat| {
+        if (stat.empty != stat.calls) continue;
+        if (!any) {
+            try aw.writer.writeAll("The script completed without throwing, but some extracts came back empty on every call:\n");
+            any = true;
+        }
+        if (stat.field) |field| {
+            try aw.writer.print("- the \"{s}\" list in extract({s}) came back empty", .{ field, stat.schema });
+        } else {
+            try aw.writer.print("- extract({s}) returned no data", .{stat.schema});
+        }
+        if (stat.calls != 1) try aw.writer.print(" in all {d} calls", .{stat.calls});
+        try aw.writer.writeAll("\n");
+    }
+    if (!any) return null;
+    try aw.writer.writeAll("A selector probably no longer matches the page — but an empty list can also be legitimate; verify against the live page before changing anything.");
+    return aw.written();
 }
 
 /// One-shot `--heal` run; counterpart of the REPL's `/load` heal offer.

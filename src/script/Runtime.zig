@@ -46,6 +46,9 @@ console_observer: ?ConsoleObserver = null,
 pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
 run_timer: std.time.Timer,
+/// Per-run tally of extract list-field emptiness. call_arena-backed, so it is
+/// re-zeroed alongside the arena reset at the top of `runSource`.
+extract_stats: std.ArrayList(ExtractStat) = .empty,
 
 /// The runtime installs exactly the recorded browser tools as script
 /// primitives — the same set the recorder writes — so every recorded call
@@ -271,18 +274,36 @@ pub const Completion = struct {
     empty: bool,
 };
 
-/// A script run's outcome. `err` is a formatted JS compile/runtime exception;
-/// `ok` carries the value the script returned, null when it returned
-/// `undefined`. All slices are allocated in this runtime's call arena and
-/// valid until deinit or the next run.
+/// One extract schema's top-level list field, tallied across the run.
+pub const ExtractStat = struct {
+    /// Schema JSON as the script wrote it (array schemas are shown without the
+    /// internal `__root` wrapper).
+    schema: []const u8,
+    /// Top-level list field of the result; null when the schema itself is a list.
+    field: ?[]const u8,
+    calls: u32,
+    empty: u32,
+};
+
+/// A script run's outcome. `err` is a formatted JS compile/runtime exception.
+/// All slices are allocated in this runtime's call arena and valid until
+/// deinit or the next run.
 pub const RunResult = union(enum) {
-    ok: ?Completion,
+    ok: Ok,
     err: []const u8,
+};
+
+pub const Ok = struct {
+    /// The value the script returned; null when it returned `undefined`.
+    completion: ?Completion,
+    /// Per-(schema, list-field) extract tallies for the run.
+    extract_stats: []const ExtractStat,
 };
 
 /// Run script source in the agent context.
 pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!RunResult {
     _ = self.call_arena.reset(.retain_capacity);
+    self.extract_stats = .empty;
     self.run_timer = std.time.Timer.start() catch return .{ .err = try self.dupeError("internal: timer unavailable") };
 
     var hs: lp.js.HandleScope = undefined;
@@ -336,10 +357,17 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     // A still-pending root means the script awaited something we can't settle
     // (no async navigation is in flight) — stay silent.
     const state = promiseState(root);
-    if (state != v8.kFulfilled and state != v8.kRejected) return .{ .ok = null };
-    const completion_value = v8.v8__Promise__Result(root) orelse return .{ .ok = null };
+    if (state != v8.kFulfilled and state != v8.kRejected) return self.runOk(null);
+    const completion_value = v8.v8__Promise__Result(root) orelse return self.runOk(null);
     if (state == v8.kRejected) return .{ .err = try self.formatRejection(context, completion_value) };
-    return .{ .ok = try self.completion(context, completion_value) };
+    return self.runOk(try self.completion(context, completion_value));
+}
+
+fn runOk(self: *Runtime, completion_value: ?Completion) RunResult {
+    return .{ .ok = .{
+        .completion = completion_value,
+        .extract_stats = self.extract_stats.items,
+    } };
 }
 
 /// `v8__Promise__State` returns the `c_uint` `PromiseState`, but the `k*`
@@ -518,15 +546,65 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     switch (result) {
         .ok => |text| switch (tool) {
             .extract => {
-                const normalized = self.normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
+                const normalized = normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
                     error.OutOfMemory => return self.throwError("out of memory"),
                 };
-                self.setReturnJson(context, info, normalized);
+                // Recording happens after `callTool` returns, so a re-entrant
+                // extract (via a `toJSON` during argument marshalling) tallies
+                // inner-then-outer; the map is append-only. Failed extracts
+                // threw above and are intentionally not counted.
+                if (normalized.parsed) |parsed| {
+                    self.recordExtractStats(args, parsed) catch
+                        return self.throwError("out of memory");
+                }
+                self.setReturnJson(context, info, normalized.text);
             },
             else => self.setReturnString(info, text),
         },
         .fail => |message| self.throwError(message),
     }
+}
+
+/// Tally each top-level list field of an extract result: a field that stays
+/// empty across every call of its schema is the heal trigger's signal, while
+/// scalar fields (legitimately sparse) are never tracked. A whole-array result
+/// (`__root` schema) tallies as the single null field.
+fn recordExtractStats(self: *Runtime, args: ?std.json.Value, result: std.json.Value) error{OutOfMemory}!void {
+    const raw_schema = switch ((args orelse return).object.get("schema") orelse return) {
+        .string => |s| s,
+        else => return,
+    };
+    const schema = stripExtractSchemaRoot(raw_schema);
+    switch (result) {
+        .array => try self.bumpExtractStat(schema, null, jsonIsEmpty(result)),
+        .object => |obj| {
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.* != .array) continue;
+                try self.bumpExtractStat(schema, entry.key_ptr.*, jsonIsEmpty(entry.value_ptr.*));
+            }
+        },
+        else => {},
+    }
+}
+
+fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_empty: bool) error{OutOfMemory}!void {
+    for (self.extract_stats.items) |*stat| {
+        if (!std.mem.eql(u8, stat.schema, schema)) continue;
+        const same_field = if (stat.field) |f| field != null and std.mem.eql(u8, f, field.?) else field == null;
+        if (!same_field) continue;
+        stat.calls += 1;
+        if (is_empty) stat.empty += 1;
+        return;
+    }
+    // `schema`/`field` live in invoke's per-call arena; the stat outlives it.
+    const arena = self.call_arena.allocator();
+    try self.extract_stats.append(arena, .{
+        .schema = try arena.dupe(u8, schema),
+        .field = if (field) |f| try arena.dupe(u8, f) else null,
+        .calls = 1,
+        .empty = @intFromBool(is_empty),
+    });
 }
 
 /// Start the receiver Page's navigation and return a *pending* Promise of the
@@ -866,10 +944,24 @@ fn extractSchemaString(arena: std.mem.Allocator, value: std.json.Value) error{Ou
     };
 }
 
+/// Key under which `normalizeExtractSchemaString` nests an array schema so the
+/// walker always receives an object; wrap, unwrap, and display-strip must agree.
+const extract_root_key = "__root";
+
 fn normalizeExtractSchemaString(arena: std.mem.Allocator, schema: []const u8) error{OutOfMemory}![]const u8 {
     const trimmed = std.mem.trim(u8, schema, &std.ascii.whitespace);
     if (trimmed.len == 0 or trimmed[0] != '[') return schema;
-    return try std.fmt.allocPrint(arena, "{{\"__root\":{s}}}", .{schema});
+    return try std.fmt.allocPrint(arena, "{{\"" ++ extract_root_key ++ "\":{s}}}", .{schema});
+}
+
+/// Inverse of the wrapping above, for showing an array schema the way the
+/// script wrote it.
+fn stripExtractSchemaRoot(schema: []const u8) []const u8 {
+    const prefix = "{\"" ++ extract_root_key ++ "\":";
+    if (std.mem.startsWith(u8, schema, prefix) and std.mem.endsWith(u8, schema, "}")) {
+        return schema[prefix.len .. schema.len - 1];
+    }
+    return schema;
 }
 
 fn argJson(
@@ -903,19 +995,27 @@ fn objectWith(arena: std.mem.Allocator, key: []const u8, value: std.json.Value) 
 
 /// Unwraps only the `__root` sentinel that `normalizeExtractSchemaString` injects
 /// for array schemas; a real single-field object schema keeps its shape.
-fn normalizeExtractReturnJson(_: *Runtime, arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}![]const u8 {
-    if (value.len == 0) return value;
+/// `parsed` is the post-unwrap value, null when the raw text is empty or not
+/// JSON — the stats hook classifies it without a second parse.
+fn normalizeExtractReturnJson(arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}!struct {
+    text: []const u8,
+    parsed: ?std.json.Value,
+} {
+    if (value.len == 0) return .{ .text = value, .parsed = null };
 
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, value, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return value,
+        else => return .{ .text = value, .parsed = null },
     };
-    if (parsed != .object or parsed.object.count() != 1) return value;
-
-    var it = parsed.object.iterator();
-    const entry = it.next() orelse return value;
-    if (!std.mem.eql(u8, entry.key_ptr.*, "__root")) return value;
-    return try std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{});
+    if (parsed == .object and parsed.object.count() == 1) {
+        var it = parsed.object.iterator();
+        const entry = it.next().?;
+        if (std.mem.eql(u8, entry.key_ptr.*, extract_root_key)) return .{
+            .text = try std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{}),
+            .parsed = entry.value_ptr.*,
+        };
+    }
+    return .{ .text = value, .parsed = parsed };
 }
 
 fn setReturnString(self: *Runtime, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
@@ -1604,10 +1704,58 @@ test "agent script runtime: completion value emptiness" {
     };
     for (cases) |case| {
         const result = try runtime.runSource(case.source, "agent-runtime-emptiness.js");
-        try testing.expectEqual(case.empty, result.ok.?.empty);
+        try testing.expectEqual(case.empty, result.ok.completion.?.empty);
     }
 
     // No `return` — nothing to classify, nothing to heal.
     const silent = try runtime.runSource("const x = 1;", "agent-runtime-emptiness.js");
-    try testing.expectEqual(null, silent.ok);
+    try testing.expectEqual(null, silent.ok.completion);
+}
+
+test "agent script runtime: extract stats tally list-field emptiness" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const result = try runtime.runSource(
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\page.extract({ items: [".no-such"] });
+        \\page.extract({ items: [".no-such"] });
+        \\page.extract({ btn: "#btn", buttons: ["button"] });
+        \\page.extract([".no-such-root"]);
+        \\const other = new Page();
+        \\await other.goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
+        \\page.extract({ sel: ["#sel0"] });
+        \\other.extract({ sel: ["#sel0"] });
+    , "agent-runtime-extract-stats.js");
+
+    const stats = result.ok.extract_stats;
+    try testing.expectEqual(4, stats.len);
+
+    // Scalar `btn` never records a stat.
+    try testing.expectString("items", stats[0].field.?);
+    try testing.expectEqual(2, stats[0].calls);
+    try testing.expectEqual(2, stats[0].empty);
+
+    try testing.expectString("buttons", stats[1].field.?);
+    try testing.expectEqual(1, stats[1].calls);
+    try testing.expectEqual(0, stats[1].empty);
+
+    try testing.expectEqual(null, stats[2].field);
+    try testing.expectString("[\".no-such-root\"]", stats[2].schema);
+    try testing.expectEqual(1, stats[2].calls);
+    try testing.expectEqual(1, stats[2].empty);
+
+    try testing.expectString("sel", stats[3].field.?);
+    try testing.expectEqual(2, stats[3].calls);
+    try testing.expectEqual(1, stats[3].empty);
+
+    const rerun = try runtime.runSource("return 1;", "agent-runtime-extract-stats.js");
+    try testing.expectEqual(0, rerun.ok.extract_stats.len);
 }
