@@ -492,3 +492,27 @@ test "Runner: networkidle notifies child frames" {
         try testing.expectEqual(true, child._notified_network_idle == .done);
     }
 }
+
+test "Runner: lazy iframe does not delay the load event" {
+    const page = try testing.pageTest("runner/iframe_lazy.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+
+    const frame = page.frame().?;
+    try testing.expectEqual(true, frame._load_state == .complete);
+    try testing.expectEqual(2, frame.child_frames.items.len);
+
+    // The lazy child's delayed response is still in flight: the parent's
+    // load event fired without waiting for it.
+    const lazy_child = frame.child_frames.items[0];
+    try testing.expectEqual(false, lazy_child._delays_parent_load);
+    try testing.expectEqual(false, lazy_child._load_state == .complete);
+
+    // It still loads to completion and notifies the parent (which fires the
+    // iframe element's load event, but doesn't touch _pending_loads).
+    try runner.waitForFrame(page.frame_id, 3000, .{ .until = .done });
+    try testing.expectEqual(true, lazy_child._load_state == .complete);
+    try testing.expectEqual(true, lazy_child._parent_notified);
+}

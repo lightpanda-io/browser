@@ -283,6 +283,11 @@ _pending_loads: u32,
 
 _parent_notified: bool = false,
 
+// whether our parent's load event is waiting for us to load. For a root page,
+// this is meaningless. For an iframe, it's false when loading=lazy. We'll still
+// load the iframe, but we won't delay the parent
+_delays_parent_load: bool = true,
+
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
@@ -1012,7 +1017,7 @@ pub fn scriptsCompletedLoading(self: *Frame) void {
     self.pendingLoadCompleted();
 }
 
-pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
+pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void {
     // When parsing HTML, fire any load event for an iframe on the next tick.
     const parsing_html = switch (self._parse_state) {
         .html => true,
@@ -1022,7 +1027,9 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
         self.queueElementEvent(iframe._proto, .load) catch |err| {
             log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe._src });
         };
-        self.pendingLoadCompleted();
+        if (delays_load) {
+            self.pendingLoadCompleted();
+        }
         return;
     }
 
@@ -1040,7 +1047,9 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
         };
     }
 
-    self.pendingLoadCompleted();
+    if (delays_load) {
+        self.pendingLoadCompleted();
+    }
 }
 
 fn pendingLoadCompleted(self: *Frame) void {
@@ -1125,7 +1134,7 @@ fn notifyParentLoadComplete(self: *Frame) void {
     }
 
     self._parent_notified = true;
-    parent.iframeCompletedLoading(self.iframe.?);
+    parent.iframeCompletedLoading(self.iframe.?, self._delays_parent_load);
 }
 
 fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
@@ -1677,7 +1686,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     try Frame.init(new_frame, frame_id, self._page, .{ .parent = self });
     errdefer new_frame.deinit();
 
-    self._pending_loads += 1;
+    const delays_load = iframe.isLazyLoading() == false;
+    new_frame._delays_parent_load = delays_load;
+    if (delays_load) {
+        self._pending_loads += 1;
+    }
     new_frame.iframe = iframe;
     iframe._window = new_frame.window;
     errdefer iframe._window = null;
@@ -1728,7 +1741,9 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
             _ = self.child_frames.swapRemove(idx);
         }
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
-        self._pending_loads -= 1;
+        if (delays_load) {
+            self._pending_loads -= 1;
+        }
         iframe._window = null;
         return error.IFrameLoadError;
     };
