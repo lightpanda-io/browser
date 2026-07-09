@@ -209,6 +209,59 @@ fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, inf
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
+pub fn setIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _setIndex(T, local, func, idx, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
+    };
+}
+
+fn _setIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "1") = idx;
+    @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
+    if (@typeInfo(F).@"fn".params.len == 4) {
+        @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
+    }
+    const ret = @call(.auto, func, args);
+    return handleIndexedReturn(T, F, false, local, ret, info, opts);
+}
+
+pub fn deleteIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _deleteIndex(T, local, func, idx, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
+    };
+}
+
+fn _deleteIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "1") = idx;
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
+    }
+    const ret = @call(.auto, func, args);
+    return handleIndexedReturn(T, F, false, local, ret, info, opts);
+}
+
 pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
@@ -311,6 +364,66 @@ fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: Pr
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
+}
+
+pub fn getIndexQuery(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo) u32 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _getIndexQuery(T, local, func, idx, info) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
+    };
+}
+
+fn _getIndexQuery(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo) !u32 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "1") = idx;
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
+    }
+    if (@call(.auto, func, args) == false) {
+        return js.Intercepted.no;
+    }
+    info.getReturnValue().set(try local.zigValueToJs(@as(u32, v8.None), .{}));
+    return js.Intercepted.yes;
+}
+
+pub fn getNamedQuery(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo) u32 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _getNamedQuery(T, local, func, name, info) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
+    };
+}
+
+fn _getNamedQuery(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo) !u32 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
+    }
+    if (@call(.auto, func, args) == false) {
+        return js.Intercepted.no;
+    }
+    // The property exists as a supported property name; report it as an
+    // enumerable, writable, configurable data property (PropertyAttribute.None).
+    info.getReturnValue().set(try local.zigValueToJs(@as(u32, v8.None), .{}));
+    return js.Intercepted.yes;
 }
 
 fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {

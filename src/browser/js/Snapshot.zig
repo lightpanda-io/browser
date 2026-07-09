@@ -443,10 +443,15 @@ fn countExternalReferences() comptime_int {
                 if (value.enumerator != null) {
                     count += 1;
                 }
+                if (value.setter != null) count += 1;
+                if (value.deleter != null) count += 1;
+                if (value.query != null) count += 1;
             } else if (T == bridge.NamedIndexed) {
                 count += 1;
                 if (value.setter != null) count += 1;
                 if (value.deleter != null) count += 1;
+                if (value.enumerator != null) count += 1;
+                if (value.query != null) count += 1;
             }
         }
     }
@@ -519,6 +524,18 @@ fn collectExternalReferences() [countExternalReferences()]isize {
                     references[idx] = @bitCast(@intFromPtr(enumerator));
                     idx += 1;
                 }
+                if (value.setter) |setter| {
+                    references[idx] = @bitCast(@intFromPtr(setter));
+                    idx += 1;
+                }
+                if (value.deleter) |deleter| {
+                    references[idx] = @bitCast(@intFromPtr(deleter));
+                    idx += 1;
+                }
+                if (value.query) |query| {
+                    references[idx] = @bitCast(@intFromPtr(query));
+                    idx += 1;
+                }
             } else if (T == bridge.NamedIndexed) {
                 references[idx] = @bitCast(@intFromPtr(value.getter));
                 idx += 1;
@@ -528,6 +545,14 @@ fn collectExternalReferences() [countExternalReferences()]isize {
                 }
                 if (value.deleter) |deleter| {
                     references[idx] = @bitCast(@intFromPtr(deleter));
+                    idx += 1;
+                }
+                if (value.enumerator) |enumerator| {
+                    references[idx] = @bitCast(@intFromPtr(enumerator));
+                    idx += 1;
+                }
+                if (value.query) |query| {
+                    references[idx] = @bitCast(@intFromPtr(query));
                     idx += 1;
                 }
             }
@@ -792,9 +817,9 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 var configuration: v8.IndexedPropertyHandlerConfiguration = .{
                     .getter = value.getter,
                     .enumerator = value.enumerator,
-                    .setter = null,
-                    .query = null,
-                    .deleter = null,
+                    .setter = value.setter,
+                    .query = value.query,
+                    .deleter = value.deleter,
                     .definer = null,
                     .descriptor = null,
                     .index_of = null,
@@ -807,9 +832,9 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 var configuration: v8.NamedPropertyHandlerConfiguration = .{
                     .getter = value.getter,
                     .setter = value.setter,
-                    .query = null,
+                    .query = value.query,
                     .deleter = value.deleter,
-                    .enumerator = null,
+                    .enumerator = value.enumerator,
                     .definer = null,
                     .descriptor = null,
                     .data = null,

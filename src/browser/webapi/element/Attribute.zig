@@ -540,7 +540,7 @@ pub const NamedNodeMap = struct {
 
         pub const length = bridge.accessor(NamedNodeMap.length, null, .{});
         pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, null, .{ .null_as_undefined = true });
-        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, .{ .null_as_undefined = true });
+        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, null, null, .{ .null_as_undefined = true });
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });
