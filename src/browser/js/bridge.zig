@@ -46,11 +46,15 @@ pub fn Builder(comptime T: type) type {
         }
 
         pub fn indexed(comptime getter_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
-            return Indexed.init(T, getter_func, enumerator_func, opts);
+            return Indexed.init(T, getter_func, null, null, null, enumerator_func, opts);
         }
 
-        pub fn namedIndexed(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
-            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, opts);
+        pub fn indexedReadWrite(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, query_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
+            return Indexed.init(T, getter_func, setter_func, deleter_func, query_func, enumerator_func, opts);
+        }
+
+        pub fn namedIndexed(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, enumerator_func: anytype, query_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
+            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, enumerator_func, query_func, opts);
         }
 
         pub fn iterator(comptime func: anytype, comptime opts: Iterator.Opts) Iterator {
@@ -261,13 +265,16 @@ pub const Accessor = struct {
 pub const Indexed = struct {
     getter: *const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
     enumerator: ?*const fn (handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
+    setter: ?*const fn (idx: u32, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    deleter: ?*const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    query: ?*const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
 
     const Opts = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
     };
 
-    fn init(comptime T: type, comptime getter: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
+    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, query: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
         var indexed = Indexed{
             .enumerator = null,
             .getter = struct {
@@ -301,6 +308,57 @@ pub const Indexed = struct {
             }.wrap;
         }
 
+        if (@typeInfo(@TypeOf(setter)) != .null) {
+            indexed.setter = struct {
+                fn wrap(idx: u32, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return js.Intercepted.no;
+                    }
+                    defer caller.deinit();
+
+                    return caller.setIndex(T, setter, idx, c_value.?, handle.?, .{
+                        .as_typed_array = opts.as_typed_array,
+                        .null_as_undefined = opts.null_as_undefined,
+                    });
+                }
+            }.wrap;
+        }
+
+        if (@typeInfo(@TypeOf(deleter)) != .null) {
+            indexed.deleter = struct {
+                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return js.Intercepted.no;
+                    }
+                    defer caller.deinit();
+
+                    return caller.deleteIndex(T, deleter, idx, handle.?, .{
+                        .as_typed_array = opts.as_typed_array,
+                        .null_as_undefined = opts.null_as_undefined,
+                    });
+                }
+            }.wrap;
+        }
+
+        if (@typeInfo(@TypeOf(query)) != .null) {
+            indexed.query = struct {
+                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return js.Intercepted.no;
+                    }
+                    defer caller.deinit();
+
+                    return caller.getIndexQuery(T, query, idx, handle.?);
+                }
+            }.wrap;
+        }
+
         return indexed;
     }
 };
@@ -309,6 +367,8 @@ pub const NamedIndexed = struct {
     getter: *const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
     setter: ?*const fn (c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
     deleter: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    enumerator: ?*const fn (handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    query: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
 
     const Opts = struct {
         as_typed_array: bool = false,
@@ -319,7 +379,7 @@ pub const NamedIndexed = struct {
         ce_reactions: bool = false,
     };
 
-    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, comptime opts: Opts) NamedIndexed {
+    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, enumerator: anytype, query: anytype, comptime opts: Opts) NamedIndexed {
         const getter_fn = struct {
             fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
@@ -392,10 +452,38 @@ pub const NamedIndexed = struct {
             }
         }.wrap;
 
+        const enumerator_fn = if (@typeInfo(@TypeOf(enumerator)) == .null) null else struct {
+            fn wrap(handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
+                }
+                defer caller.deinit();
+
+                return caller.getEnumerator(T, enumerator, handle.?, .{});
+            }
+        }.wrap;
+
+        const query_fn = if (@typeInfo(@TypeOf(query)) == .null) null else struct {
+            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
+                }
+                defer caller.deinit();
+
+                return caller.getNamedQuery(T, query, c_name.?, handle.?);
+            }
+        }.wrap;
+
         return .{
             .getter = getter_fn,
             .setter = setter_fn,
             .deleter = deleter_fn,
+            .enumerator = enumerator_fn,
+            .query = query_fn,
         };
     }
 };

@@ -89,14 +89,11 @@ pub const Lookup = struct {
         self._size = 0;
     }
 
-    pub fn getItem(self: *const Lookup, key_: ?[]const u8) ?[]const u8 {
-        const k = key_ orelse return null;
+    pub fn getItem(self: *const Lookup, k: []const u8) ?[]const u8 {
         return self._data.get(k);
     }
 
-    pub fn setItem(self: *Lookup, key_: ?[]const u8, value: []const u8) !void {
-        const k = key_ orelse return;
-
+    pub fn setItem(self: *Lookup, k: []const u8, value: []const u8) !void {
         const old_len = if (self._data.get(k)) |old| old.len else 0;
         std.debug.assert(old_len <= self._size);
         if (self._size - old_len + value.len > max_size) {
@@ -120,8 +117,7 @@ pub const Lookup = struct {
         }
     }
 
-    pub fn removeItem(self: *Lookup, key_: ?[]const u8) void {
-        const k = key_ orelse return;
+    pub fn removeItem(self: *Lookup, k: []const u8) void {
         const kv = self._data.fetchRemove(k) orelse return;
         self._size -= kv.value.len;
         self._allocator.free(kv.key);
@@ -154,6 +150,21 @@ pub const Lookup = struct {
         return @intCast(self._data.count());
     }
 
+    pub fn hasItem(self: *const Lookup, k: []const u8) bool {
+        return self._data.contains(k);
+    }
+
+    pub fn keys(self: *const Lookup, exec: *const js.Execution) !js.Array {
+        const local = exec.js.local.?;
+        var arr = local.newArray(self.getLength());
+        var it = self._data.keyIterator();
+        var i: u32 = 0;
+        while (it.next()) |k| : (i += 1) {
+            _ = try arr.set(i, k.*, .{});
+        }
+        return arr;
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Lookup);
 
@@ -169,7 +180,30 @@ pub const Lookup = struct {
         pub const removeItem = bridge.function(Lookup.removeItem, .{});
         pub const clear = bridge.function(Lookup.clear, .{});
         pub const key = bridge.function(Lookup.key, .{});
-        pub const @"[str]" = bridge.namedIndexed(Lookup.getItem, Lookup.setItem, null, .{ .null_as_undefined = true });
+        pub const @"[str]" = bridge.namedIndexed(Lookup.getItem, Lookup.setItem, Lookup.removeItem, Lookup.keys, Lookup.hasItem, .{ .null_as_undefined = true });
+        pub const @"[int]" = bridge.indexedReadWrite(_getByIndex, _setByIndex, _removeByIndex, _indexHas, null, .{ .null_as_undefined = true });
+
+        // v8 routes storage[9] to the indexed interceptor, so we need to do the
+        // int -> string conversion
+        fn _getByIndex(self: *const Lookup, idx: u32) ?[]const u8 {
+            var buf: [10]u8 = undefined;
+            return self._data.get(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch unreachable);
+        }
+
+        fn _setByIndex(self: *Lookup, idx: u32, value: []const u8) !void {
+            var buf: [10]u8 = undefined;
+            return self.setItem(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch unreachable, value);
+        }
+
+        fn _removeByIndex(self: *Lookup, idx: u32) void {
+            var buf: [10]u8 = undefined;
+            return self.removeItem(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch unreachable);
+        }
+
+        fn _indexHas(self: *const Lookup, idx: u32) bool {
+            var buf: [10]u8 = undefined;
+            return self._data.contains(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch unreachable);
+        }
     };
 };
 
