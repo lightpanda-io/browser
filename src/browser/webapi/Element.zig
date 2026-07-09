@@ -104,7 +104,7 @@ pub const Namespace = enum(u8) {
 _type: Type,
 _proto: *Node,
 _namespace: Namespace = .html,
-_attributes: ?*Attribute.List = null,
+_attributes: Attribute.List = .{},
 
 pub const Type = union(enum) {
     html: *Html,
@@ -150,15 +150,6 @@ pub fn asConstNode(self: *const Element) *const Node {
     return self._proto;
 }
 
-pub fn attributesEql(self: *const Element, other: *Element) bool {
-    if (self._attributes) |attr_list| {
-        const other_list = other._attributes orelse return false;
-        return attr_list.eql(other_list);
-    }
-    // Make sure no attrs in both sides.
-    return other._attributes == null;
-}
-
 /// TODO: localName and prefix comparison.
 pub fn isEqualNode(self: *Element, other: *Element) bool {
     const self_tag = self.getTagNameDump();
@@ -169,8 +160,7 @@ pub fn isEqualNode(self: *Element, other: *Element) bool {
         return false;
     }
 
-    // Compare attributes.
-    if (!self.attributesEql(other)) {
+    if (self._attributes.eql(&other._attributes) == false) {
         return false;
     }
 
@@ -382,21 +372,18 @@ pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, frame: 
     }
 
     // Step 2: search xmlns attributes
-    if (self._attributes) |attrs| {
-        var iter = attrs.iterator();
-        while (iter.next()) |entry| {
-            if (prefix == null) {
-                if (entry._name.eql(comptime .wrap("xmlns"))) {
-                    const val = entry._value.str();
+    for (self._attributes.entries()) |*entry| {
+        if (prefix == null) {
+            if (std.mem.eql(u8, entry.name(), "xmlns")) {
+                const val = entry.value();
+                return if (val.len == 0) null else val;
+            }
+        } else {
+            const name = entry.name();
+            if (std.mem.startsWith(u8, name, "xmlns:")) {
+                if (std.mem.eql(u8, name["xmlns:".len..], prefix.?)) {
+                    const val = entry.value();
                     return if (val.len == 0) null else val;
-                }
-            } else {
-                const name = entry._name.str();
-                if (std.mem.startsWith(u8, name, "xmlns:")) {
-                    if (std.mem.eql(u8, name["xmlns:".len..], prefix.?)) {
-                        const val = entry._value.str();
-                        return if (val.len == 0) null else val;
-                    }
                 }
             }
         }
@@ -420,13 +407,10 @@ pub fn lookupPrefixForElement(self: *Element, namespace: []const u8, frame: *Fra
     }
 
     // Step 2: search xmlns: attribute declarations for one whose value is the namespace
-    if (self._attributes) |attrs| {
-        var iter = attrs.iterator();
-        while (iter.next()) |entry| {
-            const name = entry._name.str();
-            if (std.mem.startsWith(u8, name, "xmlns:") and std.mem.eql(u8, entry._value.str(), namespace)) {
-                return name["xmlns:".len..];
-            }
+    for (self._attributes.entries()) |*entry| {
+        const name = entry.name();
+        if (std.mem.startsWith(u8, name, "xmlns:") and std.mem.eql(u8, entry.value(), namespace)) {
+            return name["xmlns:".len..];
         }
     }
 
@@ -565,14 +549,13 @@ pub fn setClassName(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("class"), .wrap(value), frame);
 }
 
-pub fn attributeIterator(self: *Element) Attribute.InnerIterator {
-    const attributes = self._attributes orelse return .{};
-    return attributes.iterator();
+/// DANGER: Invalidated by mutation of the attribute list.
+pub fn attributeEntries(self: *const Element) []const Attribute.List.Entry {
+    return self._attributes.entries();
 }
 
 pub fn getAttribute(self: *const Element, name: String, frame: *Frame) !?String {
-    const attributes = self._attributes orelse return null;
-    return attributes.get(name, frame);
+    return self._attributes.get(name, frame);
 }
 
 /// For simplicity, the namespace is currently ignored and only the local name is used.
@@ -592,19 +575,16 @@ pub fn getAttributeNS(
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
-    const attributes = self._attributes orelse return null;
-    return attributes.getSafe(name);
+    return self._attributes.getSafe(name);
 }
 
 pub fn hasAttribute(self: *const Element, name: String, frame: *Frame) !bool {
-    const attributes = self._attributes orelse return false;
-    const value = try attributes.get(name, frame);
+    const value = try self._attributes.get(name, frame);
     return value != null;
 }
 
 pub fn hasAttributeSafe(self: *const Element, name: String) bool {
-    const attributes = self._attributes orelse return false;
-    return attributes.hasSafe(name);
+    return self._attributes.hasSafe(name);
 }
 
 // Per HTML "concept-fe-disabled", only listed elements participate in the
@@ -665,19 +645,16 @@ pub fn isDisabled(self: *Element) bool {
 }
 
 pub fn hasAttributes(self: *const Element) bool {
-    const attributes = self._attributes orelse return false;
-    return attributes.isEmpty() == false;
+    return self._attributes.isEmpty() == false;
 }
 
 pub fn getAttributeNode(self: *Element, name: String, frame: *Frame) !?*Attribute {
-    const attributes = self._attributes orelse return null;
-    return attributes.getAttribute(name, self, frame);
+    return self._attributes.getAttribute(name, self, frame);
 }
 
 pub fn setAttribute(self: *Element, name: String, value: String, frame: *Frame) !void {
     try Attribute.validateAttributeName(name);
-    const attributes = try self.getOrCreateAttributeList(frame);
-    _ = try attributes.put(name, value, self, frame);
+    _ = try self._attributes.put(name, value, self, frame);
 }
 
 pub fn setAttributeNS(
@@ -710,20 +687,7 @@ pub fn setAttributeNS(
 }
 
 pub fn setAttributeSafe(self: *Element, name: String, value: String, frame: *Frame) !void {
-    const attributes = try self.getOrCreateAttributeList(frame);
-    _ = try attributes.putSafe(name, value, self, frame);
-}
-
-pub fn getOrCreateAttributeList(self: *Element, frame: *Frame) !*Attribute.List {
-    return self._attributes orelse return self.createAttributeList(frame);
-}
-
-pub fn createAttributeList(self: *Element, frame: *Frame) !*Attribute.List {
-    lp.assert(self._attributes == null, "Element.createAttributeList non-null _attributes", .{});
-    const a = try frame.arena.create(Attribute.List);
-    a.* = .{ .normalize = self._namespace == .html };
-    self._attributes = a;
-    return a;
+    _ = try self._attributes.putSafe(name, value, self, frame);
 }
 
 pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
@@ -811,13 +775,11 @@ pub fn setAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !?*Attr
         _ = try el.removeAttributeNode(attr, frame);
     }
 
-    const attributes = try self.getOrCreateAttributeList(frame);
-    return attributes.putAttribute(attr, self, frame);
+    return self._attributes.putAttribute(attr, self, frame);
 }
 
 pub fn removeAttribute(self: *Element, name: String, frame: *Frame) !void {
-    const attributes = self._attributes orelse return;
-    return attributes.delete(name, self, frame);
+    return self._attributes.delete(name, self, frame);
 }
 
 pub fn toggleAttribute(self: *Element, name: String, force: ?bool, frame: *Frame) !bool {
@@ -847,16 +809,13 @@ pub fn removeAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !*At
 }
 
 pub fn getAttributeNames(self: *const Element, frame: *Frame) ![][]const u8 {
-    const attributes = self._attributes orelse return &.{};
-    return attributes.getNames(frame);
+    return self._attributes.getNames(frame.local_arena);
 }
 
 pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.NamedNodeMap {
     const gop = try frame._attribute_named_node_map_lookup.getOrPut(frame.arena, @intFromPtr(self));
     if (!gop.found_existing) {
-        const attributes = try self.getOrCreateAttributeList(frame);
-        const named_node_map = try frame._factory.create(Attribute.NamedNodeMap{ ._list = attributes, ._element = self });
-        gop.value_ptr.* = named_node_map;
+        gop.value_ptr.* = try frame._factory.create(Attribute.NamedNodeMap{ ._element = self });
     }
     return gop.value_ptr.*;
 }
@@ -1506,7 +1465,7 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, frame: *Fr
 
 pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     const tag_name = self.getTagNameDump();
-    const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, self._attributes);
+    const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, &self._attributes);
 
     // Allow element-specific types to copy their runtime state
     _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), deep, frame }) catch |err| {
@@ -1623,11 +1582,8 @@ pub fn format(self: *Element, writer: *std.Io.Writer) !void {
     try writer.writeByte('<');
     try writer.writeAll(self.getTagNameDump());
 
-    if (self._attributes) |attributes| {
-        var it = attributes.iterator();
-        while (it.next()) |attr| {
-            try writer.print(" {f}", .{attr});
-        }
+    for (self._attributes.entries()) |*attr| {
+        try writer.print(" {f}", .{attr});
     }
     try writer.writeByte('>');
 }

@@ -539,7 +539,7 @@ fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.Attrib
     const element = node.as(Element);
     const frame = self.frame;
 
-    const attr_list = try element.getOrCreateAttributeList(frame);
+    const attr_list = &element._attributes;
     while (attributes.next()) |attr| {
         const name = attr.name.local.slice();
         const value = attr.value.slice();
