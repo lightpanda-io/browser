@@ -56,6 +56,8 @@ pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 pub const core_dump = @import("core_dump.zig");
 
+pub const Updater = @import("Updater.zig");
+
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
@@ -221,6 +223,17 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
         },
         .wpt => try dumpWPT(frame, writer),
     }
+}
+
+pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
+    var client = try Updater.init(allocator, config);
+    defer client.deinit();
+
+    var stdout = std.fs.File.stdout();
+    var buf: [4096]u8 = undefined;
+    var writer = stdout.writer(&buf);
+    const w = &writer.interface;
+    try client.inform(w);
 }
 
 // Writes a single page's result object. Framing (the enclosing array and any

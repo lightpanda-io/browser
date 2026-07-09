@@ -138,7 +138,9 @@ cdp_start: usize,
 /// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
 ip_filter: ?*IpFilter = null,
 
-fn globalInit(allocator: Allocator) void {
+/// Calling `init` also calls this function; only marked public for situations
+/// networking is needed without `App`.
+pub fn globalInit(allocator: Allocator) void {
     // Only route curl's own allocations through our allocator in Debug, so the
     // leak detector sees them. In Release it'd just wrap c_allocator (curl's
     // default malloc anyway) at the cost of a per-allocation header.
@@ -152,7 +154,9 @@ fn globalInit(allocator: Allocator) void {
     };
 }
 
-fn globalDeinit() void {
+/// Calling `deinit` also calls this function; only marked public for situations
+/// networking is needed without `App`.
+pub fn globalDeinit() void {
     libcurl.curl_global_cleanup();
 }
 
@@ -720,7 +724,7 @@ const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{
 
 /// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
 /// Allocations made through passed `allocator` are freed before this function returns.
-fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE {
+pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
 

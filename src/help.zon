@@ -238,9 +238,15 @@
     \\API key.
     ,
     .version =
-    \\usage:  {0s} version
+    \\usage:  {0s} version [OPTIONS]
     \\
     \\Displays the version of {0s}.
+    \\
+    \\options:
+    \\  --check
+    \\          Checks whether a newer release of {0s} is available. When one is
+    \\          found, prints the running version, the latest release, and how to
+    \\          update.
     ,
     .help =
     \\usage: {0s} help
