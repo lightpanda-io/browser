@@ -343,7 +343,10 @@ pub fn disableWorkers(self: *const Config) bool {
 
 pub fn watchdogMs(self: *const Config) ?u32 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.watchdog_ms,
+        inline .serve, .fetch, .mcp, .agent => |opts| {
+            const ms = opts.watchdog_ms orelse 30000;
+            return if (ms == 0) null else ms;
+        },
         else => unreachable,
     };
 }

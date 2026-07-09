@@ -360,7 +360,7 @@
     \\          stuck in an endless script loop). In serve mode the CDP
     \\          connection is then closed. Unlike fetch's --terminate-ms, an idle
     \\          or normally-working page never trips this.
-    \\          Defaults to disabled.
+    \\          Defaults to [a very generous] 30000, disable by setting to 0.
     \\  --web-bot-auth-domain <DOMAIN>
     \\          Your domain, e.g. yourdomain.com.
     \\  --web-bot-auth-key-file <PATH>
