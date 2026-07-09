@@ -1488,7 +1488,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .tool_call => |t| t,
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
-    const result = browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| return .{
+    return self.callTool(arena, tc.name(), tc.args) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1496,7 +1496,16 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         },
         .is_error = true,
     };
-    if (tc.tool == .extract and !result.is_error) self.baseline.noteExtractResult(result.text) catch {};
+}
+
+/// `browser_tools.call` plus the session-baseline note owed on a successful
+/// extract, shared by both dispatch paths. The note runs on the uncapped
+/// result — a truncated one parses as malformed and records nothing.
+fn callTool(self: *Agent, arena: std.mem.Allocator, tool_name: []const u8, args: ?std.json.Value) browser_tools.ToolError!browser_tools.ToolResult {
+    const result = try browser_tools.call(arena, self.session, &self.node_registry, tool_name, args);
+    if (!result.is_error and std.mem.eql(u8, tool_name, @tagName(BrowserTool.extract))) {
+        self.baseline.noteExtractResult(result.text) catch {};
+    }
     return result;
 }
 
@@ -1558,7 +1567,6 @@ const RunFacts = struct {
     /// The returned value when it was deep-empty (capped display text).
     empty_completion: ?[]const u8,
     extract_stats: []const ScriptRuntime.ExtractStat,
-    /// The exact text that ran.
     source: []const u8,
 };
 
@@ -1682,34 +1690,23 @@ fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]co
     return std.mem.concat(arena, u8, &.{ string.truncateUtf8(text, detail_max_bytes), "…[truncated]" });
 }
 
-/// Facts worth a verdict, not yet a finding: the return value was deep-empty,
-/// or some extract field came back empty on every call — any field, scalar or
-/// list, baseline or not. Whether that is breakage or legitimate sparseness
-/// is the model's judgment, not encoded here.
-const Suspicion = struct {
-    kind: ScriptError.Kind,
-    detail: []const u8,
-    dry_fields: []const ?[]const u8,
-};
-
-fn suspicionOf(arena: std.mem.Allocator, facts: RunFacts) ?Suspicion {
+/// A finding worth a verdict, not yet confirmed: the return value was
+/// deep-empty, or some extract field came back empty on every call — any field,
+/// scalar or list, baseline or not. Whether that is breakage or legitimate
+/// sparseness is the model's judgment, not encoded here.
+fn suspicionOf(arena: std.mem.Allocator, facts: RunFacts) ?ScriptError {
     if (facts.empty_completion) |text| return .{
         .kind = .empty,
         .detail = std.fmt.allocPrint(arena, "its return value carries no data: {s}", .{text}) catch return null,
-        .dry_fields = &.{},
+        .source = facts.source,
     };
-    const finding = (dryExtractsFinding(arena, facts.extract_stats) catch return null) orelse return null;
-    return .{ .kind = .dry_extracts, .detail = finding.detail, .dry_fields = finding.fields };
+    return dryExtractsFinding(arena, facts.source, facts.extract_stats) catch return null;
 }
 
-const DryFinding = struct {
-    detail: []const u8,
-    fields: []const ?[]const u8,
-};
-
-/// One detail line per extract field that came back empty on every call, plus
-/// the field names for the cure check. Null when no field was dry.
-fn dryExtractsFinding(arena: std.mem.Allocator, stats: []const ScriptRuntime.ExtractStat) !?DryFinding {
+/// A `dry_extracts` finding with one detail line per extract field that came
+/// back empty on every call, plus the field names for the cure check. Null when
+/// no field was dry.
+fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []const ScriptRuntime.ExtractStat) !?ScriptError {
     var aw: std.Io.Writer.Allocating = .init(arena);
     var fields: std.ArrayList(?[]const u8) = .empty;
     for (stats) |stat| {
@@ -1717,7 +1714,8 @@ fn dryExtractsFinding(arena: std.mem.Allocator, stats: []const ScriptRuntime.Ext
         if (fields.items.len == 0) {
             try aw.writer.writeAll("some extracts came back empty on every call:\n");
         }
-        try fields.append(arena, if (stat.field) |f| try arena.dupe(u8, f) else null);
+        // `stat.field` already lives in `arena` (facts were duped into it).
+        try fields.append(arena, stat.field);
         const schema = try capDetail(arena, stat.schema);
         if (stat.field) |field| {
             const shape: []const u8 = if (stat.is_list) "list" else "field";
@@ -1729,7 +1727,7 @@ fn dryExtractsFinding(arena: std.mem.Allocator, stats: []const ScriptRuntime.Ext
         try aw.writer.writeAll("\n");
     }
     if (fields.items.len == 0) return null;
-    return .{ .detail = aw.written(), .fields = fields.items };
+    return .{ .kind = .dry_extracts, .detail = aw.written(), .source = source, .dry_fields = fields.items };
 }
 
 /// One-shot `--heal` run; counterpart of the REPL's `/load` heal offer.
@@ -1898,7 +1896,7 @@ const Verdict = struct {
 /// One tool-free LLM turn deciding whether suspicious facts are breakage.
 /// Null on transport/parse failure or cancellation — the caller falls back to
 /// surfacing the facts instead of guessing.
-fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, source: []const u8, suspicion: Suspicion) ?Verdict {
+fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, suspicion: ScriptError) ?Verdict {
     const user_msg = std.fmt.allocPrint(self.conversation.arena.allocator(),
         \\Replay of {s} completed without errors, but {s}
         \\
@@ -1906,7 +1904,7 @@ fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, sour
         \\```js
         \\{s}
         \\```
-    , .{ path, suspicion.detail, source }) catch return null;
+    , .{ path, suspicion.detail, suspicion.source }) catch return null;
     const raw = self.metaTurn(arena, "verdict", verdict_system_prompt, user_msg, 1024, self.effort) orelse return null;
     return parseVerdict(arena, raw);
 }
@@ -1941,7 +1939,7 @@ fn parseVerdict(arena: std.mem.Allocator, raw: []const u8) ?Verdict {
 fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts: RunFacts) ?ScriptError {
     const suspicion = suspicionOf(arena, facts) orelse return null;
     if (self.ai_client == null) return null;
-    if (self.judgeSuspicion(arena, path, facts.source, suspicion)) |verdict| {
+    if (self.judgeSuspicion(arena, path, suspicion)) |verdict| {
         if (!verdict.broken) {
             self.terminal.printInfo("Output has empty fields, but the model judged the run consistent: {s}", .{verdict.reason});
             return null;
@@ -1949,11 +1947,11 @@ fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts
         return .{
             .kind = suspicion.kind,
             .detail = std.fmt.allocPrint(arena, "{s}\nVerdict: {s}", .{ suspicion.detail, verdict.reason }) catch return null,
-            .source = facts.source,
+            .source = suspicion.source,
             .dry_fields = if (verdict.fields.len > 0) verdict.fields else suspicion.dry_fields,
         };
     }
-    return .{ .kind = suspicion.kind, .detail = suspicion.detail, .source = facts.source, .dry_fields = suspicion.dry_fields };
+    return suspicion;
 }
 
 /// Null when the validation run cured the original finding; otherwise the
@@ -2301,14 +2299,10 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result| blk: {
-        // Pre-cap text: a truncated result would parse as malformed and
-        // record nothing.
-        if (std.mem.eql(u8, tool_name, @tagName(BrowserTool.extract)) and !result.is_error) {
-            self.baseline.noteExtractResult(result.text) catch {};
-        }
-        break :blk .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error };
-    } else |err| .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
+    const outcome: zenai.provider.Client.ToolHandler.Result = if (self.callTool(allocator, tool_name, arguments)) |result|
+        .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error }
+    else |err|
+        .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
