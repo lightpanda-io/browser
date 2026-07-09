@@ -309,8 +309,15 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
                 return error.InvalidDomain;
             }
 
-            // Can't set a cookie for a public suffix (e.g. co.uk, com.au).
             if (public_suffix_list(owned_domain[1..])) {
+                // we're targetting a domain on the public suffix list. Such a
+                // cookie is only allowed on to do this for a host-only domain
+                // in order to make sure cookies don't get passed to a different
+                // subdomain
+                const host = encoded_host orelse return owned_domain[1..];
+                if (std.mem.eql(u8, host, owned_domain[1..])) {
+                    return owned_domain[1..];
+                }
                 return error.InvalidDomain;
             }
 
@@ -1244,6 +1251,12 @@ test "Cookie: parse domain" {
     // Subdomains of public suffixes should still be accepted
     try expectAttribute(.{ .domain = ".example.gov.uk" }, "http://example.gov.uk/", "b;domain=example.gov.uk");
     try expectAttribute(.{ .domain = ".example.gov.uk" }, "http://sub.example.gov.uk/", "b;domain=example.gov.uk");
+
+    // A public-suffix domain identical to the request host downgrades to a
+    // host-only cookie
+    try expectAttribute(.{ .domain = "gov.uk" }, "http://gov.uk/", "b;domain=gov.uk");
+    try expectAttribute(.{ .domain = "gov.uk" }, "http://gov.uk/", "b;domain=.gov.uk");
+    try expectAttribute(.{ .domain = "api.gov.uk" }, "http://api.gov.uk/", "b;domain=api.gov.uk");
 }
 
 test "Cookie: parse limit" {

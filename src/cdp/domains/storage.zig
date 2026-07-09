@@ -270,6 +270,7 @@ test "cdp.Storage: cookies" {
             .cookies = &[_]CdpCookie{
                 .{ .name = "test", .value = "value", .domain = "example.com", .path = "/mango" },
                 .{ .name = "test2", .value = "value2", .url = "https://car.example.com/pancakes" },
+                .{ .name = "test3", .value = "value3", .domain = "gov.uk" },
             },
             .browserContextId = "BID-S",
         },
@@ -284,6 +285,7 @@ test "cdp.Storage: cookies" {
         .cookies = &[_]ResCookie{
             .{ .name = "test", .value = "value", .domain = ".example.com", .path = "/mango", .size = 9 },
             .{ .name = "test2", .value = "value2", .domain = "car.example.com", .path = "/", .size = 11, .secure = true }, // No Pancakes!
+            .{ .name = "test3", .value = "value3", .domain = "gov.uk", .path = "/", .size = 11 },
         },
     }, .{ .id = 5 });
 
