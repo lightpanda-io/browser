@@ -43,6 +43,7 @@ socket_flags: usize,
 state: State = .handshaking,
 reader: WS.Reader(true),
 send_arena: ArenaAllocator,
+metrics_enabled: bool,
 max_http_message_size: usize,
 json_version_response: []const u8,
 
@@ -67,6 +68,7 @@ pub fn init(
         .socket = socket,
         .arena_pool = &app.arena_pool,
         .socket_flags = socket_flags,
+        .metrics_enabled = config.metricsEndpointEnabled(),
         .max_http_message_size = config.cdpMaxHTTPMessageSize(),
         .reader = try .init(allocator, config.cdpMaxMessageSize()),
         .send_arena = ArenaAllocator.init(allocator),
@@ -85,7 +87,7 @@ pub fn send(self: *Connection, data: []const u8) !void {
     defer _ = self.send_arena.reset(.{ .retain_with_limit = 1024 * 32 });
 
     defer if (changed_to_blocking) {
-        // We had to change our socket to blocking me to get our write out
+        // We had to change our socket to blocking mode to get our write out
         // We need to change it back to non-blocking.
         _ = posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags) catch |err| {
             log.err(.app, "ws restore nonblocking", .{ .err = err });
@@ -298,7 +300,28 @@ fn handleHttpRequest(self: *Connection, request: []u8) !HttpResult {
         return .close;
     }
 
+    if (self.metrics_enabled and std.mem.eql(u8, url, "/metrics")) {
+        try self.sendMetrics();
+        self.shutdown();
+        return .close;
+    }
+
     return error.NotFound;
+}
+
+fn sendMetrics(self: *Connection) !void {
+    const allocator = self.send_arena.allocator();
+
+    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
+    lp.metrics.write(&aw.writer);
+    const body = aw.written();
+
+    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\n" ++
+        "Content-Length: {d}\r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n\r\n" ++
+        "{s}", .{ body.len, body });
+    try self.send(response);
 }
 
 const empty_json_list_response =

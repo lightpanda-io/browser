@@ -578,6 +578,7 @@ pub fn protectHeapLimit(self: *Env) void {
 // V8 expects.
 fn nearHeapLimit(data: ?*anyopaque, current_limit: usize, initial_limit: usize) callconv(.c) usize {
     const self: *Env = @ptrCast(@alignCast(data.?));
+    lp.metrics.js_heap_limits.incr();
     log.err(.app, "JS heap limit reached", .{
         .initial_limit = initial_limit,
         .current_limit = current_limit,

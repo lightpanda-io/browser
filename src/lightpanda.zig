@@ -58,6 +58,8 @@ pub const core_dump = @import("core_dump.zig");
 
 pub const Updater = @import("Updater.zig");
 
+pub var metrics = @import("Metrics.zig"){};
+
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,

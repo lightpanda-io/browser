@@ -110,6 +110,12 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
     app.telemetry.record(.{ .run = {} });
 
+    defer if (app.config.dumpMetricsOnExit()) {
+        var stdout = std.fs.File.stdout();
+        var writer = stdout.writer(&.{});
+        lp.metrics.write(&writer.interface);
+    };
+
     switch (args.mode) {
         .serve => |opts| {
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
