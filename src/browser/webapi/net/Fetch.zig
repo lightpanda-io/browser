@@ -41,6 +41,7 @@ _response: *Response,
 _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
 _signal: ?*AbortSignal,
+_manual_redirect: bool,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -74,6 +75,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._response = response,
         ._owns_response = true,
         ._signal = request._signal,
+        ._manual_redirect = request._redirect == .manual,
     };
 
     const session = exec.session;
@@ -110,6 +112,11 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .resource_type = .fetch,
         .cookie_jar = cookie_jar,
         .cookie_origin = exec.url.*,
+        .redirect = switch (request._redirect) {
+            .follow => .follow,
+            .manual => .manual,
+            .@"error" => .@"error",
+        },
         .notification = session.notification,
         .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
@@ -157,6 +164,17 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
     res._status_text = std.http.Status.phrase(@enumFromInt(response.status().?)) orelse "";
     res._url = try arena.dupeZ(u8, response.url());
     res._is_redirected = response.redirectCount().? > 0;
+
+    // redirect: "manual" surfaces the unfollowed 3xx as an opaque-redirect
+    // filtered response: status 0, no headers, no body.
+    if (self._manual_redirect and HttpClient.isRedirectStatus(res._status)) {
+        res._status = 0;
+        res._status_text = "";
+        res._url = "";
+        res._type = .opaqueredirect;
+        res._is_redirected = false;
+        return .proceed;
+    }
 
     // Determine response type based on origin comparison
     const exec = self._exec;
