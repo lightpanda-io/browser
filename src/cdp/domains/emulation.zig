@@ -79,7 +79,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     // Not-yet-emulated parameters: accept them but warn so the caller knows
     // they are ignored.
     if (params.deviceScaleFactor) |v| {
-        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
+        if (v != 0 and v != 1) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
             .cdp_cmd = "Emulation.setDeviceMetricsOverride",
             .param = "deviceScaleFactor",
             .value = v,
