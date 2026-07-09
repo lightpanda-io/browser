@@ -1121,28 +1121,39 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     if (effective_err == null) {
         const status = try msg.conn.getResponseCode();
         if (isRedirectStatus(status)) {
-            if (msg.conn.getResponseHeader("location", 0)) |location| {
-                try transfer.handleRedirect(location.value);
+            if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
+                .follow => {
+                    try transfer.handleRedirect(location.value);
 
-                const conn = transfer._conn.?;
+                    const conn = transfer._conn.?;
 
-                try self.handles.remove(conn);
-                conn.debug_removed = 3;
-                // Conn temporarily out of multi during reconfigure.
-                // _detached_conn lets processMessages release it if any of
-                // the steps below throw. State stays .inflight; _conn stays set
-                transfer._detached_conn = conn;
+                    try self.handles.remove(conn);
+                    conn.debug_removed = 3;
+                    // Conn temporarily out of multi during reconfigure.
+                    // _detached_conn lets processMessages release it if any of
+                    // the steps below throw. State stays .inflight; _conn stays set
+                    transfer._detached_conn = conn;
 
-                transfer.reset();
-                try transfer.configureConn(conn);
-                try self.handles.add(conn);
-                conn.debug_added = 2;
-                transfer._detached_conn = null;
+                    transfer.reset();
+                    try transfer.configureConn(conn);
+                    try self.handles.add(conn);
+                    conn.debug_added = 2;
+                    transfer._detached_conn = null;
 
-                _ = try self.perform(0);
+                    _ = try self.perform(0);
 
-                return false;
-            }
+                    return false;
+                },
+                // error_callback surfaces this as a TypeError.
+                .@"error" => {
+                    transfer.state = .completing;
+                    transfer.requestFailed(error.RedirectNotAllowed, true);
+                    return true;
+                },
+                // Don't follow; fall through to deliver the 3xx as the final
+                // response, which the fetch layer turns into an opaque redirect.
+                .manual => {},
+            };
         }
     }
 
@@ -1356,6 +1367,10 @@ pub const Request = struct {
         }
     };
 
+    // Fetch request redirect mode. `.follow` keeps navigations, XHR and
+    // internal requests transparently following redirects.
+    pub const RedirectMode = enum { follow, manual, @"error" };
+
     frame_id: u32,
     loader_id: u32,
     method: Method,
@@ -1365,6 +1380,7 @@ pub const Request = struct {
     cookie_jar: ?*CookieJar,
     cookie_origin: [:0]const u8,
     resource_type: ResourceType,
+    redirect: RedirectMode = .follow,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
     timeout_ms: u32 = 0,

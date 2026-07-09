@@ -85,6 +85,40 @@
   }
 </script>
 
+<script id=fetch_redirect_manual type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch('http://127.0.0.1:9582/xhr/redirect', { redirect: 'manual' });
+    const text = await response.text();
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(0, response.status);
+      testing.expectEqual('opaqueredirect', response.type);
+      testing.expectEqual(false, response.redirected);
+      testing.expectEqual('', response.url);
+      testing.expectEqual('', text);
+    });
+  }
+</script>
+
+<script id=fetch_redirect_error type=module>
+  {
+    const state = await testing.async();
+    let rejected = false;
+    try {
+      await fetch('http://127.0.0.1:9582/xhr/redirect', { redirect: 'error' });
+    } catch (e) {
+      rejected = e instanceof TypeError;
+    }
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(true, rejected);
+    });
+  }
+</script>
+
 <script id=fetch_404 type=module>
   {
     const state = await testing.async();
