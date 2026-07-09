@@ -336,6 +336,87 @@ fn writeMultipartName(writer: *std.Io.Writer, name: []const u8) !void {
     }
 }
 
+// Inverse of urlEncode: application/x-www-form-urlencoded parsing per
+// URL §5.1 — '+' decodes to a space, invalid percent sequences pass through
+// verbatim, and a pair without '=' becomes an entry with an empty value.
+pub fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
+    var it = std.mem.splitScalar(u8, bytes, '&');
+    while (it.next()) |pair| {
+        if (pair.len == 0) {
+            continue;
+        }
+        if (std.mem.indexOfScalar(u8, pair, '=')) |idx| {
+            try self.append(
+                try formUrlDecode(self._arena, pair[0..idx]),
+                try formUrlDecode(self._arena, pair[idx + 1 ..]),
+            );
+        } else {
+            const key = try formUrlDecode(self._arena, pair);
+            // Insert with empty value.
+            try self.append(key, "");
+        }
+    }
+}
+
+/// Index of the first byte needing URL-decoding ('%' or '+'), or null if
+/// the slice needs no decoding at all.
+fn indexOfSpecial(slice: []const u8) ?usize {
+    const vector_len = std.simd.suggestVectorLength(u8) orelse {
+        // Non-SIMD path.
+        return std.mem.indexOfAnyPos(u8, slice, 0, "%+");
+    };
+    const Vector = @Vector(vector_len, u8);
+
+    var end: usize = 0;
+    while (end + vector_len <= slice.len) : (end += vector_len) {
+        const percent: Vector = @splat('%');
+        const plus: Vector = @splat('+');
+        const chunk: Vector = slice[end..][0..vector_len].*;
+
+        const mask = @intFromBool(chunk == percent) | @intFromBool(chunk == plus);
+        const mask_int = @as(std.meta.Int(.unsigned, vector_len), @bitCast(mask));
+
+        if (mask_int != 0) {
+            return end + @ctz(mask_int);
+        }
+    }
+
+    return std.mem.indexOfAnyPos(u8, slice, end, "%+");
+}
+
+/// URL-decodes passed `raw` slice; returned value may or may not be heap allocated.
+fn formUrlDecode(arena: Allocator, raw: []const u8) ![]const u8 {
+    const start = indexOfSpecial(raw) orelse return raw;
+
+    var out: std.ArrayList(u8) = try .initCapacity(arena, raw.len);
+    out.appendSliceAssumeCapacity(raw[0..start]);
+
+    var i: usize = start;
+    while (i < raw.len) : (i += 1) {
+        const c = raw[i];
+        switch (c) {
+            '+' => out.appendAssumeCapacity(' '),
+            '%' => {
+                const decoded: ?u8 = blk: {
+                    if (i + 2 >= raw.len) break :blk null;
+                    const hi = std.fmt.charToDigit(raw[i + 1], 16) catch break :blk null;
+                    const lo = std.fmt.charToDigit(raw[i + 2], 16) catch break :blk null;
+                    break :blk hi * 16 + lo;
+                };
+                if (decoded) |b| {
+                    out.appendAssumeCapacity(b);
+                    i += 2;
+                } else {
+                    out.appendAssumeCapacity('%');
+                }
+            },
+            else => out.appendAssumeCapacity(c),
+        }
+    }
+
+    return out.items;
+}
+
 // Used by URLSearchParams to ingest a FormData; file entries collapse via Value.asString.
 pub fn toKeyValueList(self: *const FormData, arena: Allocator) !KeyValueList {
     var list: KeyValueList = .empty;
