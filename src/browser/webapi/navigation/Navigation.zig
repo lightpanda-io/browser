@@ -56,10 +56,16 @@ fn asEventTarget(self: *Navigation) *EventTarget {
 
 pub fn onRemoveFrame(self: *Navigation) void {
     self._proto = undefined;
+    for (self._entries.items) |entry| {
+        entry._proto = undefined;
+    }
 }
 
 pub fn onNewFrame(self: *Navigation, frame: *Frame) !void {
     self._proto = try frame._factory.standaloneEventTarget(self);
+    for (self._entries.items) |entry| {
+        entry._proto = try frame._factory.standaloneEventTarget(entry);
+    }
 }
 
 pub fn getActivation(self: *const Navigation) ?NavigationActivation {
@@ -184,6 +190,9 @@ pub fn pushEntry(
 
     // truncates our history here.
     if (self._entries.items.len > self._index + 1) {
+        for (self._entries.items[self._index + 1 ..]) |disposed| {
+            try disposed.fireDispose(frame);
+        }
         self._entries.shrinkRetainingCapacity(self._index + 1);
     }
 
@@ -196,6 +205,7 @@ pub fn pushEntry(
 
     const entry = try arena.create(NavigationHistoryEntry);
     entry.* = NavigationHistoryEntry{
+        ._proto = try frame._factory.standaloneEventTarget(entry),
         ._id = id_str,
         ._key = id_str,
         ._url = url,
@@ -241,13 +251,16 @@ pub fn replaceEntry(
 
     const entry = try arena.create(NavigationHistoryEntry);
     entry.* = NavigationHistoryEntry{
+        ._proto = try frame._factory.standaloneEventTarget(entry),
         ._id = id_str,
         ._key = previous._key,
         ._url = url,
         ._state = state,
     };
 
+    const old_entry = self._entries.items[self._index];
     self._entries.items[self._index] = entry;
+    try old_entry.fireDispose(frame);
 
     if (should_dispatch == false) {
         return entry;
