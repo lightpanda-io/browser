@@ -116,6 +116,7 @@ const CommonOptions = .{
     .{ .name = "enable_external_stylesheets", .type = bool },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
+    .{ .name = "watchdog_ms", .type = ?u32 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -336,6 +337,16 @@ pub fn disableSubframes(self: *const Config) bool {
 pub fn disableWorkers(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_workers,
+        else => unreachable,
+    };
+}
+
+pub fn watchdogMs(self: *const Config) ?u32 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| {
+            const ms = opts.watchdog_ms orelse 30000;
+            return if (ms == 0) null else ms;
+        },
         else => unreachable,
     };
 }

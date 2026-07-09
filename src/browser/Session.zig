@@ -493,6 +493,8 @@ pub fn idleSlice(self: *Session) u31 {
     self.processDestroyQueues();
 
     if (self.pages.items.len == 0) {
+        // no page, we don't want the watchdog to kill us.
+        self.browser.http_client.heartbeat.disarm();
         return quiet_ms;
     }
     const page = self.pages.items[0];

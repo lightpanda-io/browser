@@ -399,6 +399,9 @@ pub fn runMicrotasks(self: *Env) void {
 
         const v8_isolate = self.isolate.handle;
 
+        // terminatePending: once a forcible terminate is requested (and not
+        // canceled), refuse to start new work — IsExecutionTerminating alone
+        // goes false again as soon as the killed script finishes unwinding.
         if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate) or self.terminatePending()) {
             return;
         }

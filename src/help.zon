@@ -354,6 +354,13 @@
     \\          Maximum V8 heap size in megabytes, per browser instance. Values
     \\          below ~16 are clamped by V8 and all behave the same.
     \\          Defaults to the V8 default (based on available memory).
+    \\  --watchdog-ms <INT>
+    \\          Terminates JavaScript when the browser stalls — stays busy for
+    \\          this long without returning to its network poll (e.g. a page
+    \\          stuck in an endless script loop). In serve mode the CDP
+    \\          connection is then closed. Unlike fetch's --terminate-ms, an idle
+    \\          or normally-working page never trips this.
+    \\          Defaults to [a very generous] 30000, disable by setting to 0.
     \\  --web-bot-auth-domain <DOMAIN>
     \\          Your domain, e.g. yourdomain.com.
     \\  --web-bot-auth-key-file <PATH>
