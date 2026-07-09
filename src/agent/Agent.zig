@@ -863,10 +863,11 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
     while (true) {
-        const finding: ScriptError = switch (self.runScriptOutcome(arena.allocator(), path)) {
-            .fatal => return,
-            .ok => |facts| self.judgedFinding(arena.allocator(), path, facts) orelse return,
-            .script_error => |script_error| script_error,
+        // Nothing from a prior retry is read again.
+        _ = arena.reset(.retain_capacity);
+        const finding: ScriptError = switch (self.runAndJudge(arena.allocator(), path)) {
+            .fatal, .clean => return,
+            .broken => |f| f,
         };
         if (self.ai_client == null) return;
         switch (promptHeal(path, finding.kind)) {
@@ -1558,14 +1559,21 @@ const ScriptRunOutcome = union(enum) {
     script_error: ScriptError,
 };
 
+/// What a completed run returned, as far as heal cares.
+const Returned = union(enum) {
+    /// No `return`, or a value whose display form couldn't be computed.
+    none,
+    /// A value carrying data.
+    data,
+    /// A deep-empty value, carrying its capped display text.
+    empty: []const u8,
+};
+
 /// Facts about a run that completed without throwing — suspicion is judged by
 /// the model, never here. Duped into the caller's arena — the runtime dies
 /// with `runScriptOutcome`.
 const RunFacts = struct {
-    /// The script returned a value that carries data.
-    returned_data: bool,
-    /// The returned value when it was deep-empty (capped display text).
-    empty_completion: ?[]const u8,
+    returned: Returned,
     extract_stats: []const ScriptRuntime.ExtractStat,
     source: []const u8,
 };
@@ -1598,6 +1606,23 @@ fn runScript(self: *Agent, path: []const u8) bool {
     return switch (self.runScriptOutcome(arena.allocator(), path)) {
         .ok => true,
         .fatal, .script_error => false,
+    };
+}
+
+/// Terminal `fatal`/`clean` states, or the `broken` finding to heal — the model
+/// gets to judge a clean-but-suspicious run. Shared by the `/load` heal offer
+/// and one-shot `--heal`.
+const RunJudgement = union(enum) {
+    fatal,
+    clean,
+    broken: ScriptError,
+};
+
+fn runAndJudge(self: *Agent, arena: std.mem.Allocator, path: []const u8) RunJudgement {
+    return switch (self.runScriptOutcome(arena, path)) {
+        .fatal => .fatal,
+        .ok => |facts| if (self.judgedFinding(arena, path, facts)) |finding| .{ .broken = finding } else .clean,
+        .script_error => |script_error| .{ .broken = script_error },
     };
 }
 
@@ -1655,13 +1680,12 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
     // A script that printed nothing leaves no trace, so freeze the spinner into
     // a green bullet (like /goto); one that printed already showed its result.
     if (!output.emitted) self.terminal.printScriptDone("script", path);
-    const empty_completion: ?[]const u8 = if (ok.completion) |c|
-        (if (c.empty) capDetail(arena, c.text) catch return .fatal else null)
+    const returned: Returned = if (ok.completion) |c|
+        (if (c.empty) .{ .empty = capDetail(arena, c.text) catch return .fatal } else .data)
     else
-        null;
+        .none;
     return .{ .ok = .{
-        .returned_data = if (ok.completion) |c| !c.empty else false,
-        .empty_completion = empty_completion,
+        .returned = returned,
         .extract_stats = dupeExtractStats(arena, ok.extract_stats) catch return .fatal,
         .source = arena.dupe(u8, content) catch return .fatal,
     } };
@@ -1695,11 +1719,14 @@ fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]co
 /// scalar or list, baseline or not. Whether that is breakage or legitimate
 /// sparseness is the model's judgment, not encoded here.
 fn suspicionOf(arena: std.mem.Allocator, facts: RunFacts) ?ScriptError {
-    if (facts.empty_completion) |text| return .{
-        .kind = .empty,
-        .detail = std.fmt.allocPrint(arena, "its return value carries no data: {s}", .{text}) catch return null,
-        .source = facts.source,
-    };
+    switch (facts.returned) {
+        .empty => |text| return .{
+            .kind = .empty,
+            .detail = std.fmt.allocPrint(arena, "its return value carries no data: {s}", .{text}) catch return null,
+            .source = facts.source,
+        },
+        .none, .data => {},
+    }
     return dryExtractsFinding(arena, facts.source, facts.extract_stats) catch return null;
 }
 
@@ -1735,24 +1762,22 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
-    for (0..2) |attempt| {
-        const finding: ScriptError = switch (self.runScriptOutcome(arena.allocator(), path)) {
-            .fatal => return false,
-            .ok => |facts| self.judgedFinding(arena.allocator(), path, facts) orelse return true,
-            .script_error => |script_error| script_error,
-        };
-        if (attempt == 0) {
-            // A re-run is free; healing is not — one retry filters transient
-            // failures (a flaky page load) before the model is asked to fix
-            // a correct script.
-            self.terminal.printInfo("Script run failed or looks broken; retrying once before healing.", .{});
-            continue;
-        }
-        // Healing spends tokens; report the cost the way --task does.
-        defer self.printUsageSummary();
-        return self.healLoop(arena.allocator(), path, finding);
+    switch (self.runAndJudge(arena.allocator(), path)) {
+        .fatal => return false,
+        .clean => return true,
+        .broken => {},
     }
-    unreachable;
+    // A re-run is free; healing is not — one retry filters a transient failure
+    // (a flaky page load) before the model is asked to fix a correct script.
+    self.terminal.printInfo("Script run failed or looks broken; retrying once before healing.", .{});
+    const finding: ScriptError = switch (self.runAndJudge(arena.allocator(), path)) {
+        .fatal => return false,
+        .clean => return true,
+        .broken => |f| f,
+    };
+    // Healing spends tokens; report the cost the way --task does.
+    defer self.printUsageSummary();
+    return self.healLoop(arena.allocator(), path, finding);
 }
 
 const max_heal_attempts = 2;
@@ -1948,10 +1973,27 @@ fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts
             .kind = suspicion.kind,
             .detail = std.fmt.allocPrint(arena, "{s}\nVerdict: {s}", .{ suspicion.detail, verdict.reason }) catch return null,
             .source = suspicion.source,
-            .dry_fields = if (verdict.fields.len > 0) verdict.fields else suspicion.dry_fields,
+            .dry_fields = confirmedDryFields(arena, verdict.fields, suspicion.dry_fields) catch return null,
         };
     }
     return suspicion;
+}
+
+/// Verdict field names minus any that weren't actually dry — a hallucinated
+/// name never matches an extract stat, so the cure check could never clear it.
+/// Falls back to every dry field when none match.
+fn confirmedDryFields(arena: std.mem.Allocator, judged: []const ?[]const u8, actual: []const ?[]const u8) error{OutOfMemory}![]const ?[]const u8 {
+    if (judged.len == 0) return actual;
+    var kept: std.ArrayList(?[]const u8) = .empty;
+    for (judged) |f| {
+        for (actual) |a| {
+            if (ScriptRuntime.fieldEql(f, a)) {
+                try kept.append(arena, f);
+                break;
+            }
+        }
+    }
+    return if (kept.items.len == 0) actual else kept.items;
 }
 
 /// Null when the validation run cured the original finding; otherwise the
@@ -1961,7 +2003,7 @@ fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts
 fn cureFailure(arena: std.mem.Allocator, first: ScriptError, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
     switch (first.kind) {
         .threw => return null,
-        .empty => return if (facts.returned_data)
+        .empty => return if (facts.returned == .data)
             null
         else
             "The revised script ran, but still returns no data (or no longer returns anything) — the original returned a value.",
@@ -2418,10 +2460,10 @@ test "cureFailure: running clean is not a cure" {
         .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 5, .empty = 2 },
         .{ .schema = "[]", .field = null, .is_list = true, .calls = 1, .empty = 0 },
     };
-    try std.testing.expectEqual(null, try cureFailure(aa, dry, testFacts(true, cured_stats)));
+    try std.testing.expectEqual(null, try cureFailure(aa, dry, testFacts(.data, cured_stats)));
 
     // Fix-by-deletion: the dry field is simply gone from the revised run.
-    const deleted = (try cureFailure(aa, dry, testFacts(true, cured_stats[1..]))).?;
+    const deleted = (try cureFailure(aa, dry, testFacts(.data, cured_stats[1..]))).?;
     try std.testing.expect(std.mem.indexOf(u8, deleted, "\"comments\"") != null);
 
     // Still dry counts as uncured.
@@ -2429,20 +2471,42 @@ test "cureFailure: running clean is not a cure" {
         .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 5, .empty = 5 },
         cured_stats[1],
     };
-    try std.testing.expect((try cureFailure(aa, dry, testFacts(true, still_dry_stats))) != null);
+    try std.testing.expect((try cureFailure(aa, dry, testFacts(.data, still_dry_stats))) != null);
 
     // .empty is cured only by a data-carrying return.
     const empty: ScriptError = .{ .kind = .empty, .detail = "", .source = "" };
-    try std.testing.expectEqual(null, try cureFailure(aa, empty, testFacts(true, &.{})));
-    try std.testing.expect((try cureFailure(aa, empty, testFacts(false, &.{}))) != null);
+    try std.testing.expectEqual(null, try cureFailure(aa, empty, testFacts(.data, &.{})));
+    try std.testing.expect((try cureFailure(aa, empty, testFacts(.none, &.{}))) != null);
 
     // .threw needs nothing beyond running clean.
     const threw: ScriptError = .{ .kind = .threw, .detail = "", .source = "" };
-    try std.testing.expectEqual(null, try cureFailure(aa, threw, testFacts(false, &.{})));
+    try std.testing.expectEqual(null, try cureFailure(aa, threw, testFacts(.none, &.{})));
 }
 
-fn testFacts(returned_data: bool, stats: []const ScriptRuntime.ExtractStat) RunFacts {
-    return .{ .returned_data = returned_data, .empty_completion = null, .extract_stats = stats, .source = "" };
+fn testFacts(returned: Returned, stats: []const ScriptRuntime.ExtractStat) RunFacts {
+    return .{ .returned = returned, .extract_stats = stats, .source = "" };
+}
+
+test "confirmedDryFields drops hallucinated names, keeps the narrowing" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const actual: []const ?[]const u8 = &.{ @as(?[]const u8, "comments"), @as(?[]const u8, "score"), null };
+
+    const narrowed = try confirmedDryFields(aa, &.{@as(?[]const u8, "comments")}, actual);
+    try std.testing.expectEqual(1, narrowed.len);
+    try std.testing.expectEqualStrings("comments", narrowed[0].?);
+
+    const mixed = try confirmedDryFields(aa, &.{ @as(?[]const u8, "nonexistent"), @as(?[]const u8, "score") }, actual);
+    try std.testing.expectEqual(1, mixed.len);
+    try std.testing.expectEqualStrings("score", mixed[0].?);
+
+    // All hallucinated → the full dry set, not an empty one.
+    const fallback = try confirmedDryFields(aa, &.{@as(?[]const u8, "bogus")}, actual);
+    try std.testing.expectEqual(3, fallback.len);
+
+    try std.testing.expectEqual(actual.ptr, (try confirmedDryFields(aa, &.{}, actual)).ptr);
 }
 
 test "suspicionOf: any all-empty field is suspect, none is not" {
@@ -2453,18 +2517,17 @@ test "suspicionOf: any all-empty field is suspect, none is not" {
     const sparse: []const ScriptRuntime.ExtractStat = &.{
         .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 5, .empty = 2 },
     };
-    try std.testing.expectEqual(null, suspicionOf(aa, testFacts(true, sparse)));
+    try std.testing.expectEqual(null, suspicionOf(aa, testFacts(.data, sparse)));
 
     // Scalar all-empty is suspect too — judgment belongs to the model now.
     const dry_scalar: []const ScriptRuntime.ExtractStat = &.{
         .{ .schema = "{}", .field = "title", .is_list = false, .calls = 3, .empty = 3 },
     };
-    const s = suspicionOf(aa, testFacts(true, dry_scalar)).?;
+    const s = suspicionOf(aa, testFacts(.data, dry_scalar)).?;
     try std.testing.expectEqual(ScriptError.Kind.dry_extracts, s.kind);
     try std.testing.expectEqual(1, s.dry_fields.len);
 
-    var empty_facts = testFacts(false, &.{});
-    empty_facts.empty_completion = "[]";
+    const empty_facts = testFacts(.{ .empty = "[]" }, &.{});
     try std.testing.expectEqual(ScriptError.Kind.empty, suspicionOf(aa, empty_facts).?.kind);
 }
 
