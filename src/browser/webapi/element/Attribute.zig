@@ -385,27 +385,10 @@ pub const List = struct {
         const normalized =
             if (self.normalize) try normalizeNameForLookup(name, frame) else name;
 
-        // A name that was never canonicalized can't be in any list.
-        const canonical = lookupCanonicalName(normalized.str(), frame) orelse {
-            return .{ .normalized = normalized, .entry = null };
-        };
         return .{
             .normalized = normalized,
-            .entry = self.getEntryWithCanonicalName(canonical.ptr),
+            .entry = self.getEntryWithNormalizedName(normalized),
         };
-    }
-
-    // This is one of the wins of the canonical names...we can compare strings
-    // as a single pointer comparison. By applying the same canonicalization to
-    // the lists attributes name and to an input, we get the same pointer for
-    // a given string.
-    fn getEntryWithCanonicalName(self: *const List, name_ptr: [*]const u8) ?*Entry {
-        for (self._entries[0..self._len]) |*e| {
-            if (e._name_ptr == name_ptr) {
-                return e;
-            }
-        }
-        return null;
     }
 
     fn getEntryWithNormalizedName(self: *const List, name: String) ?*Entry {
@@ -514,10 +497,10 @@ pub fn validateAttributeName(name: String) !void {
 }
 
 // Every stored entry name either comes from the static String.intern or from
-// the frame._attribute_names. This doesn't just avoid extra dupes/allocations,
-// it gives us comparable pointer.
-// For the lifetime of a frame:
-//    canonicalizeName("attrx").ptr == canonicalizeName("attrx").ptr
+// the frame._attribute_names. Beyond avoiding extra dupes/allocations, this
+// gives a stable pointer for the frame's lifetime, which List.LookupKey
+// relies on for identity. The pointer is NOT comparable across frames (each
+// frame has its own pool), which is why lookups byte-compare.
 fn canonicalizeName(name: []const u8, frame: *Frame) ![]const u8 {
     if (String.intern(name)) |static| {
         return static;
@@ -527,19 +510,6 @@ fn canonicalizeName(name: []const u8, frame: *Frame) ![]const u8 {
         gop.key_ptr.* = try frame.arena.dupe(u8, name);
     }
     return gop.key_ptr.*;
-}
-
-// Let's say you want to find an attribute name "attrx". We could iterate an
-// attribute list to do the string comparison. OR, we could run "attrx" through
-// the same canonicalization as we applied to the attribute's names. If we don't
-// find a canonical value, then it's then this attribute was never canonicalized
-// before (and thus, we can shortcircuit a search). If we DO canonicalize it
-// the we get do a pointer comparison rather than a full string comparison.
-fn lookupCanonicalName(name: []const u8, frame: *const Frame) ?[]const u8 {
-    if (String.intern(name)) |static| {
-        return static;
-    }
-    return frame._attribute_names.getKey(name);
 }
 
 fn normalizeNameForLookup(name: String, frame: *Frame) !String {
