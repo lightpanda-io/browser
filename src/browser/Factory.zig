@@ -237,8 +237,9 @@ fn AutoPrototypeChain(comptime types: []const type) type {
 
 fn eventInit(arena: Allocator, typ: String, value: anytype) !Event {
     // Round to 2ms for privacy (browsers do this)
-    const raw_timestamp = @import("../datetime.zig").milliTimestamp(.monotonic);
-    const time_stamp = (raw_timestamp / 2) * 2;
+    // Same (already coarsened) clock as the performance time origin, so the
+    // timeStamp getter can report it relative to that origin.
+    const time_stamp = @import("webapi/Performance.zig").highResTimestamp();
 
     return .{
         ._rc = .{},
