@@ -124,8 +124,11 @@ pub fn getView(self: *UIEvent, frame: *Frame) ?*Window {
 // Legacy: see https://w3c.github.io/uievents/#dom-uievent-which
 pub fn getWhich(self: *const UIEvent) u32 {
     return switch (self._type) {
-        .mouse_event => |me| @as(u32, @intCast(me.getButton())) + 1,
-        .keyboard_event => 0,
+        .mouse_event => |me| blk: {
+            const button = me.getButton();
+            break :blk if (button < 0) 0 else @as(u32, @intCast(button)) + 1;
+        },
+        .keyboard_event => |ke| ke.getKeyCode(),
         else => 0,
     };
 }
