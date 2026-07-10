@@ -146,7 +146,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(HTMLCollection.length, null, .{});
-    pub const @"[int]" = bridge.indexed(HTMLCollection.getAtIndex, null, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexedReadWrite(HTMLCollection.getAtIndex, null, deleteAtIndex, null, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(struct {
         pub fn wrap(self: *HTMLCollection, name: []const u8, frame: *Frame) !?*Element {
             if (name.len == 0) {
@@ -155,7 +155,24 @@ pub const JsApi = struct {
 
             return self.getByName(name, frame) orelse error.NotHandled;
         }
-    }.wrap, null, null, null, null, .{ .null_as_undefined = true });
+    }.wrap, null, deleteByName, null, null, .{ .null_as_undefined = true });
+
+    // Supported indexed and named properties can't be deleted (delete returns
+    // false, which throws a TypeError in strict mode); unsupported ones follow
+    // the ordinary [[Delete]] path.
+    fn deleteAtIndex(self: *HTMLCollection, idx: u32, frame: *Frame) !bool {
+        if (idx < self.length(frame)) {
+            return false;
+        }
+        return error.NotHandled;
+    }
+
+    fn deleteByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !bool {
+        if (self.getByName(name, frame) != null) {
+            return false;
+        }
+        return error.NotHandled;
+    }
 
     pub const item = bridge.function(_item, .{});
     fn _item(self: *HTMLCollection, index: i32, frame: *Frame) ?*Element {
