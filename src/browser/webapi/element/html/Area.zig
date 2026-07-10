@@ -290,12 +290,11 @@ pub const JsApi = struct {
     pub const referrerPolicy = bridge.accessor(Area.getReferrerPolicy, Area.setReferrerPolicy, .{ .ce_reactions = true });
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
     pub const toString = bridge.function(Area.getHref, .{});
-
+    pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
     fn _getRelList(self: *Area, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
         const element = self.asElement();
-        // relList is only valid for HTML and SVG <area> elements
-        const namespace = element._namespace;
-        if (namespace != .html and namespace != .svg) {
+        // relList is only valid for HTML <area> elements
+        if (element._namespace != .html) {
             return null;
         }
         return element.getRelList(frame);
