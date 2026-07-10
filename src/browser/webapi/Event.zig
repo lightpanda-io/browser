@@ -50,6 +50,10 @@ _needs_retargeting: bool = false,
 _is_trusted: bool = false,
 _in_passive_listener: bool = false,
 _listeners_did_throw: bool = false, // IndexedDB needs to abort on callback throw
+// Per spec, events created via document.createEvent are not initialized
+// until one of the init*Event methods runs; dispatching one throws an
+// InvalidStateError. Events created any other way start initialized.
+_initialized: bool = true,
 
 // There's a period of time between creating an event and handing it off to v8
 // where things can fail. If it does fail, we need to deinit the event. The timing
@@ -137,6 +141,7 @@ pub fn initEvent(
         return;
     }
 
+    self._initialized = true;
     self._type_string = try String.init(self._arena, event_string, .{});
     self._bubbles = bubbles orelse false;
     self._cancelable = cancelable orelse false;
