@@ -41,6 +41,7 @@ _body: ?[]const u8,
 _arena: Allocator,
 _cache: Cache,
 _credentials: Credentials,
+_redirect: Redirect,
 _signal: ?*AbortSignal,
 _body_used: bool = false,
 
@@ -55,11 +56,19 @@ pub const InitOpts = struct {
     body: ?BodyInit = null,
     cache: Cache = .default,
     credentials: Credentials = .@"same-origin",
+    redirect: Redirect = .follow,
     signal: ?*AbortSignal = null,
     priority: ?[]const u8 = null,
 };
 
 const Priority = enum { high, low, auto };
+
+const Redirect = enum {
+    follow,
+    manual,
+    @"error",
+    pub const js_enum_from_string = true;
+};
 
 const Credentials = enum {
     omit,
@@ -138,6 +147,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._headers = headers,
         ._cache = opts.cache,
         ._credentials = opts.credentials,
+        ._redirect = opts.redirect,
         ._body = body,
         ._signal = signal,
     });
@@ -177,6 +187,10 @@ pub fn getCache(self: *const Request) []const u8 {
 
 pub fn getCredentials(self: *const Request) []const u8 {
     return @tagName(self._credentials);
+}
+
+pub fn getRedirect(self: *const Request) []const u8 {
+    return @tagName(self._redirect);
 }
 
 pub fn getSignal(self: *const Request) ?*AbortSignal {
@@ -271,6 +285,7 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._headers = self._headers,
         ._cache = self._cache,
         ._credentials = self._credentials,
+        ._redirect = self._redirect,
         ._body = self._body,
         ._signal = self._signal,
     });
@@ -291,6 +306,7 @@ pub const JsApi = struct {
     pub const headers = bridge.accessor(Request.getHeaders, null, .{});
     pub const cache = bridge.accessor(Request.getCache, null, .{});
     pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
+    pub const redirect = bridge.accessor(Request.getRedirect, null, .{});
     pub const signal = bridge.accessor(Request.getSignal, null, .{});
     pub const bodyUsed = bridge.accessor(Request.getBodyUsed, null, .{});
     pub const blob = bridge.function(Request.blob, .{});

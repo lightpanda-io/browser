@@ -213,11 +213,10 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
 
     // Enqueue attributeChangedCallback for existing observed attributes
     const element = custom.asElement();
-    var attr_it = element.attributeIterator();
-    while (attr_it.next()) |attr| {
-        const name = attr._name;
+    for (element.attributeEntries()) |*attr| {
+        const name = lp.String.wrap(attr.name());
         if (definition.isAttributeObserved(name)) {
-            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, attr._value, null, frame);
+            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, .wrap(attr.value()), null, frame);
         }
     }
 

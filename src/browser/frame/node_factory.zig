@@ -862,18 +862,15 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
 
                 // After constructor runs, invoke attributeChangedCallback for initial attributes
                 const element = node.as(Element);
-                if (element._attributes) |attributes| {
-                    var it = attributes.iterator();
-                    while (it.next()) |attr| {
-                        Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(
-                            element,
-                            attr._name,
-                            null, // old_value is null for initial attributes
-                            attr._value,
-                            null,
-                            frame,
-                        );
-                    }
+                for (element.attributeEntries()) |*attr| {
+                    Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(
+                        element,
+                        .wrap(attr.name()),
+                        null, // old_value is null for initial attributes
+                        .wrap(attr.value()),
+                        null,
+                        frame,
+                    );
                 }
 
                 return node;
@@ -907,6 +904,7 @@ fn createHtmlElementT(frame: *Frame, comptime E: type, namespace: Element.Namesp
     const html_element_ptr = try frame._factory.htmlElement(html_element);
     const element = html_element_ptr.asElement();
     element._namespace = namespace;
+    element._attributes.normalize = namespace == .html;
     try populateElementAttributes(frame, element, attribute_iterator);
 
     // Check for customized built-in element via "is" attribute
@@ -934,34 +932,27 @@ fn createSvgElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attr
     const svg_element_ptr = try frame._factory.svgElement(tag_name, svg_element);
     var element = svg_element_ptr.asElement();
     element._namespace = .svg;
+    element._attributes.normalize = false;
     try populateElementAttributes(frame, element, attribute_iterator);
     return element.asNode();
 }
 
 fn populateElementAttributes(frame: *Frame, element: *Element, list: anytype) !void {
-    if (@TypeOf(list) == ?*Element.Attribute.List) {
+    if (@TypeOf(list) == *Element.Attribute.List or @TypeOf(list) == *const Element.Attribute.List) {
         // from cloneNode
-
-        var existing = list orelse return;
-
-        var attributes = try frame.arena.create(Element.Attribute.List);
-        attributes.* = .{
-            .normalize = existing.normalize,
-        };
-
-        var it = existing.iterator();
-        while (it.next()) |attr| {
-            try attributes.putNew(attr._name.str(), attr._value.str(), frame);
-        }
-        element._attributes = attributes;
-        return;
+        return element._attributes.cloneFrom(list, frame);
     }
 
     // from the parser
-    if (@TypeOf(list) == @TypeOf(null) or list.count() == 0) {
+    if (@TypeOf(list) == @TypeOf(null)) {
         return;
     }
-    var attributes = try element.createAttributeList(frame);
+    const count = list.count();
+    if (count == 0) {
+        return;
+    }
+    var attributes = &element._attributes;
+    try attributes.ensureTotalCapacity(count, frame);
     while (list.next()) |attr| {
         try attributes.putNew(attr.name.local.slice(), attr.value.slice(), frame);
     }
@@ -988,7 +979,7 @@ pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element 
     }
 
     const tag_name = try String.init(frame.arena, definition.name, .{});
-    const node = try createHtmlElementT(frame, Element.Html.Custom, .html, @as(?*Element.Attribute.List, null), .{
+    const node = try createHtmlElementT(frame, Element.Html.Custom, .html, null, .{
         ._proto = undefined,
         ._tag_name = tag_name,
         ._definition = definition,

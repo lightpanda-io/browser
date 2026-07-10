@@ -107,10 +107,17 @@ _fragment_scripts_runnable: bool = false,
 // See Attribute.List for what this is. TL;DR: proper DOM Attribute Nodes are
 // fat yet rarely needed. We only create them on-demand, but still need proper
 // identity (a given attribute should return the same *Attribute), so we do
-// a look here. We don't store this in the Element or Attribute.List.Entry
-// because that would require additional space per element / Attribute.List.Entry
-// even though we'll create very few (if any) actual *Attributes.
-_attribute_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute) = .empty,
+// a look here, keyed by (list, name). We don't store this in the Element or
+// Attribute.List.Entry because that would require additional space per
+// element / Attribute.List.Entry even though we'll create very few (if any)
+// actual *Attributes.
+_attribute_lookup: Element.Attribute.List.Lookup = .empty,
+
+// Canonical pool for attribute names that aren't in String.intern's.
+// Every Attribute's entry's name is either a String intern or held here.
+// This is both a memory optimization (deduping attribute names) and a performance
+// optimization (since we can compare strings by just their pointer)
+_attribute_names: std.StringHashMapUnmanaged(void) = .empty,
 
 // Same as _atlribute_lookup, but instead of individual attributes, this is for
 // the return of elements.attributes.

@@ -399,6 +399,9 @@ pub fn runMicrotasks(self: *Env) void {
 
         const v8_isolate = self.isolate.handle;
 
+        // terminatePending: once a forcible terminate is requested (and not
+        // canceled), refuse to start new work — IsExecutionTerminating alone
+        // goes false again as soon as the killed script finishes unwinding.
         if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate) or self.terminatePending()) {
             return;
         }
@@ -553,13 +556,18 @@ pub fn terminate(self: *Env) void {
 // We need a stable pointer for *Env, so can't be setup in init.
 pub fn protectHeapLimit(self: *Env) void {
     v8.v8__Isolate__AddNearHeapLimitCallback(self.isolate.handle, nearHeapLimit, self);
+    // TODO: uncomment this when https://github.com/lightpanda-io/zig-v8-fork/pull/187 lands
+    // if our nearHeapLimit extends the memory, we want to  restore the original
+    // value, since the isolate can be long lived (relative to the page/script
+    // that caused the memory spike).
+    // v8.v8__Isolate__AutomaticallyRestoreInitialHeapLimit(self.isolate.handle, 0.5);
 }
 
 // v8 is telling us it's about to run out of memory for this isolate. We'll
 // do two things:
 // 1 - Terminate the execution (attempting to prevent v8 from OOM'ing the process)
-// 2 - Tell v8 that it can use 8MB more memory, hopefully giving it enough memory
-//     to properly shutdown
+// 2 - Grant more headroom so execution can reach a stack-guard check, where
+//     the terminate lands
 //
 // The terminate must go through requestTerminate (RequestInterrupt), NOT a
 // direct TerminateExecution: we're mid-GC, which is an arbitrary point —
@@ -575,7 +583,12 @@ fn nearHeapLimit(data: ?*anyopaque, current_limit: usize, initial_limit: usize) 
         .current_limit = current_limit,
     });
     self.requestTerminate();
-    return current_limit + 8 * 1024 * 1024;
+
+    const cap = initial_limit + 256 * 1024 * 1024;
+    if (current_limit >= cap) {
+        return current_limit;
+    }
+    return @min(cap, current_limit + 64 * 1024 * 1024);
 }
 
 // Called from the network thread, caused v8 to eventually call terminateInterrupt

@@ -26,6 +26,7 @@ const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
 const Storage = @import("storage/Storage.zig");
 const Network = @import("network/Network.zig");
+const Watchdog = @import("Watchdog.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 
 const log = lp.log;
@@ -39,6 +40,7 @@ storage: Storage,
 platform: Platform,
 snapshot: Snapshot,
 telemetry: Telemetry,
+watchdog: Watchdog,
 allocator: Allocator,
 arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
@@ -66,7 +68,11 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .app_dir_path = undefined,
         .telemetry = undefined,
         .arena_pool = undefined,
+        .watchdog = .init(config.watchdogMs()),
     };
+    try app.watchdog.start();
+    errdefer app.watchdog.deinit();
+
     app.network = try Network.init(allocator, app, config);
     errdefer app.network.deinit();
 
@@ -87,6 +93,9 @@ pub fn shutdown(self: *const App) bool {
 
 pub fn deinit(self: *App) void {
     const allocator = self.allocator;
+    // All browsers are gone by now, so the entry list is empty; this just
+    // stops the checker thread.
+    self.watchdog.deinit();
     if (self.app_dir_path) |app_dir_path| {
         allocator.free(app_dir_path);
         self.app_dir_path = null;
