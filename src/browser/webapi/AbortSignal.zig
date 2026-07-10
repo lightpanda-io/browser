@@ -149,10 +149,21 @@ fn dispatchAbortEvent(self: *AbortSignal, exec: *const Execution) !void {
     }
 }
 
+// Converts an abort(reason) JS argument to a Reason. Per spec, only a
+// missing or undefined reason falls back to the default "AbortError"
+// DOMException: an explicit null (or any other value) is kept as-is.
+pub fn reasonFromJs(reason_: ?js.Value) !?Reason {
+    const reason = reason_ orelse return null;
+    if (reason.isUndefined()) {
+        return null;
+    }
+    return .{ .js_val = try reason.persist() };
+}
+
 // Static method to create an already-aborted signal
-pub fn createAborted(reason_: ?js.Value.Global, exec: *const Execution) !*AbortSignal {
+pub fn createAborted(reason_: ?js.Value, exec: *const Execution) !*AbortSignal {
     const signal = try init(exec);
-    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, exec);
+    try signal.abort(try reasonFromJs(reason_), exec);
     return signal;
 }
 
