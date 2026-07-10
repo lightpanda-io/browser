@@ -32,8 +32,7 @@
 
   const unknownNsElement = document.createElementNS('http://example.com/unknown', 'custom');
   testing.expectEqual('custom', unknownNsElement.tagName);
-  // Should be http://example.com/unknown
-  testing.expectEqual('http://lightpanda.io/unsupported/namespace', unknownNsElement.namespaceURI);
+  testing.expectEqual('http://example.com/unknown', unknownNsElement.namespaceURI);
 
   const regularDiv = document.createElement('div');
   testing.expectEqual('DIV', regularDiv.tagName);
@@ -45,5 +44,5 @@
   testing.expectEqual('te:ST', custom.tagName);
   testing.expectEqual('te', custom.prefix);
   testing.expectEqual('ST', custom.localName);
-  testing.expectEqual('http://lightpanda.io/unsupported/namespace', custom.namespaceURI); // Should be test
+  testing.expectEqual('test', custom.namespaceURI);
 </script>

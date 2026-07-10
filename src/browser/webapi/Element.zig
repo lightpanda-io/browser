@@ -1505,6 +1505,14 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     const tag_name = self.getTagNameDump();
     const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, &self._attributes);
 
+    // A namespace outside the built-in set lives in a side table; the clone
+    // must report the same namespaceURI.
+    if (self._namespace == .unknown) {
+        if (frame._element_namespace_uris.get(self)) |uri| {
+            try frame._element_namespace_uris.put(frame.arena, node.as(Element), uri);
+        }
+    }
+
     // Allow element-specific types to copy their runtime state
     _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), deep, frame }) catch |err| {
         log.err(.dom, "element.clone.failed", .{ .err = err });
@@ -1916,7 +1924,9 @@ pub const JsApi = struct {
     fn _tagName(self: *Element, frame: *Frame) []const u8 {
         return self.getTagNameSpec(&frame.buf);
     }
-    pub const namespaceURI = bridge.accessor(Element.getNamespaceURI, null, .{});
+    // the frame-aware variant returns the original URI for namespaces
+    // outside the built-in set instead of the placeholder
+    pub const namespaceURI = bridge.accessor(Element.getNamespaceUri, null, .{});
 
     pub const innerText = bridge.accessor(_innerText, Element.setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *Element, frame: *Frame) ![]const u8 {
