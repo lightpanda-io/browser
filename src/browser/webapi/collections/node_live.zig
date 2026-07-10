@@ -194,6 +194,11 @@ pub fn NodeLive(comptime mode: Mode) type {
             // (like length or getAtIndex)
             var tw = self._tw.clone();
             while (self.nextTw(&tw)) |element| {
+                // Per spec, only HTML-namespace elements are exposed via
+                // their name attribute (ids expose any element).
+                if (element._namespace != .html) {
+                    continue;
+                }
                 const element_name = element.getAttributeSafe(comptime .wrap("name")) orelse continue;
                 if (std.mem.eql(u8, element_name, name)) {
                     return element;
