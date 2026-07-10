@@ -186,12 +186,14 @@ pub const remembered_path = ".lp-agent.zon";
 /// disabled the LLM (`/provider null`), so the REPL starts in basic mode without
 /// re-prompting. `effort`/`verbosity` are optional so files predating them still
 /// parse; null means "use the mode default" (see `Agent.resolveEffort` /
-/// `Agent.resolveVerbosity`).
+/// `Agent.resolveVerbosity`). `stream` is likewise optional: null means "use the
+/// default" (see `resolveStream`).
 pub const Remembered = struct {
     provider: ?Config.AiProvider = null,
     model: []const u8,
     effort: ?Config.Effort = null,
     verbosity: ?Config.AgentVerbosity = null,
+    stream: ?bool = null,
 };
 
 pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
@@ -267,6 +269,13 @@ pub fn resolveVerbosity(opts: Config.Agent, remembered: ?Remembered) Config.Agen
     if (opts.verbosity) |v| return v;
     if (remembered) |r| if (r.verbosity) |v| return v;
     return Config.agentVerbosity(opts);
+}
+
+/// Precedence: remembered `.lp-agent.zon` value > default (on). Streaming has no
+/// CLI flag — the REPL `/stream` command toggles and persists it.
+pub fn resolveStream(remembered: ?Remembered) bool {
+    if (remembered) |r| if (r.stream) |s| return s;
+    return true;
 }
 
 pub const ReconciledModel = union(enum) {

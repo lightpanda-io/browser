@@ -1336,6 +1336,15 @@ pub fn printAssistant(_: *Terminal, text: []const u8) void {
     _ = std.posix.write(fd, "\n") catch {};
 }
 
+/// Write a streamed assistant-text delta verbatim (no trailing newline). The
+/// caller must pause the spinner first (its stderr frames would otherwise
+/// interleave with this stdout text) and emit a closing newline when the
+/// stream ends.
+pub fn printAssistantDelta(_: *Terminal, text: []const u8) void {
+    if (text.len == 0) return;
+    _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
+}
+
 // Must exceed the downstream LLM-judge's snapshot window for full grounding
 // evidence. Does not cap the agent's own LLM, which gets up to
 // tool_output_max_bytes (1 MiB) via Agent.zig:capToolOutput. Bypassed in REPL
