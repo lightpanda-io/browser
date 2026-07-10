@@ -1822,6 +1822,9 @@ const heal_revision_prompt =
     \\Fix the script so it replays successfully against the current site: the
     \\error and this session's working tool calls identify the repair. Keep
     \\every step, selector, and output shape that still works unchanged.
+    \\Preserve the script's `//` intent comments; where you change a block,
+    \\update its comment so it still describes what the revised code does, and
+    \\add one for any block that lacks it.
 ;
 
 /// Only a revision that passed validation in a fresh session replaces `path`;
