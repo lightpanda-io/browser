@@ -3143,6 +3143,14 @@ const SubmitFormOpts = struct {
 pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
 
+    // Interactive submission (submit button, requestSubmit) of a
+    // disconnected form does nothing; the programmatic form.submit() is
+    // exempt from the connectedness requirement (HTML "cannot navigate"
+    // only applies its connected clause to non-form elements).
+    if (submit_opts.fire_event and !form.asElement().asNode().isConnected()) {
+        return;
+    }
+
     // see the `_constructing_entry_list` field documentation
     if (form._constructing_entry_list) {
         return;

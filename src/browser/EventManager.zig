@@ -237,9 +237,16 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         if (event._prevent_default) {
             // can't return in a defer (╯°□°)╯︵ ┻━┻
         } else if (event._type_string.eql(comptime .wrap("click"))) {
-            Frame.user_input.handleClick(frame, target) catch |err| {
-                log.warn(.event, "frame.click", .{ .err = err });
-            };
+            // Per spec, only a MouseEvent "click" is an activation event, and
+            // the activation target is the nearest inclusive ancestor with
+            // activation behavior (ancestors only for bubbling events).
+            if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
+                if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
+                    Frame.user_input.handleClick(frame, activation_target) catch |err| {
+                        log.warn(.event, "frame.click", .{ .err = err });
+                    };
+                }
+            }
         } else if (event._type_string.eql(comptime .wrap("keydown"))) {
             Frame.user_input.handleKeydown(frame, target, event) catch |err| {
                 log.warn(.event, "frame.keydown", .{ .err = err });
@@ -678,12 +685,18 @@ const ActivationState = struct {
 
     const Input = Element.Html.Input;
 
-    fn create(event: *const Event, target: *Node, frame: *Frame) !?ActivationState {
+    fn create(event: *Event, target: *Node, frame: *Frame) !?ActivationState {
         if (event._type_string.eql(comptime .wrap("click")) == false) {
             return null;
         }
 
-        const input = target.is(Element.Html.Input) orelse return null;
+        // Per spec, only a MouseEvent "click" is an activation event.
+        if (event.is(@import("webapi/event/MouseEvent.zig")) == null) {
+            return null;
+        }
+
+        const activation_node = Frame.user_input.findClickActivationTarget(target, event._bubbles) orelse return null;
+        const input = activation_node.is(Element.Html.Input) orelse return null;
         if (input._input_type != .checkbox and input._input_type != .radio) {
             return null;
         }
