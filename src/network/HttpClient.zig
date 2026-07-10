@@ -380,6 +380,9 @@ pub fn abort(self: *Client) void {
         std.debug.assert(self.in_use.first == null);
         std.debug.assert(self.ready_queue.first == null);
         std.debug.assert(self.dirty.first == null);
+        // - self.robots.pending : each robots fetch's shutdown_callback
+        //   drops its entry; parked waiters unlink in their own deinit.
+        std.debug.assert(self.robots.pending.count() == 0);
     }
 }
 
@@ -1881,10 +1884,7 @@ pub const Transfer = struct {
             self._conn = null;
         }
 
-        // Unlink from client.queue if we were waiting for a handle.
-        // Without this, deinit'ing a queued transfer (e.g. via owner-list
-        // abort during navigation) leaves a dangling _node in the queue
-        // that the next tick would pop and hand to libcurl → UAF.
+        // Unlink from client.pending_queue if we were waiting for a handle.
         if (self.state == .queued) {
             self.client.pending_queue.remove(&self._node);
         }
@@ -1898,6 +1898,12 @@ pub const Transfer = struct {
                 self.client.dispatch_queue.remove(&self._queue_node);
             }
             self.client.dispatch_count -= 1;
+        }
+
+        // And for the robots gate: RobotsGate.pending holds a raw *Transfer
+        // while we're parked.
+        if (self.state == .parked and self.state.parked == .robots) {
+            self.client.robots.remove(self);
         }
 
         // A pending revalidation entry owns cache resources (possibly an
@@ -2832,6 +2838,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.cache = null;
     client.serve_mode = false;
     client.obey_robots = false;
+    client.robots = .{ .allocator = testing.allocator, .network = undefined };
 }
 
 test "HttpClient: fulfillIntercepted survives a done_callback that tears down the owner" {
@@ -2909,6 +2916,62 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
     try testing.expectEqual(0, client.dispatch_count);
     try testing.expectEqual(0, client.transfers.count());
     try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
+    // Regression: RobotsGate.pending kept a raw *Transfer with nothing
+    // removing it when a parked transfer was aborted out-of-band
+    // (xhr.abort(), owner teardown). The robots.txt resolution would then
+    // unpark freed memory.
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    defer client.transfers.deinit(testing.allocator);
+    defer client.robots.deinit();
+
+    const robots_url = "http://example.com/robots.txt";
+
+    var waiting: std.ArrayList(*Transfer) = .empty;
+    for (0..2) |i| {
+        const arena = try pool.acquire(.small, "test");
+        const transfer = try arena.create(Transfer);
+        transfer.* = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .frame_id = 0,
+                .loader_id = 0,
+                .method = .GET,
+                .url = "http://example.com/",
+                .cookie_jar = null,
+                .cookie_origin = "",
+                .resource_type = .document,
+                .notification = undefined,
+                .shutdown_callback = noopShutdown,
+            },
+            .client = &client,
+            .id = @intCast(i + 1),
+            .start_time = 0,
+        };
+        try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+        try waiting.append(testing.allocator, transfer);
+        transfer.park(.robots);
+    }
+    try client.robots.pending.putNoClobber(testing.allocator, robots_url, waiting);
+
+    const t1 = client.robots.pending.get(robots_url).?.items[0];
+    const t2 = client.robots.pending.get(robots_url).?.items[1];
+
+    t1.abort(error.Abort);
+    try testing.expectEqual(1, client.robots.pending.get(robots_url).?.items.len);
+    try testing.expect(client.robots.pending.get(robots_url).?.items[0] == t2);
+    try testing.expectEqual(1, client.transfers.count());
+
+    t2.abort(error.Abort);
+    try testing.expectEqual(0, client.robots.pending.get(robots_url).?.items.len);
+    try testing.expectEqual(0, client.transfers.count());
 }
 
 test "HttpClient: fulfillIntercepted follows a 3xx redirect" {

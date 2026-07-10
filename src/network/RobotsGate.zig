@@ -25,6 +25,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const URL = @import("../browser/URL.zig");
+const ArenaPool = @import("../ArenaPool.zig");
 
 const Robots = @import("Robots.zig");
 const Network = @import("Network.zig");
@@ -71,40 +72,66 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
     return .pending;
 }
 
-fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Transfer) !void {
-    const entry = try self.pending.getOrPut(self.allocator, robots_url);
+// A parked transfer is dying out-of-band (abort, owner teardown) — unlink
+// it so the robots.txt resolution doesn't touch freed memory. The map entry
+// stays: the in-flight fetch owns it (the key lives on the fetch's context
+// arena) and still resolves the remaining waiters.
+pub fn remove(self: *RobotsGate, transfer: *Transfer) void {
+    var it = self.pending.valueIterator();
+    while (it.next()) |waiting| {
+        for (waiting.items, 0..) |t, i| {
+            if (t == transfer) {
+                _ = waiting.swapRemove(i);
+                return;
+            }
+        }
+    }
+}
 
-    if (entry.found_existing) {
+fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Transfer) !void {
+    if (self.pending.getPtr(robots_url)) |waiting| {
         // A fetch for this robots.txt is already in flight, queue behind it.
-        try entry.value_ptr.append(self.allocator, transfer);
+        try waiting.append(self.allocator, transfer);
         transfer.park(.robots);
         return;
     }
 
-    errdefer _ = self.pending.remove(robots_url);
-    entry.value_ptr.* = .empty;
+    const client = transfer.client;
 
-    try entry.value_ptr.append(self.allocator, transfer);
-    transfer.park(.robots);
-    errdefer {
-        entry.value_ptr.deinit(self.allocator);
-        transfer.unpark();
-    }
+    // The context, the response buffer and the pending-map key live on
+    // their own pooled arena, NOT on transfer.arena — any waiter (this one
+    // included) can be aborted while the fetch is still in flight, and the
+    // fetch's callbacks must survive that. The arena is released by
+    // whichever terminal callback fires (done / error / shutdown).
+    const arena = try client.arena_pool.acquire(.small, "RobotsGate.RobotsContext");
+    errdefer client.arena_pool.release(arena);
 
-    const robots_ctx = try transfer.arena.create(RobotsContext);
+    const owned_url = try arena.dupeZ(u8, robots_url);
+    const robots_ctx = try arena.create(RobotsContext);
     robots_ctx.* = .{
         .gate = self,
         .buffer = .empty,
-        .arena = transfer.arena,
-        .robots_url = robots_url,
+        .arena = arena,
+        .arena_pool = client.arena_pool,
+        .robots_url = owned_url,
     };
 
-    log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
+    var waiting: std.ArrayList(*Transfer) = .empty;
+    try waiting.append(self.allocator, transfer);
+    errdefer waiting.deinit(self.allocator);
+
+    try self.pending.putNoClobber(self.allocator, owned_url, waiting);
+    errdefer _ = self.pending.remove(owned_url);
+
+    transfer.park(.robots);
+    errdefer transfer.unpark();
+
+    log.debug(.browser, "fetching robots.txt", .{ .robots_url = owned_url });
 
     // Only the parent's frame/loader ids (CDP correlation) and notification
     // carry over — no cookies, credentials, headers, or timeout.
-    try transfer.client.request(.{
-        .url = robots_url,
+    const fetch_transfer = try client.newRequest(.{
+        .url = owned_url,
         .method = .GET,
         .internal = true,
         .resource_type = .fetch,
@@ -112,7 +139,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .loader_id = transfer.req.loader_id,
         .notification = transfer.req.notification,
         .cookie_jar = null,
-        .cookie_origin = robots_url,
+        .cookie_origin = owned_url,
         .ctx = robots_ctx,
         .header_callback = RobotsContext.headerCallback,
         .data_callback = RobotsContext.dataCallback,
@@ -120,14 +147,31 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .error_callback = RobotsContext.errorCallback,
         .shutdown_callback = RobotsContext.shutdownCallback,
     }, transfer.owner);
+
+    // From here the fetch owns the pending entry and the context arena. If
+    // submit fails it fires error_callback — possibly synchronously, right
+    // here — which resolves the waiters (fail-open, may already have resumed
+    // `transfer`) and releases the arena. So there is nothing to unwind
+    // locally and the errdefers above must not run: swallow the error.
+    fetch_transfer.submit() catch {};
 }
 
-fn flushPending(self: *RobotsGate, robots_url: [:0]const u8, allowed: bool) void {
+// The robots.txt fetch resolved: hand every waiter back to the pipeline,
+// each judged against its own path. No store entry (fetch failed, or a 200
+// whose body never got parsed) fails open.
+fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
     var queued = self.pending.fetchRemove(robots_url) orelse return;
     defer queued.value.deinit(self.allocator);
 
+    const robot_entry = self.network.robot_store.get(robots_url);
     for (queued.value.items) |transfer| {
         transfer.unpark();
+
+        const allowed = if (robot_entry) |entry| switch (entry) {
+            .absent => true,
+            .present => |robots| robots.isAllowed(URL.getPathname(transfer.req.url)),
+        } else true;
+
         if (!allowed) {
             log.warn(.http, "blocked by robots", .{ .url = transfer.req.url });
             transfer.failAsync(error.RobotsBlocked);
@@ -143,9 +187,12 @@ fn flushPending(self: *RobotsGate, robots_url: [:0]const u8, allowed: bool) void
     }
 }
 
-// shutdown_callback is only called on owner shutdown. And if this robot's fetch
-// is being shutdown, than any transfers waiting for it will be shutdown too.
-fn flushPendingShutdown(self: *RobotsGate, robots_url: [:0]const u8) void {
+// shutdown_callback fires on owner shutdown. Drop the entry without
+// resuming anyone. Waiters from the same owner are being kill()'d by the
+// same teardown loop; their deinit finds no gate entry left and no-ops.
+// A waiter parked by a different owner stays parked until its own owner
+// tears it down — it is never resumed (known limitation).
+fn flushPendingShutdown(self: *RobotsGate, robots_url: []const u8) void {
     var pending = self.pending.fetchRemove(robots_url) orelse return;
     pending.value.deinit(self.allocator);
 }
@@ -153,6 +200,7 @@ fn flushPendingShutdown(self: *RobotsGate, robots_url: [:0]const u8) void {
 const RobotsContext = struct {
     gate: *RobotsGate,
     arena: Allocator,
+    arena_pool: *ArenaPool,
     robots_url: [:0]const u8,
     buffer: std.ArrayList(u8),
     status: u16 = 0,
@@ -176,11 +224,8 @@ const RobotsContext = struct {
 
     fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
-        const gate = self.gate;
         const robots_url = self.robots_url;
-
-        var allowed = true;
-        const network = gate.network;
+        const network = self.gate.network;
 
         switch (self.status) {
             200 => {
@@ -195,8 +240,6 @@ const RobotsContext = struct {
                     };
                     if (robots) |r| {
                         try network.robot_store.put(robots_url, r);
-                        const path = URL.getPathname(gate.pending.get(robots_url).?.items[0].req.url);
-                        allowed = r.isAllowed(path);
                     }
                 }
             },
@@ -213,20 +256,34 @@ const RobotsContext = struct {
             },
         }
 
-        gate.flushPending(robots_url, allowed);
+        // If anything above threw, error_callback fires next and resolves
+        // instead — resolve() must run exactly once.
+        self.resolve();
     }
 
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
 
         log.warn(.http, "robots fetch failed", .{ .err = err });
-        self.gate.flushPending(self.robots_url, true);
+        self.resolve();
     }
 
     fn shutdownCallback(ctx_ptr: *anyopaque) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
 
         log.debug(.http, "robots fetch shutdown", .{});
-        self.gate.flushPendingShutdown(self.robots_url);
+        const gate = self.gate;
+        const pool = self.arena_pool;
+        const arena = self.arena;
+        gate.flushPendingShutdown(self.robots_url);
+        pool.release(arena);
+    }
+
+    fn resolve(self: *RobotsContext) void {
+        const gate = self.gate;
+        const pool = self.arena_pool;
+        const arena = self.arena;
+        gate.flushPending(self.robots_url);
+        pool.release(arena);
     }
 };
