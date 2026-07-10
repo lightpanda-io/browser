@@ -78,7 +78,7 @@
   async function async() {
     const script_id = (IS_TEST_RUNNER) ? document.currentScript.id : 'cannot track module id in FF/Chrome';
 
-    if (async_seen.has(script_id)) {
+    if (async_seen.has(script_id) && IS_TEST_RUNNER) {
       throw new Error(`testing.async() called more than once for script '${script_id}'. A script may only register one async block (the runner can declare success in the gap between two of them); split the test into separate <script> tags.`);
     }
     async_seen.add(script_id);
