@@ -35,14 +35,18 @@ const Dependend = union(enum) {
     signal: *AbortSignal,
     model_context_tool: *ModelContextTool,
 
-    fn markAborted(self: Dependend, reason_: ?Reason, exec: *const Execution) !void {
+    // Returns false if the dependent was already aborted, in which case no
+    // abort event must be dispatched for it.
+    fn markAborted(self: Dependend, reason_: ?Reason, exec: *const Execution) !bool {
         switch (self) {
             .signal => |dep| {
-                if (dep._aborted) return;
+                if (dep._aborted) return false;
                 try dep.markAborted(reason_, exec);
+                return true;
             },
             .model_context_tool => |dep| {
                 try dep.markAborted(exec);
+                return true;
             },
         }
     }
@@ -101,8 +105,9 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     // so we never need to recurse here.
     var to_dispatch: std.ArrayList(Dependend) = .{};
     for (self._dependents.items) |dep| {
-        try dep.markAborted(self._reason, exec);
-        try to_dispatch.append(exec.arena, dep);
+        if (try dep.markAborted(self._reason, exec)) {
+            try to_dispatch.append(exec.arena, dep);
+        }
     }
 
     try self.dispatchAbortEvent(exec);
@@ -123,7 +128,11 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
             .undefined => self._reason = reason,
         }
     } else {
-        self._reason = .{ .dom = DOMException.fromError(error.AbortError).? };
+        // Allocate the DOMException so the reason keeps a single JS identity:
+        // dependent signals must expose the very same DOMException instance.
+        const dom = try exec.arena.create(DOMException);
+        dom.* = DOMException.fromError(error.AbortError).?;
+        self._reason = .{ .dom = dom };
     }
 }
 
@@ -207,7 +216,7 @@ pub fn throwIfAborted(self: *const AbortSignal, exec: *const Execution) !ThrowIf
 
 const Reason = union(enum) {
     js_val: js.Value.Global,
-    dom: DOMException,
+    dom: *DOMException,
     string: []const u8,
     undefined: void,
 };
@@ -218,10 +227,16 @@ const TimeoutCallback = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
-        self.signal.abort(.{ .dom = DOMException.fromError(error.TimeoutError).? }, self.exec) catch |err| {
+        self.timeoutAbort() catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };
         return null;
+    }
+
+    fn timeoutAbort(self: *TimeoutCallback) !void {
+        const dom = try self.exec.arena.create(DOMException);
+        dom.* = DOMException.fromError(error.TimeoutError).?;
+        try self.signal.abort(.{ .dom = dom }, self.exec);
     }
 };
 
