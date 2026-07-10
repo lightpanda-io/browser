@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
@@ -146,7 +147,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(HTMLCollection.length, null, .{});
-    pub const @"[int]" = bridge.indexedReadWrite(HTMLCollection.getAtIndex, null, deleteAtIndex, null, null, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexedReadWrite(HTMLCollection.getAtIndex, null, deleteAtIndex, null, getIndexes, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(struct {
         pub fn wrap(self: *HTMLCollection, name: []const u8, frame: *Frame) !?*Element {
             if (name.len == 0) {
@@ -155,7 +156,63 @@ pub const JsApi = struct {
 
             return self.getByName(name, frame) orelse error.NotHandled;
         }
-    }.wrap, null, deleteByName, null, null, .{ .null_as_undefined = true });
+    }.wrap, null, deleteByName, getNames, null, .{ .null_as_undefined = true });
+
+    fn getIndexes(self: *HTMLCollection, exec: *const Execution) !js.Array {
+        const frame = switch (exec.js.global) {
+            .frame => |f| f,
+            .worker => unreachable,
+        };
+        const len = self.length(frame);
+        var arr = exec.js.local.?.newArray(len);
+        for (0..len) |i| {
+            _ = try arr.set(@intCast(i), i, .{});
+        }
+        return arr;
+    }
+
+    // The supported property names: for each element represented by the
+    // collection, in tree order, its id and (for HTML elements) its name
+    // attribute, skipping empty values and duplicates.
+    fn getNames(self: *HTMLCollection, exec: *const Execution) !js.Array {
+        const frame = switch (exec.js.global) {
+            .frame => |f| f,
+            .worker => unreachable,
+        };
+
+        var names: std.ArrayList([]const u8) = .{};
+        const arena = exec.call_arena;
+
+        const len = self.length(frame);
+        for (0..len) |i| {
+            const element = self.getAtIndex(i, frame) orelse break;
+            if (element.getAttributeSafe(comptime .wrap("id"))) |id| {
+                if (id.len > 0 and !contains(names.items, id)) {
+                    try names.append(arena, id);
+                }
+            }
+            if (element._namespace == .html) {
+                if (element.getAttributeSafe(comptime .wrap("name"))) |name| {
+                    if (name.len > 0 and !contains(names.items, name)) {
+                        try names.append(arena, name);
+                    }
+                }
+            }
+        }
+
+        var arr = exec.js.local.?.newArray(@intCast(names.items.len));
+        for (names.items, 0..) |name, i| {
+            _ = try arr.set(@intCast(i), name, .{});
+        }
+        return arr;
+    }
+
+    fn contains(names: []const []const u8, name: []const u8) bool {
+        for (names) |n| {
+            if (std.mem.eql(u8, n, name)) return true;
+        }
+        return false;
+    }
 
     // Supported indexed and named properties can't be deleted (delete returns
     // false, which throws a TypeError in strict mode); unsupported ones follow
