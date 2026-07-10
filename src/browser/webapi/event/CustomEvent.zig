@@ -73,6 +73,7 @@ pub fn initCustomEvent(
 
     // This function can only be called after the constructor has called.
     // So we assume proto is initialized already by constructor.
+    self._proto._initialized = true;
     self._proto._type_string = try String.init(self._proto._arena, event_string, .{});
     self._proto._bubbles = bubbles orelse false;
     self._proto._cancelable = cancelable orelse false;

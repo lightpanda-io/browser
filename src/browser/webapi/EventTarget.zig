@@ -69,6 +69,11 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     if (event._event_phase != .none) {
         return error.InvalidStateError;
     }
+    // An event created by document.createEvent stays uninitialized until an
+    // init*Event call; dispatching it is an error.
+    if (!event._initialized) {
+        return error.InvalidStateError;
+    }
     event._is_trusted = false;
 
     switch (exec.js.global) {
