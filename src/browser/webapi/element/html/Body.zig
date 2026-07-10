@@ -22,9 +22,10 @@ const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Window = @import("../../Window.zig");
 const HtmlElement = @import("../Html.zig");
 
-const log = lp.log;
+const String = lp.String;
 
 const Body = @This();
 
@@ -37,14 +38,49 @@ pub fn asNode(self: *Body) *Node {
     return self.asElement().asNode();
 }
 
-/// Special-case: `body.onload` is actually an alias for `window.onload`.
-pub fn setOnLoad(_: *Body, callback: ?js.Function.Global, frame: *Frame) !void {
-    frame.window._on_load = callback;
+// Special-case: the "window-reflecting body element event handler set"
+// (blur, error, focus, load, resize, scroll) are aliases for the Window's
+// event handlers.
+pub fn getOnBlur(_: *Body, frame: *Frame) ?js.Function.Global {
+    return frame.window._on_blur;
+}
+pub fn setOnBlur(_: *Body, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    frame.window._on_blur = Window.getFunctionFromSetter(setter);
 }
 
-/// Special-case: `body.onload` is actually an alias for `window.onload`.
+pub fn getOnError(_: *Body, frame: *Frame) ?js.Function.Global {
+    return frame.window._on_error;
+}
+pub fn setOnError(_: *Body, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    frame.window._on_error = Window.getFunctionFromSetter(setter);
+}
+
+pub fn getOnFocus(_: *Body, frame: *Frame) ?js.Function.Global {
+    return frame.window._on_focus;
+}
+pub fn setOnFocus(_: *Body, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    frame.window._on_focus = Window.getFunctionFromSetter(setter);
+}
+
 pub fn getOnLoad(_: *Body, frame: *Frame) ?js.Function.Global {
     return frame.window._on_load;
+}
+pub fn setOnLoad(_: *Body, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    frame.window._on_load = Window.getFunctionFromSetter(setter);
+}
+
+pub fn getOnResize(_: *Body, frame: *Frame) ?js.Function.Global {
+    return frame.window._on_resize;
+}
+pub fn setOnResize(_: *Body, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    frame.window._on_resize = Window.getFunctionFromSetter(setter);
+}
+
+pub fn getOnScroll(_: *Body, frame: *Frame) ?js.Function.Global {
+    return frame.window._on_scroll;
+}
+pub fn setOnScroll(_: *Body, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    frame.window._on_scroll = Window.getFunctionFromSetter(setter);
 }
 
 pub const JsApi = struct {
@@ -56,17 +92,33 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const onblur = bridge.accessor(getOnBlur, setOnBlur, .{ .null_as_undefined = false });
+    pub const onerror = bridge.accessor(getOnError, setOnError, .{ .null_as_undefined = false });
+    pub const onfocus = bridge.accessor(getOnFocus, setOnFocus, .{ .null_as_undefined = false });
     pub const onload = bridge.accessor(getOnLoad, setOnLoad, .{ .null_as_undefined = false });
+    pub const onresize = bridge.accessor(getOnResize, setOnResize, .{ .null_as_undefined = false });
+    pub const onscroll = bridge.accessor(getOnScroll, setOnScroll, .{ .null_as_undefined = false });
 };
 
 pub const Build = struct {
+    const window_reflecting_attributes = [_][]const u8{
+        "onblur", "onerror", "onfocus", "onload", "onresize", "onscroll",
+    };
+
     pub fn complete(node: *Node, frame: *Frame) !void {
         const el = node.as(Element);
-        const on_load = el.getAttributeSafe(comptime .wrap("onload")) orelse return;
-        if (frame.js.stringToPersistedFunction(on_load, &.{"event"}, &.{})) |func| {
-            frame.window._on_load = func;
-        } else |err| {
-            log.err(.js, "body.onload", .{ .err = err, .str = on_load });
+        inline for (window_reflecting_attributes) |attr| {
+            if (el.getAttributeSafe(comptime .wrap(attr))) |value| {
+                frame.window.setWindowReflectingHandlerFromAttribute(comptime .wrap(attr), value, frame);
+            }
         }
+    }
+
+    pub fn attributeChange(_: *Element, name: String, value: String, frame: *Frame) !void {
+        frame.window.setWindowReflectingHandlerFromAttribute(name, value.str(), frame);
+    }
+
+    pub fn attributeRemove(_: *Element, name: String, frame: *Frame) !void {
+        frame.window.setWindowReflectingHandlerFromAttribute(name, null, frame);
     }
 };
