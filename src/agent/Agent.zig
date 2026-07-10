@@ -1165,7 +1165,8 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
 fn saveOneShot(self: *Agent) void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
-    self.synthesizeSaveTo(arena.allocator(), self.one_shot_save.?, .replace, self.one_shot_task.?);
+    const path = save.ensureJsExtension(arena.allocator(), self.one_shot_save.?) catch self.one_shot_save.?;
+    self.synthesizeSaveTo(arena.allocator(), path, .replace, self.one_shot_task.?);
 }
 
 /// LLM synthesis + write for an already-resolved destination. Shared by the
