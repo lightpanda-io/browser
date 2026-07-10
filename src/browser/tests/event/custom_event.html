@@ -75,8 +75,10 @@
   const event2 = document.createEvent('CUSTOMEVENT');
   testing.expectEqual('', event2.type);
 
-  const event3 = document.createEvent('CustomEvents');
-  testing.expectEqual('', event3.type);
+  // per spec, the pluralized legacy alias is not supported
+  let threw = false;
+  try { document.createEvent('CustomEvents'); } catch (e) { threw = e.name === 'NotSupportedError'; }
+  testing.expectEqual(true, threw);
 }
 </script>
 
