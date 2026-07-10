@@ -245,6 +245,22 @@ const TimeoutCallback = struct {
     }
 
     fn timeoutAbort(self: *TimeoutCallback) !void {
+        // Per spec, the abort is queued as a global task on the signal's
+        // global: it must not run when the global's document is no longer
+        // fully active (e.g. the iframe that created the signal was detached).
+        switch (self.exec.js.global) {
+            .frame => |frame| {
+                var current: ?@TypeOf(frame) = frame;
+                while (current) |f| : (current = f.parent) {
+                    const iframe = f.iframe orelse continue;
+                    if (!iframe.asNode().isConnected()) {
+                        return;
+                    }
+                }
+            },
+            .worker => {},
+        }
+
         const dom = try self.exec.arena.create(DOMException);
         dom.* = DOMException.fromError(error.TimeoutError).?;
         try self.signal.abort(.{ .dom = dom }, self.exec);
