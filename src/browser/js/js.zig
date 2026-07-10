@@ -284,6 +284,18 @@ pub const NullableString = struct {
     value: []const u8,
 };
 
+// A required argument that accepts null (Web IDL "T?"): unlike a Zig optional
+// parameter, omitting the argument is a TypeError, while passing null or
+// undefined yields .{ .value = null }. It also counts towards the JS-visible
+// function length, which a plain optional would not.
+pub fn Nullable(comptime T: type) type {
+    return struct {
+        value: ?T,
+
+        pub const js_nullable = T;
+    };
+}
+
 pub const Exception = struct {
     local: *const Local,
     handle: *const v8.Value,

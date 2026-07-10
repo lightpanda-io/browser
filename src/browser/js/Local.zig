@@ -742,6 +742,14 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
 // Extracted so that it can be used in both jsValueToZig and in
 // probeJsValueToZig. Avoids having to duplicate this logic when probing.
 fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
+    // js.Nullable(T): a required argument that accepts null.
+    if (@hasDecl(T, "js_nullable")) {
+        if (js_val.isNullOrUndefined()) {
+            return T{ .value = null };
+        }
+        return T{ .value = try self.jsValueToZig(T.js_nullable, js_val) };
+    }
+
     return switch (T) {
         js.Function, js.Function.Global => {
             if (!js_val.isFunction()) {
