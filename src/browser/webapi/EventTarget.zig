@@ -137,7 +137,7 @@ pub const EventListenerCallback = union(enum) {
     function: js.Function,
     object: js.Object,
 };
-pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, exec: *js.Execution) !void {
+pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: js.Nullable(EventListenerCallback), opts_: ?AddEventListenerOptions, exec: *js.Execution) !void {
     // Convert the options before the null-callback early return: per spec,
     // the dictionary conversion throws even when the callback is null.
     const options = blk: {
@@ -159,7 +159,7 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventLi
         };
     };
 
-    const callback = callback_ orelse return;
+    const callback = callback_.value orelse return;
 
     const em_callback: EventManager.Callback = switch (callback) {
         .object => |obj| .{ .object = obj },
@@ -179,8 +179,8 @@ const RemoveEventListenerOptions = union(enum) {
         capture: bool = false,
     };
 };
-pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?RemoveEventListenerOptions, exec: *js.Execution) !void {
-    const callback = callback_ orelse return;
+pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: js.Nullable(EventListenerCallback), opts_: ?RemoveEventListenerOptions, exec: *js.Execution) !void {
+    const callback = callback_.value orelse return;
 
     // For object callbacks, check if handleEvent exists
     if (callback == .object) {
