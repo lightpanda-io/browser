@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Window = @import("Window.zig");
 const URL = @import("../URL.zig");
 const idna = @import("../../sys/idna.zig");
 const public_suffix_list = @import("../../data/public_suffix_list.zig");
@@ -86,6 +87,21 @@ pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
         self._on_selectionchange = try listen.persistWithThis(self);
     } else {
         self._on_selectionchange = null;
+    }
+}
+
+// Stored in the frame's attribute-listener map (like element and ShadowRoot
+// property handlers), which the dispatch propagation path consults for any
+// event target.
+pub fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
+    return frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
+}
+
+pub fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    if (Window.getFunctionFromSetter(setter)) |cb| {
+        try frame._event_target_attr_listeners.put(frame.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
+    } else {
+        _ = frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
     }
 }
 
@@ -1265,6 +1281,7 @@ pub const JsApi = struct {
     }
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
+    pub const onclick = bridge.accessor(Document.getOnClick, Document.setOnClick, .{});
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
