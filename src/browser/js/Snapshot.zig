@@ -757,6 +757,52 @@ fn inheritsFromHtmlElement(comptime JsApi: type) bool {
 // and define_on != null. This is the "flattening" pass, and it defines all of
 // the functions/accessors on directly on the global instance. Thus, globals have
 // it defined on both their prototype (first pass) and their own instance (2nd pass).
+fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, signature: anytype, target: anytype) void {
+    const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+    const getter_signature = if (value.static) null else signature;
+    const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+        .callback = value.getter,
+        .signature = getter_signature,
+    }).?;
+    // WebIDL: getter function's .name should be "get X"
+    const getter_name_str = "get " ++ name;
+    const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name_str.ptr, v8.kNormal, @intCast(getter_name_str.len));
+    v8.v8__FunctionTemplate__SetClassName(getter_callback, getter_name_v8);
+
+    const setter_callback = if (value.setter) |setter| blk: {
+        const cb = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+            .callback = setter,
+            .signature = getter_signature,
+            .length = 1,
+        }).?;
+        const setter_name_str = "set " ++ name;
+        const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));
+        v8.v8__FunctionTemplate__SetClassName(cb, setter_name_v8);
+        break :blk cb;
+    } else null;
+
+    var attribute: v8.PropertyAttribute = 0;
+    if (value.setter == null) {
+        attribute |= v8.ReadOnly;
+    }
+    if (value.deletable == false) {
+        attribute |= v8.DontDelete;
+    }
+
+    if (value.static) {
+        v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
+    } else {
+        // Web IDL: attributes on the interface prototype object
+        // (and mirrored onto [Global] instances) are enumerable.
+        v8.v8__ObjectTemplate__SetAccessorProperty__Config(target, &.{
+            .key = js_name,
+            .getter = getter_callback,
+            .setter = setter_callback,
+            .attribute = attribute,
+        });
+    }
+}
+
 fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, define_on: ?*const v8.ObjectTemplate) void {
     const instance = v8.v8__FunctionTemplate__InstanceTemplate(template);
     const prototype = v8.v8__FunctionTemplate__PrototypeTemplate(template);
@@ -792,49 +838,10 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     continue;
                 }
 
-                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                const getter_signature = if (value.static) null else signature;
-                const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
-                    .callback = value.getter,
-                    .signature = getter_signature,
-                }).?;
-                // WebIDL: getter function's .name should be "get X"
-                const getter_name_str = "get " ++ name;
-                const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name_str.ptr, v8.kNormal, @intCast(getter_name_str.len));
-                v8.v8__FunctionTemplate__SetClassName(getter_callback, getter_name_v8);
-
-                const setter_callback = if (value.setter) |setter| blk: {
-                    const cb = v8.v8__FunctionTemplate__New__Config(isolate, &.{
-                        .callback = setter,
-                        .signature = getter_signature,
-                        .length = 1,
-                    }).?;
-                    const setter_name_str = "set " ++ name;
-                    const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));
-                    v8.v8__FunctionTemplate__SetClassName(cb, setter_name_v8);
-                    break :blk cb;
-                } else null;
-
-                var attribute: v8.PropertyAttribute = 0;
-                if (value.setter == null) {
-                    attribute |= v8.ReadOnly;
-                }
-                if (value.deletable == false) {
-                    attribute |= v8.DontDelete;
-                }
-
-                if (value.static) {
-                    v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
-                } else {
-                    // Web IDL: attributes on the interface prototype object
-                    // (and mirrored onto [Global] instances) are enumerable.
-                    v8.v8__ObjectTemplate__SetAccessorProperty__Config(define_on orelse prototype, &.{
-                        .key = js_name,
-                        .getter = getter_callback,
-                        .setter = setter_callback,
-                        .attribute = attribute,
-                    });
-                }
+                // [LegacyUnforgeable] accessors live on the instances, not on
+                // the interface prototype object.
+                const target = if (value.unforgeable) instance else (define_on orelse prototype);
+                attachAccessorProperty(name, value, isolate, template, signature, target);
             },
             bridge.Function => {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
@@ -917,6 +924,26 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
             },
             bridge.Constructor => {},
             else => {},
+        }
+    }
+
+    // Web IDL [LegacyUnforgeable]: unforgeable accessors of ancestor
+    // interfaces are own properties of every subclass instance too. v8's
+    // Inherit only chains prototype templates, not instance templates, so
+    // re-install them on this class's instance template.
+    if (comptime !flatten) {
+        comptime var T = JsApi.bridge.type;
+        inline while (comptime @hasField(T, "_proto")) {
+            const P = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
+            inline for (@typeInfo(P.JsApi).@"struct".decls) |pd| {
+                const pvalue = @field(P.JsApi, pd.name);
+                if (comptime @TypeOf(pvalue) == bridge.Accessor) {
+                    if (comptime (pvalue.unforgeable and !pvalue.static)) {
+                        attachAccessorProperty(pd.name, pvalue, isolate, template, signature, instance);
+                    }
+                }
+            }
+            T = P;
         }
     }
 

@@ -719,6 +719,10 @@ pub const Function = struct {
         exposed: Exposed = .both,
         ce_reactions: bool = false,
         js_name: ?[:0]const u8 = null,
+        // Web IDL [LegacyUnforgeable]: the accessor is an own property of
+        // every instance (including subclass instances) instead of living on
+        // the interface prototype object.
+        unforgeable: bool = false,
 
         pub const Exposed = enum { both, window, worker };
 
