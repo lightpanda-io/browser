@@ -169,7 +169,14 @@ pub const save_synthesis_prompt =
     \\didn't use. Never round-trip a result through `lp.*`, and never append
     \\no-op page.extract(...) probes or `page.evaluate("return lp....")` tails to
     \\surface output.
-    \\Output ONLY JavaScript source — no markdown fences, no commentary.
+    \\Annotate the script with short `//` intent comments so a later reader grasps
+    \\it at a glance: one comment above each logical block (navigate, extract a
+    \\list, fan out to detail pages, aggregate, return) stating what that block
+    \\accomplishes toward the goal — NOT restating the API call. One comment per
+    \\step, not per line; skip self-evident lines.
+    \\Output ONLY JavaScript source — no markdown fences and no prose outside the
+    \\code, but DO annotate the script with the `//` intent comments described
+    \\above.
 ;
 
 /// Script-language rules for consumers that never see the full
