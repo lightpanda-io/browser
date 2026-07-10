@@ -53,11 +53,19 @@ pub fn parseCommand(arena: std.mem.Allocator, rest: []const u8) !Command {
         after = trimmed[tok_end..];
     }
     if (name.len == 0) return error.EmptyFilename;
-    if (!std.mem.endsWith(u8, name, ".js")) {
-        name = try std.mem.concat(arena, u8, &.{ name, ".js" });
-    }
     const prompt = std.mem.trim(u8, after, &std.ascii.whitespace);
-    return .{ .filename = name, .prompt = if (prompt.len == 0) null else prompt };
+    return .{
+        .filename = try ensureJsExtension(arena, name),
+        .prompt = if (prompt.len == 0) null else prompt,
+    };
+}
+
+/// `name` with `.js` appended when missing; may alias `name` or be
+/// arena-allocated. Shared by `/save` parsing and the one-shot `--save` flag
+/// so the two paths can't drift.
+pub fn ensureJsExtension(arena: std.mem.Allocator, name: []const u8) ![]const u8 {
+    if (std.mem.endsWith(u8, name, ".js")) return name;
+    return std.mem.concat(arena, u8, &.{ name, ".js" });
 }
 
 pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
@@ -117,6 +125,14 @@ test "parseCommand: filename only" {
     const r = try parseCommand(arena.allocator(), "out.js");
     try std.testing.expectEqualStrings("out.js", r.filename.?);
     try std.testing.expect(r.prompt == null);
+}
+
+test "ensureJsExtension appends only when missing" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqualStrings("out.js", try ensureJsExtension(arena.allocator(), "out"));
+    try std.testing.expectEqualStrings("out.js", try ensureJsExtension(arena.allocator(), "out.js"));
+    try std.testing.expectEqualStrings("a/b.thing.js", try ensureJsExtension(arena.allocator(), "a/b.thing"));
 }
 
 test "parseCommand: filename and prompt" {
