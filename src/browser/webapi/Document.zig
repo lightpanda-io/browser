@@ -54,6 +54,8 @@ _type: Type,
 _proto: *Node,
 _frame: ?*Frame = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
+// content type override for documents created via DOMImplementation.createDocument
+_content_type: ?[]const u8 = null,
 _ready_state: ReadyState = .loading,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
@@ -158,6 +160,9 @@ pub fn setLocation(self: *Document, url: [:0]const u8) !void {
 }
 
 pub fn getContentType(self: *const Document) []const u8 {
+    if (self._content_type) |content_type| {
+        return content_type;
+    }
     return switch (self._type) {
         .html => "text/html",
         .xml => "application/xml",
@@ -300,7 +305,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
 }
 
 pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8, frame: *Frame) !*Element {
-    try validateElementName(name);
+    _ = try validateAndExtract(namespace, name, .element);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
     const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
@@ -1239,26 +1244,118 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
     }
 }
 
-fn validateElementName(name: []const u8) !void {
+// DOM §1.4 "Name validation" productions.
+
+pub fn isValidElementLocalName(name: []const u8) bool {
     if (name.len == 0) {
-        return error.InvalidCharacterError;
+        return false;
     }
-
-    const first = name[0];
-    // Element names cannot start with: digits, period, hyphen
-    if ((first >= '0' and first <= '9') or first == '.' or first == '-') {
-        return error.InvalidCharacterError;
+    if (std.ascii.isAlphabetic(name[0])) {
+        // Names the HTML parser can construct: anything except ASCII
+        // whitespace, NUL, '/' or '>'.
+        for (name[1..]) |c| {
+            switch (c) {
+                '\t', '\n', 0x0C, '\r', ' ', 0, '/', '>' => return false,
+                else => {},
+            }
+        }
+        return true;
     }
-
+    // Otherwise the first code point must be ':', '_' or beyond ASCII, and
+    // the rest restricted to alphanumerics, '-', '.', ':', '_' or non-ASCII.
+    if (name[0] != ':' and name[0] != '_' and name[0] < 0x80) {
+        return false;
+    }
     for (name[1..]) |c| {
-        const is_valid = std.ascii.isAlphanumeric(c) or
-            c == '_' or c == '-' or c == '.' or c == ':' or
-            c >= 128; // Allow non-ASCII UTF-8
+        const valid = std.ascii.isAlphanumeric(c) or
+            c == '-' or c == '.' or c == ':' or c == '_' or c >= 0x80;
+        if (!valid) {
+            return false;
+        }
+    }
+    return true;
+}
 
-        if (!is_valid) {
+pub fn isValidNamespacePrefix(prefix: []const u8) bool {
+    if (prefix.len == 0) {
+        return false;
+    }
+    for (prefix) |c| {
+        switch (c) {
+            '\t', '\n', 0x0C, '\r', ' ', 0, '/', '>' => return false,
+            else => {},
+        }
+    }
+    return true;
+}
+
+pub fn isValidAttributeLocalName(name: []const u8) bool {
+    if (name.len == 0) {
+        return false;
+    }
+    for (name) |c| {
+        switch (c) {
+            '\t', '\n', 0x0C, '\r', ' ', 0, '/', '=', '>' => return false,
+            else => {},
+        }
+    }
+    return true;
+}
+
+fn validateElementName(name: []const u8) !void {
+    if (!isValidElementLocalName(name)) {
+        return error.InvalidCharacterError;
+    }
+}
+
+pub const ValidatedName = struct {
+    prefix: ?[]const u8,
+    local_name: []const u8,
+    namespace: ?[]const u8,
+};
+
+// The DOM spec's "validate and extract a namespace and qualifiedName".
+pub fn validateAndExtract(namespace_: ?[]const u8, qualified_name: []const u8, comptime context: enum { element, attribute }) !ValidatedName {
+    var namespace: ?[]const u8 = namespace_;
+    if (namespace) |ns| {
+        if (ns.len == 0) {
+            namespace = null;
+        }
+    }
+
+    var prefix: ?[]const u8 = null;
+    var local_name = qualified_name;
+    if (std.mem.indexOfScalar(u8, qualified_name, ':')) |colon| {
+        prefix = qualified_name[0..colon];
+        local_name = qualified_name[colon + 1 ..];
+        if (!isValidNamespacePrefix(prefix.?)) {
             return error.InvalidCharacterError;
         }
     }
+
+    const local_valid = switch (context) {
+        .element => isValidElementLocalName(local_name),
+        .attribute => isValidAttributeLocalName(local_name),
+    };
+    if (!local_valid) {
+        return error.InvalidCharacterError;
+    }
+
+    if (prefix != null and namespace == null) {
+        return error.NamespaceError;
+    }
+    if (prefix) |p| {
+        if (std.mem.eql(u8, p, "xml") and (namespace == null or !std.mem.eql(u8, namespace.?, "http://www.w3.org/XML/1998/namespace"))) {
+            return error.NamespaceError;
+        }
+    }
+    const is_xmlns = std.mem.eql(u8, qualified_name, "xmlns") or (prefix != null and std.mem.eql(u8, prefix.?, "xmlns"));
+    const ns_is_xmlns = namespace != null and std.mem.eql(u8, namespace.?, "http://www.w3.org/2000/xmlns/");
+    if (is_xmlns != ns_is_xmlns) {
+        return error.NamespaceError;
+    }
+
+    return .{ .prefix = prefix, .local_name = local_name, .namespace = namespace };
 }
 
 // When a frame's URL is about:blank, or as soon as a frame is
