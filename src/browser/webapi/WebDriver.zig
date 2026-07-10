@@ -173,6 +173,9 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const button = readI32(action, "button", 0);
             dispatchPointer(el, "pointerdown", button, 1, frame);
             dispatchMouse(el, "mousedown", button, 1, frame);
+            Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
+                log.warn(.app, "webdriver editable focus", .{ .err = err });
+            };
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
