@@ -108,6 +108,24 @@ pub fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame
     }
 }
 
+// Generates a getter/setter pair backed by the frame's attribute-listener
+// map, like onclick above, for other document event handler properties.
+fn handlerAccessor(comptime handler: @import("global_event_handlers.zig").Handler) type {
+    return struct {
+        pub fn get(self: *Document, frame: *Frame) ?js.Function.Global {
+            return frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = handler });
+        }
+
+        pub fn set(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+            if (Window.getFunctionFromSetter(setter)) |cb| {
+                try frame._event_target_attr_listeners.put(frame.arena, .{ .target = self.asEventTarget(), .handler = handler }, cb);
+            } else {
+                _ = frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = handler });
+            }
+        }
+    };
+}
+
 pub const Type = union(enum) {
     generic,
     html: *HTMLDocument,
@@ -495,7 +513,7 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
             break :blk try Event.init("", null, frame._page);
         }
 
-        if (std.mem.eql(u8, normalized, "customevent") or std.mem.eql(u8, normalized, "customevents")) {
+        if (std.mem.eql(u8, normalized, "customevent")) {
             const CustomEvent = @import("event/CustomEvent.zig");
             break :blk (try CustomEvent.init("", null, frame._page)).asEvent();
         }
@@ -535,12 +553,12 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
             break :blk (try UIEvent.init("", null, frame)).asEvent();
         }
 
-        if (std.mem.eql(u8, normalized, "focusevent") or std.mem.eql(u8, normalized, "focusevents")) {
+        if (std.mem.eql(u8, normalized, "focusevent")) {
             const FocusEvent = @import("event/FocusEvent.zig");
             break :blk (try FocusEvent.init("", null, frame)).asEvent();
         }
 
-        if (std.mem.eql(u8, normalized, "textevent") or std.mem.eql(u8, normalized, "textevents")) {
+        if (std.mem.eql(u8, normalized, "textevent")) {
             const TextEvent = @import("event/TextEvent.zig");
             break :blk (try TextEvent.init("", null, frame)).asEvent();
         }
@@ -550,16 +568,29 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
             break :blk (try CompositionEvent.init("", null, frame)).asEvent();
         }
 
-        // Aliases the spec requires createEvent to support but whose
-        // interfaces aren't implemented yet: return a plain Event so the
-        // caller can at least initialize and dispatch it.
-        if (std.mem.eql(u8, normalized, "beforeunloadevent") or
-            std.mem.eql(u8, normalized, "devicemotionevent") or
-            std.mem.eql(u8, normalized, "deviceorientationevent") or
-            std.mem.eql(u8, normalized, "storageevent"))
-        {
-            log.info(.not_implemented, "createEvent interface", .{ .type = event_type });
-            break :blk try Event.init("", null, frame._page);
+        if (std.mem.eql(u8, normalized, "beforeunloadevent")) {
+            const BeforeUnloadEvent = @import("event/BeforeUnloadEvent.zig");
+            break :blk (try BeforeUnloadEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "devicemotionevent")) {
+            const DeviceMotionEvent = @import("event/DeviceMotionEvent.zig");
+            break :blk (try DeviceMotionEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "deviceorientationevent")) {
+            const DeviceOrientationEvent = @import("event/DeviceOrientationEvent.zig");
+            break :blk (try DeviceOrientationEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "storageevent")) {
+            const StorageEvent = @import("event/StorageEvent.zig");
+            break :blk (try StorageEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "touchevent")) {
+            const TouchEvent = @import("event/TouchEvent.zig");
+            break :blk (try TouchEvent.init("", null, frame)).asEvent();
         }
 
         return error.NotSupported;
@@ -1409,6 +1440,10 @@ pub const JsApi = struct {
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
     pub const onclick = bridge.accessor(Document.getOnClick, Document.setOnClick, .{});
+    pub const ontouchstart = bridge.accessor(handlerAccessor(.ontouchstart).get, handlerAccessor(.ontouchstart).set, .{});
+    pub const ontouchend = bridge.accessor(handlerAccessor(.ontouchend).get, handlerAccessor(.ontouchend).set, .{});
+    pub const ontouchmove = bridge.accessor(handlerAccessor(.ontouchmove).get, handlerAccessor(.ontouchmove).set, .{});
+    pub const ontouchcancel = bridge.accessor(handlerAccessor(.ontouchcancel).get, handlerAccessor(.ontouchcancel).set, .{});
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
