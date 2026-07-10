@@ -12,6 +12,7 @@
     \\  version     displays the version of {0s}
     \\
     \\Use "{0s} help <command>" for more information about a command.
+    \\Add --all (e.g. "{0s} help <command> --all") to also show the common options.
     ,
     .serve =
     \\usage: {0s} serve [OPTIONS] [COMMON_OPTIONS]

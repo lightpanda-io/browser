@@ -33,10 +33,12 @@ const log = lp.log;
 ///
 ///   - When no command is given, the parser defaults to `serve`.
 ///   - `help`, `help <command>`, `<command> help`, and `<command> --help` all
-///     yield the `help` union variant. When a command is named (in either
-///     position), the variant carries that command's enum tag so callers can
-///     print command-specific help; bare `help` and `help help` carry the
-///     `.help` tag. An unknown name after `help` returns
+///     yield the `help` union variant, whose payload is `.{ tag, all }`. When a
+///     command is named (in either position), `tag` is that command's enum so
+///     callers can print command-specific help; bare `help` and `help help`
+///     carry the `.help` tag. A trailing `--all` (accepted in any of these
+///     forms) sets `all = true`, which asks the renderer to also print the
+///     common options. An unknown name after `help` returns
 ///     `error.UnknownCommand`.
 ///   - Legacy fallback: if the first argument starts with `--` and matches a
 ///     known fetch/serve flag, the parser sniffs the command from it and
@@ -287,8 +289,8 @@ pub fn Builder(comptime commands: anytype) type {
                 union_fields[i] = .{ .name = command.name, .type = T, .alignment = @alignOf(T) };
             }
 
-            // Entry for help; just takes `Enum` itself.
-            const Help = Enum;
+            // Entry for help; carries the target command tag and an `all` flag.
+            const Help = struct { tag: Enum, all: bool = false };
             union_fields[i] = .{ .name = "help", .type = Help, .alignment = @alignOf(Help) };
 
             break :blk @Type(.{
@@ -339,28 +341,19 @@ pub fn Builder(comptime commands: anytype) type {
 
             // Help is not in `commands`; so, we have to special case it.
             if (std.mem.eql(u8, cmd_str, "help")) {
-                // Check if we're followed by a command name.
-                const command_name: []const u8 = args.next() orelse {
-                    // "lightpanda help"; short-circuit.
-                    return .{ exec_name, @unionInit(Union, "help", .help) };
-                };
-
-                inline for (commands) |command| {
-                    if (std.mem.eql(u8, command_name, command.name)) {
-                        return .{
-                            exec_name,
-                            @unionInit(Union, "help", std.meta.stringToEnum(Enum, command.name).?),
-                        };
+                var tag: Enum = .help;
+                var all = false;
+                while (args.next()) |arg| {
+                    if (std.mem.eql(u8, arg, "--all")) {
+                        all = true;
+                        continue;
                     }
+                    tag = std.meta.stringToEnum(Enum, arg) orelse {
+                        log.fatal(.app, "unknown command", .{ .arg = arg });
+                        return error.UnknownCommand;
+                    };
                 }
-
-                // Treat `help help` as the full help.
-                if (std.mem.eql(u8, command_name, "help")) {
-                    return .{ exec_name, @unionInit(Union, "help", .help) };
-                }
-
-                log.fatal(.app, "unknown command", .{ .arg = command_name });
-                return error.UnknownCommand;
+                return .{ exec_name, @unionInit(Union, "help", .{ .tag = tag, .all = all }) };
             }
 
             // Last resort, try sniffing.
@@ -368,7 +361,7 @@ pub fn Builder(comptime commands: anytype) type {
 
             // Legacy `--help` situation.
             if (command_enum == .help) {
-                return .{ exec_name, @unionInit(Union, "help", .help) };
+                return .{ exec_name, @unionInit(Union, "help", .{ .tag = .help }) };
             }
 
             // "cmd_str" wasn't a command but an option. We can't reset args, but
@@ -682,7 +675,11 @@ pub fn Builder(comptime commands: anytype) type {
 
                 // Subcommand help: `lightpanda fetch help` or `lightpanda fetch --help`.
                 if (std.mem.eql(u8, option_name, "help") or std.mem.eql(u8, option_name, "--help")) {
-                    return @unionInit(Union, "help", std.meta.stringToEnum(Enum, command.name).?);
+                    const all = if (args.next()) |next| std.mem.eql(u8, next, "--all") else false;
+                    return @unionInit(Union, "help", .{
+                        .tag = std.meta.stringToEnum(Enum, command.name).?,
+                        .all = all,
+                    });
                 }
 
                 // Encountered an option we don't know of.

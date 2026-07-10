@@ -696,36 +696,29 @@ pub const HttpHeaders = struct {
     }
 };
 
-pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) void {
+pub fn printUsageAndExit(self: *const Config, help_for: RunMode, all: bool, success: bool) void {
     const exec_name = self.exec_name;
     const Help = @import("help.zon");
     const is_debug = builtin.mode == .Debug;
     const info_or_warn = if (comptime is_debug) "info" else "warn";
     const pretty_or_logfmt = if (comptime is_debug) "pretty" else "logfmt";
-    const comptimePrint = std.fmt.comptimePrint;
 
     switch (help_for) {
-        // Requested help for everything.
-        .help => {
-            const template = comptimePrint(
-                \\{s}
-                \\
-            , .{Help.general});
-            std.debug.print(template, .{exec_name});
+        // `.help` renders the general overview; the command tags render their
+        // own section. `--all` appends the common options to any of them.
+        inline .help, .fetch, .serve, .mcp, .agent => |tag| {
+            const section = comptime if (tag == .help) Help.general else @field(Help, @tagName(tag));
+            if (all) {
+                std.debug.print(section ++ "\n\n" ++ Help.common_options ++ "\n", .{ exec_name, info_or_warn, pretty_or_logfmt });
+            } else {
+                const footer = comptime if (tag == .help)
+                    ""
+                else
+                    "\nRun \"{0s} help " ++ @tagName(tag) ++ " --all\" to also show common options.\n";
+                std.debug.print(section ++ "\n" ++ footer, .{exec_name});
+            }
         },
-        inline .fetch, .serve, .mcp, .agent => |tag| {
-            const template = comptimePrint(
-                \\{s}
-                \\
-                \\{s}
-                \\
-            , .{ @field(Help, @tagName(tag)), Help.common_options });
-            std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
-        },
-        .version => {
-            const template = Help.version ++ "\n";
-            std.debug.print(template, .{exec_name});
-        },
+        .version => std.debug.print(Help.version ++ "\n", .{exec_name}),
     }
 
     if (success) {
