@@ -111,8 +111,28 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event, opts),
+        // Property event handlers (e.g. xhr.onload, window.onerror) fire for
+        // script-dispatched events too, not only for the internal dispatch
+        // paths which pass them explicitly.
+        .xhr => |xhr| try self.dispatchDirect(target, event, xhr.inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .window => |w| try self.dispatchDirect(target, event, windowInlineHandler(w, event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
+}
+
+// Resolves the Window's property event handler for the given event type.
+fn windowInlineHandler(window: *@import("webapi/Window.zig"), typ: lp.String) ?js.Function.Global {
+    const global_event_handlers = @import("webapi/global_event_handlers.zig");
+    const handler_type = global_event_handlers.fromEventType(typ.str()) orelse return null;
+    return switch (handler_type) {
+        .onerror => window._on_error,
+        .onload => window._on_load,
+        .onblur => window._on_blur,
+        .onfocus => window._on_focus,
+        .onresize => window._on_resize,
+        .onscroll => window._on_scroll,
+        else => null,
+    };
 }
 
 // There are a lot of events that can be attached via addEventListener or as
@@ -284,6 +304,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             was_handled = true;
             event._current_target = target_et;
 
+            const prev_current_event = window._current_event;
+            window._current_event = currentEventForTarget(target_et, event);
+            defer window._current_event = prev_current_event;
+
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
             var caught: js.TryCatch.Caught = undefined;
@@ -331,6 +355,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
                 was_handled = true;
                 event._current_target = current_target;
 
+                const prev_current_event = window._current_event;
+                window._current_event = currentEventForTarget(current_target, event);
+                defer window._current_event = prev_current_event;
+
                 const original_target = event._target;
                 if (event._needs_retargeting) {
                     event._target = getAdjustedTarget(original_target, current_target);
@@ -360,6 +388,22 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     }
 }
 
+// Per spec ("invocation target in shadow tree"), window.event is left
+// undefined while invoking listeners whose target lives in a shadow tree.
+fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
+    const ShadowRoot = @import("webapi/ShadowRoot.zig");
+    switch (target._type) {
+        .node => |n| {
+            const root = n.getRootNode(.{});
+            if (root.is(ShadowRoot) != null) {
+                return null;
+            }
+        },
+        else => {},
+    }
+    return event;
+}
+
 const DispatchPhaseOpts = struct {
     capture_only: ?bool = null,
     apply_ignore: bool = false,
@@ -375,6 +419,11 @@ const DispatchPhaseOpts = struct {
 fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime opts: DispatchPhaseOpts) !void {
     const frame = self.frame;
     const base = &self.base;
+
+    const window = frame.window;
+    const prev_current_event = window._current_event;
+    window._current_event = currentEventForTarget(current_target, event);
+    defer window._current_event = prev_current_event;
 
     // Track dispatch depth for deferred removal
     base.dispatch_depth += 1;
@@ -477,6 +526,17 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     // Look up the inline handler for this target
     const html_element = switch (target._type) {
         .node => |n| n.is(Element.Html) orelse return null,
+        // The Window stores its event handlers in dedicated fields; an event
+        // propagating to the window must fire them too.
+        .window => |w| return switch (handler_type) {
+            .onerror => w._on_error,
+            .onload => w._on_load,
+            .onblur => w._on_blur,
+            .onfocus => w._on_focus,
+            .onresize => w._on_resize,
+            .onscroll => w._on_scroll,
+            else => null,
+        },
         else => return null,
     };
 
