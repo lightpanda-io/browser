@@ -49,6 +49,20 @@ pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) !
     return (try axnode.getName(frame, frame.call_arena)) orelse "";
 }
 
+// Implements testdriver's `click`: a full trusted primary-button click
+// sequence on the element, as a real user click would produce. Unlike
+// HTMLElement.click() (a lone untrusted click event), the events are trusted
+// and preceded by the pointer/mouse press and release. Dispatched
+// synchronously so the events are observable when the testdriver promise
+// resolves.
+pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
+    dispatchPointer(element, "pointerdown", 0, 1, frame);
+    dispatchMouse(element, "mousedown", 0, 1, frame);
+    dispatchPointer(element, "pointerup", 0, 0, frame);
+    dispatchMouse(element, "mouseup", 0, 0, frame);
+    dispatchMouse(element, "click", 0, 0, frame);
+}
+
 // Implements testdriver's `action_sequence` (the WebDriver "Perform Actions"
 // command) for the renderless browser. We can't do real hit-testing, so we only
 // support the subset that targets a concrete element via `origin`. Each input
@@ -333,4 +347,5 @@ pub const JsApi = struct {
     pub const deleteAllCookies = bridge.function(WebDriver.deleteAllCookies, .{});
     pub const getComputedLabel = bridge.function(WebDriver.getComputedLabel, .{});
     pub const actionSequence = bridge.function(WebDriver.actionSequence, .{});
+    pub const click = bridge.function(WebDriver.click, .{});
 };
