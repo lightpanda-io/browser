@@ -93,6 +93,15 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{ .ce_reactions = true });
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
     pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
+    pub const sandbox = bridge.accessor(_getSandbox, null, .{ .null_as_undefined = true });
+
+    fn _getSandbox(self: *IFrame, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
+        const element = self.asElement();
+        if (element._namespace != .html) {
+            return null;
+        }
+        return element.getTokenList(.sandbox, frame);
+    }
 };
 
 pub const Build = struct {

@@ -256,6 +256,15 @@ pub const JsApi = struct {
     pub const rev = bridge.accessor(Link.getRev, Link.setRev, .{ .ce_reactions = true });
     pub const target = bridge.accessor(Link.getTarget, Link.setTarget, .{ .ce_reactions = true });
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
+    pub const sizes = bridge.accessor(_getSizes, null, .{ .null_as_undefined = true });
+
+    fn _getSizes(self: *Link, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
+        const element = self.asElement();
+        if (element._namespace != .html) {
+            return null;
+        }
+        return element.getTokenList(.sizes, frame);
+    }
 
     fn _getRelList(self: *Link, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
         const element = self.asElement();

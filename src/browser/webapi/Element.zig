@@ -885,6 +885,23 @@ pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     return gop.value_ptr.*;
 }
 
+// The other DOMTokenList-reflected attributes (class and rel have dedicated
+// lookups above).
+pub const TokenListAttribute = enum { sizes, sandbox, @"for" };
+pub const TokenListKey = struct { element: *Element, attribute: TokenListAttribute };
+pub const TokenListLookup = std.AutoHashMapUnmanaged(TokenListKey, *collections.DOMTokenList);
+
+pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, frame: *Frame) !*collections.DOMTokenList {
+    const gop = try frame._element_token_lists.getOrPut(frame.arena, .{ .element = self, .attribute = attribute });
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
+            ._element = self,
+            ._attribute_name = comptime .wrap(@tagName(attribute)),
+        });
+    }
+    return gop.value_ptr.*;
+}
+
 pub fn getDataset(self: *Element, frame: *Frame) !*DOMStringMap {
     const gop = try frame._element_datasets.getOrPut(frame.arena, self);
     if (!gop.found_existing) {

@@ -29,4 +29,13 @@ pub const JsApi = struct {
     };
 
     pub const labels = bridge.accessor(Output.getLabels, null, .{});
+    pub const htmlFor = bridge.accessor(_getHtmlFor, null, .{ .null_as_undefined = true });
+
+    fn _getHtmlFor(self: *Output, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
+        const element = self.asElement();
+        if (element._namespace != .html) {
+            return null;
+        }
+        return element.getTokenList(.@"for", frame);
+    }
 };

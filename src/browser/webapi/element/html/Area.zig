@@ -212,4 +212,14 @@ pub const JsApi = struct {
     pub const search = bridge.accessor(Area.getSearch, Area.setSearch, .{ .ce_reactions = true });
     pub const hash = bridge.accessor(Area.getHash, Area.setHash, .{ .ce_reactions = true });
     pub const toString = bridge.function(Area.getHref, .{});
+    pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
+
+    fn _getRelList(self: *Area, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
+        const element = self.asElement();
+        // relList is only valid for HTML <area> elements
+        if (element._namespace != .html) {
+            return null;
+        }
+        return element.getRelList(frame);
+    }
 };
