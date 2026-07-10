@@ -23,10 +23,26 @@ const Document = @import("Document.zig");
 const DocumentType = @import("DocumentType.zig");
 
 const DOMImplementation = @This();
-_pad: bool = false,
 
-pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
-    return DocumentType.init(qualified_name, public_id, system_id, frame);
+// The document this implementation object belongs to: nodes created through
+// it are owned by that document, not necessarily the frame's main document.
+_document: *Document,
+
+pub fn createDocumentType(self: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
+    // Per spec, qualifiedName must match the doctype name production: any
+    // characters except ASCII whitespace or '>'.
+    for (qualified_name) |c| {
+        switch (c) {
+            '\t', '\n', 0x0C, '\r', ' ', '>' => return error.InvalidCharacterError,
+            else => {},
+        }
+    }
+
+    const doctype = try DocumentType.init(qualified_name, public_id, system_id, frame);
+    if (self._document != frame.document) {
+        try frame.setNodeOwnerDocument(doctype.asNode(), self._document);
+    }
+    return doctype;
 }
 
 pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, frame: *Frame) !*Document {
@@ -98,7 +114,6 @@ pub const JsApi = struct {
         pub const name = "DOMImplementation";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
     pub const createDocumentType = bridge.function(DOMImplementation.createDocumentType, .{});

@@ -418,7 +418,7 @@ pub fn querySelectorAll(self: *Document, input: String, frame: *Frame) !*Selecto
 
 pub fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
     if (self._implementation) |impl| return impl;
-    const impl = try frame._factory.create(DOMImplementation{});
+    const impl = try frame._factory.create(DOMImplementation{ ._document = self });
     self._implementation = impl;
     return impl;
 }
