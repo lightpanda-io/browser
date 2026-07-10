@@ -461,31 +461,45 @@ pub const Listener = struct {
             },
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
-                const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
-                    // Getting "handleEvent" threw (e.g. a throwing getter).
+
+                var try_catch: js.TryCatch = undefined;
+                try_catch.init(local);
+                defer try_catch.deinit();
+
+                // Get(handleEvent) can run a getter: a thrown exception is
+                // reported like an exception from the listener itself.
+                const handle_event_value = obj.get("handleEvent") catch |err| {
                     if (err == error.JsException) {
                         event._listeners_did_throw = true;
+                        reportException(&try_catch, local);
                     } else {
                         log.warn(.event, context, .{ .err = err });
                     }
-                    break :blk null;
+                    return;
                 };
-                if (handle_event) |handleEvent| {
-                    var try_catch: js.TryCatch = undefined;
-                    try_catch.init(local);
-                    defer try_catch.deinit();
-                    handleEvent.callWithThisRethrow(void, obj, .{event}) catch |err| switch (err) {
-                        error.JsException, error.TryCatchRethrow => {
-                            event._listeners_did_throw = true;
-                            reportException(&try_catch, local);
-                        },
-                        else => log.warn(.event, context, .{ .err = err }),
-                    };
-                } else {
-                    // The listener was an object without the handleEvent function
-                    // This is throwing a TypeError
+
+                if (!handle_event_value.isFunction()) {
+                    // Per the callback interface invocation steps, a
+                    // non-callable handleEvent is a reported TypeError.
                     event._listeners_did_throw = true;
+                    reportExceptionValue(local, .{
+                        .local = local,
+                        .handle = local.isolate.createTypeError("handleEvent is not a function"),
+                    });
+                    return;
                 }
+
+                const handle_event = js.Function{
+                    .local = local,
+                    .handle = @ptrCast(handle_event_value.handle),
+                };
+                handle_event.callWithThisRethrow(void, obj, .{event}) catch |err| switch (err) {
+                    error.JsException, error.TryCatchRethrow => {
+                        event._listeners_did_throw = true;
+                        reportException(&try_catch, local);
+                    },
+                    else => log.warn(.event, context, .{ .err = err }),
+                };
             },
         }
     }
@@ -494,6 +508,10 @@ pub const Listener = struct {
     // window.onerror / an "error" event) without stopping the dispatch.
     fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
         const exc = try_catch.exceptionValue() orelse return;
+        reportExceptionValue(local, exc);
+    }
+
+    fn reportExceptionValue(local: *const js.Local, exc: js.Value) void {
         switch (local.ctx.global) {
             .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
                 log.warn(.event, "listener report error", .{ .err = err });
