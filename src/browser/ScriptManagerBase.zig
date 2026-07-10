@@ -321,7 +321,7 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
         };
         switch (entry.value_ptr.state) {
             .loading => {
-                _ = try client.tick(200, .sync_wait);
+                _ = try client.tickSync(200);
                 continue;
             },
             .done => |script| {

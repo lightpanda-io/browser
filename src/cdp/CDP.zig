@@ -258,7 +258,7 @@ pub fn tick(self: *CDP) !bool {
             // No active page yet (or a teardown is in flight). Fall
             // back to ticking the http client directly so CDP messages
             // still get dispatched.
-            self.browser.http_client.tick(wait_ms, .all) catch |err| switch (err) {
+            self.browser.http_client.tick(wait_ms) catch |err| switch (err) {
                 error.ClientDisconnected => return false,
                 else => {
                     log.err(.app, "http tick", .{ .err = err });
@@ -1420,13 +1420,13 @@ test "cdp: disconnect latches so the worker keeps exiting" {
     }
 
     // First tick drains the .disconnect and tears the link down.
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
 
     // The inbox is now empty. Without the latch this second tick would fall
     // through to perform/poll with no producer left to wake it, so the worker
     // would never exit and Server.deinit() would spin on active_threads
     // (#2510). The latch keeps the terminal state sticky so the worker exits.
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
 }
 
 test "cdp: syncRequest short-circuits after disconnect" {
@@ -1440,7 +1440,7 @@ test "cdp: syncRequest short-circuits after disconnect" {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
         client.inbox.push(arena, .{ .disconnect = null });
     }
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
 
     // A synchronous fetch attempted after the latch returns ClientDisconnected
     // without starting the request. syncRequest also frees req.headers on this

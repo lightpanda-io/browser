@@ -65,7 +65,6 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
                 return .blocked;
             },
         }
-        unreachable;
     }
 
     try self.fetchThenResume(robots_url, transfer);
@@ -146,7 +145,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .done_callback = RobotsContext.doneCallback,
         .error_callback = RobotsContext.errorCallback,
         .shutdown_callback = RobotsContext.shutdownCallback,
-    }, transfer.owner);
+    }, null);
 
     // From here the fetch owns the pending entry and the context arena. If
     // submit fails it fires error_callback — possibly synchronously, right
@@ -178,20 +177,18 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
             continue;
         }
         // Hand back to the pipeline; the robots gate is the last step
-        // before the network. If it fails before committing, clean up here.
+        // before the network. If it fails while we still own the transfer,
+        // clean up here.
         transfer.client.resumeAfterRobots(transfer) catch |e| {
-            if (transfer.state == .created) {
-                transfer.abort(e);
-            }
+            transfer.abortPipelineError(e);
         };
     }
 }
 
-// shutdown_callback fires on owner shutdown. Drop the entry without
-// resuming anyone. Waiters from the same owner are being kill()'d by the
-// same teardown loop; their deinit finds no gate entry left and no-ops.
-// A waiter parked by a different owner stays parked until its own owner
-// tears it down — it is never resumed (known limitation).
+// shutdown_callback fires when the fetch is kill()'d. The fetch is
+// ownerless, so that only happens at client-wide teardown (Client.abort),
+// where every waiter is being kill()'d by the same loop; their deinit
+// finds no gate entry left (or unlinks itself first) and no-ops.
 fn flushPendingShutdown(self: *RobotsGate, robots_url: []const u8) void {
     var pending = self.pending.fetchRemove(robots_url) orelse return;
     pending.value.deinit(self.allocator);

@@ -170,7 +170,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 if (elapsed >= timeout_ms) {
                     return .timeout;
                 }
-                try self.http_client.tick(@min(timeout_ms - elapsed, 200), .all);
+                try self.http_client.tick(@min(timeout_ms - elapsed, 200));
                 break :done_blk 0;
             },
         };
@@ -302,7 +302,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             // for a client message; loop back and run macrotasks instead.
             ms_to_wait = @min(ms_to_wait, 10);
         }
-        try http_client.tick(@intCast(ms_to_wait), .all);
+        try http_client.tick(@intCast(ms_to_wait));
         return .{ .ok = 0 };
     }
 

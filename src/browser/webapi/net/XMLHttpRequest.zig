@@ -297,10 +297,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
 
     transfer.submit() catch |err| {
-        // If the failure aborted the transfer, httpErrorCallback already
-        // released the self-ref and cleared _http_transfer, making this
-        // release a guarded no-op.
-        self.releaseSelfRef();
+        // don't releaseSelfRef, submit() has taken ownership and will call
+        // our error callback
         self._send_flag = false;
         return err;
     };

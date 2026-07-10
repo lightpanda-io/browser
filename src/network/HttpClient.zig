@@ -119,6 +119,10 @@ gated_queue: std.DoublyLinkedList = .{},
 // Undelivered transfers across dispatch_queue + gated_queue.
 dispatch_count: usize = 0,
 
+// Transfers retired by Transfer.deinit. This is a safety measure incase
+// something tries to use the transfer after it's freed.
+graveyard: std.DoublyLinkedList = .{},
+
 // The main app allocator
 allocator: Allocator,
 
@@ -222,6 +226,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
 pub fn deinit(self: *Client) void {
     self.abort();
+    self.processGraveyard();
 
     if (comptime IS_DEBUG) {
         lp.assert(
@@ -386,6 +391,16 @@ pub fn abort(self: *Client) void {
     }
 }
 
+// Release the arenas of retired transfers. Must only run at a safe point, e.g.
+// tick(.all)
+fn processGraveyard(self: *Client) void {
+    while (self.graveyard.popFirst()) |node| {
+        const transfer: *Transfer = @fieldParentPtr("_node", node);
+        const arena = transfer.arena;
+        self.arena_pool.release(arena);
+    }
+}
+
 // Kill every transfer + websocket owned by `owner`. Used when the owner
 // (Frame / WorkerGlobalScope) is being torn down. After this returns,
 // every WebSocket is fully gone; HTTP transfers that were mid-perform may
@@ -525,7 +540,16 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
     return transfer;
 }
 
-pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
+pub fn tick(self: *Client, timeout_ms: u32) !void {
+    self.processGraveyard();
+    return self._tick(timeout_ms, .all);
+}
+
+pub fn tickSync(self: *Client, timeout_ms: u32) !void {
+    return self._tick(timeout_ms, .sync_wait);
+}
+
+pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     if (self.inbox.terminated) {
         return error.ClientDisconnected;
     }
@@ -544,7 +568,6 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     // based approach as HTTP connections, and then this can be removed
     try self.settleConns();
 
-    var has_processed = true;
     if (try self.processMessages() == false) {
         // No messages were processed. We need to wait for I/O. The network
         // layer will wake this up if there's acticity.
@@ -556,7 +579,7 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
             }
             // poll only waits, so we do the perform -> process dance again
             _ = try self.perform();
-            has_processed = try self.processMessages();
+            _ = try self.processMessages();
         }
     } else {
         // If we DO have processed messages, we don't wan to wait / poll. We
@@ -672,7 +695,12 @@ fn isGated(self: *const Client, transfer: *const Transfer) bool {
         // O(1) quick check.
         return false;
     }
-    const blocking_id = self.blocking_requests.get(transfer.req.frame_id) orelse return false;
+    // The gate is global, not per-frame: delivering another frame's
+    // JS-running callback (script eval, XHR onload) here still executes on
+    // the blocking request's stack and can nest parse -> syncRequest ->
+    // parse until v8's stack overflows — same hazard as the .document case
+    // above. Only the blocking transfer itself gets through.
+    const blocking_id = self.blocking_requests.get(transfer.req.frame_id) orelse return true;
     return transfer.id != blocking_id;
 }
 
@@ -684,12 +712,15 @@ fn startPending(self: *Client) !void {
             return;
         };
         // Bridge state to .created so a failure inside makeRequest before
-        // any commit cleans up via the abort below. makeRequest flips to
+        // any commit cleans up via the failAsync below. makeRequest flips to
         // .inflight on a successful trackConn.
         transfer.state = .created;
         self.makeRequest(conn, transfer) catch |err| {
             if (transfer.state == .created) {
-                transfer.abort(err);
+                // Fail through the dispatcher: this can run from a
+                // tick(.sync_wait), and error_callback JS must not fire
+                // on a blocking request's stack.
+                transfer.failAsync(err);
             }
             return err;
         };
@@ -777,6 +808,11 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         return false;
     }
 
+    // Redirects rewrite req.url; the entry must be stored/renewed under the
+    // URL this lookup ran against, not the final hop. req.url is arena-owned,
+    // so the captured slice outlives any redirect rewrite.
+    transfer._cache_key = req.url;
+
     const arena = transfer.arena;
     var iter = req.headers.iterator();
     const req_headers = try iter.collect(arena);
@@ -836,7 +872,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
     transfer._cache_intent = .none;
 
     cache.renew(transfer.arena, .{
-        .url = transfer.req.url,
+        .url = transfer._cache_key,
         .timestamp = std.time.timestamp(),
         .headers = transfer.res.headers,
     }) catch |err| {
@@ -860,10 +896,12 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
             stale.data.deinit();
         },
     }
+    // Cleared with the release above: deinit must not release the stale
+    // entry a second time on any early return below.
+    transfer._cache_intent = .none;
+
     // could have been disabled while waiting of the response
     const cache = self.cache orelse return;
-
-    transfer._cache_intent = .none;
 
     const arena = transfer.arena;
     const rh = &(transfer.res.header orelse return);
@@ -873,7 +911,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     const maybe_cm = Cache.tryCache(
         arena,
         std.time.timestamp(),
-        transfer.req.url,
+        transfer._cache_key,
         rh.status,
         rh.contentType(),
         findHeader(headers, "cache-control"),
@@ -911,7 +949,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     metadata.vary_headers = vary_headers.items;
 
     if (comptime IS_DEBUG) {
-        log.debug(.browser, "http cache", .{ .key = transfer.req.url, .metadata = metadata });
+        log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .metadata = metadata });
     }
     cache.put(metadata, transfer.res.stream_buffer.items) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
@@ -991,7 +1029,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     try transfer.submit();
 
     while (sync_ctx.completion == .in_progress) {
-        self.tick(200, .sync_wait) catch |err| {
+        self.tickSync(200) catch |err| {
             if (sync_ctx.completion == .in_progress) {
                 // tick failed for a reason unrelated to our transfer (likely OOM or
                 // client disconnect). transfer.req.ctx points at &sync_ctx on this
@@ -1189,17 +1227,26 @@ fn processMessages(self: *Client) !bool {
                 // Only the throw path cleans up here.
                 const done = self.processOneMessage(msg, transfer) catch |err| blk: {
                     log.err(.http, "process_messages", .{ .err = err, .req = transfer });
-                    transfer.state = .completing;
-                    transfer.requestFailed(err);
                     if (transfer._detached_conn) |c| {
                         // Conn was removed from handles during redirect reconfiguration
                         // but not re-added. Release it directly to avoid double-remove.
+                        // _conn still aliases it during that window.
                         self.in_use.remove(&c.node);
                         self.http_active -= 1;
                         self.releaseConn(c);
+                        if (transfer._conn == c) {
+                            transfer._conn = null;
+                        }
                         transfer._detached_conn = null;
                     }
-                    transfer.deinit();
+                    if (transfer._conn) |c| {
+                        self.removeConn(c);
+                        transfer._conn = null;
+                    }
+                    // Fail through the dispatcher — error_callback must not
+                    // run user code from the pump; it would bypass the
+                    // blocking gate (see dispatchCompleted).
+                    transfer.failAsync(err);
                     break :blk true;
                 };
                 if (done) {
@@ -1553,9 +1600,7 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
 
     transfer.unpark();
     self.processTransfer(transfer) catch |err| {
-        if (transfer.state == .created) {
-            transfer.abort(err);
-        }
+        transfer.abortPipelineError(err);
         return err;
     };
 }
@@ -1570,9 +1615,7 @@ pub fn continueIntercepted(self: *Client, transfer: *Transfer) !void {
 
     transfer.unpark();
     self.pipeline(transfer, .after_intercept) catch |err| {
-        if (transfer.state == .created) {
-            transfer.abort(err);
-        }
+        transfer.abortPipelineError(err);
         return err;
     };
 }
@@ -1608,9 +1651,7 @@ pub fn fulfillIntercepted(
     }
 
     transfer.bufferFulfilled(status, headers, body) catch |err| {
-        if (transfer.state == .created) {
-            transfer.abort(err);
-        }
+        transfer.abortPipelineError(err);
         return err;
     };
 }
@@ -1622,7 +1663,7 @@ fn fulfillRedirect(
     headers: []const http.Header,
     location: []const u8,
 ) !void {
-    errdefer |err| if (transfer.state == .created) transfer.abort(err);
+    errdefer |err| transfer.abortPipelineError(err);
 
     // retrieve cookies from the fulfilled response's headers.
     if (transfer.req.cookie_jar) |jar| {
@@ -1648,6 +1689,27 @@ const Noop = struct {
     fn dataCallback(_: *Transfer, _: []const u8) !void {}
     fn doneCallback(_: *anyopaque) !void {}
     fn errorCallback(_: *anyopaque, _: anyerror) void {}
+};
+
+// Debug-only stubs installed on retirement. Unlike detachInPerform's Noop
+// set (which curl legitimately drains through), nothing may ever invoke a
+// callback on a retired transfer.
+const Poison = struct {
+    fn headerCallback(_: *Transfer) anyerror!Transfer.HeaderResult {
+        @panic("callback on retired transfer");
+    }
+    fn dataCallback(_: *Transfer, _: []const u8) anyerror!void {
+        @panic("callback on retired transfer");
+    }
+    fn doneCallback(_: *anyopaque) anyerror!void {
+        @panic("callback on retired transfer");
+    }
+    fn errorCallback(_: *anyopaque, _: anyerror) void {
+        @panic("callback on retired transfer");
+    }
+    fn shutdownCallback(_: *anyopaque) void {
+        @panic("callback on retired transfer");
+    }
 };
 
 // An opaque-from-the-outside handle that Frame / WorkerGlobalScope embed
@@ -1721,7 +1783,9 @@ pub const Transfer = struct {
     _tries: u8 = 0,
     _redirect_count: u8 = 0,
 
-    // for when a Transfer is queued in the client.queue
+    // Linked into client.pending_queue while .queued; reused to link the
+    // retired transfer into client.graveyard (deinit unlinks it from the
+    // pending queue first, so the node is always free by then).
     _node: std.DoublyLinkedList.Node = .{},
 
     // Buffered response ordered events awaiting dispatch. Today, ArrayList is
@@ -1746,13 +1810,16 @@ pub const Transfer = struct {
     // What the cache wants from this transfer's response.
     _cache_intent: CacheIntent = .none,
 
+    // Cache key captured at lookup time (req.url before any redirect
+    // rewrote it). Only meaningful while _cache_intent != .none.
+    _cache_key: [:0]const u8 = "",
+
     // Content length reported on the CDP loadingFinished event.
     _cdp_content_length: usize = 0,
 
-    // Debug canary: set on the first deinit, so that if a second deinit on the
-    // same instance is called, we have a double free. The memory _could_ be
-    // re-used, since the lack of a failure doesn't proove there's no UAF.
-    _deinited: bool = false,
+    // Set by the first deinit. A retired transfer is unlinked from
+    // everything and sits on client.graveyard
+    _retired: bool = false,
 
     pub const State = union(enum) {
         // Pre-commit. Only valid inside the request flow (Client.request
@@ -1863,21 +1930,21 @@ pub const Transfer = struct {
         }
 
         self.client.pipeline(self, .start) catch |err| {
-            if (self.state == .created) {
-                // pipeline failed before the Transfer was handed over to a
-                // another owner (e.g. the multi, the pending queue, ...)
-                // so we're still responsible for it.
-                self.abort(err);
-            }
+            self.abortPipelineError(err);
             return err;
         };
     }
 
     pub fn deinit(self: *Transfer) void {
-        if (comptime IS_DEBUG) {
-            lp.assert(self._deinited == false, "Transfer.deinit", .{ .id = self.id });
-            self._deinited = true;
+        if (self._retired) {
+            // transfer.deinit should be called once. But _retired and the graveyard
+            // are a safety net born out of UAFs.
+            if (comptime IS_DEBUG) {
+                lp.assert(false, "Transfer.deinit on retired transfer", .{ .id = self.id });
+            }
+            return;
         }
+        self._retired = true;
         self.leaveIntercept();
         if (self._conn) |c| {
             self.client.removeConn(c);
@@ -1921,11 +1988,23 @@ pub const Transfer = struct {
         if (self.owner) |o| {
             o.removeTransfer(self);
         }
-        // The Transfer itself lives on this arena, so this must be last —
-        // `self` is invalid memory after release.
-        const arena_pool = self.client.arena_pool;
-        const arena = self.arena;
-        arena_pool.release(arena);
+
+        if (comptime IS_DEBUG) {
+            // Any callback on a corpse is a bug — fail loudly instead of
+            // silently running user code from a retired transfer.
+            self.req.start_callback = null;
+            self.req.header_callback = Poison.headerCallback;
+            self.req.data_callback = Poison.dataCallback;
+            self.req.done_callback = Poison.doneCallback;
+            self.req.error_callback = Poison.errorCallback;
+            self.req.shutdown_callback = Poison.shutdownCallback;
+        }
+
+        // Why not free the memory here? It _should_ be safe, but the flow is
+        // complicated, and history tells us we'll get UAF. The above effectively
+        // rendered the transfer dead,but it's memory alive, just incase
+        // something uses it. We'll clean it up when it's likely to be safer.
+        self.client.graveyard.append(&self._node);
     }
 
     // Cancel this transfer with `err`. Fires error_callback once (latched
@@ -1937,20 +2016,32 @@ pub const Transfer = struct {
     // a transfer. Don't reach for kill() or requestFailed() directly —
     // they're internal helpers.
     pub fn abort(self: *Transfer, err: anyerror) void {
+        // error_callback can run JS that tears this transfer down again
+        // (e.g. an XHR abort handler navigates -> abortRequests -> kill).
+        // Hold the state at .completing so the re-entrant teardown defers,
+        // then do the single real teardown against the original state.
+        const state = self.state;
+        self.state = .completing;
         self.requestFailed(err);
+        self.state = state;
         self.detachOrDeinit();
     }
 
-    // Abort a transfer that an external owner (CDP interception) is holding in a
-    // .parked state. Unlike abort(), this is re-entrancy safe so that if
-    // requestFailed causes a teardown/navigate, this won't be killed again
-    // Mirrors Client.fulfillIntercepted. unpark asserts the transfer is
-    // actually parked.
+    // A pipeline entry point failed. The pipeline still owns the transfer in
+    // two states: .created and .inflight. In all other states, the owner
+    // delivers the failure.
+    pub fn abortPipelineError(self: *Transfer, err: anyerror) void {
+        switch (self.state) {
+            .created, .inflight => self.abort(err),
+            else => {},
+        }
+    }
+
+    // Abort a transfer that an external owner (CDP interception) is holding
+    // in a .parked state.
     pub fn abortParked(self: *Transfer, err: anyerror) void {
         self.unpark();
-        self.state = .completing;
-        defer self.deinit();
-        self.requestFailed(err);
+        self.failAsync(err);
     }
 
     // Owner-driven teardown: fires shutdown_callback (not error_callback)
@@ -2832,6 +2923,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.pending_queue = .{};
     client.dispatch_queue = .{};
     client.gated_queue = .{};
+    client.graveyard = .{};
     client.dispatch_count = 0;
     client.performing = false;
     client.intercepted = 0;
@@ -2851,6 +2943,8 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
 
     var client: Client = undefined;
     initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
     var owner: Owner = .{};
@@ -2928,6 +3022,8 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
 
     var client: Client = undefined;
     initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
     defer client.robots.deinit();
 
@@ -2989,6 +3085,8 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
 
     var client: Client = undefined;
     initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
     client.network = &net;
     // Forces process() to queue the re-issued request instead of asking the
     // (undefined) Network for a connection — the queue IS the capture.
@@ -3089,6 +3187,8 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
 
     var client: Client = undefined;
     initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
     const Ctx = struct {
@@ -3149,13 +3249,16 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
 test "HttpClient: abortParked survives an error_callback that tears down the owner" {
     // Same re-entrancy hazard as fulfillRequest, but on the abort path
     // (failRequest / continueWithAuth-cancel / session teardown). abortParked
-    // fires the failure callback while .completing, so a re-entrant owner
-    // teardown defers to the single deinit instead of double-freeing.
+    // buffers the failure; deliver() fires it while .completing, so a
+    // re-entrant owner teardown defers to the single deinit instead of
+    // double-freeing.
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var client: Client = undefined;
     initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
     var owner: Owner = .{};
@@ -3205,8 +3308,125 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
 
     transfer.abortParked(error.Abort);
 
-    try testing.expect(ctx.err_called);
+    // The failure is buffered, not delivered from the CDP command itself —
+    // error_callback JS must not run on a blocking request's stack.
+    try testing.expectEqual(false, ctx.err_called);
     try testing.expectEqual(0, client.intercepted);
+    try testing.expectEqual(1, client.dispatch_count);
+
+    client.dispatchCompleted(.all);
+
+    try testing.expect(ctx.err_called);
+    try testing.expectEqual(0, client.dispatch_count);
     try testing.expectEqual(0, client.transfers.count());
     try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: abort survives an error_callback that tears down the owner" {
+    // Regression: abort() fired error_callback before detachOrDeinit, so JS
+    // in that callback that killed the transfer again (navigation ->
+    // abortRequests -> kill) freed it inline and abort() then ran
+    // detachOrDeinit on freed memory. abort holds .completing across
+    // requestFailed so the re-entrant kill defers to the single teardown.
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner: Owner = .{};
+
+    const Ctx = struct {
+        client: *Client,
+        owner: *Owner,
+        err_called: bool = false,
+
+        fn errorCallback(ctx: *anyopaque, _: anyerror) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.err_called = true;
+            self.client.abortOwner(self.owner);
+        }
+    };
+    var ctx = Ctx{ .client = &client, .owner = &owner };
+
+    // .created — abort before the transfer was committed anywhere.
+    {
+        const arena = try pool.acquire(.small, "test");
+        const transfer = try arena.create(Transfer);
+        transfer.* = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .frame_id = 0,
+                .loader_id = 0,
+                .method = .GET,
+                .url = "http://example.com/",
+                .cookie_jar = null,
+                .cookie_origin = "",
+                .resource_type = .xhr,
+                .notification = undefined,
+                .shutdown_callback = noopShutdown,
+                .ctx = &ctx,
+                .error_callback = Ctx.errorCallback,
+            },
+            .client = &client,
+            .id = 1,
+            .start_time = 0,
+        };
+        try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+        owner.addTransfer(transfer);
+        transfer.owner = &owner;
+
+        transfer.abort(error.Abort);
+
+        try testing.expect(ctx.err_called);
+        try testing.expectEqual(0, client.transfers.count());
+        try testing.expectEqual(null, owner.transfers.first);
+    }
+
+    // .buffered — abort while queued for dispatch; the queue must end up
+    // empty and the transfer freed exactly once.
+    {
+        ctx.err_called = false;
+        const arena = try pool.acquire(.small, "test");
+        const transfer = try arena.create(Transfer);
+        transfer.* = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .frame_id = 0,
+                .loader_id = 0,
+                .method = .GET,
+                .url = "http://example.com/",
+                .cookie_jar = null,
+                .cookie_origin = "",
+                .resource_type = .xhr,
+                .notification = undefined,
+                .shutdown_callback = noopShutdown,
+                .ctx = &ctx,
+                .error_callback = Ctx.errorCallback,
+            },
+            .client = &client,
+            .id = 2,
+            .start_time = 0,
+        };
+        try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+        owner.addTransfer(transfer);
+        transfer.owner = &owner;
+
+        transfer.state = .buffered;
+        client.dispatch_queue.append(&transfer._queue_node);
+        client.dispatch_count += 1;
+
+        transfer.abort(error.Abort);
+
+        try testing.expect(ctx.err_called);
+        try testing.expectEqual(0, client.dispatch_count);
+        try testing.expectEqual(null, client.dispatch_queue.first);
+        try testing.expectEqual(0, client.transfers.count());
+        try testing.expectEqual(null, owner.transfers.first);
+    }
 }
