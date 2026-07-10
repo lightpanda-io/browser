@@ -321,11 +321,15 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
 
     Event.populatePrototypes(event, opts, trusted);
 
-    // https://w3c.github.io/uievents/#event-type-keyup
-    const rootevt = event._proto._proto;
-    rootevt._bubbles = true;
-    rootevt._cancelable = true;
-    rootevt._composed = true;
+    if (trusted) {
+        // Browser-generated key events bubble, are cancelable and composed:
+        // https://w3c.github.io/uievents/#event-type-keyup
+        // Synthetic ones follow the EventInit dictionary defaults.
+        const rootevt = event._proto._proto;
+        rootevt._bubbles = true;
+        rootevt._cancelable = true;
+        rootevt._composed = true;
+    }
 
     return event;
 }
