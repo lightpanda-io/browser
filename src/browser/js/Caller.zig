@@ -388,11 +388,7 @@ fn _getIndexQuery(comptime T: type, local: *const Local, func: anytype, idx: u32
     if (@typeInfo(F).@"fn".params.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
-    if (@call(.auto, func, args) == false) {
-        return js.Intercepted.no;
-    }
-    info.getReturnValue().set(try local.zigValueToJs(@as(u32, v8.None), .{}));
-    return js.Intercepted.yes;
+    return queryReturn(local, @call(.auto, func, args), info);
 }
 
 pub fn getNamedQuery(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo) u32 {
@@ -417,12 +413,33 @@ fn _getNamedQuery(comptime T: type, local: *const Local, func: anytype, name: *c
     if (@typeInfo(F).@"fn".params.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
-    if (@call(.auto, func, args) == false) {
-        return js.Intercepted.no;
+    return queryReturn(local, @call(.auto, func, args), info);
+}
+
+// A query callback either returns a bool (true -> the property exists as an
+// enumerable, writable, configurable data property, PropertyAttribute.None)
+// or the v8.PropertyAttribute bits directly (e.g. v8.ReadOnly).
+// error.NotHandled falls through to the ordinary property lookup.
+fn queryReturn(local: *const Local, ret: anytype, info: PropertyCallbackInfo) !u32 {
+    const val = switch (@typeInfo(@TypeOf(ret))) {
+        .error_union => |eu| ret catch |err| {
+            if (comptime isInErrorSet(error.NotHandled, eu.error_set)) {
+                if (err == error.NotHandled) {
+                    return js.Intercepted.no;
+                }
+            }
+            return err;
+        },
+        else => ret,
+    };
+    if (@TypeOf(val) == bool) {
+        if (val == false) {
+            return js.Intercepted.no;
+        }
+        info.getReturnValue().set(try local.zigValueToJs(@as(u32, v8.None), .{}));
+    } else {
+        info.getReturnValue().set(try local.zigValueToJs(@as(u32, val), .{}));
     }
-    // The property exists as a supported property name; report it as an
-    // enumerable, writable, configurable data property (PropertyAttribute.None).
-    info.getReturnValue().set(try local.zigValueToJs(@as(u32, v8.None), .{}));
     return js.Intercepted.yes;
 }
 

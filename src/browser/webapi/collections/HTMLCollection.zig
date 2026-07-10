@@ -147,8 +147,8 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(HTMLCollection.length, null, .{});
-    pub const @"[int]" = bridge.indexedReadWrite(HTMLCollection.getAtIndex, null, deleteAtIndex, null, getIndexes, .{ .null_as_undefined = true });
-    pub const @"[str]" = bridge.namedIndexed(struct {
+    pub const @"[int]" = bridge.indexedFull(HTMLCollection.getAtIndex, setAtIndex, deleteAtIndex, queryAtIndex, defineAtIndex, getIndexes, .{ .null_as_undefined = true });
+    pub const @"[str]" = bridge.namedIndexedFull(struct {
         pub fn wrap(self: *HTMLCollection, name: []const u8, frame: *Frame) !?*Element {
             if (name.len == 0) {
                 return error.NotHandled;
@@ -156,7 +156,61 @@ pub const JsApi = struct {
 
             return self.getByName(name, frame) orelse error.NotHandled;
         }
-    }.wrap, null, deleteByName, getNames, null, .{ .null_as_undefined = true });
+    }.wrap, null, deleteByName, getNames, null, defineByName, describeByName, .{ .null_as_undefined = true });
+
+    // HTMLCollection has no indexed setter: per Web IDL, assigning to or
+    // defining any array index property fails (TypeError in strict mode).
+    fn setAtIndex(_: *HTMLCollection, _: u32, _: js.Value) bool {
+        return false;
+    }
+
+    fn defineAtIndex(_: *HTMLCollection, _: u32) bool {
+        return false;
+    }
+
+    // Supported indexed properties are enumerable, configurable, read-only.
+    fn queryAtIndex(self: *HTMLCollection, idx: u32, frame: *Frame) !u32 {
+        if (idx < self.length(frame)) {
+            return js.v8.ReadOnly;
+        }
+        return error.NotHandled;
+    }
+
+    // Redefining a supported named property fails; unsupported names follow
+    // the ordinary path, so expandos remain allowed. Note there is no named
+    // setter and no named query: a direct assignment falls through to the
+    // ordinary [[Set]] which ends up in defineByName, while an assignment
+    // through a derived object (the collection as prototype) must ignore the
+    // named property entirely and create an expando on the receiver.
+    fn defineByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !bool {
+        if (name.len > 0 and self.getByName(name, frame) != null) {
+            return false;
+        }
+        return error.NotHandled;
+    }
+
+    // Named properties are [LegacyUnenumerableNamedProperties]: not
+    // enumerable, configurable, read-only.
+    fn describeByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !Descriptor {
+        if (name.len > 0) {
+            if (self.getByName(name, frame)) |element| {
+                return .{
+                    .value = element,
+                    .writable = false,
+                    .enumerable = false,
+                    .configurable = true,
+                };
+            }
+        }
+        return error.NotHandled;
+    }
+
+    const Descriptor = struct {
+        value: *Element,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    };
 
     fn getIndexes(self: *HTMLCollection, exec: *const Execution) !js.Array {
         const frame = switch (exec.js.global) {
