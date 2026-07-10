@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<body>
+  <span id="s1" data-cp="5F" data-bytes="A1B2" nonstandardattr="ns1">x</span>
+  <script>
+    // Called by the parent test: reads execute in this frame's realm.
+    function readAttr(name) {
+      return document.getElementById('s1').getAttribute(name);
+    }
+  </script>
+</body>
