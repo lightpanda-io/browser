@@ -515,6 +515,10 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
 
     const js_err: *const v8.Value = switch (err) {
         error.TryCatchRethrow => return,
+        // A JS exception is already pending in the isolate (e.g. a value's
+        // toString threw during argument conversion); throwing anything here
+        // would replace the original exception the script expects to see.
+        error.JsException => return,
         error.InvalidArgument => isolate.createTypeError("invalid argument"),
         error.TypeError => isolate.createTypeError(""),
         error.RangeError => isolate.createRangeError(""),
@@ -1016,6 +1020,11 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             // type instantiation of jsValueToZig may not include such errors
             // in its inferred error set.
             @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch |err| {
+                if (err == error.JsException) {
+                    // an exception thrown by user code (e.g. a toString
+                    // getter) is pending; propagate it untouched
+                    return err;
+                }
                 const DOMException = @import("../webapi/DOMException.zig");
                 if (DOMException.fromError(err) != null) {
                     return err;
