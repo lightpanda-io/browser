@@ -481,7 +481,9 @@ pub const JsApi = struct {
     pub const eventPhase = bridge.accessor(Event.getEventPhase, null, .{});
     pub const defaultPrevented = bridge.accessor(Event.getDefaultPrevented, null, .{});
     pub const timeStamp = bridge.accessor(Event.getTimeStamp, null, .{});
-    pub const isTrusted = bridge.accessor(Event.getIsTrusted, null, .{});
+    // [LegacyUnforgeable]: an own, non-configurable accessor of every
+    // Event (and subclass) instance.
+    pub const isTrusted = bridge.accessor(Event.getIsTrusted, null, .{ .unforgeable = true, .deletable = false });
     pub const preventDefault = bridge.function(Event.preventDefault, .{});
     pub const stopPropagation = bridge.function(Event.stopPropagation, .{});
     pub const stopImmediatePropagation = bridge.function(Event.stopImmediatePropagation, .{});
