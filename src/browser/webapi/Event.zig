@@ -54,6 +54,9 @@ _listeners_did_throw: bool = false, // IndexedDB needs to abort on callback thro
 // until one of the init*Event methods runs; dispatching one throws an
 // InvalidStateError. Events created any other way start initialized.
 _initialized: bool = true,
+// Time origin of the event's relevant global, captured at creation when
+// known; 0 means "use the accessing realm's origin" (see getTimeStamp).
+_time_origin: u64 = 0,
 
 // There's a period of time between creating an event and handing it off to v8
 // where things can fail. If it does fail, we need to deinit the event. The timing
@@ -104,6 +107,15 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
     return initWithTrusted(arena, str, opts_, false);
 }
 
+// The JS constructor entry point: also captures the creating realm's time
+// origin so timeStamp stays relative to the event's relevant global even
+// when read from another realm.
+fn initFromJs(typ: []const u8, opts_: ?Options, exec: *js.Execution) !*Event {
+    const event = try init(typ, opts_, exec.page);
+    event._time_origin = exec.performance()._time_origin;
+    return event;
+}
+
 pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
     const arena = try page.getArena(.tiny, "Event.trusted");
     errdefer page.releaseArena(arena);
@@ -113,9 +125,9 @@ pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
 fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, comptime trusted: bool) !*Event {
     const opts = opts_ orelse Options{};
 
-    // Round to 2ms for privacy (browsers do this)
-    const raw_timestamp = @import("../../datetime.zig").milliTimestamp(.monotonic);
-    const time_stamp = (raw_timestamp / 2) * 2;
+    // Same (already coarsened) clock as the performance time origin, so the
+    // timeStamp getter can report it relative to that origin.
+    const time_stamp = @import("Performance.zig").highResTimestamp();
 
     const event = try arena.create(Event);
     event.* = .{
@@ -262,8 +274,16 @@ pub fn getEventPhase(self: *const Event) u8 {
     return @intFromEnum(self._event_phase);
 }
 
-pub fn getTimeStamp(self: *const Event) u64 {
-    return self._time_stamp;
+// A DOMHighResTimeStamp in milliseconds, relative to the relevant global's
+// time origin (the same clock as performance.now()). When the creating
+// realm's origin wasn't captured, fall back to the accessing realm's, which
+// is the same realm in all but cross-realm accesses.
+pub fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
+    const origin = if (self._time_origin != 0) self._time_origin else exec.performance()._time_origin;
+    if (self._time_stamp <= origin) {
+        return 0.0;
+    }
+    return @as(f64, @floatFromInt(self._time_stamp - origin)) / 1000.0;
 }
 
 pub fn setTrusted(self: *Event) void {
@@ -475,7 +495,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(Event.init, .{});
+    pub const constructor = bridge.constructor(Event.initFromJs, .{});
     pub const @"type" = bridge.accessor(Event.getType, null, .{});
     pub const bubbles = bridge.accessor(Event.getBubbles, null, .{});
     pub const cancelable = bridge.accessor(Event.getCancelable, null, .{});
