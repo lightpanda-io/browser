@@ -172,6 +172,19 @@ const script_skill =
     \\6. **Let failures fail.** Primitives throw on error and stop the script — only `try/catch` where you have a real fallback (e.g. optional cookie banner: `try { page.click("#accept") } catch {}`).
     \\7. **End with `return <result>`.** `console.log` is for debug output only and doesn't JSON-format objects.
     \\8. Modern, readable JS: `const`/`let`, `for (const x of xs)`, template literals, destructuring, 2-space indent.
+    \\9. **Comment the intent of each block.** Put a one-line `//` comment above each logical step describing what it accomplishes toward the goal (not restating the call). One comment per block, not per line — skip self-evident lines:
+    \\   ```js
+    \\   // Load the Hacker News front page
+    \\   const page = new Page();
+    \\   await page.goto("https://news.ycombinator.com");
+    \\
+    \\   // Pull the top 5 stories (title + link)
+    \\   const { stories } = page.extract({ stories: [{ selector: "tr.athing", limit: 5, fields: { title: ".titleline > a", url: { selector: ".titleline > a", attr: "href" } } }] });
+    \\
+    \\   // Open each story page in parallel and read its text
+    \\   const pages = stories.map(() => new Page());
+    \\   await Promise.all(pages.map((p, i) => p.goto(stories[i].url)));
+    \\   ```
     \\
     \\## Common errors
     \\
