@@ -178,6 +178,19 @@ pub fn as(self: *Event, comptime T: type) *T {
     return self.is(T).?;
 }
 
+// Storage of the subtype's relatedTarget, for event types that have one.
+// Used by dispatch for retargeting and shadow-tree resets.
+pub fn relatedTargetPtr(self: *Event) ?*?*EventTarget {
+    switch (self._type) {
+        .ui_event => |ui| switch (ui._type) {
+            .mouse_event => |me| return &me._related_target,
+            .focus_event => |fe| return &fe._related_target,
+            else => return null,
+        },
+        else => return null,
+    }
+}
+
 pub fn is(self: *Event, comptime T: type) ?*T {
     switch (self._type) {
         .generic => return if (T == Event) self else null,
