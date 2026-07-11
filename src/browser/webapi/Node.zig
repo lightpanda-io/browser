@@ -913,7 +913,8 @@ pub fn getChildrenCount(self: *Node) usize {
 pub fn getLength(self: *Node) u32 {
     switch (self._type) {
         .cdata => |cdata| {
-            return @intCast(cdata.getData().len);
+            // The node length of CharacterData is in UTF-16 code units.
+            return @intCast(cdata.getLength());
         },
         .element, .document, .document_fragment => {
             var count: u32 = 0;
