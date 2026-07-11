@@ -612,13 +612,15 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .focus_visible => return false,
 
-        // Link states
-        .link => return false,
-        .visited => return false,
-        .any_link => {
-            if (el.getTag() != .anchor) return false;
+        // Link states. In a headless browser no link is ever visited, so
+        // :link matches every hyperlink (a or area with an href attribute)
+        // and :visited matches nothing.
+        .link, .any_link => {
+            const tag = el.getTag();
+            if (tag != .anchor and tag != .area) return false;
             return el.getAttributeSafe(comptime .wrap("href")) != null;
         },
+        .visited => return false,
         .target => {
             const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
             const doc = node.ownerDocument(frame) orelse return false;
@@ -638,7 +640,19 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return node == scope;
         },
         .empty => {
-            return node.firstChild() == null;
+            // Only element and content (non-empty text/cdata) children affect
+            // emptiness; comments and processing instructions are ignored.
+            var child = node.firstChild();
+            while (child) |c| : (child = c.nextSibling()) {
+                switch (c._type) {
+                    .cdata => |cdata| switch (cdata._type) {
+                        .comment, .processing_instruction => {},
+                        else => if (cdata.getLength() > 0) return false,
+                    },
+                    else => return false,
+                }
+            }
+            return true;
         },
         .first_child => return isFirstChild(el),
         .last_child => return isLastChild(el),
@@ -660,7 +674,36 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
 
         // Functional
-        .lang => return false,
+        .lang => |expected| {
+            if (expected.len == 0) return false;
+            // The element's language is the nearest ancestor-or-self lang
+            // attribute. Elements in a document with no declared language
+            // fall back to the UA default (en); detached subtrees have no
+            // language at all.
+            var lang: ?[]const u8 = null;
+            var current: ?*Node = node;
+            while (current) |cur| : (current = cur.parentNode()) {
+                switch (cur._type) {
+                    .element => |ancestor| {
+                        if (ancestor.getAttributeSafe(comptime .wrap("lang"))) |value| {
+                            lang = value;
+                            break;
+                        }
+                    },
+                    .document => {
+                        lang = "en";
+                        break;
+                    },
+                    else => {},
+                }
+            }
+            const value = lang orelse return false;
+            // Match the exact language or a `-` separated sub-tag prefix
+            // (:lang(en) matches lang="en-AU"), ASCII case-insensitively.
+            if (value.len < expected.len) return false;
+            if (!std.ascii.eqlIgnoreCase(value[0..expected.len], expected)) return false;
+            return value.len == expected.len or value[expected.len] == '-';
+        },
         .not => |selectors| {
             for (selectors) |selector| {
                 if (matches(node, selector, scope, frame)) {
