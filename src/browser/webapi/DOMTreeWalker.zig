@@ -33,6 +33,9 @@ _root: *Node,
 _what_to_show: u32,
 _filter: NodeFilter,
 _current: *Node,
+// Set while the filter callback runs; a walker method called from inside
+// its own filter must throw InvalidStateError.
+_active: bool = false,
 
 pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) !*DOMTreeWalker {
     const node_filter = try NodeFilter.init(filter);
@@ -334,7 +337,11 @@ pub fn nextNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
 }
 
 // Helper methods
-fn acceptNode(self: *const DOMTreeWalker, node: *Node, frame: *Frame) !i32 {
+fn acceptNode(self: *DOMTreeWalker, node: *Node, frame: *Frame) !i32 {
+    if (self._active) {
+        return error.InvalidStateError;
+    }
+
     // First check whatToShow
     if (!NodeFilter.shouldShow(node, self._what_to_show)) {
         return NodeFilter.FILTER_SKIP;
@@ -344,6 +351,8 @@ fn acceptNode(self: *const DOMTreeWalker, node: *Node, frame: *Frame) !i32 {
     // For TreeWalker, REJECT means reject node and its descendants
     // SKIP means skip node but check its descendants
     // ACCEPT means accept the node
+    self._active = true;
+    defer self._active = false;
     return try self._filter.acceptNode(node, frame.js.local.?);
 }
 
