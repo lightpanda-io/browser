@@ -2364,6 +2364,9 @@ pub fn dupeSSO(self: *Frame, value: []const u8) !String {
 
 const RemoveNodeOpts = struct {
     will_be_reconnected: bool,
+    // Set to false when the caller queues its own combined mutation record
+    // (e.g. replaceChildren's single "replace all" record).
+    notify_observers: bool = true,
 };
 pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
     // Capture siblings before removing
@@ -2398,7 +2401,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
     slotting.removalSteps(parent, child, self);
 
-    if (observers.hasMutationObservers(self)) {
+    if (opts.notify_observers and observers.hasMutationObservers(self)) {
         const removed = [_]*Node{child};
         observers.notifyChildListChange(self, parent, &.{}, &removed, previous_sibling, next_sibling);
     }
@@ -2497,6 +2500,9 @@ const InsertNodeRelative = union(enum) {
 const InsertNodeOpts = struct {
     child_already_connected: bool = false,
     adopting_to_new_document: bool = false,
+    // Set to false when the caller queues its own combined mutation record
+    // (e.g. replaceChildren's single "replace all" record).
+    notify_observers: bool = true,
 };
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
@@ -2590,7 +2596,9 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
     }
 
-    self.notifyChildInserted(parent, child);
+    if (opts.notify_observers) {
+        self.notifyChildInserted(parent, child);
+    }
 
     if (opts.child_already_connected and !opts.adopting_to_new_document) {
         // The child is already connected in the same document, we don't have to reconnect it.

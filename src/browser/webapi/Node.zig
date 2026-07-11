@@ -1282,10 +1282,19 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
 
     frame.domChanged();
 
+    // Per the "replace all" algorithm, observers get one combined mutation
+    // record with all removed and added nodes, so per-node notification is
+    // suppressed here.
+    const notify = Frame.observers.hasMutationObservers(frame);
+    var removed: std.ArrayList(*Node) = .empty;
+
     // Remove all existing children
     var it = self.childrenIterator();
     while (it.next()) |child| {
-        frame.removeNode(self, child, .{ .will_be_reconnected = false });
+        if (notify) {
+            try removed.append(frame.call_arena, child);
+        }
+        frame.removeNode(self, child, .{ .will_be_reconnected = false, .notify_observers = false });
     }
 
     // Append new children
@@ -1296,7 +1305,11 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
             child_connected = child.isConnected();
             frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
         }
-        try frame.appendNode(self, child, .{ .child_already_connected = child_connected });
+        try frame.appendNode(self, child, .{ .child_already_connected = child_connected, .notify_observers = false });
+    }
+
+    if (notify and (removed.items.len > 0 or children_to_add.items.len > 0)) {
+        Frame.observers.notifyChildListChange(frame, self, children_to_add.items, removed.items, null, null);
     }
 }
 
