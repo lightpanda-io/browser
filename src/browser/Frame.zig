@@ -2566,14 +2566,13 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
     }
 
-    // The parser path does its own (limited) notification and connected-callback
-    // work, then returns.
+    // The parser path does its own (limited) connected-callback work, then
+    // returns.
     if (comptime from_parser) {
-        // Of the parser insertions, only fragment parses (innerHTML) mutate a
-        // live tree; the initial document parse suppresses notifications.
-        if (self._parse_mode == .fragment) {
-            self.notifyChildInserted(parent, child);
-        }
+        // No mutation records from parser insertions: the initial document
+        // parse never notifies, and fragment parses (innerHTML et al.) queue
+        // one combined "replace all" record at the call site (Node.setHTML)
+        // instead of one per inserted child.
 
         if (child.is(Element)) |el| {
             // Invoke connectedCallback for custom elements during parsing.
@@ -2829,21 +2828,11 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: F
     }
     node._children = first._children;
 
-    if (observers.hasMutationObservers(self)) {
-        var it = node.childrenIterator();
-        while (it.next()) |child| {
-            child._parent = node;
-            // Notify mutation observers for each unwrapped child
-            const previous_sibling = child.previousSibling();
-            const next_sibling = child.nextSibling();
-            const added = [_]*Node{child};
-            observers.notifyChildListChange(self, node, &added, &.{}, previous_sibling, next_sibling);
-        }
-    } else {
-        var it = node.childrenIterator();
-        while (it.next()) |child| {
-            child._parent = node;
-        }
+    // No mutation records for the unwrapped children either; see the comment
+    // about fragment parses in _insertNodeRelative.
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        child._parent = node;
     }
 }
 

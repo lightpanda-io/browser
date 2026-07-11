@@ -1318,19 +1318,38 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
 /// Shared implementation in Element and DocumentFragment
 pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, frame: *Frame) !void {
     frame.domChanged();
+
+    // Observers of this subtree get one combined "replace all" mutation
+    // record; per-node notification is suppressed for the removals here and
+    // for the parser insertions (fragment parsing never notifies).
+    const notify = Frame.observers.hasMutationObservers(frame);
+    var removed: std.ArrayList(*Node) = .empty;
+
     var it = self.childrenIterator();
     while (it.next()) |child| {
-        frame.removeNode(self, child, .{ .will_be_reconnected = false });
+        if (notify) {
+            try removed.append(frame.call_arena, child);
+        }
+        frame.removeNode(self, child, .{ .will_be_reconnected = false, .notify_observers = false });
     }
 
-    if (html.len == 0) {
-        return;
+    if (html.len > 0) {
+        if (allow_declarative_shadow) {
+            try frame.parseHtmlUnsafeAsChildren(self, html);
+        } else {
+            try frame.parseHtmlAsChildren(self, html);
+        }
     }
 
-    if (allow_declarative_shadow) {
-        try frame.parseHtmlUnsafeAsChildren(self, html);
-    } else {
-        try frame.parseHtmlAsChildren(self, html);
+    if (notify) {
+        var added: std.ArrayList(*Node) = .empty;
+        var child_it = self.childrenIterator();
+        while (child_it.next()) |child| {
+            try added.append(frame.call_arena, child);
+        }
+        if (removed.items.len > 0 or added.items.len > 0) {
+            Frame.observers.notifyChildListChange(frame, self, added.items, removed.items, null, null);
+        }
     }
 }
 
