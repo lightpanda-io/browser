@@ -2590,13 +2590,16 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
     }
 
-    // The parser path does its own (limited) connected-callback work, then
-    // returns.
+    // The parser path does its own (limited) notification and
+    // connected-callback work, then returns.
     if (comptime from_parser) {
-        // No mutation records from parser insertions: the initial document
-        // parse never notifies, and fragment parses (innerHTML et al.) queue
-        // one combined "replace all" record at the call site (Node.setHTML)
-        // instead of one per inserted child.
+        // Main-document parser insertions notify per node: scripts running
+        // during parsing can observe the document. Fragment parses
+        // (innerHTML et al.) stay silent; Node.setHTML queues one combined
+        // "replace all" record instead.
+        if (self._parse_mode != .fragment) {
+            self.notifyChildInserted(parent, child);
+        }
 
         if (child.is(Element)) |el| {
             // Invoke connectedCallback for custom elements during parsing.
