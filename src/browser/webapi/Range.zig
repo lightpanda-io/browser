@@ -134,7 +134,8 @@ pub fn selectNodeContents(self: *Range, node: *Node) !void {
 }
 
 pub fn collapse(self: *Range, to_start: ?bool) void {
-    if (to_start orelse true) {
+    // Per spec, toStart defaults to false: collapse to the end point.
+    if (to_start orelse false) {
         self._proto._end_container = self._proto._start_container;
         self._proto._end_offset = self._proto._start_offset;
     } else {
