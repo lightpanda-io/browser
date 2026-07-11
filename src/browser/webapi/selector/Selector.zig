@@ -187,15 +187,24 @@ pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bo
 
     var search = class_attr;
     while (std.mem.indexOf(u8, search, class_name)) |pos| {
-        const is_start = pos == 0 or search[pos - 1] == ' ';
+        const is_start = pos == 0 or isClassWhitespace(search[pos - 1]);
         const end = pos + class_name.len;
-        const is_end = end == search.len or search[end] == ' ';
+        const is_end = end == search.len or isClassWhitespace(search[end]);
 
         if (is_start and is_end) return true;
 
         search = search[pos + 1 ..];
     }
     return false;
+}
+
+// The class attribute tokens are separated by ASCII whitespace (which,
+// unlike std.ascii.isWhitespace, does not include vertical tab).
+fn isClassWhitespace(c: u8) bool {
+    return switch (c) {
+        '\t', '\n', 0x0C, '\r', ' ' => true,
+        else => false,
+    };
 }
 
 pub const Part = union(enum) {
