@@ -269,41 +269,18 @@
   innerHtmlParent.innerHTML = '<span>New 1</span><span>New 2</span><span>New 3</span>';
 
   await state.done((mutations) => {
-    // innerHTML triggers mutations for both removals and additions
-    // With tri-state: from_parser=true + parse_mode=fragment -> mutations fire
-    // HTML wrapper element is filtered out, so: 3 removals + 3 additions = 6
-    testing.expectEqual(6, mutations.length);
+    // Per the "replace all" algorithm, innerHTML queues a single mutation
+    // record combining all removed and added nodes.
+    testing.expectEqual(1, mutations.length);
 
-    // First 3: removals
     testing.expectEqual('childList', mutations[0].type);
-    testing.expectEqual(1, mutations[0].removedNodes.length);
+    testing.expectEqual(3, mutations[0].removedNodes.length);
     testing.expectEqual(oldChildren[0], mutations[0].removedNodes[0]);
-    testing.expectEqual(0, mutations[0].addedNodes.length);
-
-    testing.expectEqual('childList', mutations[1].type);
-    testing.expectEqual(1, mutations[1].removedNodes.length);
-    testing.expectEqual(oldChildren[1], mutations[1].removedNodes[0]);
-    testing.expectEqual(0, mutations[1].addedNodes.length);
-
-    testing.expectEqual('childList', mutations[2].type);
-    testing.expectEqual(1, mutations[2].removedNodes.length);
-    testing.expectEqual(oldChildren[2], mutations[2].removedNodes[0]);
-    testing.expectEqual(0, mutations[2].addedNodes.length);
-
-    // Last 3: additions (unwrapped span elements)
-    testing.expectEqual('childList', mutations[3].type);
-    testing.expectEqual(0, mutations[3].removedNodes.length);
-    testing.expectEqual(1, mutations[3].addedNodes.length);
-    testing.expectEqual('SPAN', mutations[3].addedNodes[0].nodeName);
-
-    testing.expectEqual('childList', mutations[4].type);
-    testing.expectEqual(0, mutations[4].removedNodes.length);
-    testing.expectEqual(1, mutations[4].addedNodes.length);
-    testing.expectEqual('SPAN', mutations[4].addedNodes[0].nodeName);
-
-    testing.expectEqual('childList', mutations[5].type);
-    testing.expectEqual(0, mutations[5].removedNodes.length);
-    testing.expectEqual(1, mutations[5].addedNodes.length);
-    testing.expectEqual('SPAN', mutations[5].addedNodes[0].nodeName);
+    testing.expectEqual(oldChildren[1], mutations[0].removedNodes[1]);
+    testing.expectEqual(oldChildren[2], mutations[0].removedNodes[2]);
+    testing.expectEqual(3, mutations[0].addedNodes.length);
+    testing.expectEqual('SPAN', mutations[0].addedNodes[0].nodeName);
+    testing.expectEqual('SPAN', mutations[0].addedNodes[1].nodeName);
+    testing.expectEqual('SPAN', mutations[0].addedNodes[2].nodeName);
   });
 </script>

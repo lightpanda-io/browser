@@ -472,13 +472,34 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     }
 
     frame.domChanged();
+
+    // Observers of the parent must see a single mutation record replacing
+    // this node with the parsed nodes.
+    const notify = Frame.observers.hasMutationObservers(frame);
+    const previous_sibling = node.previousSibling();
+    const next_sibling = node.nextSibling();
+    var added: std.ArrayList(*Node) = .empty;
+
     if (html.len > 0) {
         const fragment = (try Node.DocumentFragment.init(frame)).asNode();
         try frame.parseHtmlAsChildren(fragment, html);
-        try frame.insertAllChildrenBefore(fragment, parent, node);
+        const dest_connected = parent.isConnected();
+        var it = fragment.childrenIterator();
+        while (it.next()) |child| {
+            if (notify) {
+                try added.append(frame.call_arena, child);
+            }
+            frame.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
+            try frame.insertNodeRelative(parent, child, .{ .before = node }, .{ .notify_observers = false });
+        }
     }
 
-    frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    frame.removeNode(parent, node, .{ .will_be_reconnected = false, .notify_observers = false });
+
+    if (notify) {
+        const removed = [_]*Node{node};
+        Frame.observers.notifyChildListChange(frame, parent, added.items, &removed, previous_sibling, next_sibling);
+    }
 }
 
 pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
