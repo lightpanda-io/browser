@@ -771,9 +771,14 @@ pub fn insertAdjacentElement(
     position: []const u8,
     element: *Element,
     frame: *Frame,
-) !void {
-    const target_node, const prev_node = try self.asNode().findAdjacentNodes(position);
+) !?*Element {
+    const target_node, const prev_node = self.asNode().findAdjacentNodes(position, .node) catch |err| switch (err) {
+        // beforebegin/afterend with no parent is a no-op returning null.
+        error.AdjacentNoParent => return null,
+        else => return err,
+    };
     _ = try target_node.insertBefore(element.asNode(), prev_node, frame);
+    return element;
 }
 
 pub fn insertAdjacentText(
@@ -782,8 +787,12 @@ pub fn insertAdjacentText(
     data: []const u8,
     frame: *Frame,
 ) !void {
+    const target_node, const prev_node = self.asNode().findAdjacentNodes(where, .node) catch |err| switch (err) {
+        // beforebegin/afterend with no parent is a no-op.
+        error.AdjacentNoParent => return,
+        else => return err,
+    };
     const text_node = try Frame.node_factory.createTextNode(frame, data);
-    const target_node, const prev_node = try self.asNode().findAdjacentNodes(where);
     _ = try target_node.insertBefore(text_node, prev_node, frame);
 }
 

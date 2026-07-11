@@ -287,7 +287,7 @@ pub fn insertAdjacentHTML(
     const fragment = (try DocumentFragment.init(frame)).asNode();
     try frame.parseHtmlAsChildren(fragment, html);
 
-    const target_node, const prev_node = try self.asElement().asNode().findAdjacentNodes(position);
+    const target_node, const prev_node = try self.asElement().asNode().findAdjacentNodes(position, .html);
 
     var iter = fragment.childrenIterator();
     while (iter.next()) |child_node| {
