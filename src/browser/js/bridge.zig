@@ -1094,6 +1094,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/BeforeUnloadEvent.zig"),
     @import("../webapi/event/StorageEvent.zig"),
     @import("../webapi/event/DeviceMotionEvent.zig"),
+    @import("../webapi/event/GamepadEvent.zig"),
     @import("../webapi/event/DeviceOrientationEvent.zig"),
     @import("../webapi/event/TouchEvent.zig"),
     @import("../webapi/event/UIEvent.zig"),
