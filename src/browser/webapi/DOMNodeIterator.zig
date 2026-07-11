@@ -77,7 +77,7 @@ pub fn getWhatToShow(self: *const DOMNodeIterator) u32 {
 }
 
 pub fn getFilter(self: *const DOMNodeIterator) ?FilterOpts {
-    return self._filter._original_filter;
+    return self._filter._opts;
 }
 
 pub fn nextNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {

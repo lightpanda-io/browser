@@ -21,32 +21,24 @@ const Node = @import("Node.zig");
 
 const NodeFilter = @This();
 
-_func: ?js.Function.Global,
-_original_filter: ?FilterOpts,
+_opts: ?FilterOpts,
 
 pub const FilterOpts = union(enum) {
     function: js.Function.Global,
-    object: struct {
-        pub const js_as_object = true;
-        acceptNode: js.Function.Global,
-    },
+    // Any object is a valid callback interface; whether its acceptNode
+    // member is callable is only checked when the filter is invoked.
+    object: js.Object.Global,
 };
 
 pub fn init(opts_: ?FilterOpts) !NodeFilter {
-    const opts = opts_ orelse return .{ ._func = null, ._original_filter = null };
-    const func = switch (opts) {
-        .function => |func| func,
-        .object => |obj| obj.acceptNode,
-    };
-    return .{
-        ._func = func,
-        ._original_filter = opts_,
-    };
+    return .{ ._opts = opts_ };
 }
 
 pub fn deinit(self: *const NodeFilter) void {
-    if (self._func) |func| {
-        func.release();
+    const opts = self._opts orelse return;
+    switch (opts) {
+        .function => |func| func.release(),
+        .object => |obj| obj.release(),
     }
 }
 
@@ -71,8 +63,23 @@ pub const SHOW_DOCUMENT_FRAGMENT: u32 = 0x400;
 pub const SHOW_NOTATION: u32 = 0x800;
 
 pub fn acceptNode(self: *const NodeFilter, node: *Node, local: *const js.Local) !i32 {
-    const func = self._func orelse return FILTER_ACCEPT;
-    return local.toLocal(func).callRethrow(i32, .{node});
+    const opts = self._opts orelse return FILTER_ACCEPT;
+    switch (opts) {
+        .function => |func| return local.toLocal(func).callRethrow(i32, .{node}),
+        .object => |obj| {
+            // Per WebIDL "call a user object's operation": the acceptNode
+            // member is looked up on every invocation (rethrowing getter
+            // errors), must be callable (TypeError otherwise), and is
+            // invoked with the filter object as its this value.
+            const filter_obj = obj.local(local);
+            const member = try filter_obj.get("acceptNode");
+            if (!member.isFunction()) {
+                return error.TypeError;
+            }
+            const func = js.Function{ .local = local, .handle = @ptrCast(member.handle) };
+            return func.callWithThisRethrow(i32, filter_obj, .{node});
+        },
+    }
 }
 
 pub fn shouldShow(node: *const Node, what_to_show: u32) bool {
