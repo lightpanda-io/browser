@@ -38,6 +38,20 @@ pub fn parseDimension(value: []const u8) ?f64 {
     return std.fmt.parseFloat(f64, num_str) catch null;
 }
 
+// parseDimension plus viewport-relative units, which the faux layout
+// resolves against the page viewport.
+pub fn parseDimensionViewport(value: []const u8, frame: *Frame) ?f64 {
+    if (std.mem.endsWith(u8, value, "vh")) {
+        const n = std.fmt.parseFloat(f64, value[0 .. value.len - 2]) catch return null;
+        return n * @as(f64, @floatFromInt(frame._page.getViewport().height)) / 100.0;
+    }
+    if (std.mem.endsWith(u8, value, "vw")) {
+        const n = std.fmt.parseFloat(f64, value[0 .. value.len - 2]) catch return null;
+        return n * @as(f64, @floatFromInt(frame._page.getViewport().width)) / 100.0;
+    }
+    return parseDimension(value);
+}
+
 /// Escapes a CSS identifier string
 /// https://drafts.csswg.org/cssom/#the-css.escape()-method
 pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {

@@ -30,6 +30,8 @@ const MouseEvent = @import("event/MouseEvent.zig");
 const PointerEvent = @import("event/PointerEvent.zig");
 const KeyboardEvent = @import("event/KeyboardEvent.zig");
 const WheelEvent = @import("event/WheelEvent.zig");
+const TouchEvent = @import("event/TouchEvent.zig");
+const EventManagerBase = @import("../EventManagerBase.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -160,9 +162,19 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     }
     const actions = actions_val.toArray();
 
+    // A touch pointer dispatches touch events instead of mouse events.
+    var is_touch = false;
+    const params = try source.get("parameters");
+    if (params.isObject()) {
+        if ((try params.toObject().get("pointerType")).toSSO(false)) |pointer_type| {
+            is_touch = pointer_type.eql(comptime .wrap("touch"));
+        } else |_| {}
+    }
+
     // The element the pointer is currently over, set by the last pointerMove
     // whose origin resolved to an element.
     var target: ?*Element = null;
+    var pressed = false;
 
     for (0..actions.len()) |i| {
         const action_val = try actions.get(@intCast(i));
@@ -179,21 +191,37 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             }
             const el = target orelse continue;
             dispatchPointer(el, "pointermove", 0, 0, frame);
-            dispatchMouse(el, "mousemove", 0, 0, frame);
+            if (is_touch) {
+                if (pressed) {
+                    dispatchTouch(el, "touchmove", frame);
+                }
+            } else {
+                dispatchMouse(el, "mousemove", 0, 0, frame);
+            }
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
+            pressed = true;
             dispatchPointer(el, "pointerdown", button, 1, frame);
-            dispatchMouse(el, "mousedown", button, 1, frame);
-            Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
-                log.warn(.app, "webdriver editable focus", .{ .err = err });
-            };
+            if (is_touch) {
+                dispatchTouch(el, "touchstart", frame);
+            } else {
+                dispatchMouse(el, "mousedown", button, 1, frame);
+                Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
+                    log.warn(.app, "webdriver editable focus", .{ .err = err });
+                };
+            }
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
+            pressed = false;
             dispatchPointer(el, "pointerup", button, 0, frame);
-            dispatchMouse(el, "mouseup", button, 0, frame);
-            dispatchMouse(el, "click", button, 0, frame);
+            if (is_touch) {
+                dispatchTouch(el, "touchend", frame);
+            } else {
+                dispatchMouse(el, "mouseup", button, 0, frame);
+                dispatchMouse(el, "click", button, 0, frame);
+            }
         }
         // "pause" carries timing only and is ignored. ("pointerCancel" is not
         // emitted by the testdriver Actions builder.)
@@ -220,14 +248,23 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
         }
 
         const origin = try action.get("origin");
-        if (!origin.isObject()) {
-            continue;
+        var el: ?*Element = null;
+        if (origin.isObject()) {
+            el = origin.local.jsValueToZig(*Element, origin) catch null;
+        } else {
+            // "viewport"/"pointer" origins: approximate hit-testing with
+            // the faux layout's vertical axis, falling back to the root.
+            const y = readI32(action, "y", 0);
+            el = frame.document.elementFromVerticalPoint(@floatFromInt(y), frame) catch null;
+            if (el == null) {
+                el = frame.document.getDocumentElement();
+            }
         }
-        const el = origin.local.jsValueToZig(*Element, origin) catch continue;
+        const target = el orelse continue;
 
         const delta_x = readI32(action, "deltaX", 0);
         const delta_y = readI32(action, "deltaY", 0);
-        dispatchWheel(el, delta_x, delta_y, frame);
+        dispatchWheel(target, delta_x, delta_y, frame);
     }
 }
 
@@ -311,9 +348,12 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u
 }
 
 fn dispatchWheel(el: *Element, delta_x: i32, delta_y: i32, frame: *Frame) void {
+    // The UA dispatches scroll-blocking events as non-cancelable when every
+    // listener on the propagation path is passive: it already knows
+    // preventDefault can't be called.
     const event = WheelEvent.initTrusted("wheel", .{
         .bubbles = true,
-        .cancelable = true,
+        .cancelable = hasNonPassiveListener(el, "wheel", frame),
         .composed = true,
         .deltaX = @floatFromInt(delta_x),
         .deltaY = @floatFromInt(delta_y),
@@ -327,7 +367,22 @@ fn dispatchWheel(el: *Element, delta_x: i32, delta_y: i32, frame: *Frame) void {
     defer _ = event.asEvent().releaseRef(frame._page);
     dispatch(el.asEventTarget(), event.asEvent(), frame, "wheel");
 
-    if (event.asEvent()._prevent_default) {
+    // Blink also fires the legacy mousewheel event.
+    const legacy = WheelEvent.initTrusted("mousewheel", .{
+        .bubbles = true,
+        .cancelable = hasNonPassiveListener(el, "mousewheel", frame),
+        .composed = true,
+        .deltaX = @floatFromInt(delta_x),
+        .deltaY = @floatFromInt(delta_y),
+    }, frame) catch |err| {
+        log.warn(.app, "webdriver mousewheel event", .{ .err = err });
+        return;
+    };
+    legacy.asEvent().acquireRef();
+    defer _ = legacy.asEvent().releaseRef(frame._page);
+    dispatch(el.asEventTarget(), legacy.asEvent(), frame, "mousewheel");
+
+    if (event.asEvent()._prevent_default or legacy.asEvent()._prevent_default) {
         return;
     }
 
@@ -348,6 +403,41 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
     frame._event_manager.dispatch(target, event) catch |err| {
         log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ });
     };
+}
+
+fn hasNonPassiveListener(el: *Element, typ: []const u8, frame: *Frame) bool {
+    const base = &frame._event_manager.base;
+    var current: ?*@import("Node.zig") = el.asNode();
+    while (current) |node| : (current = node.parentNode()) {
+        if (anyNonPassive(base.getListeners(node.asEventTarget(), .wrap(typ)))) {
+            return true;
+        }
+    }
+    return anyNonPassive(base.getListeners(frame.window.asEventTarget(), .wrap(typ)));
+}
+
+fn anyNonPassive(list_: ?*std.DoublyLinkedList) bool {
+    const list = list_ orelse return false;
+    var link = list.first;
+    while (link) |l| : (link = l.next) {
+        const listener: *align(8) EventManagerBase.Listener = @fieldParentPtr("node", l);
+        if (!listener.passive) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
+    const event = TouchEvent.initTrusted(typ, .{
+        .bubbles = true,
+        .cancelable = hasNonPassiveListener(el, typ, frame),
+        .composed = true,
+    }, frame) catch |err| {
+        log.warn(.app, "webdriver touch event", .{ .err = err });
+        return;
+    };
+    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
 }
 
 pub const JsApi = struct {

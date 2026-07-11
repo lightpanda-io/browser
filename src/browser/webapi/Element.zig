@@ -1232,8 +1232,8 @@ pub fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, 
 
     if (self.getStyle(frame)) |style| {
         const decl = style.asCSSStyleDeclaration();
-        width = CSS.parseDimension(decl.getPropertyValue("width", frame)) orelse 5.0;
-        height = CSS.parseDimension(decl.getPropertyValue("height", frame)) orelse 5.0;
+        width = CSS.parseDimensionViewport(decl.getPropertyValue("width", frame), frame) orelse 5.0;
+        height = CSS.parseDimensionViewport(decl.getPropertyValue("height", frame), frame) orelse 5.0;
     }
 
     if (width == 5.0 or height == 5.0) {

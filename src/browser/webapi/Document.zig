@@ -831,6 +831,17 @@ pub fn moveBefore(self: *Document, node: js.Value, child: js.Value, frame: *Fram
 }
 
 pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
+    return self.elementFromPointImpl(x, y, false, frame);
+}
+
+// The faux layout gives most elements no useful horizontal extent, so
+// viewport-relative hit-testing (WebDriver scroll actions) matches on the
+// vertical axis only.
+pub fn elementFromVerticalPoint(self: *Document, y: f64, frame: *Frame) !?*Element {
+    return self.elementFromPointImpl(0, y, true, frame);
+}
+
+fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: *Frame) !?*Element {
     // DFS in document order; topmost = last visited element whose rect contains (x, y).
     //
     // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
@@ -868,7 +879,8 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Eleme
                 const top = pos;
                 const right = pos + dims.width;
                 const bottom = pos + dims.height;
-                if (x >= left and x <= right and y >= top and y <= bottom) {
+                const x_contained = ignore_x or (x >= left and x <= right);
+                if (x_contained and y >= top and y <= bottom) {
                     topmost = element;
                 }
             }

@@ -51,6 +51,14 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent {
+    return initWithTrusted(typ, _opts, false, frame);
+}
+
+pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent {
+    return initWithTrusted(typ, _opts, true, frame);
+}
+
+fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, frame: *Frame) !*TouchEvent {
     const arena = try frame.getArena(.tiny, "TouchEvent");
     errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
@@ -68,7 +76,7 @@ pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts, false);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 
