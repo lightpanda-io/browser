@@ -56,6 +56,9 @@ pub const NamespaceUriLookup = std.AutoHashMapUnmanaged(*Element, []const u8);
 pub const ScrollPosition = struct {
     x: u32 = 0,
     y: u32 = 0,
+    // Throttle state for the async scroll/scrollend dispatch (mirrors
+    // Window._scroll_pos.state).
+    state: enum { scroll, end, done } = .done,
 };
 pub const ScrollPositionLookup = std.AutoHashMapUnmanaged(*Element, ScrollPosition);
 
@@ -1324,7 +1327,11 @@ pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
-    gop.value_ptr.y = @intCast(@max(0, value));
+    const new_y: u32 = @intCast(@max(0, value));
+    if (gop.value_ptr.y != new_y) {
+        gop.value_ptr.y = new_y;
+        try self.scheduleScrollEvents(frame);
+    }
 }
 
 pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
@@ -1337,7 +1344,11 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
-    gop.value_ptr.x = @intCast(@max(0, value));
+    const new_x: u32 = @intCast(@max(0, value));
+    if (gop.value_ptr.x != new_x) {
+        gop.value_ptr.x = new_x;
+        try self.scheduleScrollEvents(frame);
+    }
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
@@ -1627,6 +1638,8 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
+    const old_x = gop.value_ptr.x;
+    const old_y = gop.value_ptr.y;
     switch (o) {
         .x => |x| {
             gop.value_ptr.x = @intCast(@max(0, x));
@@ -1636,6 +1649,9 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
             if (dict.left) |left| gop.value_ptr.x = @intCast(@max(0, left));
             if (dict.top) |top| gop.value_ptr.y = @intCast(@max(0, top));
         },
+    }
+    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
+        try self.scheduleScrollEvents(frame);
     }
 }
 
@@ -1652,7 +1668,74 @@ pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
     };
     gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
     gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
+    if (dx != 0 or dy != 0) {
+        try self.scheduleScrollEvents(frame);
+    }
 }
+
+// Scrolling an element fires a scroll event and then a scrollend event,
+// asynchronously and throttled, mirroring Window.scrollTo. Scrolls of the
+// scrolling element (the root) are fired at the document instead.
+fn scheduleScrollEvents(self: *Element, frame: *Frame) !void {
+    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    gop.value_ptr.state = .scroll;
+
+    const task = try frame.arena.create(ScrollEventTask);
+    task.* = .{ .frame = frame, .element = self };
+    try frame.js.scheduler.add(task, ScrollEventTask.dispatchScroll, 10, .{ .low_priority = true });
+    try frame.js.scheduler.add(task, ScrollEventTask.dispatchScrollEnd, 20, .{ .low_priority = true });
+}
+
+const ScrollEventTask = struct {
+    frame: *Frame,
+    element: *Element,
+
+    fn eventTarget(self: *ScrollEventTask) *@import("EventTarget.zig") {
+        if (self.frame.document.getDocumentElement() == self.element) {
+            return self.frame.document.asEventTarget();
+        }
+        return self.element.asEventTarget();
+    }
+
+    // Scroll events fired at an element don't bubble; only document-level
+    // scrolls (the scrolling element, dispatched at the document) do.
+    fn bubbles(self: *ScrollEventTask) bool {
+        return self.frame.document.getDocumentElement() == self.element;
+    }
+
+    fn dispatchScroll(ptr: *anyopaque) anyerror!?u32 {
+        const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
+        const f = self.frame;
+        const pos = f._element_scroll_positions.getPtr(self.element) orelse return null;
+        if (pos.state != .scroll) {
+            return null;
+        }
+        const Event = @import("Event.zig");
+        const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = self.bubbles() }, f._page);
+        try f._event_manager.dispatch(self.eventTarget(), event);
+        pos.state = .end;
+        return null;
+    }
+
+    fn dispatchScrollEnd(ptr: *anyopaque) anyerror!?u32 {
+        const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
+        const f = self.frame;
+        const pos = f._element_scroll_positions.getPtr(self.element) orelse return null;
+        switch (pos.state) {
+            .scroll => return 10,
+            .end => {},
+            .done => return null,
+        }
+        const Event = @import("Event.zig");
+        const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = self.bubbles() }, f._page);
+        try f._event_manager.dispatch(self.eventTarget(), event);
+        pos.state = .done;
+        return null;
+    }
+};
 
 pub fn format(self: *Element, writer: *std.Io.Writer) !void {
     try writer.writeByte('<');
