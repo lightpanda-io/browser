@@ -830,11 +830,73 @@ fn insertBeforeInner(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fr
 pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Frame) !*Node {
     try ensurePreInsertValidity(self, new_child, old_child, .replace);
 
-    _ = try self.insertBeforeInner(new_child, old_child, frame);
+    frame.domChanged();
+    const notify = Frame.observers.hasMutationObservers(frame);
 
-    // Special case: if we replace a node by itself, insertBefore was a noop.
-    if (new_child != old_child) {
-        frame.removeNode(self, old_child, .{ .will_be_reconnected = false });
+    if (new_child == old_child) {
+        // Replacing a node with itself doesn't change the tree; observers
+        // still get a removal record followed by an addition record.
+        if (notify) {
+            const prev = old_child.previousSibling();
+            const next = old_child.nextSibling();
+            const nodes = [_]*Node{old_child};
+            Frame.observers.notifyChildListChange(frame, self, &.{}, &nodes, prev, next);
+            Frame.observers.notifyChildListChange(frame, self, &nodes, &.{}, prev, next);
+        }
+        return old_child;
+    }
+
+    // Removing new_child from its current position (internal replacement)
+    // notifies normally; the replacement itself queues one combined record
+    // with both the added and the removed node.
+    const child_already_connected = new_child.isConnected();
+    const child_owner = new_child.ownerDocument(frame);
+    const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
+    const adopting = child_owner != null and child_owner.? != parent_owner;
+    const will_be_reconnected = self.isConnected() and !adopting;
+
+    if (new_child.is(DocumentFragment) == null) {
+        if (new_child._parent) |previous_parent| {
+            frame.removeNode(previous_parent, new_child, .{ .will_be_reconnected = will_be_reconnected });
+        }
+        if (adopting) {
+            try frame.adoptNodeTree(new_child, child_owner.?, parent_owner);
+        }
+    }
+
+    const prev = old_child.previousSibling();
+    const next = old_child.nextSibling();
+
+    var added: std.ArrayList(*Node) = .empty;
+    if (new_child.is(DocumentFragment)) |_| {
+        if (notify) {
+            var it = new_child.childrenIterator();
+            while (it.next()) |fragment_child| {
+                try added.append(frame.call_arena, fragment_child);
+            }
+        }
+        try frame.moveAllChildren(new_child, self, old_child, .silent);
+    } else {
+        if (notify) {
+            try added.append(frame.call_arena, new_child);
+        }
+        try frame.insertNodeRelative(
+            self,
+            new_child,
+            .{ .before = old_child },
+            .{
+                .child_already_connected = child_already_connected,
+                .adopting_to_new_document = adopting,
+                .notify_observers = false,
+            },
+        );
+    }
+
+    frame.removeNode(self, old_child, .{ .will_be_reconnected = false, .notify_observers = false });
+
+    if (notify) {
+        const removed = [_]*Node{old_child};
+        Frame.observers.notifyChildListChange(frame, self, added.items, &removed, prev, next);
     }
 
     return old_child;
