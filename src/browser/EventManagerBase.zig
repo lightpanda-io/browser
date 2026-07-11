@@ -256,22 +256,13 @@ pub fn dispatchDirect(
     // Per spec, currentTarget is only set while listeners are being invoked
     defer event._current_target = null;
 
-    // Call the property handler (e.g., onmessage) if present
-    if (getFunction(handler, &ls.local)) |func| {
-        event._current_target = target;
-        _ = func.callWithThis(void, target, .{event}) catch |err| {
-            log.warn(.event, opts.context, .{ .err = err });
-        };
-    }
-
-    // Call listeners registered via addEventListener
-    const list = self.getListeners(target, event._type_string) orelse return;
-
     // This is a slightly simplified version of what you'll find in EventManager.
     // dispatchPhase. It is simpler because, for direct dispatching, we know
     // there's no ancestors and only the single target phase.
 
-    // Track dispatch depth for deferred removal
+    // Track dispatch depth for deferred removal. Bump it *before* the property
+    // handler runs so any listener it removes is deferred (keeping our sentinel
+    // node alive) rather than freed mid-dispatch.
     self.dispatch_depth += 1;
     defer {
         self.dispatch_depth -= 1;
@@ -285,8 +276,32 @@ pub fn dispatchDirect(
         }
     }
 
-    // Use the last listener in the list as sentinel - listeners added during dispatch will be after it
-    const last_node = list.last orelse return;
+    // Snapshot the listener list *before* invoking the property handler. Per
+    // spec the set of listeners is collected at the start of dispatch, so a
+    // listener added while we're dispatching — including one added by the
+    // property handler itself (e.g. onupgradeneeded calling addEventListener) —
+    // must not be invoked for this event.
+    const maybe_list = self.getListeners(target, event._type_string);
+    const sentinel = if (maybe_list) |list| list.last else null;
+
+    // Call the property handler (e.g., onmessage) if present
+    if (getFunction(handler, &ls.local)) |func| {
+        event._current_target = target;
+        _ = func.callWithThis(void, target, .{event}) catch |err| {
+            if (err == error.JsException) {
+                event._listeners_did_throw = true;
+            } else {
+                log.warn(.event, opts.context, .{ .err = err });
+            }
+        };
+    }
+
+    // No listeners were registered via addEventListener at dispatch start.
+    const last_node = sentinel orelse return;
+    const list = maybe_list.?;
+
+    // Use the last listener present at dispatch start as sentinel - listeners
+    // added during dispatch will be after it
     const last_listener: *Listener = @alignCast(@fieldParentPtr("node", last_node));
 
     // Iterate through the list, stopping after we've encountered the last_listener
@@ -421,24 +436,45 @@ pub const Listener = struct {
     ) error{OutOfMemory}!void {
         switch (self.function) {
             .value => |value| local.toLocal(value).callWithThis(void, event._current_target.?, .{event}) catch |err| {
-                log.warn(.event, context, .{ .err = err });
+                if (err == error.JsException) {
+                    event._listeners_did_throw = true;
+                } else {
+                    log.warn(.event, context, .{ .err = err });
+                }
             },
             .string => |string| {
                 const str = try arena.dupeZ(u8, string.str());
                 local.eval(str, null) catch |err| {
-                    log.warn(.event, context, .{ .err = err });
+                    if (err == error.JsException) {
+                        event._listeners_did_throw = true;
+                    } else {
+                        log.warn(.event, context, .{ .err = err });
+                    }
                 };
             },
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
                 const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
-                    log.warn(.event, context, .{ .err = err });
+                    // Getting "handleEvent" threw (e.g. a throwing getter).
+                    if (err == error.JsException) {
+                        event._listeners_did_throw = true;
+                    } else {
+                        log.warn(.event, context, .{ .err = err });
+                    }
                     break :blk null;
                 };
                 if (handle_event) |handleEvent| {
                     handleEvent.callWithThis(void, obj, .{event}) catch |err| {
-                        log.warn(.event, context, .{ .err = err });
+                        if (err == error.JsException) {
+                            event._listeners_did_throw = true;
+                        } else {
+                            log.warn(.event, context, .{ .err = err });
+                        }
                     };
+                } else {
+                    // The listener was an object without the handleEvent function
+                    // This is throwing a TypeError
+                    event._listeners_did_throw = true;
                 }
             },
         }
