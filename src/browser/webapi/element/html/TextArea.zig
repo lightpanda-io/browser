@@ -90,7 +90,7 @@ pub fn getDefaultValue(self: *const TextArea) []const u8 {
     const node = self.asConstNode();
     if (node.firstChild()) |child| {
         if (child.is(Node.CData.Text)) |txt| {
-            return txt.getWholeText();
+            return txt.ownData();
         }
     }
     return "";
