@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 
@@ -31,16 +33,55 @@ _filter: NodeFilter,
 _reference_node: *Node,
 _pointer_before_reference_node: bool,
 _active: bool = false,
+// Intrusive link for Frame._live_node_iterators (pre-removing steps).
+// Iterators are slab-allocated and live as long as the frame, so they are
+// never unlinked.
+_iterator_link: std.DoublyLinkedList.Node = .{},
 
 pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) !*DOMNodeIterator {
     const node_filter = try NodeFilter.init(filter);
-    return frame._factory.create(DOMNodeIterator{
+    const iterator = try frame._factory.create(DOMNodeIterator{
         ._root = root,
         ._filter = node_filter,
         ._reference_node = root,
         ._what_to_show = what_to_show,
         ._pointer_before_reference_node = true,
     });
+    frame._live_node_iterators.append(&iterator._iterator_link);
+    return iterator;
+}
+
+// DOM "node iterator pre-removing steps", run while the tree still contains
+// to_be_removed.
+pub fn nodeWillBeRemoved(self: *DOMNodeIterator, to_be_removed: *Node) void {
+    // Removing the root or one of its ancestors leaves the iterator alone.
+    if (to_be_removed == self._root or to_be_removed.contains(self._root)) return;
+    if (to_be_removed != self._reference_node and !to_be_removed.contains(self._reference_node)) return;
+
+    if (self._pointer_before_reference_node) {
+        // The first node following to_be_removed's subtree, if any.
+        var node = to_be_removed;
+        while (true) {
+            if (node.nextSibling()) |sibling| {
+                self._reference_node = sibling;
+                return;
+            }
+            node = node.parentNode() orelse break;
+        }
+        self._pointer_before_reference_node = false;
+    }
+
+    // The node immediately preceding to_be_removed in tree order: the
+    // previous sibling's last inclusive descendant, or the parent.
+    if (to_be_removed.previousSibling()) |prev| {
+        var node = prev;
+        while (node.lastChild()) |child| {
+            node = child;
+        }
+        self._reference_node = node;
+    } else {
+        self._reference_node = to_be_removed.parentNode() orelse self._root;
+    }
 }
 
 pub fn getRoot(self: *const DOMNodeIterator) *Node {
