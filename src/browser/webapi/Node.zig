@@ -658,6 +658,14 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
         return null;
     }
 
+    // An attribute node has no parent; its owner follows its element's
+    // (including across adoption into another document).
+    if (self._type == .attribute) {
+        if (self._type.attribute._element) |element| {
+            return element.asNode().ownerDocument(frame);
+        }
+    }
+
     // The root of the tree that a node belongs to is its owner.
     var current = self;
     while (current._parent) |parent| {
