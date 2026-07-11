@@ -34,9 +34,15 @@ const Range = @This();
 _proto: *AbstractRange,
 
 pub fn init(frame: *Frame) !*Range {
+    return initIn(frame.document.asNode(), frame);
+}
+
+// Both boundary points start at (container, 0); document.createRange()
+// passes the document it was called on.
+pub fn initIn(container: *Node, frame: *Frame) !*Range {
     const arena = try frame.getArena(.medium, "Range");
     errdefer frame.releaseArena(arena);
-    return frame._factory.abstractRange(arena, Range{ ._proto = undefined }, frame);
+    return frame._factory.abstractRangeIn(arena, Range{ ._proto = undefined }, container, frame);
 }
 
 pub fn asAbstractRange(self: *Range) *AbstractRange {

@@ -522,8 +522,8 @@ pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []
 }
 
 const Range = @import("Range.zig");
-pub fn createRange(_: *const Document, frame: *Frame) !*Range {
-    return Range.init(frame);
+pub fn createRange(self: *Document, frame: *Frame) !*Range {
+    return Range.initIn(self.asNode(), frame);
 }
 
 pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@import("Event.zig") {
