@@ -3164,7 +3164,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const target_frame = blk: {
         const target_name = target_name_ orelse {
-            break :blk form_element.asNode().ownerFrame(self);
+            break :blk form_element.ownerFrame(self);
         };
         break :blk self.resolveTargetFrame(target_name) orelse {
             log.warn(.not_implemented, "target", .{ .type = self._type, .url = self.url, .target = target_name });
