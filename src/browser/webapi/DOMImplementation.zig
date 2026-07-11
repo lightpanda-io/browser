@@ -50,6 +50,7 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString
     const document = (try frame._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
     document._ready_state = .complete;
     document._url = "about:blank";
+    document._charset = "UTF-8";
 
     {
         const doctype = try frame._factory.node(DocumentType{
@@ -101,6 +102,7 @@ pub fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullab
     // Create XML Document
     const document = (try frame._factory.document(Node.Document.XMLDocument{ ._proto = undefined })).asDocument();
     document._url = "about:blank";
+    document._charset = "UTF-8";
     // Per spec the content type depends on the requested namespace.
     document._content_type = blk: {
         const ns = namespace_ orelse break :blk "application/xml";
