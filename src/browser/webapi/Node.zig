@@ -226,39 +226,93 @@ fn validateNodeInsertion(parent: *Node, node: *Node) !void {
     }
 }
 
-// DOM "ensure pre-insert validity" rules specific to document parents: a
-// document can't contain text nodes and has at most one element child.
-// `replaced_child` is the node about to be replaced (replaceChild), which
-// doesn't count against the single-element rule. Not part of
-// validateNodeInsertion because replaceChildren replaces every existing
-// child and must skip the single-element rule entirely.
-fn validateDocumentInsertion(parent: *Node, node: *const Node, replaced_child: ?*const Node) !void {
-    if (parent._type != .document) {
-        return;
+// DOM "ensure pre-insert validity" (and its replaceChild variant), with the
+// checks in spec order: parent type, cycle, child-parent (NotFoundError),
+// node type, then the document-parent structure rules.
+const PreInsertMode = enum { insert, replace };
+
+fn ensurePreInsertValidity(parent: *Node, node: *Node, child: ?*Node, comptime mode: PreInsertMode) !void {
+    switch (parent._type) {
+        .document, .document_fragment, .element => {},
+        else => return error.HierarchyError,
     }
+
+    if (node.contains(parent)) {
+        return error.HierarchyError;
+    }
+
+    if (child) |c| {
+        if (c._parent == null or c._parent.? != parent) {
+            return error.NotFound;
+        }
+    }
+
     switch (node._type) {
+        .document, .attribute => return error.HierarchyError,
         .cdata => |cd| {
-            if (cd._type == .text or cd._type == .cdata_section) {
+            if ((cd._type == .text or cd._type == .cdata_section) and parent._type == .document) {
                 // A Text node (CDATASection included) cannot be a child of a
                 // document.
                 return error.HierarchyError;
             }
         },
-        .element => {
-            var it = parent.childrenIterator();
-            while (it.next()) |existing| {
-                if (existing._type == .element and existing != node and existing != replaced_child) {
-                    // A document can have at most one element child.
-                    return error.HierarchyError;
-                }
+        .document_type => {
+            if (parent._type != .document) {
+                return error.HierarchyError;
             }
         },
+        else => {},
+    }
+
+    if (parent._type != .document) {
+        return;
+    }
+
+    switch (node._type) {
+        .document_fragment => {
+            var element_count: u32 = 0;
+            var it = node.childrenIterator();
+            while (it.next()) |frag_child| {
+                switch (frag_child._type) {
+                    .element => element_count += 1,
+                    .cdata => |cd| {
+                        if (cd._type == .text) {
+                            return error.HierarchyError;
+                        }
+                    },
+                    else => {},
+                }
+            }
+            if (element_count > 1) {
+                return error.HierarchyError;
+            }
+            if (element_count == 1) {
+                try checkDocumentElementRules(parent, node, child, mode);
+            }
+        },
+        .element => try checkDocumentElementRules(parent, node, child, mode),
         .document_type => {
             var it = parent.childrenIterator();
             while (it.next()) |existing| {
-                if (existing._type == .document_type and existing != node and existing != replaced_child) {
-                    // A document can have at most one doctype child.
+                if (existing._type == .document_type and existing != node) {
+                    if (mode == .replace and existing == child) continue;
                     return error.HierarchyError;
+                }
+            }
+            if (child) |c| {
+                // An element preceding child?
+                var prev = c.previousSibling();
+                while (prev) |p| : (prev = p.previousSibling()) {
+                    if (p._type == .element) {
+                        return error.HierarchyError;
+                    }
+                }
+            } else if (mode == .insert) {
+                var it2 = parent.childrenIterator();
+                while (it2.next()) |existing| {
+                    if (existing._type == .element) {
+                        return error.HierarchyError;
+                    }
                 }
             }
         },
@@ -266,14 +320,36 @@ fn validateDocumentInsertion(parent: *Node, node: *const Node, replaced_child: ?
     }
 }
 
+fn checkDocumentElementRules(parent: *Node, node: *Node, child: ?*Node, comptime mode: PreInsertMode) !void {
+    // A document can have at most one element child.
+    var it = parent.childrenIterator();
+    while (it.next()) |existing| {
+        if (existing._type == .element and existing != node) {
+            if (mode == .replace and existing == child) continue;
+            return error.HierarchyError;
+        }
+    }
+    if (child) |c| {
+        if (mode == .insert and c._type == .document_type) {
+            return error.HierarchyError;
+        }
+        // A doctype following child?
+        var next = c.nextSibling();
+        while (next) |n| : (next = n.nextSibling()) {
+            if (n._type == .document_type) {
+                return error.HierarchyError;
+            }
+        }
+    }
+}
+
 pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
+    try ensurePreInsertValidity(self, child, null, .insert);
+
     if (child.is(DocumentFragment)) |_| {
         try frame.appendAllChildren(child, self);
         return child;
     }
-
-    try validateNodeInsertion(self, child);
-    try validateDocumentInsertion(self, child, null);
 
     frame.domChanged();
 
@@ -675,12 +751,13 @@ pub fn removeChild(self: *Node, child: *Node, frame: *Frame) !*Node {
 }
 
 pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Frame) !*Node {
-    return self.insertBeforeReplacing(new_node, ref_node_, null, frame);
+    try ensurePreInsertValidity(self, new_node, ref_node_, .insert);
+    return self.insertBeforeInner(new_node, ref_node_, frame);
 }
 
-// `replacing` is the child replaceChild is about to remove; it doesn't count
-// against the document single-element rule.
-fn insertBeforeReplacing(self: *Node, new_node: *Node, ref_node_: ?*Node, replacing: ?*const Node, frame: *Frame) !*Node {
+// The insertion work, after pre-insert (or replace) validity was ensured by
+// the caller.
+fn insertBeforeInner(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Frame) !*Node {
     const ref_node = ref_node_ orelse {
         return self.appendChild(new_node, frame);
     };
@@ -700,17 +777,10 @@ fn insertBeforeReplacing(self: *Node, new_node: *Node, ref_node_: ?*Node, replac
         return new_node;
     }
 
-    if (ref_node._parent == null or ref_node._parent.? != self) {
-        return error.NotFound;
-    }
-
     if (new_node.is(DocumentFragment)) |_| {
         try frame.insertAllChildrenBefore(new_node, self, ref_node);
         return new_node;
     }
-
-    try validateNodeInsertion(self, new_node);
-    try validateDocumentInsertion(self, new_node, replacing);
 
     const child_already_connected = new_node.isConnected();
 
@@ -744,14 +814,9 @@ fn insertBeforeReplacing(self: *Node, new_node: *Node, ref_node_: ?*Node, replac
 }
 
 pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Frame) !*Node {
-    if (old_child._parent == null or old_child._parent.? != self) {
-        return error.HierarchyError;
-    }
+    try ensurePreInsertValidity(self, new_child, old_child, .replace);
 
-    try validateNodeInsertion(self, new_child);
-    try validateDocumentInsertion(self, new_child, old_child);
-
-    _ = try self.insertBeforeReplacing(new_child, old_child, old_child, frame);
+    _ = try self.insertBeforeInner(new_child, old_child, frame);
 
     // Special case: if we replace a node by itself, insertBefore was a noop.
     if (new_child != old_child) {
@@ -1447,7 +1512,10 @@ pub const JsApi = struct {
     pub const contains = bridge.function(Node.contains, .{});
     pub const removeChild = bridge.function(Node.removeChild, .{ .ce_reactions = true });
     pub const nodeValue = bridge.accessor(Node.getNodeValue, Node.setNodeValue, .{ .ce_reactions = true });
-    pub const insertBefore = bridge.function(Node.insertBefore, .{ .ce_reactions = true });
+    pub const insertBefore = bridge.function(_insertBefore, .{ .ce_reactions = true });
+    fn _insertBefore(self: *Node, new_node: *Node, ref_node: js.Nullable(*Node), frame: *Frame) !*Node {
+        return self.insertBefore(new_node, ref_node.value, frame);
+    }
     pub const replaceChild = bridge.function(Node.replaceChild, .{ .ce_reactions = true });
     pub const normalize = bridge.function(Node.normalize, .{ .ce_reactions = true });
     pub const cloneNode = bridge.function(Node.cloneNode, .{ .ce_reactions = true });
