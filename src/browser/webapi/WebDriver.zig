@@ -83,7 +83,7 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
 //   { type: "pointer", actions: [{type: "pointerMove", x, y, origin}, ...] }
 //   { type: "key",     actions: [{type: "keyDown", value}, ...] }
 //   { type: "wheel",   actions: [{type: "scroll", deltaX, deltaY, origin}, ...] }
-pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !void {
+pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !js.Promise {
     if (sources.isArray() == false) {
         return error.InvalidArgument;
     }
@@ -94,11 +94,16 @@ pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !vo
     const persisted = try sources.persist();
     errdefer persisted.release();
 
+    // Resolved once the actions have been performed, so testdriver's
+    // Actions().send() promise doesn't settle before the events fired.
+    const resolver = frame.js.local.?.createPromiseResolver();
+
     const action_sequence = try arena.create(ActionSequence);
     action_sequence.* = .{
         .frame = frame,
         .arena = arena,
         .sources = persisted,
+        .resolver = try resolver.persist(),
     };
     errdefer action_sequence.sources.release();
 
@@ -107,12 +112,15 @@ pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !vo
         .name = "WebDriver.actionSequence",
         .finalizer = ActionSequence.finalize,
     });
+
+    return resolver.promise();
 }
 
 const ActionSequence = struct {
     frame: *Frame,
     arena: Allocator,
     sources: js.Value.Global,
+    resolver: js.PromiseResolver.Global,
 
     fn run(ptr: *anyopaque) !?u32 {
         const self: *ActionSequence = @ptrCast(@alignCast(ptr));
@@ -140,6 +148,8 @@ const ActionSequence = struct {
             }
             // "none" sources only carry pauses, which have no observable effect here.
         }
+
+        ls.toLocal(self.resolver).resolve("WebDriver.actionSequence", {});
         return null;
     }
 
@@ -150,6 +160,8 @@ const ActionSequence = struct {
 
     fn deinit(self: *ActionSequence) void {
         self.sources.release();
+        // The persisted resolver handle is page-managed; resetting it here
+        // too would double-free the v8 global at page teardown.
         self.frame.releaseArena(self.arena);
     }
 };
