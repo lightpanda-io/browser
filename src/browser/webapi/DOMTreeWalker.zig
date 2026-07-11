@@ -174,27 +174,52 @@ pub fn lastChild(self: *DOMTreeWalker, frame: *Frame) !?*Node {
 }
 
 pub fn previousSibling(self: *DOMTreeWalker, frame: *Frame) !?*Node {
-    var node = self.previousSiblingOrNull(self._current);
-    while (node) |n| {
-        if (try self.acceptNode(n, frame) == NodeFilter.FILTER_ACCEPT) {
-            self._current = n;
-            return n;
-        }
-        node = self.previousSiblingOrNull(n);
-    }
-    return null;
+    return self.traverseSiblings(.previous, frame);
 }
 
 pub fn nextSibling(self: *DOMTreeWalker, frame: *Frame) !?*Node {
-    var node = self.nextSiblingOrNull(self._current);
-    while (node) |n| {
-        if (try self.acceptNode(n, frame) == NodeFilter.FILTER_ACCEPT) {
-            self._current = n;
-            return n;
+    return self.traverseSiblings(.next, frame);
+}
+
+// The spec's "traverse siblings" algorithm: a skipped (but not rejected)
+// sibling's children are still candidates, and when the siblings run out the
+// walk climbs to the parent and continues from its siblings, stopping at the
+// root or at an accepted parent.
+fn traverseSiblings(self: *DOMTreeWalker, comptime direction: enum { next, previous }, frame: *Frame) !?*Node {
+    var node = self._current;
+    if (node == self._root) return null;
+
+    while (true) {
+        var sibling: ?*Node = if (direction == .next)
+            self.nextSiblingOrNull(node)
+        else
+            self.previousSiblingOrNull(node);
+
+        while (sibling) |sib| {
+            node = sib;
+            const result = try self.acceptNode(node, frame);
+            if (result == NodeFilter.FILTER_ACCEPT) {
+                self._current = node;
+                return node;
+            }
+            sibling = if (direction == .next)
+                self.firstChildOrNull(node)
+            else
+                self.lastChildOrNull(node);
+            if (result == NodeFilter.FILTER_REJECT or sibling == null) {
+                sibling = if (direction == .next)
+                    self.nextSiblingOrNull(node)
+                else
+                    self.previousSiblingOrNull(node);
+            }
         }
-        node = self.nextSiblingOrNull(n);
+
+        node = node.parentNode() orelse return null;
+        if (node == self._root) return null;
+        if (try self.acceptNode(node, frame) == NodeFilter.FILTER_ACCEPT) {
+            return null;
+        }
     }
-    return null;
 }
 
 pub fn previousNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
