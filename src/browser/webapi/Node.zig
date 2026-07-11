@@ -830,11 +830,26 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
     const notify = Frame.observers.hasMutationObservers(frame);
 
     if (new_child == old_child) {
-        // Replacing a node with itself doesn't change the tree; observers
-        // still get a removal record followed by an addition record.
+        // Replacing a node with itself leaves the tree unchanged, but the
+        // remove-then-reinsert still happens: live ranges anchored inside the
+        // node move to its old position, and observers get a removal record
+        // followed by an addition record.
+        const prev = old_child.previousSibling();
+        const next = old_child.nextSibling();
+        const was_connected = old_child.isConnected();
+        frame.removeNode(self, old_child, .{ .will_be_reconnected = was_connected, .notify_observers = false });
+        if (next) |reference| {
+            try frame.insertNodeRelative(self, old_child, .{ .before = reference }, .{
+                .child_already_connected = was_connected,
+                .notify_observers = false,
+            });
+        } else {
+            try frame.appendNode(self, old_child, .{
+                .child_already_connected = was_connected,
+                .notify_observers = false,
+            });
+        }
         if (notify) {
-            const prev = old_child.previousSibling();
-            const next = old_child.nextSibling();
             const nodes = [_]*Node{old_child};
             Frame.observers.notifyChildListChange(frame, self, &.{}, &nodes, prev, next);
             Frame.observers.notifyChildListChange(frame, self, &nodes, &.{}, prev, next);
@@ -842,20 +857,17 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
         return old_child;
     }
 
-    // The combined record's siblings are captured before new_child is
-    // removed from its old position (spec: referenceChild and
-    // previousSibling are set before the adopt step), so new_child itself
-    // can be the record's previousSibling. A referenceChild that is
-    // new_child becomes new_child's next sibling.
+    // Spec order: capture the reference points, remove new_child from its
+    // current position (notifying normally - internal replacement), remove
+    // old_child (suppressed), insert new_child before the reference
+    // (suppressed), and queue one combined record. Removing old_child before
+    // inserting matters for live ranges anchored on this parent's offsets.
     const prev = old_child.previousSibling();
-    var next = old_child.nextSibling();
-    if (next == new_child) {
-        next = new_child.nextSibling();
+    var reference = old_child.nextSibling();
+    if (reference == new_child) {
+        reference = new_child.nextSibling();
     }
 
-    // Removing new_child from its current position (internal replacement)
-    // notifies normally; the replacement itself queues one combined record
-    // with both the added and the removed node.
     const child_already_connected = new_child.isConnected();
     const child_owner = new_child.ownerDocument(frame);
     const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
@@ -872,35 +884,43 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
     }
 
     var added: std.ArrayList(*Node) = .empty;
-    if (new_child.is(DocumentFragment)) |_| {
-        if (notify) {
+    if (notify) {
+        if (new_child.is(DocumentFragment)) |_| {
             var it = new_child.childrenIterator();
             while (it.next()) |fragment_child| {
                 try added.append(frame.call_arena, fragment_child);
             }
-        }
-        try frame.moveAllChildren(new_child, self, old_child, .silent_parent);
-    } else {
-        if (notify) {
+        } else {
             try added.append(frame.call_arena, new_child);
         }
+    }
+
+    frame.removeNode(self, old_child, .{ .will_be_reconnected = false, .notify_observers = false });
+
+    if (new_child.is(DocumentFragment)) |_| {
+        try frame.moveAllChildren(new_child, self, reference, .silent_parent);
+    } else if (reference) |ref| {
         try frame.insertNodeRelative(
             self,
             new_child,
-            .{ .before = old_child },
+            .{ .before = ref },
             .{
                 .child_already_connected = child_already_connected,
                 .adopting_to_new_document = adopting,
                 .notify_observers = false,
             },
         );
+    } else {
+        try frame.appendNode(self, new_child, .{
+            .child_already_connected = child_already_connected,
+            .adopting_to_new_document = adopting,
+            .notify_observers = false,
+        });
     }
-
-    frame.removeNode(self, old_child, .{ .will_be_reconnected = false, .notify_observers = false });
 
     if (notify) {
         const removed = [_]*Node{old_child};
-        Frame.observers.notifyChildListChange(frame, self, added.items, &removed, prev, next);
+        Frame.observers.notifyChildListChange(frame, self, added.items, &removed, prev, reference);
     }
 
     return old_child;
