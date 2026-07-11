@@ -236,6 +236,10 @@ _factory: *Factory,
 
 _load_state: LoadState = .waiting,
 
+// The navigation response's MIME essence, recorded when the first chunk
+// arrives and applied to the new document (document.contentType) once the
+// navigation commits. null means the text/html default.
+_pending_content_type: ?[]const u8 = null,
 _parse_state: ParseState = .pre,
 
 /// `frameErrorCallback` swallows the failure into a placeholder page;
@@ -1424,6 +1428,19 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             });
         }
 
+        // Record the response's MIME essence so the resulting document
+        // reports it (document.contentType); text/html stays the default.
+        self._pending_content_type = null;
+        if (transfer.contentType()) |ct| {
+            const end = std.mem.indexOfScalar(u8, ct, ';') orelse ct.len;
+            const essence = std.mem.trim(u8, ct[0..end], " \t");
+            if (essence.len > 0 and !std.ascii.eqlIgnoreCase(essence, "text/html")) {
+                const lower = try self.arena.dupe(u8, essence);
+                _ = std.ascii.lowerString(lower, essence);
+                self._pending_content_type = lower;
+            }
+        }
+
         switch (mime.content_type) {
             .text_html => {
                 // Normalize and store the charset using encoding_rs canonical names
@@ -1497,6 +1514,11 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
 
     //We need to handle different navigation types differently.
     try self._session.navigation.commitNavigation(self);
+
+    if (self._pending_content_type) |content_type| {
+        self.document._content_type = content_type;
+        self._pending_content_type = null;
+    }
 
     defer if (comptime IS_DEBUG) {
         log.debug(.frame, "frame load complete", .{
