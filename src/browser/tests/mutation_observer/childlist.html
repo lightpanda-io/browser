@@ -183,28 +183,18 @@
   replaceParent.replaceChild(replaceNew, replaceOld);
 
   await state.done((mutations) => {
-    // replaceChild generates two separate mutation records in modern spec:
-    // 1. First record for insertBefore (new node added)
-    // 2. Second record for removeChild (old node removed)
-    testing.expectEqual(2, mutations.length);
+    // Per the DOM "replace" algorithm, replaceChild queues one combined
+    // mutation record with both the added and the removed node.
+    testing.expectEqual(1, mutations.length);
 
-    // First mutation: insertion of new node
     testing.expectEqual('childList', mutations[0].type);
     testing.expectEqual(replaceParent, mutations[0].target);
     testing.expectEqual(1, mutations[0].addedNodes.length);
     testing.expectEqual(replaceNew, mutations[0].addedNodes[0]);
-    testing.expectEqual(0, mutations[0].removedNodes.length);
+    testing.expectEqual(1, mutations[0].removedNodes.length);
+    testing.expectEqual(replaceOld, mutations[0].removedNodes[0]);
     testing.expectEqual(null, mutations[0].previousSibling);
-    testing.expectEqual(replaceOld, mutations[0].nextSibling);
-
-    // Second mutation: removal of old node
-    testing.expectEqual('childList', mutations[1].type);
-    testing.expectEqual(replaceParent, mutations[1].target);
-    testing.expectEqual(0, mutations[1].addedNodes.length);
-    testing.expectEqual(1, mutations[1].removedNodes.length);
-    testing.expectEqual(replaceOld, mutations[1].removedNodes[0]);
-    testing.expectEqual(replaceNew, mutations[1].previousSibling);
-    testing.expectEqual(null, mutations[1].nextSibling);
+    testing.expectEqual(null, mutations[0].nextSibling);
   });
 </script>
 
