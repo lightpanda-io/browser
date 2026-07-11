@@ -269,10 +269,17 @@ pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child
     return chain.get(1);
 }
 
-pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, frame: *Frame) !*@TypeOf(child) {
+pub fn abstractRange(self: *const Factory, arena: Allocator, child: anytype, frame: *Frame) !*@TypeOf(child) {
+    return self.abstractRangeIn(arena, child, frame.document.asNode(), frame);
+}
+
+// `container` is the initial start/end container: per spec, createRange()
+// initializes both boundary points to (document, 0) of the document it was
+// called on, which is not necessarily the frame's main document.
+pub fn abstractRangeIn(_: *const Factory, arena: Allocator, child: anytype, container: *Node, frame: *Frame) !*@TypeOf(child) {
     const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(arena);
 
-    const doc = frame.document.asNode();
+    const doc = container;
     const abstract_range = chain.get(0);
     abstract_range.* = AbstractRange{
         ._rc = .{},
