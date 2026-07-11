@@ -582,7 +582,11 @@ pub const ResolveURLOpts = struct {
 pub fn resolveURL(self: *const Node, url: anytype, frame: *Frame, opts: ResolveURLOpts) ![:0]const u8 {
     const owner_frame = self.ownerFrame(frame);
     const allocator = opts.allocator orelse frame.call_arena;
-    return URL.resolve(allocator, owner_frame.base(), url, .{ .encoding = owner_frame.charset });
+    // The owning document's encoding, not the frame's: script-created
+    // documents (e.g. createHTMLDocument) are always UTF-8.
+    const doc: ?*const Document = if (self._type == .document) self._type.document else self.ownerDocument(frame);
+    const encoding = if (doc) |d| d.getCharset() else owner_frame.charset;
+    return URL.resolve(allocator, owner_frame.base(), url, .{ .encoding = encoding });
 }
 
 // Same as `resolveURL` but can't return `TypeError`, this is needed for multiple

@@ -56,6 +56,9 @@ _frame: ?*Frame = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
 // content type override for documents created via DOMImplementation.createDocument
 _content_type: ?[]const u8 = null,
+// encoding override: documents synthesized by script (createHTMLDocument,
+// createDocument) are UTF-8 regardless of the frame's encoding
+_charset: ?[]const u8 = null,
 _ready_state: ReadyState = .loading,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
@@ -157,6 +160,14 @@ pub fn setLocation(self: *Document, url: [:0]const u8) !void {
     if (self._type != .html) return;
     const frame = self._frame orelse return;
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
+}
+
+pub fn getCharset(self: *const Document) []const u8 {
+    if (self._charset) |charset| {
+        return charset;
+    }
+    const doc_frame = self._frame orelse return "UTF-8";
+    return doc_frame.charset;
 }
 
 pub fn getContentType(self: *const Document) []const u8 {
@@ -1417,6 +1428,7 @@ pub const JsApi = struct {
         return frame._factory.node(Document{
             ._proto = undefined,
             ._type = .generic,
+            ._charset = "UTF-8",
         });
     }
 
@@ -1508,8 +1520,7 @@ pub const JsApi = struct {
     pub const compatMode = bridge.property("CSS1Compat", .{ .template = false });
 
     fn getCharacterSet(self: *const Document) []const u8 {
-        const doc_frame = self._frame orelse return "UTF-8";
-        return doc_frame.charset;
+        return self.getCharset();
     }
     pub const referrer = bridge.property("", .{ .template = false });
 
