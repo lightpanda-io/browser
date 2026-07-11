@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -21,24 +21,23 @@ const js = @import("../../../js/js.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 
-const Svg = @import("../Svg.zig");
+const Geometry = @import("Geometry.zig");
 
-const Generic = @This();
-_proto: *Svg,
-_tag: Element.Tag,
+const Line = @This();
+_proto: *Geometry,
 
-pub fn asElement(self: *Generic) *Element {
-    return self._proto._proto;
+pub fn asElement(self: *Line) *Element {
+    return self._proto.asElement();
 }
-pub fn asNode(self: *Generic) *Node {
+pub fn asNode(self: *Line) *Node {
     return self.asElement().asNode();
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(Generic);
+    pub const bridge = js.Bridge(Line);
 
     pub const Meta = struct {
-        pub const name = "SVGGenericElement";
+        pub const name = "SVGLineElement";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };

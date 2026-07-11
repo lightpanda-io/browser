@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -17,29 +17,35 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const AnimatedString = @import("../../svg/AnimatedString.zig");
 
-const Svg = @import("../Svg.zig");
+const Graphics = @import("Graphics.zig");
 
-const Generic = @This();
-_proto: *Svg,
-_tag: Element.Tag,
+const Image = @This();
+_proto: *Graphics,
 
-pub fn asElement(self: *Generic) *Element {
-    return self._proto._proto;
+pub fn asElement(self: *Image) *Element {
+    return self._proto.asElement();
 }
-pub fn asNode(self: *Generic) *Node {
+pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(Generic);
+    pub const bridge = js.Bridge(Image);
 
     pub const Meta = struct {
-        pub const name = "SVGGenericElement";
+        pub const name = "SVGImageElement";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const href = bridge.accessor(_href, null, .{});
+    fn _href(self: *Image, frame: *Frame) !*AnimatedString {
+        return AnimatedString.getOrCreate(self.asElement(), .href, frame);
+    }
 };
