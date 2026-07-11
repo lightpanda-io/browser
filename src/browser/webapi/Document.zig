@@ -179,6 +179,21 @@ pub fn setLocation(self: *Document, url: [:0]const u8) !void {
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
 }
 
+// Approximation of quirks mode: an HTML document without a doctype is in
+// quirks mode. (Legacy doctypes that also trigger quirks are not detected.)
+pub fn isQuirksMode(self: *const Document) bool {
+    if (self._type != .html) {
+        return false;
+    }
+    var child = self._proto.firstChild();
+    while (child) |c| : (child = c.nextSibling()) {
+        if (c._type == .document_type) {
+            return false;
+        }
+    }
+    return true;
+}
+
 pub fn getCharset(self: *const Document) []const u8 {
     if (self._charset) |charset| {
         return charset;
@@ -1445,6 +1460,7 @@ pub const JsApi = struct {
         return frame._factory.node(Document{
             ._proto = undefined,
             ._type = .generic,
+            ._url = "about:blank",
             ._charset = "UTF-8",
         });
     }
@@ -1534,7 +1550,10 @@ pub const JsApi = struct {
     pub const characterSet = bridge.accessor(getCharacterSet, null, .{});
     pub const charset = bridge.accessor(getCharacterSet, null, .{});
     pub const inputEncoding = bridge.accessor(getCharacterSet, null, .{});
-    pub const compatMode = bridge.property("CSS1Compat", .{ .template = false });
+    pub const compatMode = bridge.accessor(getCompatMode, null, .{});
+    fn getCompatMode(self: *const Document) []const u8 {
+        return if (self.isQuirksMode()) "BackCompat" else "CSS1Compat";
+    }
 
     fn getCharacterSet(self: *const Document) []const u8 {
         return self.getCharset();
