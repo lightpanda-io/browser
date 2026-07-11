@@ -448,7 +448,7 @@ pub fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
         }
         if (child.is(Node.CData)) |cdata| {
             if (cdata.is(Node.CData.Text)) |text| {
-                const content = std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace);
+                const content = std.mem.trim(u8, text.ownData(), &std.ascii.whitespace);
                 if (content.len > 0) {
                     if (single_chunk == null and arr.items.len == 0) {
                         single_chunk = content;

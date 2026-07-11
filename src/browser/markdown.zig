@@ -142,7 +142,7 @@ fn isStandaloneAnchor(el: *Element) bool {
 
 fn isSignificantText(node: *Node) bool {
     const text = node.is(Node.CData.Text) orelse return false;
-    return !isAllWhitespace(text.getWholeText());
+    return !isAllWhitespace(text.ownData());
 }
 
 fn isVisibleElement(el: *Element) bool {

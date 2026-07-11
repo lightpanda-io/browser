@@ -1175,11 +1175,11 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
 
         if (next_node) |next| {
             if (next.is(CData.Text)) |_| {
-                try buffer.appendSlice(allocator, text_node.getWholeText());
+                try buffer.appendSlice(allocator, text_node.ownData());
 
                 while (next_node) |node_to_merge| {
                     const next_text_node = node_to_merge.is(CData.Text) orelse break;
-                    try buffer.appendSlice(allocator, next_text_node.getWholeText());
+                    try buffer.appendSlice(allocator, next_text_node.ownData());
 
                     const to_remove = node_to_merge;
                     next_node = node_to_merge.nextSibling();

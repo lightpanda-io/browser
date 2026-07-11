@@ -139,7 +139,7 @@ fn walk(
             if (html_el.getHidden()) return;
         }
     } else if (node.is(CData.Text)) |text_node| {
-        const text = text_node.getWholeText();
+        const text = text_node.ownData();
         if (isAllWhitespace(text)) {
             return;
         }
@@ -414,7 +414,7 @@ const JsonVisitor = struct {
             try self.jw.objectField("nodeType");
             try self.jw.write(3);
             try self.jw.objectField("nodeValue");
-            try self.jw.write(text_node.getWholeText());
+            try self.jw.write(text_node.ownData());
         } else {
             try self.jw.objectField("nodeType");
             try self.jw.write(9);
@@ -472,7 +472,7 @@ const TextVisitor = struct {
                 name_to_print = n;
             }
         } else if (node.is(CData.Text)) |text_node| {
-            const trimmed = std.mem.trim(u8, text_node.getWholeText(), " \t\r\n");
+            const trimmed = std.mem.trim(u8, text_node.ownData(), " \t\r\n");
             if (trimmed.len > 0) {
                 name_to_print = trimmed;
             }
