@@ -459,95 +459,202 @@ fn collectContained(self: *const Range, node: *Node, list: *std.ArrayList(*Node)
 }
 
 fn nodeContained(self: *const Range, node: *Node) bool {
-    const after_start = AbstractRange.compareBoundaryPoints(
+    return containedBetween(
         node,
-        0,
         self._proto._start_container,
         self._proto._start_offset,
-    ) == .after;
-    if (!after_start) return false;
-    return AbstractRange.compareBoundaryPoints(
-        node,
-        node.getLength(),
         self._proto._end_container,
         self._proto._end_offset,
-    ) == .before;
+    );
 }
 
 pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
     const fragment = try DocumentFragment.init(frame);
-
     if (self._proto.getCollapsed()) return fragment;
 
-    // Simple case: same container
-    if (self._proto._start_container == self._proto._end_container) {
-        if (self._proto._start_container.is(Node.CData)) |_| {
-            // Clone part of text node
-            const text_data = self._proto._start_container.getData().str();
-            const byte_start = byteOffset(text_data, self._proto._start_offset);
-            const byte_end = byteOffset(text_data, self._proto._end_offset);
-            if (byte_start < text_data.len and byte_end <= text_data.len) {
-                const cloned_text = text_data[byte_start..byte_end];
-                const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
-                _ = try fragment.asNode().appendChild(text_node, frame);
-            }
-        } else {
-            // Clone child nodes in range
-            var offset = self._proto._start_offset;
-            while (offset < self._proto._end_offset) : (offset += 1) {
-                if (self._proto._start_container.getChildAt(offset)) |child| {
-                    if (try child.cloneNodeForAppending(true, frame)) |cloned| {
-                        _ = try fragment.asNode().appendChild(cloned, frame);
-                    }
-                }
-            }
-        }
-    } else {
-        // Complex case: different containers
-        // Clone partial start container
-        if (self._proto._start_container.is(Node.CData)) |_| {
-            const text_data = self._proto._start_container.getData().str();
-            const byte_start = byteOffset(text_data, self._proto._start_offset);
-            if (byte_start < text_data.len) {
-                // Clone from start_offset to end of text
-                const cloned_text = text_data[byte_start..];
-                const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
-                _ = try fragment.asNode().appendChild(text_node, frame);
-            }
-        }
-
-        // Clone nodes between start and end containers (siblings case)
-        if (self._proto._start_container.parentNode() == self._proto._end_container.parentNode()) {
-            var current = self._proto._start_container.nextSibling();
-            while (current != null and current != self._proto._end_container) {
-                const next = current.?.nextSibling();
-                if (try current.?.cloneNodeForAppending(true, frame)) |cloned| {
-                    _ = try fragment.asNode().appendChild(cloned, frame);
-                }
-                current = next;
-            }
-        }
-
-        // Clone partial end container
-        if (self._proto._end_container.is(Node.CData)) |_| {
-            const text_data = self._proto._end_container.getData().str();
-            const byte_end = byteOffset(text_data, self._proto._end_offset);
-            if (byte_end > 0 and byte_end <= text_data.len) {
-                // Clone from start to end_offset
-                const cloned_text = text_data[0..byte_end];
-                const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
-                _ = try fragment.asNode().appendChild(text_node, frame);
-            }
-        }
-    }
-
+    try cloneContentsBetween(
+        frame,
+        fragment.asNode(),
+        self._proto._start_container,
+        self._proto._start_offset,
+        self._proto._end_container,
+        self._proto._end_offset,
+    );
     return fragment;
 }
 
+// The DOM "clone the contents of a range" algorithm, on explicit boundary
+// points so the partially-contained recursion doesn't need Range objects.
+fn cloneContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_offset: u32, end_node: *Node, end_offset: u32) !void {
+    if (start_node == end_node) {
+        if (start_node.is(Node.CData)) |cdata| {
+            const data = cdata.getData().str();
+            const cloned = (try start_node.cloneNodeForAppending(false, frame)) orelse return;
+            try cloned.setData(data[byteOffset(data, start_offset)..byteOffset(data, end_offset)], frame);
+            _ = try out.appendChild(cloned, frame);
+            return;
+        }
+    }
+
+    // The closest common ancestor of the two boundary points.
+    var common = start_node;
+    while (common != end_node and !common.contains(end_node)) {
+        common = common.parentNode() orelse break;
+    }
+
+    var child = common.firstChild();
+    while (child) |c| : (child = c.nextSibling()) {
+        const contains_start = c == start_node or c.contains(start_node);
+        const contains_end = c == end_node or c.contains(end_node);
+
+        if (contains_start) {
+            // First partially contained child.
+            if (c.is(Node.CData)) |cdata| {
+                // c is the start node itself.
+                const data = cdata.getData().str();
+                const cloned = (try c.cloneNodeForAppending(false, frame)) orelse continue;
+                try cloned.setData(data[byteOffset(data, start_offset)..], frame);
+                _ = try out.appendChild(cloned, frame);
+            } else {
+                const cloned = (try c.cloneNodeForAppending(false, frame)) orelse continue;
+                _ = try out.appendChild(cloned, frame);
+                try cloneContentsBetween(frame, cloned, start_node, start_offset, c, c.getLength());
+            }
+        } else if (contains_end) {
+            // Last partially contained child.
+            if (c.is(Node.CData)) |cdata| {
+                // c is the end node itself.
+                const data = cdata.getData().str();
+                const cloned = (try c.cloneNodeForAppending(false, frame)) orelse continue;
+                try cloned.setData(data[0..byteOffset(data, end_offset)], frame);
+                _ = try out.appendChild(cloned, frame);
+            } else {
+                const cloned = (try c.cloneNodeForAppending(false, frame)) orelse continue;
+                _ = try out.appendChild(cloned, frame);
+                try cloneContentsBetween(frame, cloned, c, 0, end_node, end_offset);
+            }
+        } else if (containedBetween(c, start_node, start_offset, end_node, end_offset)) {
+            if (c._type == .document_type) {
+                return error.HierarchyError;
+            }
+            const cloned = (try c.cloneNodeForAppending(true, frame)) orelse continue;
+            _ = try out.appendChild(cloned, frame);
+        }
+    }
+}
+
+fn containedBetween(node: *Node, start_node: *Node, start_offset: u32, end_node: *Node, end_offset: u32) bool {
+    const after_start = AbstractRange.compareBoundaryPoints(node, 0, start_node, start_offset) == .after;
+    if (!after_start) return false;
+    return AbstractRange.compareBoundaryPoints(node, node.getLength(), end_node, end_offset) == .before;
+}
+
 pub fn extractContents(self: *Range, frame: *Frame) !*DocumentFragment {
-    const fragment = try self.cloneContents(frame);
-    try self.deleteContents(frame);
+    const fragment = try DocumentFragment.init(frame);
+    if (self._proto.getCollapsed()) return fragment;
+
+    frame.domChanged();
+
+    const start_node = self._proto._start_container;
+    const start_offset = self._proto._start_offset;
+    const end_node = self._proto._end_container;
+    const end_offset = self._proto._end_offset;
+
+    // Where the range collapses to afterwards; same rule as deleteContents.
+    var new_node = start_node;
+    var new_offset = start_offset;
+    if (start_node != end_node and !start_node.contains(end_node)) {
+        var reference = start_node;
+        while (reference.parentNode()) |parent| {
+            if (parent == end_node or parent.contains(end_node)) break;
+            reference = parent;
+        }
+        new_node = reference.parentNode().?;
+        new_offset = (new_node.getChildIndex(reference) orelse 0) + 1;
+    }
+
+    try extractContentsBetween(frame, fragment.asNode(), start_node, start_offset, end_node, end_offset);
+
+    try self.setStart(new_node, new_offset);
+    try self.setEnd(new_node, new_offset);
     return fragment;
+}
+
+// The DOM "extract" algorithm: contained nodes MOVE into the output
+// (preserving identity); only the partially contained boundary
+// CharacterData nodes and the partially contained element shells are cloned.
+// Children are classified before anything moves, since moving a contained
+// child shifts the indices the boundary comparisons rely on.
+fn extractContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_offset: u32, end_node: *Node, end_offset: u32) !void {
+    if (start_node == end_node) {
+        if (start_node.is(Node.CData)) |cdata| {
+            const data = cdata.getData().str();
+            const cloned = (try start_node.cloneNodeForAppending(false, frame)) orelse return;
+            try cloned.setData(data[byteOffset(data, start_offset)..byteOffset(data, end_offset)], frame);
+            _ = try out.appendChild(cloned, frame);
+            try cdata.replaceData(start_offset, end_offset - start_offset, "", frame);
+            return;
+        }
+    }
+
+    var common = start_node;
+    while (common != end_node and !common.contains(end_node)) {
+        common = common.parentNode() orelse break;
+    }
+
+    var first_partial: ?*Node = null;
+    var last_partial: ?*Node = null;
+    var contained: std.ArrayList(*Node) = .empty;
+
+    var child = common.firstChild();
+    while (child) |c| : (child = c.nextSibling()) {
+        if (c == start_node or c.contains(start_node)) {
+            first_partial = c;
+        } else if (c == end_node or c.contains(end_node)) {
+            last_partial = c;
+        } else if (containedBetween(c, start_node, start_offset, end_node, end_offset)) {
+            if (c._type == .document_type) {
+                return error.HierarchyError;
+            }
+            try contained.append(frame.call_arena, c);
+        }
+    }
+
+    if (first_partial) |c| {
+        if (c.is(Node.CData)) |cdata| {
+            // c is the start node itself.
+            const data = cdata.getData().str();
+            const byte_start = byteOffset(data, start_offset);
+            const cloned = (try c.cloneNodeForAppending(false, frame)) orelse return;
+            try cloned.setData(data[byte_start..], frame);
+            _ = try out.appendChild(cloned, frame);
+            const length: u32 = @intCast(cdata.getLength());
+            try cdata.replaceData(start_offset, length - start_offset, "", frame);
+        } else {
+            const cloned = (try c.cloneNodeForAppending(false, frame)) orelse return;
+            _ = try out.appendChild(cloned, frame);
+            try extractContentsBetween(frame, cloned, start_node, start_offset, c, c.getLength());
+        }
+    }
+
+    for (contained.items) |c| {
+        _ = try out.appendChild(c, frame);
+    }
+
+    if (last_partial) |c| {
+        if (c.is(Node.CData)) |cdata| {
+            // c is the end node itself.
+            const data = cdata.getData().str();
+            const cloned = (try c.cloneNodeForAppending(false, frame)) orelse return;
+            try cloned.setData(data[0..byteOffset(data, end_offset)], frame);
+            _ = try out.appendChild(cloned, frame);
+            try cdata.replaceData(0, end_offset, "", frame);
+        } else {
+            const cloned = (try c.cloneNodeForAppending(false, frame)) orelse return;
+            _ = try out.appendChild(cloned, frame);
+            try extractContentsBetween(frame, cloned, c, 0, end_node, end_offset);
+        }
+    }
 }
 
 pub fn surroundContents(self: *Range, new_parent: *Node, frame: *Frame) !void {
