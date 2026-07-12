@@ -48,4 +48,9 @@ pub const JsApi = struct {
     fn _href(self: *A, frame: *Frame) !*AnimatedString {
         return AnimatedString.getOrCreate(self.asElement(), .href, frame);
     }
+
+    pub const relList = bridge.accessor(_getRelList, null, .{});
+    fn _getRelList(self: *A, frame: *Frame) !*@import("../../collections.zig").DOMTokenList {
+        return self.asElement().getRelList(frame);
+    }
 };
