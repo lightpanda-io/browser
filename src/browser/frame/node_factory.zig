@@ -879,16 +879,47 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
             return createHtmlElementT(frame, Element.Html.Unknown, namespace, attribute_iterator, .{ ._proto = undefined, ._tag_name = tag_name });
         },
         .svg => {
-            const tag_name = try String.init(frame.arena, name, .{});
-            if (std.ascii.eqlIgnoreCase(name, "svg")) {
-                return createSvgElementT(frame, Element.Svg, name, attribute_iterator, .{
-                    ._proto = undefined,
-                    ._type = .svg,
-                    ._tag_name = tag_name,
-                });
+            const Graphics = Element.Svg.Graphics;
+            const Geometry = Graphics.Geometry;
+            // SVG tag names are case-sensitive; no lowering before matching.
+            switch (name.len) {
+                1 => switch (name[0]) {
+                    'g' => return createSvgGraphicsElementT(frame, Graphics.G, name, attribute_iterator),
+                    'a' => return createSvgGraphicsElementT(frame, Graphics.A, name, attribute_iterator),
+                    else => {},
+                },
+                3 => switch (@as(u24, @bitCast(name[0..3].*))) {
+                    asUint("svg") => return createSvgGraphicsElementT(frame, Graphics.Svg, name, attribute_iterator),
+                    asUint("use") => return createSvgGraphicsElementT(frame, Graphics.Use, name, attribute_iterator),
+                    else => {},
+                },
+                4 => switch (@as(u32, @bitCast(name[0..4].*))) {
+                    asUint("defs") => return createSvgGraphicsElementT(frame, Graphics.Defs, name, attribute_iterator),
+                    asUint("rect") => return createSvgGeometryElementT(frame, Geometry.Rect, name, attribute_iterator),
+                    asUint("line") => return createSvgGeometryElementT(frame, Geometry.Line, name, attribute_iterator),
+                    asUint("path") => return createSvgGeometryElementT(frame, Geometry.Path, name, attribute_iterator),
+                    else => {},
+                },
+                5 => switch (@as(u40, @bitCast(name[0..5].*))) {
+                    asUint("image") => return createSvgGraphicsElementT(frame, Graphics.Image, name, attribute_iterator),
+                    else => {},
+                },
+                6 => switch (@as(u48, @bitCast(name[0..6].*))) {
+                    asUint("circle") => return createSvgGeometryElementT(frame, Geometry.Circle, name, attribute_iterator),
+                    else => {},
+                },
+                7 => switch (@as(u56, @bitCast(name[0..7].*))) {
+                    asUint("ellipse") => return createSvgGeometryElementT(frame, Geometry.Ellipse, name, attribute_iterator),
+                    asUint("polygon") => return createSvgGeometryElementT(frame, Geometry.Polygon, name, attribute_iterator),
+                    else => {},
+                },
+                8 => switch (@as(u64, @bitCast(name[0..8].*))) {
+                    asUint("polyline") => return createSvgGeometryElementT(frame, Geometry.Polyline, name, attribute_iterator),
+                    else => {},
+                },
+                else => {},
             }
 
-            // Other SVG elements (rect, circle, text, g, etc.)
             const lower = std.ascii.lowerString(&frame.buf, name);
             const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
             return createSvgElementT(frame, Element.Svg.Generic, name, attribute_iterator, .{ ._proto = undefined, ._tag = tag });
@@ -930,7 +961,20 @@ fn createHtmlMediaElementT(frame: *Frame, comptime E: type, namespace: Element.N
 
 fn createSvgElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype, svg_element: E) !*Node {
     const svg_element_ptr = try frame._factory.svgElement(tag_name, svg_element);
-    var element = svg_element_ptr.asElement();
+    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
+}
+
+fn createSvgGraphicsElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype) !*Node {
+    const svg_element_ptr = try frame._factory.svgGraphicsElement(tag_name, E{ ._proto = undefined });
+    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
+}
+
+fn createSvgGeometryElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype) !*Node {
+    const svg_element_ptr = try frame._factory.svgGeometryElement(tag_name, E{ ._proto = undefined });
+    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
+}
+
+fn initSvgElement(frame: *Frame, element: *Element, attribute_iterator: anytype) !*Node {
     element._namespace = .svg;
     element._attributes.normalize = false;
     try populateElementAttributes(frame, element, attribute_iterator);

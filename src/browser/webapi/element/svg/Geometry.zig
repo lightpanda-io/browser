@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -17,25 +17,56 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
-const Geometry = @import("Geometry.zig");
 
-const Rect = @This();
-_proto: *Geometry,
+const Graphics = @import("Graphics.zig");
+pub const Rect = @import("Rect.zig");
+pub const Circle = @import("Circle.zig");
+pub const Ellipse = @import("Ellipse.zig");
+pub const Line = @import("Line.zig");
+pub const Path = @import("Path.zig");
+pub const Polygon = @import("Polygon.zig");
+pub const Polyline = @import("Polyline.zig");
 
-pub fn asElement(self: *Rect) *Element {
+const Geometry = @This();
+_proto: *Graphics,
+_type: Type,
+
+pub const Type = union(enum) {
+    rect: *Rect,
+    circle: *Circle,
+    ellipse: *Ellipse,
+    line: *Line,
+    path: *Path,
+    polygon: *Polygon,
+    polyline: *Polyline,
+};
+
+pub fn is(self: *Geometry, comptime T: type) ?*T {
+    inline for (@typeInfo(Type).@"union".fields) |f| {
+        if (@field(Type, f.name) == self._type) {
+            if (f.type == *T) {
+                return @field(self._type, f.name);
+            }
+        }
+    }
+    return null;
+}
+
+pub fn asElement(self: *Geometry) *Element {
     return self._proto.asElement();
 }
-pub fn asNode(self: *Rect) *Node {
+pub fn asNode(self: *Geometry) *Node {
     return self.asElement().asNode();
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(Rect);
+    pub const bridge = js.Bridge(Geometry);
 
     pub const Meta = struct {
-        pub const name = "SVGRectElement";
+        pub const name = "SVGGeometryElement";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };

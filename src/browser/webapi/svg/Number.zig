@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -16,30 +16,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const js = @import("../../../js/js.zig");
+const js = @import("../../js/js.zig");
 
-const Node = @import("../../Node.zig");
-const Element = @import("../../Element.zig");
+const Number = @This();
+_value: f32 = 0,
 
-const Svg = @import("../Svg.zig");
-
-const Generic = @This();
-_proto: *Svg,
-_tag: Element.Tag,
-
-pub fn asElement(self: *Generic) *Element {
-    return self._proto._proto;
+pub fn getValue(self: *const Number) f32 {
+    return self._value;
 }
-pub fn asNode(self: *Generic) *Node {
-    return self.asElement().asNode();
+
+pub fn setValue(self: *Number, value: f32) void {
+    self._value = value;
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(Generic);
+    pub const bridge = js.Bridge(Number);
 
     pub const Meta = struct {
-        pub const name = "SVGGenericElement";
+        pub const name = "SVGNumber";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const value = bridge.accessor(Number.getValue, Number.setValue, .{});
 };
