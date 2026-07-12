@@ -263,6 +263,13 @@ const Commands = cli.Builder(.{
         },
         .shared_options = CommonOptions,
     },
+    .{
+        // Normalized to `.agent` in `parseArgs`; intentionally no LLM options.
+        .name = "run",
+        .positional = .{ .name = "script_file", .type = ?[:0]const u8 },
+        .options = .{},
+        .shared_options = CommonOptions,
+    },
     .{ .name = "version", .options = .{
         .{ .name = "check", .type = bool },
     } },
@@ -273,6 +280,9 @@ pub const Mode = Commands.Union;
 pub const Agent = @FieldType(Mode, "agent");
 
 mode: Mode,
+// The command as typed. Mirrors `mode`, except `run` normalizes to `.agent`
+// for execution while this keeps `.run` for telemetry.
+command: RunMode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
 
@@ -287,6 +297,7 @@ fn modeNeedsHttp(mode: Mode) bool {
 pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
     var config = Config{
         .mode = mode,
+        .command = std.meta.activeTag(mode),
         .exec_name = exec_name,
         .http_headers = undefined,
     };
@@ -713,7 +724,7 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
             , .{Help.general});
             std.debug.print(template, .{exec_name});
         },
-        inline .fetch, .serve, .mcp, .agent => |tag| {
+        inline .fetch, .serve, .mcp, .agent, .run => |tag| {
             const template = comptimePrint(
                 \\{s}
                 \\
@@ -735,11 +746,28 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
 }
 
 pub fn parseArgs(allocator: Allocator) !Config {
-    const exec_name, const command = try Commands.parse(allocator);
+    const exec_name, var command = try Commands.parse(allocator);
     if (command == .serve and command.serve.timeout != null) {
         log.warn(.app, "--timeout is deprecated", .{});
     }
-    return .init(allocator, exec_name, command);
+    const invoked = std.meta.activeTag(command);
+    // Rewrite `run` to `.agent` so nothing downstream needs a `.run` case.
+    if (command == .run) {
+        const run = command.run;
+        if (run.script_file == null) {
+            log.fatal(.app, "missing script file", .{ .hint = "usage: lightpanda run <script.js>" });
+            return error.MissingArgument;
+        }
+        // run's fields are a strict subset of Agent's (compile error otherwise).
+        var agent_opts: Agent = .{};
+        inline for (@typeInfo(@TypeOf(run)).@"struct".fields) |f| {
+            @field(agent_opts, f.name) = @field(run, f.name);
+        }
+        command = .{ .agent = agent_opts };
+    }
+    var config = try Config.init(allocator, exec_name, command);
+    config.command = invoked;
+    return config;
 }
 
 pub fn validateUserAgent(ua: []const u8) !void {

@@ -78,7 +78,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 
-    app.telemetry = try Telemetry.init(app, config.mode, config.interactive());
+    app.telemetry = try Telemetry.init(app, config.command, config.interactive());
     errdefer app.telemetry.deinit(allocator);
 
     app.arena_pool = ArenaPool.init(allocator, .{});
