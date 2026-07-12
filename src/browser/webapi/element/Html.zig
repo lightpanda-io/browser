@@ -372,6 +372,17 @@ pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("translate"), .wrap(if (translate) "yes" else "no"), frame);
 }
 
+// accessKeyLabel: the UA-assigned shortcut for a valid (single character)
+// accesskey, or the empty string. We report an Alt+ chord like Chromium.
+pub fn getAccessKeyLabel(self: *HtmlElement, frame: *Frame) ![]const u8 {
+    const value = self.asElement().getAttributeSafe(comptime .wrap("accesskey")) orelse return "";
+    const codepoints = std.unicode.utf8CountCodepoints(value) catch return "";
+    if (codepoints != 1) {
+        return "";
+    }
+    return std.fmt.allocPrint(frame.call_arena, "Alt+{s}", .{value});
+}
+
 pub fn getPopover(self: *HtmlElement) ?[]const u8 {
     const s = popover.getState(self.asElement()) orelse return null;
     return @tagName(s);
@@ -1735,6 +1746,7 @@ pub const JsApi = struct {
     pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
+    pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
     pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
     pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{});
