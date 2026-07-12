@@ -604,9 +604,11 @@ fn endStreamedText(self: *Agent) void {
 }
 
 /// The text-delta hook, or null when `/stream off` — a null hook makes
-/// `runTools` fall back to a buffered response.
+/// `runTools` fall back to a buffered response. Streaming is an interactive
+/// REPL affordance; one-shot (`--task`) and script modes keep stdout to the
+/// buffered final answer so wrappers can parse it cleanly.
 fn streamHook(self: *Agent) ?zenai.provider.Client.TextDeltaHook {
-    if (!self.stream_enabled) return null;
+    if (!self.stream_enabled or !self.terminal.isRepl()) return null;
     return .{ .context = @ptrCast(self), .onText = streamAssistantDelta };
 }
 

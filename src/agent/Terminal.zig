@@ -186,7 +186,7 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
     };
 }
 
-fn isRepl(self: *const Terminal) bool {
+pub fn isRepl(self: *const Terminal) bool {
     return self.repl_arena != null;
 }
 
