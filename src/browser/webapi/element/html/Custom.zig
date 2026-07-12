@@ -225,10 +225,11 @@ fn invokeCallbackOnElement(element: *Element, comptime callback_name: [:0]const 
     // for "move", we call "connectedMoveCallback" if it exists, else we fallback
     // to  "disconnectedCallback" + "connectedCallback"
     if (js_element.has("connectedMoveCallback")) {
-        js_element.callMethod(void, "connectedMoveCallback", .{}) catch return;
+        js_element.callMethod(void, "connectedMoveCallback", .{}) catch {};
     } else {
-        js_element.callMethod(void, "disconnectedCallback", .{}) catch return;
-        js_element.callMethod(void, "connectedCallback", .{}) catch return;
+        // Either callback may be undefined; the other still runs.
+        js_element.callMethod(void, "disconnectedCallback", .{}) catch {};
+        js_element.callMethod(void, "connectedCallback", .{}) catch {};
     }
 }
 
