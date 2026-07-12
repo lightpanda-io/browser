@@ -872,8 +872,13 @@ pub const Script = struct {
         const local = &ls.local;
 
         // Per spec, trigger any microtasks BEFORE execution in case the parser
-        // (e.g. via event callbacks) queued anything.
-        local.runMicrotasks();
+        // (e.g. via event callbacks) queued anything. Only at a microtask
+        // checkpoint though (empty JS stack): a script executing because a
+        // running script inserted it must not drain the queue mid-task -
+        // e.g. its own insertion record must survive for takeRecords().
+        if (frame.js.call_depth == 0) {
+            local.runMicrotasks();
+        }
 
         // Handle importmap special case here: the content is a JSON containing imports.
         // Multiple <script type="importmap"> elements merge with first-wins semantics.

@@ -1064,21 +1064,11 @@ pub fn getChildren(self: *Element, frame: *Frame) !collections.NodeLive(.child_e
 }
 
 pub fn append(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    const parent = self.asNode();
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
-        _ = try parent.appendChild(child, frame);
-    }
+    return self.asNode().appendNodes(nodes, frame);
 }
 
 pub fn prepend(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    const parent = self.asNode();
-    var i = nodes.len;
-    while (i > 0) {
-        i -= 1;
-        const child = try nodes[i].toNode(frame);
-        _ = try parent.insertBefore(child, parent.firstChild(), frame);
-    }
+    return self.asNode().prependNodes(nodes, frame);
 }
 
 pub fn moveBefore(self: *Element, node: js.Value, child: js.Value, frame: *Frame) !void {

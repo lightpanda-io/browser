@@ -2523,9 +2523,7 @@ pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*N
 
     var it = source.childrenIterator();
     while (it.next()) |child| {
-        if (notify) {
-            try moved.append(self.call_arena, child);
-        }
+        try moved.append(self.call_arena, child);
         const child_was_connected = child.isConnected();
         self.removeNode(source, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
         if (ref_node) |ref| {
@@ -2533,16 +2531,31 @@ pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*N
                 parent,
                 child,
                 .{ .before = ref },
-                .{ .child_already_connected = child_was_connected, .notify_observers = false },
+                .{ .child_already_connected = child_was_connected, .notify_observers = false, .run_ready = false },
             );
         } else {
-            try self.appendNode(parent, child, .{ .child_already_connected = child_was_connected, .notify_observers = false });
+            try self.appendNode(parent, child, .{ .child_already_connected = child_was_connected, .notify_observers = false, .run_ready = false });
         }
     }
 
     if (notify and moved.items.len > 0) {
         observers.notifyChildListChange(self, source, &.{}, moved.items, null, null);
         observers.notifyChildListChange(self, parent, moved.items, &.{}, previous_sibling, ref_node);
+    }
+
+    // Nodes moved into a not-yet-started script run the script's
+    // children-changed steps first (whatwg/html#10188), then each inserted
+    // node's own ready work runs, in tree order, with everything in place.
+    if (parent.isConnected()) {
+        if (parent.is(Element.Html.Script)) |script| {
+            if (!script._executed) {
+                try self.nodeIsReady(false, parent);
+            }
+        }
+    }
+
+    for (moved.items) |child| {
+        try self.nodeIsReadySubtree(child);
     }
 }
 
@@ -2557,6 +2570,10 @@ const InsertNodeOpts = struct {
     // Set to false when the caller queues its own combined mutation record
     // (e.g. replaceChildren's single "replace all" record).
     notify_observers: bool = true,
+    // Set to false for multi-node insertions (fragments): the caller runs
+    // the ready work itself once every node is in place, so an earlier
+    // script observes its later siblings already inserted.
+    run_ready: bool = true,
 };
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
@@ -2639,12 +2656,16 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
 
     const parent_is_connected = parent.isConnected();
 
-    // nodeIsReady resolves the node's owning frame itself (only for the few node
-    // types that have ready work), so pass the incumbent `self`.
-    try self.nodeIsReady(false, child);
+    // Mutation records queue synchronously at insertion, before any script
+    // runs: an inserted script can observe its own record via takeRecords.
+    if (opts.notify_observers) {
+        self.notifyChildInserted(parent, child);
+    }
 
-    // Check if text was added to a script that hasn't started yet.
-    if (child._type == .cdata and parent_is_connected) {
+    // Inserting into a not-yet-started script runs the script's
+    // children-changed steps first, then the inserted nodes' own ready work
+    // (whatwg/html#10188: the outer script executes before an inner one).
+    if (opts.run_ready and parent_is_connected) {
         if (parent.is(Element.Html.Script)) |script| {
             if (!script._executed) {
                 try self.nodeIsReady(false, parent);
@@ -2652,8 +2673,10 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
     }
 
-    if (opts.notify_observers) {
-        self.notifyChildInserted(parent, child);
+    // nodeIsReady resolves the node's owning frame itself (only for the few node
+    // types that have ready work), so pass the incumbent `self`.
+    if (opts.run_ready) {
+        try self.nodeIsReadySubtree(child);
     }
 
     if (opts.child_already_connected and !opts.adopting_to_new_document) {
@@ -2885,6 +2908,19 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: F
     }
 }
 
+// Runs the "ready" work for an inserted node and, when it's an element with
+// children, for its descendants in tree order: appending a subtree
+// containing scripts must execute them all, after the whole insertion.
+fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
+    if (node._type != .element or node.firstChild() == null) {
+        return self.nodeIsReady(false, node);
+    }
+    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
+    while (tw.next()) |el| {
+        try self.nodeIsReady(false, el.asNode());
+    }
+}
+
 fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     if ((comptime from_parser) and self._parse_mode == .fragment) {
         if (self._fragment_scripts_runnable == false) {
@@ -2906,6 +2942,16 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     // walk, so we only do it once we've matched a node type that has ready work
     // (the common text/element insertion does nothing here). The parser inserts
     // into its own document, so from_parser always uses `self`.
+    // Scripts, iframes, links and styles activate on becoming connected;
+    // appending them to a detached parent does nothing (they run/load later
+    // if the subtree gets inserted into the document).
+    if (comptime from_parser == false) {
+        switch (node._type) {
+            .element => if (!node.isConnected()) return,
+            else => {},
+        }
+    }
+
     if (node.is(Element.Html.Script)) |script| {
         if ((comptime from_parser == false) and script._src.len == 0) {
             // Script was added via JavaScript without a src attribute.
