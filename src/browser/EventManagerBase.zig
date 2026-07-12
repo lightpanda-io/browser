@@ -223,7 +223,7 @@ pub const DispatchDirectOptions = struct {
 
 /// Direct dispatch for non-DOM targets. No propagation - just calls the property
 /// handler and registered listeners. Caller is responsible for event ref counting.
-/// Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
+/// Handler can be: null, ?js.Function.Global or js.Function
 pub fn dispatchDirect(
     self: *EventManagerBase,
     arena: Allocator,
@@ -359,7 +359,6 @@ fn getFunction(handler: anytype, local: *const js.Local) ?js.Function {
     }
     return switch (T) {
         js.Function => handler,
-        js.Function.Temp => local.toLocal(handler),
         js.Function.Global => local.toLocal(handler),
         else => @compileError("handler must be null or \\??js.Function(\\.(Temp|Global))?"),
     };

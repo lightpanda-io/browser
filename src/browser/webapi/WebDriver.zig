@@ -64,7 +64,7 @@ pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !vo
     const arena = try frame.getArena(.tiny, "WebDriver.actionSequence");
     errdefer frame.releaseArena(arena);
 
-    const persisted = try sources.temp();
+    const persisted = try sources.persist();
     errdefer persisted.release();
 
     const action_sequence = try arena.create(ActionSequence);
@@ -85,7 +85,7 @@ pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !vo
 const ActionSequence = struct {
     frame: *Frame,
     arena: Allocator,
-    sources: js.Value.Temp,
+    sources: js.Value.Global,
 
     fn run(ptr: *anyopaque) !?u32 {
         const self: *ActionSequence = @ptrCast(@alignCast(ptr));

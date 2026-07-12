@@ -67,6 +67,84 @@ pub fn Bridge(comptime T: type) type {
     return bridge.Builder(T);
 }
 
+// Our wrapper around a v8::Global designed to be tracked (in a GlobalTracker).
+pub const GlobalSlot = struct {
+    handle: v8.Global,
+    tracker: ?*GlobalTracker, // null for Bare globals (see IndexedDB)
+    gindex: u32, // position in GlobalTracker, used to efficiently remove + reuse
+
+    pub fn reset(self: *GlobalSlot) void {
+        v8.v8__Global__Reset(&self.handle);
+    }
+
+    // Eager free: reset the handle and, if page-tracked, drop the slot from the
+    // tracker and return it to the pool. Idempotent for bare slots.
+    pub fn release(self: *GlobalSlot) void {
+        self.reset();
+        if (self.tracker) |t| {
+            t.untrack(self);
+        }
+    }
+
+    pub fn local(self: *const GlobalSlot, l: *const Local) Value {
+        return .{
+            .local = l,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
+        };
+    }
+};
+
+// Per-page owner of persisted v8 handles (v8::Global). Teardown resets all globals
+pub const GlobalTracker = struct {
+    allocator: Allocator,
+    list: std.ArrayList(*GlobalSlot) = .empty,
+    pool: std.heap.MemoryPool(GlobalSlot),
+
+    pub fn init(allocator: Allocator) GlobalTracker {
+        return .{ .allocator = allocator, .pool = std.heap.MemoryPool(GlobalSlot).init(allocator) };
+    }
+
+    pub fn deinit(self: *GlobalTracker) void {
+        for (self.list.items) |slot| {
+            slot.reset();
+        }
+        self.list.deinit(self.allocator);
+        self.pool.deinit();
+    }
+
+    pub fn track(self: *GlobalTracker, handle: v8.Global) !*GlobalSlot {
+        const slot = try self.pool.create();
+        errdefer self.pool.destroy(slot);
+        slot.* = .{
+            .handle = handle,
+            .tracker = self,
+            .gindex = @intCast(self.list.items.len),
+        };
+        try self.list.append(self.allocator, slot);
+        return slot;
+    }
+
+    // swapRemove + updating the moved's index
+    fn untrack(self: *GlobalTracker, slot: *GlobalSlot) void {
+        const idx = slot.gindex;
+        const moved = self.list.pop().?;
+        if (moved != slot) {
+            self.list.items[idx] = moved;
+            // moved has..well...moved, we need to update its gindex
+            moved.gindex = idx;
+        }
+        self.pool.destroy(slot);
+    }
+};
+
+// Build a v8.Global from a live handle and track it on the context's page.
+pub fn newTrackedSlot(ctx: *Context, handle: anytype) !*GlobalSlot {
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(ctx.isolate.handle, handle, &global);
+    errdefer v8.v8__Global__Reset(&global);
+    return ctx.page.globals.track(global);
+}
+
 // If a function returns a []i32, should that map to a plain-old
 // JavaScript array, or a Int32Array? It's ambiguous. By default, we'll
 // map arrays/slices to the JavaScript arrays. If you want a TypedArray
@@ -126,14 +204,16 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
 
         /// Persisted typed array.
         pub const Global = struct {
-            handle: v8.Global,
+            slot: *GlobalSlot,
 
-            pub fn deinit(self: *Global) void {
-                v8.v8__Global__Reset(&self.handle);
+            pub fn deinit(self: Global) void {
+                self.slot.release();
             }
 
-            pub fn local(self: *const Global, l: *const Local) Self {
-                return .{ .local = l, .handle = v8.v8__Global__Get(&self.handle, l.isolate.handle).? };
+            pub const release = deinit;
+
+            pub fn local(self: Global, l: *const Local) Self {
+                return .{ .local = l, .handle = v8.v8__Global__Get(&self.slot.handle, l.isolate.handle).? };
             }
         };
 
@@ -173,12 +253,7 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
         }
 
         pub fn persist(self: *const Self) !Global {
-            var ctx = self.local.ctx;
-            var global: v8.Global = undefined;
-            v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-            try ctx.trackGlobal(global);
-
-            return .{ .handle = global };
+            return .{ .slot = try js.newTrackedSlot(self.local.ctx, self.handle) };
         }
 
         // Direct view into the typed array's backing memory.

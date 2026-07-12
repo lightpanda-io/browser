@@ -49,7 +49,7 @@ _deleted: bool = false,
 _created: bool = false,
 // not just for efficiency, we must return the same v8::Array every time the
 // compound key is accessed.
-_key_path_js: ?*js.Value.BareGlobal = null,
+_key_path_js: ?*js.GlobalSlot = null,
 
 pub fn init(obj_store: *IDBObjectStore, info: Engine.IndexInfo, name: []const u8) !*IDBIndex {
     const self = try obj_store._txn._arena.create(IDBIndex);

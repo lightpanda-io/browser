@@ -48,7 +48,7 @@ _on_messageerror: ?js.Function.Global = null,
 // and delivered once the worker is ready (i.e. once onmessage can be set).
 // Drained by drainPendingMessages, called from Worker.loadInitialScript
 // after the initial script has been evaluated.
-_pending_messages: std.ArrayList(?js.Value.Temp) = .empty,
+_pending_messages: std.ArrayList(?js.Value.Global) = .empty,
 
 pub fn init(worker: *Worker, url: [:0]const u8) !*DedicatedWorkerGlobalScope {
     const self = try worker._arena.create(DedicatedWorkerGlobalScope);
@@ -104,7 +104,7 @@ pub fn setOnMessageError(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGloba
     self._on_messageerror = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 
-pub fn requestAnimationFrame(self: *DedicatedWorkerGlobalScope, cb: js.Function.Temp, exec: *js.Execution) !u32 {
+pub fn requestAnimationFrame(self: *DedicatedWorkerGlobalScope, cb: js.Function.Global, exec: *js.Execution) !u32 {
     return self._proto._timers.schedule(exec, cb, 5, .{
         .repeat = false,
         .params = &.{},
@@ -123,7 +123,7 @@ pub fn receiveMessage(self: *DedicatedWorkerGlobalScope, data: js.Value) !void {
         return;
     }
 
-    const cloned_data: ?js.Value.Temp = blk: {
+    const cloned_data: ?js.Value.Global = blk: {
         // Enter our context to clone the message
         var ls: js.Local.Scope = undefined;
         self._proto.js.localScope(&ls);
@@ -131,7 +131,7 @@ pub fn receiveMessage(self: *DedicatedWorkerGlobalScope, data: js.Value) !void {
 
         // clones from where it currently is (the Worker's Page context) to our Context
         const cloned = data.structuredCloneTo(&ls.local) catch break :blk null;
-        break :blk cloned.temp() catch break :blk null;
+        break :blk cloned.persist() catch break :blk null;
     };
 
     if (!self._worker._script_loaded) {
@@ -147,7 +147,7 @@ pub fn receiveMessage(self: *DedicatedWorkerGlobalScope, data: js.Value) !void {
     try self.scheduleMessage(cloned_data);
 }
 
-fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: ?js.Value.Temp) !void {
+fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: ?js.Value.Global) !void {
     const wgs = self._proto;
     const session = wgs._session;
 
@@ -183,7 +183,7 @@ pub fn drainPendingMessages(self: *DedicatedWorkerGlobalScope) void {
 }
 
 const ReceiveMessageCallback = struct {
-    data: ?js.Value.Temp,
+    data: ?js.Value.Global,
     arena: Allocator,
     worker_scope: *DedicatedWorkerGlobalScope,
 
