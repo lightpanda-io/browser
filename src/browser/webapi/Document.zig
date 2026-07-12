@@ -303,7 +303,18 @@ pub fn setDomain(self: *Document, value: []const u8) !void {
     try doc_frame.js.setOrigin(key);
 }
 
-pub fn getCookie(_: *Document, frame: *Frame) ![]const u8 {
+// A cookie-averse document (no browsing context: createHTMLDocument,
+// DOMParser, XHR documents) reads cookies as the empty string and ignores
+// writes.
+fn isCookieAverse(self: *const Document, frame: *const Frame) bool {
+    const doc_frame = self._frame orelse return true;
+    return doc_frame.document != self and frame.document != self;
+}
+
+pub fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
+    if (self.isCookieAverse(frame)) {
+        return "";
+    }
     var buf: std.ArrayList(u8) = .empty;
     try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.local_arena), .{
         .is_http = false,
@@ -312,7 +323,10 @@ pub fn getCookie(_: *Document, frame: *Frame) ![]const u8 {
     return buf.items;
 }
 
-pub fn setCookie(_: *Document, cookie_str: []const u8, frame: *Frame) ![]const u8 {
+pub fn setCookie(self: *Document, cookie_str: []const u8, frame: *Frame) ![]const u8 {
+    if (self.isCookieAverse(frame)) {
+        return cookie_str;
+    }
     // we use the cookie jar's allocator to parse the cookie because it
     // outlives the frame's arena.
     const Cookie = @import("storage/Cookie.zig");
