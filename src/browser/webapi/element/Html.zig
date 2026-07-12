@@ -243,6 +243,11 @@ pub fn setInnerText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
 
 pub fn setOuterText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
     const el = self.asElement();
+    // outerText is an HTMLElement property. MathML elements currently share
+    // the HTML wrapper types, so keep the assignment inert for them.
+    if (el._namespace != .html) {
+        return;
+    }
     const node = el.asNode();
     const parent = node.parentNode() orelse return error.NoModificationAllowed;
 
