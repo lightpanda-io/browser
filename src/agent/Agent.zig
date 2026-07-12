@@ -752,7 +752,15 @@ fn runRepl(self: *Agent) void {
             continue :repl;
         }
 
-        const slash_split: ?Schema.Split = Schema.parseSlashCommand(trimmed);
+        // A slash command whose `'''…'''` body is still open continues on the
+        // following lines until the block closes (the multi-line /extract
+        // form). Ctrl-D on the continuation prompt abandons the command.
+        const command_text: []const u8 = if (trimmed[0] == '/' and Schema.hasUnclosedTripleQuote(trimmed))
+            Terminal.readContinuation(aa, trimmed) orelse continue :repl
+        else
+            trimmed;
+
+        const slash_split: ?Schema.Split = Schema.parseSlashCommand(command_text);
         if (slash_split) |split| {
             if (SlashCommand.findMeta(split.name)) |meta| {
                 if (self.handleMeta(aa, meta, split.rest)) break :repl;
@@ -761,7 +769,7 @@ fn runRepl(self: *Agent) void {
         }
 
         var diag: Schema.Diag = .{};
-        const cmd = Command.parseDiag(aa, line, &diag) catch |err| switch (err) {
+        const cmd = Command.parseDiag(aa, command_text, &diag) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
                     self.terminal.printError("Basic REPL (LLM disabled) accepts only commands. Try /help, or " ++ llm_setup_hint ++ " to enable natural-language prompts.", .{});
@@ -793,7 +801,7 @@ fn runRepl(self: *Agent) void {
                 if (!result.is_error) {
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse cmd);
                 }
-                self.recordSlashToolCall(trimmed, tc.name(), tc.args, result) catch |err| {
+                self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
                 };
             },
@@ -1244,7 +1252,8 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
 fn saveOneShot(self: *Agent) void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
-    self.synthesizeSaveTo(arena.allocator(), self.one_shot_save.?, .replace, self.one_shot_task.?);
+    const path = save.ensureJsExtension(arena.allocator(), self.one_shot_save.?) catch self.one_shot_save.?;
+    self.synthesizeSaveTo(arena.allocator(), path, .replace, self.one_shot_task.?);
 }
 
 /// LLM synthesis + write for an already-resolved destination. Shared by the

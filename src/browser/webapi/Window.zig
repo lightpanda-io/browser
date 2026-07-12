@@ -43,6 +43,7 @@ const MessageEvent = @import("event/MessageEvent.zig");
 const MessagePort = @import("MessagePort.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
+const idb = @import("storage/idb/idb.zig");
 const CookieStore = @import("storage/CookieStore.zig");
 const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
@@ -75,6 +76,7 @@ _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
 _cookie_store: ?*CookieStore = null,
+_idb_factory: ?*idb.IDBFactory = null,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
@@ -295,6 +297,15 @@ pub fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
     try cs.attach(exec);
     self._cookie_store = cs;
     return cs;
+}
+
+pub fn getIndexedDB(self: *Window, exec: *Execution) !*idb.IDBFactory {
+    if (self._idb_factory) |f| {
+        return f;
+    }
+    const f = try exec._factory.create(idb.IDBFactory{});
+    self._idb_factory = f;
+    return f;
 }
 
 pub fn getOrigin(self: *const Window) []const u8 {
@@ -671,6 +682,7 @@ pub fn close(self: *Window) void {
         }
     }
 
+    page.session.idb.detachContext(frame.js);
     frame.js.scheduler.reset();
     frame.abortTransfers();
 
@@ -1051,6 +1063,7 @@ pub const JsApi = struct {
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
     pub const cookieStore = bridge.accessor(Window.getCookieStore, null, .{});
+    pub const indexedDB = bridge.accessor(Window.getIndexedDB, null, .{});
     pub const origin = bridge.accessor(Window.getOrigin, Window.setOrigin, .{});
     pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .deletable = false });
     pub const history = bridge.accessor(Window.getHistory, null, .{});

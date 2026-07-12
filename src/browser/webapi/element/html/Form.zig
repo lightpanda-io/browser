@@ -115,7 +115,7 @@ pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
 
 pub fn getAction(self: *Form, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const owner_url = element.asNode().ownerFrame(frame).url;
+    const owner_url = element.ownerFrame(frame).url;
     const action = element.getAttributeSafe(comptime .wrap("action")) orelse return owner_url;
     if (action.len == 0) {
         return owner_url;

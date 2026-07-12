@@ -923,7 +923,7 @@ pub fn getForm(self: *Input, frame: *Frame) ?*Form {
 
 pub fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const owner_url = element.asNode().ownerFrame(frame).url;
+    const owner_url = element.ownerFrame(frame).url;
     const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return owner_url;
     if (action.len == 0) {
         return owner_url;

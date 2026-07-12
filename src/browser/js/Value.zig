@@ -126,6 +126,10 @@ pub fn isArrayBuffer(self: Value) bool {
     return v8.v8__Value__IsArrayBuffer(self.handle);
 }
 
+pub fn isDate(self: Value) bool {
+    return v8.v8__Value__IsDate(self.handle);
+}
+
 pub fn isUint8Array(self: Value) bool {
     return v8.v8__Value__IsUint8Array(self.handle);
 }
@@ -370,6 +374,7 @@ pub fn serialize(self: Value) !Serialized {
         .throw_data_clone_error = CloneDelegate.throwDataCloneError,
     }) orelse return error.JsException;
     defer v8.v8__ValueSerializer__DELETE(serializer);
+
     // the delegate callbacks only fire during WriteValue, after this is set
     delegate_ctx.serializer = serializer;
 
@@ -624,6 +629,16 @@ pub fn temp(self: Value) !Temp {
     return self._persist(false);
 }
 
+// Like persist(), but not tracked on the context: the caller owns the handle
+// and must deinit (Reset) it. A reset is only idempotent through the same
+// instance — copies alias one v8 slot, so keep a single canonical instance and
+// reset through it.
+pub fn bare(self: Value) BareGlobal {
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(self.local.ctx.isolate.handle, self.handle, &global);
+    return .{ .handle = global, .temps = {} };
+}
+
 fn _persist(self: *const Value, comptime is_global: bool) !(if (is_global) Global else Temp) {
     var ctx = self.local.ctx;
 
@@ -683,10 +698,12 @@ pub fn format(self: Value, writer: *std.Io.Writer) !void {
 
 pub const Temp = G(.temp);
 pub const Global = G(.global);
+pub const BareGlobal = G(.bare);
 
 const GlobalType = enum(u8) {
     temp,
     global,
+    bare,
 };
 
 fn G(comptime global_type: GlobalType) type {

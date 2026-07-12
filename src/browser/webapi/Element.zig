@@ -1680,6 +1680,10 @@ pub fn getTag(self: *const Element) Tag {
     };
 }
 
+pub fn ownerFrame(self: *const Element, default: *Frame) *Frame {
+    return self._proto.ownerFrame(default);
+}
+
 pub const Tag = enum {
     address,
     anchor,

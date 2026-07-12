@@ -82,7 +82,8 @@ pub fn postMessage(self: *DedicatedWorkerGlobalScope, data: js.Value) !void {
 }
 
 pub fn close(self: *DedicatedWorkerGlobalScope) void {
-    // TOOD: we should also stop new tasks from being scheduled
+    // TODO: we should also stop new tasks from being scheduled
+    self._proto._session.idb.detachContext(self._proto.js);
     self._proto.js.scheduler.reset();
     self._closed = true;
 }

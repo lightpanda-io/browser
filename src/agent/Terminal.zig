@@ -995,6 +995,23 @@ pub fn freeLine(line: []const u8) void {
     c.ic_free(@ptrCast(@constCast(line.ptr)));
 }
 
+const continuation_prompt = "... ";
+
+/// Read the follow-up lines of an input whose `'''…'''` body is still open,
+/// joined with newlines until the block closes. Null abandons the input
+/// (EOF on the continuation prompt, or out of memory).
+pub fn readContinuation(arena: std.mem.Allocator, first: []const u8) ?[]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    buf.appendSlice(arena, first) catch return null;
+    while (Schema.hasUnclosedTripleQuote(buf.items)) {
+        const next = readLine(continuation_prompt) orelse return null;
+        defer freeLine(next);
+        buf.append(arena, '\n') catch return null;
+        buf.appendSlice(arena, next) catch return null;
+    }
+    return buf.items;
+}
+
 // Free-function `lp.log.sink` can't capture self; the agent sets this
 // before installing the sink and clears it on teardown.
 var active_for_log: ?*Terminal = null;

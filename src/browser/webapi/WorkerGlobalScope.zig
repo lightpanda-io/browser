@@ -44,6 +44,7 @@ const Performance = @import("Performance.zig");
 const WorkerLocation = @import("WorkerLocation.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
+const idb = @import("storage/idb/idb.zig");
 const CookieStore = @import("storage/CookieStore.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
@@ -103,6 +104,7 @@ _console: Console = .init,
 _crypto: Crypto = .init,
 _navigator: Navigator = .init,
 _performance: Performance,
+_idb_factory: ?*idb.IDBFactory = null,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
@@ -503,6 +505,15 @@ pub fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
+pub fn getIndexedDB(self: *WorkerGlobalScope, exec: *JS.Execution) !*idb.IDBFactory {
+    if (self._idb_factory) |f| {
+        return f;
+    }
+    const f = try exec._factory.create(idb.IDBFactory{});
+    self._idb_factory = f;
+    return f;
+}
+
 // Some properties are readonly but [Replaceable]. They get assigned as own
 // data properties on the underlying v8::object that represents the global (the
 // WorkerGlobalScope)
@@ -548,6 +559,7 @@ pub const JsApi = struct {
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
     pub const cookieStore = bridge.accessor(WorkerGlobalScope.getCookieStore, null, .{});
+    pub const indexedDB = bridge.accessor(WorkerGlobalScope.getIndexedDB, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});

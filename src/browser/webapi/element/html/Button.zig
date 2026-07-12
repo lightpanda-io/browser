@@ -137,7 +137,7 @@ pub fn getLabels(self: *Button, frame: *Frame) !js.Array {
 
 pub fn getFormAction(self: *Button, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const owner_url = element.asNode().ownerFrame(frame).url;
+    const owner_url = element.ownerFrame(frame).url;
     const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return owner_url;
     if (action.len == 0) {
         return owner_url;

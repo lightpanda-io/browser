@@ -22,9 +22,10 @@ const builtin = @import("builtin");
 
 const App = @import("../App.zig");
 
-const storage = @import("webapi/storage/storage.zig");
-const Navigation = @import("webapi/navigation/Navigation.zig");
 const History = @import("webapi/History.zig");
+const storage = @import("webapi/storage/storage.zig");
+const IdbManager = @import("webapi/storage/idb/idb.zig").Manager;
+const Navigation = @import("webapi/navigation/Navigation.zig");
 
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
@@ -50,6 +51,8 @@ arena: Allocator,
 history: History,
 navigation: Navigation,
 storage_shed: storage.Shed,
+// Per-origin IndexedDB engines
+idb: IdbManager,
 // Backs `globalThis.lp.*`; values pre-stringified so the prelude splices
 // them in without re-encoding.
 bridge_store: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -159,6 +162,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         // The prototype (EventTarget) for Navigation is created when a Frame is created.
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
+        .idb = IdbManager.init(allocator),
         .browser = browser,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator, notification),
@@ -183,6 +187,7 @@ pub fn deinit(self: *Session) void {
     self.browser.env.memoryPressureNotification(.critical);
 
     self.storage_shed.deinit(self.browser.app.allocator);
+    self.idb.deinit();
     {
         const allocator = self.browser.app.allocator;
         var it = self.bridge_store.iterator();
