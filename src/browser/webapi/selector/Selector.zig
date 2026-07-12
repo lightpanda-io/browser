@@ -229,7 +229,11 @@ pub const Part = union(enum) {
 };
 
 pub const Attribute = struct {
+    // Lowercased for the HTML-element case-insensitive match.
     name: String,
+    // As written in the selector: attribute names match case-sensitively on
+    // foreign (SVG/MathML) elements, whose attributes are stored unnormalized.
+    original_name: String,
     matcher: AttributeMatcher,
     case_insensitive: bool,
 };

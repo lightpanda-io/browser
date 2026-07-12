@@ -445,7 +445,11 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, frame: *Frame) bool 
 }
 
 fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
-    const value = el.getAttributeSafe(attr.name) orelse {
+    // Attribute names match ASCII case-insensitively on HTML elements (both
+    // sides lowercased) and case-sensitively on foreign elements, whose
+    // attributes are stored as written.
+    const name = if (el._namespace == .html) attr.name else attr.original_name;
+    const value = el.getAttributeSafe(name) orelse {
         return false;
     };
 
