@@ -241,6 +241,8 @@ const Commands = cli.Builder(.{
     .{
         .name = "mcp",
         .options = .{
+            .{ .name = "port", .type = ?u16 },
+            .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "cdp_port", .type = ?u16 },
         },
         .shared_options = CommonOptions,
