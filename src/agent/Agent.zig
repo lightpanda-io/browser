@@ -1663,6 +1663,10 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const ma = self.conversation.arena.allocator();
     self.api_error_detail = null;
     self.streamed_text = false;
+    // Defensive: if an exit path ever missed `endStreamedText`, a stale-true
+    // `stream_active` would skip the spinner pause on the next turn's first
+    // delta and let frames interleave with the text. Reset it at the source.
+    self.stream_active = false;
     self.http_interrupt.reset();
 
     try self.conversation.ensureSystemPrompt();
