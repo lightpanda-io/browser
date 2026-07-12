@@ -1703,7 +1703,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // non-thinking models.
             .effort = self.effort,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
-            .stream = self.streamHook(),
+            // Suppressed turns (e.g. `--save` capture) must keep stdout clean;
+            // streaming would bypass the `suppress_answer` guard in `runTurn`.
+            .stream = if (input.suppress_answer) null else self.streamHook(),
         },
     ) catch |err| {
         self.endStreamedText();
@@ -1790,7 +1792,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // `.none` stays off to opt out on models that reject it.
                 .effort = if (self.effort == .none) .none else .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
-                .stream = self.streamHook(),
+                .stream = if (input.suppress_answer) null else self.streamHook(),
             },
         ) catch |err| {
             self.endStreamedText();
