@@ -683,7 +683,10 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
     if (!input.suppress_answer) {
         if (text) |t| {
             // Streaming already emitted the text incrementally (plus a closing
-            // newline); only the buffered path needs to print it here.
+            // newline); only the buffered path needs to print it here. Safe as a
+            // turn-wide flag: the stream accumulator reconstructs `t` from the
+            // same deltas it emitted, and the synthesis fallback also streams, so
+            // `streamed_text` implies `t` was already shown in full.
             if (!self.streamed_text) self.terminal.printAssistant(t);
         } else if (self.last_turn_refused)
             self.terminal.printInfo("(model declined to respond — safety refusal)", .{})
