@@ -17,11 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const http = @import("../../../network/http.zig");
 
 const URL = @import("../URL.zig");
+const Page = @import("../../Page.zig");
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 
@@ -34,6 +36,7 @@ const Allocator = std.mem.Allocator;
 
 const Request = @This();
 
+_rc: lp.RC(u8) = .{},
 _url: [:0]const u8,
 _method: http.Method,
 _headers: ?*Headers,
@@ -88,7 +91,9 @@ const Cache = enum {
 };
 
 pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
-    const arena = exec.arena;
+    const arena = try exec.getArena(.medium, "Request");
+    errdefer exec.releaseArena(arena);
+
     const url = switch (input) {
         .url => |u| try URL.resolve(arena, exec.base(), u, .{ .encoding = exec.charset.* }),
         .request => |r| try arena.dupeZ(u8, r._url),
@@ -130,7 +135,9 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         break :blk extracted.bytes;
     } else switch (input) {
         .url => null,
-        .request => |r| r._body,
+        // Dupe: the source Request owns its body bytes and may be finalized
+        // before this one.
+        .request => |r| if (r._body) |b| try arena.dupe(u8, b) else null,
     };
 
     const signal = if (opts.signal) |s|
@@ -140,7 +147,8 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._signal,
     };
 
-    return exec._factory.create(Request{
+    const self = try arena.create(Request);
+    self.* = .{
         ._url = url,
         ._arena = arena,
         ._method = method,
@@ -150,7 +158,20 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._redirect = opts.redirect,
         ._body = body,
         ._signal = signal,
-    });
+    };
+    return self;
+}
+
+pub fn deinit(self: *Request, page: *Page) void {
+    page.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *Request, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *Request) void {
+    self._rc.acquire();
 }
 
 fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
@@ -278,17 +299,22 @@ pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
 }
 
 pub fn clone(self: *const Request, exec: *const Execution) !*Request {
-    return exec._factory.create(Request{
-        ._url = self._url,
-        ._arena = self._arena,
+    const arena = try exec.getArena(if (self._body) |b| b.len else 512, "Request.clone");
+    errdefer exec.releaseArena(arena);
+
+    const request = try arena.create(Request);
+    request.* = .{
+        ._url = try arena.dupeZ(u8, self._url),
+        ._arena = arena,
         ._method = self._method,
         ._headers = self._headers,
         ._cache = self._cache,
         ._credentials = self._credentials,
         ._redirect = self._redirect,
-        ._body = self._body,
+        ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
-    });
+    };
+    return request;
 }
 
 pub const JsApi = struct {
