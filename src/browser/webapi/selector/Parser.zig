@@ -962,6 +962,8 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     }
 
     const attr_name = try self.attributeName(arena);
+    // As written, for the case-sensitive match on foreign elements.
+    const original_name = try arena.dupe(u8, attr_name);
 
     // Normalize the name to lowercase for fast matching (consistent with Attribute.normalizeNameForLookup)
     const name = try Attribute.normalizeNameForLookupAlloc(arena, .wrap(attr_name));
@@ -974,7 +976,7 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         if (self.peek() == ']') {
             self.input = self.input[1..];
         }
-        return .{ .name = name, .matcher = .presence, .case_insensitive = case_insensitive };
+        return .{ .name = name, .original_name = .wrap(original_name), .matcher = .presence, .case_insensitive = case_insensitive };
     }
 
     const matcher_type = try self.attributeMatcher();
@@ -1012,7 +1014,7 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         .presence => unreachable,
     };
 
-    return .{ .name = name, .matcher = matcher, .case_insensitive = case_insensitive };
+    return .{ .name = name, .original_name = .wrap(original_name), .matcher = matcher, .case_insensitive = case_insensitive };
 }
 
 fn attributeName(self: *Parser, arena: Allocator) ![]const u8 {
