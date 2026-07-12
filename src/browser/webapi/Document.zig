@@ -194,6 +194,53 @@ pub fn isQuirksMode(self: *const Document) bool {
     return true;
 }
 
+// document.lastModified: the response's Last-Modified header in local time,
+// "MM/DD/YYYY hh:mm:ss", defaulting to the current time.
+pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
+    var timestamp: i64 = std.time.timestamp();
+    if (self._frame) |doc_frame| {
+        if (doc_frame.document == self) {
+            for (doc_frame._http_headers.items) |header| {
+                if (std.ascii.eqlIgnoreCase(header.name, "last-modified")) {
+                    const DateTime = @import("../../datetime.zig").DateTime;
+                    if (DateTime.parse(header.value, .rfc822)) |dt| {
+                        timestamp = dt.unix(.seconds);
+                    } else |_| {}
+                    break;
+                }
+            }
+        }
+    }
+
+    var tm: LibcTm = undefined;
+    if (localtime_r(&timestamp, &tm) == null) {
+        return error.InvalidArgument;
+    }
+    return std.fmt.allocPrint(frame.call_arena, "{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
+        @as(u32, @intCast(tm.tm_mon + 1)),
+        @as(u32, @intCast(tm.tm_mday)),
+        tm.tm_year + 1900,
+        @as(u32, @intCast(tm.tm_hour)),
+        @as(u32, @intCast(tm.tm_min)),
+        @as(u32, @intCast(tm.tm_sec)),
+    });
+}
+
+const LibcTm = extern struct {
+    tm_sec: c_int,
+    tm_min: c_int,
+    tm_hour: c_int,
+    tm_mday: c_int,
+    tm_mon: c_int,
+    tm_year: c_int,
+    tm_wday: c_int,
+    tm_yday: c_int,
+    tm_isdst: c_int,
+    tm_gmtoff: c_long,
+    tm_zone: ?[*:0]const u8,
+};
+extern "c" fn localtime_r(timep: *const i64, result: *LibcTm) ?*LibcTm;
+
 pub fn getCharset(self: *const Document) []const u8 {
     if (self._charset) |charset| {
         return charset;
@@ -1563,6 +1610,7 @@ pub const JsApi = struct {
     pub const charset = bridge.accessor(getCharacterSet, null, .{});
     pub const inputEncoding = bridge.accessor(getCharacterSet, null, .{});
     pub const compatMode = bridge.accessor(getCompatMode, null, .{});
+    pub const lastModified = bridge.accessor(Document.getLastModified, null, .{});
     fn getCompatMode(self: *const Document) []const u8 {
         return if (self.isQuirksMode()) "BackCompat" else "CSS1Compat";
     }
