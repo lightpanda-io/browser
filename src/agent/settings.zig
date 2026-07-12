@@ -338,4 +338,19 @@ test "parseRemembered: valid file round-trips" {
     defer std.zon.parse.free(testing.allocator, remembered);
     try testing.expect(remembered.provider == null);
     try testing.expectString("some-model", remembered.model);
+    // Absent `stream` is null so pre-streaming files still fall back to the default.
+    try testing.expect(remembered.stream == null);
+}
+
+test "parseRemembered: stream field round-trips" {
+    const remembered = parseRemembered(testing.allocator, ".{ .model = \"m\", .stream = false }").?;
+    defer std.zon.parse.free(testing.allocator, remembered);
+    try testing.expect(remembered.stream == false);
+}
+
+test "resolveStream: default on, remembered wins" {
+    try testing.expect(resolveStream(null));
+    try testing.expect(resolveStream(.{ .model = "m", .stream = null }));
+    try testing.expect(resolveStream(.{ .model = "m", .stream = true }));
+    try testing.expect(!resolveStream(.{ .model = "m", .stream = false }));
 }
