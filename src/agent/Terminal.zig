@@ -24,6 +24,7 @@ const Command = lp.Command;
 const Schema = lp.Schema;
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
+const md_term = @import("md_term.zig");
 const c = @cImport({
     @cInclude("isocline.h");
 });
@@ -47,6 +48,8 @@ pub const ansi = struct {
     pub const bold = "\x1b[1m";
     pub const dim = "\x1b[2m";
     pub const italic = "\x1b[3m";
+    pub const underline = "\x1b[4m";
+    pub const strike = "\x1b[9m";
     pub const cyan = "\x1b[36m";
     pub const green = "\x1b[32m";
     pub const yellow = "\x1b[33m";
@@ -70,6 +73,7 @@ verbosity: Verbosity,
 /// only gates non-interactive runs.
 repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
+stdout_is_tty: bool,
 spinner: Spinner,
 completion_source: ?CompletionSource = null,
 /// True while the REPL is in JS mode; set by isocline's mode callback.
@@ -181,6 +185,7 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
         .stderr_is_tty = stderr_is_tty,
+        .stdout_is_tty = std.posix.isatty(std.posix.STDOUT_FILENO),
         .spinner = .init(is_repl, stderr_is_tty),
         .history_paths = history_paths,
     };
@@ -1346,10 +1351,24 @@ test "renderSchemaHint: ghosts enum value once typing, keeps template when empty
     try std.testing.expectEqualStrings("load", hintStr(renderSchemaHint(schema, "state=", false)).?);
 }
 
-pub fn printAssistant(_: *Terminal, text: []const u8) void {
+test {
+    _ = md_term;
+}
+
+pub fn printAssistant(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
     const fd = std.posix.STDOUT_FILENO;
-    _ = std.posix.write(fd, text) catch {};
+
+    // Style only for the interactive REPL on a real terminal; `--task`/piped
+    // output stays verbatim so it can be consumed programmatically.
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+    const out = if (self.isRepl() and self.stdout_is_tty)
+        md_term.render(arena.allocator(), text) catch text
+    else
+        text;
+
+    _ = std.posix.write(fd, out) catch {};
     _ = std.posix.write(fd, "\n") catch {};
 }
 
