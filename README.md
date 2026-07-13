@@ -48,7 +48,7 @@ brew install lightpanda-io/browser/lightpanda
 
 Latest nightly from Arch Linux User Repository:
 ```console
-yay -S lightpanda-nightly-bi
+yay -S lightpanda-nightly-bin
 ```
 
 **Download from the nightly builds**
