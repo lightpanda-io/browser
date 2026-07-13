@@ -85,7 +85,7 @@ pub const JsApi = struct {
 
     pub const createSVGRect = bridge.function(_createSVGRect, .{});
     fn _createSVGRect(_: *Svg, frame: *Frame) !*DOMRect {
-        return DOMRect.init(0, 0, 0, 0, frame);
+        return DOMRect.create(.{}, frame._factory);
     }
 
     pub const createSVGNumber = bridge.function(_createSVGNumber, .{});

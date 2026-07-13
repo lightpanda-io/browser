@@ -429,16 +429,16 @@ const BoxModel = struct {
     // shapeOutside: ?ShapeOutsideInfo,
 };
 
-fn rectToQuad(rect: DOMNode.Element.DOMRect) Quad {
+fn rectToQuad(rect: DOMNode.Element.DOMRect.Data) Quad {
     return Quad{
-        rect._x,
-        rect._y,
-        rect._x + rect._width,
-        rect._y,
-        rect._x + rect._width,
-        rect._y + rect._height,
-        rect._x,
-        rect._y + rect._height,
+        rect.x,
+        rect.y,
+        rect.x + rect.width,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
     };
 }
 
@@ -447,7 +447,7 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
         nodeId: ?Node.Id = null,
         backendNodeId: ?u32 = null,
         objectId: ?[]const u8 = null,
-        rect: ?DOMNode.Element.DOMRect = null,
+        rect: ?DOMNode.Element.DOMRect.Data = null,
     })) orelse return error.InvalidParams;
     // Only 1 of nodeId, backendNodeId, objectId may be set, but chrome just takes the first non-null
 
@@ -507,7 +507,7 @@ fn getContentQuads(cmd: *CDP.Command) !void {
     // Text may be tricky, multiple quads in case of multiple lines? empty quads of text  = ""?
     // Elements like SVGElement may have multiple quads.
 
-    const quad = rectToQuad(element.getBoundingClientRect(frame));
+    const quad = rectToQuad(element.boundingClientRectValues(frame));
     return cmd.sendResult(.{ .quads = &.{quad} }, .{});
 }
 
@@ -526,7 +526,7 @@ fn getBoxModel(cmd: *CDP.Command) !void {
     // TODO implement for document or text
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
 
-    const rect = element.getBoundingClientRect(frame);
+    const rect = element.boundingClientRectValues(frame);
     const quad = rectToQuad(rect);
     const zero = [_]f64{0.0} ** 8;
 
@@ -535,8 +535,8 @@ fn getBoxModel(cmd: *CDP.Command) !void {
         .padding = zero,
         .border = zero,
         .margin = zero,
-        .width = @intFromFloat(rect._width),
-        .height = @intFromFloat(rect._height),
+        .width = @intFromFloat(rect.width),
+        .height = @intFromFloat(rect.height),
     } }, .{});
 }
 

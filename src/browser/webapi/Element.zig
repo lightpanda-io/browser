@@ -1223,22 +1223,22 @@ pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
     return dims.height;
 }
 
-pub fn getBoundingClientRect(self: *Element, frame: *Frame) DOMRect {
-    if (!self.checkVisibilityCached(null, frame)) {
-        return .{
-            ._x = 0.0,
-            ._y = 0.0,
-            ._width = 0.0,
-            ._height = 0.0,
-        };
-    }
-
-    return self.getBoundingClientRectForVisible(frame);
+pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
+    return DOMRect.create(self.boundingClientRectValues(frame), frame._factory);
 }
 
-// Some cases need a the BoundingClientRect but have already done the
-// visibility check.
-pub fn getBoundingClientRectForVisible(self: *Element, frame: *Frame) DOMRect {
+// Plain rect values, no JS-backed allocation: the internal fast path shared by
+// getBoundingClientRect, getClientRects, and IntersectionObserver. A DOMRect is
+// only materialized at the JS boundary.
+pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
+    if (!self.checkVisibilityCached(null, frame)) {
+        return .{};
+    }
+    return self.boundingClientRectValuesForVisible(frame);
+}
+
+// Some cases need the bounding rect but have already done the visibility check.
+pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect.Data {
     const y = calculateDocumentPosition(self.asNode());
     const dims = self.getElementDimensions(frame);
 
@@ -1246,19 +1246,19 @@ pub fn getBoundingClientRectForVisible(self: *Element, frame: *Frame) DOMRect {
     const x = calculateSiblingPosition(self.asNode());
 
     return .{
-        ._x = x,
-        ._y = y,
-        ._width = dims.width,
-        ._height = dims.height,
+        .x = x,
+        .y = y,
+        .width = dims.width,
+        .height = dims.height,
     };
 }
 
-pub fn getClientRects(self: *Element, frame: *Frame) ![]DOMRect {
+pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
     if (!self.checkVisibilityCached(null, frame)) {
         return &.{};
     }
-    const rects = try frame.local_arena.alloc(DOMRect, 1);
-    rects[0] = self.getBoundingClientRectForVisible(frame);
+    const rects = try frame.local_arena.alloc(*DOMRect, 1);
+    rects[0] = try DOMRect.create(self.boundingClientRectValuesForVisible(frame), frame._factory);
     return rects;
 }
 
