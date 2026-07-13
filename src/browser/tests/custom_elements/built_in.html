@@ -68,6 +68,39 @@
 }
 
 {
+    let constructorCalled = 0;
+
+    class TypedButton extends HTMLButtonElement {
+        constructor() {
+            super();
+            constructorCalled++;
+            this.custom = true;
+        }
+    }
+
+    customElements.define('typed-button', TypedButton, { extends: 'button' });
+
+    const btn = document.createElement('button', { is: 'typed-button' });
+    testing.expectEqual(1, constructorCalled);
+    testing.expectEqual(true, btn instanceof TypedButton);
+    testing.expectEqual(true, btn instanceof HTMLButtonElement);
+    testing.expectEqual('BUTTON', btn.tagName);
+    testing.expectEqual(true, btn.custom);
+}
+
+// Directly constructing a built-in interface is unsupported and must throw a
+// TypeError (not silently succeed).
+{
+    let threw = false;
+    try {
+        new HTMLDivElement();
+    } catch (e) {
+        threw = e instanceof TypeError;
+    }
+    testing.expectEqual(true, threw);
+}
+
+{
     let connectedCount = 0;
     let disconnectedCount = 0;
     let attributeChanges = [];
