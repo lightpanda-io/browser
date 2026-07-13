@@ -36,6 +36,13 @@ pub fn deinit(self: *Self) void {
     self.aw.deinit();
 }
 
+/// Point subsequent responses at a different sink. The HTTP transport uses
+/// this to capture each request's response into its own buffer; safe because
+/// the browser worker retargets and writes on a single thread.
+pub fn retarget(self: *Self, writer: *std.io.Writer) void {
+    self.writer = writer;
+}
+
 pub fn sendResponse(self: *Self, response: anytype) !void {
     self.mutex.lock();
     defer self.mutex.unlock();

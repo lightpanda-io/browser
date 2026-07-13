@@ -126,7 +126,7 @@ pub fn is(self: *Element, comptime T: type) ?*T {
             if (T == Svg) {
                 return svg;
             }
-            if (comptime std.mem.startsWith(u8, type_name, "webapi.element.svg.")) {
+            if (comptime std.mem.startsWith(u8, type_name, "browser.webapi.element.svg.")) {
                 return svg.is(T);
             }
         },
@@ -581,6 +581,22 @@ pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
 pub fn hasAttribute(self: *const Element, name: String, frame: *Frame) !bool {
     const value = try self._attributes.get(name, frame);
     return value != null;
+}
+
+/// Like getAttributeNS, the namespace is currently ignored.
+pub fn hasAttributeNS(
+    self: *const Element,
+    maybe_namespace: ?[]const u8,
+    local_name: String,
+    frame: *Frame,
+) !bool {
+    if (maybe_namespace) |namespace| {
+        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
+            log.warn(.not_implemented, "Element.hasAttributeNS", .{ .namespace = namespace });
+        }
+    }
+
+    return self.hasAttribute(local_name, frame);
 }
 
 pub fn hasAttributeSafe(self: *const Element, name: String) bool {
@@ -1673,10 +1689,7 @@ pub fn getTag(self: *const Element) Tag {
             .head => .head,
             .unknown => .unknown,
         },
-        .svg => |se| switch (se._type) {
-            .svg => .svg,
-            .generic => |g| g._tag,
-        },
+        .svg => |se| se.getTag(),
     };
 }
 
@@ -1940,6 +1953,7 @@ pub const JsApi = struct {
     pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
+    pub const hasAttributeNS = bridge.function(Element.hasAttributeNS, .{});
     pub const hasAttributes = bridge.function(Element.hasAttributes, .{});
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});

@@ -20,7 +20,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
-const v8 = js.v8;
 
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
@@ -81,11 +80,10 @@ identity: js.Identity = .{},
 // weak-callback safety.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *js.FinalizerCallback) = .empty,
 
-// Tracked global v8 objects that need to be released when the Page tears down.
-globals: std.ArrayList(v8.Global) = .empty,
-
-// Temporary v8 globals that can be released early. Key is global.data_ptr.
-temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+// Persisted v8 handles owned by this Page. Handles that outlive the Page are
+// reset on teardown; handles that can be released early are dropped
+// individually. See js.GlobalTracker.
+globals: js.GlobalTracker,
 
 // Double buffered so that, as we process one list of queued navigations, new
 // entries are added to the separate buffer. Prevents endless navigation loops
@@ -144,6 +142,7 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
         .frame = undefined,
         .frame_arena = frame_arena,
         .factory = Factory.init(frame_arena),
+        .globals = .init(session.browser.app.allocator),
     };
     self.queued_navigation = &self.queued_navigation_1;
 
@@ -180,20 +179,7 @@ pub fn deinit(self: *Page) void {
         self.finalizer_callbacks = .empty;
     }
 
-    {
-        for (self.globals.items) |*global| {
-            v8.v8__Global__Reset(global);
-        }
-        self.globals = .empty;
-    }
-
-    {
-        var it = self.temps.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-        self.temps = .empty;
-    }
+    self.globals.deinit();
 
     if (comptime IS_DEBUG) {
         std.debug.assert(self.origins.count() == 0);

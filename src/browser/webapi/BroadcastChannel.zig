@@ -88,7 +88,7 @@ pub fn postMessage(self: *BroadcastChannel, message: js.Value, exec: *Execution)
         const cloned = message.structuredCloneTo(&ls.local) catch {
             return error.DataClone;
         };
-        break :blk try cloned.temp();
+        break :blk try cloned.persist();
     };
     errdefer snapshot.release();
 
@@ -134,7 +134,7 @@ const PostMessageCallback = struct {
     sender: *BroadcastChannel,
     // A self-owned structured-clone snapshot of the posted message. Re-cloned
     // (never shared) into each receiver's MessageEvent, then released.
-    message: js.Value.Temp,
+    message: js.Value.Global,
     exec: *Execution,
     post_sequence: u64,
 
@@ -221,7 +221,7 @@ const PostMessageCallback = struct {
                     continue;
                 };
 
-                const cloned_temp = cloned.temp() catch |err| {
+                const cloned_temp = cloned.persist() catch |err| {
                     log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                     continue;
                 };

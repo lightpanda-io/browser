@@ -43,7 +43,7 @@ pub const forms = @import("browser/forms.zig");
 pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const tools = @import("browser/tools.zig");
-pub const HttpClient = @import("browser/HttpClient.zig");
+pub const HttpClient = @import("network/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
 pub const Agent = @import("agent/Agent.zig");

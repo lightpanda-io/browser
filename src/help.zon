@@ -7,7 +7,7 @@
     \\  agent       starts an interactive AI agent that can browse the web
     \\  fetch       fetches the specified URL
     \\  help        displays this message
-    \\  mcp         starts an MCP (Model Context Protocol) server over stdio
+    \\  mcp         starts an MCP (Model Context Protocol) server (stdio or HTTP)
     \\  serve       starts a WebSocket CDP server
     \\  version     displays the version of {0s}
     \\
@@ -120,15 +120,28 @@
     .mcp =
     \\usage: {0s} mcp [OPTIONS] [COMMON_OPTIONS]
     \\
-    \\Starts an MCP (Model Context Protocol) server over stdio.
+    \\Starts an MCP (Model Context Protocol) server. Defaults to stdio; pass
+    \\--port to serve over HTTP with an independent browsing session per client.
     \\
     \\options:
+    \\  --cdp-port <INT>
+    \\          Also run a CDP (WebSocket) server on this port. Cannot be
+    \\          combined with --port (they share one network listener).
+    \\          Defaults to disabled.
     \\  --cookie <PATH>
     \\          Path to a JSON file to load cookies from (read-only).
     \\          Defaults to no cookie loading.
     \\  --cookie-jar <PATH>
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
+    \\  --host <HOST>
+    \\          Host to bind when --port is set (e.g. 0.0.0.0 for all interfaces).
+    \\          Defaults to "127.0.0.1".
+    \\  --port <INT>
+    \\          Serve MCP over HTTP on this port instead of stdio. Clients POST
+    \\          JSON-RPC to /mcp; route requests to a session with the
+    \\          Mcp-Session-Id header.
+    \\          Defaults to stdio (no HTTP server).
     ,
     .agent =
     \\agent command

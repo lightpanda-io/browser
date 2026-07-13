@@ -22,7 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
 const Page = @import("../../Page.zig");
-const HttpClient = @import("../../HttpClient.zig");
+const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const Blob = @import("../Blob.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
@@ -53,7 +53,7 @@ _type: Type,
 _status_text: []const u8,
 _url: [:0]const u8,
 _is_redirected: bool,
-_http_response: ?HttpClient.Response = null,
+_http_transfer: ?*Transfer = null,
 _body_used: bool = false,
 
 const Body = union(enum) {
@@ -197,9 +197,9 @@ pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Re
 }
 
 pub fn deinit(self: *Response, page: *Page) void {
-    if (self._http_response) |resp| {
+    if (self._http_transfer) |resp| {
         resp.abort(error.Abort);
-        self._http_response = null;
+        self._http_transfer = null;
     }
     page.releaseArena(self._arena);
 }
@@ -484,7 +484,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         ._type = self._type,
         ._is_redirected = self._is_redirected,
         ._headers = try Headers.init(.{ .obj = self._headers }, exec),
-        ._http_response = null,
+        ._http_transfer = null,
     };
     return cloned;
 }

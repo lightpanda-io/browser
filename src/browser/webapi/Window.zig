@@ -416,7 +416,7 @@ pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, exe
     return Fetch.init(input, options, exec);
 }
 
-pub fn setTimeout(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, exec: *js.Execution) !u32 {
+pub fn setTimeout(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []js.Value.Global, exec: *js.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
         .repeat = false,
@@ -425,7 +425,7 @@ pub fn setTimeout(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, 
     });
 }
 
-pub fn setInterval(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, exec: *js.Execution) !u32 {
+pub fn setInterval(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []js.Value.Global, exec: *js.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
         .repeat = true,
@@ -434,7 +434,7 @@ pub fn setInterval(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32,
     });
 }
 
-pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp, exec: *js.Execution) !u32 {
+pub fn setImmediate(self: *Window, cb: js.Function.Global, params: []js.Value.Global, exec: *js.Execution) !u32 {
     return self._timers.schedule(exec, cb, 0, .{
         .repeat = false,
         .params = params,
@@ -442,7 +442,7 @@ pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp
     });
 }
 
-pub fn requestAnimationFrame(self: *Window, cb: js.Function.Temp, exec: *js.Execution) !u32 {
+pub fn requestAnimationFrame(self: *Window, cb: js.Function.Global, exec: *js.Execution) !u32 {
     return self._timers.schedule(exec, cb, 5, .{
         .repeat = false,
         .params = &.{},
@@ -474,7 +474,7 @@ pub fn cancelAnimationFrame(self: *Window, id: u32) void {
 const RequestIdleCallbackOpts = struct {
     timeout: ?u32 = null,
 };
-pub fn requestIdleCallback(self: *Window, cb: js.Function.Temp, opts_: ?RequestIdleCallbackOpts, exec: *js.Execution) !u32 {
+pub fn requestIdleCallback(self: *Window, cb: js.Function.Global, opts_: ?RequestIdleCallbackOpts, exec: *js.Execution) !u32 {
     const opts = opts_ orelse RequestIdleCallbackOpts{};
     return self._timers.schedule(exec, cb, opts.timeout orelse 50, .{
         .mode = .idle,
@@ -491,7 +491,7 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
 
 pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
-        .@"error" = try err.temp(),
+        .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
@@ -725,7 +725,7 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
         const c = message.structuredCloneTo(&ls.local) catch {
             return error.DataClone;
         };
-        break :blk try c.temp();
+        break :blk try c.persist();
     };
     errdefer cloned.release();
 
@@ -926,8 +926,8 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
     const target = self.asEventTarget();
     if (frame._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
-            .reason = if (rejection.reason()) |r| try r.temp() else null,
-            .promise = try rejection.promise().temp(),
+            .reason = if (rejection.reason()) |r| try r.persist() else null,
+            .promise = try rejection.promise().persist(),
         }, frame._page)).asEvent();
         try frame._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
     }
@@ -965,7 +965,7 @@ const PostMessageCallback = struct {
     source: *Window,
     arena: Allocator,
     origin: []const u8,
-    message: js.Value.Temp,
+    message: js.Value.Global,
     ports: []const *MessagePort,
 
     fn deinit(self: *PostMessageCallback) void {

@@ -223,7 +223,7 @@ pub const DispatchDirectOptions = struct {
 
 /// Direct dispatch for non-DOM targets. No propagation - just calls the property
 /// handler and registered listeners. Caller is responsible for event ref counting.
-/// Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
+/// Handler can be: null, ?js.Function.Global or js.Function
 pub fn dispatchDirect(
     self: *EventManagerBase,
     arena: Allocator,
@@ -287,11 +287,12 @@ pub fn dispatchDirect(
     // Call the property handler (e.g., onmessage) if present
     if (getFunction(handler, &ls.local)) |func| {
         event._current_target = target;
-        _ = func.callWithThis(void, target, .{event}) catch |err| {
+        var caught: js.TryCatch.Caught = undefined;
+        _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
             if (err == error.JsException) {
                 event._listeners_did_throw = true;
             } else {
-                log.warn(.event, opts.context, .{ .err = err });
+                log.warn(.event, opts.context, .{ .err = err, .caught = caught });
             }
         };
     }
@@ -359,7 +360,6 @@ fn getFunction(handler: anytype, local: *const js.Local) ?js.Function {
     }
     return switch (T) {
         js.Function => handler,
-        js.Function.Temp => local.toLocal(handler),
         js.Function.Global => local.toLocal(handler),
         else => @compileError("handler must be null or \\??js.Function(\\.(Temp|Global))?"),
     };
@@ -434,12 +434,13 @@ pub const Listener = struct {
         event: *Event,
         comptime context: []const u8,
     ) error{OutOfMemory}!void {
+        var caught: js.TryCatch.Caught = undefined;
         switch (self.function) {
-            .value => |value| local.toLocal(value).callWithThis(void, event._current_target.?, .{event}) catch |err| {
+            .value => |value| local.toLocal(value).tryCallWithThis(void, event._current_target.?, .{event}, &caught) catch |err| {
                 if (err == error.JsException) {
                     event._listeners_did_throw = true;
                 } else {
-                    log.warn(.event, context, .{ .err = err });
+                    log.warn(.event, context, .{ .err = err, .caught = caught });
                 }
             },
             .string => |string| {
@@ -448,7 +449,7 @@ pub const Listener = struct {
                     if (err == error.JsException) {
                         event._listeners_did_throw = true;
                     } else {
-                        log.warn(.event, context, .{ .err = err });
+                        log.warn(.event, context, .{ .err = err, .caught = caught });
                     }
                 };
             },
@@ -464,11 +465,11 @@ pub const Listener = struct {
                     break :blk null;
                 };
                 if (handle_event) |handleEvent| {
-                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
+                    handleEvent.tryCallWithThis(void, obj, .{event}, &caught) catch |err| {
                         if (err == error.JsException) {
                             event._listeners_did_throw = true;
                         } else {
-                            log.warn(.event, context, .{ .err = err });
+                            log.warn(.event, context, .{ .err = err, .caught = caught });
                         }
                     };
                 } else {

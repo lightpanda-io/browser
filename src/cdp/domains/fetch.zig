@@ -290,7 +290,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         request.body = body;
     }
 
-    try client.interception_layer.continueRequest(transfer);
+    try client.continueIntercepted(transfer);
     return cmd.sendResult(null, .{});
 }
 
@@ -396,7 +396,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
         body = buf;
     }
 
-    try client.interception_layer.fulfillRequest(transfer, params.responseCode, params.responseHeaders orelse &.{}, body);
+    try client.fulfillIntercepted(transfer, params.responseCode, params.responseHeaders orelse &.{}, body);
     return cmd.sendResult(null, .{});
 }
 
@@ -417,7 +417,7 @@ fn failRequest(cmd: *CDP.Command) !void {
         return cmd.sendResult(null, .{});
     };
 
-    defer client.interception_layer.abortRequest(transfer);
+    defer transfer.abortParked(error.Abort);
 
     log.info(.cdp, "request intercept", .{
         .state = "fail",

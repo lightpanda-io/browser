@@ -19,13 +19,13 @@
 const js = @import("../../../js/js.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
-const Svg = @import("../Svg.zig");
+const Geometry = @import("Geometry.zig");
 
 const Rect = @This();
-_proto: *Svg,
+_proto: *Geometry,
 
 pub fn asElement(self: *Rect) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Rect) *Node {
     return self.asElement().asNode();

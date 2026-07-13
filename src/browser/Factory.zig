@@ -335,33 +335,49 @@ pub fn htmlMediaElement(self: *Factory, child: anytype) !*@TypeOf(child) {
 }
 
 pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-    const ChildT = @TypeOf(child);
-
-    if (ChildT == Element.Svg) {
-        return self.element(child);
-    }
-
     const chain = try PrototypeChain(
-        &.{ EventTarget, Node, Element, Element.Svg, ChildT },
-    ).allocate(allocator);
+        &.{ EventTarget, Node, Element, Element.Svg, @TypeOf(child) },
+    ).allocate(self._slab.allocator());
 
+    try self.setSvgChainBase(chain, tag_name);
+    chain.setLeaf(4, child);
+    return chain.get(4);
+}
+
+pub fn svgGraphicsElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
+    const chain = try PrototypeChain(
+        &.{ EventTarget, Node, Element, Element.Svg, Element.Svg.Graphics, @TypeOf(child) },
+    ).allocate(self._slab.allocator());
+
+    try self.setSvgChainBase(chain, tag_name);
+    chain.setMiddle(4, Element.Svg.Graphics.Type);
+    chain.setLeaf(5, child);
+    return chain.get(5);
+}
+
+pub fn svgGeometryElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
+    const chain = try PrototypeChain(
+        &.{ EventTarget, Node, Element, Element.Svg, Element.Svg.Graphics, Element.Svg.Graphics.Geometry, @TypeOf(child) },
+    ).allocate(self._slab.allocator());
+
+    try self.setSvgChainBase(chain, tag_name);
+    chain.setMiddle(4, Element.Svg.Graphics.Type);
+    chain.setMiddle(5, Element.Svg.Graphics.Geometry.Type);
+    chain.setLeaf(6, child);
+    return chain.get(6);
+}
+
+fn setSvgChainBase(self: *Factory, chain: anytype, tag_name: []const u8) !void {
     chain.setRoot(EventTarget.Type);
     chain.setMiddle(1, Node.Type);
     chain.setMiddle(2, Element.Type);
 
-    // will never allocate, can't fail
-    const tag_name_str = String.init(self._arena, tag_name, .{}) catch unreachable;
-
     // Manually set Element.Svg with the tag_name
     chain.set(3, .{
         ._proto = chain.get(2),
-        ._tag_name = tag_name_str,
+        ._tag_name = try String.init(self._arena, tag_name, .{}),
         ._type = unionInit(Element.Svg.Type, chain.get(4)),
     });
-
-    chain.setLeaf(4, child);
-    return chain.get(4);
 }
 
 pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !*@TypeOf(child) {

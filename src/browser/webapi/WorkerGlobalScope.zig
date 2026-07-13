@@ -29,7 +29,7 @@ const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const Session = @import("../Session.zig");
-const HttpClient = @import("../HttpClient.zig");
+const HttpClient = @import("../../network/HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 
@@ -252,6 +252,11 @@ pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
     return self._session.browser.http_client.request(req, &self._http_owner);
 }
 
+// Two-phase variant; see HttpClient.newRequest for the ownership contract.
+pub fn newRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !*HttpClient.Transfer {
+    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+}
+
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
     return self;
 }
@@ -348,8 +353,8 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
     const target = self.asEventTarget();
     if (self._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
-            .reason = if (rejection.reason()) |r| try r.temp() else null,
-            .promise = try rejection.promise().temp(),
+            .reason = if (rejection.reason()) |r| try r.persist() else null,
+            .promise = try rejection.promise().persist(),
         }, self._page)).asEvent();
         try self.dispatch(target, event, attribute_callback, .{});
     }
@@ -392,6 +397,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .cookie_origin = self.url,
         .resource_type = .script,
         .notification = session.notification,
+        .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }) catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
@@ -401,8 +407,6 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         log.warn(.http, "importScript", .{ .url = resolved_url, .status = response.status });
         return error.NetworkError;
     }
-
-    defer http_client.deferring_layer.flushFrame(self._frame_id);
 
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
@@ -423,7 +427,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
-        .@"error" = try err.temp(),
+        .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
@@ -479,7 +483,7 @@ pub fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
     self.js.queueMicrotaskFunc(cb);
 }
 
-pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Temp, exec: *JS.Execution) !u32 {
+pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
         .repeat = false,
@@ -492,7 +496,7 @@ pub fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Temp, exec: *JS.Execution) !u32 {
+pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
         .repeat = true,

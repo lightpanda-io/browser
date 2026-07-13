@@ -277,14 +277,6 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     }
 }
 
-pub fn trackGlobal(self: *Context, global: v8.Global) !void {
-    return self.page.globals.append(self.page.frame_arena, global);
-}
-
-pub fn trackTemp(self: *Context, global: v8.Global) !void {
-    return self.page.temps.put(self.page.frame_arena, global.data_ptr, global);
-}
-
 pub const IdentityResult = struct {
     value_ptr: *v8.Global,
     found_existing: bool,
@@ -1134,7 +1126,7 @@ fn enqueueMicrotask(self: *Context, callback: anytype) void {
 // this should be safe (I think). In whatever HandleScope a microtask is enqueued,
 // PerformCheckpoint should be run. So the v8::Local<v8::Function> should remain
 // valid. If we have problems with this, a simple solution is to provide a Zig
-// wrapper for these callbacks which references a js.Function.Temp, on callback
+// wrapper for these callbacks which references a js.Function, on callback
 // it executes the function and then releases the global.
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     // Use context-specific microtask queue instead of isolate queue

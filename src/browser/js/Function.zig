@@ -95,7 +95,11 @@ pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
 pub fn callRethrow(self: *const Function, comptime T: type, args: anytype) !T {
     var caught: js.TryCatch.Caught = undefined;
     return self._tryCallWithThis(T, self.getThis(), args, &caught, .{ .rethrow = true }) catch |err| {
-        log.warn(.js, "call caught", .{ .err = err, .caught = caught });
+        if (err != error.TryCatchRethrow) {
+            // error.TryCatchRethrow is a control flow (sorry!), not an actual
+            // error we want to log
+            log.warn(.js, "call caught", .{ .err = err, .caught = caught });
+        }
         return err;
     };
 }
@@ -227,29 +231,7 @@ pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
 }
 
 pub fn persist(self: *const Function) !Global {
-    return self._persist(true);
-}
-
-pub fn temp(self: *const Function) !Temp {
-    return self._persist(false);
-}
-
-fn _persist(self: *const Function, comptime is_global: bool) !(if (is_global) Global else Temp) {
-    var ctx = self.local.ctx;
-
-    var global: v8.Global = undefined;
-    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-    if (comptime is_global) {
-        try ctx.trackGlobal(global);
-        return .{ .handle = global, .temps = {} };
-    }
-    try ctx.trackTemp(global);
-    return .{ .handle = global, .temps = &ctx.page.temps };
-}
-
-pub fn tempWithThis(self: *const Function, value: anytype) !Temp {
-    const with_this = try self.withThis(value);
-    return with_this.temp();
+    return .{ .slot = try js.newTrackedSlot(self.local.ctx, self.handle) };
 }
 
 pub fn persistWithThis(self: *const Function, value: anytype) !Global {
@@ -257,41 +239,23 @@ pub fn persistWithThis(self: *const Function, value: anytype) !Global {
     return with_this.persist();
 }
 
-pub const Temp = G(.temp);
-pub const Global = G(.global);
+// A cheap, copyable handle to a persisted function. See js.GlobalSlot.
+pub const Global = struct {
+    slot: *js.GlobalSlot,
 
-const GlobalType = enum(u8) {
-    temp,
-    global,
+    pub fn deinit(self: Global) void {
+        self.slot.release();
+    }
+    pub const release = deinit;
+
+    pub fn local(self: Global, l: *const js.Local) Function {
+        return .{
+            .local = l,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.slot.handle, l.isolate.handle)),
+        };
+    }
+
+    pub fn isEqual(self: Global, other: Function) bool {
+        return v8.v8__Global__IsEqual(&self.slot.handle, other.handle);
+    }
 };
-
-fn G(comptime global_type: GlobalType) type {
-    return struct {
-        handle: v8.Global,
-        temps: if (global_type == .temp) *std.AutoHashMapUnmanaged(usize, v8.Global) else void,
-
-        const Self = @This();
-
-        pub fn deinit(self: *Self) void {
-            v8.v8__Global__Reset(&self.handle);
-        }
-
-        pub fn local(self: *const Self, l: *const js.Local) Function {
-            return .{
-                .local = l,
-                .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
-            };
-        }
-
-        pub fn isEqual(self: *const Self, other: Function) bool {
-            return v8.v8__Global__IsEqual(&self.handle, other.handle);
-        }
-
-        pub fn release(self: *const Self) void {
-            if (self.temps.fetchRemove(self.handle.data_ptr)) |kv| {
-                var g = kv.value;
-                v8.v8__Global__Reset(&g);
-            }
-        }
-    };
-}
