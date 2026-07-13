@@ -1693,9 +1693,11 @@ pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
         .x => |x| .{ x, y orelse 0 },
         .opts => |dict| .{ dict.left orelse 0, dict.top orelse 0 },
     };
+    const old_x = gop.value_ptr.x;
+    const old_y = gop.value_ptr.y;
     gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
     gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
-    if (dx != 0 or dy != 0) {
+    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
         try self.scheduleScrollEvents(owner);
     }
 }
@@ -1709,81 +1711,29 @@ fn scheduleScrollEvents(self: *Element, frame: *Frame) !void {
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
+    const task_pending = gop.value_ptr.state != .done;
     gop.value_ptr.state = .scroll;
+    if (task_pending) {
+        return;
+    }
 
     const task = try frame._factory.create(ScrollEventTask{ .frame = frame, .element = self });
-    try frame.js.scheduler.add(task, ScrollEventTask.dispatchScroll, 10, .{ .low_priority = true });
-    try frame.js.scheduler.add(task, ScrollEventTask.dispatchScrollEnd, 20, .{ .low_priority = true, .finalizer = ScrollEventTask.cancelled });
+    errdefer {
+        gop.value_ptr.state = .done;
+        frame._factory.destroy(task);
+    }
+    try frame.js.scheduler.add(task, ScrollEventTask.run, 10, .{
+        .name = "element.scrollEvents",
+        .low_priority = true,
+        .finalizer = ScrollEventTask.cancelled,
+    });
 }
 
 const ScrollEventTask = struct {
     frame: *Frame,
     element: *Element,
 
-    fn cancelled(ctx: *anyopaque) void {
-        const self: *ScrollEventTask = @ptrCast(@alignCast(ctx));
-        self.deinit();
-    }
-
-    fn deinit(self: *ScrollEventTask) void {
-        self.frame._factory.destroy(self);
-    }
-
-    fn dispatchScroll(ctx: *anyopaque) anyerror!?u32 {
-        const self: *ScrollEventTask = @ptrCast(@alignCast(ctx));
-        const f = self.frame;
-        const pos = f._element_scroll_positions.getPtr(self.element) orelse return null;
-        if (pos.state != .scroll) {
-            return null;
-        }
-
-        const Event = @import("Event.zig");
-        const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = self.bubbles() }, f._page);
-        try f._event_manager.dispatch(self.eventTarget(), event);
-
-        // can't use gop on _element_scroll_positions above, since the JS callback
-        // can mutate _element_scroll_positions and invalidate any pointers
-        if (f._element_scroll_positions.getPtr(self.element)) |p| {
-            p.state = .end;
-        }
-        return null;
-    }
-
-    fn dispatchScrollEnd(ctx: *anyopaque) anyerror!?u32 {
-        const self: *ScrollEventTask = @ptrCast(@alignCast(ctx));
-
-        const f = self.frame;
-        const pos = f._element_scroll_positions.getPtr(self.element) orelse {
-            self.deinit();
-            return null;
-        };
-
-        switch (pos.state) {
-            // The scroll event is still pending; retry in 10ms. Must not destroy
-            // the task here — the entry is re-scheduled and runs again.
-            .scroll => return 10,
-            .end => {},
-            .done => {
-                self.deinit();
-                return null;
-            },
-        }
-
-        defer self.deinit();
-        const Event = @import("Event.zig");
-        const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = self.bubbles() }, f._page);
-        try f._event_manager.dispatch(self.eventTarget(), event);
-
-        // can't use gop on _element_scroll_positions above, since the JS callback
-        // can mutate _element_scroll_positions and invalidate any pointers
-        if (f._element_scroll_positions.getPtr(self.element)) |p| {
-            p.state = .done;
-        }
-
-        return null;
-    }
-
-    fn eventTarget(self: *ScrollEventTask) *EventTarget {
+    fn eventTarget(self: *ScrollEventTask) *@import("EventTarget.zig") {
         if (self.frame.document.getDocumentElement() == self.element) {
             return self.frame.document.asEventTarget();
         }
@@ -1794,6 +1744,51 @@ const ScrollEventTask = struct {
     // scrolls (the scrolling element, dispatched at the document) do.
     fn bubbles(self: *ScrollEventTask) bool {
         return self.frame.document.getDocumentElement() == self.element;
+    }
+
+    fn cancelled(ptr: *anyopaque) void {
+        const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
+        if (self.frame._element_scroll_positions.getPtr(self.element)) |pos| {
+            pos.state = .done;
+        }
+        self.frame._factory.destroy(self);
+    }
+
+    fn run(ptr: *anyopaque) anyerror!?u32 {
+        const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
+        const f = self.frame;
+        const pos = f._element_scroll_positions.getPtr(self.element) orelse {
+            f._factory.destroy(self);
+            return null;
+        };
+        switch (pos.state) {
+            .scroll => {
+                pos.state = .end;
+                self.dispatchEvent(comptime .wrap("scroll"));
+                return 10;
+            },
+            .end => {
+                pos.state = .done;
+                defer f._factory.destroy(self);
+                self.dispatchEvent(comptime .wrap("scrollend"));
+                return null;
+            },
+            .done => {
+                f._factory.destroy(self);
+                return null;
+            },
+        }
+    }
+
+    fn dispatchEvent(self: *ScrollEventTask, comptime event_type: String) void {
+        const Event = @import("Event.zig");
+        const event = Event.initTrusted(event_type, .{ .bubbles = self.bubbles() }, self.frame._page) catch |err| {
+            log.warn(.dom, "element.scroll.event", .{ .err = err });
+            return;
+        };
+        self.frame._event_manager.dispatch(self.eventTarget(), event) catch |err| {
+            log.warn(.dom, "element.scroll.dispatch", .{ .err = err });
+        };
     }
 };
 
