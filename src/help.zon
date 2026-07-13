@@ -135,7 +135,7 @@
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
     \\  --host <HOST>
-    \\          Host to bind when --port is set (e.g. 0.0.0.0 for remote access).
+    \\          Host to bind when --port is set (e.g. 0.0.0.0 for all interfaces).
     \\          Defaults to "127.0.0.1".
     \\  --port <INT>
     \\          Serve MCP over HTTP on this port instead of stdio. Clients POST
