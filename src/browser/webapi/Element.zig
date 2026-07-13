@@ -466,6 +466,11 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node._parent orelse return;
 
+    // The parent of a documentElement is the Document, which cannot be modified.
+    if (parent._type == .document) {
+        return error.NoModificationAllowed;
+    }
+
     frame.domChanged();
     if (html.len > 0) {
         const fragment = (try Node.DocumentFragment.init(frame)).asNode();
