@@ -1656,9 +1656,11 @@ pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
         .x => |x| .{ x, y orelse 0 },
         .opts => |dict| .{ dict.left orelse 0, dict.top orelse 0 },
     };
+    const old_x = gop.value_ptr.x;
+    const old_y = gop.value_ptr.y;
     gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
     gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
-    if (dx != 0 or dy != 0) {
+    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
         try self.scheduleScrollEvents(frame);
     }
 }
@@ -1671,12 +1673,22 @@ fn scheduleScrollEvents(self: *Element, frame: *Frame) !void {
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
+    const task_pending = gop.value_ptr.state != .done;
     gop.value_ptr.state = .scroll;
+    if (task_pending) {
+        return;
+    }
 
-    const task = try frame.arena.create(ScrollEventTask);
-    task.* = .{ .frame = frame, .element = self };
-    try frame.js.scheduler.add(task, ScrollEventTask.dispatchScroll, 10, .{ .low_priority = true });
-    try frame.js.scheduler.add(task, ScrollEventTask.dispatchScrollEnd, 20, .{ .low_priority = true });
+    const task = try frame._factory.create(ScrollEventTask{ .frame = frame, .element = self });
+    errdefer {
+        gop.value_ptr.state = .done;
+        frame._factory.destroy(task);
+    }
+    try frame.js.scheduler.add(task, ScrollEventTask.run, 10, .{
+        .name = "element.scrollEvents",
+        .low_priority = true,
+        .finalizer = ScrollEventTask.cancelled,
+    });
 }
 
 const ScrollEventTask = struct {
@@ -1696,34 +1708,53 @@ const ScrollEventTask = struct {
         return self.frame.document.getDocumentElement() == self.element;
     }
 
-    fn dispatchScroll(ptr: *anyopaque) anyerror!?u32 {
+    fn cancelled(ptr: *anyopaque) void {
         const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
-        const f = self.frame;
-        const pos = f._element_scroll_positions.getPtr(self.element) orelse return null;
-        if (pos.state != .scroll) {
-            return null;
+        if (self.frame._element_scroll_positions.getPtr(self.element)) |pos| {
+            pos.state = .done;
         }
-        const Event = @import("Event.zig");
-        const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = self.bubbles() }, f._page);
-        try f._event_manager.dispatch(self.eventTarget(), event);
-        pos.state = .end;
-        return null;
+        self.frame._factory.destroy(self);
     }
 
-    fn dispatchScrollEnd(ptr: *anyopaque) anyerror!?u32 {
+    fn run(ptr: *anyopaque) anyerror!?u32 {
         const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
         const f = self.frame;
-        const pos = f._element_scroll_positions.getPtr(self.element) orelse return null;
+        const pos = f._element_scroll_positions.getPtr(self.element) orelse {
+            f._factory.destroy(self);
+            return null;
+        };
         switch (pos.state) {
-            .scroll => return 10,
-            .end => {},
-            .done => return null,
+            .scroll => {
+                // Update the state before dispatch: a re-entrant scroll listener
+                // can then move it back to .scroll without being overwritten.
+                pos.state = .end;
+                self.dispatchEvent(comptime .wrap("scroll"));
+                return 10;
+            },
+            .end => {
+                // Mark this sequence complete before dispatch so a scrollend
+                // listener can safely start a new sequence and task.
+                pos.state = .done;
+                defer f._factory.destroy(self);
+                self.dispatchEvent(comptime .wrap("scrollend"));
+                return null;
+            },
+            .done => {
+                f._factory.destroy(self);
+                return null;
+            },
         }
+    }
+
+    fn dispatchEvent(self: *ScrollEventTask, comptime event_type: String) void {
         const Event = @import("Event.zig");
-        const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = self.bubbles() }, f._page);
-        try f._event_manager.dispatch(self.eventTarget(), event);
-        pos.state = .done;
-        return null;
+        const event = Event.initTrusted(event_type, .{ .bubbles = self.bubbles() }, self.frame._page) catch |err| {
+            log.warn(.dom, "element.scroll.event", .{ .err = err });
+            return;
+        };
+        self.frame._event_manager.dispatch(self.eventTarget(), event) catch |err| {
+            log.warn(.dom, "element.scroll.dispatch", .{ .err = err });
+        };
     }
 };
 
