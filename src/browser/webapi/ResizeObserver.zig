@@ -30,7 +30,7 @@ fn init(cbk: js.Function) ResizeObserver {
 }
 
 const Options = struct {
-    box: []const u8,
+    box: []const u8 = "content-box",
 };
 pub fn observe(self: *const ResizeObserver, element: *Element, options_: ?Options) void {
     _ = self;
