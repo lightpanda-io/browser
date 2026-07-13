@@ -276,6 +276,15 @@ synthetic_tool_call_id: u32 = 0,
 total_usage: zenai.provider.Usage = .{},
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
+/// Whether assistant text streams to the terminal as the model produces it.
+/// Toggled via `/stream`; persisted in `.lp-agent.zon`.
+stream_enabled: bool,
+/// True while assistant text is streaming to stdout (spinner paused). Cleared
+/// by `endStreamedText`, which also emits the closing newline.
+stream_active: bool = false,
+/// True when any assistant text streamed during the current turn, so `runTurn`
+/// skips the buffered `printAssistant` that would double-print it.
+streamed_text: bool = false,
 available_providers: []const []const u8,
 /// Cached reachability of each `local_providers` entry, so the per-keystroke
 /// `/provider` hinter probes each local server at most once.
@@ -388,10 +397,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credentials.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
+    const stream_enabled = settings.resolveStream(remembered);
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity }) catch {};
+            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -427,6 +437,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
         .model = model,
         .effort = effort,
+        .stream_enabled = stream_enabled,
         .script_file = opts.script_file,
         .one_shot_task = opts.task,
         .one_shot_save = opts.save,
@@ -564,10 +575,41 @@ fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
 /// The side effects of `drainCancellation` without surfacing the error, for
 /// void callers (e.g. `/save` synthesis) that just need to clean up.
 fn resetAfterCancel(self: *Agent, baseline: usize) void {
+    self.endStreamedText();
     self.conversation.rollback(baseline);
     self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
     self.http_interrupt.reset();
+}
+
+/// On the first delta it pauses the spinner, whose stderr frames would
+/// otherwise interleave with this stdout text.
+fn streamAssistantDelta(ctx: *anyopaque, delta: []const u8) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    if (delta.len == 0) return;
+    if (!self.stream_active) {
+        self.terminal.spinner.pause();
+        self.stream_active = true;
+    }
+    self.streamed_text = true;
+    self.terminal.printAssistantDelta(delta);
+}
+
+/// Close an in-progress streamed line with a newline. Idempotent, so every
+/// `runTools` exit path can call it unconditionally.
+fn endStreamedText(self: *Agent) void {
+    if (!self.stream_active) return;
+    self.terminal.printAssistantDelta("\n");
+    self.stream_active = false;
+}
+
+/// The text-delta hook, or null when `/stream off` — a null hook makes
+/// `runTools` fall back to a buffered response. Streaming is an interactive
+/// REPL affordance; one-shot (`--task`) and script modes keep stdout to the
+/// buffered final answer so wrappers can parse it cleanly.
+fn streamHook(self: *Agent) ?zenai.provider.Client.TextDeltaHook {
+    if (!self.stream_enabled or !self.terminal.isRepl()) return null;
+    return .{ .context = @ptrCast(self), .onText = streamAssistantDelta };
 }
 
 /// One agent turn: the prompt sent to the model, plus optional context — a
@@ -639,9 +681,14 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
         },
     };
     if (!input.suppress_answer) {
-        if (text) |t|
-            self.terminal.printAssistant(t)
-        else if (self.last_turn_refused)
+        if (text) |t| {
+            // Streaming already emitted the text incrementally (plus a closing
+            // newline); only the buffered path needs to print it here. Safe as a
+            // turn-wide flag: the stream accumulator reconstructs `t` from the
+            // same deltas it emitted, and the synthesis fallback also streams, so
+            // `streamed_text` implies `t` was already shown in full.
+            if (!self.streamed_text) self.terminal.printAssistant(t);
+        } else if (self.last_turn_refused)
             self.terminal.printInfo("(model declined to respond — safety refusal)", .{})
         else
             self.terminal.printInfo("(no response from model)", .{});
@@ -655,7 +702,7 @@ fn runRepl(self: *Agent) void {
 
     if (self.ai_client != null) {
         const a = Terminal.ansi;
-        std.debug.print("  model: {s}{s}  {s}effort: {s}{s}{s}\n", .{ a.dim, self.model, a.reset, a.dim, @tagName(self.effort), a.reset });
+        std.debug.print("  model: {s}{s}  {s}effort: {s}{s}  {s}stream: {s}{s}{s}\n", .{ a.dim, self.model, a.reset, a.dim, @tagName(self.effort), a.reset, a.dim, if (self.stream_enabled) "on" else "off", a.reset });
     }
 
     repl: while (true) {
@@ -770,6 +817,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .help => self.printSlashHelp(arena, rest),
         .verbosity => self.setEnumOption("verbosity", &self.terminal.verbosity, rest),
         .effort => self.setEnumOption("effort", &self.effort, rest),
+        .stream => self.handleStream(rest),
         .usage => self.handleUsage(),
         .clear => self.handleClear(),
         .reset => self.handleReset(),
@@ -796,6 +844,24 @@ fn setEnumOption(self: *Agent, comptime name: []const u8, target: anytype, rest:
     };
     target.* = level;
     self.reportSaved(name, @tagName(level));
+}
+
+/// `/stream`: bare prints the current state; `on`/`off` sets and persists it.
+fn handleStream(self: *Agent, rest: []const u8) void {
+    if (rest.len == 0) {
+        self.terminal.printInfo("stream: {s}", .{if (self.stream_enabled) "on" else "off"});
+        return;
+    }
+    const on = if (std.ascii.eqlIgnoreCase(rest, "on") or std.ascii.eqlIgnoreCase(rest, "true"))
+        true
+    else if (std.ascii.eqlIgnoreCase(rest, "off") or std.ascii.eqlIgnoreCase(rest, "false"))
+        false
+    else {
+        self.terminal.printError("usage: /stream [on|off] (got {s})", .{rest});
+        return;
+    };
+    self.stream_enabled = on;
+    self.reportSaved("stream", if (on) "on" else "off");
 }
 
 /// Print cumulative session token usage, broken down so the cache's effect is
@@ -908,7 +974,7 @@ fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
     }
-    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity })) {
+    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
@@ -1366,6 +1432,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 "/effort " ++ Config.tagHint(Config.Effort) ++ " — set per-turn reasoning effort (currently: {s}); saved to {s}. Bare /effort prints the level.",
                 .{ @tagName(self.effort), settings.remembered_path },
             ),
+            .stream => self.terminal.printInfo(
+                "/stream [on|off] — stream assistant text as it's generated (currently: {s}); saved to {s}. Bare /stream prints the state.",
+                .{ if (self.stream_enabled) "on" else "off", settings.remembered_path },
+            ),
             .usage => self.terminal.printInfo(
                 "/usage — show cumulative token usage and cache hit rate for this session",
                 .{},
@@ -1601,6 +1671,11 @@ fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []
 fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const ma = self.conversation.arena.allocator();
     self.api_error_detail = null;
+    self.streamed_text = false;
+    // Defensive: if an exit path ever missed `endStreamedText`, a stale-true
+    // `stream_active` would skip the spinner pause on the next turn's first
+    // delta and let frames interleave with the text. Reset it at the source.
+    self.stream_active = false;
     self.http_interrupt.reset();
 
     try self.conversation.ensureSystemPrompt();
@@ -1646,8 +1721,12 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // non-thinking models.
             .effort = self.effort,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+            // Suppressed turns (e.g. `--save` capture) must keep stdout clean;
+            // streaming would bypass the `suppress_answer` guard in `runTurn`.
+            .stream = if (input.suppress_answer) null else self.streamHook(),
         },
     ) catch |err| {
+        self.endStreamedText();
         self.terminal.spinner.cancel();
         // Ctrl-C can land while runTools unwinds an HTTP error — surface
         // UserCancelled, not ApiError, so the user sees the outcome they asked for.
@@ -1657,6 +1736,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         self.conversation.rollback(msg_baseline);
         return error.ApiError;
     };
+    self.endStreamedText();
     self.terminal.spinner.stop();
     defer result.deinit();
     self.total_usage.add(result.usage);
@@ -1730,13 +1810,16 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // `.none` stays off to opt out on models that reject it.
                 .effort = if (self.effort == .none) .none else .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+                .stream = if (input.suppress_answer) null else self.streamHook(),
             },
         ) catch |err| {
+            self.endStreamedText();
             if (self.cancel_requested.load(.acquire)) return self.drainCancellation(msg_baseline);
             log.err(.app, "AI synthesis error", .{ .err = err });
             self.conversation.rollback(synth_baseline);
             break :blk null;
         };
+        self.endStreamedText();
         defer synth.deinit();
         self.total_usage.add(synth.usage);
 
@@ -1819,6 +1902,8 @@ fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
+    // Close any assistant text streamed this turn before the tool spinner shows.
+    self.endStreamedText();
     // The spinner doesn't render args, and `agentToolDone` skips the body line
     // at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
