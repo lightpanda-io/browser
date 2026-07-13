@@ -380,7 +380,7 @@ pub fn getAccessKeyLabel(self: *HtmlElement, frame: *Frame) ![]const u8 {
     if (codepoints != 1) {
         return "";
     }
-    return std.fmt.allocPrint(frame.call_arena, "Alt+{s}", .{value});
+    return std.fmt.allocPrint(frame.local_arena, "Alt+{s}", .{value});
 }
 
 pub fn getPopover(self: *HtmlElement) ?[]const u8 {

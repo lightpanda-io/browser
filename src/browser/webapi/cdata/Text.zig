@@ -60,7 +60,7 @@ pub fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
     var current: ?*Node = first;
     while (current) |cur| : (current = cur.nextSibling()) {
         if (!isExclusiveTextNode(cur)) break;
-        try buf.appendSlice(frame.call_arena, cur._type.cdata._data.str());
+        try buf.appendSlice(frame.local_arena, cur._type.cdata._data.str());
     }
     return buf.items;
 }

@@ -216,7 +216,7 @@ pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     if (localtime_r(&timestamp, &tm) == null) {
         return error.InvalidArgument;
     }
-    return std.fmt.allocPrint(frame.call_arena, "{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
+    return std.fmt.allocPrint(frame.local_arena, "{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
         @as(u32, @intCast(tm.tm_mon + 1)),
         @as(u32, @intCast(tm.tm_mday)),
         tm.tm_year + 1900,

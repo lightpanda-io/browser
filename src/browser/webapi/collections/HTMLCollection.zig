@@ -256,7 +256,7 @@ pub const JsApi = struct {
         };
 
         var names: std.ArrayList([]const u8) = .{};
-        const arena = exec.call_arena;
+        const arena = exec.local_arena;
 
         const len = self.length(frame);
         for (0..len) |i| {

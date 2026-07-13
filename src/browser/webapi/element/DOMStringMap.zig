@@ -141,9 +141,9 @@ pub const JsApi = struct {
     // element's data-* attributes, in attribute order.
     fn getNames(self: *DOMStringMap, exec: *const js.Execution) !js.Array {
         var names: std.ArrayList([]const u8) = .empty;
-        for (try self._element._attributes.getNames(exec.call_arena)) |attr_name| {
-            const camel = (try kebabToCamel(exec.call_arena, attr_name)) orelse continue;
-            try names.append(exec.call_arena, camel);
+        for (try self._element._attributes.getNames(exec.local_arena)) |attr_name| {
+            const camel = (try kebabToCamel(exec.local_arena, attr_name)) orelse continue;
+            try names.append(exec.local_arena, camel);
         }
 
         var arr = exec.js.local.?.newArray(@intCast(names.items.len));

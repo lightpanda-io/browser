@@ -106,7 +106,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     var to_dispatch: std.ArrayList(Dependend) = .{};
     for (self._dependents.items) |dep| {
         if (try dep.markAborted(self._reason, exec)) {
-            try to_dispatch.append(exec.arena, dep);
+            try to_dispatch.append(exec.call_arena, dep);
         }
     }
 
