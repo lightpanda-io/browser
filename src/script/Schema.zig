@@ -50,6 +50,8 @@ pub const FieldEntry = struct {
     /// Allowed values when the schema constrains the field with `enum`; empty
     /// otherwise. The REPL completer/hinter offers these as value suggestions.
     enum_values: []const []const u8 = &.{},
+    /// The schema's per-parameter `description` string; empty when absent.
+    description: []const u8 = "",
 
     /// `backendNodeId` is ephemeral, never replayable. Boolean fields
     /// matching the schema default are cosmetic noise.
@@ -408,6 +410,7 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
                     .field_type = fieldTypeOf(entry.value_ptr.*),
                     .default_true = booleanDefaultTrue(entry.value_ptr.*),
                     .enum_values = try enumValuesOf(arena, entry.value_ptr.*),
+                    .description = descriptionOf(entry.value_ptr.*),
                 };
             }
             info.fields = fields;
@@ -460,6 +463,13 @@ fn booleanDefaultTrue(value: std.json.Value) bool {
     if (value != .object) return false;
     const d = value.object.get("default") orelse return false;
     return d == .bool and d.bool;
+}
+
+fn descriptionOf(value: std.json.Value) []const u8 {
+    if (value != .object) return "";
+    const d = value.object.get("description") orelse return "";
+    if (d != .string) return "";
+    return d.string;
 }
 
 fn enumValuesOf(arena: std.mem.Allocator, value: std.json.Value) ![]const []const u8 {
@@ -611,6 +621,8 @@ test "all: comptime tool defs reduce cleanly" {
         if (std.mem.eql(u8, f.name, "checked")) checked_default_true = f.default_true;
     }
     try testing.expect(checked_default_true);
+    const timeout = goto.findField("timeout").?;
+    try testing.expect(timeout.description.len > 0);
 }
 
 test "parseValue: single-required positional binds" {
