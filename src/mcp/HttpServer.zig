@@ -84,6 +84,7 @@ const Queue = struct {
     cond: std.Thread.Condition = .{},
     head: ?*Job = null,
     tail: ?*Job = null,
+    closed: std.atomic.Value(bool) = .init(false),
 
     fn push(self: *Queue, job: *Job) void {
         self.mutex.lock();
@@ -95,11 +96,13 @@ const Queue = struct {
     }
 
     /// Pop the next job, waiting at most `timeout_ms`. Returns null on timeout
-    /// (or spurious wakeup) so the worker can pump idle sessions and retry.
+    /// (or spurious wakeup) so the worker can pump idle sessions and retry;
+    /// check `closed` to tell shutdown from timeout.
     fn pop(self: *Queue, timeout_ms: u64) ?*Job {
         self.mutex.lock();
         defer self.mutex.unlock();
         if (self.head == null) {
+            if (timeout_ms == 0 or self.closed.load(.acquire)) return null;
             self.cond.timedWait(&self.mutex, timeout_ms * ns_per_ms) catch {};
         }
         const job = self.head orelse return null;
@@ -107,13 +110,26 @@ const Queue = struct {
         if (self.head == null) self.tail = null;
         return job;
     }
+
+    fn close(self: *Queue) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.closed.store(true, .release);
+        self.cond.signal();
+    }
 };
 
 allocator: std.mem.Allocator,
 app: *App,
 
 queue: Queue = .{},
-stopping: std.atomic.Value(bool) = .init(false),
+
+// Registration happens in onAccept — the same (network) thread deinit runs
+// on — so a connection is always counted and its socket registered before
+// deinit can observe either.
+active_conns: std.atomic.Value(u32) = .init(0),
+conn_mutex: std.Thread.Mutex = .{},
+conns: std.ArrayList(posix.socket_t) = .{},
 
 // The worker owns `server`; other threads must not touch it.
 worker_thread: std.Thread = undefined,
@@ -139,10 +155,26 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*HttpServer {
     return self;
 }
 
+/// Runs after the accept loop has stopped, so no new connection can arrive.
+/// Shutting the sockets down unblocks the connection threads' pending reads;
+/// the worker must outlive their drain because a connection thread may still
+/// be blocked on `job.done`.
 pub fn deinit(self: *HttpServer) void {
-    self.stopping.store(true, .release);
-    self.queue.cond.signal(); // nudge the worker off its idle wait
+    {
+        self.conn_mutex.lock();
+        defer self.conn_mutex.unlock();
+        for (self.conns.items) |socket| {
+            posix.shutdown(socket, .both) catch {};
+        }
+    }
+    while (self.active_conns.load(.monotonic) > 0) {
+        std.Thread.sleep(10 * ns_per_ms);
+    }
+
+    self.queue.close();
     self.worker_thread.join();
+
+    self.conns.deinit(self.allocator);
     self.allocator.destroy(self);
 }
 
@@ -170,12 +202,35 @@ fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
         return;
     };
 
+    {
+        self.conn_mutex.lock();
+        defer self.conn_mutex.unlock();
+        self.conns.append(self.allocator, socket) catch {
+            posix.close(socket);
+            return;
+        };
+    }
+    _ = self.active_conns.fetchAdd(1, .monotonic);
+
     const thread = std.Thread.spawn(.{}, handleConn, .{ self, socket }) catch |err| {
         log.warn(.mcp, "mcp spawn", .{ .err = err });
+        _ = self.active_conns.fetchSub(1, .monotonic);
+        self.unregister(socket);
         posix.close(socket);
         return;
     };
     thread.detach();
+}
+
+fn unregister(self: *HttpServer, socket: posix.socket_t) void {
+    self.conn_mutex.lock();
+    defer self.conn_mutex.unlock();
+    for (self.conns.items, 0..) |s, i| {
+        if (s == socket) {
+            _ = self.conns.swapRemove(i);
+            break;
+        }
+    }
 }
 
 fn worker(self: *HttpServer) void {
@@ -197,12 +252,20 @@ fn worker(self: *HttpServer) void {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
-    while (!self.stopping.load(.acquire)) {
-        const wait_ms = server.idle();
-        const job = self.queue.pop(wait_ms) orelse continue;
+    // Drain queued jobs before pumping idle work: idle() enters and ticks
+    // every live session (blocking up to 25ms each), so pumping between
+    // every two jobs would cap throughput at one job per full pass.
+    var wait_ms: u64 = 0;
+    while (true) {
+        const job = self.queue.pop(wait_ms) orelse {
+            if (self.queue.closed.load(.acquire)) break;
+            wait_ms = server.idle();
+            continue;
+        };
         _ = arena.reset(.retain_capacity);
         process(server, arena.allocator(), job);
         job.done.set();
+        wait_ms = 0;
     }
 }
 
@@ -254,8 +317,12 @@ fn isInitialize(arena: std.mem.Allocator, body: []const u8) bool {
 }
 
 fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
+    defer _ = self.active_conns.fetchSub(1, .monotonic);
     const stream: std.net.Stream = .{ .handle = socket };
     defer stream.close();
+    // Runs before close (defers are LIFO): deinit's shutdown sweep must
+    // never see an fd that has been closed and possibly reused.
+    defer self.unregister(socket);
 
     var recv_buf: [16 * 1024]u8 = undefined;
     var send_buf: [16 * 1024]u8 = undefined;
@@ -269,8 +336,8 @@ fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
     var out: std.Io.Writer.Allocating = .init(self.allocator);
     defer out.deinit();
 
-    while (!self.stopping.load(.acquire)) {
-        var request = http_server.receiveHead() catch return; // peer closed or bad head
+    while (true) {
+        var request = http_server.receiveHead() catch return; // peer closed, bad head, or shutdown
         _ = arena.reset(.retain_capacity);
         out.clearRetainingCapacity();
         self.serve(&out.writer, arena.allocator(), &request) catch return;

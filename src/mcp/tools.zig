@@ -185,7 +185,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
 /// all unsupported, kept uniform so clients see one consistent rule.
 fn requireMultiSession(server: *Server, id: std.json.Value) !bool {
     if (server.park_isolates) return true;
-    try sendToolResultText(server, id, "multiple sessions require the HTTP transport (start with --http-port)", true);
+    try sendToolResultText(server, id, "multiple sessions require the HTTP transport (start with --port)", true);
     return false;
 }
 

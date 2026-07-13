@@ -203,8 +203,8 @@ Add to your MCP configuration:
 #### HTTP transport and independent sessions
 
 For serving several agents from one process, start the MCP server over HTTP
-instead of stdio by giving it a port (add `--host 0.0.0.0` to accept remote
-connections):
+instead of stdio by giving it a port (add `--host x.x.x.x` to specify the
+interface to listen on):
 
 ```bash
 lightpanda mcp --port 9223
