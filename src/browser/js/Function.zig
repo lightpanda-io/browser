@@ -95,7 +95,11 @@ pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
 pub fn callRethrow(self: *const Function, comptime T: type, args: anytype) !T {
     var caught: js.TryCatch.Caught = undefined;
     return self._tryCallWithThis(T, self.getThis(), args, &caught, .{ .rethrow = true }) catch |err| {
-        log.warn(.js, "call caught", .{ .err = err, .caught = caught });
+        if (err != error.TryCatchRethrow) {
+            // error.TryCatchRethrow is a control flow (sorry!), not an actual
+            // error we want to log
+            log.warn(.js, "call caught", .{ .err = err, .caught = caught });
+        }
         return err;
     };
 }
