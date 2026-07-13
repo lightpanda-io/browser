@@ -51,6 +51,18 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
     const indent = line[0..indent_len];
     const trimmed = line[indent_len..];
 
+    if (trimmed.len >= 1 and trimmed[0] == '>') {
+        try styled(w, "│", ansi.dim);
+        try w.writeByte(' ');
+        try renderInline(w, std.mem.trimLeft(u8, trimmed[1..], " "));
+        return;
+    }
+
+    if (isHorizontalRule(trimmed)) {
+        try styled(w, "─" ** 24, ansi.dim);
+        return;
+    }
+
     var hashes: usize = 0;
     while (hashes < trimmed.len and trimmed[hashes] == '#') hashes += 1;
     if (hashes >= 1 and hashes <= 6 and hashes < trimmed.len and trimmed[hashes] == ' ') {
@@ -87,6 +99,12 @@ fn renderInline(w: *std.Io.Writer, text: []const u8) !void {
     var i: usize = 0;
     while (i < text.len) {
         switch (text[i]) {
+            // Only unescape markdown-special chars; leave e.g. `C:\Users` intact.
+            '\\' => if (i + 1 < text.len and isEscapable(text[i + 1])) {
+                try w.writeByte(text[i + 1]);
+                i += 2;
+                continue;
+            },
             '`' => if (std.mem.indexOfPos(u8, text, i + 1, "`")) |end| {
                 try styled(w, text[i + 1 .. end], ansi.cyan);
                 i = end + 1;
@@ -133,9 +151,37 @@ fn styled(w: *std.Io.Writer, inner: []const u8, style: []const u8) !void {
     try w.writeAll(ansi.reset);
 }
 
+fn isEscapable(c: u8) bool {
+    return switch (c) {
+        '*', '_', '`', '~', '[', ']', '(', ')', '\\' => true,
+        else => false,
+    };
+}
+
+/// A line of 3+ identical `-`, `*` or `_` markers (spaces ignored).
+fn isHorizontalRule(s: []const u8) bool {
+    var marker: ?u8 = null;
+    var count: usize = 0;
+    for (s) |c| switch (c) {
+        ' ', '\t' => {},
+        '-', '*', '_' => {
+            if (marker) |m| {
+                if (c != m) return false;
+            } else marker = c;
+            count += 1;
+        },
+        else => return false,
+    };
+    return count >= 3;
+}
+
 fn renderLink(w: *std.Io.Writer, label: []const u8, url: []const u8) !void {
+    // OSC 8 makes the label clickable where supported and is ignored elsewhere;
+    // the trailing dim url is the fallback for terminals without OSC 8.
+    try w.print("\x1b]8;;{s}\x1b\\", .{url});
     try styled(w, label, ansi.underline);
-    try w.print(" {s}({s}){s}", .{ ansi.dim, url, ansi.reset });
+    try w.writeAll("\x1b]8;;\x1b\\");
+    if (!std.mem.eql(u8, label, url)) try w.print(" {s}({s}){s}", .{ ansi.dim, url, ansi.reset });
 }
 
 const testing = std.testing;
@@ -166,7 +212,30 @@ test "md_term: fenced code block" {
 }
 
 test "md_term: link" {
-    try expectRender("\x1b[4mLP\x1b[0m \x1b[2m(https://x.io)\x1b[0m", "[LP](https://x.io)");
+    // OSC 8 hyperlink around the label, plus a dim fallback url.
+    try expectRender(
+        "\x1b]8;;https://x.io\x1b\\\x1b[4mLP\x1b[0m\x1b]8;;\x1b\\ \x1b[2m(https://x.io)\x1b[0m",
+        "[LP](https://x.io)",
+    );
+    // A bare link (label == url) omits the redundant suffix.
+    try expectRender(
+        "\x1b]8;;https://x.io\x1b\\\x1b[4mhttps://x.io\x1b[0m\x1b]8;;\x1b\\",
+        "[https://x.io](https://x.io)",
+    );
+}
+
+test "md_term: blockquote" {
+    try expectRender("\x1b[2m│\x1b[0m quoted \x1b[1mnote\x1b[0m", "> quoted **note**");
+}
+
+test "md_term: horizontal rule" {
+    try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "---");
+    try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "***");
+}
+
+test "md_term: backslash escapes" {
+    try expectRender("a * b", "a \\* b");
+    try expectRender("keep \\d and C:\\Users", "keep \\d and C:\\Users");
 }
 
 test "md_term: unterminated markers stay literal" {
