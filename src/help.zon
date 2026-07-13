@@ -314,7 +314,7 @@
     \\  --http-max-response-size <INT>
     \\          Limits the acceptable response size for any request
     \\          e.g. XHR, fetch, script loading.
-    \\          Defaults to no limit.
+    \\          Defaults to 1GB.
     \\  --http-proxy <URL>
     \\          HTTP proxy for all HTTP requests.
     \\          username:password may be included for basic auth.
