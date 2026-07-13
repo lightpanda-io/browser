@@ -1826,6 +1826,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     errdefer popup.deinit();
 
     popup.window._opener = opts.opener;
+
     if (opts.name.len > 0 and
         !std.ascii.eqlIgnoreCase(opts.name, "_blank") and
         !std.ascii.eqlIgnoreCase(opts.name, "_self") and
@@ -1844,6 +1845,13 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
         log.warn(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
         return err;
     };
+
+    // A bit hacky. The type of window we return depends on whether or not its
+    // origin is the same as the opener. I believe that we're supposed to do
+    // this check lazily, per function invocation. But we don't have that in
+    // place right now. So the best we can do is set the origin now, before the
+    // async navigation completed.
+    try popup.js.setOrigin(popup.origin);
 
     return popup;
 }

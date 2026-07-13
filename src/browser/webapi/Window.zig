@@ -695,6 +695,9 @@ pub fn close(self: *Window) void {
     page.closed_frames.append(page.frame_arena, frame) catch @panic("OOM");
 }
 
+pub fn focus(_: *Window) void {}
+pub fn blur(_: *Window) void {}
+
 pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
@@ -1131,6 +1134,8 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(Window.getName, Window.setName, .{});
     pub const open = bridge.function(Window.open, .{});
     pub const close = bridge.function(Window.close, .{});
+    pub const focus = bridge.function(Window.focus, .{});
+    pub const blur = bridge.function(Window.blur, .{});
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
@@ -1198,6 +1203,30 @@ const CrossOriginWindow = struct {
         return self.window.getFramesLength();
     }
 
+    pub fn getWindow(self: *CrossOriginWindow, frame: *Frame) Access {
+        return Access.init(frame.window, self.window);
+    }
+
+    pub fn getOpener(self: *CrossOriginWindow, frame: *Frame) ?Access {
+        return self.window.getOpener(frame);
+    }
+
+    pub fn getClosed(self: *const CrossOriginWindow) bool {
+        return self.window.getClosed();
+    }
+
+    pub fn close(self: *CrossOriginWindow) void {
+        self.window.close();
+    }
+
+    pub fn focus(self: *CrossOriginWindow) void {
+        self.window.focus();
+    }
+
+    pub fn blur(self: *CrossOriginWindow) void {
+        self.window.blur();
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(CrossOriginWindow);
 
@@ -1208,8 +1237,16 @@ const CrossOriginWindow = struct {
         };
 
         pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{});
+        pub const close = bridge.function(CrossOriginWindow.close, .{});
+        pub const focus = bridge.function(CrossOriginWindow.focus, .{});
+        pub const blur = bridge.function(CrossOriginWindow.blur, .{});
+        pub const window = bridge.accessor(CrossOriginWindow.getWindow, null, .{});
+        pub const self = bridge.accessor(CrossOriginWindow.getWindow, null, .{});
+        pub const frames = bridge.accessor(CrossOriginWindow.getWindow, null, .{});
         pub const top = bridge.accessor(CrossOriginWindow.getTop, null, .{});
         pub const parent = bridge.accessor(CrossOriginWindow.getParent, null, .{});
+        pub const opener = bridge.accessor(CrossOriginWindow.getOpener, null, .{});
+        pub const closed = bridge.accessor(CrossOriginWindow.getClosed, null, .{});
         pub const length = bridge.accessor(CrossOriginWindow.getFramesLength, null, .{});
     };
 };
