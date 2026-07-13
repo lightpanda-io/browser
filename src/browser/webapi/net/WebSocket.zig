@@ -26,7 +26,7 @@ const Blob = @import("../Blob.zig");
 const URL = @import("../../URL.zig");
 
 const Page = @import("../../Page.zig");
-const HttpClient = @import("../../HttpClient.zig");
+const HttpClient = @import("../../../network/HttpClient.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");

@@ -33,7 +33,7 @@ const Scheduler = @import("Scheduler.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const Factory = @import("../Factory.zig");
-const HttpClient = @import("../HttpClient.zig");
+const HttpClient = @import("../../network/HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
 const Event = @import("../webapi/Event.zig");
@@ -99,6 +99,13 @@ pub fn isSameOrigin(self: *const Execution, url: [:0]const u8) bool {
 pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
     return switch (self.js.global) {
         inline else => |g| g.makeRequest(req),
+    };
+}
+
+// Two-phase variant; see HttpClient.newRequest for the ownership contract.
+pub fn newRequest(self: *const Execution, req: HttpClient.Request) !*HttpClient.Transfer {
+    return switch (self.js.global) {
+        inline else => |g| g.newRequest(req),
     };
 }
 

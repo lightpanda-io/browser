@@ -308,11 +308,6 @@ pub const ResponseHead = struct {
     redirect_count: u32,
     _content_type_len: usize = 0,
     _content_type: [MAX_CONTENT_TYPE_LEN]u8 = undefined,
-    // this is normally an empty list, but if the response is being injected
-    // than it'll be populated. It isn't meant to be used directly, but should
-    // be used through the transfer.responseHeaderIterator() which abstracts
-    // whether the headers are from a live curl easy handle, or injected.
-    _injected_headers: []const Header = &.{},
 
     pub fn contentType(self: *ResponseHead) ?[]u8 {
         if (self._content_type_len == 0) {
@@ -364,7 +359,7 @@ pub const Connection = struct {
 
     pub const Transport = union(enum) {
         none, // used for cases that manage their own connection, e.g. telemetry
-        http: *@import("../browser/HttpClient.zig").Transfer,
+        http: *@import("HttpClient.zig").Transfer,
         websocket: *@import("../browser/webapi/net/WebSocket.zig"),
     };
 
