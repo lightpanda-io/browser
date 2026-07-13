@@ -647,14 +647,24 @@ fn settleConns(self: *Client) !void {
 fn dispatchCompleted(self: *Client, mode: DrainMode) void {
     if (mode == .all) {
         if (comptime IS_DEBUG) {
+            // .all never inside a syncRequest, so nothing can be gating requests.
             std.debug.assert(self.blocking_requests.count() == 0);
         }
-        // Called from the top; not inside a syncRequest. There cannot be a
-        // blocking request, so this is the time to process any gated requests.
+    }
+
+    // blocking_requests.count() is always true on tick(.all) but can also
+    // happen mid .sync_wait. This is important to do. During blocking, we gated
+    // every request. When the blocking requested completed, it only unblocked
+    // it's frames request.
+    if (self.blocking_requests.count() == 0) {
         var node = self.gated_queue.last;
         while (node) |n| {
             node = n.prev;
             const transfer: *Transfer = @fieldParentPtr("_queue_node", n);
+            if (mode == .sync_wait and self.isGated(transfer)) {
+                // still gated: a document is never delivered on a sync pump
+                continue;
+            }
             transfer._gated = false;
             self.gated_queue.remove(n);
             self.dispatch_queue.prepend(n);

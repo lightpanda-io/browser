@@ -211,6 +211,12 @@ _customized_builtin_disconnected_callback_invoked: std.AutoHashMapUnmanaged(*Ele
 // The constructor can access this to get the element being upgraded.
 _upgrading_element: ?*Node = null,
 
+// Set when materializing the fragment parser's context element. The element
+// is never inserted into the tree so if its a custom element ,we must not run
+// its constructor (else we'll end up in an endless loop if the constructor
+// sets this.innerHTML = '...', which happens).
+_skip_custom_element_upgrade: bool = false,
+
 // List of custom elements that were created before their definition was registered
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
 

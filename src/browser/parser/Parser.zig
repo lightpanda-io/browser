@@ -272,6 +272,7 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         &self.container,
         self,
         createElementCallback,
+        createContextElementCallback,
         getDataCallback,
         appendCallback,
         parseErrorCallback,
@@ -437,6 +438,25 @@ fn createElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName,
 
 fn createXMLElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
     return _createElementCallbackWithDefaultnamespace(ctx, data, qname, attributes, .xml);
+}
+
+// html5ever_parse_fragment materializes the fragment's context element through
+// this dedicated callback, never through createElementCallback. The context
+// element is a throwaway: html5ever only queries its name (and, for a
+// <template> context, its content), it is never inserted into the tree. It
+// must be built bare — running a custom element constructor here is unbounded
+// recursion when the constructor sets innerHTML: that re-parse needs a context
+// element of the same custom tag, reconstructing forever (stack overflow). No
+// _ce_reactions window is needed: nothing can enqueue reactions on a bare
+// create.
+fn createContextElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    self.frame._skip_custom_element_upgrade = true;
+    defer self.frame._skip_custom_element_upgrade = false;
+    return self._createElementCallback(data, qname, attributes, .unknown) catch |err| {
+        self.err = .{ .err = err, .source = .create_element };
+        return null;
+    };
 }
 
 fn _createElementCallbackWithDefaultnamespace(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) ?*anyopaque {
