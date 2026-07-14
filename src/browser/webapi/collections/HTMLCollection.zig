@@ -229,13 +229,8 @@ pub const JsApi = struct {
     // collection, in tree order, its id and (for HTML elements) its name
     // attribute, skipping empty values and duplicates.
     fn getNames(self: *HTMLCollection, frame: *Frame) !js.Array {
-        const frame = switch (exec.js.global) {
-            .frame => |f| f,
-            .worker => unreachable,
-        };
-
         var names: std.ArrayList([]const u8) = .{};
-        const arena = exec.local_arena;
+        const arena = frame.local_arena;
 
         const len = self.length(frame);
         for (0..len) |i| {
@@ -254,7 +249,7 @@ pub const JsApi = struct {
             }
         }
 
-        var arr = exec.js.local.?.newArray(@intCast(names.items.len));
+        var arr = frame.js.local.?.newArray(@intCast(names.items.len));
         for (names.items, 0..) |name, i| {
             _ = try arr.set(@intCast(i), name, .{});
         }

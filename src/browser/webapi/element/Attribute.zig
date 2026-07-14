@@ -633,8 +633,8 @@ pub const NamedNodeMap = struct {
         }
 
         fn getNames(self: *const NamedNodeMap, frame: *Frame) !js.Array {
-            const names = try self.list().getNames(exec.local_arena);
-            var arr = exec.js.local.?.newArray(@intCast(names.len));
+            const names = try self.list().getNames(frame.local_arena);
+            var arr = frame.js.local.?.newArray(@intCast(names.len));
             for (names, 0..) |name, i| {
                 _ = try arr.set(@intCast(i), name, .{});
             }
