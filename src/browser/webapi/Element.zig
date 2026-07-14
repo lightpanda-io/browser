@@ -1337,37 +1337,46 @@ pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
     return rects;
 }
 
+// Scroll positions live in the map of the element's own frame — not the
+// caller's, which differs when a same-origin script scrolls an element in
+// another frame (e.g. inside an iframe). All scroll accessors resolve the
+// owner frame first so the state, the fired events and the document
+// comparison stay in the element's frame.
 pub fn getScrollTop(self: *Element, frame: *Frame) u32 {
-    const pos = frame._element_scroll_positions.get(self) orelse return 0;
+    const owner = self.ownerFrame(frame);
+    const pos = owner._element_scroll_positions.get(self) orelse return 0;
     return pos.y;
 }
 
 pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
-    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
+    const owner = self.ownerFrame(frame);
+    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
     const new_y: u32 = @intCast(@max(0, value));
     if (gop.value_ptr.y != new_y) {
         gop.value_ptr.y = new_y;
-        try self.scheduleScrollEvents(frame);
+        try self.scheduleScrollEvents(owner);
     }
 }
 
 pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
-    const pos = frame._element_scroll_positions.get(self) orelse return 0;
+    const owner = self.ownerFrame(frame);
+    const pos = owner._element_scroll_positions.get(self) orelse return 0;
     return pos.x;
 }
 
 pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
-    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
+    const owner = self.ownerFrame(frame);
+    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
     const new_x: u32 = @intCast(@max(0, value));
     if (gop.value_ptr.x != new_x) {
         gop.value_ptr.x = new_x;
-        try self.scheduleScrollEvents(frame);
+        try self.scheduleScrollEvents(owner);
     }
 }
 
@@ -1654,7 +1663,8 @@ const ScrollToOpts = union(enum) {
 
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts orelse return;
-    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
+    const owner = self.ownerFrame(frame);
+    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -1671,14 +1681,15 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
         },
     }
     if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
-        try self.scheduleScrollEvents(frame);
+        try self.scheduleScrollEvents(owner);
     }
 }
 
 // scrollBy(): like scrollTo() but relative to the current position.
 pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts orelse return;
-    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
+    const owner = self.ownerFrame(frame);
+    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -1689,13 +1700,14 @@ pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
     gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
     gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
     if (dx != 0 or dy != 0) {
-        try self.scheduleScrollEvents(frame);
+        try self.scheduleScrollEvents(owner);
     }
 }
 
 // Scrolling an element fires a scroll event and then a scrollend event,
 // asynchronously and throttled, mirroring Window.scrollTo. Scrolls of the
 // scrolling element (the root) are fired at the document instead.
+// `frame` is the element's owner frame (resolved by the public accessors).
 fn scheduleScrollEvents(self: *Element, frame: *Frame) !void {
     const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
