@@ -106,7 +106,7 @@ const HtmlElement = @This();
 _type: Type,
 _proto: *Element,
 
-// Special constructor for custom elements.
+// Special constructor for custom elements (autonomous, `extends HTMLElement`).
 // Two paths:
 //  - Upgrade path: customElements.define / createElement / upgrade set
 //    `_upgrading_element` before calling newInstance, and we just return it.
@@ -117,6 +117,15 @@ pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
         return node.is(Element) orelse return error.IllegalConstructor;
     }
     return Frame.node_factory.constructCustomElement(frame, new_target);
+}
+
+// Shared constructor callback for builtin html element interfaces. These types
+// cannot be instantinated (e.g. new HTMLDivElement), but a custom element can
+// be extended, so super() has to create them. All of these types have their
+// constructors routed here.
+pub fn upgradeConstruct(frame: *Frame) !*Element {
+    const node = frame._upgrading_element orelse return error.TypeError;
+    return node.is(Element) orelse return error.TypeError;
 }
 
 pub const Type = union(enum) {
@@ -1643,6 +1652,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
+    pub const upgrade_constructor = bridge.constructor(HtmlElement.upgradeConstruct, .{});
 
     pub const innerText = bridge.accessor(_innerText, _setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *HtmlElement, frame: *Frame) ![]const u8 {

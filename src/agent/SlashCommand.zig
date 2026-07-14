@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! REPL-only meta slash commands (`/help`, `/quit`, `/verbosity`, `/effort`,
-//! `/usage`, `/model`, `/provider`). Not tool slash commands — handled by
+//! `/stream`, `/usage`, `/model`, `/provider`). Not tool slash commands — handled by
 //! `Agent.handleMeta`, never reaching the recorder. Tool slash-command schema
 //! primitives live in `lp.Schema`; import that directly.
 
@@ -46,7 +46,7 @@ pub const MetaCommand = struct {
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch, so a new meta
     /// command is a compile error until it's wired up there too.
-    const Tag = enum { help, quit, verbosity, effort, usage, clear, reset, save, load, model, provider };
+    const Tag = enum { help, quit, verbosity, effort, stream, usage, clear, reset, save, load, model, provider };
 };
 
 const tagNames = Config.tagNames;
@@ -57,6 +57,7 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .quit, .name = "quit", .hint = "", .values = &.{}, .description = "Exit the REPL" },
     .{ .tag = .verbosity, .name = "verbosity", .hint = tagHint(Config.AgentVerbosity), .values = tagNames(Config.AgentVerbosity), .description = "Set agent verbosity" },
     .{ .tag = .effort, .name = "effort", .hint = tagHint(Config.Effort), .values = tagNames(Config.Effort), .description = "Set per-turn reasoning effort" },
+    .{ .tag = .stream, .name = "stream", .hint = "[on|off]", .values = &.{ "on", "off" }, .description = "Toggle streaming of assistant text" },
     .{ .tag = .usage, .name = "usage", .hint = "", .values = &.{}, .description = "Show token usage and cache stats for this session" },
     .{ .tag = .clear, .name = "clear", .hint = "", .values = &.{}, .description = "Clear conversation history and usage (keeps page/cookies)" },
     .{ .tag = .reset, .name = "reset", .hint = "", .values = &.{}, .description = "Reset conversation and browser session (drops page/cookies)" },

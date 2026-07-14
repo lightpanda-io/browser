@@ -51,12 +51,15 @@ pub const Command = @import("script/command.zig").Command;
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
 pub const Schema = @import("script/Schema.zig");
+pub const skill = @import("script/skill.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 pub const core_dump = @import("core_dump.zig");
 
 pub const Updater = @import("Updater.zig");
+
+pub var metrics = @import("Metrics.zig"){};
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,

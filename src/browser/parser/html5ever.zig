@@ -75,6 +75,7 @@ pub extern "c" fn html5ever_parse_fragment(
     doc: *anyopaque,
     ctx: *anyopaque,
     createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
+    createContextElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
     elemNameCallback: *const fn (node_ref: *anyopaque) callconv(.c) *anyopaque,
     appendCallback: *const fn (ctx: *anyopaque, parent_ref: *anyopaque, NodeOrText) callconv(.c) void,
     parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,

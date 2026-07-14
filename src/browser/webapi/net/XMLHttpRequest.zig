@@ -68,7 +68,7 @@ _response_mime: ?Mime = null,
 _override_mime: ?Mime = null,
 _response_xml: ?*Node.Document = null,
 _response_headers: std.ArrayList([]const u8) = .empty,
-_response_type: ResponseType = .text,
+_response_type: ResponseType = .default,
 
 _ready_state: ReadyState = .unsent,
 _on_ready_state_change: ?js.Function.Global = null,
@@ -83,7 +83,7 @@ const ReadyState = enum(u8) {
     done = 4,
 };
 
-const Response = union(ResponseType) {
+const Response = union(enum) {
     text: []const u8,
     json: js.Value.Global,
     document: *Node.Document,
@@ -91,11 +91,18 @@ const Response = union(ResponseType) {
 };
 
 const ResponseType = enum {
+    default, // behaves like `text`, but its string representation is ""
     text,
     json,
     document,
     arraybuffer,
-    // TODO: other types to support
+
+    pub fn toString(self: ResponseType) []const u8 {
+        return switch (self) {
+            .default => "",
+            else => @tagName(self),
+        };
+    }
 };
 
 pub fn init(exec: *const Execution) !*XMLHttpRequest {
@@ -354,16 +361,24 @@ pub fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution
     return buf.written();
 }
 
-pub fn getResponseType(self: *const XMLHttpRequest) []const u8 {
-    if (self._ready_state != .done) {
-        return "";
-    }
-    return @tagName(self._response_type);
+pub fn getResponseType(self: *const XMLHttpRequest) ResponseType {
+    return self._response_type;
 }
 
-pub fn setResponseType(self: *XMLHttpRequest, value: []const u8) void {
+pub fn setResponseType(self: *XMLHttpRequest, value: []const u8) !void {
+    if (self._ready_state == .loading or self._ready_state == .done) {
+        return error.InvalidStateError;
+    }
+
+    if (value.len == 0) {
+        self._response_type = .default;
+        return;
+    }
+
     if (std.meta.stringToEnum(ResponseType, value)) |rt| {
-        self._response_type = rt;
+        if (rt != .default) {
+            self._response_type = rt;
+        }
     }
 }
 
@@ -399,9 +414,21 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
 
     const data = self._response_data.items;
     const res: Response = switch (self._response_type) {
-        .text => .{ .text = data },
+        .default, .text => .{ .text = data },
         .json => blk: {
-            const value = try exec.js.local.?.parseJSON(data);
+            const local = exec.js.local.?;
+
+            // per spec, we need to strip a JSON's body leading BOM
+            const json_text = if (std.mem.startsWith(u8, data, "\u{FEFF}")) data[3..] else data;
+
+            var try_catch: js.TryCatch = undefined;
+            try_catch.init(local);
+            defer try_catch.deinit();
+            const value = local.parseJSON(json_text) catch {
+                // if we fail to parse, we return null, not an error.
+                const null_value = js.Value{ .local = local, .handle = local.isolate.initNull() };
+                break :blk .{ .json = try null_value.persist() };
+            };
             break :blk .{ .json = try value.persist() };
         },
         .document => blk: {
@@ -443,11 +470,9 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
         };
     }
 
-    // responseType="" (we map "" to .text — see setResponseType): lazily
-    // produce a Document when the final MIME type is XML, per WHATWG XHR
-    // "set a document response". For an HTML final MIME the spec returns
-    // null in this branch, so we only act on text/xml.
-    if (self._response_type != .text) return null;
+    if (self._response_type != .default) {
+        return null;
+    }
 
     if (self._response_xml) |document| {
         return document;

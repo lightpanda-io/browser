@@ -215,7 +215,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
         .tls_verify = network.config.tlsVerifyHost(),
-        .max_response_size = network.config.httpMaxResponseSize() orelse std.math.maxInt(u32),
+        .max_response_size = network.config.httpMaxResponseSize() orelse 1 * 1024 * 1024 * 1024, // 1 GiB
 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
@@ -568,13 +568,15 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     // based approach as HTTP connections, and then this can be removed
     try self.settleConns();
 
-    if (try self.processMessages() == false) {
-        // No messages were processed. We need to wait for I/O. The network
-        // layer will wake this up if there's acticity.
+    const processed = try self.processMessages();
+    if (processed == false and self.dispatch_queue.first == null) {
+        // No messages were processed and nothing is waiting for dispatch
+        // We need to wait for I/O.
         if (running > 0 or self.cdp_link_active) {
             {
                 self.heartbeat.enterWait();
                 defer self.heartbeat.exitWait();
+                // The network layer will wake this up if there's acticity.
                 try self.handles.poll(&.{}, @intCast(timeout_ms));
             }
             // poll only waits, so we do the perform -> process dance again
@@ -647,14 +649,24 @@ fn settleConns(self: *Client) !void {
 fn dispatchCompleted(self: *Client, mode: DrainMode) void {
     if (mode == .all) {
         if (comptime IS_DEBUG) {
+            // .all never inside a syncRequest, so nothing can be gating requests.
             std.debug.assert(self.blocking_requests.count() == 0);
         }
-        // Called from the top; not inside a syncRequest. There cannot be a
-        // blocking request, so this is the time to process any gated requests.
+    }
+
+    // blocking_requests.count() is always true on tick(.all) but can also
+    // happen mid .sync_wait. This is important to do. During blocking, we gated
+    // every request. When the blocking requested completed, it only unblocked
+    // it's frames request.
+    if (self.blocking_requests.count() == 0) {
         var node = self.gated_queue.last;
         while (node) |n| {
             node = n.prev;
             const transfer: *Transfer = @fieldParentPtr("_queue_node", n);
+            if (mode == .sync_wait and self.isGated(transfer)) {
+                // still gated: a document is never delivered on a sync pump
+                continue;
+            }
             transfer._gated = false;
             self.gated_queue.remove(n);
             self.dispatch_queue.prepend(n);
@@ -671,6 +683,7 @@ fn dispatchCompleted(self: *Client, mode: DrainMode) void {
             continue;
         }
         self.dispatch_count -= 1;
+        transfer._dispatch_queued = false;
         transfer.deliver();
     }
 }
@@ -770,8 +783,13 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             }
             if (self.obey_robots and !transfer.req.internal) {
                 switch (try self.robots.check(transfer)) {
-                    .allowed => {},
-                    .blocked => return transfer.failAsync(error.RobotsBlocked),
+                    .allowed => {
+                        lp.metrics.robots_access.incr(.allow);
+                    },
+                    .blocked => {
+                        lp.metrics.robots_access.incr(.deny);
+                        return transfer.failAsync(error.RobotsBlocked);
+                    },
                     .pending => return,
                 }
             }
@@ -804,7 +822,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     const cache = self.cache orelse return false;
 
     const req = &transfer.req;
-    if (req.method != .GET) {
+    if (req.method != .GET or req.streaming) {
         return false;
     }
 
@@ -822,17 +840,20 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         .timestamp = std.time.timestamp(),
         .request_headers = req_headers.items,
     }) orelse {
+        lp.metrics.http_cache.incr(.miss);
         transfer._cache_intent = .store;
         return false;
     };
 
     if (cached.expired == false) {
+        lp.metrics.http_cache.incr(.hit);
         try transfer.bufferCached(cached);
         return true;
     }
 
     if (cached.metadata.hasValidators() == false) {
         // Expired and no validators
+        lp.metrics.http_cache.incr(.miss);
         cached.data.deinit();
         cache.evict(req.url);
         transfer._cache_intent = .store;
@@ -879,6 +900,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
         log.warn(.cache, "renew failed", .{ .err = err });
     };
 
+    lp.metrics.http_cache.incr(.revalidated);
     try transfer.bufferCached(stale);
     return true;
 }
@@ -951,7 +973,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     if (comptime IS_DEBUG) {
         log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .metadata = metadata });
     }
-    cache.put(metadata, transfer.res.stream_buffer.items) catch |err| {
+    cache.put(metadata, transfer.res.buffer.items) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
     };
 }
@@ -1011,6 +1033,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     errdefer sync_ctx.body.deinit(allocator);
 
     var r = req;
+    r.sync = true;
     r.ctx = &sync_ctx;
     r.header_callback = SyncContext.headerCallback;
     r.data_callback = SyncContext.dataCallback;
@@ -1301,7 +1324,11 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         return true;
     }
 
-    if (effective_err == null or effective_err.? == error.RecvError) {
+    // A streaming response that has emitted events is committed: its header
+    // (and data) already reached the consumer, so it can't be transparently
+    // retried as an auth challenge — don't even offer it to CDP, parking it
+    // would strand the already-queued events.
+    if (!transfer.res.stream.started and (effective_err == null or effective_err.? == error.RecvError)) {
         transfer.detectAuthChallenge(msg.conn);
     }
 
@@ -1340,6 +1367,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
                     try transfer.handleRedirect(location.value);
+                    if (!transfer.req.internal) lp.metrics.http_redirects.incr();
 
                     const conn = transfer._conn.?;
 
@@ -1402,6 +1430,14 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
     try transfer.materializeResponse(msg.conn);
 
+    // Latency is only meaningful for responses that hit the network (cache
+    // and synthetic responses never reach processOneMessage).
+    if (!transfer.req.internal) {
+        if (msg.conn.getTotalTimeMicros()) |micros| {
+            lp.metrics.http_duration_ms.observe(@intCast(@max(0, @divTrunc(micros, 1000))));
+        } else |_| {}
+    }
+
     // Release the conn before any of this response's callbacks can run —
     // they'll want it for the next resource.
     self.removeConn(msg.conn);
@@ -1413,7 +1449,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     self.cacheStore(transfer);
 
     transfer._cdp_content_length = transfer.getContentLength() orelse 0;
-    try transfer.bufferEvents(transfer.res.stream_buffer.items);
+    try transfer.bufferEvents(transfer.res.buffer.items);
     return true;
 }
 
@@ -1499,6 +1535,7 @@ pub const Request = struct {
         script,
         fetch,
         stylesheet,
+        eventsource,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -1511,6 +1548,7 @@ pub const Request = struct {
                 .script => "Script",
                 .fetch => "Fetch",
                 .stylesheet => "Stylesheet",
+                .eventsource => "EventSource",
             };
         }
     };
@@ -1538,6 +1576,14 @@ pub const Request = struct {
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
     internal: bool = false,
+
+    // Set by syncRequest; only used to label the http_requests metric.
+    sync: bool = false,
+
+    // Deliver the response body progressively: data_callback can fire multiple
+    // times. Currently, streaming request always bypass the cache as they are only
+    // used for EventSource.
+    streaming: bool = false,
 
     // When false, the caller does not guarantee that the body outlives the
     // transfer, and thus we'll need to dupe it.
@@ -1788,15 +1834,16 @@ pub const Transfer = struct {
     // pending queue first, so the node is always free by then).
     _node: std.DoublyLinkedList.Node = .{},
 
-    // Buffered response ordered events awaiting dispatch. Today, ArrayList is
-    // overkill. _events will be at most len == 4 and almost always len == 4.
-    // BUT, when WebSockets move to a dispatch mode AND we re-add streaming,
-    // this will become more dynamic.
+    // Buffered response ordered events awaiting dispatch.
     _events: std.ArrayList(Event) = .{},
 
     // controls if _queue_node is in client.dispatch_queue (false) or
     // client.gated_queue (true)
     _gated: bool = false,
+
+    // True while _queue_node is linked into dispatch_queue/gated_queue.
+    // A streaming transfer can be queued while still .inflight (in the multi)
+    _dispatch_queued: bool = false,
 
     _queue_node: std.DoublyLinkedList.Node = .{},
 
@@ -1842,10 +1889,11 @@ pub const Transfer = struct {
         // for us.
         inflight,
 
-        // processOneMessage is running user callbacks. The conn may
-        // still be in `_conn` (header/data phase) or have been cleared
-        // by the "release ASAP" step before done_callback fires.
-        completing,
+        // deliver() is running user callbacks (abort() also latches this
+        // to defer re-entrant teardown). For a buffered transfer no conn
+        // is held; a streaming transfer's conn is still in the multi and
+        // the state returns to .inflight after the batch.
+        delivering,
 
         // External owner is holding the transfer paused. The owner is
         // responsible for resuming or terminating it.
@@ -1916,6 +1964,9 @@ pub const Transfer = struct {
     // on failure the transfer is already cleaned up (error_callback fired,
     // memory freed) — do not deinit it, and do not touch it after this.
     pub fn submit(self: *Transfer) anyerror!void {
+        if (!self.req.internal) {
+            lp.metrics.http_requests.incr(if (self.req.sync) .sync else .async);
+        }
         // Synthetic schemes never touch the network — no robots, cache, or
         // interception. The response is materialized here and delivered by
         // the dispatcher like any other transfer.
@@ -1956,15 +2007,17 @@ pub const Transfer = struct {
             self.client.pending_queue.remove(&self._node);
         }
 
-        // Same for the dispatch queue: a buffered transfer killed
-        // out-of-band (owner teardown, abort) must not be delivered.
-        if (self.state == .buffered) {
+        // Same for the dispatch queue: a queued transfer (buffered, or
+        // streaming with a pending batch) killed out-of-band (owner
+        // teardown, abort) must not be delivered.
+        if (self._dispatch_queued) {
             if (self._gated) {
                 self.client.gated_queue.remove(&self._queue_node);
             } else {
                 self.client.dispatch_queue.remove(&self._queue_node);
             }
             self.client.dispatch_count -= 1;
+            self._dispatch_queued = false;
         }
 
         // And for the robots gate: RobotsGate.pending holds a raw *Transfer
@@ -2018,10 +2071,10 @@ pub const Transfer = struct {
     pub fn abort(self: *Transfer, err: anyerror) void {
         // error_callback can run JS that tears this transfer down again
         // (e.g. an XHR abort handler navigates -> abortRequests -> kill).
-        // Hold the state at .completing so the re-entrant teardown defers,
+        // Hold the state at .delivering so the re-entrant teardown defers,
         // then do the single real teardown against the original state.
         const state = self.state;
-        self.state = .completing;
+        self.state = .delivering;
         self.requestFailed(err);
         self.state = state;
         self.detachOrDeinit();
@@ -2064,10 +2117,10 @@ pub const Transfer = struct {
     // eventually drains the in-flight curl handle.
     //
     // Two states force deferral:
-    //   * `.completing` — processOneMessage is currently processing
-    //     this transfer. It will call `transfer.deinit` itself after the
-    //     chain returns; deiniting here would double-free. This covers
-    //     both the with-conn and post-release-ASAP windows.
+    //   * `.delivering` — deliver() is running this transfer's callbacks.
+    //     It will call `transfer.deinit` itself after the chain returns;
+    //     deiniting here would double-free. This covers both the with-conn
+    //     and post-release-ASAP windows.
     //   * `.inflight` while `client.performing` — libcurl could still
     //     fire callbacks for us. Releasing the arena now would UAF
     //     from inside curl.
@@ -2077,7 +2130,7 @@ pub const Transfer = struct {
     // inline.
     fn detachOrDeinit(self: *Transfer) void {
         const must_defer = switch (self.state) {
-            .completing => true,
+            .delivering => true,
             .inflight => self.client.performing,
             else => false,
         };
@@ -2126,6 +2179,10 @@ pub const Transfer = struct {
         }
         self._notified_fail = true;
 
+        if (!self.req.internal) {
+            lp.metrics.http_error.incr(http.errorReason(err));
+        }
+
         if (self._notify_cdp) {
             self.req.notification.dispatch(.http_request_fail, &.{
                 .transfer = self,
@@ -2159,6 +2216,9 @@ pub const Transfer = struct {
     // dispatcher owns the transfer's fate; deinit unlinks it if it dies
     // out-of-band first.
     fn scheduleDispatch(self: *Transfer) void {
+        if (self.state == .delivering) {
+            return;
+        }
         if (comptime IS_DEBUG) {
             lp.assert(
                 self.state == .created or self.state == .inflight,
@@ -2167,6 +2227,14 @@ pub const Transfer = struct {
             );
         }
         self.state = .buffered;
+        self.enqueueDispatch();
+    }
+
+    fn enqueueDispatch(self: *Transfer) void {
+        if (self._dispatch_queued) {
+            return;
+        }
+        self._dispatch_queued = true;
         self.client.dispatch_queue.append(&self._queue_node);
         self.client.dispatch_count += 1;
     }
@@ -2174,6 +2242,23 @@ pub const Transfer = struct {
     // Buffer the standard success event sequence. `body` is either owned by
     // transfer.arena OR, through some other mechanism, outlives the transfer.
     fn bufferEvents(self: *Transfer, body: []const u8) !void {
+        // Single delivery point for every successful response — network,
+        // cache, and synthetic, on both the sync and async paths. Redirect
+        // hops never reach here (they loop back in processOneMessage), so
+        // http_status reflects the final response only. Internal requests
+        // (robots.txt) are tracked by the robots_* metrics instead.
+        if (self.res.stream.started) {
+            try self._events.append(self.arena, .done);
+            self.scheduleDispatch();
+            return;
+        }
+
+        if (!self.req.internal) {
+            const status = if (self.res.header) |h| h.status else 0;
+            lp.metrics.http_status.incr(http.statusCategory(status));
+            lp.metrics.http_response_size_bytes.observe(body.len);
+        }
+
         try self._events.ensureUnusedCapacity(self.arena, 4);
         self._events.appendAssumeCapacity(.start);
         self._events.appendAssumeCapacity(.header);
@@ -2250,6 +2335,10 @@ pub const Transfer = struct {
     // transfer arena. After this, delivery never touches libcurl state —
     // the conn can be released and reused before the consumer sees a byte.
     fn materializeResponse(self: *Transfer, conn: *http.Connection) !void {
+        if (self.res.stream.started) {
+            // Streaming: already materialized at the first delivered chunk.
+            return;
+        }
         const arena = self.arena;
 
         if (self.res.header == null) {
@@ -2313,6 +2402,8 @@ pub const Transfer = struct {
         // Per-request timeout override (e.g. XHR timeout)
         if (req.timeout_ms > 0) {
             try conn.setTimeout(req.timeout_ms);
+        } else if (req.streaming) {
+            try conn.setTimeout(0);
         }
 
         // add credentials
@@ -2332,8 +2423,11 @@ pub const Transfer = struct {
         // total hops. The rest of the response state is per-attempt.
         self._notified_fail = false;
         self._tries += 1;
-        self.res.stream_buffer.clearRetainingCapacity();
-        self.res = .{ .stream_buffer = self.res.stream_buffer };
+        self.res.buffer.clearRetainingCapacity();
+        self.res = .{
+            .buffer = self.res.buffer,
+            .stream = .{ .spare = self.res.stream.spare },
+        };
     }
 
     fn buildResponseHeader(self: *Transfer, conn: *const http.Connection) !void {
@@ -2510,6 +2604,7 @@ pub const Transfer = struct {
                 log.err(.http, "getResponseCode", .{ .err = err, .source = "body callback" });
                 return http.writefunc_error;
             };
+
             // Only skip the body when the response will actually be retried
             // as a redirect (a redirect status with a Location header). Any
             // other 3xx is a final response whose body must be kept.
@@ -2524,20 +2619,41 @@ pub const Transfer = struct {
                     res.callback_error = error.ResponseTooLarge;
                     return http.writefunc_error;
                 }
-                res.stream_buffer.ensureTotalCapacity(transfer.arena, cl) catch {};
+                res.buffer.ensureTotalCapacity(transfer.arena, cl) catch {};
             }
         }
 
-        if (res.skip_body) return @intCast(chunk_len);
+        if (res.skip_body) {
+            return @intCast(chunk_len);
+        }
 
         res.bytes_received += chunk_len;
+
+        const chunk = buffer[0..chunk_len];
+
+        if (transfer.req.streaming) {
+            if (transfer.state == .aborted) {
+                return http.writefunc_error;
+            }
+            // A stream's total is unbounded by design; cap the undelivered
+            // batch instead — that's what actually occupies memory.
+            if (res.buffer.items.len + chunk_len > transfer.client.max_response_size) {
+                res.callback_error = error.ResponseTooLarge;
+                return http.writefunc_error;
+            }
+            transfer.streamChunk(conn, chunk) catch |err| {
+                res.callback_error = err;
+                return http.writefunc_error;
+            };
+            return @intCast(chunk_len);
+        }
+
         if (res.bytes_received > transfer.client.max_response_size) {
             res.callback_error = error.ResponseTooLarge;
             return http.writefunc_error;
         }
 
-        const chunk = buffer[0..chunk_len];
-        res.stream_buffer.appendSlice(transfer.arena, chunk) catch |err| {
+        res.buffer.appendSlice(transfer.arena, chunk) catch |err| {
             res.callback_error = err;
             return http.writefunc_error;
         };
@@ -2547,6 +2663,34 @@ pub const Transfer = struct {
         }
 
         return @intCast(chunk_len);
+    }
+
+    fn streamChunk(self: *Transfer, conn: *http.Connection, chunk: []const u8) !void {
+        const res = &self.res;
+        if (res.stream.started == false) {
+            // we haven't delivered the start/header events yet
+            try self.materializeResponse(conn);
+            try self._events.ensureUnusedCapacity(self.arena, 3);
+            self._events.appendAssumeCapacity(.start);
+            self._events.appendAssumeCapacity(.header);
+            res.stream.started = true;
+        }
+        // append the data to whatever data we already have (but haven't delivered)
+        try res.buffer.appendSlice(self.arena, chunk);
+        if (res.stream.data_queued == false) {
+            res.stream.data_queued = true;
+            try self._events.append(self.arena, .stream_data);
+        }
+
+        switch (self.state) {
+            .inflight => self.enqueueDispatch(),
+            // deliver() is mid-batch on this transfer; its loop consumes
+            // events appended behind its cursor.
+            .delivering => {},
+            else => if (comptime IS_DEBUG) {
+                lp.assert(false, "Transfer.scheduleStreamDispatch", .{ .state = self.state });
+            },
+        }
     }
 
     // Response-view accessors. Callbacks receive the *Transfer once the
@@ -2578,9 +2722,9 @@ pub const Transfer = struct {
         return .{ .curl = .{ .conn = self._conn.? } };
     }
 
-    pub fn getContentLength(self: *const Transfer) ?u32 {
+    pub fn getContentLength(self: *const Transfer) ?usize {
         const cl = self.getContentLengthRawValue() orelse return null;
-        return std.fmt.parseInt(u32, cl, 10) catch null;
+        return std.fmt.parseInt(usize, cl, 10) catch null;
     }
 
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
@@ -2600,12 +2744,20 @@ pub const Transfer = struct {
         return null;
     }
 
-    // Only ever called from tick, delivers a completed event to its caller
+    // Only ever called from tick, delivers buffered events to their consumer.
+    // A buffered (completed) transfer gets exactly one deliver() and dies at
+    // the end of it. A streaming transfer gets one deliver() per dispatched
+    // batch and stays inflight between batches, until a terminal event
+    // (done / err) or an abort.
     fn deliver(transfer: *Transfer) void {
+        // A streaming batch is delivered while the conn is still inflight;
+        // that state is restored after the batch unless it turned terminal.
+        const was_inflight = transfer.state == .inflight;
+
         // Important. If a callback tries to kill the transfer (e.g. abort()),
         // this will cause the teardown to be deferred so that it doesn't get
         // freed from under us.
-        transfer.state = .completing;
+        transfer.state = .delivering;
 
         const req = &transfer.req;
         if (transfer._from_cache) {
@@ -2615,24 +2767,19 @@ pub const Transfer = struct {
             );
         }
 
-        // The current design is that a Transfer will get one and only one
-        // deliver(). So at the end of deliver() we can deinit. That also means
-        // we can safely iterate transfer._events without risking a mutation to
-        // it.
-        //
-        // When WebSockets and/or buffering is added this will no longer be true
-        // and one transfer will be potentially get multiple deliver() calls.
-        // When that happens, we need to adjust two things:
-        // 1 - It might not be safe to iterate transfer._events like this,
-        //     something could append to it, making it invalid
-        // 2 - Only terminal states (done, err, abort) should call deinit
-
-        for (transfer._events.items) |event| {
+        // Index loop, re-reading len and items on every iteration: a
+        // streaming transfer's callback can re-enter the pump (syncRequest)
+        // and append more events — possibly the terminal one — to the batch
+        // being delivered.
+        var terminal = !was_inflight;
+        var i: usize = 0;
+        while (i < transfer._events.items.len) : (i += 1) {
             if (transfer.state == .aborted) {
                 // the state can become aborted as events are processed, check
                 // it on every iteration.
                 break;
             }
+            const event = transfer._events.items[i];
             switch (event) {
                 .start => {
                     if (req.start_callback) |cb| {
@@ -2665,7 +2812,31 @@ pub const Transfer = struct {
                         return transfer.failDelivery(err);
                     };
                 },
+                .stream_data => {
+                    // Move the batch into stream.spare and deliver it from
+                    // there: chunks received during the callback (re-entrant
+                    // pump) append to the swapped-in buffer and queue a new
+                    // .stream_data that this loop picks up, while the batch
+                    // the consumer is reading stays untouched. The batch is
+                    // only valid during the callback — it's cleared right
+                    // after, ready to be swapped back in.
+                    const res = &transfer.res;
+                    res.stream.data_queued = false;
+                    std.mem.swap(std.ArrayList(u8), &res.buffer, &res.stream.spare);
+                    const chunk = res.stream.spare.items;
+                    if (transfer._notify_cdp) {
+                        req.notification.dispatch(.http_response_data, &.{
+                            .data = chunk,
+                            .transfer = transfer,
+                        });
+                    }
+                    req.data_callback(transfer, chunk) catch |err| {
+                        return transfer.failDelivery(err);
+                    };
+                    res.stream.spare.clearRetainingCapacity();
+                },
                 .done => {
+                    terminal = true;
                     if (transfer._notify_cdp) {
                         req.notification.dispatch(.http_request_done, &.{
                             .transfer = transfer,
@@ -2677,12 +2848,21 @@ pub const Transfer = struct {
                     };
                 },
                 .err => |err| {
+                    terminal = true;
                     transfer.requestFailed(err);
                     break;
                 },
             }
         }
-        transfer.deinit();
+
+        if (transfer.state == .aborted or terminal) {
+            transfer.deinit();
+            return;
+        }
+
+        // Mid-stream batch fully delivered; the conn is still receiving.
+        transfer._events.clearRetainingCapacity();
+        transfer.state = .inflight;
     }
 };
 
@@ -2705,11 +2885,28 @@ const Response = struct {
     skip_body: bool = false,
     first_data_received: bool = false,
 
-    // Buffered response body. Filled by dataCallback, consumed in processMessages.
-    stream_buffer: std.ArrayList(u8) = .{},
+    // Response body. Filled by dataCallback, consumed in processMessages.
+    // See Stream.spare to see how this works in streaming mode
+    buffer: std.ArrayList(u8) = .{},
 
     // Error captured in dataCallback to be reported in processMessages.
     callback_error: ?anyerror = null,
+
+    // State for streaming. Unused in non-streaming
+    stream: Stream = .{},
+
+    const Stream = struct {
+        // Whether we've queued the start/header events or not
+        started: bool = false,
+
+        // We only queue one .stream_data event at a time, it drains whatever
+        // has accumulated since the last deliver
+        data_queued: bool = false,
+
+        // Along with the main Response.buffer, acts as a double buffer allowing
+        // us to accumulate new data while in a delivery callback.
+        spare: std.ArrayList(u8) = .{},
+    };
 };
 
 // A single buffered response event. The payload of `data` has transfer-arena
@@ -2718,6 +2915,7 @@ const Event = union(enum) {
     start,
     header,
     data: []const u8,
+    stream_data, // the payload is carried in res.stream.data_queued
     done,
     err: anyerror,
 };
@@ -2936,7 +3134,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
 test "HttpClient: fulfillIntercepted survives a done_callback that tears down the owner" {
     // Regression: the fulfilled response's done_callback runs JS which
     // navigates / closes the page, re-entrantly killing the transfer
-    // (abortOwner -> kill). deliver() holds the transfer in `.completing`,
+    // (abortOwner -> kill). deliver() holds the transfer in `.delivering`,
     // so the teardown defers and there is exactly one free.
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
@@ -3249,7 +3447,7 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
 test "HttpClient: abortParked survives an error_callback that tears down the owner" {
     // Same re-entrancy hazard as fulfillRequest, but on the abort path
     // (failRequest / continueWithAuth-cancel / session teardown). abortParked
-    // buffers the failure; deliver() fires it while .completing, so a
+    // buffers the failure; deliver() fires it while .delivering, so a
     // re-entrant owner teardown defers to the single deinit instead of
     // double-freeing.
     var pool = ArenaPool.init(testing.allocator, .{});
@@ -3326,7 +3524,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
     // Regression: abort() fired error_callback before detachOrDeinit, so JS
     // in that callback that killed the transfer again (navigation ->
     // abortRequests -> kill) freed it inline and abort() then ran
-    // detachOrDeinit on freed memory. abort holds .completing across
+    // detachOrDeinit on freed memory. abort holds .delivering across
     // requestFailed so the re-entrant kill defers to the single teardown.
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
@@ -3418,6 +3616,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
         transfer.owner = &owner;
 
         transfer.state = .buffered;
+        transfer._dispatch_queued = true;
         client.dispatch_queue.append(&transfer._queue_node);
         client.dispatch_count += 1;
 

@@ -211,6 +211,12 @@ _customized_builtin_disconnected_callback_invoked: std.AutoHashMapUnmanaged(*Ele
 // The constructor can access this to get the element being upgraded.
 _upgrading_element: ?*Node = null,
 
+// Set when materializing the fragment parser's context element. The element
+// is never inserted into the tree so if its a custom element ,we must not run
+// its constructor (else we'll end up in an endless loop if the constructor
+// sets this.innerHTML = '...', which happens).
+_skip_custom_element_upgrade: bool = false,
+
 // List of custom elements that were created before their definition was registered
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
 
@@ -793,14 +799,17 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 }
 
 fn recordNavigateTelemetry(self: *Frame, tls: bool) void {
+    const TE = @import("../telemetry/telemetry.zig").Event;
+    const context: TE.Navigate.Context = if (self.parent != null)
+        .iframe
+    else if (self.window._opener != null)
+        .popup
+    else
+        .page;
+    lp.metrics.navigate.incr(context);
     self._session.browser.app.telemetry.record(.{ .navigate = .{
         .tls = tls,
-        .context = if (self.parent != null)
-            .iframe
-        else if (self.window._opener != null)
-            .popup
-        else
-            .page,
+        .context = context,
     } });
 }
 

@@ -203,6 +203,7 @@ const Commands = cli.Builder(.{
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
             // Don't widen this without growing the reader buffer in the HTTP path.
             .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
+            .{ .name = "disable_metrics", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -235,6 +236,7 @@ const Commands = cli.Builder(.{
             },
             .{ .name = "terminate_ms", .type = ?u32 },
             .{ .name = "json", .type = bool },
+            .{ .name = "metrics", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -583,6 +585,20 @@ pub fn cdpMaxMessageSize(self: *const Config) u32 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_message_size,
         else => unreachable,
+    };
+}
+
+pub fn metricsEndpointEnabled(self: *const Config) bool {
+    return switch (self.mode) {
+        .serve => |opts| !opts.disable_metrics,
+        else => unreachable,
+    };
+}
+
+pub fn dumpMetricsOnExit(self: *const Config) bool {
+    return switch (self.mode) {
+        .fetch => |opts| opts.metrics,
+        else => false,
     };
 }
 

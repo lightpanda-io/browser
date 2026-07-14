@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=eventsource_in_worker type=module>
+{
+  const state = await testing.async();
+  const worker = new Worker('./eventsource-worker.js');
+  worker.onmessage = (e) => state.resolve(e.data);
+  worker.postMessage({});
+
+  await state.done((data) => {
+    testing.expectTrue(data.ok, 'worker eventsource error: ' + data.err);
+    testing.expectEqual(['open', 'first', 'a\nb'], data.received);
+    testing.expectEqual(2, data.readyState);
+  });
+}
+</script>

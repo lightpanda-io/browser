@@ -50,13 +50,9 @@ _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .{},
 // tracked targets that aren't reported yet
 _tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
 
-// Shared zero DOMRect to avoid repeated allocations for non-intersecting elements
-var zero_rect: DOMRect = .{
-    ._x = 0.0,
-    ._y = 0.0,
-    ._width = 0.0,
-    ._height = 0.0,
-};
+// Shared zero rect (plain values) for non-intersecting elements. Materialized
+// into a DOMRect only if it ends up on a delivered entry.
+const zero_rect: DOMRect.Data = .{};
 
 pub const ObserverInit = struct {
     root: ?*Node = null,
@@ -202,18 +198,16 @@ fn calculateIntersection(
     has_parent: bool,
     frame: *Frame,
 ) !IntersectionData {
-    const target_rect = target.getBoundingClientRect(frame);
+    const target_rect = target.boundingClientRectValues(frame);
 
     // Use root element's rect or the faux-layout viewport.
     const root_rect = if (self._root) |root|
-        root.getBoundingClientRect(frame)
+        root.boundingClientRectValues(frame)
     else blk: {
         const viewport = frame._page.getViewport();
-        break :blk DOMRect{
-            ._x = 0.0,
-            ._y = 0.0,
-            ._width = @floatFromInt(viewport.width),
-            ._height = @floatFromInt(viewport.height),
+        break :blk DOMRect.Data{
+            .width = @floatFromInt(viewport.width),
+            .height = @floatFromInt(viewport.height),
         };
     };
 
@@ -238,9 +232,9 @@ fn calculateIntersection(
 const IntersectionData = struct {
     is_intersecting: bool,
     intersection_ratio: f64,
-    intersection_rect: DOMRect,
-    bounding_client_rect: DOMRect,
-    root_bounds: DOMRect,
+    intersection_rect: DOMRect.Data,
+    bounding_client_rect: DOMRect.Data,
+    root_bounds: DOMRect.Data,
 };
 
 fn meetsThreshold(self: *IntersectionObserver, ratio: f64) bool {
@@ -280,9 +274,9 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
         ._target = target,
         ._time = frame.window._performance.now(),
         ._is_intersecting = is_now_intersecting,
-        ._root_bounds = try frame._factory.create(data.root_bounds),
-        ._intersection_rect = try frame._factory.create(data.intersection_rect),
-        ._bounding_client_rect = try frame._factory.create(data.bounding_client_rect),
+        ._root_bounds = try DOMRect.create(data.root_bounds, frame._factory),
+        ._intersection_rect = try DOMRect.create(data.intersection_rect, frame._factory),
+        ._bounding_client_rect = try DOMRect.create(data.bounding_client_rect, frame._factory),
         ._intersection_ratio = data.intersection_ratio,
     };
     try self._pending_entries.append(self._arena, entry);

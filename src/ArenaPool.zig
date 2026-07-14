@@ -111,23 +111,25 @@ pub fn deinit(self: *ArenaPool) void {
 // - Pass a BucketSize (.tiny, .small, .medium, .large) for explicit bucket selection
 // - Pass a usize for automatic bucket selection based on expected size
 pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Allocator {
-    const bucket = blk: {
+    const bucket_size: BucketSize = blk: {
         const T = @TypeOf(size_or_bucket);
         if (T == BucketSize or T == @TypeOf(.enum_literal)) {
-            break :blk switch (@as(BucketSize, size_or_bucket)) {
-                .tiny => &self.tiny,
-                .small => &self.small,
-                .medium => &self.medium,
-                .large => &self.large,
-            };
+            break :blk @as(BucketSize, size_or_bucket);
         }
         if (T == usize or T == comptime_int) {
-            if (size_or_bucket <= self.tiny.retain_bytes) break :blk &self.tiny;
-            if (size_or_bucket <= self.small.retain_bytes) break :blk &self.small;
-            if (size_or_bucket <= self.medium.retain_bytes) break :blk &self.medium;
-            break :blk &self.large;
+            if (size_or_bucket <= self.tiny.retain_bytes) break :blk .tiny;
+            if (size_or_bucket <= self.small.retain_bytes) break :blk .small;
+            if (size_or_bucket <= self.medium.retain_bytes) break :blk .medium;
+            break :blk .large;
         }
         @compileError("acquire expects BucketSize or usize, got " ++ @typeName(T));
+    };
+
+    const bucket = switch (bucket_size) {
+        .tiny => &self.tiny,
+        .small => &self.small,
+        .medium => &self.medium,
+        .large => &self.large,
     };
 
     self.mutex.lock();
@@ -144,8 +146,11 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Al
             }
             gop.value_ptr.* += 1;
         }
+        lp.metrics.arena_hit.incr(bucket_size);
         return entry.arena.allocator();
     }
+
+    lp.metrics.arena_miss.incr(bucket_size);
 
     const entry = try self.entry_pool.create();
     entry.* = .{

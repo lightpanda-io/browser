@@ -46,15 +46,23 @@ pub fn Builder(comptime T: type) type {
         }
 
         pub fn indexed(comptime getter_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
-            return Indexed.init(T, getter_func, null, null, null, enumerator_func, opts);
+            return Indexed.init(T, getter_func, null, null, null, null, enumerator_func, opts);
         }
 
         pub fn indexedReadWrite(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, query_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
-            return Indexed.init(T, getter_func, setter_func, deleter_func, query_func, enumerator_func, opts);
+            return Indexed.init(T, getter_func, setter_func, deleter_func, query_func, null, enumerator_func, opts);
+        }
+
+        pub fn indexedFull(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, query_func: anytype, definer_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
+            return Indexed.init(T, getter_func, setter_func, deleter_func, query_func, definer_func, enumerator_func, opts);
         }
 
         pub fn namedIndexed(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, enumerator_func: anytype, query_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
-            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, enumerator_func, query_func, opts);
+            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, enumerator_func, query_func, null, null, opts);
+        }
+
+        pub fn namedIndexedFull(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, enumerator_func: anytype, query_func: anytype, definer_func: anytype, descriptor_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
+            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, enumerator_func, query_func, definer_func, descriptor_func, opts);
         }
 
         pub fn iterator(comptime func: anytype, comptime opts: Iterator.Opts) Iterator {
@@ -268,13 +276,16 @@ pub const Indexed = struct {
     setter: ?*const fn (idx: u32, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
     deleter: ?*const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
     query: ?*const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    // v8 expects an Intercepted (u32) return; the stale void-returning
+    // typedef in binding.h is papered over with a @ptrCast at install time.
+    definer: ?*const fn (idx: u32, desc: ?*v8.PropertyDescriptor, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
 
     const Opts = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
     };
 
-    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, query: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
+    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, query: anytype, definer: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
         var indexed = Indexed{
             .enumerator = null,
             .getter = struct {
@@ -336,7 +347,7 @@ pub const Indexed = struct {
                     }
                     defer caller.deinit();
 
-                    return caller.deleteIndex(T, deleter, idx, handle.?, .{
+                    return caller.deleteOrDefineIndex(T, deleter, idx, handle.?, .{
                         .as_typed_array = opts.as_typed_array,
                         .null_as_undefined = opts.null_as_undefined,
                     });
@@ -359,6 +370,22 @@ pub const Indexed = struct {
             }.wrap;
         }
 
+        if (@typeInfo(@TypeOf(definer)) != .null) {
+            indexed.definer = struct {
+                fn wrap(idx: u32, _: ?*v8.PropertyDescriptor, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return js.Intercepted.no;
+                    }
+                    defer caller.deinit();
+
+                    // same (self, index) -> bool shape as a deleter
+                    return caller.deleteOrDefineIndex(T, definer, idx, handle.?, .{});
+                }
+            }.wrap;
+        }
+
         return indexed;
     }
 };
@@ -367,8 +394,12 @@ pub const NamedIndexed = struct {
     getter: *const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
     setter: ?*const fn (c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
     deleter: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
-    enumerator: ?*const fn (handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
     query: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    // v8 expects an Intercepted (u32) return; the stale void-returning
+    // typedefs in binding.h are papered over with a @ptrCast at install time.
+    definer: ?*const fn (c_name: ?*const v8.Name, desc: ?*v8.PropertyDescriptor, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    descriptor: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    enumerator: ?*const fn (handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
 
     const Opts = struct {
         as_typed_array: bool = false,
@@ -379,7 +410,7 @@ pub const NamedIndexed = struct {
         ce_reactions: bool = false,
     };
 
-    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, enumerator: anytype, query: anytype, comptime opts: Opts) NamedIndexed {
+    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, enumerator: anytype, query: anytype, definer: anytype, descriptor: anytype, comptime opts: Opts) NamedIndexed {
         const getter_fn = struct {
             fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
@@ -445,10 +476,39 @@ pub const NamedIndexed = struct {
                     if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
                 };
 
-                return caller.deleteNamedIndex(T, deleter, c_name.?, handle.?, .{
+                return caller.deleteOrDefineNamedIndex(T, deleter, c_name.?, handle.?, .{
                     .as_typed_array = opts.as_typed_array,
                     .null_as_undefined = opts.null_as_undefined,
                 });
+            }
+        }.wrap;
+
+        const definer_fn = if (@typeInfo(@TypeOf(definer)) == .null) null else struct {
+            fn wrap(c_name: ?*const v8.Name, _: ?*v8.PropertyDescriptor, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
+                }
+                defer caller.deinit();
+
+                // same (self, name) -> bool shape as a deleter
+                return caller.deleteOrDefineNamedIndex(T, definer, c_name.?, handle.?, .{});
+            }
+        }.wrap;
+
+        const descriptor_fn = if (@typeInfo(@TypeOf(descriptor)) == .null) null else struct {
+            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
+                }
+                defer caller.deinit();
+
+                // same (self, name) -> value shape as a getter; the returned
+                // struct is converted to a JS property descriptor object
+                return caller.getNamedIndex(T, descriptor, c_name.?, handle.?, .{});
             }
         }.wrap;
 
@@ -482,8 +542,10 @@ pub const NamedIndexed = struct {
             .getter = getter_fn,
             .setter = setter_fn,
             .deleter = deleter_fn,
-            .enumerator = enumerator_fn,
             .query = query_fn,
+            .definer = definer_fn,
+            .descriptor = descriptor_fn,
+            .enumerator = enumerator_fn,
         };
     }
 };
@@ -907,6 +969,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/DOMImplementation.zig"),
     @import("../webapi/DOMTreeWalker.zig"),
     @import("../webapi/DOMNodeIterator.zig"),
+    @import("../webapi/DOMRectReadOnly.zig"),
     @import("../webapi/DOMRect.zig"),
     @import("../webapi/DOMMatrixReadOnly.zig"),
     @import("../webapi/DOMMatrix.zig"),
@@ -1062,6 +1125,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/net/XMLHttpRequestUpload.zig"),
     @import("../webapi/net/WebSocket.zig"),
+    @import("../webapi/net/EventSource.zig"),
     @import("../webapi/event/CloseEvent.zig"),
     @import("../webapi/streams/ReadableStream.zig"),
     @import("../webapi/streams/ReadableStreamDefaultReader.zig"),
@@ -1128,6 +1192,8 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/event/PromiseRejectionEvent.zig"),
     @import("../webapi/event/CloseEvent.zig"),
     @import("../webapi/DOMException.zig"),
+    @import("../webapi/DOMRectReadOnly.zig"),
+    @import("../webapi/DOMRect.zig"),
     @import("../webapi/DOMMatrixReadOnly.zig"),
     @import("../webapi/DOMMatrix.zig"),
     @import("../webapi/DOMPointReadOnly.zig"),
@@ -1163,6 +1229,7 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/net/XMLHttpRequestUpload.zig"),
     @import("../webapi/net/WebSocket.zig"),
+    @import("../webapi/net/EventSource.zig"),
     @import("../webapi/FileReader.zig"),
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),

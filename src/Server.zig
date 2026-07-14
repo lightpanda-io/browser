@@ -156,6 +156,7 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
     while (current < self.max_connections) {
         current = self.active_threads.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
     } else {
+        lp.metrics.cdp_connection_limit.incr();
         return error.MaxThreadsReached;
     }
     errdefer _ = self.active_threads.fetchSub(1, .monotonic);
@@ -217,6 +218,12 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     if (!upgraded) {
         return;
     }
+
+    // only count websocket (i.e. CDP) connections, not HTTP requests like
+    // /json/version probes or /metrics scrapes
+    lp.metrics.cdp_connections.incr();
+    lp.metrics.cdp_active_connections.incr();
+    defer lp.metrics.cdp_active_connections.decr();
 
     {
         // Transition from .handshake state to .live
@@ -551,6 +558,18 @@ test "server: get /json/version" {
     }
 }
 
+test "server: get /metrics" {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const res = try c.httpRequest("GET /metrics HTTP/1.1\r\n\r\n");
+    std.debug.print("1\n", .{});
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+    try testing.expect(std.mem.indexOf(u8, res, "Content-Type: text/plain; version=0.0.4") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "build_info{version=") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "# TYPE cdp_connections_total counter") != null);
+}
+
 fn assertHTTPError(
     comptime expected_status: u16,
     comptime expected_body: []const u8,
@@ -648,7 +667,7 @@ fn createTestClient() !TestClient {
 
 const TestClient = struct {
     stream: std.net.Stream,
-    buf: [1024]u8 = undefined,
+    buf: [8192]u8 = undefined,
     reader: WS.Reader(false),
 
     const WS = @import("network/WS.zig");
@@ -664,10 +683,11 @@ const TestClient = struct {
         var pos: usize = 0;
         var total_length: ?usize = null;
         while (true) {
-            pos += try self.stream.read(self.buf[pos..]);
-            if (pos == 0) {
-                return error.NoMoreData;
+            const n = try self.stream.read(self.buf[pos..]);
+            if (n == 0) {
+                return if (pos == self.buf.len) error.MessageTooLarge else error.NoMoreData;
             }
+            pos += n;
             const response = self.buf[0..pos];
             if (total_length == null) {
                 const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse continue;
