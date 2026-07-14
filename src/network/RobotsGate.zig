@@ -27,6 +27,7 @@ const lp = @import("lightpanda");
 const URL = @import("../browser/URL.zig");
 const ArenaPool = @import("../ArenaPool.zig");
 
+const http = @import("http.zig");
 const Robots = @import("Robots.zig");
 const Network = @import("Network.zig");
 const Transfer = @import("HttpClient.zig").Transfer;
@@ -172,6 +173,7 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
         } else true;
 
         if (!allowed) {
+            lp.metrics.robots_access.incr(.deny);
             log.warn(.http, "blocked by robots", .{ .url = transfer.req.url });
             transfer.failAsync(error.RobotsBlocked);
             continue;
@@ -179,6 +181,7 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
         // Hand back to the pipeline; the robots gate is the last step
         // before the network. If it fails while we still own the transfer,
         // clean up here.
+        lp.metrics.robots_access.incr(.allow);
         transfer.client.resumeAfterRobots(transfer) catch |e| {
             transfer.abortPipelineError(e);
         };
@@ -208,6 +211,7 @@ const RobotsContext = struct {
             log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = self.robots_url });
             self.status = hdr.status;
         }
+        lp.metrics.robots_status.incr(http.statusCategory(self.status));
         if (transfer.getContentLength()) |cl| {
             try self.buffer.ensureTotalCapacity(self.arena, cl);
         }

@@ -799,14 +799,17 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 }
 
 fn recordNavigateTelemetry(self: *Frame, tls: bool) void {
+    const TE = @import("../telemetry/telemetry.zig").Event;
+    const context: TE.Navigate.Context = if (self.parent != null)
+        .iframe
+    else if (self.window._opener != null)
+        .popup
+    else
+        .page;
+    lp.metrics.navigate.incr(context);
     self._session.browser.app.telemetry.record(.{ .navigate = .{
         .tls = tls,
-        .context = if (self.parent != null)
-            .iframe
-        else if (self.window._opener != null)
-            .popup
-        else
-            .page,
+        .context = context,
     } });
 }
 

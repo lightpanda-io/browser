@@ -624,6 +624,13 @@ pub const Connection = struct {
         return @intCast(count);
     }
 
+    // Total transfer time (name lookup to completion) in microseconds.
+    pub fn getTotalTimeMicros(self: *const Connection) !c_long {
+        var micros: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .total_time_t, &micros);
+        return micros;
+    }
+
     pub fn getConnectHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
         var hdr: ?*libcurl.CurlHeader = null;
         libcurl.curl_easy_header(self._easy, name, index, .connect, -1, &hdr) catch |err| {
@@ -756,6 +763,62 @@ pub const Handles = struct {
         };
     }
 };
+
+pub const StatusCategory = enum {
+    @"2xx",
+    @"4xx",
+    @"5xx",
+    other,
+};
+
+pub fn statusCategory(status: u16) StatusCategory {
+    return switch (status) {
+        200...299 => .@"2xx",
+        400...499 => .@"4xx",
+        500...599 => .@"5xx",
+        else => .other,
+    };
+}
+
+// Coarse failure classes for the http_error metric. Anything we don't
+// explicitly bucket lands in `other`.
+pub const ErrorReason = enum {
+    timeout,
+    connect,
+    tls,
+    too_large,
+    aborted,
+    robots_blocked,
+    other,
+};
+
+pub fn errorReason(err: anyerror) ErrorReason {
+    return switch (err) {
+        error.OperationTimedout => .timeout,
+        error.CouldntConnect,
+        error.CouldntResolveHost,
+        error.CouldntResolveProxy,
+        error.NoConnectionAvailable,
+        => .connect,
+        error.SslConnectError,
+        error.PeerFailedVerification,
+        error.SslCertproblem,
+        error.SslCacertBadfile,
+        error.SslIssuerError,
+        error.SslPinnedpubkeynotmatch,
+        error.SslInvalidcertstatus,
+        error.UseSslFailed,
+        => .tls,
+        error.ResponseTooLarge => .too_large,
+        error.Abort,
+        error.AbortedByCallback,
+        error.AbortAuthChallenge,
+        error.SyncWaitInterrupted,
+        => .aborted,
+        error.RobotsBlocked => .robots_blocked,
+        else => .other,
+    };
+}
 
 fn debugCallback(_: *libcurl.Curl, msg_type: libcurl.CurlInfoType, raw: [*c]u8, len: usize, _: ?*anyopaque) callconv(.c) c_int {
     const data = raw[0..len];
