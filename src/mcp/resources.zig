@@ -19,6 +19,12 @@ pub const resource_list = [_]protocol.Resource{
         .description = "The token-efficient markdown representation of the current page",
         .mimeType = "text/markdown",
     },
+    .{
+        .uri = "mcp://skill/pandascript",
+        .name = "PandaScript skill",
+        .description = lp.skill.description,
+        .mimeType = "text/markdown",
+    },
 };
 
 pub fn handleList(server: *Server, req: protocol.Request) !void {
@@ -65,11 +71,13 @@ const ResourceStreamingResult = struct {
 const ResourceUri = enum {
     @"mcp://page/html",
     @"mcp://page/markdown",
+    @"mcp://skill/pandascript",
 };
 
 const resource_map = std.StaticStringMap(ResourceUri).initComptime(.{
     .{ "mcp://page/html", .@"mcp://page/html" },
     .{ "mcp://page/markdown", .@"mcp://page/markdown" },
+    .{ "mcp://skill/pandascript", .@"mcp://skill/pandascript" },
 });
 
 pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -86,6 +94,16 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         return server.sendError(req_id, .InvalidRequest, "Resource not found");
     };
 
+    if (uri == .@"mcp://skill/pandascript") {
+        return server.sendResult(req_id, .{
+            .contents = &.{.{
+                .uri = params.uri,
+                .mimeType = "text/markdown",
+                .text = lp.skill.text(),
+            }},
+        });
+    }
+
     const frame = server.active_session.session.currentFrame() orelse {
         return server.sendError(req_id, .FrameNotLoaded, "Page not loaded");
     };
@@ -93,10 +111,12 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     const format: Format = switch (uri) {
         .@"mcp://page/html" => .html,
         .@"mcp://page/markdown" => .markdown,
+        .@"mcp://skill/pandascript" => unreachable,
     };
     const mime_type: []const u8 = switch (uri) {
         .@"mcp://page/html" => "text/html",
         .@"mcp://page/markdown" => "text/markdown",
+        .@"mcp://skill/pandascript" => unreachable,
     };
 
     const result: ResourceStreamingResult = .{
