@@ -22,7 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("js/js.zig");
 const Browser = @import("Browser.zig");
 const Session = @import("Session.zig");
-const HttpClient = @import("HttpClient.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 
 const Node = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -170,7 +170,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 if (elapsed >= timeout_ms) {
                     return .timeout;
                 }
-                try self.http_client.tick(@min(timeout_ms - elapsed, 200), .all);
+                try self.http_client.tick(@min(timeout_ms - elapsed, 200));
                 break :done_blk 0;
             },
         };
@@ -221,12 +221,12 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 
     const http_active = http_client.http_active;
-    const http_next_tick = http_client.next_tick_count;
-    const total_http_activity = http_active + http_next_tick + http_client.interception_layer.intercepted;
+    const http_buffered = http_client.dispatch_count;
+    const total_http_activity = http_active + http_buffered + http_client.intercepted;
     const total_network_activity = total_http_activity + http_client.ws_active;
 
     const ms_to_next_macrotask = browser.msToNextMacrotask();
-    const network_idle = total_network_activity == 0 and http_client.queue.first == null and http_client.ready_queue.first == null;
+    const network_idle = total_network_activity == 0 and http_client.pending_queue.first == null and http_client.ready_queue.first == null;
     const is_done = ms_to_next_macrotask == null and network_idle;
 
     // _we_ have nothing to run, but v8 is working on background tasks. We'll
@@ -302,7 +302,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             // for a client message; loop back and run macrotasks instead.
             ms_to_wait = @min(ms_to_wait, 10);
         }
-        try http_client.tick(@intCast(ms_to_wait), .all);
+        try http_client.tick(@intCast(ms_to_wait));
         return .{ .ok = 0 };
     }
 

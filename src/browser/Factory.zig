@@ -35,6 +35,8 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
+const DOMRect = @import("webapi/DOMRect.zig");
+const DOMRectReadOnly = @import("webapi/DOMRectReadOnly.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -288,6 +290,22 @@ pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, frame:
         // live_ranges list.
         frame._live_ranges.append(&abstract_range._range_link);
     }
+
+    return chain.get(1);
+}
+
+pub fn domRect(self: *Factory, rect: DOMRectReadOnly.Data) !*DOMRect {
+    const chain = try PrototypeChain(&.{ DOMRectReadOnly, DOMRect }).allocate(self._slab.allocator());
+
+    const base = chain.get(0);
+    base.* = .{
+        ._type = .{ .mutable = chain.get(1) },
+        ._x = rect.x,
+        ._y = rect.y,
+        ._width = rect.width,
+        ._height = rect.height,
+    };
+    chain.setLeaf(1, DOMRect{ ._proto = base });
 
     return chain.get(1);
 }

@@ -7,7 +7,7 @@
     \\  agent       starts an interactive AI agent that can browse the web
     \\  fetch       fetches the specified URL
     \\  help        displays this message
-    \\  mcp         starts an MCP (Model Context Protocol) server over stdio
+    \\  mcp         starts an MCP (Model Context Protocol) server (stdio or HTTP)
     \\  serve       starts a WebSocket CDP server
     \\  version     displays the version of {0s}
     \\
@@ -38,6 +38,9 @@
     \\  --cookie <PATH>
     \\          Path to a JSON file to load cookies from (read-only).
     \\          Defaults to no cookie loading.
+    \\  --disable-metrics
+    \\          Disables the /metrics endpoint (Prometheus text format).
+    \\          Defaults to false (the endpoint is exposed).
     \\  --host <HOST>
     \\          Host of the CDP server.
     \\          Defaults to "127.0.0.1".
@@ -78,6 +81,10 @@
     \\          prints one object; multiple URLs print {{"results": [ ... ]}} with
     \\          one object per URL. When used with --dump <MODE> the dumped
     \\          content is wrapped within each object.
+    \\  --metrics
+    \\          Write metrics (Prometheus text format) to stdout on exit, after
+    \\          any --dump output.
+    \\          Defaults to false.
     \\  --strip-mode <STRIP>
     \\          Comma-separated list of tag groups to remove from dump.
     \\          Defaults to no-strip.
@@ -120,15 +127,28 @@
     .mcp =
     \\usage: {0s} mcp [OPTIONS] [COMMON_OPTIONS]
     \\
-    \\Starts an MCP (Model Context Protocol) server over stdio.
+    \\Starts an MCP (Model Context Protocol) server. Defaults to stdio; pass
+    \\--port to serve over HTTP with an independent browsing session per client.
     \\
     \\options:
+    \\  --cdp-port <INT>
+    \\          Also run a CDP (WebSocket) server on this port. Cannot be
+    \\          combined with --port (they share one network listener).
+    \\          Defaults to disabled.
     \\  --cookie <PATH>
     \\          Path to a JSON file to load cookies from (read-only).
     \\          Defaults to no cookie loading.
     \\  --cookie-jar <PATH>
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
+    \\  --host <HOST>
+    \\          Host to bind when --port is set (e.g. 0.0.0.0 for all interfaces).
+    \\          Defaults to "127.0.0.1".
+    \\  --port <INT>
+    \\          Serve MCP over HTTP on this port instead of stdio. Clients POST
+    \\          JSON-RPC to /mcp; route requests to a session with the
+    \\          Mcp-Session-Id header.
+    \\          Defaults to stdio (no HTTP server).
     ,
     .agent =
     \\agent command
@@ -301,7 +321,7 @@
     \\  --http-max-response-size <INT>
     \\          Limits the acceptable response size for any request
     \\          e.g. XHR, fetch, script loading.
-    \\          Defaults to no limit.
+    \\          Defaults to 1 GiB.
     \\  --http-proxy <URL>
     \\          HTTP proxy for all HTTP requests.
     \\          username:password may be included for basic auth.

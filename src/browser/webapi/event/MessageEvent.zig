@@ -35,12 +35,14 @@ const MessageEvent = @This();
 _proto: *Event,
 _data: ?Data = null,
 _origin: []const u8 = "",
+_last_event_id: []const u8 = "",
 _source: ?*Window = null,
 _ports: []const *MessagePort = &.{},
 
 const MessageEventOptions = struct {
     data: ?Data = null,
     origin: ?[]const u8 = null,
+    lastEventId: ?[]const u8 = null,
     source: ?*Window = null,
     ports: []const *MessagePort = &.{},
 };
@@ -77,6 +79,7 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
             ._proto = undefined,
             ._data = opts.data,
             ._origin = if (opts.origin) |str| try arena.dupe(u8, str) else "",
+            ._last_event_id = if (opts.lastEventId) |str| try arena.dupe(u8, str) else "",
             ._source = opts.source,
             ._ports = if (opts.ports.len == 0) &.{} else try arena.dupe(*MessagePort, opts.ports),
         },
@@ -117,6 +120,10 @@ pub fn getOrigin(self: *const MessageEvent) []const u8 {
     return self._origin;
 }
 
+pub fn getLastEventId(self: *const MessageEvent) []const u8 {
+    return self._last_event_id;
+}
+
 pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?Window.Access {
     switch (exec.js.global) {
         .frame => |frame| {
@@ -149,6 +156,7 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(MessageEvent.init, .{});
     pub const data = bridge.accessor(MessageEvent.getData, null, .{});
     pub const origin = bridge.accessor(MessageEvent.getOrigin, null, .{});
+    pub const lastEventId = bridge.accessor(MessageEvent.getLastEventId, null, .{});
     pub const source = bridge.accessor(MessageEvent.getSource, null, .{});
     pub const ports = bridge.accessor(MessageEvent.getPorts, null, .{});
 };

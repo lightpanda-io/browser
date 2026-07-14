@@ -61,7 +61,7 @@ const popover = @import("webapi/element/popover.zig");
 const slotting = @import("webapi/element/slotting.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 
-const HttpClient = @import("HttpClient.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 const sys_url = @import("../sys/url.zig");
 
 const timestamp = @import("../datetime.zig").timestamp;
@@ -210,6 +210,12 @@ _customized_builtin_disconnected_callback_invoked: std.AutoHashMapUnmanaged(*Ele
 // This is set when an element is being upgraded (constructor is called).
 // The constructor can access this to get the element being upgraded.
 _upgrading_element: ?*Node = null,
+
+// Set when materializing the fragment parser's context element. The element
+// is never inserted into the tree so if its a custom element ,we must not run
+// its constructor (else we'll end up in an endless loop if the constructor
+// sets this.innerHTML = '...', which happens).
+_skip_custom_element_upgrade: bool = false,
 
 // List of custom elements that were created before their definition was registered
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
@@ -599,15 +605,15 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     self._load_state = .parsing;
     self._last_navigate_error = null;
 
-    const req_id = self._session.browser.http_client.nextReqId();
     log.info(.frame, "navigate", .{
         .url = request_url,
         .method = opts.method,
         .reason = opts.reason,
         .body = opts.body != null,
-        .req_id = req_id,
         .type = self._type,
     });
+
+    const http_client = &session.browser.http_client;
 
     // Handle synthetic navigations: about:blank and blob: URLs
     const is_about_blank = std.mem.eql(u8, "about:blank", request_url);
@@ -672,6 +678,10 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             };
         }
 
+        // No real request is made, but CDP still correlates the navigation
+        // events by request id, so consume one.
+        const req_id = http_client.incrReqId();
+
         session.notification.dispatch(.frame_navigate, &.{
             .opts = opts,
             .req_id = req_id,
@@ -696,9 +706,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .timestamp = timestamp(.monotonic),
         });
 
-        // force next request id manually b/c we won't create a real req.
-        _ = session.browser.http_client.incrReqId();
-
         if (self.parent == null) {
             session.navigation._current_navigation_kind = opts.kind;
             try session.navigation.commitNavigation(self);
@@ -707,8 +714,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         self.documentIsComplete();
         return;
     }
-
-    const http_client = &session.browser.http_client;
 
     self._http_status = null;
     self._http_headers = .empty;
@@ -721,7 +726,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     };
     self.origin = try URL.getOrigin(self.arena, self.url);
 
-    self._req_id = req_id;
     self._navigated_options = .{
         .cdp_id = opts.cdp_id,
         .reason = opts.reason,
@@ -730,14 +734,37 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
     };
 
-    var headers = try http_client.newHeaders();
-    try headers.add(lp.Config.HttpHeaders.navigation_accept);
-    if (opts.header) |hdr| {
-        try headers.add(hdr);
-    }
-    if (opts.referer) |ref| {
-        const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
-        try headers.add(ref_header);
+    const transfer = try http_client.newRequest(.{
+        .ctx = self,
+        .url = self.url,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .method = opts.method,
+        .body = opts.body,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = opts.initiator_url orelse self.url,
+        .resource_type = .document,
+        .notification = self._session.notification,
+        .header_callback = frameHeaderDoneCallback,
+        .data_callback = frameDataCallback,
+        .done_callback = frameDoneCallback,
+        .error_callback = frameErrorCallback,
+        // The frame tracks its navigation by id (_req_id), never by pointer.
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, &self._http_owner);
+    self._req_id = transfer.id;
+
+    {
+        // Ours until submit; clean up if header setup fails.
+        errdefer transfer.deinit();
+        try transfer.req.headers.add(lp.Config.HttpHeaders.navigation_accept);
+        if (opts.header) |hdr| {
+            try transfer.req.headers.add(hdr);
+        }
+        if (opts.referer) |ref| {
+            const ref_header = try std.mem.concatWithSentinel(transfer.arena, u8, &.{ "Referer: ", ref }, 0);
+            try transfer.req.headers.add(ref_header);
+        }
     }
 
     // A root navigation issued against a pending Page (i.e. one allocated by
@@ -753,7 +780,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     session.notification.dispatch(.frame_navigate, &.{
         .opts = opts,
         .url = self.url,
-        .req_id = req_id,
+        .req_id = transfer.id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
@@ -765,37 +792,24 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     session.navigation._current_navigation_kind = opts.kind;
 
-    self.makeRequest(.{
-        .ctx = self,
-        .url = self.url,
-        .frame_id = self._frame_id,
-        .loader_id = self._loader_id,
-        .method = opts.method,
-        .headers = headers,
-        .body = opts.body,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = opts.initiator_url orelse self.url,
-        .resource_type = .document,
-        .notification = self._session.notification,
-        .header_callback = frameHeaderDoneCallback,
-        .data_callback = frameDataCallback,
-        .done_callback = frameDoneCallback,
-        .error_callback = frameErrorCallback,
-    }) catch |err| {
+    transfer.submit() catch |err| {
         log.err(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
         return err;
     };
 }
 
 fn recordNavigateTelemetry(self: *Frame, tls: bool) void {
+    const TE = @import("../telemetry/telemetry.zig").Event;
+    const context: TE.Navigate.Context = if (self.parent != null)
+        .iframe
+    else if (self.window._opener != null)
+        .popup
+    else
+        .page;
+    lp.metrics.navigate.incr(context);
     self._session.browser.app.telemetry.record(.{ .navigate = .{
         .tls = tls,
-        .context = if (self.parent != null)
-            .iframe
-        else if (self.window._opener != null)
-            .popup
-        else
-            .page,
+        .context = context,
     } });
 }
 
@@ -964,6 +978,11 @@ pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
     return self._session.browser.http_client.request(req, &self._http_owner);
 }
 
+// Two-phase variant; see HttpClient.newRequest for the ownership contract.
+pub fn newRequest(self: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
+    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+}
+
 // Synchronously abort every transfer and WebSocket owned by this frame
 // and all of its descendants.
 pub fn abortTransfers(self: *Frame) void {
@@ -972,8 +991,6 @@ pub fn abortTransfers(self: *Frame) void {
     }
     const http_client = &self._session.browser.http_client;
     http_client.abortOwner(&self._http_owner);
-    // abortOwner misses deferred contexts whose transfer already completed.
-    http_client.deferring_layer.cancelFrame(self._frame_id);
 }
 
 pub fn documentIsLoaded(self: *Frame) void {
@@ -1146,8 +1163,8 @@ fn notifyParentLoadComplete(self: *Frame) void {
     parent.iframeCompletedLoading(self.iframe.?, self._delays_parent_load);
 }
 
-fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
-    var self: *Frame = @ptrCast(@alignCast(response.ctx));
+fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
+    var self: *Frame = @ptrCast(@alignCast(transfer.req.ctx));
 
     // Commit point for a pending root navigation. The session has been
     // holding the OLD page alive during the round-trip; now that response
@@ -1159,7 +1176,7 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
         try self._session.commitPendingPage(self._page);
     }
 
-    const response_url = response.url();
+    const response_url = transfer.req.url;
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
         self.url = try self.arena.dupeZ(u8, response_url);
@@ -1171,7 +1188,7 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
     // Page.reload doesn't re-POST form data to the redirect target. Conservative
     // default — 307/308 technically preserve the method per RFC 7231, but
     // resubmitting form data is the more dangerous failure mode.
-    if ((response.redirectCount() orelse 0) > 0) {
+    if ((transfer.redirectCount() orelse 0) > 0) {
         if (self._navigated_options) |*no| {
             no.method = .GET;
             no.body = null;
@@ -1188,14 +1205,14 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
     if (comptime IS_DEBUG) {
         log.debug(.frame, "navigate header", .{
             .url = self.url,
-            .status = response.status(),
-            .content_type = response.contentType(),
+            .status = transfer.responseStatus(),
+            .content_type = transfer.contentType(),
             .type = self._type,
         });
     }
 
-    self._http_status = response.status();
-    var it = response.headerIterator();
+    self._http_status = transfer.responseStatus();
+    var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
         try self._http_headers.append(self.arena, .{
             .name = try self.arena.dupe(u8, hdr.name),
@@ -1220,7 +1237,7 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
     // If the response is a file download, stream its body to disk instead of
     // parsing it as a page. This sets _parse_state to .download, which the
     // data/done callbacks below special-case.
-    _ = try self.maybeStartDownload(response);
+    _ = try self.maybeStartDownload(transfer);
 
     return .proceed;
 }
@@ -1229,7 +1246,7 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
 // treated as a download when Browser.setDownloadBehavior opted in
 // (allow/allowAndName) and the response carries Content-Disposition: attachment.
 // See issue #2701.
-fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
+fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     const session = self._session;
     switch (session.download_behavior) {
         .allow, .allow_and_name => {},
@@ -1237,7 +1254,7 @@ fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
     }
 
     const disposition: HttpClient.Header = blk: {
-        var it = response.headerIterator();
+        var it = transfer.responseHeaderIterator();
         while (it.next()) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "content-disposition")) {
                 break :blk hdr;
@@ -1283,7 +1300,7 @@ fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
         return false;
     };
 
-    const total: ?u64 = if (response.contentLength()) |cl| cl else null;
+    const total: ?u64 = if (transfer.getContentLength()) |cl| cl else null;
 
     self._parse_state = .{ .download = .{
         .guid = guid,
@@ -1366,14 +1383,14 @@ fn isUtf16Encoding(charset: []const u8) bool {
     return std.mem.eql(u8, charset, "UTF-16LE") or std.mem.eql(u8, charset, "UTF-16BE");
 }
 
-fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
-    var self: *Frame = @ptrCast(@alignCast(response.ctx));
+fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    var self: *Frame = @ptrCast(@alignCast(transfer.req.ctx));
 
     if (self._parse_state == .pre) {
         // we lazily do this, because we might need the first chunk of data
         // to sniff the content type
         var mime: Mime = blk: {
-            if (response.contentType()) |ct| {
+            if (transfer.contentType()) |ct| {
                 break :blk try Mime.parse(ct);
             }
             break :blk Mime.sniff(data);
@@ -2098,18 +2115,10 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     const http_client = &session.browser.http_client;
 
-    // `syncRequest` below registers a blocking request for this frame, which
-    // makes the DeferringLayer hold back the completion callbacks of every
-    // OTHER in-flight transfer for the frame (e.g. a `<script defer>` still
-    // loading) so they don't run JS while we're on the parser stack. Those
-    // deferred completions must be flushed once the sync fetch returns —
-    // otherwise a `<script defer>` whose fetch finishes during this window is
-    // left at `complete == false` forever, the deferred-script queue never
-    // drains, and `documentIsLoaded` (readyState -> "interactive",
-    // DOMContentLoaded, the load event) never fires. The blocking-`<script>`
-    // path (ScriptManager.addFromElement) and the worker path already flush;
-    // the external-stylesheet path must too.
-    defer http_client.deferring_layer.flushFrame(self._frame_id);
+    // `syncRequest` below registers a blocking request for this frame; the
+    // client's dispatcher holds back every OTHER transfer's callbacks for
+    // the frame while it's registered (they'd run JS on the parser's stack)
+    // and delivers them on the next tick after the sync fetch returns.
 
     var headers = try http_client.newHeaders();
     try headers.add("Accept: text/css,*/*;q=0.1");
@@ -2137,6 +2146,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .cookie_origin = self.url,
         .resource_type = .stylesheet,
         .notification = session.notification,
+        .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }) catch |err| {
         log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));

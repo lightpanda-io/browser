@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const HttpClient = @import("HttpClient.zig");
 const http = @import("../network/http.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 
 const js = @import("js/js.zig");
 const Session = @import("Session.zig");
@@ -321,7 +321,7 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
         };
         switch (entry.value_ptr.state) {
             .loading => {
-                _ = try client.tick(200, .sync_wait);
+                _ = try client.tickSync(200);
                 continue;
             },
             .done => |script| {
@@ -454,6 +454,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         .data_callback = Script.dataCallback,
         .done_callback = Script.doneCallback,
         .error_callback = Script.errorCallback,
+        .shutdown_callback = Script.shutdownCallback,
     }) catch |err| {
         self.async_scripts.remove(&script.node);
         return err;
@@ -660,19 +661,19 @@ pub const Script = struct {
         self.manager.releaseArena(self.arena);
     }
 
-    pub fn startCallback(response: HttpClient.Response) !void {
-        log.debug(.http, "script fetch start", .{ .req = response });
+    pub fn startCallback(transfer: *HttpClient.Transfer) !void {
+        log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
-    pub fn headerCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
-        const self: *Script = @ptrCast(@alignCast(response.ctx));
+    pub fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
+        const self: *Script = @ptrCast(@alignCast(transfer.req.ctx));
 
-        self.status = response.status().?;
-        if (response.status() != 200) {
+        self.status = transfer.responseStatus().?;
+        if (transfer.responseStatus() != 200) {
             log.info(.http, "script header", .{
-                .req = response,
-                .status = response.status(),
-                .content_type = response.contentType(),
+                .req = transfer,
+                .status = transfer.responseStatus(),
+                .content_type = transfer.contentType(),
             });
 
             return .abort;
@@ -680,64 +681,61 @@ pub const Script = struct {
 
         if (comptime IS_DEBUG) {
             log.debug(.http, "script header", .{
-                .req = response,
-                .status = response.status(),
-                .content_type = response.contentType(),
+                .req = transfer,
+                .status = transfer.responseStatus(),
+                .content_type = transfer.contentType(),
             });
         }
 
-        switch (response.inner) {
-            .transfer => |transfer| {
-                // temp debug, trying to figure out why the next assert sometimes
-                // fails. Is the buffer just corrupt or is headerCallback really
-                // being called twice?
-                lp.assert(self.header_callback_called == false, "ScriptManagerBase.Header recall", .{
-                    .m = @tagName(std.meta.activeTag(self.extra)),
-                    .a1 = self.debug_transfer_id,
-                    .a2 = self.debug_transfer_tries,
-                    .a3 = self.debug_transfer_aborted,
-                    .a4 = self.debug_transfer_bytes_received,
-                    .a5 = self.debug_transfer_notified_fail,
-                    .a8 = self.debug_transfer_auth_challenge,
-                    .a9 = self.debug_transfer_easy_id,
-                    .b1 = transfer.id,
-                    .b2 = transfer._tries,
-                    .b3 = transfer.state == .aborted,
-                    .b4 = transfer.res.bytes_received,
-                    .b5 = transfer._notified_fail,
-                    .b8 = transfer._auth_challenge != null,
-                    .b9 = if (transfer._conn) |c| @intFromPtr(c._easy) else 0,
-                });
-                self.header_callback_called = true;
-                self.debug_transfer_id = transfer.id;
-                self.debug_transfer_tries = transfer._tries;
-                self.debug_transfer_aborted = transfer.state == .aborted;
-                self.debug_transfer_bytes_received = transfer.res.bytes_received;
-                self.debug_transfer_notified_fail = transfer._notified_fail;
-                self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
-                self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
-            },
-            else => {},
+        {
+            // temp debug, trying to figure out why the next assert sometimes
+            // fails. Is the buffer just corrupt or is headerCallback really
+            // being called twice?
+            lp.assert(self.header_callback_called == false, "ScriptManagerBase.Header recall", .{
+                .m = @tagName(std.meta.activeTag(self.extra)),
+                .a1 = self.debug_transfer_id,
+                .a2 = self.debug_transfer_tries,
+                .a3 = self.debug_transfer_aborted,
+                .a4 = self.debug_transfer_bytes_received,
+                .a5 = self.debug_transfer_notified_fail,
+                .a8 = self.debug_transfer_auth_challenge,
+                .a9 = self.debug_transfer_easy_id,
+                .b1 = transfer.id,
+                .b2 = transfer._tries,
+                .b3 = transfer.state == .aborted,
+                .b4 = transfer.res.bytes_received,
+                .b5 = transfer._notified_fail,
+                .b8 = transfer._auth_challenge != null,
+                .b9 = if (transfer._conn) |c| @intFromPtr(c._easy) else 0,
+            });
+            self.header_callback_called = true;
+            self.debug_transfer_id = transfer.id;
+            self.debug_transfer_tries = transfer._tries;
+            self.debug_transfer_aborted = transfer.state == .aborted;
+            self.debug_transfer_bytes_received = transfer.res.bytes_received;
+            self.debug_transfer_notified_fail = transfer._notified_fail;
+            self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
+            self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManagerBase.Header buffer", .{ .capacity = self.source.remote.capacity });
         var buffer: std.ArrayList(u8) = .empty;
-        if (response.contentLength()) |cl| {
+        if (transfer.getContentLength()) |cl| {
             try buffer.ensureTotalCapacity(self.arena, cl);
         }
         self.source = .{ .remote = buffer };
         return .proceed;
     }
 
-    pub fn dataCallback(response: HttpClient.Response, data: []const u8) !void {
-        const self: *Script = @ptrCast(@alignCast(response.ctx));
-        self._dataCallback(response, data) catch |err| {
-            log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = response, .len = data.len });
+    pub fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+        const self: *Script = @ptrCast(@alignCast(transfer.req.ctx));
+        self._dataCallback(transfer, data) catch |err| {
+            log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
             return err;
         };
     }
 
-    fn _dataCallback(self: *Script, _: HttpClient.Response, data: []const u8) !void {
+    fn _dataCallback(self: *Script, _: *HttpClient.Transfer, data: []const u8) !void {
         try self.source.remote.appendSlice(self.arena, data);
     }
 
@@ -937,6 +935,7 @@ pub const Script = struct {
         }
 
         const caught = try_catch.caughtOrError(frame.local_arena, error.Unknown);
+        lp.metrics.script_errors.incr();
         log.warn(.js, "eval script", .{
             .url = url,
             .caught = caught,

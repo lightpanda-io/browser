@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=constants type=module>
+  testing.expectEqual(0, EventSource.CONNECTING);
+  testing.expectEqual(1, EventSource.OPEN);
+  testing.expectEqual(2, EventSource.CLOSED);
+
+  let threw = false;
+  try {
+    new EventSource('http://this is invalid/');
+  } catch (e) {
+    threw = true;
+    testing.expectEqual('SyntaxError', e.name);
+  }
+  testing.expectTrue(threw, 'invalid URL must throw');
+</script>
+
+<script id=simple type=module>
+{
+  const state = await testing.async();
+  const received = [];
+  const es = new EventSource('http://127.0.0.1:9582/sse/simple');
+  testing.expectEqual(0, es.readyState);
+  testing.expectEqual('http://127.0.0.1:9582/sse/simple', es.url);
+  testing.expectEqual(false, es.withCredentials);
+
+  es.onopen = () => {
+    received.push(['open', es.readyState]);
+  };
+  es.onmessage = (e) => {
+    received.push(['message', e.data, e.lastEventId, e.origin, e.isTrusted]);
+  };
+  es.addEventListener('custom', (e) => {
+    received.push(['custom', e.data, e.lastEventId]);
+    es.close();
+    received.push(['closed', es.readyState]);
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([
+      ['open', 1],
+      ['message', 'first', '', 'http://127.0.0.1:9582', true],
+      ['custom', 'a\nb', '42'],
+      ['closed', 2],
+    ], received);
+  });
+}
+</script>
+
+<script id=streaming type=module>
+{
+  // The server only sends "second" after seeing our /sse/flag request, which
+  // we make on receiving "first" — so this only completes if data events are
+  // delivered while the response is still streaming.
+  const state = await testing.async();
+  const received = [];
+  const es = new EventSource('http://127.0.0.1:9582/sse/streaming');
+  es.onmessage = (e) => {
+    received.push(e.data);
+    if (e.data === 'first') {
+      fetch('http://127.0.0.1:9582/sse/flag');
+    } else {
+      es.close();
+      state.resolve();
+    }
+  };
+
+  await state.done(() => {
+    testing.expectEqual(['first', 'second'], received);
+  });
+}
+</script>
+
+<script id=reconnect type=module>
+{
+  const state = await testing.async();
+  const received = [];
+  const es = new EventSource('http://127.0.0.1:9582/sse/reconnect');
+  es.onerror = () => {
+    received.push(['error', es.readyState]);
+  };
+  es.onmessage = (e) => {
+    received.push(e.data);
+    if (e.data === 'two') {
+      es.close();
+      state.resolve();
+    }
+  };
+
+  await state.done(() => {
+    testing.expectEqual(['one', ['error', 0], 'two'], received);
+  });
+}
+</script>
+
+<script id=pending_reconnect_at_teardown type=module>
+{
+  // Deliberately left open: the stream ends and the source sits on its
+  // (60s) reconnect timer with no transfer, so page teardown can only
+  // clean it up through the scheduler-task finalizer. The test runner's
+  // leak detection fails this test if that path regresses.
+  const state = await testing.async();
+  const es = new EventSource('http://127.0.0.1:9582/sse/long_retry');
+  es.onerror = () => state.resolve(es.readyState);
+
+  await state.done((readyState) => {
+    testing.expectEqual(0, readyState);
+  });
+}
+</script>
+
+<script id=fail_status type=module>
+{
+  const state = await testing.async();
+  const es = new EventSource('http://127.0.0.1:9582/sse/404');
+  es.onmessage = () => { throw new Error('unexpected message'); };
+  es.onerror = () => state.resolve(es.readyState);
+
+  await state.done((readyState) => {
+    testing.expectEqual(2, readyState);
+  });
+}
+</script>
+
+<script id=fail_mime type=module>
+{
+  const state = await testing.async();
+  const es = new EventSource('http://127.0.0.1:9582/sse/badmime');
+  es.onmessage = () => { throw new Error('unexpected message'); };
+  es.onerror = () => state.resolve(es.readyState);
+
+  await state.done((readyState) => {
+    testing.expectEqual(2, readyState);
+  });
+}
+</script>
+
+<script id=fail_scheme type=module>
+{
+  const state = await testing.async();
+  const es = new EventSource('ftp://127.0.0.1/');
+  es.onerror = () => state.resolve(es.readyState);
+
+  await state.done((readyState) => {
+    testing.expectEqual(2, readyState);
+  });
+}
+</script>

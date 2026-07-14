@@ -21,8 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("browser/js/js.zig");
 const Frame = @import("browser/Frame.zig");
-const Transfer = @import("browser/HttpClient.zig").Transfer;
-const Response = @import("browser/HttpClient.zig").Response;
+const Transfer = @import("network/HttpClient.zig").Transfer;
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -224,7 +223,6 @@ pub const ResponseData = struct {
 
 pub const ResponseHeaderDone = struct {
     transfer: *Transfer,
-    response: *const Response,
 };
 
 pub const RequestDone = struct {

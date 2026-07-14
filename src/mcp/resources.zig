@@ -104,7 +104,7 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         });
     }
 
-    const frame = server.session.currentFrame() orelse {
+    const frame = server.active_session.session.currentFrame() orelse {
         return server.sendError(req_id, .FrameNotLoaded, "Page not loaded");
     };
 

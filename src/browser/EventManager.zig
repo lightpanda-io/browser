@@ -286,8 +286,9 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
 
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
-            ls.toLocal(inline_handler).callWithThis(void, target_et, .{event}) catch |err| {
-                log.warn(.event, "inline handler", .{ .err = err });
+            var caught: js.TryCatch.Caught = undefined;
+            ls.toLocal(inline_handler).tryCallWithThis(void, target_et, .{event}, &caught) catch |err| {
+                log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
             };
 
             if (event._stop_propagation) {
@@ -325,8 +326,9 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
                     event._target = getAdjustedTarget(original_target, current_target);
                 }
 
-                ls.toLocal(inline_handler).callWithThis(void, current_target, .{event}) catch |err| {
-                    log.warn(.event, "inline handler", .{ .err = err });
+                var caught: js.TryCatch.Caught = undefined;
+                ls.toLocal(inline_handler).tryCallWithThis(void, current_target, .{event}, &caught) catch |err| {
+                    log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
                 };
 
                 if (event._needs_retargeting) {

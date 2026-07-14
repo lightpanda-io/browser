@@ -290,10 +290,9 @@ test "WebApi: HTML.Link external stylesheet" {
 }
 
 // Regression: a synchronous external-stylesheet fetch must not strand the
-// completion of an in-flight <script defer> (deferred by the blocking-request
-// window). Otherwise the deferred-script queue never drains and the document
-// is stuck at readyState "loading". See Frame.loadExternalStylesheet's
-// flushFrame call.
+// completion of an in-flight <script defer> (held back by the blocking-
+// request gate during the sync window). Otherwise the deferred-script queue
+// never drains and the document is stuck at readyState "loading".
 test "WebApi: HTML.Link deferred script then external stylesheet" {
     const filter: testing.LogFilter = .init(&.{.http});
     defer filter.deinit();

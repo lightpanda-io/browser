@@ -664,17 +664,17 @@ fn nextAfterSubtree(node: *Node, root: *Node) ?*Node {
     return null;
 }
 
-pub fn getBoundingClientRect(self: *const Range, frame: *Frame) DOMRect {
+pub fn getBoundingClientRect(self: *const Range, frame: *Frame) !*DOMRect {
     if (self._proto.getCollapsed()) {
-        return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
+        return DOMRect.create(.{}, frame._factory);
     }
     const element = self.getContainerElement() orelse {
-        return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
+        return DOMRect.create(.{}, frame._factory);
     };
     return element.getBoundingClientRect(frame);
 }
 
-pub fn getClientRects(self: *const Range, frame: *Frame) ![]DOMRect {
+pub fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
     if (self._proto.getCollapsed()) {
         return &.{};
     }

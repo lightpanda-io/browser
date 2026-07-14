@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
-const HttpClient = @import("../../HttpClient.zig");
 const http = @import("../../../network/http.zig");
+const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
@@ -47,7 +47,7 @@ _exec: *const Execution,
 _proto: *XMLHttpRequestEventTarget,
 _upload: ?*XMLHttpRequestUpload = null,
 _arena: Allocator,
-_http_response: ?HttpClient.Response = null,
+_http_transfer: ?*Transfer = null,
 
 // number of inflight requests, we can have multiple, e.g. xhr calling its own
 // send from the onload callback
@@ -68,7 +68,7 @@ _response_mime: ?Mime = null,
 _override_mime: ?Mime = null,
 _response_xml: ?*Node.Document = null,
 _response_headers: std.ArrayList([]const u8) = .empty,
-_response_type: ResponseType = .text,
+_response_type: ResponseType = .default,
 
 _ready_state: ReadyState = .unsent,
 _on_ready_state_change: ?js.Function.Global = null,
@@ -83,7 +83,7 @@ const ReadyState = enum(u8) {
     done = 4,
 };
 
-const Response = union(ResponseType) {
+const Response = union(enum) {
     text: []const u8,
     json: js.Value.Global,
     document: *Node.Document,
@@ -91,11 +91,18 @@ const Response = union(ResponseType) {
 };
 
 const ResponseType = enum {
+    default, // behaves like `text`, but its string representation is ""
     text,
     json,
     document,
     arraybuffer,
-    // TODO: other types to support
+
+    pub fn toString(self: ResponseType) []const u8 {
+        return switch (self) {
+            .default => "",
+            else => @tagName(self),
+        };
+    }
 };
 
 pub fn init(exec: *const Execution) !*XMLHttpRequest {
@@ -111,9 +118,9 @@ pub fn init(exec: *const Execution) !*XMLHttpRequest {
 }
 
 pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
-    if (self._http_response) |resp| {
+    if (self._http_transfer) |resp| {
         resp.abort(error.Abort);
-        self._http_response = null;
+        self._http_transfer = null;
     }
 
     if (self._on_ready_state_change) |func| {
@@ -182,9 +189,9 @@ pub fn setTimeout(self: *XMLHttpRequest, value: u32) void {
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
     // Abort any in-progress request
-    if (self._http_response) |transfer| {
+    if (self._http_transfer) |transfer| {
         transfer.abort(error.Abort);
-        self._http_response = null;
+        self._http_transfer = null;
     }
     self._send_flag = false;
 
@@ -263,7 +270,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     self._active_requests += 1;
     self._send_flag = true;
 
-    exec.makeRequest(.{
+    const transfer = exec.newRequest(.{
         .ctx = self,
         .url = self._url,
         .method = self._method,
@@ -276,7 +283,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .resource_type = .xhr,
         .timeout_ms = self._timeout,
         .notification = session.notification,
-        .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -285,6 +291,21 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .body_outlives_request = true,
     }) catch |err| {
         self.releaseSelfRef();
+        self._send_flag = false;
+        return err;
+    };
+
+    // Held for abort() / open() / deinit; the error, shutdown and done
+    // callbacks clear it.
+    self._http_transfer = transfer;
+
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
+    }
+
+    transfer.submit() catch |err| {
+        // don't releaseSelfRef, submit() has taken ownership and will call
+        // our error callback
         self._send_flag = false;
         return err;
     };
@@ -340,16 +361,24 @@ pub fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution
     return buf.written();
 }
 
-pub fn getResponseType(self: *const XMLHttpRequest) []const u8 {
-    if (self._ready_state != .done) {
-        return "";
-    }
-    return @tagName(self._response_type);
+pub fn getResponseType(self: *const XMLHttpRequest) ResponseType {
+    return self._response_type;
 }
 
-pub fn setResponseType(self: *XMLHttpRequest, value: []const u8) void {
+pub fn setResponseType(self: *XMLHttpRequest, value: []const u8) !void {
+    if (self._ready_state == .loading or self._ready_state == .done) {
+        return error.InvalidStateError;
+    }
+
+    if (value.len == 0) {
+        self._response_type = .default;
+        return;
+    }
+
     if (std.meta.stringToEnum(ResponseType, value)) |rt| {
-        self._response_type = rt;
+        if (rt != .default) {
+            self._response_type = rt;
+        }
     }
 }
 
@@ -385,9 +414,21 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
 
     const data = self._response_data.items;
     const res: Response = switch (self._response_type) {
-        .text => .{ .text = data },
+        .default, .text => .{ .text = data },
         .json => blk: {
-            const value = try exec.js.local.?.parseJSON(data);
+            const local = exec.js.local.?;
+
+            // per spec, we need to strip a JSON's body leading BOM
+            const json_text = if (std.mem.startsWith(u8, data, "\u{FEFF}")) data[3..] else data;
+
+            var try_catch: js.TryCatch = undefined;
+            try_catch.init(local);
+            defer try_catch.deinit();
+            const value = local.parseJSON(json_text) catch {
+                // if we fail to parse, we return null, not an error.
+                const null_value = js.Value{ .local = local, .handle = local.isolate.initNull() };
+                break :blk .{ .json = try null_value.persist() };
+            };
             break :blk .{ .json = try value.persist() };
         },
         .document => blk: {
@@ -429,11 +470,9 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
         };
     }
 
-    // responseType="" (we map "" to .text — see setResponseType): lazily
-    // produce a Document when the final MIME type is XML, per WHATWG XHR
-    // "set a document response". For an HTML final MIME the spec returns
-    // null in this branch, so we only act on text/xml.
-    if (self._response_type != .text) return null;
+    if (self._response_type != .default) {
+        return null;
+    }
 
     if (self._response_xml) |document| {
         return document;
@@ -453,32 +492,24 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
     }
 }
 
-fn httpStartCallback(response: HttpClient.Response) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
-    if (comptime IS_DEBUG) {
-        log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
-    }
-    self._http_response = response;
-}
-
-fn httpHeaderCallback(response: HttpClient.Response, header: http.Header) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
+fn httpHeaderCallback(transfer: *Transfer, header: http.Header) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ header.name, header.value });
     try self._response_headers.append(self._arena, joined);
 }
 
-fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
+fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "request header", .{
             .source = "xhr",
             .url = self._url,
-            .status = response.status(),
+            .status = transfer.responseStatus(),
         });
     }
 
-    if (response.contentType()) |ct| {
+    if (transfer.contentType()) |ct| {
         self._response_mime = Mime.parse(ct) catch |e| {
             log.info(.http, "invalid content type", .{
                 .content_Type = ct,
@@ -489,18 +520,18 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
         };
     }
 
-    var it = response.headerIterator();
+    var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
         const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
         try self._response_headers.append(self._arena, joined);
     }
 
-    self._response_status = response.status().?;
-    if (response.contentLength()) |cl| {
+    self._response_status = transfer.responseStatus().?;
+    if (transfer.getContentLength()) |cl| {
         self._response_len = cl;
         try self._response_data.ensureTotalCapacity(self._arena, cl);
     }
-    self._response_url = try self._arena.dupeZ(u8, response.url());
+    self._response_url = try self._arena.dupeZ(u8, transfer.req.url);
 
     const exec = self._exec;
 
@@ -515,8 +546,8 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
     return .proceed;
 }
 
-fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
+fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
     try self._response_data.appendSlice(self._arena, data);
 
     try self._proto.dispatch(.progress, .{
@@ -537,7 +568,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 
     // Not that the request is done, the http/client will free the transfer
     // object. It isn't safe to keep it around.
-    self._http_response = null;
+    self._http_transfer = null;
 
     const exec = self._exec;
 
@@ -560,22 +591,22 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
     // http client will close it after an error, it isn't safe to keep around
     self.handleError(err);
-    if (self._http_response != null) {
-        self._http_response = null;
+    if (self._http_transfer != null) {
+        self._http_transfer = null;
     }
     self.releaseSelfRef();
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
-    self._http_response = null;
+    self._http_transfer = null;
     self.releaseSelfRef();
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
     self.handleError(error.Abort);
-    if (self._http_response) |resp| {
-        self._http_response = null;
+    if (self._http_transfer) |resp| {
+        self._http_transfer = null;
         resp.abort(error.Abort);
     }
     self.releaseSelfRef();

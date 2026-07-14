@@ -186,7 +186,7 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
     };
 }
 
-fn isRepl(self: *const Terminal) bool {
+pub fn isRepl(self: *const Terminal) bool {
     return self.repl_arena != null;
 }
 
@@ -1351,6 +1351,15 @@ pub fn printAssistant(_: *Terminal, text: []const u8) void {
     const fd = std.posix.STDOUT_FILENO;
     _ = std.posix.write(fd, text) catch {};
     _ = std.posix.write(fd, "\n") catch {};
+}
+
+/// Write a streamed assistant-text delta verbatim (no trailing newline). The
+/// caller must pause the spinner first (its stderr frames would otherwise
+/// interleave with this stdout text) and emit a closing newline when the
+/// stream ends.
+pub fn printAssistantDelta(_: *Terminal, text: []const u8) void {
+    if (text.len == 0) return;
+    _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
 }
 
 // Must exceed the downstream LLM-judge's snapshot window for full grounding

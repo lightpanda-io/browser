@@ -21,9 +21,12 @@ const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const Inbox = @import("../Inbox.zig");
-const Network = @import("../network/Network.zig");
 const Notification = @import("../Notification.zig");
+
 const WS = @import("../network/WS.zig");
+const Network = @import("../network/Network.zig");
+const Transfer = @import("../network/HttpClient.zig").Transfer;
+
 const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
@@ -32,7 +35,6 @@ const Page = @import("../browser/Page.zig");
 const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
-const Transfer = @import("../browser/HttpClient.zig").Transfer;
 
 const Connection = @import("Connection.zig");
 const Incrementing = @import("id.zig").Incrementing;
@@ -256,7 +258,7 @@ pub fn tick(self: *CDP) !bool {
             // No active page yet (or a teardown is in flight). Fall
             // back to ticking the http client directly so CDP messages
             // still get dispatched.
-            self.browser.http_client.tick(wait_ms, .all) catch |err| switch (err) {
+            self.browser.http_client.tick(wait_ms) catch |err| switch (err) {
                 error.ClientDisconnected => return false,
                 else => {
                     log.err(.app, "http tick", .{ .err = err });
@@ -297,6 +299,8 @@ pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []con
 // keeping `str` and the backing storage for `input`'s string slices
 // alive for the duration of the call.
 fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, input: InputMessage) !void {
+    lp.metrics.cdp_commands.incr();
+
     var command = Command{
         .input = .{
             .json = str,
@@ -327,6 +331,10 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
         };
     } else {
         dispatchCommand(&command, input.method) catch |err| {
+            switch (err) {
+                error.UnknownDomain, error.UnknownMethod => lp.metrics.cdp_unknown_commands.incr(),
+                else => {},
+            }
             command.sendError(-31998, @errorName(err), .{}) catch return err;
         };
     }
@@ -981,8 +989,7 @@ pub const BrowserContext = struct {
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.
                 .must_encode = blk: {
-                    const response = msg.response;
-                    if (response.contentType()) |ct| {
+                    if (msg.transfer.contentType()) |ct| {
                         const mime = try Mime.parse(ct);
 
                         if (!mime.isText()) {
@@ -1419,13 +1426,13 @@ test "cdp: disconnect latches so the worker keeps exiting" {
     }
 
     // First tick drains the .disconnect and tears the link down.
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
 
     // The inbox is now empty. Without the latch this second tick would fall
     // through to perform/poll with no producer left to wake it, so the worker
     // would never exit and Server.deinit() would spin on active_threads
     // (#2510). The latch keeps the terminal state sticky so the worker exits.
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
 }
 
 test "cdp: syncRequest short-circuits after disconnect" {
@@ -1439,7 +1446,7 @@ test "cdp: syncRequest short-circuits after disconnect" {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
         client.inbox.push(arena, .{ .disconnect = null });
     }
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
 
     // A synchronous fetch attempted after the latch returns ClientDisconnected
     // without starting the request. syncRequest also frees req.headers on this
@@ -1458,5 +1465,6 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .cookie_origin = "",
         .resource_type = .fetch,
         .notification = undefined,
+        .shutdown_callback = @import("../network/HttpClient.zig").noopShutdown,
     }));
 }

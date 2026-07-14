@@ -70,6 +70,11 @@ mu: std.Thread.Mutex = .{},
 cv: std.Thread.Condition = .{},
 state: State = .idle,
 frame: u8 = 0,
+/// True while a caller streams assistant text to stdout: the worker stops
+/// rendering and the current frame is cleared, so the stderr spinner does not
+/// interleave with the streamed line. Turn state (timer, tool count) is
+/// preserved for the eventual `stop`.
+paused: bool = false,
 
 tool_calls: u32 = 0,
 turn_started_ns: i128 = 0,
@@ -105,6 +110,7 @@ pub fn start(self: *Spinner) void {
     self.mu.lock();
     defer self.mu.unlock();
     self.state = .thinking;
+    self.paused = false;
     self.frame = 0;
     self.tool_calls = 0;
     self.turn_started_ns = std.time.nanoTimestamp();
@@ -143,6 +149,7 @@ pub fn stop(self: *Spinner) void {
     _ = std.posix.write(std.posix.STDERR_FILENO, summary) catch {};
 
     self.state = .idle;
+    self.paused = false;
     self.last_render_len = 0;
 }
 
@@ -155,7 +162,23 @@ pub fn cancel(self: *Spinner) void {
     if (self.state == .idle) return;
     _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
     self.state = .idle;
+    self.paused = false;
     self.last_render_len = 0;
+}
+
+/// Clear the current frame and stop rendering without ending the turn, so the
+/// caller can stream text to stdout. The next explicit state change
+/// (`setTool`/`stop`/`cancel`/`start`) clears `paused` and resumes the
+/// animation. No-op when idle or already paused.
+pub fn pause(self: *Spinner) void {
+    if (!self.isEnabled()) return;
+    self.mu.lock();
+    defer self.mu.unlock();
+    if (self.state == .idle or self.paused) return;
+    self.paused = true;
+    _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
+    self.last_render_len = 0;
+    self.cv.signal();
 }
 
 /// Switch the indicator to "running tool <name> <args>". Counts toward the
@@ -166,6 +189,8 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     if (!self.isEnabled()) return;
     self.mu.lock();
     defer self.mu.unlock();
+    // A tool call ends any in-progress text stream; resume normal rendering.
+    self.paused = false;
     const manual = self.state == .idle;
     self.tool_calls += 1;
     var tool: ToolState = .{ .set_ns = std.time.nanoTimestamp(), .manual = manual };
@@ -224,7 +249,7 @@ fn workerLoop(self: *Spinner) void {
     self.mu.lock();
     defer self.mu.unlock();
     while (!self.should_exit) {
-        while (!self.should_exit and self.state == .idle) self.cv.wait(&self.mu);
+        while (!self.should_exit and (self.state == .idle or self.paused)) self.cv.wait(&self.mu);
         if (self.should_exit) return;
 
         switch (self.state) {

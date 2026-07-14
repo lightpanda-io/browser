@@ -22,6 +22,11 @@ const lp = @import("lightpanda");
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
 
+// Not ideal, but its children have special constructor rules (can be extended
+// can't be instantiated). And rather than coming up with a generic definition
+// for this one case, we just hardcode it.
+const HtmlElement = @import("../webapi/element/Html.zig");
+
 const v8 = js.v8;
 const log = lp.log;
 const JsApis = bridge.JsApis;
@@ -402,6 +407,9 @@ fn countExternalReferences() comptime_int {
     // +1 for the illegal constructor callback shared by various types
     count += 1;
 
+    // +1 for the upgrade constructor shared by built-in element interfaces
+    count += 1;
+
     // +1 for the noop function shared by various types
     count += 1;
 
@@ -472,6 +480,9 @@ fn collectExternalReferences() [countExternalReferences()]isize {
     var references = std.mem.zeroes([countExternalReferences()]isize);
 
     references[idx] = @bitCast(@intFromPtr(&illegalConstructorCallback));
+    idx += 1;
+
+    references[idx] = @bitCast(@intFromPtr(HtmlElement.JsApi.upgrade_constructor.func));
     idx += 1;
 
     references[idx] = @bitCast(@intFromPtr(&bridge.Function.noopFunction));
@@ -676,14 +687,15 @@ fn protoIndexLookup(comptime JsApi: type) ?u16 {
 
 // Generate a constructor template for a JsApi type (public for reuse)
 pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
-    const callback = blk: {
+    const callback, const arity = comptime blk: {
         if (@hasDecl(JsApi, "constructor")) {
-            break :blk JsApi.constructor.func;
+            break :blk .{ JsApi.constructor.func, JsApi.constructor.arity };
         }
-        break :blk illegalConstructorCallback;
+        if (inheritsFromHtmlElement(JsApi)) {
+            break :blk .{ HtmlElement.JsApi.upgrade_constructor.func, @as(c_int, HtmlElement.JsApi.upgrade_constructor.arity) };
+        }
+        break :blk .{ &illegalConstructorCallback, @as(c_int, 0) };
     };
-
-    const arity: c_int = if (@hasDecl(JsApi, "constructor")) JsApi.constructor.arity else 0;
     const template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
         .length = arity,
         .callback = callback,
@@ -702,6 +714,26 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
     // Web IDL: interface object's `prototype` property is non-writable/non-configurable.
     v8.v8__FunctionTemplate__ReadOnlyPrototype(template);
     return template;
+}
+
+// hard-coded special case for HtmlElement which can be extended but not
+// instantiated.
+fn inheritsFromHtmlElement(comptime JsApi: type) bool {
+    comptime {
+        var T = JsApi.bridge.type;
+        if (T == HtmlElement) {
+            return false;
+        }
+
+        while (@hasField(T, "_proto")) {
+            const Parent = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
+            if (Parent == HtmlElement) {
+                return true;
+            }
+            T = Parent;
+        }
+        return false;
+    }
 }
 
 // Attach JsApi members to a template (public for reuse). This is called on all

@@ -829,6 +829,12 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     ._definition = definition,
                 });
 
+                // Fragment-parse context element. It will not be inserted and
+                // we should not run the custom element's constructor.
+                if (frame._skip_custom_element_upgrade) {
+                    return node;
+                }
+
                 const def = definition orelse {
                     const element = node.as(Element);
                     const custom = element.is(Element.Html.Custom).?;

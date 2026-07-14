@@ -110,6 +110,12 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
     app.telemetry.record(.{ .run = {} });
 
+    defer if (app.config.dumpMetricsOnExit()) {
+        var stdout = std.fs.File.stdout();
+        var writer = stdout.writer(&.{});
+        lp.metrics.write(&writer.interface);
+    };
+
     switch (args.mode) {
         .serve => |opts| {
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
@@ -206,6 +212,27 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             log.info(.mcp, "starting server", .{});
 
             log.opts.format = .logfmt;
+
+            // --port serves MCP over HTTP instead of stdio. It and --cdp-port
+            // both need app.network's single listener, so they can't combine.
+            if (opts.port) |port| {
+                if (opts.cdp_port != null) {
+                    log.fatal(.mcp, "port conflicts with cdp-port", .{ .hint = "both need the single network listener" });
+                    return;
+                }
+                const address = std.net.Address.parseIp(opts.host, port) catch |err| {
+                    log.fatal(.mcp, "invalid address", .{ .err = err, .host = opts.host, .port = port });
+                    return;
+                };
+                const http_server = try lp.mcp.HttpServer.init(allocator, app);
+                defer http_server.deinit();
+                // Shutdown rides the already-registered Network.stop handler:
+                // a signal stops the accept loop, run() returns, deinit joins.
+                http_server.run(address) catch |err| {
+                    log.fatal(.mcp, "mcp http error", .{ .err = err });
+                };
+                return;
+            }
 
             var cdp_server: ?*lp.Server = null;
             if (opts.cdp_port) |port| {

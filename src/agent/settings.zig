@@ -186,12 +186,14 @@ pub const remembered_path = ".lp-agent.zon";
 /// disabled the LLM (`/provider null`), so the REPL starts in basic mode without
 /// re-prompting. `effort`/`verbosity` are optional so files predating them still
 /// parse; null means "use the mode default" (see `Agent.resolveEffort` /
-/// `Agent.resolveVerbosity`).
+/// `Agent.resolveVerbosity`). `stream` is likewise optional: null means "use the
+/// default" (see `resolveStream`).
 pub const Remembered = struct {
     provider: ?Config.AiProvider = null,
     model: []const u8,
     effort: ?Config.Effort = null,
     verbosity: ?Config.AgentVerbosity = null,
+    stream: ?bool = null,
 };
 
 pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
@@ -269,6 +271,13 @@ pub fn resolveVerbosity(opts: Config.Agent, remembered: ?Remembered) Config.Agen
     return Config.agentVerbosity(opts);
 }
 
+/// Precedence: remembered `.lp-agent.zon` value > default (on). Streaming has no
+/// CLI flag — the REPL `/stream` command toggles and persists it.
+pub fn resolveStream(remembered: ?Remembered) bool {
+    if (remembered) |r| if (r.stream) |s| return s;
+    return true;
+}
+
 pub const ReconciledModel = union(enum) {
     /// Owned by the allocator passed to reconcileModel.
     use: []u8,
@@ -329,4 +338,19 @@ test "parseRemembered: valid file round-trips" {
     defer std.zon.parse.free(testing.allocator, remembered);
     try testing.expect(remembered.provider == null);
     try testing.expectString("some-model", remembered.model);
+    // Absent `stream` is null so pre-streaming files still fall back to the default.
+    try testing.expect(remembered.stream == null);
+}
+
+test "parseRemembered: stream field round-trips" {
+    const remembered = parseRemembered(testing.allocator, ".{ .model = \"m\", .stream = false }").?;
+    defer std.zon.parse.free(testing.allocator, remembered);
+    try testing.expect(remembered.stream == false);
+}
+
+test "resolveStream: default on, remembered wins" {
+    try testing.expect(resolveStream(null));
+    try testing.expect(resolveStream(.{ .model = "m", .stream = null }));
+    try testing.expect(resolveStream(.{ .model = "m", .stream = true }));
+    try testing.expect(!resolveStream(.{ .model = "m", .stream = false }));
 }

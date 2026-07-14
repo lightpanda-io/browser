@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
@@ -26,6 +27,7 @@ const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
 
+const v8 = js.v8;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -165,6 +167,7 @@ pub fn deinit(self: *Page) void {
     self.frame.deinit();
 
     const session = self.session;
+    lp.metrics.js_heap_size_bytes.observe(session.browser.env.isolate.getHeapStatistics().total_physical_size);
     defer session.browser.env.memoryPressureNotification(.moderate);
 
     self.identity.deinit();
