@@ -146,7 +146,7 @@ pub const JsApi = struct {
             try names.append(exec.local_arena, camel);
         }
 
-        var arr = exec.js.local.?.newArray(@intCast(names.items.len));
+        var arr = frame.js.local.?.newArray(@intCast(names.items.len));
         for (names.items, 0..) |name, i| {
             _ = try arr.set(@intCast(i), name, .{});
         }
