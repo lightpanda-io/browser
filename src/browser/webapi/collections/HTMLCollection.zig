@@ -228,7 +228,7 @@ pub const JsApi = struct {
     // The supported property names: for each element represented by the
     // collection, in tree order, its id and (for HTML elements) its name
     // attribute, skipping empty values and duplicates.
-    fn getNames(self: *HTMLCollection, exec: *const Execution) !js.Array {
+    fn getNames(self: *HTMLCollection, frame: *Frame) !js.Array {
         const frame = switch (exec.js.global) {
             .frame => |f| f,
             .worker => unreachable,
