@@ -46,6 +46,11 @@ const LineIterator = std.mem.SplitIterator(u8, .scalar);
 
 const max_table_columns = 16;
 
+/// Shown while a streamed table is withheld; written without a newline so
+/// `clear_placeholder` can erase it in place before the table renders.
+const table_placeholder = ansi.dim ++ "… rendering table" ++ ansi.reset;
+const clear_placeholder = "\r" ++ ansi.clear_line;
+
 /// Cells are inline-rendered and padded to per-column visible width. Widths
 /// count codepoints, so double-width glyphs (CJK, emoji) may misalign.
 fn renderTable(w: *std.Io.Writer, header: []const u8, it: *LineIterator) !void {
@@ -226,6 +231,175 @@ fn isTableSeparator(line: []const u8) bool {
     };
     return has_dash and has_pipe;
 }
+
+/// Incremental renderer for streamed deltas: buffers until each newline,
+/// then renders the completed line. Fence state carries across lines. Table
+/// rows are withheld and re-rendered aligned once the table ends — alignment
+/// needs the whole table, so it can't stream row by row.
+pub const Stream = struct {
+    len: usize = 0,
+    in_fence: bool = false,
+    /// A line that outgrew `buf` passes through unrendered to its newline.
+    raw: bool = false,
+    /// `held`: one pipe row buffered, pending the separator that confirms a
+    /// table. `table`: rows accumulate in `table_buf` until the table ends.
+    mode: enum { text, held, table } = .text,
+    table_len: usize = 0,
+    buf: [4096]u8 = undefined,
+    /// A table that outgrows this falls back to per-line rendering.
+    table_buf: [16384]u8 = undefined,
+
+    pub fn feed(self: *Stream, w: *std.Io.Writer, data: []const u8) !void {
+        var rest = data;
+        while (std.mem.indexOfScalar(u8, rest, '\n')) |nl| {
+            const head = rest[0..nl];
+            rest = rest[nl + 1 ..];
+            if (self.raw) {
+                try w.writeAll(head);
+                try w.writeByte('\n');
+                self.raw = false;
+            } else if (self.len == 0) {
+                try self.emitLine(w, head);
+            } else if (self.len + head.len <= self.buf.len) {
+                @memcpy(self.buf[self.len..][0..head.len], head);
+                const full = self.buf[0 .. self.len + head.len];
+                self.len = 0;
+                try self.emitLine(w, full);
+            } else {
+                try w.writeAll(self.buf[0..self.len]);
+                try w.writeAll(head);
+                try w.writeByte('\n');
+                self.len = 0;
+            }
+        }
+        if (rest.len == 0) return;
+        if (self.raw) {
+            try w.writeAll(rest);
+        } else if (self.len + rest.len <= self.buf.len) {
+            @memcpy(self.buf[self.len..][0..rest.len], rest);
+            self.len += rest.len;
+        } else {
+            try w.writeAll(self.buf[0..self.len]);
+            try w.writeAll(rest);
+            self.len = 0;
+            self.raw = true;
+        }
+    }
+
+    /// Flush any withheld table and a trailing partial line; no newline is
+    /// written for the partial.
+    pub fn close(self: *Stream, w: *std.Io.Writer) !void {
+        // A message often ends inside a table: adopt the partial last row.
+        if (self.len > 0 and !self.raw) {
+            const partial = self.buf[0..self.len];
+            const adopt = switch (self.mode) {
+                .table => isTableRow(partial),
+                .held => isTableSeparator(partial),
+                .text => false,
+            };
+            if (adopt and self.appendTableLine(partial)) {
+                self.mode = .table;
+                self.len = 0;
+            }
+        }
+        switch (self.mode) {
+            .text => {},
+            .held => {
+                try renderLine(w, self.tableText(), false);
+                try w.writeByte('\n');
+                self.resetTable();
+            },
+            .table => try self.renderBufferedTable(w),
+        }
+        if (self.len == 0) return;
+        const partial = self.buf[0..self.len];
+        self.len = 0;
+        if (std.mem.startsWith(u8, std.mem.trimLeft(u8, partial, " \t"), "```")) return;
+        try renderLine(w, partial, self.in_fence);
+    }
+
+    fn emitLine(self: *Stream, w: *std.Io.Writer, text: []const u8) std.Io.Writer.Error!void {
+        switch (self.mode) {
+            .text => {
+                if (std.mem.startsWith(u8, std.mem.trimLeft(u8, text, " \t"), "```")) {
+                    self.in_fence = !self.in_fence;
+                    return;
+                }
+                if (!self.in_fence and isTableRow(text) and self.appendTableLine(text)) {
+                    self.mode = .held;
+                    return;
+                }
+                try renderLine(w, text, self.in_fence);
+                try w.writeByte('\n');
+            },
+            .held => {
+                if (isTableSeparator(text) and self.appendTableLine(text)) {
+                    self.mode = .table;
+                    // Withholding goes quiet; leave a marker until the
+                    // table renders over it.
+                    try w.writeAll(table_placeholder);
+                    return;
+                }
+                // No separator followed, so the held row wasn't a header.
+                try renderLine(w, self.tableText(), false);
+                try w.writeByte('\n');
+                self.resetTable();
+                try self.emitLine(w, text);
+            },
+            .table => {
+                if (isTableRow(text)) {
+                    if (self.appendTableLine(text)) return;
+                    try self.flushTableUnaligned(w);
+                    try renderLine(w, text, false);
+                    try w.writeByte('\n');
+                    return;
+                }
+                try self.renderBufferedTable(w);
+                try self.emitLine(w, text);
+            },
+        }
+    }
+
+    fn renderBufferedTable(self: *Stream, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try w.writeAll(clear_placeholder);
+        var it: LineIterator = std.mem.splitScalar(u8, self.tableText(), '\n');
+        const header = it.first();
+        try renderTable(w, header, &it);
+        try w.writeByte('\n');
+        self.resetTable();
+    }
+
+    fn flushTableUnaligned(self: *Stream, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try w.writeAll(clear_placeholder);
+        var it = std.mem.splitScalar(u8, self.tableText(), '\n');
+        while (it.next()) |line| {
+            try renderLine(w, line, false);
+            try w.writeByte('\n');
+        }
+        self.resetTable();
+    }
+
+    fn appendTableLine(self: *Stream, line: []const u8) bool {
+        const sep: usize = if (self.table_len == 0) 0 else 1;
+        if (self.table_len + sep + line.len > self.table_buf.len) return false;
+        if (sep == 1) {
+            self.table_buf[self.table_len] = '\n';
+            self.table_len += 1;
+        }
+        @memcpy(self.table_buf[self.table_len..][0..line.len], line);
+        self.table_len += line.len;
+        return true;
+    }
+
+    fn tableText(self: *const Stream) []const u8 {
+        return self.table_buf[0..self.table_len];
+    }
+
+    fn resetTable(self: *Stream) void {
+        self.table_len = 0;
+        self.mode = .text;
+    }
+};
 
 fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
     if (in_fence) {
@@ -511,6 +685,85 @@ test "md_term: overwide table falls back to verbatim rows" {
     try expectRender(
         "\x1b[1m" ++ header ++ "\x1b[0m\n\x1b[38;5;244m" ++ sep ++ "\x1b[0m",
         header ++ "\n" ++ sep,
+    );
+}
+
+test "md_term: stream renders across chunk boundaries" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var s: Stream = .{};
+    try s.feed(&aw.writer, "say **h");
+    try s.feed(&aw.writer, "i** now\n- ite");
+    try s.feed(&aw.writer, "m\ntail");
+    try s.close(&aw.writer);
+    try testing.expectEqualStrings(
+        "say \x1b[1mhi\x1b[0m now\n\x1b[38;5;244m•\x1b[0m item\ntail",
+        aw.written(),
+    );
+}
+
+test "md_term: stream withholds tables and renders them aligned" {
+    const B = "\x1b[1m";
+    const C = "\x1b[36m";
+    const D = "\x1b[38;5;244m";
+    const R = "\x1b[0m";
+    const pipe = D ++ "│" ++ R;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var s: Stream = .{};
+    try s.feed(&aw.writer, "| Tool | Use |\n| :--- | :-");
+    try testing.expectEqualStrings("", aw.written());
+    try s.feed(&aw.writer, "-- |\n| `goto` | nav |\ndone\n");
+    try testing.expectEqualStrings(
+        D ++ "… rendering table" ++ R ++ "\r\x1b[2K" ++
+            pipe ++ " " ++ B ++ "Tool" ++ R ++ " " ++ pipe ++ " " ++ B ++ "Use" ++ R ++ " " ++ pipe ++ "\n" ++
+            D ++ "├──────┼─────┤" ++ R ++ "\n" ++
+            pipe ++ " " ++ C ++ "goto" ++ R ++ " " ++ pipe ++ " nav " ++ pipe ++ "\n" ++
+            "done\n",
+        aw.written(),
+    );
+}
+
+test "md_term: stream table ending at close adopts the partial row" {
+    const B = "\x1b[1m";
+    const D = "\x1b[38;5;244m";
+    const R = "\x1b[0m";
+    const pipe = D ++ "│" ++ R;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var s: Stream = .{};
+    try s.feed(&aw.writer, "| A | B |\n|-|-|\n| x | y |");
+    try s.close(&aw.writer);
+    try testing.expectEqualStrings(
+        D ++ "… rendering table" ++ R ++ "\r\x1b[2K" ++
+            pipe ++ " " ++ B ++ "A" ++ R ++ " " ++ pipe ++ " " ++ B ++ "B" ++ R ++ " " ++ pipe ++ "\n" ++
+            D ++ "├───┼───┤" ++ R ++ "\n" ++
+            pipe ++ " x " ++ pipe ++ " y " ++ pipe ++ "\n",
+        aw.written(),
+    );
+}
+
+test "md_term: stream releases a lone pipe row" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var s: Stream = .{};
+    try s.feed(&aw.writer, "| a |\nplain\n");
+    try s.close(&aw.writer);
+    try testing.expectEqualStrings("| a |\nplain\n", aw.written());
+}
+
+test "md_term: stream fence state spans chunks" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var s: Stream = .{};
+    try s.feed(&aw.writer, "```\ncode\n``");
+    try s.feed(&aw.writer, "`\nafter\n");
+    try s.close(&aw.writer);
+    try testing.expectEqualStrings(
+        "\x1b[38;5;244mcode\x1b[0m\nafter\n",
+        aw.written(),
     );
 }
 

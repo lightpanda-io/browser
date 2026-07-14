@@ -83,6 +83,9 @@ js_mode: bool = false,
 /// Per-mode history files (null outside REPL mode). `modeCallback` swaps the
 /// active one so JS and normal recall stay separate.
 history_paths: ?HistoryPaths = null,
+/// Line-buffered markdown state for streamed assistant deltas; reset by
+/// `endAssistantStream` so fence state can't leak into the next message.
+md_stream: md_term.Stream = .{},
 
 /// Lets the completer/hinter pull dynamic candidates from the `Agent` without
 /// `Terminal` depending on it (same idiom as `Session.cancel_hook`).
@@ -1377,13 +1380,37 @@ pub fn printAssistant(self: *Terminal, text: []const u8) void {
     _ = std.posix.write(fd, "\n") catch {};
 }
 
-/// Write a streamed assistant-text delta verbatim (no trailing newline). The
+/// Write a streamed assistant-text delta (no trailing newline). Rendered
+/// line-buffered through `md_stream` on a REPL tty, verbatim otherwise. The
 /// caller must pause the spinner first (its stderr frames would otherwise
-/// interleave with this stdout text) and emit a closing newline when the
+/// interleave with this stdout text) and call `endAssistantStream` when the
 /// stream ends.
-pub fn printAssistantDelta(_: *Terminal, text: []const u8) void {
+pub fn printAssistantDelta(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
+    if (self.isRepl() and self.stdout_is_tty) {
+        var buf: [1024]u8 = undefined;
+        var fw = std.fs.File.stdout().writer(&buf);
+        const w = &fw.interface;
+        self.md_stream.feed(w, text) catch return;
+        w.flush() catch {};
+        return;
+    }
     _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
+}
+
+/// Flush any partial streamed line, terminate it, and reset stream state.
+pub fn endAssistantStream(self: *Terminal) void {
+    if (self.isRepl() and self.stdout_is_tty) {
+        var buf: [1024]u8 = undefined;
+        var fw = std.fs.File.stdout().writer(&buf);
+        const w = &fw.interface;
+        self.md_stream.close(w) catch {};
+        w.writeByte('\n') catch {};
+        w.flush() catch {};
+        self.md_stream = .{};
+        return;
+    }
+    _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};
 }
 
 // Must exceed the downstream LLM-judge's snapshot window for full grounding

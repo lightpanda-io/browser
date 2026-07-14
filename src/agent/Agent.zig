@@ -494,7 +494,7 @@ fn streamAssistantDelta(ctx: *anyopaque, delta: []const u8) void {
 /// `runTools` exit path can call it unconditionally.
 fn endStreamedText(self: *Agent) void {
     if (!self.stream_active) return;
-    self.terminal.printAssistantDelta("\n");
+    self.terminal.endAssistantStream();
     self.stream_active = false;
 }
 
