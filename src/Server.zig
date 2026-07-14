@@ -667,7 +667,7 @@ fn createTestClient() !TestClient {
 
 const TestClient = struct {
     stream: std.net.Stream,
-    buf: [4096]u8 = undefined,
+    buf: [8192]u8 = undefined,
     reader: WS.Reader(false),
 
     const WS = @import("network/WS.zig");
