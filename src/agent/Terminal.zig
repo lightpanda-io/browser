@@ -43,22 +43,7 @@ const style_keyword = "ps-keyword";
 const style_comment = "ps-comment";
 const style_jsglobal = "ps-jsglobal";
 
-pub const ansi = struct {
-    pub const reset = "\x1b[0m";
-    pub const bold = "\x1b[1m";
-    // 256-ramp gray, not SGR 2 or palette color 8, which are theme-dependent
-    // and unreadable on some configs. Same gray as the ic-hint override.
-    pub const dim = "\x1b[38;5;244m";
-    pub const italic = "\x1b[3m";
-    pub const underline = "\x1b[4m";
-    pub const strike = "\x1b[9m";
-    pub const cyan = "\x1b[36m";
-    pub const green = "\x1b[32m";
-    pub const yellow = "\x1b[33m";
-    pub const red = "\x1b[31m";
-    pub const clear_eol = "\x1b[K";
-    pub const clear_line = "\x1b[2K";
-};
+pub const ansi = md_term.ansi;
 
 /// Command styling shared with the `/help` listing.
 pub fn highlightCmd(comptime fragment: []const u8) []const u8 {
@@ -83,8 +68,8 @@ js_mode: bool = false,
 /// Per-mode history files (null outside REPL mode). `modeCallback` swaps the
 /// active one so JS and normal recall stay separate.
 history_paths: ?HistoryPaths = null,
-/// Line-buffered markdown state for streamed assistant deltas; reset by
-/// `endAssistantStream` so fence state can't leak into the next message.
+/// Line-buffered markdown state for streamed assistant deltas; its `close`
+/// resets everything so fence state can't leak into the next message.
 md_stream: md_term.Stream = .{},
 
 /// Lets the completer/hinter pull dynamic candidates from the `Agent` without
@@ -1360,24 +1345,26 @@ test {
     _ = md_term;
 }
 
+/// Style only for the interactive REPL on a real terminal; `--task`/piped
+/// output stays verbatim so it can be consumed programmatically.
+fn styledOutput(self: *const Terminal) bool {
+    return self.isRepl() and self.stdout_is_tty;
+}
+
 pub fn printAssistant(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
-    const fd = std.posix.STDOUT_FILENO;
-
-    // Style only for the interactive REPL on a real terminal; `--task`/piped
-    // output stays verbatim so it can be consumed programmatically.
-    if (self.isRepl() and self.stdout_is_tty) {
+    if (self.styledOutput()) {
         var buf: [1024]u8 = undefined;
-        var fw = std.fs.File.stdout().writer(&buf);
+        var fw = std.fs.File.stdout().writerStreaming(&buf);
         const w = &fw.interface;
-        md_term.render(w, text) catch return;
-        w.writeByte('\n') catch return;
+        md_term.render(w, text) catch {};
+        w.writeByte('\n') catch {};
         w.flush() catch {};
         return;
     }
 
-    _ = std.posix.write(fd, text) catch {};
-    _ = std.posix.write(fd, "\n") catch {};
+    _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
+    _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};
 }
 
 /// Write a streamed assistant-text delta (no trailing newline). Rendered
@@ -1387,11 +1374,11 @@ pub fn printAssistant(self: *Terminal, text: []const u8) void {
 /// stream ends.
 pub fn printAssistantDelta(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
-    if (self.isRepl() and self.stdout_is_tty) {
+    if (self.styledOutput()) {
         var buf: [1024]u8 = undefined;
-        var fw = std.fs.File.stdout().writer(&buf);
+        var fw = std.fs.File.stdout().writerStreaming(&buf);
         const w = &fw.interface;
-        self.md_stream.feed(w, text) catch return;
+        self.md_stream.feed(w, text) catch {};
         w.flush() catch {};
         return;
     }
@@ -1400,14 +1387,13 @@ pub fn printAssistantDelta(self: *Terminal, text: []const u8) void {
 
 /// Flush any partial streamed line, terminate it, and reset stream state.
 pub fn endAssistantStream(self: *Terminal) void {
-    if (self.isRepl() and self.stdout_is_tty) {
+    if (self.styledOutput()) {
         var buf: [1024]u8 = undefined;
-        var fw = std.fs.File.stdout().writer(&buf);
+        var fw = std.fs.File.stdout().writerStreaming(&buf);
         const w = &fw.interface;
         self.md_stream.close(w) catch {};
         w.writeByte('\n') catch {};
         w.flush() catch {};
-        self.md_stream = .{};
         return;
     }
     _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};

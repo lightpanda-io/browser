@@ -17,7 +17,23 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const ansi = @import("Terminal.zig").ansi;
+
+pub const ansi = struct {
+    pub const reset = "\x1b[0m";
+    pub const bold = "\x1b[1m";
+    // 256-ramp gray, not SGR 2 or palette color 8, which are theme-dependent
+    // and unreadable on some configs. Same gray as the ic-hint override.
+    pub const dim = "\x1b[38;5;244m";
+    pub const italic = "\x1b[3m";
+    pub const underline = "\x1b[4m";
+    pub const strike = "\x1b[9m";
+    pub const cyan = "\x1b[36m";
+    pub const green = "\x1b[32m";
+    pub const yellow = "\x1b[33m";
+    pub const red = "\x1b[31m";
+    pub const clear_eol = "\x1b[K";
+    pub const clear_line = "\x1b[2K";
+};
 
 /// Render markdown `src` as ANSI-styled terminal output to `w`.
 pub fn render(w: *std.Io.Writer, src: []const u8) !void {
@@ -26,7 +42,7 @@ pub fn render(w: *std.Io.Writer, src: []const u8) !void {
     var it = std.mem.splitScalar(u8, src, '\n');
     while (it.next()) |line| {
         // Drop the ``` delimiter entirely: no line, no separator.
-        if (std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), "```")) {
+        if (isFenceDelimiter(line)) {
             in_fence = !in_fence;
             continue;
         }
@@ -122,25 +138,41 @@ fn emitRow(w: *std.Io.Writer, row: []const u8, widths: []const usize, is_header:
         const cell = cells.next() orelse "";
         var used: usize = 0;
         if (cell.len > 0) {
-            if (is_header) {
-                try w.writeAll(ansi.bold);
-                try renderInlineStyled(w, cell, &bold_style);
-                try w.writeAll(ansi.reset);
-            } else {
-                try renderInline(w, cell);
+            // Render once into scratch so `used` is measured from the exact
+            // bytes written. The header's bold re-applies add escapes on top
+            // of what measureRow saw, hence the extra headroom.
+            var buf: [1024]u8 = undefined;
+            var fw: std.Io.Writer = .fixed(&buf);
+            if (renderCell(&fw, cell, is_header)) {
+                try w.writeAll(fw.buffered());
+                used = visibleWidth(fw.buffered());
+            } else |_| {
+                // Overflow, possible only for a marker-dense header cell:
+                // keep the content, sacrifice the padding.
+                try renderCell(w, cell, is_header);
+                used = width;
             }
-            used = cellDisplayWidth(cell) orelse cell.len;
         }
         try w.splatByteAll(' ', width - used + 1);
     }
     try styled(w, "│", ansi.dim);
 }
 
+fn renderCell(w: *std.Io.Writer, cell: []const u8, is_header: bool) std.Io.Writer.Error!void {
+    if (is_header) {
+        try w.writeAll(ansi.bold);
+        try renderInlineStyled(w, cell, &bold_style);
+        try w.writeAll(ansi.reset);
+    } else {
+        try renderInline(w, cell);
+    }
+}
+
 fn emitSeparator(w: *std.Io.Writer, widths: []const usize) !void {
     try w.writeAll(ansi.dim);
     for (widths, 0..) |width, col| {
         try w.writeAll(if (col == 0) "├" else "┼");
-        for (0..width + 2) |_| try w.writeAll("─");
+        try w.splatBytesAll("─", width + 2);
     }
     try w.writeAll("┤");
     try w.writeAll(ansi.reset);
@@ -211,6 +243,10 @@ fn visibleWidth(s: []const u8) usize {
         i += 1;
     }
     return n;
+}
+
+fn isFenceDelimiter(line: []const u8) bool {
+    return std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), "```");
 }
 
 fn isTableRow(line: []const u8) bool {
@@ -286,8 +322,8 @@ pub const Stream = struct {
         }
     }
 
-    /// Flush any withheld table and a trailing partial line; no newline is
-    /// written for the partial.
+    /// Flush any withheld table and a trailing partial line (no newline is
+    /// written for it), then reset all state for the next message.
     pub fn close(self: *Stream, w: *std.Io.Writer) !void {
         // A message often ends inside a table: adopt the partial last row.
         if (self.len > 0 and !self.raw) {
@@ -304,24 +340,22 @@ pub const Stream = struct {
         }
         switch (self.mode) {
             .text => {},
-            .held => {
-                try renderLine(w, self.tableText(), false);
-                try w.writeByte('\n');
-                self.resetTable();
-            },
+            .held => try self.releaseHeldRow(w),
             .table => try self.renderBufferedTable(w),
         }
-        if (self.len == 0) return;
         const partial = self.buf[0..self.len];
+        const in_fence = self.in_fence;
         self.len = 0;
-        if (std.mem.startsWith(u8, std.mem.trimLeft(u8, partial, " \t"), "```")) return;
-        try renderLine(w, partial, self.in_fence);
+        self.raw = false;
+        self.in_fence = false;
+        if (partial.len == 0 or isFenceDelimiter(partial)) return;
+        try renderLine(w, partial, in_fence);
     }
 
     fn emitLine(self: *Stream, w: *std.Io.Writer, text: []const u8) std.Io.Writer.Error!void {
         switch (self.mode) {
             .text => {
-                if (std.mem.startsWith(u8, std.mem.trimLeft(u8, text, " \t"), "```")) {
+                if (isFenceDelimiter(text)) {
                     self.in_fence = !self.in_fence;
                     return;
                 }
@@ -340,10 +374,7 @@ pub const Stream = struct {
                     try w.writeAll(table_placeholder);
                     return;
                 }
-                // No separator followed, so the held row wasn't a header.
-                try renderLine(w, self.tableText(), false);
-                try w.writeByte('\n');
-                self.resetTable();
+                try self.releaseHeldRow(w);
                 try self.emitLine(w, text);
             },
             .table => {
@@ -358,6 +389,13 @@ pub const Stream = struct {
                 try self.emitLine(w, text);
             },
         }
+    }
+
+    /// No separator followed, so the held row wasn't a table header.
+    fn releaseHeldRow(self: *Stream, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try renderLine(w, self.tableText(), false);
+        try w.writeByte('\n');
+        self.resetTable();
     }
 
     fn renderBufferedTable(self: *Stream, w: *std.Io.Writer) std.Io.Writer.Error!void {
