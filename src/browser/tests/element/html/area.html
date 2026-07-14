@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<map name="m">
+  <area id="a1" alt="logo" coords="0,0,82,126" shape="rect" target="_blank" download="pic" rel="noopener noreferrer" referrerpolicy="no-referrer" href="/page">
+  <area id="a2">
+</map>
+
+<script id="area-from-html">
+  {
+    const a1 = document.getElementById('a1');
+    testing.expectEqual('HTMLAreaElement', a1.constructor.name);
+    testing.expectEqual('logo', a1.alt);
+    testing.expectEqual('0,0,82,126', a1.coords);
+    testing.expectEqual('rect', a1.shape);
+    testing.expectEqual('_blank', a1.target);
+    testing.expectEqual('pic', a1.download);
+    testing.expectEqual('noopener noreferrer', a1.rel);
+    testing.expectEqual('no-referrer', a1.referrerPolicy);
+    testing.expectEqual(2, a1.relList.length);
+    testing.expectEqual('noopener', a1.relList.item(0));
+    testing.expectEqual('noreferrer', a1.relList.item(1));
+    testing.expectEqual(true, a1.relList.contains('noopener'));
+
+    const a2 = document.getElementById('a2');
+    testing.expectEqual('', a2.alt);
+    testing.expectEqual('', a2.coords);
+    testing.expectEqual('', a2.shape);
+    testing.expectEqual('', a2.target);
+    testing.expectEqual('', a2.download);
+    testing.expectEqual('', a2.rel);
+    testing.expectEqual('', a2.referrerPolicy);
+    testing.expectEqual(0, a2.relList.length);
+  }
+</script>
+
+<script id="area-reflection">
+  {
+    const a = document.createElement('area');
+
+    a.alt = 'hero';
+    testing.expectEqual('hero', a.getAttribute('alt'));
+    a.setAttribute('alt', 'banner');
+    testing.expectEqual('banner', a.alt);
+
+    a.coords = '1,2,3,4';
+    testing.expectEqual('1,2,3,4', a.getAttribute('coords'));
+
+    a.shape = 'circle';
+    testing.expectEqual('circle', a.getAttribute('shape'));
+
+    a.target = '_self';
+    testing.expectEqual('_self', a.getAttribute('target'));
+
+    a.download = 'file.png';
+    testing.expectEqual('file.png', a.getAttribute('download'));
+
+    a.rel = 'nofollow';
+    testing.expectEqual('nofollow', a.getAttribute('rel'));
+    testing.expectEqual('nofollow', a.relList.item(0));
+
+    // referrerPolicy reflects an enumerated attribute: unknown values map to ''
+    a.referrerPolicy = 'origin';
+    testing.expectEqual('origin', a.referrerPolicy);
+    a.setAttribute('referrerpolicy', 'bogus');
+    testing.expectEqual('', a.referrerPolicy);
+  }
+</script>
