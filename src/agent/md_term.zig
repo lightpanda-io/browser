@@ -32,8 +32,199 @@ pub fn render(w: *std.Io.Writer, src: []const u8) !void {
         }
         if (wrote_any) try w.writeByte('\n');
         wrote_any = true;
+        if (!in_fence and isTableRow(line)) {
+            if (it.peek()) |next| if (isTableSeparator(next)) {
+                try renderTable(w, line, &it);
+                continue;
+            };
+        }
         try renderLine(w, line, in_fence);
     }
+}
+
+const LineIterator = std.mem.SplitIterator(u8, .scalar);
+
+const max_table_columns = 16;
+
+/// Cells are inline-rendered and padded to per-column visible width. Widths
+/// count codepoints, so double-width glyphs (CJK, emoji) may misalign.
+fn renderTable(w: *std.Io.Writer, header: []const u8, it: *LineIterator) !void {
+    var widths: [max_table_columns]usize = @splat(0);
+    var ncols: usize = 0;
+    var ok = measureRow(header, &widths, &ncols);
+    if (ok) {
+        var scan = it.*;
+        _ = scan.next();
+        while (scan.peek()) |line| {
+            if (!isTableRow(line)) break;
+            _ = scan.next();
+            if (!measureRow(line, &widths, &ncols)) {
+                ok = false;
+                break;
+            }
+        }
+    }
+    if (!ok or ncols == 0) return renderTableVerbatim(w, header, it);
+
+    try emitRow(w, header, widths[0..ncols], true);
+    _ = it.next();
+    try w.writeByte('\n');
+    try emitSeparator(w, widths[0..ncols]);
+    while (it.peek()) |line| {
+        if (!isTableRow(line)) break;
+        _ = it.next();
+        try w.writeByte('\n');
+        try emitRow(w, line, widths[0..ncols], false);
+    }
+}
+
+/// Fallback for tables the aligner can't measure (too many columns, or a
+/// rendered cell overflowing its fixed buffer): rows pass through untouched.
+fn renderTableVerbatim(w: *std.Io.Writer, header: []const u8, it: *LineIterator) !void {
+    try styled(w, header, ansi.bold);
+    while (it.peek()) |line| {
+        if (!isTableRow(line) and !isTableSeparator(line)) break;
+        _ = it.next();
+        try w.writeByte('\n');
+        if (isTableSeparator(line)) {
+            try styled(w, line, ansi.dim);
+        } else {
+            try w.writeAll(line);
+        }
+    }
+}
+
+fn measureRow(row: []const u8, widths: *[max_table_columns]usize, ncols: *usize) bool {
+    var cells = cellIterator(row);
+    var col: usize = 0;
+    while (cells.next()) |cell| {
+        // A row's trailing `|` leaves one empty last segment; drop it.
+        if (cell.len == 0 and cells.pos >= cells.row.len) break;
+        if (col == max_table_columns) return false;
+        const width = cellDisplayWidth(cell) orelse return false;
+        widths[col] = @max(widths[col], width);
+        col += 1;
+    }
+    ncols.* = @max(ncols.*, col);
+    return true;
+}
+
+fn emitRow(w: *std.Io.Writer, row: []const u8, widths: []const usize, is_header: bool) !void {
+    var cells = cellIterator(row);
+    for (widths) |width| {
+        try styled(w, "│", ansi.dim);
+        try w.writeByte(' ');
+        const cell = cells.next() orelse "";
+        var used: usize = 0;
+        if (cell.len > 0) {
+            if (is_header) {
+                try w.writeAll(ansi.bold);
+                try renderInlineStyled(w, cell, &bold_style);
+                try w.writeAll(ansi.reset);
+            } else {
+                try renderInline(w, cell);
+            }
+            used = cellDisplayWidth(cell) orelse cell.len;
+        }
+        try w.splatByteAll(' ', width - used + 1);
+    }
+    try styled(w, "│", ansi.dim);
+}
+
+fn emitSeparator(w: *std.Io.Writer, widths: []const usize) !void {
+    try w.writeAll(ansi.dim);
+    for (widths, 0..) |width, col| {
+        try w.writeAll(if (col == 0) "├" else "┼");
+        for (0..width + 2) |_| try w.writeAll("─");
+    }
+    try w.writeAll("┤");
+    try w.writeAll(ansi.reset);
+}
+
+const CellIterator = struct {
+    row: []const u8,
+    pos: usize,
+
+    fn next(self: *CellIterator) ?[]const u8 {
+        if (self.pos >= self.row.len) return null;
+        var i = self.pos;
+        var in_code = false;
+        while (i < self.row.len) : (i += 1) {
+            switch (self.row[i]) {
+                '`' => in_code = !in_code,
+                '\\' => i += 1,
+                '|' => if (!in_code) break,
+                else => {},
+            }
+        }
+        const end = @min(i, self.row.len);
+        const cell = std.mem.trim(u8, self.row[self.pos..end], " \t");
+        self.pos = i + 1;
+        return cell;
+    }
+};
+
+fn cellIterator(row: []const u8) CellIterator {
+    const first_pipe = std.mem.indexOfScalar(u8, row, '|');
+    return .{ .row = row, .pos = if (first_pipe) |p| p + 1 else 0 };
+}
+
+fn cellDisplayWidth(cell: []const u8) ?usize {
+    var buf: [512]u8 = undefined;
+    var fw: std.Io.Writer = .fixed(&buf);
+    renderInline(&fw, cell) catch return null;
+    return visibleWidth(fw.buffered());
+}
+
+/// Display columns of rendered output: escapes are zero, codepoints are one.
+fn visibleWidth(s: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) {
+        if (s[i] == 0x1b and i + 1 < s.len) {
+            switch (s[i + 1]) {
+                '[' => {
+                    i += 2;
+                    while (i < s.len and (s[i] < 0x40 or s[i] > 0x7e)) i += 1;
+                    i += 1;
+                    continue;
+                },
+                ']' => {
+                    i += 2;
+                    while (i < s.len and s[i] != 0x07 and s[i] != 0x1b) i += 1;
+                    i += @as(usize, if (i < s.len and s[i] == 0x1b) 2 else 1);
+                    continue;
+                },
+                '\\' => {
+                    i += 2;
+                    continue;
+                },
+                else => {},
+            }
+        }
+        if (s[i] & 0xc0 != 0x80) n += 1;
+        i += 1;
+    }
+    return n;
+}
+
+fn isTableRow(line: []const u8) bool {
+    const trimmed = std.mem.trimLeft(u8, line, " \t");
+    return trimmed.len >= 1 and trimmed[0] == '|';
+}
+
+/// A row of `-`, `:`, `|` and spaces with at least one dash and one pipe,
+/// e.g. `| --- |:---:|`.
+fn isTableSeparator(line: []const u8) bool {
+    var has_dash = false;
+    var has_pipe = false;
+    for (line) |c| switch (c) {
+        '-' => has_dash = true,
+        '|' => has_pipe = true,
+        ':', ' ', '\t' => {},
+        else => return false,
+    };
+    return has_dash and has_pipe;
 }
 
 fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
@@ -178,7 +369,7 @@ fn styled(w: *std.Io.Writer, inner: []const u8, style: []const u8) !void {
 
 fn isEscapable(c: u8) bool {
     return switch (c) {
-        '*', '_', '`', '~', '[', ']', '(', ')', '\\' => true,
+        '*', '_', '`', '~', '[', ']', '(', ')', '|', '\\' => true,
         else => false,
     };
 }
@@ -285,6 +476,42 @@ test "md_term: horizontal rule" {
     try expectRender("\x1b[38;5;244m" ++ "─" ** 24 ++ "\x1b[0m", "---");
     try expectRender("\x1b[38;5;244m" ++ "─" ** 24 ++ "\x1b[0m", "***");
     try expectRender("---x", "---x");
+}
+
+test "md_term: tables align columns and style cells" {
+    const B = "\x1b[1m";
+    const C = "\x1b[36m";
+    const D = "\x1b[38;5;244m";
+    const R = "\x1b[0m";
+    const pipe = D ++ "│" ++ R;
+
+    // Source is already padded; rendering keeps the alignment after
+    // stripping the cell markers.
+    try expectRender(
+        pipe ++ " " ++ B ++ "Tool" ++ R ++ " " ++ pipe ++ " " ++ B ++ "Use" ++ R ++ " " ++ pipe ++ "\n" ++
+            D ++ "├──────┼─────┤" ++ R ++ "\n" ++
+            pipe ++ " " ++ C ++ "goto" ++ R ++ " " ++ pipe ++ " nav " ++ pipe,
+        "| Tool   | Use |\n|--------|-----|\n| `goto` | nav |",
+    );
+    // Gemini-style unpadded source: columns are padded to the widest
+    // rendered cell.
+    try expectRender(
+        pipe ++ " " ++ B ++ "Tool" ++ R ++ " " ++ pipe ++ " " ++ B ++ "Usage" ++ R ++ "       " ++ pipe ++ "\n" ++
+            D ++ "├──────┼─────────────┤" ++ R ++ "\n" ++
+            pipe ++ " goto " ++ pipe ++ " " ++ B ++ "Nav:" ++ R ++ " to url " ++ pipe,
+        "| Tool | Usage |\n| :--- | :--- |\n| goto | **Nav:** to url |",
+    );
+    // A pipe line without a separator row underneath is not a table.
+    try expectRender("| just \x1b[1mtext\x1b[0m |", "| just **text** |");
+}
+
+test "md_term: overwide table falls back to verbatim rows" {
+    const header = "|a" ** 17 ++ "|";
+    const sep = "|-" ** 17 ++ "|";
+    try expectRender(
+        "\x1b[1m" ++ header ++ "\x1b[0m\n\x1b[38;5;244m" ++ sep ++ "\x1b[0m",
+        header ++ "\n" ++ sep,
+    );
 }
 
 test "md_term: backslash escapes" {
