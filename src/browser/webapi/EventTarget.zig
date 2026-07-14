@@ -23,6 +23,7 @@ const Page = @import("../Page.zig");
 const EventManager = @import("../EventManager.zig");
 
 const Event = @import("Event.zig");
+const AbortSignal = @import("AbortSignal.zig");
 
 const RegisterOptions = EventManager.RegisterOptions;
 
@@ -83,7 +84,17 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
 
 const AddEventListenerOptions = union(enum) {
     capture: bool,
-    options: RegisterOptions,
+    options: Options,
+
+    // The signal is kept as a raw js.Value so that an explicit null (or any
+    // non-AbortSignal value) can be told apart from an absent or undefined
+    // member, and rejected with a TypeError per the dictionary conversion.
+    const Options = struct {
+        once: bool = false,
+        capture: bool = false,
+        passive: bool = false,
+        signal: ?js.Value = null,
+    };
 };
 
 pub const EventListenerCallback = union(enum) {
@@ -91,19 +102,32 @@ pub const EventListenerCallback = union(enum) {
     object: js.Object,
 };
 pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, exec: *js.Execution) !void {
+    // Convert the options before the null-callback early return: per spec,
+    // the dictionary conversion throws even when the callback is null.
+    const options = blk: {
+        const o = opts_ orelse break :blk RegisterOptions{};
+        break :blk switch (o) {
+            .options => |opts| RegisterOptions{
+                .once = opts.once,
+                .capture = opts.capture,
+                .passive = opts.passive,
+                .signal = signal: {
+                    const signal = opts.signal orelse break :signal null;
+                    if (signal.isUndefined()) {
+                        break :signal null;
+                    }
+                    break :signal try signal.toZig(*AbortSignal);
+                },
+            },
+            .capture => |capture| RegisterOptions{ .capture = capture },
+        };
+    };
+
     const callback = callback_ orelse return;
 
     const em_callback: EventManager.Callback = switch (callback) {
         .object => |obj| .{ .object = obj },
         .function => |func| .{ .function = func },
-    };
-
-    const options = blk: {
-        const o = opts_ orelse break :blk RegisterOptions{};
-        break :blk switch (o) {
-            .options => |opts| opts,
-            .capture => |capture| RegisterOptions{ .capture = capture },
-        };
     };
 
     switch (exec.js.global) {

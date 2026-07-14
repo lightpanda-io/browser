@@ -82,6 +82,10 @@ _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
 _on_hashchange: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
+_on_blur: ?js.Function.Global = null,
+_on_focus: ?js.Function.Global = null,
+_on_resize: ?js.Function.Global = null,
+_on_scroll: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_rejection_handled: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null,
@@ -386,6 +390,68 @@ pub fn getOnError(self: *const Window) ?js.Function.Global {
 
 pub fn setOnError(self: *Window, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
+}
+
+pub fn getOnBlur(self: *const Window) ?js.Function.Global {
+    return self._on_blur;
+}
+
+pub fn setOnBlur(self: *Window, setter: ?FunctionSetter) void {
+    self._on_blur = getFunctionFromSetter(setter);
+}
+
+pub fn getOnFocus(self: *const Window) ?js.Function.Global {
+    return self._on_focus;
+}
+
+pub fn setOnFocus(self: *Window, setter: ?FunctionSetter) void {
+    self._on_focus = getFunctionFromSetter(setter);
+}
+
+pub fn getOnResize(self: *const Window) ?js.Function.Global {
+    return self._on_resize;
+}
+
+pub fn setOnResize(self: *Window, setter: ?FunctionSetter) void {
+    self._on_resize = getFunctionFromSetter(setter);
+}
+
+pub fn getOnScroll(self: *const Window) ?js.Function.Global {
+    return self._on_scroll;
+}
+
+pub fn setOnScroll(self: *Window, setter: ?FunctionSetter) void {
+    self._on_scroll = getFunctionFromSetter(setter);
+}
+
+// The "window-reflecting body element event handler set" (HTML spec): these
+// event handlers of body and frameset elements are aliases for the Window's.
+// Returns the Window storage slot for the given content attribute name, or
+// null if the attribute isn't part of the set.
+fn windowReflectingHandler(self: *Window, name: lp.String) ?*?js.Function.Global {
+    if (name.eql(comptime .wrap("onblur"))) return &self._on_blur;
+    if (name.eql(comptime .wrap("onerror"))) return &self._on_error;
+    if (name.eql(comptime .wrap("onfocus"))) return &self._on_focus;
+    if (name.eql(comptime .wrap("onload"))) return &self._on_load;
+    if (name.eql(comptime .wrap("onresize"))) return &self._on_resize;
+    if (name.eql(comptime .wrap("onscroll"))) return &self._on_scroll;
+    return null;
+}
+
+// Applies a window-reflecting content attribute (set on a body or frameset
+// element) to the Window's event handler. A null value clears the handler.
+pub fn setWindowReflectingHandlerFromAttribute(self: *Window, name: lp.String, value: ?[]const u8, frame: *Frame) void {
+    const slot = self.windowReflectingHandler(name) orelse return;
+    const expr = value orelse {
+        slot.* = null;
+        return;
+    };
+    if (frame.js.stringToPersistedFunction(expr, &.{"event"}, &.{})) |func| {
+        slot.* = func;
+    } else |err| {
+        log.err(.js, "window reflecting handler", .{ .err = err, .str = expr });
+        slot.* = null;
+    }
 }
 
 pub fn getOnMessage(self: *const Window) ?js.Function.Global {
@@ -1013,7 +1079,7 @@ const PostMessageCallback = struct {
     }
 };
 
-const FunctionSetter = union(enum) {
+pub const FunctionSetter = union(enum) {
     func: js.Function.Global,
     anything: js.Value,
 };
@@ -1021,7 +1087,7 @@ const FunctionSetter = union(enum) {
 // window.onload = {}; doesn't fail, but it doesn't do anything.
 // seems like setting to null is ok (though, at least on Firefix, it preserves
 // the original value, which we could do, but why?)
-fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
+pub fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
     const setter = setter_ orelse return null;
     return switch (setter) {
         .func => |func| func, // Already a Global from bridge auto-conversion
@@ -1079,6 +1145,10 @@ pub const JsApi = struct {
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
     pub const onhashchange = bridge.accessor(Window.getOnHashChange, Window.setOnHashChange, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
+    pub const onblur = bridge.accessor(Window.getOnBlur, Window.setOnBlur, .{});
+    pub const onfocus = bridge.accessor(Window.getOnFocus, Window.setOnFocus, .{});
+    pub const onresize = bridge.accessor(Window.getOnResize, Window.setOnResize, .{});
+    pub const onscroll = bridge.accessor(Window.getOnScroll, Window.setOnScroll, .{});
     pub const onmessage = bridge.accessor(Window.getOnMessage, Window.setOnMessage, .{});
     pub const onrejectionhandled = bridge.accessor(Window.getOnRejectionHandled, Window.setOnRejectionHandled, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
