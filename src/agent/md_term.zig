@@ -62,7 +62,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
     while (hashes < trimmed.len and trimmed[hashes] == '#') hashes += 1;
     if (hashes >= 1 and hashes <= 6 and hashes < trimmed.len and trimmed[hashes] == ' ') {
         try w.writeAll(ansi.bold);
-        try renderInline(w, std.mem.trimLeft(u8, trimmed[hashes..], " "));
+        try renderInlineStyled(w, std.mem.trimLeft(u8, trimmed[hashes..], " "), ansi.bold);
         try w.writeAll(ansi.reset);
         return;
     }
@@ -71,11 +71,10 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
         try w.writeAll(indent);
         try styled(w, "•", ansi.dim);
         try w.writeByte(' ');
-        try renderInline(w, trimmed[2..]);
+        try renderInline(w, std.mem.trimLeft(u8, trimmed[2..], " "));
         return;
     }
 
-    // Numbered list keeps its marker verbatim; a bullet is normalized to '•'.
     var digits: usize = 0;
     while (digits < trimmed.len and std.ascii.isDigit(trimmed[digits])) digits += 1;
     if (digits > 0 and digits + 1 < trimmed.len and
@@ -83,7 +82,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
     {
         try w.writeAll(indent);
         try w.writeAll(trimmed[0 .. digits + 2]);
-        try renderInline(w, trimmed[digits + 2 ..]);
+        try renderInline(w, std.mem.trimLeft(u8, trimmed[digits + 2 ..], " "));
         return;
     }
 
@@ -91,6 +90,11 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
 }
 
 fn renderInline(w: *std.Io.Writer, text: []const u8) !void {
+    try renderInlineStyled(w, text, "");
+}
+
+/// `active` is the enclosing span's style; every nested reset re-applies it.
+fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: []const u8) std.Io.Writer.Error!void {
     var i: usize = 0;
     while (i < text.len) {
         switch (text[i]) {
@@ -102,6 +106,7 @@ fn renderInline(w: *std.Io.Writer, text: []const u8) !void {
             },
             '`' => if (std.mem.indexOfPos(u8, text, i + 1, "`")) |end| {
                 try styled(w, text[i + 1 .. end], ansi.cyan);
+                try w.writeAll(active);
                 i = end + 1;
                 continue;
             },
@@ -109,19 +114,19 @@ fn renderInline(w: *std.Io.Writer, text: []const u8) !void {
                 const double = [2]u8{ ch, ch };
                 if (i + 1 < text.len and text[i + 1] == ch) {
                     if (std.mem.indexOfPos(u8, text, i + 2, &double)) |end| {
-                        try styled(w, text[i + 2 .. end], ansi.bold);
+                        try span(w, text[i + 2 .. end], ansi.bold, active);
                         i = end + 2;
                         continue;
                     }
                 } else if (std.mem.indexOfScalarPos(u8, text, i + 1, ch)) |end| {
-                    try styled(w, text[i + 1 .. end], ansi.italic);
+                    try span(w, text[i + 1 .. end], ansi.italic, active);
                     i = end + 1;
                     continue;
                 }
             },
             '~' => if (i + 1 < text.len and text[i + 1] == '~') {
                 if (std.mem.indexOfPos(u8, text, i + 2, "~~")) |end| {
-                    try styled(w, text[i + 2 .. end], ansi.strike);
+                    try span(w, text[i + 2 .. end], ansi.strike, active);
                     i = end + 2;
                     continue;
                 }
@@ -129,6 +134,7 @@ fn renderInline(w: *std.Io.Writer, text: []const u8) !void {
             '[' => if (std.mem.indexOfPos(u8, text, i + 1, "](")) |mid| {
                 if (std.mem.indexOfScalarPos(u8, text, mid + 2, ')')) |end| {
                     try renderLink(w, text[i + 1 .. mid], text[mid + 2 .. end]);
+                    try w.writeAll(active);
                     i = end + 1;
                     continue;
                 }
@@ -138,6 +144,13 @@ fn renderInline(w: *std.Io.Writer, text: []const u8) !void {
         try w.writeByte(text[i]);
         i += 1;
     }
+}
+
+fn span(w: *std.Io.Writer, inner: []const u8, style: []const u8, active: []const u8) std.Io.Writer.Error!void {
+    try w.writeAll(style);
+    try renderInlineStyled(w, inner, style);
+    try w.writeAll(ansi.reset);
+    try w.writeAll(active);
 }
 
 fn styled(w: *std.Io.Writer, inner: []const u8, style: []const u8) !void {
@@ -153,8 +166,8 @@ fn isEscapable(c: u8) bool {
     };
 }
 
-/// A left-trimmed line consisting solely of 3+ identical `-`, `*` or `_`
-/// markers. Not a prefix match: `***bold***` must stay inline text.
+/// A left-trimmed line of 3+ identical `-`, `*` or `_` markers — the whole
+/// line, so `***bold***` stays inline text.
 fn isHorizontalRule(line: []const u8) bool {
     if (line.len < 3) return false;
     const first = line[0];
@@ -194,18 +207,45 @@ test "md_term: inline styles" {
 test "md_term: blocks" {
     try expectRender("\x1b[1mTitle\x1b[0m", "# Title");
     try expectRender("\x1b[1mSub\x1b[0m", "### Sub");
-    try expectRender("\x1b[2m•\x1b[0m item", "- item");
+    try expectRender("\x1b[38;5;244m•\x1b[0m item", "- item");
     try expectRender("1. item", "1. item");
 }
 
+test "md_term: alignment spaces after list marker collapse" {
+    try expectRender("\x1b[38;5;244m•\x1b[0m item", "-   item");
+    try expectRender("1. item", "1.   item");
+}
+
+test "md_term: nested inline styles" {
+    // The code span's reset re-applies the enclosing bold.
+    try expectRender(
+        "\x1b[1muse \x1b[36mls\x1b[0m\x1b[1m now\x1b[0m",
+        "**use `ls` now**",
+    );
+    try expectRender(
+        "\x1b[1m\x1b[36mgoto(url)\x1b[0m\x1b[1m\x1b[0m: nav",
+        "**`goto(url)`**: nav",
+    );
+    // Inside a heading too: bold survives past the code span.
+    try expectRender(
+        "\x1b[1mrun \x1b[36mls\x1b[0m\x1b[1m first\x1b[0m",
+        "## run `ls` first",
+    );
+    // Italic nested in bold stacks, then bold is restored.
+    try expectRender(
+        "\x1b[1ma \x1b[3mb\x1b[0m\x1b[1m c\x1b[0m",
+        "**a *b* c**",
+    );
+}
+
 test "md_term: fenced code block" {
-    try expectRender("\x1b[2mlet x = 1;\x1b[0m", "```\nlet x = 1;\n```");
+    try expectRender("\x1b[38;5;244mlet x = 1;\x1b[0m", "```\nlet x = 1;\n```");
 }
 
 test "md_term: link" {
     // OSC 8 hyperlink around the label, plus a dim fallback url.
     try expectRender(
-        "\x1b]8;;https://x.io\x1b\\\x1b[4mLP\x1b[0m\x1b]8;;\x1b\\ \x1b[2m(https://x.io)\x1b[0m",
+        "\x1b]8;;https://x.io\x1b\\\x1b[4mLP\x1b[0m\x1b]8;;\x1b\\ \x1b[38;5;244m(https://x.io)\x1b[0m",
         "[LP](https://x.io)",
     );
     // A bare link (label == url) omits the redundant suffix.
@@ -216,13 +256,12 @@ test "md_term: link" {
 }
 
 test "md_term: blockquote" {
-    try expectRender("\x1b[2m│\x1b[0m quoted \x1b[1mnote\x1b[0m", "> quoted **note**");
+    try expectRender("\x1b[38;5;244m│\x1b[0m quoted \x1b[1mnote\x1b[0m", "> quoted **note**");
 }
 
 test "md_term: horizontal rule" {
-    try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "---");
-    try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "***");
-    // Trailing non-marker text means this is not a rule.
+    try expectRender("\x1b[38;5;244m" ++ "─" ** 24 ++ "\x1b[0m", "---");
+    try expectRender("\x1b[38;5;244m" ++ "─" ** 24 ++ "\x1b[0m", "***");
     try expectRender("---x", "---x");
 }
 

@@ -46,7 +46,9 @@ const style_jsglobal = "ps-jsglobal";
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
     pub const bold = "\x1b[1m";
-    pub const dim = "\x1b[2m";
+    // 256-ramp gray, not SGR 2 or palette color 8, which are theme-dependent
+    // and unreadable on some configs. Same gray as the ic-hint override.
+    pub const dim = "\x1b[38;5;244m";
     pub const italic = "\x1b[3m";
     pub const underline = "\x1b[4m";
     pub const strike = "\x1b[9m";
