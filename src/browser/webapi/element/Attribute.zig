@@ -625,7 +625,7 @@ pub const NamedNodeMap = struct {
 
         fn getIndexes(self: *const NamedNodeMap, frame: *Frame) !js.Array {
             const len = self.length();
-            var arr = exec.js.local.?.newArray(len);
+            var arr = frame.js.local.?.newArray(len);
             for (0..len) |i| {
                 _ = try arr.set(@intCast(i), i, .{});
             }
