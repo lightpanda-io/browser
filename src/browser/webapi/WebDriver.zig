@@ -417,14 +417,18 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
 }
 
 fn hasNonPassiveListener(el: *Element, typ: []const u8, frame: *Frame) bool {
-    const base = &frame._event_manager.base;
+    // Listeners live in the event manager of the element's own frame (and the
+    // propagation path ends at that frame's window), which is not the caller's
+    // frame when the element belongs to e.g. an iframe's document.
+    const owner = el.ownerFrame(frame);
+    const base = &owner._event_manager.base;
     var current: ?*@import("Node.zig") = el.asNode();
     while (current) |node| : (current = node.parentNode()) {
         if (anyNonPassive(base.getListeners(node.asEventTarget(), .wrap(typ)))) {
             return true;
         }
     }
-    return anyNonPassive(base.getListeners(frame.window.asEventTarget(), .wrap(typ)));
+    return anyNonPassive(base.getListeners(owner.window.asEventTarget(), .wrap(typ)));
 }
 
 fn anyNonPassive(list_: ?*std.DoublyLinkedList) bool {
