@@ -347,7 +347,7 @@ pub const Indexed = struct {
                     }
                     defer caller.deinit();
 
-                    return caller.deleteIndex(T, deleter, idx, handle.?, .{
+                    return caller.deleteOrDefineIndex(T, deleter, idx, handle.?, .{
                         .as_typed_array = opts.as_typed_array,
                         .null_as_undefined = opts.null_as_undefined,
                     });
@@ -381,7 +381,7 @@ pub const Indexed = struct {
                     defer caller.deinit();
 
                     // same (self, index) -> bool shape as a deleter
-                    return caller.deleteIndex(T, definer, idx, handle.?, .{});
+                    return caller.deleteOrDefineIndex(T, definer, idx, handle.?, .{});
                 }
             }.wrap;
         }
@@ -476,7 +476,7 @@ pub const NamedIndexed = struct {
                     if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
                 };
 
-                return caller.deleteNamedIndex(T, deleter, c_name.?, handle.?, .{
+                return caller.deleteOrDefineNamedIndex(T, deleter, c_name.?, handle.?, .{
                     .as_typed_array = opts.as_typed_array,
                     .null_as_undefined = opts.null_as_undefined,
                 });
@@ -493,7 +493,7 @@ pub const NamedIndexed = struct {
                 defer caller.deinit();
 
                 // same (self, name) -> bool shape as a deleter
-                return caller.deleteNamedIndex(T, definer, c_name.?, handle.?, .{});
+                return caller.deleteOrDefineNamedIndex(T, definer, c_name.?, handle.?, .{});
             }
         }.wrap;
 

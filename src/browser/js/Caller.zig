@@ -262,7 +262,7 @@ fn _setIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, js_
     return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
 }
 
-pub fn deleteIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
+pub fn deleteOrDefineIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -270,13 +270,13 @@ pub fn deleteIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, han
     defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
-    return _deleteIndex(T, local, func, idx, info, opts) catch |err| {
+    return _deleteOrDefineIndex(T, local, func, idx, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info);
         return js.Intercepted.no;
     };
 }
 
-fn _deleteIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
+fn _deleteOrDefineIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -315,7 +315,7 @@ fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
 }
 
-pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
+pub fn deleteOrDefineNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -323,13 +323,13 @@ pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *c
     defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
-    return _deleteNamedIndex(T, local, func, name, info, opts) catch |err| {
+    return _deleteOrDefineNamedIndex(T, local, func, name, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info);
         return js.Intercepted.no;
     };
 }
 
-fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
+fn _deleteOrDefineNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
