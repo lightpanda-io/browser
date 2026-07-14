@@ -215,7 +215,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
         .tls_verify = network.config.tlsVerifyHost(),
-        .max_response_size = network.config.httpMaxResponseSize() orelse std.math.maxInt(u32),
+        .max_response_size = network.config.httpMaxResponseSize() orelse 1 * 1024 * 1024 * 1024, // 1 GiB
 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
