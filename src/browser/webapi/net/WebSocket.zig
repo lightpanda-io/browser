@@ -67,6 +67,28 @@ _send_offset: usize = 0,
 // buffered incoming frame
 _recv_buffer: std.ArrayList(u8) = .empty,
 
+// Incoming events, buffered and delivered by HttpClient's dispatcher. We never
+// run JS inside a libcurl callback. Too many things can go wrong.
+_events: std.ArrayList(RecvEvent) = .empty,
+
+// data is dupe'd by the _batch_arena and re-used after every delivery
+_batch_arena: ?Allocator = null,
+_batch_bytes: usize = 0,
+
+// Linked into the client's ws_dispatch_queue while events await delivery.
+// Queue membership holds a self-reference (released by deliverEvents /
+// unlinkDispatch).
+_dispatch_node: std.DoublyLinkedList.Node = .{},
+_dispatch_queued: bool = false,
+
+// deliverEvents is running, events appended during delivery can be picked up
+// immediately without being queued.
+_delivering: bool = false,
+
+// Holds the base self-reference and the owner-list membership. Cleared
+// exactly once, by deactivate().
+_active: bool = true,
+
 // close info for event dispatch
 _close_code: u16 = 1000,
 _close_reason: []const u8 = "",
@@ -85,6 +107,29 @@ pub const ReadyState = enum(u8) {
     open = 1,
     closing = 2,
     closed = 3,
+};
+
+// A buffered incoming event.
+const RecvEvent = union(enum) {
+    // handshake completed
+    open,
+
+    // a complete text/binary frame; data lives in _batch_arena
+    message: Incoming,
+
+    // code/reason stored on self
+    close_frame,
+
+    // close() before the handshake completed
+    local_close,
+
+    // the transport is gone (server closed, error, ...)
+    disconnected: ?anyerror,
+
+    const Incoming = struct {
+        data: []const u8,
+        frame_type: http.WsFrameType,
+    };
 };
 
 pub const BinaryType = enum {
@@ -185,14 +230,14 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
 
     // Unlike an XHR object where we only selectively reference the instance
     // while the request is actually inflight, WS connection is "inflight" from
-    // the moment it's created.
+    // the moment it's created. deactivate() releases this reference.
     self.acquireRef();
 
     return self;
 }
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
-    self.teardownConn();
+    self.releaseTransport();
 
     if (self._on_open) |func| {
         func.release();
@@ -211,6 +256,10 @@ pub fn deinit(self: *WebSocket, page: *Page) void {
         msg.deinit(page);
     }
 
+    if (self._batch_arena) |arena| {
+        page.releaseArena(arena);
+    }
+
     page.releaseArena(self._arena);
 }
 
@@ -226,12 +275,94 @@ fn asEventTarget(self: *WebSocket) *EventTarget {
     return self._proto;
 }
 
-// we're being aborted internally (e.g. frame shutting down)
+// we're being aborted internally (e.g. frame shutting down). Must not run
+// user JS: buffered events are dropped, not delivered.
 pub fn kill(self: *WebSocket) void {
-    self.cleanup();
+    self.unlinkDispatch();
+    self.clearEvents();
+    self.deactivate();
 }
 
-pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
+// The pump saw this connection complete (server closed, error, or the tail
+// of our close handshake). Release the transport now — the conn goes back
+// to the network layer immediately — and buffer the JS-facing close/error
+// events for the dispatcher.
+pub fn transportClosed(self: *WebSocket, err: ?anyerror) void {
+    self.releaseTransport();
+    self.bufferEvent(.{ .disconnected = err }) catch |err2| {
+        log.err(.websocket, "close failure", .{ .err = err2 });
+        // Can't buffer. Drop the socket without running JS.
+        self.kill();
+    };
+}
+
+// Deliver buffered events. Called only by the client's dispatchCompleted at
+// a tick(.all) safe point — the only place WebSocket runs user JS. A
+// callback can close() us, kill us (navigation -> owner teardown), or make
+// us buffer more events (nested pump via a syncRequest); the index loop and
+// the _active check keep all of that safe.
+pub fn deliverEvents(self: *WebSocket) void {
+    // The dispatch queue's reference. Runs last (LIFO defers): keeps self
+    // alive even when a terminal event releases the base reference.
+    defer self.releaseRef(self._exec.page);
+
+    self._delivering = true;
+    defer self._delivering = false;
+
+    var i: usize = 0;
+    while (i < self._events.items.len) : (i += 1) {
+        if (!self._active) {
+            // a terminal event or a re-entrant kill got us; drop the rest
+            break;
+        }
+        switch (self._events.items[i]) {
+            .open => {
+                self._ready_state = .open;
+                self.dispatchOpenEvent() catch |err| {
+                    log.err(.websocket, "open event fail", .{ .err = err });
+                };
+            },
+            .message => |msg| {
+                // a close() mid-batch flips us to .closing; no message
+                // events after that
+                if (self._ready_state == .open) {
+                    self.dispatchMessageEvent(msg.data, msg.frame_type) catch |err| {
+                        log.err(.websocket, "message event dispatch failed", .{ .err = err });
+                    };
+                }
+            },
+            .close_frame => self.handleCloseFrame(),
+            .local_close => {
+                self.dispatchCloseEvent(self._close_code, self._close_reason, false) catch |err| {
+                    log.err(.websocket, "close event dispatch failed", .{ .err = err });
+                };
+                self.deactivate();
+            },
+            .disconnected => |err| self.disconnected(err),
+        }
+    }
+
+    self.clearEvents();
+}
+
+// The server's close frame, at delivery time.
+fn handleCloseFrame(self: *WebSocket) void {
+    if (self._ready_state == .closing) {
+        // We initiated the close; the server's close frame completes the
+        // handshake.
+        self.disconnected(null);
+        return;
+    }
+    // Server-initiated: send the reciprocal close frame per RFC 6455
+    // §5.5.1. The connection ends when the transport drains
+    // (.disconnected follows).
+    self._ready_state = .closing;
+    self.queueMessage(.close) catch |err| {
+        log.err(.websocket, "reciprocal close", .{ .err = err, .url = self._url });
+    };
+}
+
+fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     const was_clean = self._ready_state == .closing and err_ == null;
     self._ready_state = .closed;
 
@@ -241,15 +372,13 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
         log.info(.websocket, "disconnected", .{ .url = self._url, .reason = "closed" });
     }
 
-    defer self.cleanup();
+    defer self.deactivate();
 
     // Use 1006 (abnormal closure) if connection wasn't cleanly closed
     const code = if (was_clean) self._close_code else 1006;
     const reason = if (was_clean) self._close_reason else "";
 
     // Spec requires error event before close on abnormal closure.
-    // Dispatch events before cleanup since cleanup releases the ref count
-    // which may free our event handler references.
     if (!was_clean) {
         self.dispatchErrorEvent() catch |err| {
             log.err(.websocket, "error event dispatch failed", .{ .err = err });
@@ -261,22 +390,81 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     };
 }
 
-fn cleanup(self: *WebSocket) void {
-    if (self._conn == null) {
+// Release the base self-reference and unlink from the owner. Idempotent.
+fn deactivate(self: *WebSocket) void {
+    if (!self._active) {
         return;
     }
-    self.teardownConn();
+    self._active = false;
+    self.releaseTransport();
+    self._exec.httpOwner().removeWS(self);
     self.releaseRef(self._exec.page);
 }
 
-// Unlink the connection from the http client + owner and free the request headers.
-fn teardownConn(self: *WebSocket) void {
+// Unlink the connection from the http client and free the request headers.
+// Queued outgoing messages are kept: their arenas are released in deinit,
+// and bufferedAmount keeps reporting them, as the spec wants.
+fn releaseTransport(self: *WebSocket) void {
     const conn = self._conn orelse return;
-    self._exec.httpOwner().removeWS(self);
+    self._conn = null;
     self._http_client.removeConn(conn);
     self._req_headers.deinit();
-    self._conn = null;
-    self._send_queue.clearRetainingCapacity();
+}
+
+// Pump-side: record an event for delivery. Errors propagate to libcurl's
+// callback return value — never tear down from here, the pump may still be
+// inside curl.
+fn bufferEvent(self: *WebSocket, event: RecvEvent) !void {
+    try self._events.append(self._arena, event);
+    self.enqueueDispatch();
+}
+
+fn bufferMessage(self: *WebSocket, message: []const u8, frame_type: http.WsFrameType) !void {
+    // Cap the undelivered batch, not the stream: a blocking window can hold
+    // delivery across many frames, and these copies are what occupy memory.
+    const total_len = self._batch_bytes + message.len;
+    if (total_len > self._http_client.max_response_size) {
+        return error.MessageTooLarge;
+    }
+    const arena = self._batch_arena orelse blk: {
+        const arena = try self._exec.getArena(message.len, "WebSocket.recv");
+        self._batch_arena = arena;
+        break :blk arena;
+    };
+    self._batch_bytes = total_len;
+    try self.bufferEvent(.{ .message = .{
+        .data = try arena.dupe(u8, message),
+        .frame_type = frame_type,
+    } });
+}
+
+fn enqueueDispatch(self: *WebSocket) void {
+    if (self._dispatch_queued or self._delivering) {
+        // already queued, or deliverEvents' own loop will consume it
+        return;
+    }
+    self._dispatch_queued = true;
+    // the queue holds a reference until deliverEvents / unlinkDispatch
+    self.acquireRef();
+    self._http_client.wsEnqueue(&self._dispatch_node);
+}
+
+fn unlinkDispatch(self: *WebSocket) void {
+    if (!self._dispatch_queued) {
+        return;
+    }
+    self._dispatch_queued = false;
+    self._http_client.wsDequeue(&self._dispatch_node);
+    self.releaseRef(self._exec.page);
+}
+
+fn clearEvents(self: *WebSocket) void {
+    self._events.clearRetainingCapacity();
+    self._batch_bytes = 0;
+    if (self._batch_arena) |arena| {
+        self._batch_arena = null;
+        self._exec.releaseArena(arena);
+    }
 }
 
 fn queueMessage(self: *WebSocket, msg: Message) !void {
@@ -388,10 +576,18 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     const reason = reason_ orelse "";
 
     if (self._ready_state == .connecting) {
-        // Connection not yet established - fail it
+        // Connection not yet established - fail it. The close event is
+        // buffered like everything else; anything already received but
+        // undelivered (open, messages) is dropped.
         self._ready_state = .closed;
-        self.cleanup();
-        try self.dispatchCloseEvent(code, reason, false);
+        self._close_code = code;
+        self._close_reason = try self._arena.dupe(u8, reason);
+        self.releaseTransport();
+        self.clearEvents();
+        self.bufferEvent(.local_close) catch {
+            self.unlinkDispatch();
+            self.deactivate();
+        };
         return;
     }
 
@@ -667,7 +863,7 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
 
     const message = self._recv_buffer.items;
     switch (meta.frame_type) {
-        .text, .binary => try self.dispatchMessageEvent(message, meta.frame_type),
+        .text, .binary => try self.bufferMessage(message, meta.frame_type),
         .close => {
             // Parse close frame: 2-byte code (big-endian) + optional reason
             const received_code = if (message.len >= 2)
@@ -675,19 +871,16 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
             else
                 1005; // No status code received
 
-            if (self._ready_state == .closing) {
-                // Client-initiated close: this is the server's response.
-                // Close handshake complete - disconnect.
-                self.disconnected(null);
-            } else {
-                // Server-initiated close: send reciprocal close frame per RFC 6455 §5.5.1
+            if (self._ready_state != .closing) {
+                // Server-initiated: stash for the close event. (When we
+                // initiated, _close_code/_close_reason hold what close()
+                // sent, and handleCloseFrame completes the handshake.)
                 self._close_code = received_code;
                 if (message.len > 2) {
                     self._close_reason = try self._arena.dupe(u8, message[2..]);
                 }
-                self._ready_state = .closing;
-                try self.queueMessage(.close);
             }
+            try self.bufferEvent(.close_frame);
         },
         .ping, .pong, .cont => {},
     }
@@ -716,12 +909,10 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             return 0;
         }
 
-        self._ready_state = .open;
         log.info(.websocket, "connected", .{ .url = self._url });
 
-        self.dispatchOpenEvent() catch |err| {
-            log.err(.websocket, "open event fail", .{ .err = err });
-        };
+        // readyState flips to .open and onopen fires at delivery
+        self.bufferEvent(.open) catch return 0;
         return buf_len;
     }
 
