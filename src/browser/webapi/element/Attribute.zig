@@ -620,8 +620,26 @@ pub const NamedNodeMap = struct {
         };
 
         pub const length = bridge.accessor(NamedNodeMap.length, null, .{});
-        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, null, .{ .null_as_undefined = true });
-        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, null, null, .{ .null_as_undefined = true });
+        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, getIndexes, .{ .null_as_undefined = true });
+        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, getNames, null, .{ .null_as_undefined = true });
+
+        fn getIndexes(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+            const len = self.length();
+            var arr = frame.js.local.?.newArray(len);
+            for (0..len) |i| {
+                _ = try arr.set(@intCast(i), i, .{});
+            }
+            return arr;
+        }
+
+        fn getNames(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+            const names = try self.list().getNames(frame.local_arena);
+            var arr = frame.js.local.?.newArray(@intCast(names.len));
+            for (names, 0..) |name, i| {
+                _ = try arr.set(@intCast(i), name, .{});
+            }
+            return arr;
+        }
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });
