@@ -62,7 +62,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
     while (hashes < trimmed.len and trimmed[hashes] == '#') hashes += 1;
     if (hashes >= 1 and hashes <= 6 and hashes < trimmed.len and trimmed[hashes] == ' ') {
         try w.writeAll(ansi.bold);
-        try renderInlineStyled(w, std.mem.trimLeft(u8, trimmed[hashes..], " "), ansi.bold);
+        try renderInlineStyled(w, std.mem.trimLeft(u8, trimmed[hashes..], " "), &bold_style);
         try w.writeAll(ansi.reset);
         return;
     }
@@ -89,12 +89,29 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
     try renderInline(w, line);
 }
 
+/// Stack-threaded chain of enclosing span styles; a nested span's reset
+/// re-applies the whole chain, so styling survives arbitrary nesting depth.
+const Style = struct {
+    code: []const u8,
+    parent: ?*const Style,
+
+    fn apply(self: *const Style, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (self.parent) |p| try p.apply(w);
+        try w.writeAll(self.code);
+    }
+
+    fn applyOpt(active: ?*const Style, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (active) |a| try a.apply(w);
+    }
+};
+
+const bold_style: Style = .{ .code = ansi.bold, .parent = null };
+
 fn renderInline(w: *std.Io.Writer, text: []const u8) !void {
-    try renderInlineStyled(w, text, "");
+    try renderInlineStyled(w, text, null);
 }
 
-/// `active` is the enclosing span's style; every nested reset re-applies it.
-fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: []const u8) std.Io.Writer.Error!void {
+fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: ?*const Style) std.Io.Writer.Error!void {
     var i: usize = 0;
     while (i < text.len) {
         switch (text[i]) {
@@ -106,7 +123,7 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: []const u8) s
             },
             '`' => if (std.mem.indexOfPos(u8, text, i + 1, "`")) |end| {
                 try styled(w, text[i + 1 .. end], ansi.cyan);
-                try w.writeAll(active);
+                try Style.applyOpt(active, w);
                 i = end + 1;
                 continue;
             },
@@ -134,7 +151,7 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: []const u8) s
             '[' => if (std.mem.indexOfPos(u8, text, i + 1, "](")) |mid| {
                 if (std.mem.indexOfScalarPos(u8, text, mid + 2, ')')) |end| {
                     try renderLink(w, text[i + 1 .. mid], text[mid + 2 .. end]);
-                    try w.writeAll(active);
+                    try Style.applyOpt(active, w);
                     i = end + 1;
                     continue;
                 }
@@ -146,11 +163,11 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: []const u8) s
     }
 }
 
-fn span(w: *std.Io.Writer, inner: []const u8, style: []const u8, active: []const u8) std.Io.Writer.Error!void {
+fn span(w: *std.Io.Writer, inner: []const u8, style: []const u8, active: ?*const Style) std.Io.Writer.Error!void {
     try w.writeAll(style);
-    try renderInlineStyled(w, inner, style);
+    try renderInlineStyled(w, inner, &.{ .code = style, .parent = active });
     try w.writeAll(ansi.reset);
-    try w.writeAll(active);
+    try Style.applyOpt(active, w);
 }
 
 fn styled(w: *std.Io.Writer, inner: []const u8, style: []const u8) !void {
@@ -235,6 +252,11 @@ test "md_term: nested inline styles" {
     try expectRender(
         "\x1b[1ma \x1b[3mb\x1b[0m\x1b[1m c\x1b[0m",
         "**a *b* c**",
+    );
+    // Depth 2: the code span's reset re-applies the full bold+italic chain.
+    try expectRender(
+        "\x1b[1ma \x1b[3mb \x1b[36mc\x1b[0m\x1b[1m\x1b[3m d\x1b[0m\x1b[1m e\x1b[0m",
+        "**a *b `c` d* e**",
     );
 }
 
