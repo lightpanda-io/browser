@@ -212,13 +212,9 @@ pub const JsApi = struct {
         configurable: bool,
     };
 
-    fn getIndexes(self: *HTMLCollection, exec: *const Execution) !js.Array {
-        const frame = switch (exec.js.global) {
-            .frame => |f| f,
-            .worker => unreachable,
-        };
+    fn getIndexes(self: *HTMLCollection, frame: *Frame) !js.Array {
         const len = self.length(frame);
-        var arr = exec.js.local.?.newArray(len);
+        var arr = frame.js.local.?.newArray(len);
         for (0..len) |i| {
             _ = try arr.set(@intCast(i), i, .{});
         }
