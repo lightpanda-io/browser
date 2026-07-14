@@ -220,7 +220,9 @@ const RobotsContext = struct {
 
     fn dataCallback(transfer: *Transfer, data: []const u8) anyerror!void {
         const self: *RobotsContext = @ptrCast(@alignCast(transfer.req.ctx));
-        try self.buffer.appendSlice(self.arena, data);
+        if (self.status == 200) {
+            try self.buffer.appendSlice(self.arena, data);
+        }
     }
 
     fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
