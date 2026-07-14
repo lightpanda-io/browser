@@ -78,9 +78,9 @@ _skip_lf: bool = false,
 // A single leading BOM is stripped from the stream's first line.
 _bom_checked: bool = false,
 
-_on_open: ?js.Function.Temp = null,
-_on_message: ?js.Function.Temp = null,
-_on_error: ?js.Function.Temp = null,
+_on_open: ?js.Function.Global = null,
+_on_message: ?js.Function.Global = null,
+_on_error: ?js.Function.Global = null,
 
 pub const ReadyState = enum(u8) {
     connecting = 0,
@@ -547,7 +547,7 @@ fn dispatchPending(self: *EventSource) !void {
 
     const exec = self._exec;
     const target = self.asEventTarget();
-    const handler: ?js.Function.Temp = if (is_message) self._on_message else null;
+    const handler: ?js.Function.Global = if (is_message) self._on_message else null;
 
     if (is_message) {
         if (!exec.hasDirectListeners(target, "message", handler)) {
@@ -567,7 +567,7 @@ fn dispatchPending(self: *EventSource) !void {
     try exec.dispatch(target, event.asEvent(), handler, .{ .context = "EventSource message" });
 }
 
-fn dispatchEvent(self: *EventSource, comptime name: []const u8, handler: ?js.Function.Temp) !void {
+fn dispatchEvent(self: *EventSource, comptime name: []const u8, handler: ?js.Function.Global) !void {
     const exec = self._exec;
     const target = self.asEventTarget();
     if (exec.hasDirectListeners(target, name, handler)) {
@@ -588,7 +588,7 @@ pub fn getWithCredentials(self: *const EventSource) bool {
     return self._with_credentials;
 }
 
-pub fn getOnOpen(self: *const EventSource) ?js.Function.Temp {
+pub fn getOnOpen(self: *const EventSource) ?js.Function.Global {
     return self._on_open;
 }
 
@@ -596,10 +596,10 @@ pub fn setOnOpen(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_open) |old| {
         old.release();
     }
-    self._on_open = if (cb_) |cb| try cb.tempWithThis(self) else null;
+    self._on_open = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
-pub fn getOnMessage(self: *const EventSource) ?js.Function.Temp {
+pub fn getOnMessage(self: *const EventSource) ?js.Function.Global {
     return self._on_message;
 }
 
@@ -607,10 +607,10 @@ pub fn setOnMessage(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_message) |old| {
         old.release();
     }
-    self._on_message = if (cb_) |cb| try cb.tempWithThis(self) else null;
+    self._on_message = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
-pub fn getOnError(self: *const EventSource) ?js.Function.Temp {
+pub fn getOnError(self: *const EventSource) ?js.Function.Global {
     return self._on_error;
 }
 
@@ -618,7 +618,7 @@ pub fn setOnError(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_error) |old| {
         old.release();
     }
-    self._on_error = if (cb_) |cb| try cb.tempWithThis(self) else null;
+    self._on_error = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
 pub const JsApi = struct {
