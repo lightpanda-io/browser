@@ -623,7 +623,7 @@ pub const NamedNodeMap = struct {
         pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, getIndexes, .{ .null_as_undefined = true });
         pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, getNames, null, .{ .null_as_undefined = true });
 
-        fn getIndexes(self: *const NamedNodeMap, exec: *const js.Execution) !js.Array {
+        fn getIndexes(self: *const NamedNodeMap, frame: *Frame) !js.Array {
             const len = self.length();
             var arr = exec.js.local.?.newArray(len);
             for (0..len) |i| {
