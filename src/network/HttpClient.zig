@@ -780,8 +780,13 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             }
             if (self.obey_robots and !transfer.req.internal) {
                 switch (try self.robots.check(transfer)) {
-                    .allowed => {},
-                    .blocked => return transfer.failAsync(error.RobotsBlocked),
+                    .allowed => {
+                        lp.metrics.robots_access.incr(.allow);
+                    },
+                    .blocked => {
+                        lp.metrics.robots_access.incr(.deny);
+                        return transfer.failAsync(error.RobotsBlocked);
+                    },
                     .pending => return,
                 }
             }
@@ -832,17 +837,20 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         .timestamp = std.time.timestamp(),
         .request_headers = req_headers.items,
     }) orelse {
+        lp.metrics.http_cache.incr(.miss);
         transfer._cache_intent = .store;
         return false;
     };
 
     if (cached.expired == false) {
+        lp.metrics.http_cache.incr(.hit);
         try transfer.bufferCached(cached);
         return true;
     }
 
     if (cached.metadata.hasValidators() == false) {
         // Expired and no validators
+        lp.metrics.http_cache.incr(.miss);
         cached.data.deinit();
         cache.evict(req.url);
         transfer._cache_intent = .store;
@@ -889,6 +897,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
         log.warn(.cache, "renew failed", .{ .err = err });
     };
 
+    lp.metrics.http_cache.incr(.revalidated);
     try transfer.bufferCached(stale);
     return true;
 }
@@ -1021,6 +1030,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     errdefer sync_ctx.body.deinit(allocator);
 
     var r = req;
+    r.sync = true;
     r.ctx = &sync_ctx;
     r.header_callback = SyncContext.headerCallback;
     r.data_callback = SyncContext.dataCallback;
@@ -1350,6 +1360,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
                     try transfer.handleRedirect(location.value);
+                    if (!transfer.req.internal) lp.metrics.http_redirects.incr();
 
                     const conn = transfer._conn.?;
 
@@ -1411,6 +1422,14 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     try transfer.materializeResponse(msg.conn);
+
+    // Latency is only meaningful for responses that hit the network (cache
+    // and synthetic responses never reach processOneMessage).
+    if (!transfer.req.internal) {
+        if (msg.conn.getTotalTimeMicros()) |micros| {
+            lp.metrics.http_duration_ms.observe(@intCast(@max(0, @divTrunc(micros, 1000))));
+        } else |_| {}
+    }
 
     // Release the conn before any of this response's callbacks can run —
     // they'll want it for the next resource.
@@ -1548,6 +1567,9 @@ pub const Request = struct {
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
     internal: bool = false,
+
+    // Set by syncRequest; only used to label the http_requests metric.
+    sync: bool = false,
 
     // When false, the caller does not guarantee that the body outlives the
     // transfer, and thus we'll need to dupe it.
@@ -1926,6 +1948,9 @@ pub const Transfer = struct {
     // on failure the transfer is already cleaned up (error_callback fired,
     // memory freed) — do not deinit it, and do not touch it after this.
     pub fn submit(self: *Transfer) anyerror!void {
+        if (!self.req.internal) {
+            lp.metrics.http_requests.incr(if (self.req.sync) .sync else .async);
+        }
         // Synthetic schemes never touch the network — no robots, cache, or
         // interception. The response is materialized here and delivered by
         // the dispatcher like any other transfer.
@@ -2136,6 +2161,10 @@ pub const Transfer = struct {
         }
         self._notified_fail = true;
 
+        if (!self.req.internal) {
+            lp.metrics.http_error.incr(http.errorReason(err));
+        }
+
         if (self._notify_cdp) {
             self.req.notification.dispatch(.http_request_fail, &.{
                 .transfer = self,
@@ -2184,6 +2213,17 @@ pub const Transfer = struct {
     // Buffer the standard success event sequence. `body` is either owned by
     // transfer.arena OR, through some other mechanism, outlives the transfer.
     fn bufferEvents(self: *Transfer, body: []const u8) !void {
+        // Single delivery point for every successful response — network,
+        // cache, and synthetic, on both the sync and async paths. Redirect
+        // hops never reach here (they loop back in processOneMessage), so
+        // http_status reflects the final response only. Internal requests
+        // (robots.txt) are tracked by the robots_* metrics instead.
+        if (!self.req.internal) {
+            const status = if (self.res.header) |h| h.status else 0;
+            lp.metrics.http_status.incr(http.statusCategory(status));
+            lp.metrics.http_response_size_bytes.observe(body.len);
+        }
+
         try self._events.ensureUnusedCapacity(self.arena, 4);
         self._events.appendAssumeCapacity(.start);
         self._events.appendAssumeCapacity(.header);
@@ -2520,6 +2560,7 @@ pub const Transfer = struct {
                 log.err(.http, "getResponseCode", .{ .err = err, .source = "body callback" });
                 return http.writefunc_error;
             };
+
             // Only skip the body when the response will actually be retried
             // as a redirect (a redirect status with a Location header). Any
             // other 3xx is a final response whose body must be kept.

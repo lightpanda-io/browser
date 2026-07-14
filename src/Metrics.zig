@@ -41,6 +41,36 @@ js_heap_size_bytes: Histogram(&.{
     256 * 1024 * 1024,
     512 * 1024 * 1024,
 }) = .{},
+http_requests: CounterEnum("mode", enum { sync, async }) = .{},
+http_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
+http_error: CounterEnum("reason", @import("network/http.zig").ErrorReason) = .{},
+http_cache: CounterEnum("result", enum { hit, miss, revalidated }) = .{},
+http_redirects: Counter = .{},
+http_duration_ms: Histogram(&.{
+    5,
+    10,
+    25,
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+    10000,
+}) = .{},
+http_response_size_bytes: Histogram(&.{
+    32 * 1024,
+    64 * 1024,
+    128 * 1024,
+    256 * 1024,
+    512 * 1024,
+    1024 * 1024,
+    2 * 1024 * 1024,
+    4 * 1024 * 1024,
+}) = .{},
+robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
+robots_access: CounterEnum("result", enum { allow, deny }) = .{},
 
 // Emitted as each metric's "# HELP" line. A field without an entry is a
 // compile error.
@@ -56,6 +86,15 @@ const help = .{
     .arena_miss = "Arena pool acquisitions that had to allocate a new arena",
     .navigate = "Navigations by initiating frame type",
     .js_heap_size_bytes = "V8 heap physical size, sampled when a page is closed",
+    .http_requests = "HTTP requests submitted, by dispatch mode (excludes internal requests like robots.txt)",
+    .http_status = "Final HTTP response status category (redirects counted once, at the final hop)",
+    .http_error = "HTTP requests that failed before delivering a response, by cause",
+    .http_cache = "HTTP cache lookups by outcome",
+    .http_redirects = "HTTP redirect hops followed",
+    .http_duration_ms = "HTTP request wall-clock duration in milliseconds",
+    .http_response_size_bytes = "HTTP response body size in bytes",
+    .robots_status = "robots.txt response status",
+    .robots_access = "robots.txt result",
 };
 
 pub fn write(self: *const Metrics, writer: *std.Io.Writer) void {
