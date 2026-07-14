@@ -19,12 +19,8 @@
 const std = @import("std");
 const ansi = @import("Terminal.zig").ansi;
 
-/// Render markdown `src` to an ANSI-styled terminal string owned by `arena`.
-pub fn render(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
-    // Output is the input plus a bounded number of short escape sequences.
-    var aw: std.Io.Writer.Allocating = try .initCapacity(arena, src.len + src.len / 4);
-    const w = &aw.writer;
-
+/// Render markdown `src` as ANSI-styled terminal output to `w`.
+pub fn render(w: *std.Io.Writer, src: []const u8) !void {
     var in_fence = false;
     var wrote_any = false;
     var it = std.mem.splitScalar(u8, src, '\n');
@@ -38,7 +34,6 @@ pub fn render(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
         wrote_any = true;
         try renderLine(w, line, in_fence);
     }
-    return aw.written();
 }
 
 fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
@@ -158,21 +153,16 @@ fn isEscapable(c: u8) bool {
     };
 }
 
-/// A line of 3+ identical `-`, `*` or `_` markers (spaces ignored).
-fn isHorizontalRule(s: []const u8) bool {
-    var marker: ?u8 = null;
-    var count: usize = 0;
-    for (s) |c| switch (c) {
-        ' ', '\t' => {},
-        '-', '*', '_' => {
-            if (marker) |m| {
-                if (c != m) return false;
-            } else marker = c;
-            count += 1;
-        },
-        else => return false,
-    };
-    return count >= 3;
+/// A left-trimmed line consisting solely of 3+ identical `-`, `*` or `_`
+/// markers. Not a prefix match: `***bold***` must stay inline text.
+fn isHorizontalRule(line: []const u8) bool {
+    if (line.len < 3) return false;
+    const first = line[0];
+    if (first != '-' and first != '*' and first != '_') return false;
+    for (line[1..]) |c| {
+        if (c != first) return false;
+    }
+    return true;
 }
 
 fn renderLink(w: *std.Io.Writer, label: []const u8, url: []const u8) !void {
@@ -187,9 +177,10 @@ fn renderLink(w: *std.Io.Writer, label: []const u8, url: []const u8) !void {
 const testing = std.testing;
 
 fn expectRender(expected: []const u8, src: []const u8) !void {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    try testing.expectEqualStrings(expected, try render(arena.allocator(), src));
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try render(&aw.writer, src);
+    try testing.expectEqualStrings(expected, aw.written());
 }
 
 test "md_term: inline styles" {
@@ -231,6 +222,8 @@ test "md_term: blockquote" {
 test "md_term: horizontal rule" {
     try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "---");
     try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "***");
+    // Trailing non-marker text means this is not a rule.
+    try expectRender("---x", "---x");
 }
 
 test "md_term: backslash escapes" {

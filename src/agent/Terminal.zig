@@ -1361,14 +1361,17 @@ pub fn printAssistant(self: *Terminal, text: []const u8) void {
 
     // Style only for the interactive REPL on a real terminal; `--task`/piped
     // output stays verbatim so it can be consumed programmatically.
-    var arena = std.heap.ArenaAllocator.init(self.allocator);
-    defer arena.deinit();
-    const out = if (self.isRepl() and self.stdout_is_tty)
-        md_term.render(arena.allocator(), text) catch text
-    else
-        text;
+    if (self.isRepl() and self.stdout_is_tty) {
+        var buf: [1024]u8 = undefined;
+        var fw = std.fs.File.stdout().writer(&buf);
+        const w = &fw.interface;
+        md_term.render(w, text) catch return;
+        w.writeByte('\n') catch return;
+        w.flush() catch {};
+        return;
+    }
 
-    _ = std.posix.write(fd, out) catch {};
+    _ = std.posix.write(fd, text) catch {};
     _ = std.posix.write(fd, "\n") catch {};
 }
 
