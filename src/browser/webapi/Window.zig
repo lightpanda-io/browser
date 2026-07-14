@@ -428,7 +428,7 @@ pub fn setOnScroll(self: *Window, setter: ?FunctionSetter) void {
 // event handlers of body and frameset elements are aliases for the Window's.
 // Returns the Window storage slot for the given content attribute name, or
 // null if the attribute isn't part of the set.
-pub fn windowReflectingHandler(self: *Window, name: lp.String) ?*?js.Function.Global {
+fn windowReflectingHandler(self: *Window, name: lp.String) ?*?js.Function.Global {
     if (name.eql(comptime .wrap("onblur"))) return &self._on_blur;
     if (name.eql(comptime .wrap("onerror"))) return &self._on_error;
     if (name.eql(comptime .wrap("onfocus"))) return &self._on_focus;
