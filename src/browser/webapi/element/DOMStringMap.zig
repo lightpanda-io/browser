@@ -142,7 +142,7 @@ pub const JsApi = struct {
     fn getNames(self: *DOMStringMap, exec: *const js.Execution) !js.Array {
         var names: std.ArrayList([]const u8) = .empty;
         for (try self._element._attributes.getNames(exec.call_arena)) |attr_name| {
-            const camel = (try kebabToCamel(exec.call_arena, attr_name)) orelse continue;
+            const camel = (try kebabToCamel(exec.local_arena, attr_name)) orelse continue;
             try names.append(exec.call_arena, camel);
         }
 
