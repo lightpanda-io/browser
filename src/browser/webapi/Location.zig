@@ -112,7 +112,9 @@ pub fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
         } else if (hash[0] == '#') {
             break :blk hash;
         }
-        break :blk try std.fmt.allocPrint(frame.call_arena, "#{s}", .{hash});
+        // Scratch only: scheduleNavigation dupes the URL into its own arena
+        // synchronously, so the local arena suffices.
+        break :blk try std.fmt.allocPrint(frame.local_arena, "#{s}", .{hash});
     };
 
     // Per the Location hash setter, when the fragment doesn't change no
