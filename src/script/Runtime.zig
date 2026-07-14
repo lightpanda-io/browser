@@ -1172,6 +1172,9 @@ test "agent script runtime: re-goto on the same page object replaces its page" {
 }
 
 test "agent script runtime: a failed navigation rejects the goto promise" {
+    const filter: testing.LogFilter = .init(&.{.frame});
+    defer filter.deinit();
+
     defer testing.reset();
     defer testing.test_session.closeAllPages();
 

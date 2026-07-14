@@ -471,6 +471,9 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
+    const filter: testing.LogFilter = .init(&.{.http});
+    defer filter.deinit();
+
     // Worker tests chain a worker-script fetch with a dynamic-import fetch
     // and a cross-context postMessage. The default 2 s assertion budget can
     // blow up on TSAN CI; give it more room.
