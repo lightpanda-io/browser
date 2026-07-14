@@ -2538,7 +2538,9 @@ pub const Transfer = struct {
             }
         }
 
-        if (res.skip_body) return @intCast(chunk_len);
+        if (res.skip_body) {
+            return @intCast(chunk_len);
+        }
 
         res.bytes_received += chunk_len;
         if (res.bytes_received > transfer.client.max_response_size) {
@@ -2588,9 +2590,9 @@ pub const Transfer = struct {
         return .{ .curl = .{ .conn = self._conn.? } };
     }
 
-    pub fn getContentLength(self: *const Transfer) ?u32 {
+    pub fn getContentLength(self: *const Transfer) ?usize {
         const cl = self.getContentLengthRawValue() orelse return null;
-        return std.fmt.parseInt(u32, cl, 10) catch null;
+        return std.fmt.parseInt(usize, cl, 10) catch null;
     }
 
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
