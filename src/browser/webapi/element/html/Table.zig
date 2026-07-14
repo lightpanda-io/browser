@@ -27,7 +27,9 @@ pub fn getTBodies(self: *Table, frame: *Frame) collections.NodeLive(.child_tag) 
 // of tfoot children.
 fn collectRows(self: *Table, frame: *Frame) !std.ArrayList(*Node) {
     var rows: std.ArrayList(*Node) = .empty;
-    const arena = frame.call_arena;
+    // Scratch only: deleteRow reads the list before the removal (the only
+    // point that can re-enter JS), so the local arena suffices.
+    const arena = frame.local_arena;
 
     try self.appendSectionRows(.thead, &rows, arena);
 
