@@ -456,6 +456,22 @@ pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
     return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
+pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self.consume(local)) |rejected| return rejected;
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read FormData from stream body" }),
+    };
+    const content_type = try self._headers.get("content-type", exec) orelse "";
+    const form_data = body_init.parseFormData(body, content_type, exec) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+    };
+    return local.resolvePromise(form_data);
+}
+
 pub fn clone(self: *const Response, exec: *const Execution) !*Response {
     const session = exec.session;
     const body_len = switch (self._body) {
@@ -519,6 +535,7 @@ pub const JsApi = struct {
     pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});
     pub const blob = bridge.function(Response.blob, .{});
     pub const bytes = bridge.function(Response.bytes, .{});
+    pub const formData = bridge.function(Response.formData, .{});
     pub const clone = bridge.function(Response.clone, .{});
 };
 
