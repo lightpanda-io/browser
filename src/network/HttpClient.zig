@@ -905,7 +905,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         out.* = .{ .name = hdr.name, .value = hdr.value };
     }
 
-    const cached = cache.get(arena.allocator(), .{
+    const cached = try cache.get(arena.allocator(), .{
         .url = req.url,
         .timestamp = lp.datetime.timestamp(.real),
         .request_headers = req_headers,

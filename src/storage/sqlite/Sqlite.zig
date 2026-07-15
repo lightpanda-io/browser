@@ -27,32 +27,60 @@ const Allocator = std.mem.Allocator;
 
 const Sqlite = @This();
 
-pool: Pool,
+pub const Migration = union(enum) {
+    sql: [:0]const u8,
+    func: struct {
+        ctx: *anyopaque,
+        func: *const fn (conn: Conn, ctx: *anyopaque) anyerror!void,
+    },
+};
 
-pub fn init(allocator: Allocator, path_: ?[:0]const u8) !Sqlite {
-    const path = path_ orelse ":memory:";
-    var pool = try Pool.init(allocator, path);
-    errdefer pool.deinit(allocator);
+pub const Migrations = struct {
+    pub fn run(conn: Conn, migrations: []const Migration) !usize {
+        try conn.exec(
+            \\create table if not exists migrations (
+            \\  id integer primary key,
+            \\  applied_at integer not null
+            \\) strict
+        , .{});
 
-    {
-        // copy by value warning! The connection HAS to be returned to the
-        // pool in this scope. If we didn't have this scope, we'd assign the
-        // pool to the return value (copy A) and then release the original
-        const conn = try pool.acquire();
-        defer pool.release(conn);
+        const current = (try conn.scalar(
+            i64,
+            "select max(id) from migrations",
+            .{},
+        )) orelse 0;
+        const start: usize = @intCast(current);
 
-        const version = try @import("migrations.zig").run(conn);
-        log.info(.storage, "storage initialized", .{ .engine = "sqlite", .version = version, .path = path });
+        if (start > migrations.len) {
+            log.err(.storage, "migrations removed", .{
+                .applied = start,
+                .defined = migrations.len,
+            });
+            return error.MigrationsRemoved;
+        }
+
+        if (start == migrations.len) {
+            return start;
+        }
+
+        try conn.begin();
+        errdefer conn.rollback() catch {};
+
+        for (migrations[start..], start..) |migration, i| {
+            switch (migration) {
+                .sql => |sql| try conn.exec(sql, .{}),
+                .func => |f| try f.func(conn, f.ctx),
+            }
+            try conn.exec(
+                "insert into migrations (id, applied_at) values ($1, $2)",
+                .{ @as(i64, @intCast(i + 1)), std.Io.Timestamp.now(lp.io, .boot).toMilliseconds() },
+            );
+        }
+
+        try conn.commit();
+        return migrations.len;
     }
-
-    return .{
-        .pool = pool,
-    };
-}
-
-pub fn deinit(self: *Sqlite, allocator: Allocator) void {
-    self.pool.deinit(allocator);
-}
+};
 
 pub const Conn = struct {
     conn: *c.sqlite3,
@@ -136,6 +164,18 @@ pub const Conn = struct {
         }
 
         return .{ .stmt = stmt.?, .conn = self.conn };
+    }
+
+    pub fn begin(self: Conn) !void {
+        try self.exec("begin", .{});
+    }
+
+    pub fn commit(self: Conn) !void {
+        try self.exec("commit", .{});
+    }
+
+    pub fn rollback(self: Conn) !void {
+        try self.exec("rollback", .{});
     }
 
     pub fn busyTimeout(self: Conn, ms: c_int) !void {
@@ -568,12 +608,42 @@ test "Sqlite: exec, row and scalar" {
     }
 }
 
-test "Sqlite: Migration" {
-    var sqlite = try Sqlite.init(testing.allocator, ":memory:");
-    defer sqlite.deinit(testing.allocator);
+test "Sqlite: Migrations - basic" {
+    var conn = try Sqlite.Conn.open(":memory:");
+    defer conn.close();
 
-    const conn = try sqlite.pool.acquire();
-    defer sqlite.pool.release(conn);
+    const migrations: []const Migration = &.{
+        .{ .sql = "create table test (id integer primary key, name text)" },
+        .{ .sql = "alter table test add column email text" },
+    };
 
-    try testing.expectEqual(1, (try conn.scalar(i64, "select max(id) from migrations", .{})).?);
+    const v1 = try Migrations.run(conn, migrations);
+    try testing.expectEqual(@as(usize, 2), v1);
+
+    // idempotent - running again should return same version
+    const v2 = try Migrations.run(conn, migrations);
+    try testing.expectEqual(@as(usize, 2), v2);
+
+    // verify migrations table has correct entries
+    try testing.expectEqual(
+        @as(i64, 2),
+        (try conn.scalar(i64, "select count(*) from migrations", .{})).?,
+    );
+}
+
+test "Sqlite: Migrations - removed migration" {
+    var conn = try Sqlite.Conn.open(":memory:");
+    defer conn.close();
+
+    const m1: []const Migration = &.{
+        .{ .sql = "create table test (id integer primary key, name text)" },
+        .{ .sql = "alter table test add column email text" },
+    };
+    _ = try Migrations.run(conn, m1);
+
+    // fewer migrations than were applied
+    const m2: []const Migration = &.{
+        .{ .sql = "create table test (id integer primary key, name text)" },
+    };
+    try testing.expectError(error.MigrationsRemoved, Migrations.run(conn, m2));
 }
