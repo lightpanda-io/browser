@@ -17,9 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+
 const dom = @import("dom.zig");
+
+const log = lp.log;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
@@ -106,8 +111,17 @@ fn getPartialAXTree(cmd: *CDP.Command) !void {
         // Accepted for Chrome protocol compatibility. The ancestor chain is
         // not yet emitted; this returns the subtree rooted at the resolved
         // node, matching the scope of queryAXTree.
-        fetchRelatives: ?bool = true,
+        fetchRelatives: ?bool = null,
     })) orelse return error.InvalidParams;
+
+    if (params.fetchRelatives orelse true) {
+        // orelse true, because that's what Chrome defaults too, and if people
+        // aren't setting it, then they're expecting true.
+        log.warn(.not_implemented, "getPartialAXTree", .{
+            .cdp_cmd = "Accessibility.getPartialAXTree",
+            .param = "fetchRelatives",
+        });
+    }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const node = try dom.getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
@@ -162,7 +176,7 @@ test "cdp.accessibility: getPartialAXTree requires nodeId, backendNodeId or obje
     try ctx.processMessage(.{
         .id = 1,
         .method = "Accessibility.getPartialAXTree",
-        .params = .{ .fetchRelatives = true },
+        .params = .{ .fetchRelatives = false },
     });
     try ctx.expectSentError(-31998, "MissingParams", .{ .id = 1 });
 }
@@ -176,7 +190,7 @@ test "cdp.accessibility: getPartialAXTree with unknown nodeId returns error" {
     try ctx.processMessage(.{
         .id = 1,
         .method = "Accessibility.getPartialAXTree",
-        .params = .{ .nodeId = 99999 },
+        .params = .{ .nodeId = 99999, .fetchRelatives = false },
     });
     try ctx.expectSentError(-31998, "NodeNotFound", .{ .id = 1 });
 }
