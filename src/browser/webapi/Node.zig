@@ -949,9 +949,9 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
             cloned._ready_state = .complete;
 
             if (deep) {
-                var child = self.firstChild();
-                while (child) |c| : (child = c.nextSibling()) {
-                    if (try c.cloneNodeForAppending(true, frame)) |cloned_child| {
+                var child_it = self.childrenIterator();
+                while (child_it.next()) |child| {
+                    if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
                         _ = cloned.asNode().appendChild(cloned_child, frame) catch return error.CloneError;
                     }
                 }
