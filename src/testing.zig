@@ -605,6 +605,11 @@ fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     test_app.network.run();
 }
 
+// /serve-count/ counters; only ever touched from the test HTTP server thread.
+var serve_count_defer: u32 = 0;
+var serve_count_async: u32 = 0;
+var serve_count_dynamic: u32 = 0;
+
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
     const path = req.head.target;
 
@@ -728,6 +733,30 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("window.__deferRan = true;", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/javascript" },
+            },
+        });
+    }
+
+    if (std.mem.startsWith(u8, path, "/serve-count/") and std.mem.endsWith(u8, path, ".js")) {
+        // Serves `window.__serve_count_<name> = N;` where N counts how many
+        // times this URL has been served. Lets a fixture assert a preloaded
+        // script was fetched exactly once: the body the consumer executes
+        // carries N == 1, while a duplicate fetch would execute N == 2.
+        // no-store so the second fetch can't be satisfied by the HTTP cache.
+        const name = path["/serve-count/".len .. path.len - ".js".len];
+        const slot: *u32 = blk: {
+            if (std.mem.eql(u8, name, "defer")) break :blk &serve_count_defer;
+            if (std.mem.eql(u8, name, "async")) break :blk &serve_count_async;
+            if (std.mem.eql(u8, name, "dynamic")) break :blk &serve_count_dynamic;
+            return req.respond("unknown counter", .{ .status = .not_found });
+        };
+        slot.* += 1;
+        var buf: [64]u8 = undefined;
+        const body = try std.fmt.bufPrint(&buf, "window.__serve_count_{s} = {d};", .{ name, slot.* });
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/javascript" },
+                .{ .name = "Cache-Control", .value = "no-store" },
             },
         });
     }
