@@ -283,6 +283,7 @@ fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         "\"Browser\": \"Lightpanda/1.0\", " ++
         "\"Protocol-Version\": \"1.3\", " ++
         "\"User-Agent\": \"Lightpanda/1.0\", " ++
+        "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\", " ++
         "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
         "}}";
     const body_len = std.fmt.count(body_format, .{ host, port });
@@ -316,6 +317,7 @@ test "server: buildJSONVersionResponse" {
     try testing.expect(std.mem.indexOf(u8, res, "\"Browser\": \"Lightpanda/") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"Protocol-Version\": \"1.3\"") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"User-Agent\": \"Lightpanda/") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\"") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
 }
 
