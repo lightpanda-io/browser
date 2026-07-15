@@ -17,24 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const ansi = @import("ansi.zig");
 const js_highlight = @import("js_highlight.zig");
-
-pub const ansi = struct {
-    pub const reset = "\x1b[0m";
-    pub const bold = "\x1b[1m";
-    pub const dim = "\x1b[2m";
-    pub const italic = "\x1b[3m";
-    pub const underline = "\x1b[4m";
-    pub const strike = "\x1b[9m";
-    pub const cyan = "\x1b[36m";
-    pub const green = "\x1b[32m";
-    pub const yellow = "\x1b[33m";
-    pub const red = "\x1b[31m";
-    pub const blue = "\x1b[34m";
-    pub const magenta = "\x1b[35m";
-    pub const clear_eol = "\x1b[K";
-    pub const clear_line = "\x1b[2K";
-};
 
 /// Render markdown `src` as ANSI-styled terminal output to `w`.
 pub fn render(w: *std.Io.Writer, src: []const u8) !void {
@@ -74,31 +58,32 @@ const clear_placeholder = "\r" ++ ansi.clear_line;
 /// count codepoints, so double-width glyphs (CJK, emoji) may misalign.
 fn renderTable(w: *std.Io.Writer, header: []const u8, it: *LineIterator) !void {
     var widths: [max_table_columns]usize = @splat(0);
-    var ncols: usize = 0;
-    var ok = measureRow(header, &widths, &ncols);
-    if (ok) {
+    var ncols: ?usize = measureRow(header, &widths);
+    if (ncols != null) {
         var scan = it.*;
         _ = scan.next();
         while (scan.peek()) |line| {
             if (!isTableRow(line)) break;
             _ = scan.next();
-            if (!measureRow(line, &widths, &ncols)) {
-                ok = false;
+            const n = measureRow(line, &widths) orelse {
+                ncols = null;
                 break;
-            }
+            };
+            ncols = @max(ncols.?, n);
         }
     }
-    if (!ok or ncols == 0) return renderTableVerbatim(w, header, it);
+    const cols = ncols orelse 0;
+    if (cols == 0) return renderTableVerbatim(w, header, it);
 
-    try emitRow(w, header, widths[0..ncols], true);
+    try emitRow(w, header, widths[0..cols], true);
     _ = it.next();
     try w.writeByte('\n');
-    try emitSeparator(w, widths[0..ncols]);
+    try emitSeparator(w, widths[0..cols]);
     while (it.peek()) |line| {
         if (!isTableRow(line)) break;
         _ = it.next();
         try w.writeByte('\n');
-        try emitRow(w, line, widths[0..ncols], false);
+        try emitRow(w, line, widths[0..cols], false);
     }
 }
 
@@ -118,19 +103,18 @@ fn renderTableVerbatim(w: *std.Io.Writer, header: []const u8, it: *LineIterator)
     }
 }
 
-fn measureRow(row: []const u8, widths: *[max_table_columns]usize, ncols: *usize) bool {
+/// Column count of `row`, or null when the table can't be aligned (too many
+/// columns, or a cell overflowing the measuring buffer).
+fn measureRow(row: []const u8, widths: *[max_table_columns]usize) ?usize {
     var cells = cellIterator(row);
     var col: usize = 0;
     while (cells.next()) |cell| {
-        // A row's trailing `|` leaves one empty last segment; drop it.
-        if (cell.len == 0 and cells.pos >= cells.row.len) break;
-        if (col == max_table_columns) return false;
-        const width = cellDisplayWidth(cell) orelse return false;
+        if (col == max_table_columns) return null;
+        const width = cellDisplayWidth(cell) orelse return null;
         widths[col] = @max(widths[col], width);
         col += 1;
     }
-    ncols.* = @max(ncols.*, col);
-    return true;
+    return col;
 }
 
 fn emitRow(w: *std.Io.Writer, row: []const u8, widths: []const usize, is_header: bool) !void {
@@ -162,13 +146,8 @@ fn emitRow(w: *std.Io.Writer, row: []const u8, widths: []const usize, is_header:
 }
 
 fn renderCell(w: *std.Io.Writer, cell: []const u8, is_header: bool) std.Io.Writer.Error!void {
-    if (is_header) {
-        try w.writeAll(ansi.bold);
-        try renderInlineStyled(w, cell, &bold_style);
-        try w.writeAll(ansi.reset);
-    } else {
-        try renderInline(w, cell);
-    }
+    if (is_header) return span(w, cell, ansi.bold, null);
+    try renderInline(w, cell);
 }
 
 fn emitSeparator(w: *std.Io.Writer, widths: []const usize) !void {
@@ -200,6 +179,8 @@ const CellIterator = struct {
         const end = @min(i, self.row.len);
         const cell = std.mem.trim(u8, self.row[self.pos..end], " \t");
         self.pos = i + 1;
+        // A row's trailing `|` leaves one empty last segment; drop it.
+        if (cell.len == 0 and i >= self.row.len) return null;
         return cell;
     }
 };
@@ -473,9 +454,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !vo
     var hashes: usize = 0;
     while (hashes < trimmed.len and trimmed[hashes] == '#') hashes += 1;
     if (hashes >= 1 and hashes <= 6 and hashes < trimmed.len and trimmed[hashes] == ' ') {
-        try w.writeAll(ansi.bold);
-        try renderInlineStyled(w, std.mem.trimLeft(u8, trimmed[hashes..], " "), &bold_style);
-        try w.writeAll(ansi.reset);
+        try span(w, std.mem.trimLeft(u8, trimmed[hashes..], " "), ansi.bold, null);
         return;
     }
 
@@ -516,8 +495,6 @@ const Style = struct {
         if (active) |a| try a.apply(w);
     }
 };
-
-const bold_style: Style = .{ .code = ansi.bold, .parent = null };
 
 fn renderInline(w: *std.Io.Writer, text: []const u8) !void {
     try renderInlineStyled(w, text, null);

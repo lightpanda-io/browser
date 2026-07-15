@@ -44,7 +44,7 @@ const style_keyword = "ps-keyword";
 const style_comment = "ps-comment";
 const style_jsglobal = "ps-jsglobal";
 
-pub const ansi = md_term.ansi;
+pub const ansi = @import("ansi.zig");
 
 /// Command styling shared with the `/help` listing.
 pub fn highlightCmd(comptime fragment: []const u8) []const u8 {
@@ -814,32 +814,20 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     } else |_| {}
 }
 
-/// Index just past the matching closing quote, or `text.len` if unterminated.
-fn scanQuoted(text: []const u8, start: usize) usize {
-    return js_highlight.scanString(text, start).end;
-}
-
 /// Highlight `$LP_*` tokens appearing from `start` onward.
 fn highlightDollarVars(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
-    highlightDollarVarsIn(henv, text, start, text.len);
-}
-
-/// Highlight `$LP_*` tokens within `text[start..end]` — used both for whole
-/// prompts and for repainting refs that fall inside a string literal.
-fn highlightDollarVarsIn(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize, end: usize) void {
     var i = start;
-    while (i < end) {
+    while (i < text.len) {
         if (text[i] != '$') {
             i += 1;
             continue;
         }
         const tok_start = i;
-        i += 1;
-        while (i < end and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+        i = js_highlight.dollarRefEnd(text, i, text.len);
         if (i > tok_start + 1) {
             c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_var.ptr);
         }
-        // Don't post-step: the inner loop already landed on the char after the
+        // Don't post-step: dollarRefEnd already landed on the char after the
         // identifier (or end-of-text); auto-advancing would skip an adjacent `$LP_*`.
     }
 }
@@ -874,7 +862,7 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     while (skipWhitespace(text, i)) |tok_start| {
         i = tok_start;
         if (text[i] == '\'' or text[i] == '"') {
-            i = scanQuoted(text, i);
+            i = js_highlight.scanString(text, i).end;
             c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_string.ptr);
             continue;
         }
@@ -885,7 +873,7 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
             i += 1;
             const val_start = i;
             if (i < text.len and (text[i] == '\'' or text[i] == '"')) {
-                i = scanQuoted(text, i);
+                i = js_highlight.scanString(text, i).end;
                 c.ic_highlight(henv, @intCast(val_start), @intCast(i - val_start), style_string.ptr);
             } else {
                 while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
@@ -1276,18 +1264,29 @@ fn styledOutput(self: *const Terminal) bool {
     return self.isRepl() and self.stdout_is_tty;
 }
 
+/// Buffered, error-swallowing markdown write to stdout; only called on the
+/// styled (REPL tty) path.
+fn renderStyled(self: *Terminal, text: []const u8, op: enum { full, delta, end }) void {
+    var buf: [1024]u8 = undefined;
+    var fw = std.fs.File.stdout().writerStreaming(&buf);
+    const w = &fw.interface;
+    switch (op) {
+        .full => {
+            md_term.render(w, text) catch {};
+            w.writeByte('\n') catch {};
+        },
+        .delta => self.md_stream.feed(w, text) catch {},
+        .end => {
+            self.md_stream.close(w) catch {};
+            w.writeByte('\n') catch {};
+        },
+    }
+    w.flush() catch {};
+}
+
 pub fn printAssistant(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
-    if (self.styledOutput()) {
-        var buf: [1024]u8 = undefined;
-        var fw = std.fs.File.stdout().writerStreaming(&buf);
-        const w = &fw.interface;
-        md_term.render(w, text) catch {};
-        w.writeByte('\n') catch {};
-        w.flush() catch {};
-        return;
-    }
-
+    if (self.styledOutput()) return self.renderStyled(text, .full);
     _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
     _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};
 }
@@ -1299,28 +1298,13 @@ pub fn printAssistant(self: *Terminal, text: []const u8) void {
 /// stream ends.
 pub fn printAssistantDelta(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
-    if (self.styledOutput()) {
-        var buf: [1024]u8 = undefined;
-        var fw = std.fs.File.stdout().writerStreaming(&buf);
-        const w = &fw.interface;
-        self.md_stream.feed(w, text) catch {};
-        w.flush() catch {};
-        return;
-    }
+    if (self.styledOutput()) return self.renderStyled(text, .delta);
     _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
 }
 
 /// Flush any partial streamed line, terminate it, and reset stream state.
 pub fn endAssistantStream(self: *Terminal) void {
-    if (self.styledOutput()) {
-        var buf: [1024]u8 = undefined;
-        var fw = std.fs.File.stdout().writerStreaming(&buf);
-        const w = &fw.interface;
-        self.md_stream.close(w) catch {};
-        w.writeByte('\n') catch {};
-        w.flush() catch {};
-        return;
-    }
+    if (self.styledOutput()) return self.renderStyled("", .end);
     _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};
 }
 

@@ -42,6 +42,15 @@ pub fn scanString(text: []const u8, start: usize) StringSpan {
     return .{ .end = close + 1, .closed = true };
 }
 
+/// Index just past the `$name` ref opening at `text[start]` (scanning within
+/// `text[..end]`), or `start + 1` when the `$` is bare. A ref is a `$` followed
+/// by at least one `[A-Za-z0-9_]`.
+pub fn dollarRefEnd(text: []const u8, start: usize, end: usize) usize {
+    var i = start + 1;
+    while (i < end and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+    return i;
+}
+
 /// Tokenize `text` as JavaScript starting from `state`, reporting spans to
 /// `sink.emit(start, len, kind)` and returning the state at end of input.
 /// Spans arrive in order and never overlap — the gaps between them are plain
@@ -91,8 +100,7 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
         }
         if (ch == '$') {
             const start = i;
-            i += 1;
-            while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+            i = dollarRefEnd(text, i, text.len);
             if (i > start + 1) sink.emit(start, i - start, .variable);
             continue;
         }
@@ -121,10 +129,9 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
     return .normal;
 }
 
-/// Emit `text[start..end]` as string spans split around any `$name` refs, so
-/// the two never overlap. The prompt highlighter used to paint the ref over the
-/// string and lean on isocline's last-write-wins per cell; splitting keeps the
-/// same result while staying safe for a sequential writer.
+/// Emit `text[start..end]` as string spans split around any `$name` refs —
+/// spans must never overlap, so a sequential writer (ANSI) works as well as
+/// isocline's last-write-wins cell painting.
 fn emitString(text: []const u8, start: usize, end: usize, sink: anytype) void {
     var seg = start;
     var i = start;
@@ -134,8 +141,7 @@ fn emitString(text: []const u8, start: usize, end: usize, sink: anytype) void {
             continue;
         }
         const tok = i;
-        i += 1;
-        while (i < end and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+        i = dollarRefEnd(text, i, end);
         if (i > tok + 1) {
             if (tok > seg) sink.emit(seg, tok - seg, .string);
             sink.emit(tok, i - tok, .variable);
@@ -158,21 +164,21 @@ const keywords = [_][]const u8{
 // at the prompt that they're in scope.
 const globals = [_][]const u8{ "document", "window", "globalThis", "console", "lp" };
 
-pub fn isKeyword(tok: []const u8) bool {
+fn isKeyword(tok: []const u8) bool {
     for (keywords) |kw| {
         if (std.mem.eql(u8, kw, tok)) return true;
     }
     return false;
 }
 
-pub fn isGlobal(tok: []const u8) bool {
+fn isGlobal(tok: []const u8) bool {
     for (globals) |g| {
         if (std.mem.eql(u8, g, tok)) return true;
     }
     return false;
 }
 
-pub fn isIdChar(ch: u8) bool {
+fn isIdChar(ch: u8) bool {
     return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '$' or ch >= 0x80;
 }
 
