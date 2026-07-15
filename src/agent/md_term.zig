@@ -20,33 +20,12 @@ const std = @import("std");
 const ansi = @import("ansi.zig");
 const js_highlight = @import("js_highlight.zig");
 
-/// Render markdown `src` as ANSI-styled terminal output to `w`.
+/// Render markdown `src` as ANSI-styled terminal output to `w` — one-shot
+/// wrapper over `Stream`, so batch and streamed output share one dispatcher.
 pub fn render(w: *std.Io.Writer, src: []const u8) !void {
-    var in_fence = false;
-    var js: js_highlight.State = .normal;
-    var wrote_any = false;
-    var it = std.mem.splitScalar(u8, src, '\n');
-    while (it.next()) |line| {
-        if (wrote_any) try w.writeByte('\n');
-        wrote_any = true;
-        if (isFenceDelimiter(line)) {
-            in_fence = !in_fence;
-            js = .normal;
-            // Pad the block interior: blank line after the opening rule and
-            // before the closing one.
-            if (!in_fence) try w.writeByte('\n');
-            try renderFenceRule(w, in_fence, line);
-            if (in_fence) try w.writeByte('\n');
-            continue;
-        }
-        if (!in_fence and isTableRow(line)) {
-            if (it.peek()) |next| if (isTableSeparator(next)) {
-                try renderTable(w, line, &it);
-                continue;
-            };
-        }
-        try renderLine(w, line, if (in_fence) &js else null);
-    }
+    var s: Stream = .{};
+    try s.feed(w, src);
+    try s.close(w);
 }
 
 const LineIterator = std.mem.SplitIterator(u8, .scalar);
@@ -62,22 +41,8 @@ const clear_placeholder = "\r" ++ ansi.clear_line;
 /// count codepoints, so double-width glyphs (CJK, emoji) may misalign.
 fn renderTable(w: *std.Io.Writer, header: []const u8, it: *LineIterator) !void {
     var widths: [max_table_columns]usize = @splat(0);
-    var ncols: ?usize = measureRow(header, &widths);
-    if (ncols != null) {
-        var scan = it.*;
-        _ = scan.next();
-        while (scan.peek()) |line| {
-            if (!isTableRow(line)) break;
-            _ = scan.next();
-            const n = measureRow(line, &widths) orelse {
-                ncols = null;
-                break;
-            };
-            ncols = @max(ncols.?, n);
-        }
-    }
-    const cols = ncols orelse 0;
-    if (cols == 0) return renderTableVerbatim(w, header, it);
+    const cols = measureTable(header, it.*, &widths) orelse
+        return renderTableVerbatim(w, header, it);
 
     try emitRow(w, header, widths[0..cols], true);
     _ = it.next();
@@ -107,14 +72,29 @@ fn renderTableVerbatim(w: *std.Io.Writer, header: []const u8, it: *LineIterator)
     }
 }
 
+/// Per-column visible widths for the whole table (`it` positioned on the
+/// separator row), or null when it can't be aligned: no cells, too many
+/// columns, or a cell overflowing the rendering buffer.
+fn measureTable(header: []const u8, it: LineIterator, widths: *[max_table_columns]usize) ?usize {
+    var cols = measureRow(header, widths, true) orelse return null;
+    var scan = it;
+    _ = scan.next();
+    while (scan.peek()) |line| {
+        if (!isTableRow(line)) break;
+        _ = scan.next();
+        cols = @max(cols, measureRow(line, widths, false) orelse return null);
+    }
+    return if (cols == 0) null else cols;
+}
+
 /// Column count of `row`, or null when the table can't be aligned (too many
-/// columns, or a cell overflowing the measuring buffer).
-fn measureRow(row: []const u8, widths: *[max_table_columns]usize) ?usize {
+/// columns, or a cell overflowing the rendering buffer).
+fn measureRow(row: []const u8, widths: *[max_table_columns]usize, is_header: bool) ?usize {
     var cells = cellIterator(row);
     var col: usize = 0;
     while (cells.next()) |cell| {
         if (col == max_table_columns) return null;
-        const width = cellDisplayWidth(cell) orelse return null;
+        const width = cellDisplayWidth(cell, is_header) orelse return null;
         widths[col] = @max(widths[col], width);
         col += 1;
     }
@@ -129,20 +109,14 @@ fn emitRow(w: *std.Io.Writer, row: []const u8, widths: []const usize, is_header:
         const cell = cells.next() orelse "";
         var used: usize = 0;
         if (cell.len > 0) {
-            // Render once into scratch so `used` is measured from the exact
-            // bytes written. The header's bold re-applies add escapes on top
-            // of what measureRow saw, hence the extra headroom.
-            var buf: [1024]u8 = undefined;
+            // Render into scratch so `used` is measured from the exact bytes
+            // written. measureRow rendered the identical bytes into an
+            // identically-sized buffer, so this cannot overflow here.
+            var buf: [cell_buf_len]u8 = undefined;
             var fw: std.Io.Writer = .fixed(&buf);
-            if (renderCell(&fw, cell, is_header)) {
-                try w.writeAll(fw.buffered());
-                used = visibleWidth(fw.buffered());
-            } else |_| {
-                // Overflow, possible only for a marker-dense header cell:
-                // keep the content, sacrifice the padding.
-                try renderCell(w, cell, is_header);
-                used = width;
-            }
+            try renderCell(&fw, cell, is_header);
+            try w.writeAll(fw.buffered());
+            used = visibleWidth(fw.buffered());
         }
         try w.splatByteAll(' ', width - used + 1);
     }
@@ -194,10 +168,12 @@ fn cellIterator(row: []const u8) CellIterator {
     return .{ .row = row, .pos = if (first_pipe) |p| p + 1 else 0 };
 }
 
-fn cellDisplayWidth(cell: []const u8) ?usize {
-    var buf: [512]u8 = undefined;
+const cell_buf_len = 1024;
+
+fn cellDisplayWidth(cell: []const u8, is_header: bool) ?usize {
+    var buf: [cell_buf_len]u8 = undefined;
     var fw: std.Io.Writer = .fixed(&buf);
-    renderInline(&fw, cell) catch return null;
+    renderCell(&fw, cell, is_header) catch return null;
     return visibleWidth(fw.buffered());
 }
 
@@ -237,14 +213,15 @@ fn isFenceDelimiter(line: []const u8) bool {
     return std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), "```");
 }
 
-const fence_rule_width = 24;
+/// Shared by the fence rules and the `---` horizontal rule so they line up.
+const rule_width = 24;
 
 /// Dim `╭── lang ───` / `╰─────` rule marking where a fenced code block starts
 /// and ends. The opening rule carries the fence's info-string language, if any.
 fn renderFenceRule(w: *std.Io.Writer, opening: bool, delimiter: []const u8) !void {
     try w.writeAll(ansi.dim);
     try w.writeAll(if (opening) "╭" else "╰");
-    var fill: usize = fence_rule_width - 1;
+    var fill: usize = rule_width - 1;
     if (opening) {
         const info = std.mem.trim(u8, std.mem.trimLeft(u8, delimiter, " \t`"), " \t");
         const lang = info[0 .. std.mem.indexOfAny(u8, info, " \t") orelse info.len];
@@ -283,6 +260,11 @@ fn isTableSeparator(line: []const u8) bool {
 /// rows are withheld and re-rendered aligned once the table ends — alignment
 /// needs the whole table, so it can't stream row by row.
 pub const Stream = struct {
+    /// Show a progress marker while a streamed table is withheld, erased in
+    /// place before the table renders. Only for streaming to an interactive
+    /// terminal (the erase assumes the cursor still sits on the marker);
+    /// off, withheld tables stay silent until they render.
+    show_table_placeholder: bool = false,
     len: usize = 0,
     in_fence: bool = false,
     /// Fenced-code lexer state, carried across lines and chunks.
@@ -337,6 +319,7 @@ pub const Stream = struct {
     /// Flush any withheld table and a trailing partial line (no newline is
     /// written for it), then reset all state for the next message.
     pub fn close(self: *Stream, w: *std.Io.Writer) !void {
+        defer self.* = .{ .show_table_placeholder = self.show_table_placeholder };
         // A message often ends inside a table: adopt the partial last row.
         if (self.len > 0 and !self.raw) {
             const partial = self.buf[0..self.len];
@@ -355,19 +338,13 @@ pub const Stream = struct {
             .held => try self.releaseHeldRow(w),
             .table => try self.renderBufferedTable(w),
         }
+        if (self.len == 0) return;
         const partial = self.buf[0..self.len];
-        const in_fence = self.in_fence;
-        var js = self.js_state;
-        self.len = 0;
-        self.raw = false;
-        self.in_fence = false;
-        self.js_state = .normal;
-        if (partial.len == 0) return;
         if (isFenceDelimiter(partial)) {
-            if (in_fence) try w.writeByte('\n');
-            return renderFenceRule(w, !in_fence, partial);
+            if (self.in_fence) try w.writeByte('\n');
+            return renderFenceRule(w, !self.in_fence, partial);
         }
-        try renderLine(w, partial, if (in_fence) &js else null);
+        try renderLine(w, partial, if (self.in_fence) &self.js_state else null);
     }
 
     fn emitLine(self: *Stream, w: *std.Io.Writer, text: []const u8) std.Io.Writer.Error!void {
@@ -394,7 +371,7 @@ pub const Stream = struct {
                     self.mode = .table;
                     // Withholding goes quiet; leave a marker until the
                     // table renders over it.
-                    try w.writeAll(table_placeholder);
+                    if (self.show_table_placeholder) try w.writeAll(table_placeholder);
                     return;
                 }
                 try self.releaseHeldRow(w);
@@ -422,7 +399,7 @@ pub const Stream = struct {
     }
 
     fn renderBufferedTable(self: *Stream, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try w.writeAll(clear_placeholder);
+        if (self.show_table_placeholder) try w.writeAll(clear_placeholder);
         var it: LineIterator = std.mem.splitScalar(u8, self.tableText(), '\n');
         const header = it.first();
         try renderTable(w, header, &it);
@@ -431,7 +408,7 @@ pub const Stream = struct {
     }
 
     fn flushTableUnaligned(self: *Stream, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try w.writeAll(clear_placeholder);
+        if (self.show_table_placeholder) try w.writeAll(clear_placeholder);
         var it = std.mem.splitScalar(u8, self.tableText(), '\n');
         while (it.next()) |line| {
             try renderLine(w, line, null);
@@ -482,7 +459,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !vo
 
     // Dashed, unlike the solid fence rules, so adjacent ones read differently.
     if (isHorizontalRule(trimmed)) {
-        try styled(w, "┄" ** 24, ansi.dim);
+        try styled(w, "┄" ** rule_width, ansi.dim);
         return;
     }
 
@@ -546,7 +523,7 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: ?*const Style
                 continue;
             },
             '`' => if (std.mem.indexOfPos(u8, text, i + 1, "`")) |end| {
-                try styled(w, text[i + 1 .. end], ansi.cyan);
+                try styled(w, text[i + 1 .. end], ansi.teal);
                 try Style.applyOpt(active, w);
                 i = end + 1;
                 continue;
@@ -607,10 +584,12 @@ const JsSink = struct {
         return switch (kind) {
             .comment => ansi.dim ++ ansi.italic,
             .string => ansi.green,
-            .variable => ansi.yellow ++ ansi.bold,
+            .variable, .interpolation => ansi.yellow,
             .number => ansi.magenta,
             .keyword => ansi.blue ++ ansi.bold,
-            .global => ansi.cyan,
+            .global, .type_name => ansi.cyan,
+            .function => ansi.teal,
+            .method => ansi.teal ++ ansi.italic,
         };
     }
 
@@ -797,7 +776,7 @@ test "md_term: tables align columns and style cells" {
     try expectRender(
         pipe ++ " " ++ B ++ "Tool" ++ R ++ " " ++ pipe ++ " " ++ B ++ "Use" ++ R ++ " " ++ pipe ++ "\n" ++
             D ++ "├──────┼─────┤" ++ R ++ "\n" ++
-            pipe ++ " " ++ C ++ "goto" ++ R ++ " " ++ pipe ++ " nav " ++ pipe,
+            pipe ++ " " ++ C ++ "goto" ++ R ++ " " ++ pipe ++ " nav " ++ pipe ++ "\n",
         "| Tool   | Use |\n|--------|-----|\n| `goto` | nav |",
     );
     // Gemini-style unpadded source: columns are padded to the widest
@@ -805,7 +784,7 @@ test "md_term: tables align columns and style cells" {
     try expectRender(
         pipe ++ " " ++ B ++ "Tool" ++ R ++ " " ++ pipe ++ " " ++ B ++ "Usage" ++ R ++ "       " ++ pipe ++ "\n" ++
             D ++ "├──────┼─────────────┤" ++ R ++ "\n" ++
-            pipe ++ " goto " ++ pipe ++ " " ++ B ++ "Nav:" ++ R ++ " to url " ++ pipe,
+            pipe ++ " goto " ++ pipe ++ " " ++ B ++ "Nav:" ++ R ++ " to url " ++ pipe ++ "\n",
         "| Tool | Usage |\n| :--- | :--- |\n| goto | **Nav:** to url |",
     );
     // A pipe line without a separator row underneath is not a table.
@@ -816,7 +795,7 @@ test "md_term: overwide table falls back to verbatim rows" {
     const header = "|a" ** 17 ++ "|";
     const sep = "|-" ** 17 ++ "|";
     try expectRender(
-        "\x1b[1m" ++ header ++ "\x1b[0m\n\x1b[2m" ++ sep ++ "\x1b[0m",
+        "\x1b[1m" ++ header ++ "\x1b[0m\n\x1b[2m" ++ sep ++ "\x1b[0m\n",
         header ++ "\n" ++ sep,
     );
 }
@@ -844,7 +823,7 @@ test "md_term: stream withholds tables and renders them aligned" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    var s: Stream = .{};
+    var s: Stream = .{ .show_table_placeholder = true };
     try s.feed(&aw.writer, "| Tool | Use |\n| :--- | :-");
     try testing.expectEqualStrings("", aw.written());
     try s.feed(&aw.writer, "-- |\n| `goto` | nav |\ndone\n");
@@ -866,7 +845,7 @@ test "md_term: stream table ending at close adopts the partial row" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    var s: Stream = .{};
+    var s: Stream = .{ .show_table_placeholder = true };
     try s.feed(&aw.writer, "| A | B |\n|-|-|\n| x | y |");
     try s.close(&aw.writer);
     try testing.expectEqualStrings(

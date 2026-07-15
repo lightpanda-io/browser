@@ -43,12 +43,15 @@ const style_jsmode = "ps-jsmode";
 const style_keyword = "ps-keyword";
 const style_comment = "ps-comment";
 const style_jsglobal = "ps-jsglobal";
+const style_fn = "ps-fn";
+const style_method = "ps-method";
+const style_type = "ps-type";
 
-pub const ansi = @import("ansi.zig");
+const ansi = @import("ansi.zig");
 
 /// Command styling shared with the `/help` listing.
 pub fn highlightCmd(comptime fragment: []const u8) []const u8 {
-    return ansi.bold ++ ansi.cyan ++ fragment ++ ansi.reset;
+    return ansi.bold ++ ansi.teal ++ fragment ++ ansi.reset;
 }
 
 const Verbosity = Config.AgentVerbosity;
@@ -70,8 +73,9 @@ js_mode: bool = false,
 /// active one so JS and normal recall stay separate.
 history_paths: ?HistoryPaths = null,
 /// Line-buffered markdown state for streamed assistant deltas; its `close`
-/// resets everything so fence state can't leak into the next message.
-md_stream: md_term.Stream = .{},
+/// resets everything so fence state can't leak into the next message. Only
+/// used on the styled (REPL tty) path, hence the placeholder.
+md_stream: md_term.Stream = .{ .show_table_placeholder = true },
 
 /// Lets the completer/hinter pull dynamic candidates from the `Agent` without
 /// `Terminal` depending on it (same idiom as `Session.cancel_hook`).
@@ -148,7 +152,7 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
         c.ic_style_def(style_slash, "ansi-teal bold");
         c.ic_style_def(style_string, "ansi-green");
-        c.ic_style_def(style_var, "ansi-yellow bold");
+        c.ic_style_def(style_var, "ansi-yellow");
         c.ic_style_def(style_url, "ansi-blue underline");
         c.ic_style_def(style_key, "ansi-blue");
         c.ic_style_def(style_num, "ansi-magenta");
@@ -157,6 +161,9 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         c.ic_style_def(style_keyword, "ansi-blue bold");
         c.ic_style_def(style_comment, "ansi-darkgray italic");
         c.ic_style_def(style_jsglobal, "ansi-cyan");
+        c.ic_style_def(style_fn, "ansi-teal");
+        c.ic_style_def(style_method, "ansi-teal italic");
+        c.ic_style_def(style_type, "ansi-cyan");
         // lighten the ghost/inline-hint color from isocline's default ansi-darkgray
         c.ic_style_def("ic-hint", "ansi-color=244");
         // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
@@ -225,7 +232,7 @@ pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bo
     } else {
         std.debug.print(
             "{s}{s}[tool: {s}]{s} {s}\n",
-            .{ ansi.dim, ansi.cyan, name, ansi.reset, args },
+            .{ ansi.dim, ansi.teal, name, ansi.reset, args },
         );
     }
 }
@@ -814,21 +821,13 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     } else |_| {}
 }
 
-/// Highlight `$LP_*` tokens appearing from `start` onward.
+/// Highlight `$LP_*` tokens appearing from `start` onward. `${…}` is not a
+/// prompt substitution form, so interpolation stays off.
 fn highlightDollarVars(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
     var i = start;
-    while (i < text.len) {
-        if (text[i] != '$') {
-            i += 1;
-            continue;
-        }
-        const tok_start = i;
-        i = js_highlight.dollarRefEnd(text, i, text.len);
-        if (i > tok_start + 1) {
-            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_var.ptr);
-        }
-        // Don't post-step: dollarRefEnd already landed on the char after the
-        // identifier (or end-of-text); auto-advancing would skip an adjacent `$LP_*`.
+    while (js_highlight.nextDollarRef(text, i, text.len, false)) |ref| {
+        c.ic_highlight(henv, @intCast(ref.start), @intCast(ref.end - ref.start), style_var.ptr);
+        i = ref.end;
     }
 }
 
@@ -840,10 +839,13 @@ const IcSink = struct {
         const style: []const u8 = switch (kind) {
             .comment => style_comment,
             .string => style_string,
-            .variable => style_var,
+            .variable, .interpolation => style_var,
             .number => style_num,
             .keyword => style_keyword,
             .global => style_jsglobal,
+            .function => style_fn,
+            .method => style_method,
+            .type_name => style_type,
         };
         c.ic_highlight(self.henv, @intCast(start), @intCast(len), style.ptr);
     }
@@ -862,7 +864,7 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     while (skipWhitespace(text, i)) |tok_start| {
         i = tok_start;
         if (text[i] == '\'' or text[i] == '"') {
-            i = js_highlight.scanString(text, i).end;
+            i = Schema.quotedSpanEnd(text, i);
             c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_string.ptr);
             continue;
         }
@@ -873,7 +875,7 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
             i += 1;
             const val_start = i;
             if (i < text.len and (text[i] == '\'' or text[i] == '"')) {
-                i = js_highlight.scanString(text, i).end;
+                i = Schema.quotedSpanEnd(text, i);
                 c.ic_highlight(henv, @intCast(val_start), @intCast(i - val_start), style_string.ptr);
             } else {
                 while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
@@ -1123,7 +1125,7 @@ fn renderChoice(header: []const u8, items: []const [:0]const u8, default: ?usize
     for (items, 0..) |item, idx| {
         const on_row = idx == selected;
         const marker: []const u8 = if (on_row) ">" else " ";
-        const style: []const u8 = if (on_row) ansi.bold ++ ansi.cyan else "";
+        const style: []const u8 = if (on_row) ansi.bold ++ ansi.teal else "";
         const reset: []const u8 = if (on_row) ansi.reset else "";
         const default_marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
         std.debug.print(ansi.clear_line ++ "  {s} {s}{s}{s}{s}\r\n", .{ marker, style, item, default_marker, reset });

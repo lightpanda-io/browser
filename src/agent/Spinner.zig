@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 const Terminal = @import("Terminal.zig");
-const ansi = Terminal.ansi;
+const ansi = @import("ansi.zig");
 const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
 const Spinner = @This();

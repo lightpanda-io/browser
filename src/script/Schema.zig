@@ -590,6 +590,21 @@ pub fn hasUnclosedTripleQuote(input: []const u8) bool {
     return open != null;
 }
 
+/// End of the quoted run opening at `input[start]`, for the REPL's slash-arg
+/// highlighting: recognizes this grammar's `'''…'''` triple delimiter
+/// alongside plain quotes, mirroring `tokenize`'s quoting. Escapes are not
+/// honored (`tokenize` rejects them); an unterminated run extends to the end.
+pub fn quotedSpanEnd(input: []const u8, start: usize) usize {
+    const ch = input[start];
+    if (start + 2 < input.len and input[start + 1] == ch and input[start + 2] == ch) {
+        const close = std.mem.indexOfPos(u8, input, start + 3, input[start .. start + 3]) orelse
+            return input.len;
+        return close + 3;
+    }
+    const close = std.mem.indexOfScalarPos(u8, input, start + 1, ch) orelse return input.len;
+    return close + 1;
+}
+
 /// `body=true`: string is emitted as a `'''…'''` block (newlines OK).
 /// `body=false`: single-line kv quoting (no newlines representable).
 pub fn quotableInline(s: []const u8, body: bool) bool {
@@ -833,6 +848,13 @@ test "tokenize: even-count backslashes before close-quote are literal" {
     const tokens = try tokenize(arena.allocator(), "value=\"\\\\\"");
     try testing.expectEqual(@as(usize, 1), tokens.len);
     try testing.expectString("value=\"\\\\\"", tokens[0]);
+}
+
+test "quotedSpanEnd" {
+    try testing.expectEqual(@as(usize, 4), quotedSpanEnd("'ab' x", 0));
+    try testing.expectEqual(@as(usize, 9), quotedSpanEnd("'''a b''' x", 0));
+    try testing.expectEqual(@as(usize, 5), quotedSpanEnd("'open", 0));
+    try testing.expectEqual(@as(usize, 7), quotedSpanEnd("'''open", 0));
 }
 
 test "hasUnclosedTripleQuote" {

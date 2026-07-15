@@ -17,8 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const string = @import("../string.zig");
 
-pub const Kind = enum { comment, string, variable, number, keyword, global };
+pub const Kind = enum { comment, string, variable, interpolation, number, keyword, global, function, method, type_name };
 
 /// Carried between calls because fenced code is tokenized one line at a time:
 /// block comments and template literals outlive a line boundary.
@@ -26,18 +27,11 @@ pub const State = enum { normal, block_comment, template };
 
 pub const StringSpan = struct { end: usize, closed: bool };
 
-/// Scan the quoted run opening at `text[start]`, including the triple-delimiter
-/// form. Escapes are not honored, matching the prompt highlighter's behavior.
+/// Scan the quoted run opening at `text[start]`. Escapes are not honored —
+/// good enough for coloring, not parsing.
 pub fn scanString(text: []const u8, start: usize) StringSpan {
     if (start >= text.len) return .{ .end = start, .closed = false };
-    const ch = text[start];
-    if (start + 2 < text.len and text[start + 1] == ch and text[start + 2] == ch) {
-        const delim = text[start .. start + 3];
-        const close = std.mem.indexOfPos(u8, text, start + 3, delim) orelse
-            return .{ .end = text.len, .closed = false };
-        return .{ .end = close + 3, .closed = true };
-    }
-    const close = std.mem.indexOfScalarPos(u8, text, start + 1, ch) orelse
+    const close = std.mem.indexOfScalarPos(u8, text, start + 1, text[start]) orelse
         return .{ .end = text.len, .closed = false };
     return .{ .end = close + 1, .closed = true };
 }
@@ -45,10 +39,34 @@ pub fn scanString(text: []const u8, start: usize) StringSpan {
 /// Index just past the `$name` ref opening at `text[start]` (scanning within
 /// `text[..end]`), or `start + 1` when the `$` is bare. A ref is a `$` followed
 /// by at least one `[A-Za-z0-9_]`.
-pub fn dollarRefEnd(text: []const u8, start: usize, end: usize) usize {
+fn dollarRefEnd(text: []const u8, start: usize, end: usize) usize {
     var i = start + 1;
     while (i < end and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
     return i;
+}
+
+pub const DollarRef = struct { start: usize, end: usize, kind: Kind };
+
+/// Next `$name` (`.variable`) ref at or after `from` within `text[..end]`,
+/// or null; bare `$`s are skipped. `interpolation` additionally recognizes
+/// `${…}` (`.interpolation`, unclosed runs to `end`) — only template
+/// literals interpolate, so callers pass their quote kind.
+pub fn nextDollarRef(text: []const u8, from: usize, end: usize, interpolation: bool) ?DollarRef {
+    var i = from;
+    while (i < end) {
+        if (text[i] != '$') {
+            i += 1;
+            continue;
+        }
+        if (interpolation and i + 1 < end and text[i + 1] == '{') {
+            const close = std.mem.indexOfScalarPos(u8, text[0..end], i + 2, '}');
+            return .{ .start = i, .end = if (close) |c| c + 1 else end, .kind = .interpolation };
+        }
+        const ref_end = dollarRefEnd(text, i, end);
+        if (ref_end > i + 1) return .{ .start = i, .end = ref_end, .kind = .variable };
+        i += 1;
+    }
+    return null;
 }
 
 /// Tokenize `text` as JavaScript starting from `state`, reporting spans to
@@ -69,7 +87,7 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
         .template => {
             const close = std.mem.indexOfScalarPos(u8, text, 0, '`');
             i = if (close) |p| p + 1 else text.len;
-            emitString(text, 0, i, sink);
+            emitString(text, 0, i, true, sink);
             if (close == null) return .template;
         },
         .normal => {},
@@ -92,7 +110,7 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
         }
         if (ch == '\'' or ch == '"' or ch == '`') {
             const span = scanString(text, i);
-            emitString(text, i, span.end, sink);
+            emitString(text, i, span.end, ch == '`', sink);
             i = span.end;
             // Only a template literal may legally continue on the next line.
             if (!span.closed and ch == '`') return .template;
@@ -116,11 +134,19 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
             i += 1;
             while (i < text.len and isIdChar(text[i])) i += 1;
             const tok = text[start..i];
-            if (isKeyword(tok)) {
+            if (string.isOneOf(tok, &keywords)) {
                 sink.emit(start, i - start, .keyword);
-            } else if (isGlobal(tok) and (start == 0 or text[start - 1] != '.')) {
+            } else if (string.isOneOf(tok, &globals) and (start == 0 or text[start - 1] != '.')) {
                 // `.document` is a property access, not the global
                 sink.emit(start, i - start, .global);
+            } else if (i < text.len and text[i] == '(') {
+                const kind: Kind = if (std.ascii.isUpper(tok[0]))
+                    .type_name
+                else if (start > 0 and text[start - 1] == '.')
+                    .method
+                else
+                    .function;
+                sink.emit(start, i - start, kind);
             }
             continue;
         }
@@ -132,21 +158,12 @@ pub fn tokenize(text: []const u8, state: State, sink: anytype) State {
 /// Emit `text[start..end]` as string spans split around any `$name` refs —
 /// spans must never overlap, so a sequential writer (ANSI) works as well as
 /// isocline's last-write-wins cell painting.
-fn emitString(text: []const u8, start: usize, end: usize, sink: anytype) void {
+fn emitString(text: []const u8, start: usize, end: usize, interpolation: bool, sink: anytype) void {
     var seg = start;
-    var i = start;
-    while (i < end) {
-        if (text[i] != '$') {
-            i += 1;
-            continue;
-        }
-        const tok = i;
-        i = dollarRefEnd(text, i, end);
-        if (i > tok + 1) {
-            if (tok > seg) sink.emit(seg, tok - seg, .string);
-            sink.emit(tok, i - tok, .variable);
-            seg = i;
-        }
+    while (nextDollarRef(text, seg, end, interpolation)) |ref| {
+        if (ref.start > seg) sink.emit(seg, ref.start - seg, .string);
+        sink.emit(ref.start, ref.end - ref.start, ref.kind);
+        seg = ref.end;
     }
     if (end > seg) sink.emit(seg, end - seg, .string);
 }
@@ -163,20 +180,6 @@ const keywords = [_][]const u8{
 // Globals available in the JS-mode page context; highlighted so it's visible
 // at the prompt that they're in scope.
 const globals = [_][]const u8{ "document", "window", "globalThis", "console", "lp" };
-
-fn isKeyword(tok: []const u8) bool {
-    for (keywords) |kw| {
-        if (std.mem.eql(u8, kw, tok)) return true;
-    }
-    return false;
-}
-
-fn isGlobal(tok: []const u8) bool {
-    for (globals) |g| {
-        if (std.mem.eql(u8, g, tok)) return true;
-    }
-    return false;
-}
 
 fn isIdChar(ch: u8) bool {
     return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '$' or ch >= 0x80;
@@ -221,9 +224,26 @@ test "js_highlight: comments and strings" {
     try expectTokens("string:'hi'", "'hi'");
 }
 
+test "js_highlight: calls color by identifier case" {
+    try expectTokens("function:markdown string:'x'", "markdown('x')");
+    try expectTokens("global:console method:log", "console.log(x)");
+    try expectTokens("keyword:new type_name:URL", "new URL(u)");
+    // A keyword before `(` stays a keyword; a bare identifier stays plain.
+    try expectTokens("keyword:if", "if (x)");
+    try expectTokens("", "markdown");
+}
+
 test "js_highlight: $refs inside strings do not overlap" {
     try expectTokens("string:'a  variable:$LP_KEY string:'", "'a $LP_KEY'");
     try expectTokens("variable:$LP_KEY", "$LP_KEY");
+}
+
+test "js_highlight: template interpolations split string spans" {
+    try expectTokens("string:`a  interpolation:${x.y} string:`", "`a ${x.y}`");
+    // Unclosed interpolation runs to end of line.
+    try expectTokens("string:`a  interpolation:${x", "`a ${x");
+    // Only template literals interpolate.
+    try expectTokens("string:'a ${x}'", "'a ${x}'");
 }
 
 test "js_highlight: block comment spans lines" {

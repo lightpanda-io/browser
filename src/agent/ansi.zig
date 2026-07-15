@@ -22,7 +22,10 @@ pub const dim = "\x1b[2m";
 pub const italic = "\x1b[3m";
 pub const underline = "\x1b[4m";
 pub const strike = "\x1b[9m";
-pub const cyan = "\x1b[36m";
+// Color names follow isocline's (bbcode_colors.c): teal is the dark cyan
+// pair of bright cyan, like maroon/red or olive/yellow.
+pub const teal = "\x1b[36m";
+pub const cyan = "\x1b[96m";
 pub const green = "\x1b[32m";
 pub const yellow = "\x1b[33m";
 pub const red = "\x1b[31m";
