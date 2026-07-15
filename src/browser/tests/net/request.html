@@ -259,6 +259,62 @@
   }
 </script>
 
+<script id=form_data type=module>
+  const state = await testing.async();
+
+  // An urlencoded body parses into a FormData.
+  const req1 = new Request('https://example.com', {
+    method: 'POST',
+    body: 'a=1&b=hello+world&c=%26%3D&no_value',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  const fd1 = await req1.formData();
+
+  // A FormData body round-trips through the multipart encoding.
+  const src = new FormData();
+  src.append('username', 'alice');
+  src.append('note', 'two\r\nlines');
+  src.append('username', 'bob');
+  const req2 = new Request('https://example.com', { method: 'POST', body: src });
+  const fd2 = await req2.formData();
+
+  // A URLSearchParams body parses back (urlencoded default Content-Type).
+  const req3 = new Request('https://example.com', {
+    method: 'POST',
+    body: new URLSearchParams({ x: 'y z' }),
+  });
+  const fd3 = await req3.formData();
+
+  // A non-form Content-Type rejects with a TypeError.
+  let rejected4 = false;
+  const req4 = new Request('https://example.com', { method: 'POST', body: 'plain' });
+  try { await req4.formData(); } catch (e) { rejected4 = e instanceof TypeError; }
+
+  // So does re-consuming an already-used body.
+  let rejected5 = false;
+  try { await req1.formData(); } catch (e) { rejected5 = e instanceof TypeError; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, fd1 instanceof FormData);
+    testing.expectEqual('1', fd1.get('a'));
+    testing.expectEqual('hello world', fd1.get('b'));
+    testing.expectEqual('&=', fd1.get('c'));
+    testing.expectEqual('', fd1.get('no_value'));
+
+    testing.expectEqual(true, fd2 instanceof FormData);
+    testing.expectEqual(2, fd2.getAll('username').length);
+    testing.expectEqual('alice', fd2.getAll('username')[0]);
+    testing.expectEqual('bob', fd2.getAll('username')[1]);
+    testing.expectEqual('two\r\nlines', fd2.get('note'));
+
+    testing.expectEqual('y z', fd3.get('x'));
+
+    testing.expectEqual(true, rejected4);
+    testing.expectEqual(true, rejected5);
+  });
+</script>
+
 <script id=priority>
   {
     new Request('https://example.com', { priority: 'high' });
