@@ -1,5 +1,3 @@
-const std = @import("std");
-
 const js = @import("../../../js/js.zig");
 const Node = @import("../../Node.zig");
 const Frame = @import("../../../Frame.zig");
@@ -22,63 +20,92 @@ pub fn getTBodies(self: *Table, frame: *Frame) collections.NodeLive(.child_tag) 
     return collections.NodeLive(.child_tag).init(self.asNode(), .tbody, frame);
 }
 
-// The table's rows in spec order: rows of thead children first, then tr
-// children of the table and rows of tbody children in tree order, then rows
-// of tfoot children.
-fn collectRows(self: *Table, frame: *Frame) !std.ArrayList(*Node) {
-    var rows: std.ArrayList(*Node) = .empty;
-    // Scratch only: deleteRow reads the list before the removal (the only
-    // point that can re-enter JS), so the local arena suffices.
-    const arena = frame.local_arena;
+pub fn deleteRow(self: *Table, index: i32, frame: *Frame) !void {
+    if (index < -1) {
+        return error.IndexSizeError;
+    }
+    const row = self.findRow(index) orelse {
+        if (index == -1) {
+            // deleteRow(-1) on a rowless table is a no-op.
+            return;
+        }
+        return error.IndexSizeError;
+    };
+    _ = try row.parentNode().?.removeChild(row, frame);
+}
 
-    try self.appendSectionRows(.thead, &rows, arena);
+// Finds the index-th row (or the last row for -1) in spec order: thead, tr,
+// tbody then tfoot
+fn findRow(self: *Table, index: i32) ?*Node {
+    var scan: RowScan = .{ .index = index };
+
+    if (self.scanSectionRows(.thead, &scan)) |row| {
+        return row;
+    }
 
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
         const el = child.is(Element) orelse continue;
         switch (el.getTag()) {
-            .tr => try rows.append(arena, child),
-            .tbody => try appendChildRows(child, &rows, arena),
+            .tr => if (scan.check(child)) |row| {
+                return row;
+            },
+            .tbody => if (scanChildRows(child, &scan)) |row| {
+                return row;
+            },
             else => {},
         }
     }
 
-    try self.appendSectionRows(.tfoot, &rows, arena);
-    return rows;
+    if (self.scanSectionRows(.tfoot, &scan)) |row| {
+        return row;
+    }
+    if (index == -1) {
+        return scan.last;
+    }
+    return null;
 }
 
-fn appendSectionRows(self: *Table, tag: Element.Tag, rows: *std.ArrayList(*Node), arena: std.mem.Allocator) !void {
+const RowScan = struct {
+    index: i32,
+    count: i32 = 0,
+    last: ?*Node = null,
+
+    fn check(self: *RowScan, row: *Node) ?*Node {
+        if (self.count == self.index) {
+            return row;
+        }
+        self.count += 1;
+        self.last = row;
+        return null;
+    }
+};
+
+fn scanSectionRows(self: *Table, tag: Element.Tag, scan: *RowScan) ?*Node {
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
         const el = child.is(Element) orelse continue;
-        if (el.getTag() != tag) continue;
-        try appendChildRows(child, rows, arena);
+        if (el.getTag() != tag) {
+            continue;
+        }
+        if (scanChildRows(child, scan)) |row| {
+            return row;
+        }
     }
+    return null;
 }
 
-fn appendChildRows(section: *Node, rows: *std.ArrayList(*Node), arena: std.mem.Allocator) !void {
+fn scanChildRows(section: *Node, scan: *RowScan) ?*Node {
     var it = section.childrenIterator();
     while (it.next()) |child| {
         const el = child.is(Element) orelse continue;
         if (el.getTag() == .tr) {
-            try rows.append(arena, child);
+            if (scan.check(child)) |row| {
+                return row;
+            }
         }
     }
-}
-
-pub fn deleteRow(self: *Table, index: i32, frame: *Frame) !void {
-    const rows = try self.collectRows(frame);
-    const len: i32 = @intCast(rows.items.len);
-    const idx: i32 = if (index == -1) len - 1 else index;
-    if (idx == -1 and index == -1) {
-        // deleteRow(-1) on a rowless table is a no-op.
-        return;
-    }
-    if (idx < 0 or idx >= len) {
-        return error.IndexSizeError;
-    }
-    const row = rows.items[@intCast(idx)];
-    _ = try row.parentNode().?.removeChild(row, frame);
+    return null;
 }
 
 pub const JsApi = struct {
@@ -93,3 +120,8 @@ pub const JsApi = struct {
     pub const tBodies = bridge.accessor(Table.getTBodies, null, .{});
     pub const deleteRow = bridge.function(Table.deleteRow, .{ .ce_reactions = true });
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.Table" {
+    try testing.htmlRunner("element/html/table.html", .{});
+}

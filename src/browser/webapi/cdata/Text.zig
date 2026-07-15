@@ -46,7 +46,9 @@ pub fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
 
     var first = node;
     while (first.previousSibling()) |prev| {
-        if (!isExclusiveTextNode(prev)) break;
+        if (!isExclusiveTextNode(prev)) {
+            break;
+        }
         first = prev;
     }
 
@@ -59,14 +61,17 @@ pub fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     var current: ?*Node = first;
     while (current) |cur| : (current = cur.nextSibling()) {
-        if (!isExclusiveTextNode(cur)) break;
-        try buf.appendSlice(frame.call_arena, cur._type.cdata._data.str());
+        if (!isExclusiveTextNode(cur)) {
+            break;
+        }
+
+        try buf.appendSlice(frame.local_arena, cur._type.cdata._data.str());
     }
     return buf.items;
 }
 
-fn isExclusiveTextNode(node: *const Node) bool {
-    return node._type == .cdata and node._type.cdata._type == .text;
+fn isExclusiveTextNode(node: *Node) bool {
+    return node.is(Text) != null;
 }
 
 pub fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {
