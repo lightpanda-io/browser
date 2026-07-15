@@ -346,12 +346,13 @@ pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
             _ = try parent.insertBefore(node, container, frame);
         } else {
             const text_data = container.getData().str();
-            if (offset >= text_data.len) {
+            const byte_off = byteOffset(text_data, offset);
+            if (byte_off >= text_data.len) {
                 _ = try parent.insertBefore(node, container.nextSibling(), frame);
             } else {
                 // Split the text node into before and after parts
-                const before_text = text_data[0..offset];
-                const after_text = text_data[offset..];
+                const before_text = text_data[0..byte_off];
+                const after_text = text_data[byte_off..];
 
                 const before = try Frame.node_factory.createTextNode(frame, before_text);
                 const after = try Frame.node_factory.createTextNode(frame, after_text);
@@ -374,6 +375,16 @@ pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
     }
 }
 
+// Range offsets in CharacterData are UTF-16 code units; convert one to a
+// byte index into the UTF-8 data. An offset inside a surrogate pair rounds
+// down to the code point and out-of-range offsets clamp to the end — the
+// conversion is monotonic, so a (start, end) offset pair always converts to
+// ordered byte offsets (an error-clamp here turned a mid-surrogate start
+// into data.len, producing start > end and a slice panic).
+fn byteOffset(data: []const u8, utf16_offset: u32) usize {
+    return Node.CData.utf16OffsetToUtf8Floor(data, utf16_offset);
+}
+
 pub fn deleteContents(self: *Range, frame: *Frame) !void {
     if (self._proto.getCollapsed()) {
         return;
@@ -388,7 +399,10 @@ pub fn deleteContents(self: *Range, frame: *Frame) !void {
             const text_data = old_value.str();
             cdata._data = try String.concat(
                 frame.arena,
-                &.{ text_data[0..self._proto._start_offset], text_data[self._proto._end_offset..] },
+                &.{
+                    text_data[0..byteOffset(text_data, self._proto._start_offset)],
+                    text_data[byteOffset(text_data, self._proto._end_offset)..],
+                },
             );
             Frame.observers.notifyCharacterDataChange(frame, self._proto._start_container, old_value);
         } else {
@@ -411,9 +425,10 @@ pub fn deleteContents(self: *Range, frame: *Frame) !void {
     // Handle start container - if it's a text node, truncate it
     if (self._proto._start_container.is(Node.CData)) |cdata| {
         const text_data = cdata._data.str();
-        if (self._proto._start_offset < text_data.len) {
+        const byte_start = byteOffset(text_data, self._proto._start_offset);
+        if (byte_start < text_data.len) {
             // Keep only the part before start_offset
-            const new_text = text_data[0..self._proto._start_offset];
+            const new_text = text_data[0..byte_start];
             try self._proto._start_container.setData(new_text, frame);
         }
     }
@@ -421,11 +436,12 @@ pub fn deleteContents(self: *Range, frame: *Frame) !void {
     // Handle end container - if it's a text node, truncate it
     if (self._proto._end_container.is(Node.CData)) |cdata| {
         const text_data = cdata._data.str();
-        if (self._proto._end_offset < text_data.len) {
+        const byte_end = byteOffset(text_data, self._proto._end_offset);
+        if (byte_end < text_data.len) {
             // Keep only the part from end_offset onwards
-            const new_text = text_data[self._proto._end_offset..];
+            const new_text = text_data[byte_end..];
             try self._proto._end_container.setData(new_text, frame);
-        } else if (self._proto._end_offset == text_data.len) {
+        } else if (byte_end == text_data.len) {
             // If we're at the end, set to empty (will be removed if needed)
             try self._proto._end_container.setData("", frame);
         }
@@ -457,8 +473,10 @@ pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
         if (self._proto._start_container.is(Node.CData)) |_| {
             // Clone part of text node
             const text_data = self._proto._start_container.getData().str();
-            if (self._proto._start_offset < text_data.len and self._proto._end_offset <= text_data.len) {
-                const cloned_text = text_data[self._proto._start_offset..self._proto._end_offset];
+            const byte_start = byteOffset(text_data, self._proto._start_offset);
+            const byte_end = byteOffset(text_data, self._proto._end_offset);
+            if (byte_start < text_data.len and byte_end <= text_data.len) {
+                const cloned_text = text_data[byte_start..byte_end];
                 const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
                 _ = try fragment.asNode().appendChild(text_node, frame);
             }
@@ -478,9 +496,10 @@ pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
         // Clone partial start container
         if (self._proto._start_container.is(Node.CData)) |_| {
             const text_data = self._proto._start_container.getData().str();
-            if (self._proto._start_offset < text_data.len) {
+            const byte_start = byteOffset(text_data, self._proto._start_offset);
+            if (byte_start < text_data.len) {
                 // Clone from start_offset to end of text
-                const cloned_text = text_data[self._proto._start_offset..];
+                const cloned_text = text_data[byte_start..];
                 const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
                 _ = try fragment.asNode().appendChild(text_node, frame);
             }
@@ -501,9 +520,10 @@ pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
         // Clone partial end container
         if (self._proto._end_container.is(Node.CData)) |_| {
             const text_data = self._proto._end_container.getData().str();
-            if (self._proto._end_offset > 0 and self._proto._end_offset <= text_data.len) {
+            const byte_end = byteOffset(text_data, self._proto._end_offset);
+            if (byte_end > 0 and byte_end <= text_data.len) {
                 // Clone from start to end_offset
-                const cloned_text = text_data[0..self._proto._end_offset];
+                const cloned_text = text_data[0..byte_end];
                 const text_node = try Frame.node_factory.createTextNode(frame, cloned_text);
                 _ = try fragment.asNode().appendChild(text_node, frame);
             }
@@ -587,8 +607,8 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
         if (start_node.is(Node.CData)) |cdata| {
             if (!isCommentOrPI(cdata)) {
                 const data = cdata.getData().str();
-                const s = @min(start_offset, data.len);
-                const e = @min(end_offset, data.len);
+                const s = byteOffset(data, start_offset);
+                const e = byteOffset(data, end_offset);
                 try writer.writeAll(data[s..e]);
             }
             return;
@@ -601,7 +621,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
     if (start_node.is(Node.CData)) |cdata| {
         if (!isCommentOrPI(cdata)) {
             const data = cdata.getData().str();
-            const s = @min(start_offset, data.len);
+            const s = byteOffset(data, start_offset);
             try writer.writeAll(data[s..]);
         }
     }
@@ -639,7 +659,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
         if (end_node.is(Node.CData)) |cdata| {
             if (!isCommentOrPI(cdata)) {
                 const data = cdata.getData().str();
-                const e = @min(end_offset, data.len);
+                const e = byteOffset(data, end_offset);
                 try writer.writeAll(data[0..e]);
             }
         }

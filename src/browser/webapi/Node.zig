@@ -147,44 +147,34 @@ pub fn findAdjacentNodes(self: *Node, position: []const u8, variant: AdjacentVar
     }
 
     if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
-        // The node must have a parent node in order to use this variant.
-        const parent_node = self.parentNode() orelse switch (variant) {
-            .html => return error.NoModificationAllowed,
-            .node => return error.AdjacentNoParent,
-        };
-        if (variant == .html) {
-            // Parent cannot be Document.
-            switch (parent_node._type) {
-                .document, .document_fragment => return error.NoModificationAllowed,
-                else => {},
-            }
-        }
-
-        return .{ parent_node, self };
+        return .{ try self.adjacentParent(variant), self };
     }
 
     if (std.ascii.eqlIgnoreCase(position, "afterend")) {
-        // The node must have a parent node in order to use this variant.
-        const parent_node = self.parentNode() orelse switch (variant) {
-            .html => return error.NoModificationAllowed,
-            .node => return error.AdjacentNoParent,
-        };
-        if (variant == .html) {
-            // Parent cannot be Document.
-            switch (parent_node._type) {
-                .document, .document_fragment => return error.NoModificationAllowed,
-                else => {},
-            }
-        }
-
         // Get the next sibling or null; null indicates our node is the only one.
-        return .{ parent_node, self.nextSibling() };
+        return .{ try self.adjacentParent(variant), self.nextSibling() };
     }
 
     // Returned if:
     // * position is not one of the four listed values.
     // * The input is XML that is not well-formed.
     return error.SyntaxError;
+}
+
+// beforebegin/afterend insert into the parent, which must exist and, for the
+// html variant, cannot be a document or fragment.
+fn adjacentParent(self: *Node, variant: AdjacentVariant) !*Node {
+    const parent_node = self.parentNode() orelse switch (variant) {
+        .html => return error.NoModificationAllowed,
+        .node => return error.AdjacentNoParent,
+    };
+    if (variant == .html) {
+        switch (parent_node._type) {
+            .document, .document_fragment => return error.NoModificationAllowed,
+            else => {},
+        }
+    }
+    return parent_node;
 }
 
 pub fn firstChild(self: *const Node) ?*Node {
@@ -248,8 +238,9 @@ fn validateDocumentInsertion(parent: *Node, node: *const Node, replaced_child: ?
     }
     switch (node._type) {
         .cdata => |cd| {
-            if (cd._type == .text) {
-                // A Text node cannot be a child of a document.
+            if (cd._type == .text or cd._type == .cdata_section) {
+                // A Text node (CDATASection included) cannot be a child of a
+                // document.
                 return error.HierarchyError;
             }
         },
@@ -258,6 +249,15 @@ fn validateDocumentInsertion(parent: *Node, node: *const Node, replaced_child: ?
             while (it.next()) |existing| {
                 if (existing._type == .element and existing != node and existing != replaced_child) {
                     // A document can have at most one element child.
+                    return error.HierarchyError;
+                }
+            }
+        },
+        .document_type => {
+            var it = parent.childrenIterator();
+            while (it.next()) |existing| {
+                if (existing._type == .document_type and existing != node and existing != replaced_child) {
+                    // A document can have at most one doctype child.
                     return error.HierarchyError;
                 }
             }
@@ -915,7 +915,8 @@ pub fn getChildrenCount(self: *Node) usize {
 pub fn getLength(self: *Node) u32 {
     switch (self._type) {
         .cdata => |cdata| {
-            return @intCast(cdata.getData().len);
+            // The node length of CharacterData is in UTF-16 code units.
+            return @intCast(cdata.getLength());
         },
         .element, .document, .document_fragment => {
             var count: u32 = 0;
@@ -1177,11 +1178,11 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
 
         if (next_node) |next| {
             if (next.is(CData.Text)) |_| {
-                try buffer.appendSlice(allocator, text_node.getWholeText());
+                try buffer.appendSlice(allocator, text_node.ownData());
 
                 while (next_node) |node_to_merge| {
                     const next_text_node = node_to_merge.is(CData.Text) orelse break;
-                    try buffer.appendSlice(allocator, next_text_node.getWholeText());
+                    try buffer.appendSlice(allocator, next_text_node.ownData());
 
                     const to_remove = node_to_merge;
                     next_node = node_to_merge.nextSibling();
@@ -1274,11 +1275,11 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
             var frag_it = frag.asNode().childrenIterator();
             while (frag_it.next()) |frag_child| {
                 try validateNodeInsertion(self, frag_child);
-                try children_to_add.append(frame.local_arena, frag_child);
+                try children_to_add.append(frame.call_arena, frag_child);
             }
         } else {
             try validateNodeInsertion(self, child);
-            try children_to_add.append(frame.local_arena, child);
+            try children_to_add.append(frame.call_arena, child);
         }
     }
 
@@ -1288,16 +1289,7 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
     // record with all removed and added nodes, so per-node notification is
     // suppressed here.
     const notify = Frame.observers.hasMutationObservers(frame);
-    var removed: std.ArrayList(*Node) = .empty;
-
-    // Remove all existing children
-    var it = self.childrenIterator();
-    while (it.next()) |child| {
-        if (notify) {
-            try removed.append(frame.local_arena, child);
-        }
-        frame.removeNode(self, child, .{ .will_be_reconnected = false, .notify_observers = false });
-    }
+    const removed = try self.removeAllChildrenCollecting(notify, frame);
 
     // Append new children
     const parent_is_connected = self.isConnected();
@@ -1315,6 +1307,21 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
     }
 }
 
+// Removes every child with per-node notification suppressed, returning the
+// removed nodes when `notify` is set so the caller can queue one combined
+// "replace all" mutation record.
+fn removeAllChildrenCollecting(self: *Node, notify: bool, frame: *Frame) !std.ArrayList(*Node) {
+    var removed: std.ArrayList(*Node) = .empty;
+    var it = self.childrenIterator();
+    while (it.next()) |child| {
+        if (notify) {
+            try removed.append(frame.call_arena, child);
+        }
+        frame.removeNode(self, child, .{ .will_be_reconnected = false, .notify_observers = false });
+    }
+    return removed;
+}
+
 /// Shared implementation in Element and DocumentFragment
 pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, frame: *Frame) !void {
     frame.domChanged();
@@ -1323,15 +1330,7 @@ pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, fr
     // record; per-node notification is suppressed for the removals here and
     // for the parser insertions (fragment parsing never notifies).
     const notify = Frame.observers.hasMutationObservers(frame);
-    var removed: std.ArrayList(*Node) = .empty;
-
-    var it = self.childrenIterator();
-    while (it.next()) |child| {
-        if (notify) {
-            try removed.append(frame.local_arena, child);
-        }
-        frame.removeNode(self, child, .{ .will_be_reconnected = false, .notify_observers = false });
-    }
+    const removed = try self.removeAllChildrenCollecting(notify, frame);
 
     if (html.len > 0) {
         if (allow_declarative_shadow) {

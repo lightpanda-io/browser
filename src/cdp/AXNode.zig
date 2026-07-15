@@ -989,7 +989,7 @@ fn writeName(
         },
         .cdata => |cd| switch (cd._type) {
             .text => |*text| {
-                try writeString(text.getWholeText(), w);
+                try writeString(text.ownData(), w);
                 return .contents;
             },
             else => null,
@@ -1109,7 +1109,7 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *F
         switch (child._type) {
             .cdata => |cd| switch (cd._type) {
                 .text => |*text| {
-                    const content = std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace);
+                    const content = std.mem.trim(u8, text.ownData(), &std.ascii.whitespace);
                     if (content.len > 0) {
                         try writer.writeAll(content);
                         try writer.writeByte(' ');
