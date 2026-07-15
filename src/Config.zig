@@ -86,7 +86,7 @@ fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator) !?log.Level
 }
 
 pub fn isHashedDirectory(dir: []const u8) bool {
-    var handle = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch return false;
+    var handle = std.fs.cwd().openDir(dir, .{ .iterate = true }) catch return false;
     defer handle.close();
 
     var it = handle.iterate();
