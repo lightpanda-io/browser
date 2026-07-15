@@ -719,6 +719,7 @@ pub const Function = struct {
         exposed: Exposed = .both,
         ce_reactions: bool = false,
         js_name: ?[:0]const u8 = null,
+        unforgeable: bool = false,
 
         pub const Exposed = enum { both, window, worker };
 

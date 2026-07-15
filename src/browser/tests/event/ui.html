@@ -11,7 +11,7 @@
     testing.expectEqual(5, evt.detail);
     testing.expectEqual(true, evt.bubbles);
     testing.expectEqual(true, evt.cancelable);
-    testing.expectEqual(window, evt.view);
+    testing.expectEqual(null, evt.view);
 </script>
 
 <script id=uiEventWithView>
@@ -30,7 +30,7 @@
     testing.expectEqual(0, evt3.detail);
     testing.expectEqual(false, evt3.bubbles);
     testing.expectEqual(false, evt3.cancelable);
-    testing.expectEqual(window, evt3.view);
+    testing.expectEqual(null, evt3.view);
 </script>
 
 <script id=uiEventInheritance>
