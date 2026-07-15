@@ -78,6 +78,7 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
         });
     }
     try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, 0);
+    try focusEditingHostForMouseDown(frame, target);
 }
 
 pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
@@ -200,6 +201,76 @@ fn deltaToScroll(d: f64) i32 {
 }
 
 // callback when the "click" event reaches the frame.
+// Whether the element has a click activation behavior that handleClick
+// implements.
+fn hasClickActivationBehavior(node: *Node) bool {
+    const element = node.is(Element) orelse return false;
+    const html_element = element.is(Element.Html) orelse return false;
+    return switch (html_element._type) {
+        .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
+        .input, .button, .select, .textarea, .label => true,
+        .generic => |generic| generic._tag == .summary,
+        else => false,
+    };
+}
+
+// Clicks on editable content are for editing: they don't activate the
+// element or any enclosing link.
+// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
+// String wrap runs at runtime, mirroring Html.getIsContentEditable.
+fn isEditingHost(node: *Node) bool {
+    const element = node.is(Element) orelse return false;
+    const value = element.getAttributeSafe(.wrap("contenteditable")) orelse return false;
+    return std.ascii.eqlIgnoreCase(value, "false") == false;
+}
+
+// A mousedown on editable content focuses its editing host: the outermost
+// element of the contiguous editable chain containing the target.
+pub fn focusEditingHostForMouseDown(frame: *Frame, target: *Element) !void {
+    var node: ?*Node = target.asNode();
+    var editable: ?*Node = null;
+    while (node) |n| : (node = n._parent) {
+        if (isEditingHost(n)) {
+            editable = n;
+            break;
+        }
+    }
+    var host = editable orelse return;
+    while (host._parent) |p| {
+        if (!isEditingHost(p)) {
+            break;
+        }
+        host = p;
+    }
+    const host_element = host.is(Element) orelse return;
+    try host_element.focus(frame);
+}
+
+// Per the DOM dispatch algorithm, a click's activation target is the event
+// target itself when it has activation behavior, otherwise — for bubbling
+// events only — the nearest ancestor that has one.
+pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
+    if (isEditingHost(target)) {
+        return null;
+    }
+    if (hasClickActivationBehavior(target)) {
+        return target;
+    }
+    if (!bubbles) {
+        return null;
+    }
+    var node = target._parent;
+    while (node) |n| : (node = n._parent) {
+        if (isEditingHost(n)) {
+            return null;
+        }
+        if (hasClickActivationBehavior(n)) {
+            return n;
+        }
+    }
+    return null;
+}
+
 pub fn handleClick(frame: *Frame, target: *Node) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;

@@ -56,6 +56,17 @@ pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) !
 // synchronously so the events are observable when the testdriver promise
 // resolves.
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
+    if (element.is(Element.Html)) |html| {
+        switch (html._type) {
+            inline .button, .input, .textarea, .select => |i| {
+                if (i.getDisabled()) {
+                    return;
+                }
+            },
+            else => {},
+        }
+    }
+
     dispatchPointer(element, "pointerdown", 0, 1, frame);
     dispatchMouse(element, "mousedown", 0, 1, frame);
     dispatchPointer(element, "pointerup", 0, 0, frame);
@@ -173,6 +184,9 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const button = readI32(action, "button", 0);
             dispatchPointer(el, "pointerdown", button, 1, frame);
             dispatchMouse(el, "mousedown", button, 1, frame);
+            Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
+                log.warn(.app, "webdriver editable focus", .{ .err = err });
+            };
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);

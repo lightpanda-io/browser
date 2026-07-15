@@ -166,6 +166,15 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         const et = target.asEventTarget();
         event._target = et;
         event._dispatch_target = et; // Store original target for composedPath()
+
+        // Retarget the relatedTarget against the dispatch target up front
+        // (DOM dispatch step 4); listeners observe the retargeted value and
+        // it survives the dispatch.
+        if (event.relatedTargetPtr()) |related_ptr| {
+            if (related_ptr.*) |related| {
+                related_ptr.* = getAdjustedTarget(related, et);
+            }
+        }
     }
 
     const frame = self.frame;
@@ -195,6 +204,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     var path_len: usize = 0;
     var node_path_len: usize = 0;
     var path_buffer: [128]*EventTarget = undefined;
+    var clear_targets = false;
 
     // Defer runs even on early return - ensures event phase is reset
     // and default actions execute (unless prevented)
@@ -203,7 +213,14 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         event._current_target = null;
         event._stop_propagation = false;
         event._stop_immediate_propagation = false;
-        if (event._needs_retargeting and node_path_len > 0) {
+        if (clear_targets) {
+            // Don't leak nodes living in a shadow tree: reset the targets
+            // (decided on the pre-dispatch tree, see below).
+            event._target = null;
+            if (event.relatedTargetPtr()) |related_ptr| {
+                related_ptr.* = null;
+            }
+        } else if (event._needs_retargeting and node_path_len > 0) {
             const adjusted = getAdjustedTarget(event._dispatch_target, path_buffer[node_path_len - 1]);
             event._target = if (rootIsShadowRoot(adjusted)) null else adjusted;
         }
@@ -216,9 +233,16 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         if (event._prevent_default) {
             // can't return in a defer (╯°□°)╯︵ ┻━┻
         } else if (event._type_string.eql(comptime .wrap("click"))) {
-            Frame.user_input.handleClick(frame, target) catch |err| {
-                log.warn(.event, "frame.click", .{ .err = err });
-            };
+            // Per spec, only a MouseEvent "click" is an activation event, and
+            // the activation target is the nearest inclusive ancestor with
+            // activation behavior (ancestors only for bubbling events).
+            if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
+                if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
+                    Frame.user_input.handleClick(frame, activation_target) catch |err| {
+                        log.warn(.event, "frame.click", .{ .err = err });
+                    };
+                }
+            }
         } else if (event._type_string.eql(comptime .wrap("keydown"))) {
             Frame.user_input.handleKeydown(frame, target, event) catch |err| {
                 log.warn(.event, "frame.keydown", .{ .err = err });
@@ -271,6 +295,26 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         if (root_is_document) {
             path_buffer[path_len] = frame.window.asEventTarget();
             path_len += 1;
+        }
+    }
+
+    // DOM dispatch: decide up front — on the pre-dispatch tree, so listener
+    // mutations can't affect it — whether target and relatedTarget must be
+    // reset after dispatch because they would expose nodes inside a shadow
+    // tree.
+    if (node_path_len > 0) {
+        const last = path_buffer[node_path_len - 1];
+        if (event._needs_retargeting) {
+            if (rootIsShadowRoot(getAdjustedTarget(event._dispatch_target, last))) {
+                clear_targets = true;
+            }
+        }
+        if (event.relatedTargetPtr()) |related_ptr| {
+            if (related_ptr.*) |related| {
+                if (rootIsShadowRoot(getAdjustedTarget(related, last))) {
+                    clear_targets = true;
+                }
+            }
         }
     }
 
@@ -619,12 +663,18 @@ const ActivationState = struct {
 
     const Input = Element.Html.Input;
 
-    fn create(event: *const Event, target: *Node, frame: *Frame) !?ActivationState {
+    fn create(event: *Event, target: *Node, frame: *Frame) !?ActivationState {
         if (event._type_string.eql(comptime .wrap("click")) == false) {
             return null;
         }
 
-        const input = target.is(Element.Html.Input) orelse return null;
+        // Per spec, only a MouseEvent "click" is an activation event.
+        if (event.is(@import("webapi/event/MouseEvent.zig")) == null) {
+            return null;
+        }
+
+        const activation_node = Frame.user_input.findClickActivationTarget(target, event._bubbles) orelse return null;
+        const input = activation_node.is(Element.Html.Input) orelse return null;
         if (input._input_type != .checkbox and input._input_type != .radio) {
             return null;
         }

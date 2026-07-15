@@ -3151,6 +3151,11 @@ const SubmitFormOpts = struct {
 pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
 
+    if (submit_opts.fire_event and form.asNode().isConnected() == false) {
+        // interactive submission (e.g. submit button) noop if the form is disconnected
+        return;
+    }
+
     // see the `_constructing_entry_list` field documentation
     if (form._constructing_entry_list) {
         return;
