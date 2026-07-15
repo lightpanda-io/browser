@@ -30,6 +30,20 @@ const Schema = @import("Schema.zig");
 pub const name = "pandascript";
 pub const description = "Write PandaScript agent scripts (.js) — Lightpanda's replayable browser-automation format, run token-free with `lightpanda agent script.js`.";
 
+/// Semantics summary for the agent's default system prompt, so the agent
+/// answers user questions about PandaScript from these rules instead of
+/// inventing them. Kept here beside the full skill text ("Mental model"
+/// below) so the two stay in sync when the Runtime contract changes.
+pub const semantics_note =
+    \\- PandaScript (the saved-script language of `/save`): scripts run
+    \\  wrapped in an async function, so a script's output is ONLY its
+    \\  top-level `return <value>` (objects/arrays printed as JSON) — a bare
+    \\  trailing expression is NOT printed. `Page` is the only global:
+    \\  `const page = new Page(); await page.goto(url);` then synchronous
+    \\  `page.extract({...})`. Only page-side `evaluate` yields the value of
+    \\  a bare trailing expression.
+;
+
 /// The skill body (no frontmatter). Lazily rendered once, process lifetime.
 pub fn text() []const u8 {
     text_once.call();

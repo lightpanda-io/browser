@@ -24,6 +24,8 @@ const Command = lp.Command;
 const Schema = lp.Schema;
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
+const md_term = @import("md_term.zig");
+const js_highlight = @import("js_highlight.zig");
 const c = @cImport({
     @cInclude("isocline.h");
 });
@@ -41,23 +43,15 @@ const style_jsmode = "ps-jsmode";
 const style_keyword = "ps-keyword";
 const style_comment = "ps-comment";
 const style_jsglobal = "ps-jsglobal";
+const style_fn = "ps-fn";
+const style_method = "ps-method";
+const style_type = "ps-type";
 
-pub const ansi = struct {
-    pub const reset = "\x1b[0m";
-    pub const bold = "\x1b[1m";
-    pub const dim = "\x1b[2m";
-    pub const italic = "\x1b[3m";
-    pub const cyan = "\x1b[36m";
-    pub const green = "\x1b[32m";
-    pub const yellow = "\x1b[33m";
-    pub const red = "\x1b[31m";
-    pub const clear_eol = "\x1b[K";
-    pub const clear_line = "\x1b[2K";
-};
+const ansi = @import("ansi.zig");
 
 /// Command styling shared with the `/help` listing.
 pub fn highlightCmd(comptime fragment: []const u8) []const u8 {
-    return ansi.bold ++ ansi.cyan ++ fragment ++ ansi.reset;
+    return ansi.bold ++ ansi.teal ++ fragment ++ ansi.reset;
 }
 
 const Verbosity = Config.AgentVerbosity;
@@ -70,6 +64,7 @@ verbosity: Verbosity,
 /// only gates non-interactive runs.
 repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
+stdout_is_tty: bool,
 spinner: Spinner,
 completion_source: ?CompletionSource = null,
 /// True while the REPL is in JS mode; set by isocline's mode callback.
@@ -77,6 +72,10 @@ js_mode: bool = false,
 /// Per-mode history files (null outside REPL mode). `modeCallback` swaps the
 /// active one so JS and normal recall stay separate.
 history_paths: ?HistoryPaths = null,
+/// Line-buffered markdown state for streamed assistant deltas; its `close`
+/// resets everything so fence state can't leak into the next message. Only
+/// used on the styled (REPL tty) path, hence the placeholder.
+md_stream: md_term.Stream = .{ .show_table_placeholder = true },
 
 /// Lets the completer/hinter pull dynamic candidates from the `Agent` without
 /// `Terminal` depending on it (same idiom as `Session.cancel_hook`).
@@ -153,7 +152,7 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
         c.ic_style_def(style_slash, "ansi-teal bold");
         c.ic_style_def(style_string, "ansi-green");
-        c.ic_style_def(style_var, "ansi-yellow bold");
+        c.ic_style_def(style_var, "ansi-yellow");
         c.ic_style_def(style_url, "ansi-blue underline");
         c.ic_style_def(style_key, "ansi-blue");
         c.ic_style_def(style_num, "ansi-magenta");
@@ -162,6 +161,9 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         c.ic_style_def(style_keyword, "ansi-blue bold");
         c.ic_style_def(style_comment, "ansi-darkgray italic");
         c.ic_style_def(style_jsglobal, "ansi-cyan");
+        c.ic_style_def(style_fn, "ansi-teal");
+        c.ic_style_def(style_method, "ansi-teal italic");
+        c.ic_style_def(style_type, "ansi-cyan");
         // lighten the ghost/inline-hint color from isocline's default ansi-darkgray
         c.ic_style_def("ic-hint", "ansi-color=244");
         // `!` on an empty prompt toggles JS mode; state callback wired in attachCompleter.
@@ -181,6 +183,7 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
         .stderr_is_tty = stderr_is_tty,
+        .stdout_is_tty = std.posix.isatty(std.posix.STDOUT_FILENO),
         .spinner = .init(is_repl, stderr_is_tty),
         .history_paths = history_paths,
     };
@@ -229,7 +232,7 @@ pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bo
     } else {
         std.debug.print(
             "{s}{s}[tool: {s}]{s} {s}\n",
-            .{ ansi.dim, ansi.cyan, name, ansi.reset, args },
+            .{ ansi.dim, ansi.teal, name, ansi.reset, args },
         );
     }
 }
@@ -818,135 +821,42 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     } else |_| {}
 }
 
-/// Returns the index just past the matching closing quote, or `text.len` if
-/// unterminated. Does not handle backslash escapes (matches Schema.tokenize).
-fn scanQuoted(text: []const u8, start: usize) usize {
-    if (start >= text.len) return start;
-    const ch = text[start];
-    const is_triple = start + 2 < text.len and text[start + 1] == ch and text[start + 2] == ch;
-    if (is_triple) {
-        const triple_delim = text[start .. start + 3];
-        const close = std.mem.indexOfPos(u8, text, start + 3, triple_delim) orelse return text.len;
-        return close + 3;
-    }
-    const close = std.mem.indexOfScalarPos(u8, text, start + 1, ch) orelse return text.len;
-    return close + 1;
-}
-
-/// Highlight `$LP_*` tokens appearing from `start` onward.
+/// Highlight `$LP_*` tokens appearing from `start` onward. `${…}` is not a
+/// prompt substitution form, so interpolation stays off.
 fn highlightDollarVars(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
-    highlightDollarVarsIn(henv, text, start, text.len);
-}
-
-/// Highlight `$LP_*` tokens within `text[start..end]` — used both for whole
-/// prompts and for repainting refs that fall inside a string literal.
-fn highlightDollarVarsIn(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize, end: usize) void {
     var i = start;
-    while (i < end) {
-        if (text[i] != '$') {
-            i += 1;
-            continue;
-        }
-        const tok_start = i;
-        i += 1;
-        while (i < end and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
-        if (i > tok_start + 1) {
-            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_var.ptr);
-        }
-        // Don't post-step: the inner loop already landed on the char after the
-        // identifier (or end-of-text); auto-advancing would skip an adjacent `$LP_*`.
+    while (js_highlight.nextDollarRef(text, i, text.len, false)) |ref| {
+        c.ic_highlight(henv, @intCast(ref.start), @intCast(ref.end - ref.start), style_var.ptr);
+        i = ref.end;
     }
 }
 
-const js_keywords = [_][]const u8{
-    "function", "async",  "await", "yield",   "return",    "if",     "else",
-    "for",      "while",  "do",    "switch",  "case",      "break",  "continue",
-    "var",      "let",    "const", "new",     "delete",    "typeof", "instanceof",
-    "in",       "of",     "void",  "this",    "super",     "class",  "extends",
-    "import",   "export", "from",  "default", "try",       "catch",  "finally",
-    "throw",    "true",   "false", "null",    "undefined", "NaN",    "Infinity",
+/// Paints `js_highlight` spans onto isocline's cell attributes.
+const IcSink = struct {
+    henv: ?*c.ic_highlight_env_t,
+
+    pub fn emit(self: IcSink, start: usize, len: usize, kind: js_highlight.Kind) void {
+        const style: []const u8 = switch (kind) {
+            .comment => style_comment,
+            .string => style_string,
+            .variable, .interpolation => style_var,
+            .number => style_num,
+            .keyword => style_keyword,
+            .global => style_jsglobal,
+            .function => style_fn,
+            .method => style_method,
+            .type_name => style_type,
+        };
+        c.ic_highlight(self.henv, @intCast(start), @intCast(len), style.ptr);
+    }
 };
 
-// Globals available in the JS-mode page context; highlighted so it's visible
-// at the prompt that they're in scope.
-const js_globals = [_][]const u8{ "document", "window", "globalThis", "console", "lp" };
-
-fn isJsKeyword(tok: []const u8) bool {
-    for (js_keywords) |kw| {
-        if (std.mem.eql(u8, kw, tok)) return true;
-    }
-    return false;
-}
-
-fn isJsGlobal(tok: []const u8) bool {
-    for (js_globals) |g| {
-        if (std.mem.eql(u8, g, tok)) return true;
-    }
-    return false;
-}
-
-fn isIdChar(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '$' or ch >= 0x80;
-}
-
-/// Highlight the buffer as JavaScript: keywords, strings (incl. template
-/// literals), numbers, comments, and `$LP_*` env-var refs. Byte offsets are
-/// safe (see `highlighterCallback`): every token boundary is an ASCII byte and
-/// non-ASCII bytes advance singly without being highlighted.
+/// Highlight the buffer as JavaScript. Byte offsets are safe (see
+/// `highlighterCallback`): every token boundary is an ASCII byte and non-ASCII
+/// bytes advance singly without being highlighted.
 fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
-    var i: usize = 0;
-    while (i < text.len) {
-        const ch = text[i];
-        if (ch == '/' and i + 1 < text.len and (text[i + 1] == '/' or text[i + 1] == '*')) {
-            const start = i;
-            if (text[i + 1] == '/') {
-                i = std.mem.indexOfScalarPos(u8, text, i + 2, '\n') orelse text.len;
-            } else {
-                const close = std.mem.indexOfPos(u8, text, i + 2, "*/");
-                i = if (close) |p| p + 2 else text.len;
-            }
-            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_comment.ptr);
-            continue;
-        }
-        if (ch == '\'' or ch == '"' or ch == '`') {
-            const start = i;
-            i = scanQuoted(text, i);
-            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_string.ptr);
-            // `$LP_*` repaints yellow over green: isocline merges per cell, so the later call wins.
-            highlightDollarVarsIn(henv, text, start, i);
-            continue;
-        }
-        if (ch == '$') {
-            const start = i;
-            i += 1;
-            while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
-            if (i > start + 1) {
-                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_var.ptr);
-            }
-            continue;
-        }
-        if (std.ascii.isDigit(ch) or (ch == '.' and i + 1 < text.len and std.ascii.isDigit(text[i + 1]))) {
-            const start = i;
-            i += 1;
-            while (i < text.len and (std.ascii.isHex(text[i]) or text[i] == '.' or text[i] == '_' or text[i] == 'x' or text[i] == 'X')) i += 1;
-            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_num.ptr);
-            continue;
-        }
-        if (std.ascii.isAlphabetic(ch) or ch == '_') {
-            const start = i;
-            i += 1;
-            while (i < text.len and isIdChar(text[i])) i += 1;
-            const tok = text[start..i];
-            if (isJsKeyword(tok)) {
-                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_keyword.ptr);
-            } else if (isJsGlobal(tok) and (start == 0 or text[start - 1] != '.')) {
-                // `.document` is a property access, not the global
-                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_jsglobal.ptr);
-            }
-            continue;
-        }
-        i += 1;
-    }
+    const sink: IcSink = .{ .henv = henv };
+    _ = js_highlight.tokenize(text, .normal, sink);
 }
 
 fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
@@ -954,7 +864,7 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     while (skipWhitespace(text, i)) |tok_start| {
         i = tok_start;
         if (text[i] == '\'' or text[i] == '"') {
-            i = scanQuoted(text, i);
+            i = Schema.quotedSpanEnd(text, i);
             c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_string.ptr);
             continue;
         }
@@ -965,7 +875,7 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
             i += 1;
             const val_start = i;
             if (i < text.len and (text[i] == '\'' or text[i] == '"')) {
-                i = scanQuoted(text, i);
+                i = Schema.quotedSpanEnd(text, i);
                 c.ic_highlight(henv, @intCast(val_start), @intCast(i - val_start), style_string.ptr);
             } else {
                 while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
@@ -1215,7 +1125,7 @@ fn renderChoice(header: []const u8, items: []const [:0]const u8, default: ?usize
     for (items, 0..) |item, idx| {
         const on_row = idx == selected;
         const marker: []const u8 = if (on_row) ">" else " ";
-        const style: []const u8 = if (on_row) ansi.bold ++ ansi.cyan else "";
+        const style: []const u8 = if (on_row) ansi.bold ++ ansi.teal else "";
         const reset: []const u8 = if (on_row) ansi.reset else "";
         const default_marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
         std.debug.print(ansi.clear_line ++ "  {s} {s}{s}{s}{s}\r\n", .{ marker, style, item, default_marker, reset });
@@ -1346,20 +1256,58 @@ test "renderSchemaHint: ghosts enum value once typing, keeps template when empty
     try std.testing.expectEqualStrings("load", hintStr(renderSchemaHint(schema, "state=", false)).?);
 }
 
-pub fn printAssistant(_: *Terminal, text: []const u8) void {
-    if (text.len == 0) return;
-    const fd = std.posix.STDOUT_FILENO;
-    _ = std.posix.write(fd, text) catch {};
-    _ = std.posix.write(fd, "\n") catch {};
+test {
+    _ = md_term;
 }
 
-/// Write a streamed assistant-text delta verbatim (no trailing newline). The
-/// caller must pause the spinner first (its stderr frames would otherwise
-/// interleave with this stdout text) and emit a closing newline when the
-/// stream ends.
-pub fn printAssistantDelta(_: *Terminal, text: []const u8) void {
+/// Style only for the interactive REPL on a real terminal; `--task`/piped
+/// output stays verbatim so it can be consumed programmatically.
+fn styledOutput(self: *const Terminal) bool {
+    return self.isRepl() and self.stdout_is_tty;
+}
+
+/// Buffered, error-swallowing markdown write to stdout; only called on the
+/// styled (REPL tty) path.
+fn renderStyled(self: *Terminal, text: []const u8, op: enum { full, delta, end }) void {
+    var buf: [1024]u8 = undefined;
+    var fw = std.fs.File.stdout().writerStreaming(&buf);
+    const w = &fw.interface;
+    switch (op) {
+        .full => {
+            md_term.render(w, text) catch {};
+            w.writeByte('\n') catch {};
+        },
+        .delta => self.md_stream.feed(w, text) catch {},
+        .end => {
+            self.md_stream.close(w) catch {};
+            w.writeByte('\n') catch {};
+        },
+    }
+    w.flush() catch {};
+}
+
+pub fn printAssistant(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
+    if (self.styledOutput()) return self.renderStyled(text, .full);
     _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
+    _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};
+}
+
+/// Write a streamed assistant-text delta (no trailing newline). Rendered
+/// line-buffered through `md_stream` on a REPL tty, verbatim otherwise. The
+/// caller must pause the spinner first (its stderr frames would otherwise
+/// interleave with this stdout text) and call `endAssistantStream` when the
+/// stream ends.
+pub fn printAssistantDelta(self: *Terminal, text: []const u8) void {
+    if (text.len == 0) return;
+    if (self.styledOutput()) return self.renderStyled(text, .delta);
+    _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
+}
+
+/// Flush any partial streamed line, terminate it, and reset stream state.
+pub fn endAssistantStream(self: *Terminal) void {
+    if (self.styledOutput()) return self.renderStyled("", .end);
+    _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};
 }
 
 // Must exceed the downstream LLM-judge's snapshot window for full grounding

@@ -35,6 +35,7 @@ const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Conversation = @import("Conversation.zig");
 const Terminal = @import("Terminal.zig");
+const ansi = @import("ansi.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
 const save = @import("save.zig");
@@ -75,7 +76,8 @@ const default_system_prompt = browser_tools.driver_guidance ++
     \\- If the user asks for account-scoped data (karma, profile, inbox, …)
     \\  and the page shows you're not signed in, log in proactively (per
     \\  the Credentials section above) before reporting unavailable.
-;
+    \\
+++ lp.skill.semantics_note;
 
 // System prompt of the `/save` command: the save instructions plus the
 // script skill (`lp.skill`), whose primitives reference is rendered from
@@ -494,7 +496,7 @@ fn streamAssistantDelta(ctx: *anyopaque, delta: []const u8) void {
 /// `runTools` exit path can call it unconditionally.
 fn endStreamedText(self: *Agent) void {
     if (!self.stream_active) return;
-    self.terminal.printAssistantDelta("\n");
+    self.terminal.endAssistantStream();
     self.stream_active = false;
 }
 
@@ -596,8 +598,7 @@ fn runRepl(self: *Agent) void {
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
     if (self.ai_client != null) {
-        const a = Terminal.ansi;
-        std.debug.print("  model: {s}{s}  {s}effort: {s}{s}  {s}stream: {s}{s}{s}\n", .{ a.dim, self.model, a.reset, a.dim, @tagName(self.effort), a.reset, a.dim, if (self.stream_enabled) "on" else "off", a.reset });
+        std.debug.print("  model: {s}{s}  {s}effort: {s}{s}  {s}stream: {s}{s}{s}\n", .{ ansi.dim, self.model, ansi.reset, ansi.dim, @tagName(self.effort), ansi.reset, ansi.dim, if (self.stream_enabled) "on" else "off", ansi.reset });
     }
 
     repl: while (true) {

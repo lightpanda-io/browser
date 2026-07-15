@@ -22,7 +22,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const Terminal = @import("Terminal.zig");
+const ansi = @import("ansi.zig");
 
 // A pre-colored (truecolor braille) panda. Each line carries its own ANSI and
 // resets at the end, so it prints as-is; non-empty lines are the visible rows.
@@ -82,30 +82,28 @@ comptime {
 /// Prints the welcome banner: the logo on the left with the title and command
 /// hints beside it, vertically centered. `llm_active` picks the tagline.
 pub fn print(llm_active: bool) void {
-    const a = Terminal.ansi;
-
     var version_buf: [192]u8 = undefined;
-    const version: []const u8 = std.fmt.bufPrint(&version_buf, a.dim ++ "{s}" ++ a.reset, .{lp.build_config.version}) catch "";
+    const version: []const u8 = std.fmt.bufPrint(&version_buf, ansi.dim ++ "{s}" ++ ansi.reset, .{lp.build_config.version}) catch "";
 
     var lines: [9][]const u8 = undefined;
     var n: usize = 0;
-    lines[n] = a.bold ++ "Lightpanda Agent" ++ a.reset;
+    lines[n] = ansi.bold ++ "Lightpanda Agent" ++ ansi.reset;
     n += 1;
     lines[n] = version;
     n += 1;
     lines[n] = "";
     n += 1;
     if (llm_active) {
-        lines[n] = a.italic ++ banner_tagline_llm ++ a.reset;
+        lines[n] = ansi.italic ++ banner_tagline_llm ++ ansi.reset;
         n += 1;
     } else {
-        lines[n] = a.italic ++ banner_tagline_basic ++ a.reset;
+        lines[n] = ansi.italic ++ banner_tagline_basic ++ ansi.reset;
         n += 1;
-        lines[n] = a.dim ++ banner_setup ++ a.reset;
+        lines[n] = ansi.dim ++ banner_setup ++ ansi.reset;
         n += 1;
     }
     inline for (banner_hints) |t| {
-        lines[n] = a.dim ++ t ++ a.reset;
+        lines[n] = ansi.dim ++ t ++ ansi.reset;
         n += 1;
     }
     const text = lines[0..n];
