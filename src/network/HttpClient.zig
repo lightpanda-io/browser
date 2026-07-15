@@ -2959,8 +2959,9 @@ const Synthetic = struct {
             const owner = transfer.owner orelse return error.BlobNotFound;
             const blob_urls = owner.blob_urls orelse return error.BlobNotFound;
             const blob = blob_urls.get(url) orelse return error.BlobNotFound;
-            content_type = blob._mime;
-            body = blob._slice;
+            // blob can be removed by the time we run, dupe it.
+            content_type = try arena.dupe(u8, blob._mime);
+            body = try arena.dupe(u8, blob._slice);
         }
 
         const has_content_type = content_type.len > 0;

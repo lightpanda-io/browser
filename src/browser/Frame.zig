@@ -670,8 +670,11 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             };
             const parse_arena = try self.getArena(.medium, "Frame.parseBlob");
             defer self.releaseArena(parse_arena);
+            // A script executed mid-parse can revoke the blob URL, letting GC
+            // free the buffer under the parser; parse a copy.
+            const html = try parse_arena.dupe(u8, blob._slice);
             var parser = Parser.init(parse_arena, self.document.asNode(), self, .{ .allow_declarative_shadow = true });
-            parser.parse(blob._slice);
+            parser.parse(html);
         } else {
             self.document.injectBlank(self) catch |err| {
                 log.err(.browser, "inject blank", .{ .err = err });

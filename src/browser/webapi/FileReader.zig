@@ -199,8 +199,10 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
         return;
     }
 
-    // Perform the read (synchronous since data is in memory)
-    const data = blob._slice;
+    // Perform the read (synchronous since data is in memory). _result
+    // outlives this call and the blob can be GC'd before JS reads it,
+    // so the result must not borrow the blob's memory.
+    const data = try self._arena.dupe(u8, blob._slice);
     const size = data.len;
     try self.dispatch(.progress, .{ .loaded = size, .total = size }, exec);
     if (self._aborted) {
