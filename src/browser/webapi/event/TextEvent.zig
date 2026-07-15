@@ -83,6 +83,7 @@ pub fn initTextEvent(
     }
 
     const arena = event._arena;
+    event._initialized = true;
     event._type_string = try String.init(arena, typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;

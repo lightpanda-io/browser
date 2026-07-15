@@ -28,6 +28,7 @@ const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
+const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -111,8 +112,25 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event, opts),
+        .xhr => |xhr| try self.dispatchDirect(target, event, xhr.inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .window => |w| try self.dispatchDirect(target, event, windowInlineHandler(w, event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
+}
+
+// Resolves the Window's property event handler for the given event type.
+fn windowInlineHandler(window: *@import("webapi/Window.zig"), typ: lp.String) ?js.Function.Global {
+    const global_event_handlers = @import("webapi/global_event_handlers.zig");
+    const handler_type = global_event_handlers.fromEventType(typ.str()) orelse return null;
+    return switch (handler_type) {
+        .onerror => window._on_error,
+        .onload => window._on_load,
+        .onblur => window._on_blur,
+        .onfocus => window._on_focus,
+        .onresize => window._on_resize,
+        .onscroll => window._on_scroll,
+        else => null,
+    };
 }
 
 // There are a lot of events that can be attached via addEventListener or as
@@ -144,8 +162,6 @@ pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []cons
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts: DispatchOpts) !void {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     {
         const et = target.asEventTarget();
         event._target = et;
@@ -284,6 +300,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             was_handled = true;
             event._current_target = target_et;
 
+            const prev_current_event = window._current_event;
+            window._current_event = currentEventForTarget(target_et, event);
+            defer window._current_event = prev_current_event;
+
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
             var caught: js.TryCatch.Caught = undefined;
@@ -331,6 +351,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
                 was_handled = true;
                 event._current_target = current_target;
 
+                const prev_current_event = window._current_event;
+                window._current_event = currentEventForTarget(current_target, event);
+                defer window._current_event = prev_current_event;
+
                 const original_target = event._target;
                 if (event._needs_retargeting) {
                     event._target = getAdjustedTarget(original_target, current_target);
@@ -360,6 +384,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     }
 }
 
+fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
+    return if (rootIsShadowRoot(target)) null else event;
+}
+
 const DispatchPhaseOpts = struct {
     capture_only: ?bool = null,
     apply_ignore: bool = false,
@@ -375,6 +403,11 @@ const DispatchPhaseOpts = struct {
 fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime opts: DispatchPhaseOpts) !void {
     const frame = self.frame;
     const base = &self.base;
+
+    const window = frame.window;
+    const prev_current_event = window._current_event;
+    window._current_event = currentEventForTarget(current_target, event);
+    defer window._current_event = prev_current_event;
 
     // Track dispatch depth for deferred removal
     base.dispatch_depth += 1;
@@ -477,6 +510,17 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     // Look up the inline handler for this target
     const html_element = switch (target._type) {
         .node => |n| n.is(Element.Html) orelse return null,
+        // The Window stores its event handlers in dedicated fields; an event
+        // propagating to the window must fire them too.
+        .window => |w| return switch (handler_type) {
+            .onerror => w._on_error,
+            .onload => w._on_load,
+            .onblur => w._on_blur,
+            .onfocus => w._on_focus,
+            .onresize => w._on_resize,
+            .onscroll => w._on_scroll,
+            else => null,
+        },
         else => return null,
     };
 
@@ -489,8 +533,6 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
 // DOM spec "retarget": walk original_target out of shadow trees until the
 // node is visible from current_target's tree.
 fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarget) ?*EventTarget {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     const orig_node = switch ((original_target orelse return null)._type) {
         .node => |n| n,
         else => return original_target,
@@ -512,8 +554,6 @@ fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarge
 }
 
 fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     var n: ?*Node = node;
     while (n) |cur| {
         if (cur == ancestor) {
@@ -531,8 +571,6 @@ fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
 // Whether the target's tree root (without crossing shadow boundaries) is a
 // shadow root. Used for the spec's post-dispatch "clear targets" step.
 fn rootIsShadowRoot(target_: ?*EventTarget) bool {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     const target = target_ orelse return false;
     var current: *Node = switch (target._type) {
         .node => |n| n,

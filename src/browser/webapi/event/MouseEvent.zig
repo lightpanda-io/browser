@@ -239,6 +239,7 @@ pub fn initMouseEvent(
         return;
     }
 
+    event._initialized = true;
     event._type_string = try String.init(event._arena, typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;

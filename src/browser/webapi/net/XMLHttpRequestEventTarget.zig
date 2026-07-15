@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
 const EventTarget = @import("../EventTarget.zig");
@@ -81,6 +82,20 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
         @field(self, field),
         .{ .context = "XHR " ++ typ },
     );
+}
+
+// Resolves the property event handler for the given event type, so that a
+// script-dispatched event (target.dispatchEvent) fires it like the internal
+// dispatch path does.
+pub fn inlineHandler(self: *const XMLHttpRequestEventTarget, typ: lp.String) ?js.Function.Global {
+    if (typ.eql(comptime .wrap("abort"))) return self._on_abort;
+    if (typ.eql(comptime .wrap("error"))) return self._on_error;
+    if (typ.eql(comptime .wrap("load"))) return self._on_load;
+    if (typ.eql(comptime .wrap("loadend"))) return self._on_load_end;
+    if (typ.eql(comptime .wrap("loadstart"))) return self._on_load_start;
+    if (typ.eql(comptime .wrap("progress"))) return self._on_progress;
+    if (typ.eql(comptime .wrap("timeout"))) return self._on_timeout;
+    return null;
 }
 
 pub fn getOnAbort(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {

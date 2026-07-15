@@ -47,7 +47,7 @@ _delivery_scheduled: bool = false,
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
-fn highResTimestamp() u64 {
+pub fn highResTimestamp() u64 {
     const ts = datetime.timespec();
     const micros = @as(u64, @intCast(ts.sec)) * 1_000_000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000)));
     // Round to nearest 5 microseconds (like Firefox default)

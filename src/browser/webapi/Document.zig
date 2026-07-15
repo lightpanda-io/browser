@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Window = @import("Window.zig");
 const URL = @import("../URL.zig");
 const idna = @import("../../sys/idna.zig");
 const public_suffix_list = @import("../../data/public_suffix_list.zig");
@@ -86,6 +87,22 @@ pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
         self._on_selectionchange = try listen.persistWithThis(self);
     } else {
         self._on_selectionchange = null;
+    }
+}
+
+// Stored in the frame's attribute-listener map (like element and ShadowRoot
+// property handlers), which the dispatch propagation path consults for any
+// event target.
+pub fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
+    return (self._frame orelse frame)._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
+}
+
+pub fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    const owner = self._frame orelse frame;
+    if (Window.getFunctionFromSetter(setter)) |cb| {
+        try owner._event_target_attr_listeners.put(owner.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
+    } else {
+        _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
     }
 }
 
@@ -468,56 +485,85 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
     }
     const normalized = std.ascii.lowerString(&frame.buf, event_type);
 
-    if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents")) {
-        return Event.init("", null, frame._page);
-    }
+    const event: *Event = blk: {
+        if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents") or std.mem.eql(u8, normalized, "svgevents")) {
+            break :blk try Event.init("", null, frame._page);
+        }
 
-    if (std.mem.eql(u8, normalized, "customevent") or std.mem.eql(u8, normalized, "customevents")) {
-        const CustomEvent = @import("event/CustomEvent.zig");
-        return (try CustomEvent.init("", null, frame._page)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "customevent") or std.mem.eql(u8, normalized, "customevents")) {
+            const CustomEvent = @import("event/CustomEvent.zig");
+            break :blk (try CustomEvent.init("", null, frame._page)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "keyboardevent")) {
-        const KeyboardEvent = @import("event/KeyboardEvent.zig");
-        return (try KeyboardEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "keyboardevent")) {
+            const KeyboardEvent = @import("event/KeyboardEvent.zig");
+            break :blk (try KeyboardEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "inputevent")) {
-        const InputEvent = @import("event/InputEvent.zig");
-        return (try InputEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "inputevent")) {
+            const InputEvent = @import("event/InputEvent.zig");
+            break :blk (try InputEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
-        const MouseEvent = @import("event/MouseEvent.zig");
-        return (try MouseEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
+            const MouseEvent = @import("event/MouseEvent.zig");
+            break :blk (try MouseEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "messageevent")) {
-        const MessageEvent = @import("event/MessageEvent.zig");
-        return (try MessageEvent.init("", null, frame._page)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "dragevent")) {
+            const DragEvent = @import("event/DragEvent.zig");
+            break :blk (try DragEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "uievent") or std.mem.eql(u8, normalized, "uievents")) {
-        const UIEvent = @import("event/UIEvent.zig");
-        return (try UIEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "messageevent")) {
+            const MessageEvent = @import("event/MessageEvent.zig");
+            break :blk (try MessageEvent.init("", null, frame._page)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "focusevent") or std.mem.eql(u8, normalized, "focusevents")) {
-        const FocusEvent = @import("event/FocusEvent.zig");
-        return (try FocusEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "hashchangeevent")) {
+            const HashChangeEvent = @import("event/HashChangeEvent.zig");
+            break :blk (try HashChangeEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "textevent") or std.mem.eql(u8, normalized, "textevents")) {
-        const TextEvent = @import("event/TextEvent.zig");
-        return (try TextEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "uievent") or std.mem.eql(u8, normalized, "uievents")) {
+            const UIEvent = @import("event/UIEvent.zig");
+            break :blk (try UIEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "compositionevent")) {
-        const CompositionEvent = @import("event/CompositionEvent.zig");
-        return (try CompositionEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "focusevent") or std.mem.eql(u8, normalized, "focusevents")) {
+            const FocusEvent = @import("event/FocusEvent.zig");
+            break :blk (try FocusEvent.init("", null, frame)).asEvent();
+        }
 
-    return error.NotSupported;
+        if (std.mem.eql(u8, normalized, "textevent") or std.mem.eql(u8, normalized, "textevents")) {
+            const TextEvent = @import("event/TextEvent.zig");
+            break :blk (try TextEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "compositionevent")) {
+            const CompositionEvent = @import("event/CompositionEvent.zig");
+            break :blk (try CompositionEvent.init("", null, frame)).asEvent();
+        }
+
+        // Aliases the spec requires createEvent to support but whose
+        // interfaces aren't implemented yet: return a plain Event so the
+        // caller can at least initialize and dispatch it.
+        if (std.mem.eql(u8, normalized, "beforeunloadevent") or
+            std.mem.eql(u8, normalized, "devicemotionevent") or
+            std.mem.eql(u8, normalized, "deviceorientationevent") or
+            std.mem.eql(u8, normalized, "storageevent"))
+        {
+            log.info(.not_implemented, "createEvent interface", .{ .type = event_type });
+            break :blk try Event.init("", null, frame._page);
+        }
+
+        return error.NotSupported;
+    };
+
+    // createEvent returns an uninitialized event: dispatching it before one
+    // of the init*Event calls throws an InvalidStateError.
+    event._initialized = false;
+    return event;
 }
 
 pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMTreeWalker.FilterOpts, frame: *Frame) !*DOMTreeWalker {
@@ -1265,6 +1311,7 @@ pub const JsApi = struct {
     }
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
+    pub const onclick = bridge.accessor(Document.getOnClick, Document.setOnClick, .{});
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});

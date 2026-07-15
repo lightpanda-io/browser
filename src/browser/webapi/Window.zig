@@ -425,6 +425,21 @@ pub fn setOnScroll(self: *Window, setter: ?FunctionSetter) void {
     self._on_scroll = getFunctionFromSetter(setter);
 }
 
+// Stored in the frame's attribute-listener map (like element and ShadowRoot
+// property handlers), which the dispatch propagation path consults for any
+// event target.
+pub fn getOnClick(self: *Window) ?js.Function.Global {
+    return self._frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
+}
+
+pub fn setOnClick(self: *Window, setter: ?FunctionSetter) !void {
+    if (getFunctionFromSetter(setter)) |cb| {
+        try self._frame._event_target_attr_listeners.put(self._frame.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
+    } else {
+        _ = self._frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
+    }
+}
+
 // The "window-reflecting body element event handler set" (HTML spec): these
 // event handlers of body and frameset elements are aliases for the Window's.
 // Returns the Window storage slot for the given content attribute name, or
@@ -1159,6 +1174,7 @@ pub const JsApi = struct {
     pub const onfocus = bridge.accessor(Window.getOnFocus, Window.setOnFocus, .{});
     pub const onresize = bridge.accessor(Window.getOnResize, Window.setOnResize, .{});
     pub const onscroll = bridge.accessor(Window.getOnScroll, Window.setOnScroll, .{});
+    pub const onclick = bridge.accessor(Window.getOnClick, Window.setOnClick, .{});
     pub const onmessage = bridge.accessor(Window.getOnMessage, Window.setOnMessage, .{});
     pub const onrejectionhandled = bridge.accessor(Window.getOnRejectionHandled, Window.setOnRejectionHandled, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});

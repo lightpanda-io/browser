@@ -69,6 +69,10 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     if (event._event_phase != .none) {
         return error.InvalidStateError;
     }
+
+    if (!event._initialized) {
+        return error.InvalidStateError;
+    }
     event._is_trusted = false;
 
     switch (exec.js.global) {
