@@ -180,7 +180,17 @@ pub const JsApi = struct {
 
             return self.getByName(name, frame) orelse error.NotHandled;
         }
-    }.wrap, null, deleteByName, getNames, null, defineByName, describeByName, .{ .null_as_undefined = true });
+    }.wrap, null, deleteByName, getNames, queryByName, defineByName, describeByName, .{ .null_as_undefined = true });
+
+    // Named properties are [LegacyUnenumerableNamedProperties]: the query
+    // reports them non-enumerable, so for-in skips them while
+    // Object.getOwnPropertyNames still lists them via the enumerator.
+    fn queryByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !u32 {
+        if (name.len > 0 and self.getByName(name, frame) != null) {
+            return js.v8.DontEnum;
+        }
+        return error.NotHandled;
+    }
 
     // HTMLCollection has no indexed setter: per Web IDL, assigning to or
     // defining any array index property fails (TypeError in strict mode).
