@@ -125,6 +125,43 @@ pub const Extracted = struct {
     content_type: ?[]const u8,
 };
 
+pub fn parseFormData(bytes: []const u8, content_type: []const u8, exec: *const js.Execution) !*FormData {
+    const end = std.mem.indexOfScalar(u8, content_type, ';') orelse content_type.len;
+    const essence = std.mem.trim(u8, content_type[0..end], " \t");
+
+    if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
+        const boundary = multipartBoundary(content_type) orelse return error.InvalidFormData;
+        return FormData.initFromMultipart(bytes, boundary, exec);
+    }
+    if (std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded")) {
+        return FormData.initFromUrlEncoded(bytes, exec);
+    }
+    return error.InvalidFormData;
+}
+
+// Extracts the boundary param from a multipart/form-data Content-Type.
+// Splitting on ';' is safe: RFC 2046 §5.1.1 bchars never include ';', even
+// in the quoted form.
+fn multipartBoundary(content_type: []const u8) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, content_type, ';');
+    _ = it.next(); // skip the type/subtype
+    while (it.next()) |param_| {
+        const param = std.mem.trim(u8, param_, " \t");
+        if (!std.ascii.startsWithIgnoreCase(param, "boundary=")) {
+            continue;
+        }
+        var value = param["boundary=".len..];
+        if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') {
+            value = value[1 .. value.len - 1];
+        }
+        if (value.len == 0) {
+            return null;
+        }
+        return value;
+    }
+    return null;
+}
+
 // "UTF-8 decode" (Encoding §4.2) strips a leading BOM; consuming a body as
 // text/json must use it, while arrayBuffer/blob/bytes keep the raw bytes.
 pub fn stripUtf8Bom(bytes: []const u8) []const u8 {
@@ -186,6 +223,15 @@ test "BodyInit: buffer source has no default Content-Type" {
     const r = try (BodyInit{ .buffer = .{ .values = "hello" } }).extract(testing.arena_allocator);
     try testing.expectString("hello", r.bytes);
     try testing.expectEqual(true, r.content_type == null);
+}
+
+test "multipartBoundary" {
+    try testing.expectString("----abc", multipartBoundary("multipart/form-data; boundary=----abc").?);
+    try testing.expectString("a b", multipartBoundary("multipart/form-data; boundary=\"a b\"").?);
+    try testing.expectString("x", multipartBoundary("multipart/form-data; charset=UTF-8; Boundary=x").?);
+    try testing.expectEqual(null, multipartBoundary("multipart/form-data"));
+    try testing.expectEqual(null, multipartBoundary("multipart/form-data; boundary="));
+    try testing.expectEqual(null, multipartBoundary("multipart/form-data; charset=UTF-8"));
 }
 
 test "stripUtf8Bom" {

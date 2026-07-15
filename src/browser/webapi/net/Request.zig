@@ -298,6 +298,21 @@ pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
     return local.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
 }
 
+pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self.consume(local)) |rejected| {
+        return rejected;
+    }
+
+    const headers = try self.getHeaders(exec);
+    const content_type = try headers.get("content-type", exec) orelse "";
+    const form_data = body_init.parseFormData(self._body orelse "", content_type, exec) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+    };
+    return local.resolvePromise(form_data);
+}
+
 pub fn clone(self: *const Request, exec: *const Execution) !*Request {
     const arena = try exec.getArena(if (self._body) |b| b.len else 512, "Request.clone");
     errdefer exec.releaseArena(arena);
@@ -340,6 +355,7 @@ pub const JsApi = struct {
     pub const json = bridge.function(Request.json, .{});
     pub const arrayBuffer = bridge.function(Request.arrayBuffer, .{});
     pub const bytes = bridge.function(Request.bytes, .{});
+    pub const formData = bridge.function(Request.formData, .{});
     pub const clone = bridge.function(Request.clone, .{});
 };
 
