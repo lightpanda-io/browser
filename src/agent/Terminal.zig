@@ -48,9 +48,8 @@ repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 stdout_is_tty: bool,
 spinner: Spinner,
-/// State for the prompt-assist C callbacks (completion/hints/highlighting);
-/// registered by `attachCompleter`, which requires this Terminal to sit at
-/// its final address.
+/// Prompt-assist C-callback state; `attachCompleter` registers its address,
+/// so the Terminal must sit at its final location by then.
 assist: prompt_assist.State,
 /// Line-buffered markdown state for streamed assistant deltas; its `close`
 /// resets everything so fence state can't leak into the next message. Only
@@ -60,8 +59,7 @@ md_stream: md_term.Stream = .{ .show_table_placeholder = true },
 pub const CompletionSource = prompt_assist.CompletionSource;
 pub const HistoryPaths = prompt_assist.HistoryPaths;
 
-/// Wires the isocline completer, hinter, and highlighter to `self.assist`,
-/// with `source` supplying the dynamic `/provider` and `/model` candidates.
+/// Wires the isocline completer, hinter, and highlighter to `self.assist`.
 /// Must run after the Terminal is in its final memory location and before
 /// the first `readLine`.
 pub fn attachCompleter(self: *Terminal, source: ?CompletionSource) void {
@@ -74,9 +72,6 @@ pub fn jsMode(self: *const Terminal) bool {
 }
 
 pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosity: Verbosity, is_repl: bool) Terminal {
-    // Isocline probes the terminal on setup (writes ESC[6n cursor-report on
-    // stdout), so skip it in script-only mode — `ic_readline` is never
-    // reached there anyway.
     if (is_repl) prompt_assist.setupRepl();
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{

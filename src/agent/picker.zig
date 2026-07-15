@@ -101,8 +101,7 @@ const RawTerminal = struct {
 
     fn enable() error{NotInteractive}!RawTerminal {
         if (!interactiveTty()) return error.NotInteractive;
-        // A tty that refuses raw mode is non-interactive for the picker's
-        // purposes: callers degrade to the line prompt.
+        // A tty that refuses raw mode is non-interactive for our purposes.
         const original = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return error.NotInteractive;
         var raw = original;
         raw.iflag.BRKINT = false;

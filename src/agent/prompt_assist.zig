@@ -31,8 +31,6 @@ const c = @cImport({
     @cInclude("isocline.h");
 });
 
-// Styles referenced by name in the highlighter below; the kind-mapped styles
-// live only as `styles` table rows.
 const style_slash = "ps-slash";
 const style_string = "ps-string";
 const style_var = "ps-var";
@@ -42,16 +40,14 @@ const style_num = "ps-num";
 const style_err = "ps-err";
 const style_jsmode = "ps-jsmode";
 
-/// The prompt's style palette (`ps-*` namespace avoids colliding with
-/// isocline's built-in `ic-*` styles). `setupRepl` registers every entry and
-/// `IcSink` paints token kinds from it, so a style can't be painted without
-/// being registered: a `js_highlight.Kind` missing from `kinds` fails
-/// compilation in `kind_styles` instead of silently rendering unstyled.
+/// The prompt's style palette (`ps-*` avoids isocline's built-in `ic-*`
+/// namespace). Registration and token-kind painting both derive from it, so
+/// a painted style is registered by construction.
 const Style = struct {
     name: [:0]const u8,
     spec: [:0]const u8,
     /// `js_highlight` token kinds painted with this style; empty for styles
-    /// applied directly by name (slash names, kv keys, urls, errors, …).
+    /// applied directly by name.
     kinds: []const js_highlight.Kind = &.{},
 };
 
@@ -107,7 +103,7 @@ pub const HistoryPaths = struct {
 };
 
 /// The mutable state the C callbacks read: registered once via `attach`, so
-/// it must live at a stable address (Terminal embeds it).
+/// it must live at a stable address.
 pub const State = struct {
     /// True while the REPL is in JS mode; set by isocline's mode callback.
     js_mode: bool = false,
@@ -117,10 +113,9 @@ pub const State = struct {
     history_paths: ?HistoryPaths = null,
 };
 
-/// One-time isocline configuration for REPL mode: editing behavior, the
-/// `ps-*` style palette, and JS prompt mode. Isocline probes the terminal on
-/// first use (writes ESC[6n cursor-report on stdout), so callers must skip
-/// this in script-only mode.
+/// One-time isocline configuration for REPL mode. Probes the terminal
+/// (isocline writes an ESC[6n cursor-report on stdout), so callers must skip
+/// it in script-only mode.
 pub fn setupRepl() void {
     _ = c.ic_enable_multiline(true);
     _ = c.ic_enable_hint(true);
@@ -138,11 +133,9 @@ pub fn setupRepl() void {
     _ = c.ic_enable_highlight(true);
 }
 
-/// Wires the isocline completer, hinter, and highlighter to `state` so the C
-/// callbacks can reach the global schemas, and loads the initial history from
-/// `state.history_paths` — the same source `modeCallback` swaps from, so the
-/// two can't diverge. Must run after `state` is in its final memory location
-/// and before the first readline.
+/// Wires the isocline completer, hinter, and highlighter to `state` and
+/// loads the initial history. Must run after `state` is in its final memory
+/// location and before the first readline.
 pub fn attach(state: *State) void {
     c.ic_set_default_completer(&completionCallback, state);
     c.ic_set_default_hinter(&hintsCallback, state);
@@ -367,10 +360,8 @@ fn addMetaValueCompletions(
 }
 
 /// Directory entries whose basename completes the partial path `body`
-/// (`dir/ba` → entries of `dir/` prefix-matching `ba`). Shared by Tab
-/// completion and the ghost hint so the two can't drift on matching or the
-/// directory `/` suffix. Returned names borrow the iterator; use before the
-/// next `next()`.
+/// (`dir/ba` → entries of `dir/` prefix-matching `ba`). Returned names
+/// borrow the iterator; use before the next `next()`.
 const PathMatchIterator = struct {
     dir: std.fs.Dir,
     it: std.fs.Dir.Iterator,
@@ -406,7 +397,6 @@ const PathMatchIterator = struct {
     }
 };
 
-/// Completes a path argument against the filesystem.
 fn addPathCompletions(
     cenv: ?*c.ic_completion_env_t,
     input: []const u8,
@@ -589,7 +579,6 @@ fn renderMetaHint(state: *State, meta: *const SlashCommand.MetaCommand, body: []
     return ghostFirstMatch(meta.values, body, "");
 }
 
-/// Ghosts the first filesystem entry that completes the partial path `body`.
 fn ghostPathFirstMatch(body: []const u8) [*c]const u8 {
     var matches: PathMatchIterator = .init(body) orelse return null;
     defer matches.deinit();
