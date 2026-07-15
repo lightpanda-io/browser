@@ -132,10 +132,10 @@ const RawTerminal = struct {
 };
 
 fn promptInteractiveChoice(header: []const u8, items: []const [:0]const u8, default: ?usize) !usize {
-    var raw = try RawTerminal.enable();
+    var raw: RawTerminal = try .enable();
     defer raw.restore();
 
-    var state = ChoiceState.init(default);
+    var state: ChoiceState = .init(default);
     const line_count = items.len + 2;
     var first_render = true;
     while (true) {
@@ -219,7 +219,7 @@ fn readChoiceByte() !?u8 {
 }
 
 test "ChoiceState: arrows wrap and enter selects highlighted item" {
-    var state = ChoiceState.init(null);
+    var state: ChoiceState = .init(null);
     try std.testing.expectEqual(@as(usize, 0), state.selected);
 
     try std.testing.expectEqual(@as(?usize, null), state.apply(.up, 3));
@@ -232,7 +232,7 @@ test "ChoiceState: arrows wrap and enter selects highlighted item" {
 }
 
 test "ChoiceState: starts on default and enter returns it" {
-    var state = ChoiceState.init(2);
+    var state: ChoiceState = .init(2);
     try std.testing.expectEqual(@as(usize, 2), state.selected);
     try std.testing.expectEqual(@as(?usize, 2), state.apply(.enter, 3));
 }

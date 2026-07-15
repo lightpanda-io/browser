@@ -436,7 +436,7 @@ fn addPathCompletions(
     prefix: []const u8,
     buf: *[completion_buf_len:0]u8,
 ) void {
-    var matches = PathMatchIterator.init(body) orelse return;
+    var matches: PathMatchIterator = .init(body) orelse return;
     defer matches.deinit();
 
     var name_buf: [completion_buf_len]u8 = undefined;
@@ -613,7 +613,7 @@ fn renderMetaHint(state: *State, meta: *const SlashCommand.MetaCommand, body: []
 
 /// Ghosts the first filesystem entry that completes the partial path `body`.
 fn ghostPathFirstMatch(body: []const u8) [*c]const u8 {
-    var matches = PathMatchIterator.init(body) orelse return null;
+    var matches: PathMatchIterator = .init(body) orelse return null;
     defer matches.deinit();
     const m = matches.next() orelse return null;
     const suffix: []const u8 = if (m.is_dir) "/" else "";
