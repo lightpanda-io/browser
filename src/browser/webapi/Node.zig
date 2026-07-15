@@ -558,6 +558,13 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     return frame.document;
 }
 
+fn ownerDocumentIncludingSelf(self: *const Node, frame: *const Frame) ?*Document {
+    if (self._type == .document) {
+        return self._type.document;
+    }
+    return self.ownerDocument(frame);
+}
+
 // Returns the Frame that owns this node's tree. Used to tie cached state of
 // "live" collections (NodeList, HTMLCollection, etc.) to the right frame's DOM
 // version: cross-realm callers must invalidate based on mutations through the
@@ -566,10 +573,7 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
 // Falls back to `default` when the node has no associated document yet (e.g.,
 // freshly created and detached) or its document has no frame.
 pub fn ownerFrame(self: *const Node, default: *Frame) *Frame {
-    if (self._type == .document) {
-        return self._type.document._frame orelse default;
-    }
-    const doc = self.ownerDocument(default) orelse return default;
+    const doc = self.ownerDocumentIncludingSelf(default) orelse return default;
     return doc._frame orelse default;
 }
 
@@ -582,9 +586,7 @@ pub const ResolveURLOpts = struct {
 pub fn resolveURL(self: *const Node, url: anytype, frame: *Frame, opts: ResolveURLOpts) ![:0]const u8 {
     const owner_frame = self.ownerFrame(frame);
     const allocator = opts.allocator orelse frame.call_arena;
-    // The owning document's encoding, not the frame's: script-created
-    // documents (e.g. createHTMLDocument) are always UTF-8.
-    const doc: ?*const Document = if (self._type == .document) self._type.document else self.ownerDocument(frame);
+    const doc: ?*const Document = self.ownerDocumentIncludingSelf(frame);
     const encoding = if (doc) |d| d.getCharset() else owner_frame.charset;
     return URL.resolve(allocator, owner_frame.base(), url, .{ .encoding = encoding });
 }
@@ -600,8 +602,8 @@ pub fn resolveURLReflect(self: *const Node, url: []const u8, frame: *Frame, opts
 
 pub fn isSameDocumentAs(self: *const Node, other: *const Node, frame: *const Frame) bool {
     // Get the root document for each node
-    const self_doc = if (self._type == .document) self._type.document else self.ownerDocument(frame);
-    const other_doc = if (other._type == .document) other._type.document else other.ownerDocument(frame);
+    const self_doc = self.ownerDocumentIncludingSelf(frame);
+    const other_doc = other.ownerDocumentIncludingSelf(frame);
     return self_doc == other_doc;
 }
 
@@ -1377,11 +1379,7 @@ pub const JsApi = struct {
 
     pub const baseURI = bridge.accessor(_baseURI, null, .{});
     fn _baseURI(self: *Node, frame: *const Frame) []const u8 {
-        const doc = if (self._type == .document)
-            self._type.document
-        else
-            self.ownerDocument(frame) orelse return frame.base();
-
+        const doc = self.ownerDocumentIncludingSelf(frame) orelse return frame.base();
         if (doc._frame) |doc_frame| {
             return doc_frame.base();
         }
