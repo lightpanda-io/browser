@@ -22,6 +22,7 @@ const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const AnimatedString = @import("../../svg/AnimatedString.zig");
+const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const Graphics = @import("Graphics.zig");
 
@@ -33,6 +34,10 @@ pub fn asElement(self: *A) *Element {
 }
 pub fn asNode(self: *A) *Node {
     return self.asElement().asNode();
+}
+
+pub fn getRelList(self: *A, frame: *Frame) !*DOMTokenList {
+    return self.asElement().getRelList(frame);
 }
 
 pub const JsApi = struct {
@@ -49,8 +54,5 @@ pub const JsApi = struct {
         return AnimatedString.getOrCreate(self.asElement(), .href, frame);
     }
 
-    pub const relList = bridge.accessor(_getRelList, null, .{});
-    fn _getRelList(self: *A, frame: *Frame) !*@import("../../collections.zig").DOMTokenList {
-        return self.asElement().getRelList(frame);
-    }
+    pub const relList = bridge.accessor(A.getRelList, null, .{});
 };
