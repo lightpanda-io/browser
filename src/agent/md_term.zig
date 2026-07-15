@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js_highlight = @import("js_highlight.zig");
 
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
@@ -29,6 +30,8 @@ pub const ansi = struct {
     pub const green = "\x1b[32m";
     pub const yellow = "\x1b[33m";
     pub const red = "\x1b[31m";
+    pub const blue = "\x1b[34m";
+    pub const magenta = "\x1b[35m";
     pub const clear_eol = "\x1b[K";
     pub const clear_line = "\x1b[2K";
 };
@@ -36,12 +39,14 @@ pub const ansi = struct {
 /// Render markdown `src` as ANSI-styled terminal output to `w`.
 pub fn render(w: *std.Io.Writer, src: []const u8) !void {
     var in_fence = false;
+    var js: js_highlight.State = .normal;
     var wrote_any = false;
     var it = std.mem.splitScalar(u8, src, '\n');
     while (it.next()) |line| {
         // Drop the ``` delimiter entirely: no line, no separator.
         if (isFenceDelimiter(line)) {
             in_fence = !in_fence;
+            js = .normal;
             continue;
         }
         if (wrote_any) try w.writeByte('\n');
@@ -52,7 +57,7 @@ pub fn render(w: *std.Io.Writer, src: []const u8) !void {
                 continue;
             };
         }
-        try renderLine(w, line, in_fence);
+        try renderLine(w, line, if (in_fence) &js else null);
     }
 }
 
@@ -273,6 +278,8 @@ fn isTableSeparator(line: []const u8) bool {
 pub const Stream = struct {
     len: usize = 0,
     in_fence: bool = false,
+    /// Fenced-code lexer state, carried across lines and chunks.
+    js_state: js_highlight.State = .normal,
     /// A line that outgrew `buf` passes through unrendered to its newline.
     raw: bool = false,
     /// `held`: one pipe row buffered, pending the separator that confirms a
@@ -343,11 +350,13 @@ pub const Stream = struct {
         }
         const partial = self.buf[0..self.len];
         const in_fence = self.in_fence;
+        var js = self.js_state;
         self.len = 0;
         self.raw = false;
         self.in_fence = false;
+        self.js_state = .normal;
         if (partial.len == 0 or isFenceDelimiter(partial)) return;
-        try renderLine(w, partial, in_fence);
+        try renderLine(w, partial, if (in_fence) &js else null);
     }
 
     fn emitLine(self: *Stream, w: *std.Io.Writer, text: []const u8) std.Io.Writer.Error!void {
@@ -355,13 +364,14 @@ pub const Stream = struct {
             .text => {
                 if (isFenceDelimiter(text)) {
                     self.in_fence = !self.in_fence;
+                    self.js_state = .normal;
                     return;
                 }
                 if (!self.in_fence and isTableRow(text) and self.appendTableLine(text)) {
                     self.mode = .held;
                     return;
                 }
-                try renderLine(w, text, self.in_fence);
+                try renderLine(w, text, if (self.in_fence) &self.js_state else null);
                 try w.writeByte('\n');
             },
             .held => {
@@ -379,7 +389,7 @@ pub const Stream = struct {
                 if (isTableRow(text)) {
                     if (self.appendTableLine(text)) return;
                     try self.flushTableUnaligned(w);
-                    try renderLine(w, text, false);
+                    try renderLine(w, text, null);
                     try w.writeByte('\n');
                     return;
                 }
@@ -391,7 +401,7 @@ pub const Stream = struct {
 
     /// No separator followed, so the held row wasn't a table header.
     fn releaseHeldRow(self: *Stream, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try renderLine(w, self.tableText(), false);
+        try renderLine(w, self.tableText(), null);
         try w.writeByte('\n');
         self.resetTable();
     }
@@ -409,7 +419,7 @@ pub const Stream = struct {
         try w.writeAll(clear_placeholder);
         var it = std.mem.splitScalar(u8, self.tableText(), '\n');
         while (it.next()) |line| {
-            try renderLine(w, line, false);
+            try renderLine(w, line, null);
             try w.writeByte('\n');
         }
         self.resetTable();
@@ -437,9 +447,10 @@ pub const Stream = struct {
     }
 };
 
-fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
-    if (in_fence) {
-        try styled(w, line, ansi.cyan);
+/// `js` carries the fenced-code lexer state across lines; null outside a fence.
+fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !void {
+    if (js) |state| {
+        state.* = try renderCodeLine(w, line, state.*);
         return;
     }
 
@@ -571,6 +582,53 @@ fn span(w: *std.Io.Writer, inner: []const u8, style: []const u8, active: ?*const
     try Style.applyOpt(active, w);
 }
 
+/// Writes `js_highlight` spans as ANSI, filling the gaps between them with
+/// unstyled text. `emit` cannot fail, so a write error is stashed and returned
+/// by `finish`.
+const JsSink = struct {
+    w: *std.Io.Writer,
+    text: []const u8,
+    last: usize = 0,
+    err: ?std.Io.Writer.Error = null,
+
+    fn color(kind: js_highlight.Kind) []const u8 {
+        return switch (kind) {
+            .comment => ansi.dim ++ ansi.italic,
+            .string => ansi.green,
+            .variable => ansi.yellow ++ ansi.bold,
+            .number => ansi.magenta,
+            .keyword => ansi.blue ++ ansi.bold,
+            .global => ansi.cyan,
+        };
+    }
+
+    pub fn emit(self: *JsSink, start: usize, len: usize, kind: js_highlight.Kind) void {
+        self.write(start, len, kind) catch |err| {
+            self.err = self.err orelse err;
+        };
+    }
+
+    fn write(self: *JsSink, start: usize, len: usize, kind: js_highlight.Kind) !void {
+        if (start > self.last) try self.w.writeAll(self.text[self.last..start]);
+        try styled(self.w, self.text[start..][0..len], color(kind));
+        self.last = start + len;
+    }
+
+    fn finish(self: *JsSink) !void {
+        if (self.err) |err| return err;
+        if (self.last < self.text.len) try self.w.writeAll(self.text[self.last..]);
+    }
+};
+
+/// Syntax-highlight one line of fenced code as JavaScript — the only language
+/// this agent emits in practice. Returns the lexer state for the next line.
+fn renderCodeLine(w: *std.Io.Writer, line: []const u8, state: js_highlight.State) !js_highlight.State {
+    var sink: JsSink = .{ .w = w, .text = line };
+    const next = js_highlight.tokenize(line, state, &sink);
+    try sink.finish();
+    return next;
+}
+
 fn styled(w: *std.Io.Writer, inner: []const u8, style: []const u8) !void {
     try w.writeAll(style);
     try w.writeAll(inner);
@@ -661,8 +719,20 @@ test "md_term: nested inline styles" {
     );
 }
 
-test "md_term: fenced code block" {
-    try expectRender("\x1b[36mlet x = 1;\x1b[0m", "```\nlet x = 1;\n```");
+test "md_term: fenced code block is highlighted as JavaScript" {
+    try expectRender(
+        "\x1b[34m\x1b[1mlet\x1b[0m x = \x1b[35m1\x1b[0m;",
+        "```\nlet x = 1;\n```",
+    );
+    // Untokenized text passes through unstyled.
+    try expectRender("plain", "```\nplain\n```");
+}
+
+test "md_term: fenced template literal spans lines" {
+    try expectRender(
+        "\x1b[32m`<div>\x1b[0m\n\x1b[32m</div>`\x1b[0m",
+        "```\n`<div>\n</div>`\n```",
+    );
 }
 
 test "md_term: link" {
@@ -798,7 +868,7 @@ test "md_term: stream fence state spans chunks" {
     try s.feed(&aw.writer, "`\nafter\n");
     try s.close(&aw.writer);
     try testing.expectEqualStrings(
-        "\x1b[36mcode\x1b[0m\nafter\n",
+        "code\nafter\n",
         aw.written(),
     );
 }

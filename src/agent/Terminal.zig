@@ -25,6 +25,7 @@ const Schema = lp.Schema;
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
 const md_term = @import("md_term.zig");
+const js_highlight = @import("js_highlight.zig");
 const c = @cImport({
     @cInclude("isocline.h");
 });
@@ -813,19 +814,9 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     } else |_| {}
 }
 
-/// Returns the index just past the matching closing quote, or `text.len` if
-/// unterminated. Does not handle backslash escapes (matches Schema.tokenize).
+/// Index just past the matching closing quote, or `text.len` if unterminated.
 fn scanQuoted(text: []const u8, start: usize) usize {
-    if (start >= text.len) return start;
-    const ch = text[start];
-    const is_triple = start + 2 < text.len and text[start + 1] == ch and text[start + 2] == ch;
-    if (is_triple) {
-        const triple_delim = text[start .. start + 3];
-        const close = std.mem.indexOfPos(u8, text, start + 3, triple_delim) orelse return text.len;
-        return close + 3;
-    }
-    const close = std.mem.indexOfScalarPos(u8, text, start + 1, ch) orelse return text.len;
-    return close + 1;
+    return js_highlight.scanString(text, start).end;
 }
 
 /// Highlight `$LP_*` tokens appearing from `start` onward.
@@ -853,95 +844,29 @@ fn highlightDollarVarsIn(henv: ?*c.ic_highlight_env_t, text: []const u8, start: 
     }
 }
 
-const js_keywords = [_][]const u8{
-    "function", "async",  "await", "yield",   "return",    "if",     "else",
-    "for",      "while",  "do",    "switch",  "case",      "break",  "continue",
-    "var",      "let",    "const", "new",     "delete",    "typeof", "instanceof",
-    "in",       "of",     "void",  "this",    "super",     "class",  "extends",
-    "import",   "export", "from",  "default", "try",       "catch",  "finally",
-    "throw",    "true",   "false", "null",    "undefined", "NaN",    "Infinity",
+/// Paints `js_highlight` spans onto isocline's cell attributes.
+const IcSink = struct {
+    henv: ?*c.ic_highlight_env_t,
+
+    pub fn emit(self: IcSink, start: usize, len: usize, kind: js_highlight.Kind) void {
+        const style: []const u8 = switch (kind) {
+            .comment => style_comment,
+            .string => style_string,
+            .variable => style_var,
+            .number => style_num,
+            .keyword => style_keyword,
+            .global => style_jsglobal,
+        };
+        c.ic_highlight(self.henv, @intCast(start), @intCast(len), style.ptr);
+    }
 };
 
-// Globals available in the JS-mode page context; highlighted so it's visible
-// at the prompt that they're in scope.
-const js_globals = [_][]const u8{ "document", "window", "globalThis", "console", "lp" };
-
-fn isJsKeyword(tok: []const u8) bool {
-    for (js_keywords) |kw| {
-        if (std.mem.eql(u8, kw, tok)) return true;
-    }
-    return false;
-}
-
-fn isJsGlobal(tok: []const u8) bool {
-    for (js_globals) |g| {
-        if (std.mem.eql(u8, g, tok)) return true;
-    }
-    return false;
-}
-
-fn isIdChar(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '$' or ch >= 0x80;
-}
-
-/// Highlight the buffer as JavaScript: keywords, strings (incl. template
-/// literals), numbers, comments, and `$LP_*` env-var refs. Byte offsets are
-/// safe (see `highlighterCallback`): every token boundary is an ASCII byte and
-/// non-ASCII bytes advance singly without being highlighted.
+/// Highlight the buffer as JavaScript. Byte offsets are safe (see
+/// `highlighterCallback`): every token boundary is an ASCII byte and non-ASCII
+/// bytes advance singly without being highlighted.
 fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
-    var i: usize = 0;
-    while (i < text.len) {
-        const ch = text[i];
-        if (ch == '/' and i + 1 < text.len and (text[i + 1] == '/' or text[i + 1] == '*')) {
-            const start = i;
-            if (text[i + 1] == '/') {
-                i = std.mem.indexOfScalarPos(u8, text, i + 2, '\n') orelse text.len;
-            } else {
-                const close = std.mem.indexOfPos(u8, text, i + 2, "*/");
-                i = if (close) |p| p + 2 else text.len;
-            }
-            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_comment.ptr);
-            continue;
-        }
-        if (ch == '\'' or ch == '"' or ch == '`') {
-            const start = i;
-            i = scanQuoted(text, i);
-            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_string.ptr);
-            // `$LP_*` repaints yellow over green: isocline merges per cell, so the later call wins.
-            highlightDollarVarsIn(henv, text, start, i);
-            continue;
-        }
-        if (ch == '$') {
-            const start = i;
-            i += 1;
-            while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
-            if (i > start + 1) {
-                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_var.ptr);
-            }
-            continue;
-        }
-        if (std.ascii.isDigit(ch) or (ch == '.' and i + 1 < text.len and std.ascii.isDigit(text[i + 1]))) {
-            const start = i;
-            i += 1;
-            while (i < text.len and (std.ascii.isHex(text[i]) or text[i] == '.' or text[i] == '_' or text[i] == 'x' or text[i] == 'X')) i += 1;
-            c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_num.ptr);
-            continue;
-        }
-        if (std.ascii.isAlphabetic(ch) or ch == '_') {
-            const start = i;
-            i += 1;
-            while (i < text.len and isIdChar(text[i])) i += 1;
-            const tok = text[start..i];
-            if (isJsKeyword(tok)) {
-                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_keyword.ptr);
-            } else if (isJsGlobal(tok) and (start == 0 or text[start - 1] != '.')) {
-                // `.document` is a property access, not the global
-                c.ic_highlight(henv, @intCast(start), @intCast(i - start), style_jsglobal.ptr);
-            }
-            continue;
-        }
-        i += 1;
-    }
+    const sink: IcSink = .{ .henv = henv };
+    _ = js_highlight.tokenize(text, .normal, sink);
 }
 
 fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
