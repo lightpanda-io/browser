@@ -359,7 +359,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     if (will_repl) {
         self.terminal.attachCompleter();
-        self.terminal.completion_source = .{
+        self.terminal.assist.completion_source = .{
             .context = @ptrCast(self),
             .providers = completionProviders,
             .models = completionModels,
