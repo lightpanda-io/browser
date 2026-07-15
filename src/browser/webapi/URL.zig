@@ -58,7 +58,10 @@ pub fn parse(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) ?
     return URL.init(url, maybe_base, exec) catch null;
 }
 
-pub fn deinit(self: *URL, _: *Page) void {
+pub fn deinit(self: *URL, page: *Page) void {
+    if (self._search_params) |search_params| {
+        search_params.releaseRef(page);
+    }
     // Not tracked by arena.
     U.url_free(self._url);
 }
@@ -254,6 +257,8 @@ pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
     const search_value = if (U.url_get_query(self._url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
 
     const params = try URLSearchParams.init(.{ .query_string = search_value }, exec);
+    // Released in deinit; the cached params must outlive their JS wrapper.
+    params.acquireRef();
     self._search_params = params;
     return params;
 }

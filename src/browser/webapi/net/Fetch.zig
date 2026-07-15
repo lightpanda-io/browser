@@ -57,6 +57,10 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         resolver.rejectError("fetch init error", .{ .type_error = "Failed to construct Request" });
         return resolver.promise();
     };
+    // This Request is never exposed to JS. makeRequest dupes the url/body
+    // into the transfer, so nothing references it once we return.
+    request.acquireRef();
+    defer request.releaseRef(exec.page);
 
     if (request._signal) |signal| {
         if (signal._aborted) {
