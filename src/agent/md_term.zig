@@ -27,14 +27,18 @@ pub fn render(w: *std.Io.Writer, src: []const u8) !void {
     var wrote_any = false;
     var it = std.mem.splitScalar(u8, src, '\n');
     while (it.next()) |line| {
-        // Drop the ``` delimiter entirely: no line, no separator.
+        if (wrote_any) try w.writeByte('\n');
+        wrote_any = true;
         if (isFenceDelimiter(line)) {
             in_fence = !in_fence;
             js = .normal;
+            // Pad the block interior: blank line after the opening rule and
+            // before the closing one.
+            if (!in_fence) try w.writeByte('\n');
+            try renderFenceRule(w, in_fence, line);
+            if (in_fence) try w.writeByte('\n');
             continue;
         }
-        if (wrote_any) try w.writeByte('\n');
-        wrote_any = true;
         if (!in_fence and isTableRow(line)) {
             if (it.peek()) |next| if (isTableSeparator(next)) {
                 try renderTable(w, line, &it);
@@ -233,6 +237,28 @@ fn isFenceDelimiter(line: []const u8) bool {
     return std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), "```");
 }
 
+const fence_rule_width = 24;
+
+/// Dim `╭── lang ───` / `╰─────` rule marking where a fenced code block starts
+/// and ends. The opening rule carries the fence's info-string language, if any.
+fn renderFenceRule(w: *std.Io.Writer, opening: bool, delimiter: []const u8) !void {
+    try w.writeAll(ansi.dim);
+    try w.writeAll(if (opening) "╭" else "╰");
+    var fill: usize = fence_rule_width - 1;
+    if (opening) {
+        const info = std.mem.trim(u8, std.mem.trimLeft(u8, delimiter, " \t`"), " \t");
+        const lang = info[0 .. std.mem.indexOfAny(u8, info, " \t") orelse info.len];
+        if (lang.len > 0 and lang.len + 4 <= fill) {
+            try w.writeAll("─ ");
+            try w.writeAll(lang);
+            try w.writeByte(' ');
+            fill -= lang.len + 3;
+        }
+    }
+    try w.splatBytesAll("─", fill);
+    try w.writeAll(ansi.reset);
+}
+
 fn isTableRow(line: []const u8) bool {
     const trimmed = std.mem.trimLeft(u8, line, " \t");
     return trimmed.len >= 1 and trimmed[0] == '|';
@@ -336,7 +362,11 @@ pub const Stream = struct {
         self.raw = false;
         self.in_fence = false;
         self.js_state = .normal;
-        if (partial.len == 0 or isFenceDelimiter(partial)) return;
+        if (partial.len == 0) return;
+        if (isFenceDelimiter(partial)) {
+            if (in_fence) try w.writeByte('\n');
+            return renderFenceRule(w, !in_fence, partial);
+        }
         try renderLine(w, partial, if (in_fence) &js else null);
     }
 
@@ -346,6 +376,10 @@ pub const Stream = struct {
                 if (isFenceDelimiter(text)) {
                     self.in_fence = !self.in_fence;
                     self.js_state = .normal;
+                    if (!self.in_fence) try w.writeByte('\n');
+                    try renderFenceRule(w, self.in_fence, text);
+                    try w.writeByte('\n');
+                    if (self.in_fence) try w.writeByte('\n');
                     return;
                 }
                 if (!self.in_fence and isTableRow(text) and self.appendTableLine(text)) {
@@ -446,8 +480,9 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !vo
         return;
     }
 
+    // Dashed, unlike the solid fence rules, so adjacent ones read differently.
     if (isHorizontalRule(trimmed)) {
-        try styled(w, "─" ** 24, ansi.dim);
+        try styled(w, "┄" ** 24, ansi.dim);
         return;
     }
 
@@ -696,18 +731,33 @@ test "md_term: nested inline styles" {
     );
 }
 
+const open_rule = "\x1b[2m╭" ++ "─" ** 23 ++ "\x1b[0m";
+const close_rule = "\x1b[2m╰" ++ "─" ** 23 ++ "\x1b[0m";
+
 test "md_term: fenced code block is highlighted as JavaScript" {
     try expectRender(
-        "\x1b[34m\x1b[1mlet\x1b[0m x = \x1b[35m1\x1b[0m;",
+        open_rule ++ "\n\n\x1b[34m\x1b[1mlet\x1b[0m x = \x1b[35m1\x1b[0m;\n\n" ++ close_rule,
         "```\nlet x = 1;\n```",
     );
     // Untokenized text passes through unstyled.
-    try expectRender("plain", "```\nplain\n```");
+    try expectRender(open_rule ++ "\n\nplain\n\n" ++ close_rule, "```\nplain\n```");
+}
+
+test "md_term: fence rules carry the language tag" {
+    try expectRender(
+        "\x1b[2m╭─ js " ++ "─" ** 18 ++ "\x1b[0m\n\nx\n\n" ++ close_rule,
+        "```js\nx\n```",
+    );
+    // An overlong info string doesn't fit the rule and is dropped.
+    try expectRender(
+        open_rule ++ "\n\nx\n\n" ++ close_rule,
+        "```" ++ "x" ** 20 ++ "\nx\n```",
+    );
 }
 
 test "md_term: fenced template literal spans lines" {
     try expectRender(
-        "\x1b[32m`<div>\x1b[0m\n\x1b[32m</div>`\x1b[0m",
+        open_rule ++ "\n\n\x1b[32m`<div>\x1b[0m\n\x1b[32m</div>`\x1b[0m\n\n" ++ close_rule,
         "```\n`<div>\n</div>`\n```",
     );
 }
@@ -730,8 +780,8 @@ test "md_term: blockquote" {
 }
 
 test "md_term: horizontal rule" {
-    try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "---");
-    try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "***");
+    try expectRender("\x1b[2m" ++ "┄" ** 24 ++ "\x1b[0m", "---");
+    try expectRender("\x1b[2m" ++ "┄" ** 24 ++ "\x1b[0m", "***");
     try expectRender("---x", "---x");
 }
 
@@ -845,7 +895,19 @@ test "md_term: stream fence state spans chunks" {
     try s.feed(&aw.writer, "`\nafter\n");
     try s.close(&aw.writer);
     try testing.expectEqualStrings(
-        "code\nafter\n",
+        open_rule ++ "\n\ncode\n\n" ++ close_rule ++ "\nafter\n",
+        aw.written(),
+    );
+}
+
+test "md_term: stream closing fence at message end still draws its rule" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var s: Stream = .{};
+    try s.feed(&aw.writer, "```\ncode\n```");
+    try s.close(&aw.writer);
+    try testing.expectEqualStrings(
+        open_rule ++ "\n\ncode\n\n" ++ close_rule,
         aw.written(),
     );
 }
