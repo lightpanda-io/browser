@@ -284,7 +284,6 @@ pub const KeyboardEventOptions = struct {
     shiftKey: bool = false,
     altKey: bool = false,
     metaKey: bool = false,
-    // Legacy KeyboardEventInit members: returned as-is by synthetic events.
     charCode: u32 = 0,
     keyCode: u32 = 0,
 };
