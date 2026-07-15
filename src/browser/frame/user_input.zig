@@ -221,7 +221,7 @@ fn hasClickActivationBehavior(node: *Node) bool {
 fn isEditingHost(node: *Node) bool {
     const element = node.is(Element) orelse return false;
     const value = element.getAttributeSafe(.wrap("contenteditable")) orelse return false;
-    return !std.ascii.eqlIgnoreCase(value, "false");
+    return std.ascii.eqlIgnoreCase(value, "false") == false;
 }
 
 // A mousedown on editable content focuses its editing host: the outermost

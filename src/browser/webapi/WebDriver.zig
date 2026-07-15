@@ -56,7 +56,6 @@ pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) !
 // synchronously so the events are observable when the testdriver promise
 // resolves.
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
-    // Disabled form controls don't receive real click events at all.
     if (element.is(Element.Html)) |html| {
         switch (html._type) {
             inline .button, .input, .textarea, .select => |i| {

@@ -107,11 +107,13 @@ const AddEventListenerOptions = union(enum) {
 // event types are passive by default on the window, the document, and the
 // html and body elements.
 fn defaultPassiveValue(self: *EventTarget, typ: []const u8) bool {
-    const scroll_blocking = std.mem.eql(u8, typ, "touchstart") or
-        std.mem.eql(u8, typ, "touchmove") or
-        std.mem.eql(u8, typ, "wheel") or
-        std.mem.eql(u8, typ, "mousewheel");
-    if (!scroll_blocking) {
+    const scroll_blocking_event_types = std.StaticStringMap(void).initComptime(.{
+        .{"touchstart", {}},
+        .{"touchmove", {}},
+        .{"wheel", {}},
+        .{"mousewheel", {}},
+    });
+    if (scroll_blocking_event_types.has(typ) == false) {
         return false;
     }
 
