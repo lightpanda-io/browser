@@ -177,6 +177,10 @@ pub fn isQuirksMode(self: *const Document) bool {
     return true;
 }
 
+pub fn getCompatMode(self: *const Document) []const u8 {
+    return if (self.isQuirksMode()) "BackCompat" else "CSS1Compat";
+}
+
 pub fn getCharset(self: *const Document) []const u8 {
     if (self._charset) |charset| {
         return charset;
@@ -1533,11 +1537,7 @@ pub const JsApi = struct {
     pub const characterSet = bridge.accessor(getCharacterSet, null, .{});
     pub const charset = bridge.accessor(getCharacterSet, null, .{});
     pub const inputEncoding = bridge.accessor(getCharacterSet, null, .{});
-    pub const compatMode = bridge.accessor(getCompatMode, null, .{});
-    fn getCompatMode(self: *const Document) []const u8 {
-        return if (self.isQuirksMode()) "BackCompat" else "CSS1Compat";
-    }
-
+    pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
     fn getCharacterSet(self: *const Document) []const u8 {
         return self.getCharset();
     }
