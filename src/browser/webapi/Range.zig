@@ -376,9 +376,13 @@ pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
 }
 
 // Range offsets in CharacterData are UTF-16 code units; convert one to a
-// byte index into the UTF-8 data, clamping out-of-range offsets to the end.
+// byte index into the UTF-8 data. An offset inside a surrogate pair rounds
+// down to the code point and out-of-range offsets clamp to the end — the
+// conversion is monotonic, so a (start, end) offset pair always converts to
+// ordered byte offsets (an error-clamp here turned a mid-surrogate start
+// into data.len, producing start > end and a slice panic).
 fn byteOffset(data: []const u8, utf16_offset: u32) usize {
-    return Node.CData.utf16OffsetToUtf8(data, utf16_offset) catch data.len;
+    return Node.CData.utf16OffsetToUtf8Floor(data, utf16_offset);
 }
 
 pub fn deleteContents(self: *Range, frame: *Frame) !void {

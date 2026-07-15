@@ -61,11 +61,8 @@ pub fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     var current: ?*Node = first;
     while (current) |cur| : (current = cur.nextSibling()) {
-        if (!isExclusiveTextNode(cur)) {
-            break;
-        }
-
-        try buf.appendSlice(frame.local_arena, cur._type.cdata._data.str());
+        const text = cur.is(Text) orelse break;
+        try buf.appendSlice(frame.local_arena, text.ownData());
     }
     return buf.items;
 }

@@ -476,24 +476,44 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     // Observers of the parent must see a single mutation record replacing
     // this node with the parsed nodes.
     const notify = Frame.observers.hasMutationObservers(frame);
-    const previous_sibling = node.previousSibling();
-    const next_sibling = node.nextSibling();
     var added: std.ArrayList(*Node) = .empty;
 
+    var fragment: ?*Node = null;
     if (html.len > 0) {
-        const fragment = (try Node.DocumentFragment.init(frame)).asNode();
-        try frame.parseHtmlAsChildren(fragment, html);
+        const frag = (try Node.DocumentFragment.init(frame)).asNode();
+        try frame.parseHtmlAsChildren(frag, html);
+        fragment = frag;
+    }
+
+    // Parsing (and each insertion below) can synchronously run a custom
+    // element constructor that mutates the live tree; per the spec's replace
+    // step, a node that is no longer our parent's child cannot be replaced.
+    if (node._parent != parent) {
+        return error.NotFound;
+    }
+
+    // Captured after the parse: a constructor may have reshuffled siblings.
+    const previous_sibling = node.previousSibling();
+    const next_sibling = node.nextSibling();
+
+    if (fragment) |frag| {
         const dest_connected = parent.isConnected();
-        var it = fragment.childrenIterator();
+        var it = frag.childrenIterator();
         while (it.next()) |child| {
-            if (notify) {
-                try added.append(frame.local_arena, child);
+            if (node._parent != parent) {
+                return error.NotFound;
             }
-            frame.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
+            if (notify) {
+                try added.append(frame.call_arena, child);
+            }
+            frame.removeNode(frag, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
             try frame.insertNodeRelative(parent, child, .{ .before = node }, .{ .notify_observers = false });
         }
     }
 
+    if (node._parent != parent) {
+        return error.NotFound;
+    }
     frame.removeNode(parent, node, .{ .will_be_reconnected = false, .notify_observers = false });
 
     if (notify) {
