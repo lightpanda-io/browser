@@ -21,9 +21,7 @@ const std = @import("std");
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
     pub const bold = "\x1b[1m";
-    // 256-ramp gray, not SGR 2 or palette color 8, which are theme-dependent
-    // and unreadable on some configs. Same gray as the ic-hint override.
-    pub const dim = "\x1b[38;5;244m";
+    pub const dim = "\x1b[2m";
     pub const italic = "\x1b[3m";
     pub const underline = "\x1b[4m";
     pub const strike = "\x1b[9m";
@@ -441,7 +439,7 @@ pub const Stream = struct {
 
 fn renderLine(w: *std.Io.Writer, line: []const u8, in_fence: bool) !void {
     if (in_fence) {
-        try styled(w, line, ansi.dim);
+        try styled(w, line, ansi.cyan);
         return;
     }
 
@@ -627,12 +625,12 @@ test "md_term: inline styles" {
 test "md_term: blocks" {
     try expectRender("\x1b[1mTitle\x1b[0m", "# Title");
     try expectRender("\x1b[1mSub\x1b[0m", "### Sub");
-    try expectRender("\x1b[38;5;244m•\x1b[0m item", "- item");
+    try expectRender("\x1b[2m•\x1b[0m item", "- item");
     try expectRender("1. item", "1. item");
 }
 
 test "md_term: alignment spaces after list marker collapse" {
-    try expectRender("\x1b[38;5;244m•\x1b[0m item", "-   item");
+    try expectRender("\x1b[2m•\x1b[0m item", "-   item");
     try expectRender("1. item", "1.   item");
 }
 
@@ -664,13 +662,13 @@ test "md_term: nested inline styles" {
 }
 
 test "md_term: fenced code block" {
-    try expectRender("\x1b[38;5;244mlet x = 1;\x1b[0m", "```\nlet x = 1;\n```");
+    try expectRender("\x1b[36mlet x = 1;\x1b[0m", "```\nlet x = 1;\n```");
 }
 
 test "md_term: link" {
     // OSC 8 hyperlink around the label, plus a dim fallback url.
     try expectRender(
-        "\x1b]8;;https://x.io\x1b\\\x1b[4mLP\x1b[0m\x1b]8;;\x1b\\ \x1b[38;5;244m(https://x.io)\x1b[0m",
+        "\x1b]8;;https://x.io\x1b\\\x1b[4mLP\x1b[0m\x1b]8;;\x1b\\ \x1b[2m(https://x.io)\x1b[0m",
         "[LP](https://x.io)",
     );
     // A bare link (label == url) omits the redundant suffix.
@@ -681,19 +679,19 @@ test "md_term: link" {
 }
 
 test "md_term: blockquote" {
-    try expectRender("\x1b[38;5;244m│\x1b[0m quoted \x1b[1mnote\x1b[0m", "> quoted **note**");
+    try expectRender("\x1b[2m│\x1b[0m quoted \x1b[1mnote\x1b[0m", "> quoted **note**");
 }
 
 test "md_term: horizontal rule" {
-    try expectRender("\x1b[38;5;244m" ++ "─" ** 24 ++ "\x1b[0m", "---");
-    try expectRender("\x1b[38;5;244m" ++ "─" ** 24 ++ "\x1b[0m", "***");
+    try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "---");
+    try expectRender("\x1b[2m" ++ "─" ** 24 ++ "\x1b[0m", "***");
     try expectRender("---x", "---x");
 }
 
 test "md_term: tables align columns and style cells" {
     const B = "\x1b[1m";
     const C = "\x1b[36m";
-    const D = "\x1b[38;5;244m";
+    const D = "\x1b[2m";
     const R = "\x1b[0m";
     const pipe = D ++ "│" ++ R;
 
@@ -721,7 +719,7 @@ test "md_term: overwide table falls back to verbatim rows" {
     const header = "|a" ** 17 ++ "|";
     const sep = "|-" ** 17 ++ "|";
     try expectRender(
-        "\x1b[1m" ++ header ++ "\x1b[0m\n\x1b[38;5;244m" ++ sep ++ "\x1b[0m",
+        "\x1b[1m" ++ header ++ "\x1b[0m\n\x1b[2m" ++ sep ++ "\x1b[0m",
         header ++ "\n" ++ sep,
     );
 }
@@ -735,7 +733,7 @@ test "md_term: stream renders across chunk boundaries" {
     try s.feed(&aw.writer, "m\ntail");
     try s.close(&aw.writer);
     try testing.expectEqualStrings(
-        "say \x1b[1mhi\x1b[0m now\n\x1b[38;5;244m•\x1b[0m item\ntail",
+        "say \x1b[1mhi\x1b[0m now\n\x1b[2m•\x1b[0m item\ntail",
         aw.written(),
     );
 }
@@ -743,7 +741,7 @@ test "md_term: stream renders across chunk boundaries" {
 test "md_term: stream withholds tables and renders them aligned" {
     const B = "\x1b[1m";
     const C = "\x1b[36m";
-    const D = "\x1b[38;5;244m";
+    const D = "\x1b[2m";
     const R = "\x1b[0m";
     const pipe = D ++ "│" ++ R;
 
@@ -765,7 +763,7 @@ test "md_term: stream withholds tables and renders them aligned" {
 
 test "md_term: stream table ending at close adopts the partial row" {
     const B = "\x1b[1m";
-    const D = "\x1b[38;5;244m";
+    const D = "\x1b[2m";
     const R = "\x1b[0m";
     const pipe = D ++ "│" ++ R;
 
@@ -800,7 +798,7 @@ test "md_term: stream fence state spans chunks" {
     try s.feed(&aw.writer, "`\nafter\n");
     try s.close(&aw.writer);
     try testing.expectEqualStrings(
-        "\x1b[38;5;244mcode\x1b[0m\nafter\n",
+        "\x1b[36mcode\x1b[0m\nafter\n",
         aw.written(),
     );
 }
