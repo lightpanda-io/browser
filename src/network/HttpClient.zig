@@ -926,7 +926,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     var iter = req.headers.iterator();
     const req_headers = try iter.collect(arena);
 
-    const cached = cache.get(arena, .{
+    const cached = try cache.get(arena, .{
         .url = req.url,
         .timestamp = std.Io.Clock.now(.real, lp.io).toSeconds(),
         .request_headers = req_headers.items,

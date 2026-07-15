@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const Http = @import("../http.zig");
-const FsCache = @import("FsCache.zig");
+const SqliteCache = @import("SqliteCache.zig");
 
 const log = lp.log;
 
@@ -28,7 +28,7 @@ const log = lp.log;
 pub const Cache = @This();
 
 kind: union(enum) {
-    fs: FsCache,
+    sqlite: SqliteCache,
 },
 
 pub fn deinit(self: *Cache) void {
@@ -37,7 +37,7 @@ pub fn deinit(self: *Cache) void {
     };
 }
 
-pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) ?CachedResponse {
+pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
     return switch (self.kind) {
         inline else => |*c| c.get(arena, req),
     };
