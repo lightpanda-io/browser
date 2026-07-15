@@ -105,7 +105,8 @@ fn getHeaders(self: *ScriptManager) !HttpClient.Headers {
 
 // Returns true when a fetch was started: the link's load/error event fires
 // when the fetch settles. false (duplicate hint) = no event will fire.
-pub fn preloadScript(self: *ScriptManager, element: *Element.Html, url: []const u8) !bool {
+// element is null when the hint came from the prescan rather than a <link>.
+pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const u8) !bool {
     if (self.preloaded_scripts.contains(url)) {
         return false;
     }
@@ -290,13 +291,11 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     } };
 
     if (mode != .normal) {
-        if (self.takePreload(remote_url)) |pre| {
-            // A <link rel=preload as=script> already fetched (or is still
-            // fetching) this URL. Adopt the preloaded Script, zero-copy — the
-            // classic-script mirror of getAsyncImport's module-hint adoption.
-            // The transfer's still-registered PreloadedScript callbacks see
-            // the rewritten extra and route to the normal Script callbacks.
-            // (Blocking scripts consume preloads via waitForPreload below.)
+        var preloaded = self.takePreload(remote_url);
+        if (preloaded == null and kind == .module) {
+            preloaded = self.base.takeModuleHint(remote_url);
+        }
+        if (preloaded) |pre| {
             if (comptime IS_DEBUG) {
                 log.debug(.http, "script adopt", .{ .url = remote_url, .ctx = ctx, .state = if (pre.complete) "done" else "loading" });
             }

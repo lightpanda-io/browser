@@ -606,9 +606,14 @@ fn serveCDP(wg: *std.Thread.WaitGroup) !void {
 }
 
 // /serve-count/ counters; only ever touched from the test HTTP server thread.
-var serve_count_defer: u32 = 0;
-var serve_count_async: u32 = 0;
-var serve_count_dynamic: u32 = 0;
+var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
+    .{ .name = "defer" },
+    .{ .name = "async" },
+    .{ .name = "dynamic" },
+    .{ .name = "prescan_blocking" },
+    .{ .name = "prescan_defer" },
+    .{ .name = "prescan_module" },
+};
 
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
     const path = req.head.target;
@@ -745,9 +750,9 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // no-store so the second fetch can't be satisfied by the HTTP cache.
         const name = path["/serve-count/".len .. path.len - ".js".len];
         const slot: *u32 = blk: {
-            if (std.mem.eql(u8, name, "defer")) break :blk &serve_count_defer;
-            if (std.mem.eql(u8, name, "async")) break :blk &serve_count_async;
-            if (std.mem.eql(u8, name, "dynamic")) break :blk &serve_count_dynamic;
+            for (&serve_counts) |*sc| {
+                if (std.mem.eql(u8, sc.name, name)) break :blk &sc.count;
+            }
             return req.respond("unknown counter", .{ .status = .not_found });
         };
         slot.* += 1;
