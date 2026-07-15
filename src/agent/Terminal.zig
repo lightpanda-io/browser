@@ -948,21 +948,6 @@ fn logSink(bytes: []const u8) void {
     _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
 }
 
-/// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
-/// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
-/// (some pseudo-ttys leave the field unset). Cheap enough to call per render
-/// frame; picks up resizes without SIGWINCH plumbing.
-pub fn columns() ?u16 {
-    var ws: std.posix.winsize = undefined;
-    // bitcast via c_uint: on archs where `_IOR` sets the direction bit
-    // (MIPS/PPC/SPARC), `IOCGWINSZ` exceeds i32 range, so a plain @intCast
-    // panics; the bitcast preserves the bit pattern.
-    const req: c_int = @bitCast(@as(c_uint, std.posix.T.IOCGWINSZ));
-    const rc = std.c.ioctl(std.posix.STDERR_FILENO, req, &ws);
-    if (rc != 0 or ws.col == 0) return null;
-    return ws.col;
-}
-
 /// Erase the frame after an empty submit. The bars collapse on submit, leaving
 /// the spacing and prompt lines with the cursor one line below; move up two,
 /// clear to end of screen.
