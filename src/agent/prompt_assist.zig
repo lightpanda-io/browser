@@ -388,9 +388,47 @@ fn addMetaValueCompletions(
     for (meta.values) |v| addPrefixedCompletion(cenv, buf, input, prefix, v, "", body);
 }
 
-/// Completes a path argument against the filesystem. The directory part of
-/// the partial path is kept verbatim in each candidate; the trailing basename
-/// is matched against directory entries, and directories get a `/` suffix.
+/// Directory entries whose basename completes the partial path `body`
+/// (`dir/ba` → entries of `dir/` prefix-matching `ba`). Shared by Tab
+/// completion and the ghost hint so the two can't drift on matching or the
+/// directory `/` suffix. Returned names borrow the iterator; use before the
+/// next `next()`.
+const PathMatchIterator = struct {
+    dir: std.fs.Dir,
+    it: std.fs.Dir.Iterator,
+    /// `body` up to and including its last `/`; kept verbatim in candidates.
+    dir_part: []const u8,
+    base: []const u8,
+
+    const Match = struct { name: []const u8, is_dir: bool };
+
+    fn init(body: []const u8) ?PathMatchIterator {
+        const slash = std.mem.lastIndexOfScalar(u8, body, '/');
+        const dir_part = if (slash) |i| body[0 .. i + 1] else "";
+        const open_path = if (dir_part.len == 0) "." else dir_part;
+        const dir = std.fs.cwd().openDir(open_path, .{ .iterate = true }) catch return null;
+        return .{
+            .dir = dir,
+            .it = dir.iterate(),
+            .dir_part = dir_part,
+            .base = body[dir_part.len..],
+        };
+    }
+
+    fn deinit(self: *PathMatchIterator) void {
+        self.dir.close();
+    }
+
+    fn next(self: *PathMatchIterator) ?Match {
+        while (self.it.next() catch return null) |entry| {
+            if (!std.ascii.startsWithIgnoreCase(entry.name, self.base)) continue;
+            return .{ .name = entry.name, .is_dir = entry.kind == .directory };
+        }
+        return null;
+    }
+};
+
+/// Completes a path argument against the filesystem.
 fn addPathCompletions(
     cenv: ?*c.ic_completion_env_t,
     input: []const u8,
@@ -398,18 +436,13 @@ fn addPathCompletions(
     prefix: []const u8,
     buf: *[completion_buf_len:0]u8,
 ) void {
-    const slash = std.mem.lastIndexOfScalar(u8, body, '/');
-    const dir_part = if (slash) |i| body[0 .. i + 1] else "";
-    const open_path = if (dir_part.len == 0) "." else dir_part;
-
-    var dir = std.fs.cwd().openDir(open_path, .{ .iterate = true }) catch return;
-    defer dir.close();
+    var matches = PathMatchIterator.init(body) orelse return;
+    defer matches.deinit();
 
     var name_buf: [completion_buf_len]u8 = undefined;
-    var it = dir.iterate();
-    while (it.next() catch return) |entry| {
-        const suffix: []const u8 = if (entry.kind == .directory) "/" else "";
-        const full = std.fmt.bufPrint(&name_buf, "{s}{s}", .{ dir_part, entry.name }) catch continue;
+    while (matches.next()) |m| {
+        const suffix: []const u8 = if (m.is_dir) "/" else "";
+        const full = std.fmt.bufPrint(&name_buf, "{s}{s}", .{ matches.dir_part, m.name }) catch continue;
         addPrefixedCompletion(cenv, buf, input, prefix, full, suffix, body);
     }
 }
@@ -578,25 +611,14 @@ fn renderMetaHint(state: *State, meta: *const SlashCommand.MetaCommand, body: []
     return ghostFirstMatch(meta.values, body, "");
 }
 
-/// Ghosts the first filesystem entry that completes the partial path `body`,
-/// appending `/` when the match is a directory.
+/// Ghosts the first filesystem entry that completes the partial path `body`.
 fn ghostPathFirstMatch(body: []const u8) [*c]const u8 {
-    const slash = std.mem.lastIndexOfScalar(u8, body, '/');
-    const dir_part = if (slash) |i| body[0 .. i + 1] else "";
-    const base = body[dir_part.len..];
-    const open_path = if (dir_part.len == 0) "." else dir_part;
-
-    var dir = std.fs.cwd().openDir(open_path, .{ .iterate = true }) catch return null;
-    defer dir.close();
-
-    var it = dir.iterate();
-    while (it.next() catch return null) |entry| {
-        if (!std.ascii.startsWithIgnoreCase(entry.name, base)) continue;
-        const suffix: []const u8 = if (entry.kind == .directory) "/" else "";
-        const text = std.fmt.bufPrintZ(&hint_buf, "{s}{s}", .{ entry.name[base.len..], suffix }) catch return null;
-        return text.ptr;
-    }
-    return null;
+    var matches = PathMatchIterator.init(body) orelse return null;
+    defer matches.deinit();
+    const m = matches.next() orelse return null;
+    const suffix: []const u8 = if (m.is_dir) "/" else "";
+    const text = std.fmt.bufPrintZ(&hint_buf, "{s}{s}", .{ m.name[matches.base.len..], suffix }) catch return null;
+    return text.ptr;
 }
 
 /// Ghosts `lead` + the suffix of the first `names` entry that prefix-matches
