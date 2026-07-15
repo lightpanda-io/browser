@@ -38,6 +38,7 @@ const Terminal = @import("Terminal.zig");
 const ansi = @import("ansi.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
+const picker = @import("picker.zig");
 const save = @import("save.zig");
 const welcome = @import("welcome.zig");
 const string = @import("../string.zig");
@@ -1093,7 +1094,7 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
             "append — add the recorded commands at the end",
             "replace — overwrite with the recorded commands",
         };
-    const idx = Terminal.promptNumberedChoice(header, labels, 0) catch {
+    const idx = picker.promptNumberedChoice(header, labels, 0) catch {
         self.terminal.printInfo("Save cancelled.", .{});
         return null;
     };
@@ -1913,6 +1914,7 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
 test {
     _ = save;
     _ = settings;
+    _ = picker;
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {
