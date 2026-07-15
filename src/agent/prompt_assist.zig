@@ -47,6 +47,53 @@ const style_fn = "ps-fn";
 const style_method = "ps-method";
 const style_type = "ps-type";
 
+/// The prompt's style palette (`ps-*` namespace avoids colliding with
+/// isocline's built-in `ic-*` styles). `setupRepl` registers every entry and
+/// `IcSink` paints token kinds from it, so a style can't be painted without
+/// being registered: a `js_highlight.Kind` missing from `kinds` fails
+/// compilation in `kind_styles` instead of silently rendering unstyled.
+const Style = struct {
+    name: [:0]const u8,
+    spec: [:0]const u8,
+    /// `js_highlight` token kinds painted with this style; empty for styles
+    /// applied directly by name (slash names, kv keys, urls, errors, …).
+    kinds: []const js_highlight.Kind = &.{},
+};
+
+const styles = [_]Style{
+    .{ .name = style_slash, .spec = "ansi-teal bold" },
+    .{ .name = style_string, .spec = "ansi-green", .kinds = &.{.string} },
+    .{ .name = style_var, .spec = "ansi-yellow", .kinds = &.{ .variable, .interpolation } },
+    .{ .name = style_url, .spec = "ansi-blue underline" },
+    .{ .name = style_key, .spec = "ansi-blue" },
+    .{ .name = style_num, .spec = "ansi-magenta", .kinds = &.{.number} },
+    .{ .name = style_err, .spec = "ansi-red" },
+    .{ .name = style_jsmode, .spec = "ansi-red bold" },
+    .{ .name = style_keyword, .spec = "ansi-blue bold", .kinds = &.{.keyword} },
+    .{ .name = style_comment, .spec = "ansi-darkgray italic", .kinds = &.{.comment} },
+    .{ .name = style_jsglobal, .spec = "ansi-cyan", .kinds = &.{.global} },
+    .{ .name = style_fn, .spec = "ansi-teal", .kinds = &.{.function} },
+    .{ .name = style_method, .spec = "ansi-teal italic", .kinds = &.{.method} },
+    .{ .name = style_type, .spec = "ansi-cyan", .kinds = &.{.type_name} },
+};
+
+/// Style name per token kind, derived from `styles`. Unmapped or
+/// doubly-mapped kinds are compile errors.
+const kind_styles = blk: {
+    const n = std.enums.values(js_highlight.Kind).len;
+    var arr: [n]?[:0]const u8 = @splat(null);
+    for (styles) |s| for (s.kinds) |kind| {
+        if (arr[@intFromEnum(kind)] != null) @compileError("kind styled twice: " ++ @tagName(kind));
+        arr[@intFromEnum(kind)] = s.name;
+    };
+    var out: [n][:0]const u8 = undefined;
+    for (arr, 0..) |name, i| {
+        out[i] = name orelse @compileError("js_highlight.Kind with no ps-* style: " ++
+            @tagName(@as(js_highlight.Kind, @enumFromInt(i))));
+    }
+    break :blk out;
+};
+
 /// Lets the completer/hinter pull dynamic candidates from the `Agent` without
 /// this module depending on it (same idiom as `Session.cancel_hook`).
 pub const CompletionSource = struct {
@@ -105,21 +152,7 @@ pub fn setupRepl(history_paths: ?HistoryPaths) void {
     // Show ghost completions instantly; isocline's default is 400 ms.
     _ = c.ic_set_hint_delay(0);
     _ = c.ic_enable_brace_insertion(true);
-    // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
-    c.ic_style_def(style_slash, "ansi-teal bold");
-    c.ic_style_def(style_string, "ansi-green");
-    c.ic_style_def(style_var, "ansi-yellow");
-    c.ic_style_def(style_url, "ansi-blue underline");
-    c.ic_style_def(style_key, "ansi-blue");
-    c.ic_style_def(style_num, "ansi-magenta");
-    c.ic_style_def(style_err, "ansi-red");
-    c.ic_style_def(style_jsmode, "ansi-red bold");
-    c.ic_style_def(style_keyword, "ansi-blue bold");
-    c.ic_style_def(style_comment, "ansi-darkgray italic");
-    c.ic_style_def(style_jsglobal, "ansi-cyan");
-    c.ic_style_def(style_fn, "ansi-teal");
-    c.ic_style_def(style_method, "ansi-teal italic");
-    c.ic_style_def(style_type, "ansi-cyan");
+    for (styles) |s| c.ic_style_def(s.name.ptr, s.spec.ptr);
     // lighten the ghost/inline-hint color from isocline's default ansi-darkgray
     c.ic_style_def("ic-hint", "ansi-color=244");
     // `!` on an empty prompt toggles JS mode; state callback wired in attach.
@@ -746,18 +779,7 @@ const IcSink = struct {
     henv: ?*c.ic_highlight_env_t,
 
     pub fn emit(self: IcSink, start: usize, len: usize, kind: js_highlight.Kind) void {
-        const style: []const u8 = switch (kind) {
-            .comment => style_comment,
-            .string => style_string,
-            .variable, .interpolation => style_var,
-            .number => style_num,
-            .keyword => style_keyword,
-            .global => style_jsglobal,
-            .function => style_fn,
-            .method => style_method,
-            .type_name => style_type,
-        };
-        c.ic_highlight(self.henv, @intCast(start), @intCast(len), style.ptr);
+        c.ic_highlight(self.henv, @intCast(start), @intCast(len), kind_styles[@intFromEnum(kind)].ptr);
     }
 };
 
