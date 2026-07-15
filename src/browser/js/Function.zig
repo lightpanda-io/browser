@@ -112,6 +112,14 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     };
 }
 
+// Like callWithThis, but a thrown JS exception is rethrown past the internal
+// TryCatch, so an enclosing TryCatch of the caller can observe the exception
+// value itself (e.g. to report it to window.onerror).
+pub fn callWithThisRethrow(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
+    var caught: js.TryCatch.Caught = undefined;
+    return self._tryCallWithThis(T, this, args, &caught, .{ .rethrow = true });
+}
+
 pub fn tryCall(self: *const Function, comptime T: type, args: anytype, caught: *js.TryCatch.Caught) !T {
     return self._tryCallWithThis(T, self.getThis(), args, caught, .{});
 }

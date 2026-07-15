@@ -300,8 +300,18 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             }
         }
 
+        // Per spec, the target is invoked once during the capturing iteration
+        // and once during the bubbling iteration, each with its own snapshot
+        // of the listener list: a bubble listener added while running the
+        // target's capture listeners must run.
         if (self.base.getListeners(target_et, event._type_string)) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(null, opts));
+            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(true, opts));
+            if (event._stop_propagation) {
+                return;
+            }
+        }
+        if (self.base.getListeners(target_et, event._type_string)) |list| {
+            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(false, opts));
             if (event._stop_propagation) {
                 return;
             }

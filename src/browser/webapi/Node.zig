@@ -940,7 +940,24 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
             };
         },
         .element => |el| return el.clone(deep, frame),
-        .document => return error.NotSupported,
+        .document => |doc| {
+            const cloned = switch (doc._type) {
+                .xml => (frame._factory.document(Document.XMLDocument{ ._proto = undefined }) catch return error.CloneError).asDocument(),
+                else => (frame._factory.document(Document.HTMLDocument{ ._proto = undefined }) catch return error.CloneError).asDocument(),
+            };
+            cloned._url = doc._url;
+            cloned._ready_state = .complete;
+
+            if (deep) {
+                var child_it = self.childrenIterator();
+                while (child_it.next()) |child| {
+                    if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+                        _ = cloned.asNode().appendChild(cloned_child, frame) catch return error.CloneError;
+                    }
+                }
+            }
+            return cloned.asNode();
+        },
         .document_type => |dt| {
             const cloned = dt.clone(frame) catch return error.CloneError;
             return cloned.asNode();

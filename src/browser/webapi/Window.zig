@@ -89,6 +89,7 @@ _on_scroll: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_rejection_handled: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null,
+_reporting_error: bool = false,
 _current_event: ?*Event = null,
 _location: *Location,
 _timers: Timers = .{},
@@ -556,6 +557,15 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
 }
 
 pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
+    // Per spec's "in error reporting mode": an exception thrown while an
+    // error is being reported (e.g. by an "error" listener) is not reported
+    // again, which would otherwise recurse without bound.
+    if (self._reporting_error) {
+        return;
+    }
+    self._reporting_error = true;
+    defer self._reporting_error = false;
+
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
