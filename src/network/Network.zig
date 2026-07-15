@@ -183,7 +183,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     const x509_store = blk: {
         if (config.tlsVerifyHost()) {
-            break :blk try createX509Store(allocator);
+            break :blk try createX509Store(allocator, config.caCert(), config.caPath());
         }
         break :blk crypto.X509_STORE_new() orelse {
             return error.FailedToCreateX509Store;
@@ -720,13 +720,24 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     return conn;
 }
 
-const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{FailedToCreateX509Store};
+const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{ FailedToCreateX509Store, FailedToLoadCaCertificates };
 
 /// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
 /// Allocations made through passed `allocator` are freed before this function returns.
-pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE {
+/// `cacert`/`capath` replace the system trust store (curl semantics).
+pub fn createX509Store(allocator: Allocator, cacert: ?[:0]const u8, capath: ?[:0]const u8) CreateX509StoreError!*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
+
+    if (cacert != null or capath != null) {
+        const file: ?[*:0]const u8 = if (cacert) |f| f.ptr else null;
+        const dir: ?[*:0]const u8 = if (capath) |d| d.ptr else null;
+        if (crypto.X509_STORE_load_locations(store, file, dir) != 1) {
+            log.err(.app, "failed to load CA certificates", .{ .cacert = cacert, .capath = capath });
+            return error.FailedToLoadCaCertificates;
+        }
+        return store;
+    }
 
     switch (comptime builtin.os.tag) {
         .linux, .openbsd, .netbsd, .freebsd => blk: {

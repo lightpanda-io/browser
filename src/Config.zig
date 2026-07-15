@@ -96,6 +96,8 @@ const CommonOptions = .{
     .{ .name = "http_max_response_size", .type = ?usize },
     .{ .name = "ws_max_concurrent", .type = ?u8 },
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
+    .{ .name = "cacert", .type = ?[:0]const u8 },
+    .{ .name = "capath", .type = ?[:0]const u8 },
     .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
     .{ .name = "log_format", .type = ?log.Format },
     .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterScopesValidator },
@@ -381,6 +383,20 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
         .version => null,
         else => unreachable,
+    };
+}
+
+pub fn caCert(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.cacert,
+        else => null,
+    };
+}
+
+pub fn caPath(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.capath,
+        else => null,
     };
 }
 
