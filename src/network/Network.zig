@@ -737,10 +737,13 @@ const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{
 pub fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreError!*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
+    // Hashed directories register a lazy lookup: their certs are read on
+    // demand during verification and never appear in the store's object
+    // stack, so they must be tracked separately from `getCertCount`.
+    var loaded_hashed_dir = false;
     // Report back if no certificates loaded.
     defer {
-        const num_of_certs = crypto.getCertCount(store);
-        if (num_of_certs == 0) {
+        if (!loaded_hashed_dir and crypto.getCertCount(store) == 0) {
             log.warn(.app, "No certificates loaded", .{});
         }
     }
@@ -757,7 +760,9 @@ pub fn createX509Store(allocator: Allocator, config: *const Config) CreateX509St
             }
 
             for (directories) |ca_path| {
-                if (crypto.X509_STORE_load_locations(store, null, ca_path) != 1) {
+                if (crypto.X509_STORE_load_locations(store, null, ca_path) == 1) {
+                    loaded_hashed_dir = true;
+                } else {
                     log.warn(.app, "Invalid CA path", .{ .ca_path = ca_path });
                 }
             }
@@ -780,6 +785,7 @@ pub fn createX509Store(allocator: Allocator, config: *const Config) CreateX509St
                 "/etc/pki/tls/certs", // Fedora/RHEL
             }) |dir| {
                 if (loadHashedDirectory(store, dir)) {
+                    loaded_hashed_dir = true;
                     break :blk;
                 }
             }
