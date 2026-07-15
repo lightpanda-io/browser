@@ -111,7 +111,6 @@ pub fn initStorageEvent(
     old_value: ?[]const u8,
     new_value: ?[]const u8,
     url: ?[]const u8,
-    frame: *Frame,
 ) !void {
     const event = self._proto;
     if (event._event_phase != .none) {
@@ -127,7 +126,6 @@ pub fn initStorageEvent(
     self._old_value = if (old_value) |v| try arena.dupe(u8, v) else null;
     self._new_value = if (new_value) |v| try arena.dupe(u8, v) else null;
     self._url = if (url) |u| try arena.dupe(u8, u) else "";
-    _ = frame;
 }
 
 pub const JsApi = struct {
@@ -140,10 +138,10 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(StorageEvent.init, .{});
-    pub const key = bridge.accessor(StorageEvent.getKey, null, .{ .null_as_undefined = false });
-    pub const oldValue = bridge.accessor(StorageEvent.getOldValue, null, .{ .null_as_undefined = false });
-    pub const newValue = bridge.accessor(StorageEvent.getNewValue, null, .{ .null_as_undefined = false });
+    pub const key = bridge.accessor(StorageEvent.getKey, null, .{});
+    pub const oldValue = bridge.accessor(StorageEvent.getOldValue, null, .{});
+    pub const newValue = bridge.accessor(StorageEvent.getNewValue, null, .{});
     pub const url = bridge.accessor(StorageEvent.getUrl, null, .{});
-    pub const storageArea = bridge.accessor(StorageEvent.getStorageArea, null, .{ .null_as_undefined = false });
+    pub const storageArea = bridge.accessor(StorageEvent.getStorageArea, null, .{});
     pub const initStorageEvent = bridge.function(StorageEvent.initStorageEvent, .{});
 };

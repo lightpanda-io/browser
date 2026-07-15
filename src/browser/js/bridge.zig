@@ -1269,3 +1269,20 @@ pub const JsApis = blk: {
     }
     break :blk base ++ [_]type{@import("../webapi/WebDriver.zig").JsApi};
 };
+
+// Whether Child is Ancestor or inherits from it, following the _proto chain.
+pub fn inheritsOrIs(comptime Child: type, comptime Ancestor: type) bool {
+    comptime {
+        const target = Ancestor.bridge.type;
+        var T = Child.bridge.type;
+        while (true) {
+            if (T == target) {
+                return true;
+            }
+            if (!@hasField(T, "_proto")) {
+                return false;
+            }
+            T = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
+        }
+    }
+}

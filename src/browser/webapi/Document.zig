@@ -108,24 +108,6 @@ pub fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame
     }
 }
 
-// Generates a getter/setter pair backed by the frame's attribute-listener
-// map, like onclick above, for other document event handler properties.
-fn handlerAccessor(comptime handler: @import("global_event_handlers.zig").Handler) type {
-    return struct {
-        pub fn get(self: *Document, frame: *Frame) ?js.Function.Global {
-            return frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = handler });
-        }
-
-        pub fn set(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-            if (Window.getFunctionFromSetter(setter)) |cb| {
-                try frame._event_target_attr_listeners.put(frame.arena, .{ .target = self.asEventTarget(), .handler = handler }, cb);
-            } else {
-                _ = frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = handler });
-            }
-        }
-    };
-}
-
 pub const Type = union(enum) {
     generic,
     html: *HTMLDocument,
@@ -1530,6 +1512,26 @@ pub const JsApi = struct {
         return doc_frame.charset;
     }
     pub const referrer = bridge.property("", .{ .template = false });
+
+    // Generates a getter/setter pair backed by the frame's attribute-listener
+    // map, like onclick above, for other document event handler properties.
+    fn handlerAccessor(comptime handler: @import("global_event_handlers.zig").Handler) type {
+        return struct {
+            pub fn get(self: *Document, frame: *Frame) ?js.Function.Global {
+                const owner = self._frame orelse frame;
+                return owner._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = handler });
+            }
+
+            pub fn set(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+                const owner = self._frame orelse frame;
+                if (Window.getFunctionFromSetter(setter)) |cb| {
+                    try owner._event_target_attr_listeners.put(owner.arena, .{ .target = self.asEventTarget(), .handler = handler }, cb);
+                } else {
+                    _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = handler });
+                }
+            }
+        };
+    }
 };
 
 const testing = @import("../../testing.zig");
