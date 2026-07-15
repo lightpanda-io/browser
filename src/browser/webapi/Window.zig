@@ -428,15 +428,15 @@ pub fn setOnScroll(self: *Window, setter: ?FunctionSetter) void {
 // Stored in the frame's attribute-listener map (like element and ShadowRoot
 // property handlers), which the dispatch propagation path consults for any
 // event target.
-pub fn getOnClick(self: *Window, frame: *Frame) ?js.Function.Global {
-    return frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
+pub fn getOnClick(self: *Window) ?js.Function.Global {
+    return self._frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
 }
 
-pub fn setOnClick(self: *Window, setter: ?FunctionSetter, frame: *Frame) !void {
+pub fn setOnClick(self: *Window, setter: ?FunctionSetter) !void {
     if (getFunctionFromSetter(setter)) |cb| {
-        try frame._event_target_attr_listeners.put(frame.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
+        try self._frame._event_target_attr_listeners.put(self._frame.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
     } else {
-        _ = frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
+        _ = self._frame._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
     }
 }
 

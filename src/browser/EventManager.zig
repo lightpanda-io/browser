@@ -28,6 +28,7 @@ const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
+const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -111,9 +112,6 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event, opts),
-        // Property event handlers (e.g. xhr.onload, window.onerror) fire for
-        // script-dispatched events too, not only for the internal dispatch
-        // paths which pass them explicitly.
         .xhr => |xhr| try self.dispatchDirect(target, event, xhr.inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .window => |w| try self.dispatchDirect(target, event, windowInlineHandler(w, event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
@@ -164,8 +162,6 @@ pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []cons
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts: DispatchOpts) !void {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     {
         const et = target.asEventTarget();
         event._target = et;
@@ -388,20 +384,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     }
 }
 
-// Per spec ("invocation target in shadow tree"), window.event is left
-// undefined while invoking listeners whose target lives in a shadow tree.
 fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-    switch (target._type) {
-        .node => |n| {
-            const root = n.getRootNode(.{});
-            if (root.is(ShadowRoot) != null) {
-                return null;
-            }
-        },
-        else => {},
-    }
-    return event;
+    return if (rootIsShadowRoot(target)) null else event;
 }
 
 const DispatchPhaseOpts = struct {
@@ -549,8 +533,6 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
 // DOM spec "retarget": walk original_target out of shadow trees until the
 // node is visible from current_target's tree.
 fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarget) ?*EventTarget {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     const orig_node = switch ((original_target orelse return null)._type) {
         .node => |n| n,
         else => return original_target,
@@ -572,8 +554,6 @@ fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarge
 }
 
 fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     var n: ?*Node = node;
     while (n) |cur| {
         if (cur == ancestor) {
@@ -591,8 +571,6 @@ fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
 // Whether the target's tree root (without crossing shadow boundaries) is a
 // shadow root. Used for the spec's post-dispatch "clear targets" step.
 fn rootIsShadowRoot(target_: ?*EventTarget) bool {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     const target = target_ orelse return false;
     var current: *Node = switch (target._type) {
         .node => |n| n,

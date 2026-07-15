@@ -107,15 +107,6 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
     return initWithTrusted(arena, str, opts_, false);
 }
 
-// The JS constructor entry point: also captures the creating realm's time
-// origin so timeStamp stays relative to the event's relevant global even
-// when read from another realm.
-fn initFromJs(typ: []const u8, opts_: ?Options, exec: *js.Execution) !*Event {
-    const event = try init(typ, opts_, exec.page);
-    event._time_origin = exec.performance()._time_origin;
-    return event;
-}
-
 pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
     const arena = try page.getArena(.tiny, "Event.trusted");
     errdefer page.releaseArena(arena);
@@ -274,10 +265,6 @@ pub fn getEventPhase(self: *const Event) u8 {
     return @intFromEnum(self._event_phase);
 }
 
-// A DOMHighResTimeStamp in milliseconds, relative to the relevant global's
-// time origin (the same clock as performance.now()). When the creating
-// realm's origin wasn't captured, fall back to the accessing realm's, which
-// is the same realm in all but cross-realm accesses.
 pub fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
     const origin = if (self._time_origin != 0) self._time_origin else exec.performance()._time_origin;
     if (self._time_stamp <= origin) {
@@ -495,7 +482,14 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(Event.initFromJs, .{});
+    pub const constructor = bridge.constructor(struct {
+        fn wrap(typ: []const u8, opts_: ?Options, exec: *js.Execution) !*Event {
+            const event = try Event.init(typ, opts_, exec.page);
+            // capture the realm's time
+            event._time_origin = exec.performance()._time_origin;
+            return event;
+        }
+    }.wrap, .{});
     pub const @"type" = bridge.accessor(Event.getType, null, .{});
     pub const bubbles = bridge.accessor(Event.getBubbles, null, .{});
     pub const cancelable = bridge.accessor(Event.getCancelable, null, .{});
