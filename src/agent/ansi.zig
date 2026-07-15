@@ -33,3 +33,8 @@ pub const blue = "\x1b[34m";
 pub const magenta = "\x1b[35m";
 pub const clear_eol = "\x1b[K";
 pub const clear_line = "\x1b[2K";
+// Kitty keyboard protocol: push the "disambiguate" flag, push legacy
+// encoding (flag 0), pop the pushed entry. Pushes must pair with a pop.
+pub const kitty_disambiguate = "\x1b[>1u";
+pub const kitty_legacy = "\x1b[>0u";
+pub const kitty_pop = "\x1b[<u";

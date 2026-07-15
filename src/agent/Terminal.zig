@@ -51,7 +51,7 @@ spinner: Spinner,
 /// State for the prompt-assist C callbacks (completion/hints/highlighting);
 /// registered by `attachCompleter`, which requires this Terminal to sit at
 /// its final address.
-assist: prompt_assist.State = .{},
+assist: prompt_assist.State,
 /// Line-buffered markdown state for streamed assistant deltas; its `close`
 /// resets everything so fence state can't leak into the next message. Only
 /// used on the styled (REPL tty) path, hence the placeholder.
@@ -59,11 +59,13 @@ md_stream: md_term.Stream = .{ .show_table_placeholder = true },
 
 pub const CompletionSource = prompt_assist.CompletionSource;
 pub const HistoryPaths = prompt_assist.HistoryPaths;
-pub const closestCommand = prompt_assist.closestCommand;
 
-/// Wires the isocline completer, hinter, and highlighter to `self.assist`.
-/// Must run after the Terminal is in its final memory location.
-pub fn attachCompleter(self: *Terminal) void {
+/// Wires the isocline completer, hinter, and highlighter to `self.assist`,
+/// with `source` supplying the dynamic `/provider` and `/model` candidates.
+/// Must run after the Terminal is in its final memory location and before
+/// the first `readLine`.
+pub fn attachCompleter(self: *Terminal, source: ?CompletionSource) void {
+    self.assist.completion_source = source;
     prompt_assist.attach(&self.assist);
 }
 
@@ -75,7 +77,7 @@ pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosit
     // Isocline probes the terminal on setup (writes ESC[6n cursor-report on
     // stdout), so skip it in script-only mode — `ic_readline` is never
     // reached there anyway.
-    if (is_repl) prompt_assist.setupRepl(history_paths);
+    if (is_repl) prompt_assist.setupRepl();
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
         .allocator = allocator,
@@ -153,8 +155,8 @@ pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
     // \r) only while isocline reads: while active, Ctrl-C arrives as a CSI-u
     // escape rather than raw \x03, so the tty driver raises no SIGINT. Leaving
     // it on during thinking/tool runs would make Ctrl-C unable to interrupt them.
-    _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[>1u") catch {};
-    defer _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[<u") catch {};
+    _ = std.posix.write(std.posix.STDOUT_FILENO, ansi.kitty_disambiguate) catch {};
+    defer _ = std.posix.write(std.posix.STDOUT_FILENO, ansi.kitty_pop) catch {};
     // Isocline auto-appends the line to its (optionally-persisted) history.
     const line = c.ic_readline(prompt) orelse return null;
     return std.mem.sliceTo(line, 0);
@@ -397,7 +399,7 @@ pub fn printSlashParseError(self: *Terminal, err: Schema.ParseError, name: []con
     }
     const reason: []const u8 = switch (err) {
         error.UnknownTool => {
-            if (closestCommand(name)) |near| {
+            if (SlashCommand.closestCommand(name)) |near| {
                 return self.printError("{s}: unknown command. Did you mean " ++ highlightCmd("/{s}") ++ "? Try /help.", .{ name, near });
             }
             return self.printError("{s}: unknown command. Try /help.", .{name});

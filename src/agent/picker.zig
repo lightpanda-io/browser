@@ -99,9 +99,11 @@ const ChoiceState = struct {
 const RawTerminal = struct {
     original: std.posix.termios,
 
-    fn enable() !RawTerminal {
+    fn enable() error{NotInteractive}!RawTerminal {
         if (!interactiveTty()) return error.NotInteractive;
-        const original = try std.posix.tcgetattr(std.posix.STDIN_FILENO);
+        // A tty that refuses raw mode is non-interactive for the picker's
+        // purposes: callers degrade to the line prompt.
+        const original = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return error.NotInteractive;
         var raw = original;
         raw.iflag.BRKINT = false;
         raw.iflag.ICRNL = false;
@@ -116,17 +118,17 @@ const RawTerminal = struct {
         raw.lflag.ISIG = false;
         raw.cc[@intFromEnum(std.c.V.MIN)] = 0;
         raw.cc[@intFromEnum(std.c.V.TIME)] = 1;
-        try std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw);
-        // Under the kitty "disambiguate" flag that `Terminal.readLine` pushes
-        // (`\x1b[>1u`), cursor keys arrive as CSI-u the byte reader can't
-        // parse; push flag 0 to force legacy arrow encoding. restore() pops
-        // back to the REPL's flag.
-        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[>0u") catch {};
+        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw) catch return error.NotInteractive;
+        // Under `ansi.kitty_disambiguate` (pushed by `Terminal.readLine`),
+        // cursor keys arrive as CSI-u the byte reader can't parse; push the
+        // legacy encoding to force plain arrows. restore() pops back to
+        // whatever the REPL had pushed.
+        _ = std.posix.write(std.posix.STDOUT_FILENO, ansi.kitty_legacy) catch {};
         return .{ .original = original };
     }
 
     fn restore(self: *const RawTerminal) void {
-        _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[<u") catch {};
+        _ = std.posix.write(std.posix.STDOUT_FILENO, ansi.kitty_pop) catch {};
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
     }
 };

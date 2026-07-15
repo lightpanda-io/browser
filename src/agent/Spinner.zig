@@ -312,9 +312,6 @@ fn renderLocked(self: *Spinner) void {
     _ = std.posix.write(std.posix.STDERR_FILENO, written) catch {};
 }
 
-/// Returns the byte length of `bytes` that fits in `max_cells` cells, rounded
-/// down to a whole UTF-8 codepoint. Multi-cell glyphs (CJK, wide emoji) count
-/// as 1 — args are typically ASCII, so the approximation is good enough.
 /// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
 /// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
 /// (some pseudo-ttys leave the field unset). Cheap enough to call per render
@@ -330,6 +327,9 @@ fn columns() ?u16 {
     return ws.col;
 }
 
+/// Returns the byte length of `bytes` that fits in `max_cells` cells, rounded
+/// down to a whole UTF-8 codepoint. Multi-cell glyphs (CJK, wide emoji) count
+/// as 1 — args are typically ASCII, so the approximation is good enough.
 fn truncToCells(bytes: []const u8, max_cells: usize) usize {
     var cells: usize = 0;
     var i: usize = 0;

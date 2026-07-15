@@ -82,3 +82,56 @@ pub fn findMeta(name: []const u8) ?*const MetaCommand {
     }
     return null;
 }
+
+const browser_tools = lp.tools;
+const llm_values = std.enums.values(Command.LlmCommand);
+
+/// Every slash-invocable name: browser tools, LLM triggers, meta commands.
+pub const all_names: [browser_tools.names.len + meta_commands.len + llm_values.len][]const u8 = blk: {
+    var arr: [browser_tools.names.len + meta_commands.len + llm_values.len][]const u8 = undefined;
+    var idx: usize = 0;
+    for (browser_tools.names) |n| {
+        arr[idx] = n;
+        idx += 1;
+    }
+    for (llm_values) |lc| {
+        arr[idx] = @tagName(lc);
+        idx += 1;
+    }
+    for (meta_commands) |m| {
+        arr[idx] = m.name;
+        idx += 1;
+    }
+    break :blk arr;
+};
+
+/// Closest command name within two edits, or null — for "did you mean?" on typos.
+pub fn closestCommand(name: []const u8) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_dist: usize = std.math.maxInt(usize);
+    for (all_names) |cand| {
+        const dist = editDistance(name, cand);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = cand;
+        }
+    }
+    return if (best_dist <= 2) best else null;
+}
+
+/// Case-insensitive Levenshtein distance. Returns `maxInt` for inputs longer
+/// than the table (no slash command is that long).
+fn editDistance(a: []const u8, b: []const u8) usize {
+    const max = 32;
+    if (a.len >= max or b.len >= max) return std.math.maxInt(usize);
+    var dp: [max][max]usize = undefined;
+    for (0..a.len + 1) |i| dp[i][0] = i;
+    for (0..b.len + 1) |j| dp[0][j] = j;
+    for (a, 1..) |ca, i| {
+        for (b, 1..) |cb, j| {
+            const cost: usize = if (std.ascii.toLower(ca) == std.ascii.toLower(cb)) 0 else 1;
+            dp[i][j] = @min(@min(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
+        }
+    }
+    return dp[a.len][b.len];
+}

@@ -24,7 +24,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
-const Command = lp.Command;
 const Schema = lp.Schema;
 const SlashCommand = @import("SlashCommand.zig");
 const js_highlight = @import("js_highlight.zig");
@@ -32,6 +31,8 @@ const c = @cImport({
     @cInclude("isocline.h");
 });
 
+// Styles referenced by name in the highlighter below; the kind-mapped styles
+// live only as `styles` table rows.
 const style_slash = "ps-slash";
 const style_string = "ps-string";
 const style_var = "ps-var";
@@ -40,12 +41,6 @@ const style_key = "ps-key";
 const style_num = "ps-num";
 const style_err = "ps-err";
 const style_jsmode = "ps-jsmode";
-const style_keyword = "ps-keyword";
-const style_comment = "ps-comment";
-const style_jsglobal = "ps-jsglobal";
-const style_fn = "ps-fn";
-const style_method = "ps-method";
-const style_type = "ps-type";
 
 /// The prompt's style palette (`ps-*` namespace avoids colliding with
 /// isocline's built-in `ic-*` styles). `setupRepl` registers every entry and
@@ -69,12 +64,12 @@ const styles = [_]Style{
     .{ .name = style_num, .spec = "ansi-magenta", .kinds = &.{.number} },
     .{ .name = style_err, .spec = "ansi-red" },
     .{ .name = style_jsmode, .spec = "ansi-red bold" },
-    .{ .name = style_keyword, .spec = "ansi-blue bold", .kinds = &.{.keyword} },
-    .{ .name = style_comment, .spec = "ansi-darkgray italic", .kinds = &.{.comment} },
-    .{ .name = style_jsglobal, .spec = "ansi-cyan", .kinds = &.{.global} },
-    .{ .name = style_fn, .spec = "ansi-teal", .kinds = &.{.function} },
-    .{ .name = style_method, .spec = "ansi-teal italic", .kinds = &.{.method} },
-    .{ .name = style_type, .spec = "ansi-cyan", .kinds = &.{.type_name} },
+    .{ .name = "ps-keyword", .spec = "ansi-blue bold", .kinds = &.{.keyword} },
+    .{ .name = "ps-comment", .spec = "ansi-darkgray italic", .kinds = &.{.comment} },
+    .{ .name = "ps-jsglobal", .spec = "ansi-cyan", .kinds = &.{.global} },
+    .{ .name = "ps-fn", .spec = "ansi-teal", .kinds = &.{.function} },
+    .{ .name = "ps-method", .spec = "ansi-teal italic", .kinds = &.{.method} },
+    .{ .name = "ps-type", .spec = "ansi-cyan", .kinds = &.{.type_name} },
 };
 
 /// Style name per token kind, derived from `styles`. Unmapped or
@@ -122,30 +117,11 @@ pub const State = struct {
     history_paths: ?HistoryPaths = null,
 };
 
-const llm_values = std.enums.values(Command.LlmCommand);
-const all_slash_names: [browser_tools.names.len + SlashCommand.meta_commands.len + llm_values.len][]const u8 = blk: {
-    var arr: [browser_tools.names.len + SlashCommand.meta_commands.len + llm_values.len][]const u8 = undefined;
-    var idx: usize = 0;
-    for (browser_tools.names) |n| {
-        arr[idx] = n;
-        idx += 1;
-    }
-    for (llm_values) |lc| {
-        arr[idx] = @tagName(lc);
-        idx += 1;
-    }
-    for (SlashCommand.meta_commands) |m| {
-        arr[idx] = m.name;
-        idx += 1;
-    }
-    break :blk arr;
-};
-
 /// One-time isocline configuration for REPL mode: editing behavior, the
-/// `ps-*` style palette, JS prompt mode, and history. Isocline probes the
-/// terminal on first use (writes ESC[6n cursor-report on stdout), so callers
-/// must skip this in script-only mode.
-pub fn setupRepl(history_paths: ?HistoryPaths) void {
+/// `ps-*` style palette, and JS prompt mode. Isocline probes the terminal on
+/// first use (writes ESC[6n cursor-report on stdout), so callers must skip
+/// this in script-only mode.
+pub fn setupRepl() void {
     _ = c.ic_enable_multiline(true);
     _ = c.ic_enable_hint(true);
     _ = c.ic_enable_inline_help(true);
@@ -160,16 +136,13 @@ pub fn setupRepl(history_paths: ?HistoryPaths) void {
     // Blank continuation marker so multiline input isn't prefixed with `>`.
     c.ic_set_prompt_marker("❯ ", "");
     _ = c.ic_enable_highlight(true);
-    if (history_paths) |hp| {
-        // Mode inactive at launch, so load the normal file; modeCallback
-        // swaps to JS on mode entry.
-        c.ic_set_history(hp.normal.ptr, -1); // -1 → 200-entry default cap
-    }
 }
 
 /// Wires the isocline completer, hinter, and highlighter to `state` so the C
-/// callbacks can reach the global schemas. Must run after `state` is in its
-/// final memory location.
+/// callbacks can reach the global schemas, and loads the initial history from
+/// `state.history_paths` — the same source `modeCallback` swaps from, so the
+/// two can't diverge. Must run after `state` is in its final memory location
+/// and before the first readline.
 pub fn attach(state: *State) void {
     c.ic_set_default_completer(&completionCallback, state);
     c.ic_set_default_hinter(&hintsCallback, state);
@@ -178,6 +151,11 @@ pub fn attach(state: *State) void {
     c.ic_set_esc_clear_hint("  esc again to clear");
     c.ic_set_mode_hint("  JS mode - esc to exit");
     c.ic_set_default_highlighter(&highlighterCallback, state);
+    if (state.history_paths) |hp| {
+        // Mode inactive at launch, so load the normal file; modeCallback
+        // swaps to JS on mode entry.
+        c.ic_set_history(hp.normal.ptr, -1); // -1 → 200-entry default cap
+    }
 }
 
 fn modeCallback(active: bool, arg: ?*anyopaque) callconv(.c) void {
@@ -482,7 +460,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
 
     // `/help <name>`: arg is a command name, not a value — skip env-var fallthrough.
     if (parseHelpArgPrefix(input)) |partial| {
-        for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, help_arg_prefix, name, "", partial);
+        for (SlashCommand.all_names) |name| addPrefixedCompletion(cenv, &buf, input, help_arg_prefix, name, "", partial);
         return;
     }
 
@@ -496,7 +474,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
             // Trailing space on commands with params hands off to the hinter,
             // which renders the full ` <url> [timeout=…]` template uniformly
             // whether the name was typed or Tab-completed.
-            for (all_slash_names) |name| {
+            for (SlashCommand.all_names) |name| {
                 const suffix: []const u8 = if (slashHasParams(name)) " " else "";
                 addPrefixedCompletion(cenv, &buf, input, "/", name, suffix, partial);
             }
@@ -534,12 +512,12 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
 
     if (input.len == 0) return null;
 
-    if (parseHelpArgPrefix(input)) |partial| return ghostFirstMatch(&all_slash_names, partial, "");
+    if (parseHelpArgPrefix(input)) |partial| return ghostFirstMatch(&SlashCommand.all_names, partial, "");
 
     // Inside an open `'''…'''` body the buffer is script text, not kv args.
     if (Schema.hasUnclosedTripleQuote(input)) return null;
 
-    if (std.mem.eql(u8, input, "/")) return ghostFirstMatch(&all_slash_names, "", "");
+    if (std.mem.eql(u8, input, "/")) return ghostFirstMatch(&SlashCommand.all_names, "", "");
 
     if (Schema.parseSlashCommand(input)) |parts| {
         const ends_ws = input[input.len - 1] == ' ';
@@ -550,7 +528,7 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
             return renderMetaHint(state, meta, parts.rest, ends_ws);
         }
         if (std.mem.indexOfScalar(u8, input, ' ') == null) {
-            return ghostFirstMatch(&all_slash_names, parts.name, "");
+            return ghostFirstMatch(&SlashCommand.all_names, parts.name, "");
         }
         return null;
     }
@@ -674,14 +652,6 @@ fn renderSchemaHint(schema: *const Schema, body: []const u8, ends_ws: bool) [*c]
     return writeHints(if (ends_ws) "" else " ", frags[0..n]);
 }
 
-/// Index of the next non-whitespace byte at or after `start`, or null if only
-/// whitespace remains.
-fn skipWhitespace(text: []const u8, start: usize) ?usize {
-    var i = start;
-    while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
-    return if (i < text.len) i else null;
-}
-
 /// Byte offsets to ic_highlight are not UTF-8 code points; safe because we
 /// only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
 fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?*anyopaque) callconv(.c) void {
@@ -692,7 +662,7 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?
         highlightJavaScript(henv, text);
         return;
     }
-    const cmd_start = skipWhitespace(text, 0) orelse return;
+    const cmd_start = std.mem.indexOfNonePos(u8, text, 0, &std.ascii.whitespace) orelse return;
     var i = cmd_start;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
     const cmd = text[cmd_start..i];
@@ -720,48 +690,17 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, arg: ?
 }
 
 fn isKnownSlashName(name: []const u8) bool {
-    for (all_slash_names) |n| {
+    for (SlashCommand.all_names) |n| {
         if (std.ascii.eqlIgnoreCase(n, name)) return true;
     }
     return false;
 }
 
 fn slashHasPrefix(name: []const u8) bool {
-    for (all_slash_names) |n| {
+    for (SlashCommand.all_names) |n| {
         if (std.ascii.startsWithIgnoreCase(n, name)) return true;
     }
     return false;
-}
-
-/// Closest command name within two edits, or null — for "did you mean?" on typos.
-pub fn closestCommand(name: []const u8) ?[]const u8 {
-    var best: ?[]const u8 = null;
-    var best_dist: usize = std.math.maxInt(usize);
-    for (all_slash_names) |cand| {
-        const dist = editDistance(name, cand);
-        if (dist < best_dist) {
-            best_dist = dist;
-            best = cand;
-        }
-    }
-    return if (best_dist <= 2) best else null;
-}
-
-/// Case-insensitive Levenshtein distance. Returns `maxInt` for inputs longer
-/// than the table (no slash command is that long).
-fn editDistance(a: []const u8, b: []const u8) usize {
-    const max = 32;
-    if (a.len >= max or b.len >= max) return std.math.maxInt(usize);
-    var dp: [max][max]usize = undefined;
-    for (0..a.len + 1) |i| dp[i][0] = i;
-    for (0..b.len + 1) |j| dp[0][j] = j;
-    for (a, 1..) |ca, i| {
-        for (b, 1..) |cb, j| {
-            const cost: usize = if (std.ascii.toLower(ca) == std.ascii.toLower(cb)) 0 else 1;
-            dp[i][j] = @min(@min(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
-        }
-    }
-    return dp[a.len][b.len];
 }
 
 fn slashHasParams(name: []const u8) bool {
@@ -815,7 +754,7 @@ fn highlightJavaScript(henv: ?*c.ic_highlight_env_t, text: []const u8) void {
 
 fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
     var i = start;
-    while (skipWhitespace(text, i)) |tok_start| {
+    while (std.mem.indexOfNonePos(u8, text, i, &std.ascii.whitespace)) |tok_start| {
         i = tok_start;
         if (text[i] == '\'' or text[i] == '"') {
             i = Schema.quotedSpanEnd(text, i);
