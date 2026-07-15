@@ -734,7 +734,7 @@ const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{
 
 /// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
 /// Allocations made through passed `allocator` are freed before this function returns.
-fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreError!*crypto.X509_STORE {
+pub fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreError!*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
     // Report back if no certificates loaded.
