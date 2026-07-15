@@ -24,8 +24,10 @@ const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 const Form = @import("../element/html/Form.zig");
 const Element = @import("../Element.zig");
+const Blob = @import("../Blob.zig");
 const File = @import("../File.zig");
 const KeyValueList = @import("../KeyValueList.zig");
+const simd = @import("../../../simd.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -115,6 +117,46 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
     );
     try frame._event_manager.dispatch(form.asNode().asEventTarget(), form_data_event.asEvent());
 
+    return form_data;
+}
+
+// Fetch §6.4 "package data" with type FormData: parse an
+// application/x-www-form-urlencoded body back into a FormData.
+pub fn initFromUrlEncoded(bytes: []const u8, exec: *const Execution) !*FormData {
+    const arena = try exec.getArena(.small, "FormData");
+    errdefer exec.releaseArena(arena);
+
+    const form_data = try arena.create(FormData);
+    form_data.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._entries = .empty,
+    };
+    try form_data.parseUrlEncoded(bytes);
+    return form_data;
+}
+
+// Fetch §6.4 "package data" with type FormData: parse a multipart/form-data
+// body back into a FormData. `boundary` is the Content-Type boundary param.
+pub fn initFromMultipart(bytes: []const u8, boundary: []const u8, exec: *const Execution) !*FormData {
+    const arena = try exec.getArena(.small, "FormData");
+    errdefer exec.releaseArena(arena);
+
+    const form_data = try arena.create(FormData);
+    form_data.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._entries = .empty,
+    };
+
+    // On failure, drop the refs parseMultipart acquired on the file entries
+    // appended so far (runs before the arena release above frees the list).
+    errdefer for (form_data._entries.items) |entry| switch (entry.value) {
+        .file => |file| file.releaseRef(exec.page),
+        else => {},
+    };
+
+    try form_data.parseMultipart(exec.page, bytes, boundary);
     return form_data;
 }
 
@@ -347,11 +389,11 @@ pub fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
         }
         if (std.mem.indexOfScalar(u8, pair, '=')) |idx| {
             try self.append(
-                try formUrlDecode(self._arena, pair[0..idx]),
-                try formUrlDecode(self._arena, pair[idx + 1 ..]),
+                try urlDecode(self._arena, pair[0..idx]),
+                try urlDecode(self._arena, pair[idx + 1 ..]),
             );
         } else {
-            const key = try formUrlDecode(self._arena, pair);
+            const key = try urlDecode(self._arena, pair);
             // Insert with empty value.
             try self.append(key, "");
         }
@@ -385,18 +427,24 @@ fn indexOfSpecial(slice: []const u8) ?usize {
 }
 
 /// URL-decodes passed `raw` slice; returned value may or may not be heap allocated.
-fn formUrlDecode(arena: Allocator, raw: []const u8) ![]const u8 {
-    const start = indexOfSpecial(raw) orelse return raw;
+/// TODO: This can be more efficient I believe.
+fn urlDecode(arena: Allocator, raw: []const u8) ![]const u8 {
+    // Get where to start decoding.
+    var i: usize = indexOfSpecial(raw) orelse return raw;
 
     var out: std.ArrayList(u8) = try .initCapacity(arena, raw.len);
-    out.appendSliceAssumeCapacity(raw[0..start]);
+    out.appendSliceAssumeCapacity(raw[0..i]);
 
-    var i: usize = start;
-    while (i < raw.len) : (i += 1) {
+    while (i < raw.len) {
         const c = raw[i];
         switch (c) {
-            '+' => out.appendAssumeCapacity(' '),
+            '+' => {
+                out.appendAssumeCapacity(' ');
+                i += 1;
+            },
             '%' => {
+                // Per URL §5.1 percent-decode, an invalid or truncated
+                // escape sequence passes through verbatim.
                 const decoded: ?u8 = blk: {
                     if (i + 2 >= raw.len) break :blk null;
                     const hi = std.fmt.charToDigit(raw[i + 1], 16) catch break :blk null;
@@ -405,15 +453,176 @@ fn formUrlDecode(arena: Allocator, raw: []const u8) ![]const u8 {
                 };
                 if (decoded) |b| {
                     out.appendAssumeCapacity(b);
-                    i += 2;
+                    i += 3;
                 } else {
                     out.appendAssumeCapacity('%');
+                    i += 1;
                 }
             },
-            else => out.appendAssumeCapacity(c),
+            else => {
+                out.appendAssumeCapacity(c);
+                i += 1;
+            },
         }
     }
 
+    return out.items;
+}
+
+// Inverse of multipartEncode: strict multipart/form-data parsing (no
+// preamble, CRLF line breaks). Parts carrying a filename become File
+// entries — the FormData holds a ref on each, released in deinit — and the
+// rest become string entries.
+fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []const u8) !void {
+    // The body must open with the dash-boundary: "--" boundary.
+    if (!std.mem.startsWith(u8, bytes, "--") or !std.mem.startsWith(u8, bytes[2..], boundary)) {
+        return error.InvalidFormData;
+    }
+    // Skip-past boundary.
+    var cursor = bytes[2 + boundary.len ..];
+
+    const double_dash: u16 = @bitCast([_]u8{ '-', '-' });
+    const crlf: u16 = @bitCast([_]u8{ '\r', '\n' });
+
+    while (true) {
+        if (cursor.len < 2) {
+            return error.InvalidFormData;
+        }
+        const prefix: u16 = @bitCast(cursor[0..2].*);
+        // Check if we've reached the end.
+        if (prefix == double_dash) {
+            return;
+        }
+        // If we haven't reached the end, CRLF is required.
+        if (prefix != crlf) {
+            return error.InvalidFormData;
+        }
+        // Consume prefix.
+        cursor = cursor[2..];
+
+        // Content-Disposition can appear once a part, and is required.
+        var disposition: ?simd.Disposition = null;
+        // Default Content-Type; can be overwritten while parsing headers.
+        var content_type: []const u8 = "text/plain";
+        // Reused for parsing headers.
+        var header: simd.HttpHeader = undefined;
+
+        // Parse the whole header block; the content starts only after the
+        // terminating empty line.
+        while (true) {
+            if (cursor.len == 0) {
+                return error.InvalidFormData;
+            }
+
+            // Check if headers part has finished.
+            switch (cursor[0]) {
+                '\n' => {
+                    // End of headers.
+                    cursor = cursor[1..];
+                    break;
+                },
+                '\r' => {
+                    // We need a `\n` character too.
+                    if (cursor.len < 2 or cursor[1] != '\n') {
+                        return error.InvalidFormData;
+                    }
+
+                    // End of headers.
+                    cursor = cursor[2..];
+                    break;
+                },
+                else => {},
+            }
+
+            const consumed = try simd.parseHttpHeader(cursor, &header);
+            cursor = cursor[consumed..];
+
+            if (std.ascii.eqlIgnoreCase(header.key, "content-type")) {
+                content_type = header.value;
+            } else if (std.ascii.eqlIgnoreCase(header.key, "content-disposition")) {
+                if (disposition != null) {
+                    // Content-Disposition found twice, report an error.
+                    return error.InvalidFormData;
+                }
+                disposition = try simd.parseDisposition(header.value);
+            }
+        }
+
+        const parsed = disposition orelse return error.InvalidFormData;
+        const name = try decodeMultipartName(self._arena, parsed.name orelse return error.InvalidFormData);
+
+        const content_end = indexOfBoundary(cursor, boundary) orelse return error.InvalidFormData;
+        const content = cursor[0..content_end];
+        cursor = cursor[content_end + "\r\n--".len + boundary.len ..];
+
+        // Got a file.
+        if (parsed.filename) |filename| {
+            const blob = try Blob.initFromBytes(content, content_type, page);
+            errdefer blob.deinit(page);
+
+            const file = try blob._arena.create(File);
+            file.* = .{
+                ._proto = blob,
+                ._name = try blob._arena.dupe(u8, try decodeMultipartName(self._arena, filename)),
+                ._last_modified = std.time.milliTimestamp(),
+            };
+            blob._type = .{ .file = file };
+
+            file.acquireRef();
+            try self._entries.append(self._arena, .{
+                .name = try String.init(self._arena, name, .{}),
+                .value = .{ .file = file },
+            });
+        } else {
+            try self.append(name, content);
+        }
+    }
+}
+
+// Finds the "\r\n--" ++ boundary delimiter in haystack without materializing
+// the needle. Per RFC 2046 §5.1.1 the delimiter must be followed by CRLF (or
+// "--" for the close delimiter), so a value containing the boundary as a
+// prefix of longer text does not terminate the part.
+fn indexOfBoundary(haystack: []const u8, boundary: []const u8) ?usize {
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, start, "\r\n--")) |i| {
+        const rest = haystack[i + 4 ..];
+        if (std.mem.startsWith(u8, rest, boundary)) {
+            const after = rest[boundary.len..];
+            if (std.mem.startsWith(u8, after, "\r\n") or std.mem.startsWith(u8, after, "--")) {
+                return i;
+            }
+        }
+        start = i + 1;
+    }
+    return null;
+}
+
+// "Parse a multipart/form-data name": undo writeMultipartName's escapes
+// (%0A, %0D, %22); any other percent sequence passes through verbatim.
+fn decodeMultipartName(arena: Allocator, raw: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, raw, '%') == null) {
+        return raw;
+    }
+
+    var out: std.ArrayList(u8) = try .initCapacity(arena, raw.len);
+    var i: usize = 0;
+    while (i < raw.len) {
+        const rest = raw[i..];
+        if (std.mem.startsWith(u8, rest, "%22")) {
+            out.appendAssumeCapacity('"');
+            i += 3;
+        } else if (std.mem.startsWith(u8, rest, "%0D")) {
+            out.appendAssumeCapacity('\r');
+            i += 3;
+        } else if (std.mem.startsWith(u8, rest, "%0A")) {
+            out.appendAssumeCapacity('\n');
+            i += 3;
+        } else {
+            out.appendAssumeCapacity(raw[i]);
+            i += 1;
+        }
+    }
     return out.items;
 }
 
@@ -680,8 +889,6 @@ test "FormData: multipart empty body" {
     try testing.expectString("--B--\r\n", buf.written());
 }
 
-const Blob = @import("../Blob.zig");
-
 fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
     const blob = try Blob.initFromBytes(body, mime, page);
     blob.acquireRef();
@@ -909,4 +1116,169 @@ test "FormData: plaintext empty body" {
     try fd.write(.{ .encoding = .plaintext, .allocator = allocator }, &buf.writer);
 
     try testing.expectString("", buf.written());
+}
+
+test "FormData: urlencoded parse" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._rc = .{},
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.parseUrlEncoded("a=1&b=hello+world&c=%26%3D&no_value&&bad=100%zz");
+
+    try testing.expectEqual(5, fd._entries.items.len);
+    try testing.expectString("1", fd.get(.wrap("a")).?);
+    try testing.expectString("hello world", fd.get(.wrap("b")).?);
+    try testing.expectString("&=", fd.get(.wrap("c")).?);
+    try testing.expectString("", fd.get(.wrap("no_value")).?);
+    // An invalid percent sequence passes through verbatim.
+    try testing.expectString("100%zz", fd.get(.wrap("bad")).?);
+}
+
+test "FormData: urlencoded parse exercises the vectorized guard" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._rc = .{},
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    // Values longer than any SIMD vector length, with the lone special
+    // character early so only the vectorized loop (not the scalar tail)
+    // can spot it — a regression guard for needsDecoding's chunk mask.
+    try fd.parseUrlEncoded("plus=aaa+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ++
+        "&pct=aaa%41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ++
+        "&clean=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    try testing.expectString("aaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fd.get(.wrap("plus")).?);
+    try testing.expectString("aaaAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fd.get(.wrap("pct")).?);
+    try testing.expectString("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fd.get(.wrap("clean")).?);
+}
+
+test "FormData: multipart parse" {
+    const allocator = testing.arena_allocator;
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var fd = FormData{
+        ._rc = .{},
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.parseMultipart(frame._page, "--BOUNDARY\r\n" ++
+        "Content-Disposition: form-data; name=\"name\"\r\n\r\n" ++
+        "John\r\n" ++
+        "--BOUNDARY\r\n" ++
+        "Content-Disposition: form-data; name=\"a%22b%0D%0Ac\"\r\n\r\n" ++
+        "two\r\nlines\r\n" ++
+        "--BOUNDARY\r\n" ++
+        "Content-Disposition: form-data; name=\"tricky\"\r\n\r\n" ++
+        "a\r\n--BOUNDARYx b\r\n" ++
+        "--BOUNDARY--\r\n", "BOUNDARY");
+
+    try testing.expectEqual(3, fd._entries.items.len);
+    try testing.expectString("John", fd.get(.wrap("name")).?);
+    // Escaped name decodes, and a value containing CRLF survives.
+    try testing.expectString("a\"b\r\nc", fd._entries.items[1].name.str());
+    try testing.expectString("two\r\nlines", fd._entries.items[1].value.asString());
+    // The boundary as a prefix of longer text is not a delimiter.
+    try testing.expectString("a\r\n--BOUNDARYx b", fd.get(.wrap("tricky")).?);
+}
+
+test "FormData: multipart parse with file" {
+    const allocator = testing.arena_allocator;
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var fd = FormData{
+        ._rc = .{},
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.parseMultipart(frame._page, "--B\r\n" ++
+        "Content-Disposition: form-data; name=\"upload\"; filename=\"hello.txt\"\r\n" ++
+        "Content-Type: text/plain\r\n\r\n" ++
+        "hello\r\n" ++
+        "--B\r\n" ++
+        "Content-Disposition: form-data; name=\"raw\"; filename=\"raw.bin\"\r\n\r\n" ++
+        "bytes\r\n" ++
+        "--B--\r\n", "B");
+    defer for (fd._entries.items) |entry| switch (entry.value) {
+        .file => |file| file.releaseRef(frame._page),
+        else => {},
+    };
+
+    try testing.expectEqual(2, fd._entries.items.len);
+
+    const file = fd._entries.items[0].value.file;
+    try testing.expectString("upload", fd._entries.items[0].name.str());
+    try testing.expectString("hello.txt", file.getName());
+    try testing.expectString("hello", file._proto._slice);
+    try testing.expectString("text/plain", file._proto._mime);
+
+    // A file part without a Content-Type header defaults to text/plain.
+    const raw = fd._entries.items[1].value.file;
+    try testing.expectString("raw.bin", raw.getName());
+    try testing.expectString("bytes", raw._proto._slice);
+    try testing.expectString("text/plain", raw._proto._mime);
+}
+
+test "FormData: multipart parse rejects malformed bodies" {
+    const allocator = testing.arena_allocator;
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const cases = [_][]const u8{
+        "", // no dash-boundary
+        "--OTHER\r\n", // wrong boundary
+        "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nv\r\n", // unterminated
+        "--B\r\n\r\nv\r\n--B--\r\n", // no Content-Disposition
+        "--B\r\nContent-Disposition: inline; name=\"a\"\r\n\r\nv\r\n--B--\r\n", // not form-data
+        "--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n--B--\r\n", // no name
+    };
+    for (cases) |case| {
+        var fd = FormData{
+            ._rc = .{},
+            ._arena = allocator,
+            ._entries = .empty,
+        };
+        try testing.expectError(error.InvalidFormData, fd.parseMultipart(frame._page, case, "B"));
+    }
+}
+
+test "FormData: multipart round-trip" {
+    const allocator = testing.arena_allocator;
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var src = FormData{
+        ._rc = .{},
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try src.append("username", "alice");
+    try src.append("username", "bob");
+    try src.append("a\"b\r\nc", "quoted \"value\"");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try src.write(.{
+        .encoding = .{ .formdata = "BOUNDARY" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    var fd = FormData{
+        ._rc = .{},
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.parseMultipart(frame._page, buf.written(), "BOUNDARY");
+
+    try testing.expectEqual(3, fd._entries.items.len);
+    try testing.expectString("username", fd._entries.items[0].name.str());
+    try testing.expectString("alice", fd._entries.items[0].value.asString());
+    try testing.expectString("username", fd._entries.items[1].name.str());
+    try testing.expectString("bob", fd._entries.items[1].value.asString());
+    try testing.expectString("quoted \"value\"", fd.get(.wrap("a\"b\r\nc")).?);
 }
