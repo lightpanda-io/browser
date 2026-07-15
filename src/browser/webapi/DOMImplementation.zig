@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Node = @import("Node.zig");
@@ -23,10 +24,26 @@ const Document = @import("Document.zig");
 const DocumentType = @import("DocumentType.zig");
 
 const DOMImplementation = @This();
-_pad: bool = false,
 
-pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
-    return DocumentType.init(qualified_name, public_id, system_id, frame);
+// The document this implementation object belongs to: nodes created through
+// it are owned by that document, not necessarily the frame's main document.
+_document: *Document,
+
+pub fn createDocumentType(self: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
+    // Per spec, qualifiedName must match the doctype name production: any
+    // characters except ASCII whitespace or '>'.
+    for (qualified_name) |c| {
+        switch (c) {
+            '\t', '\n', 0x0C, '\r', ' ', '>' => return error.InvalidCharacterError,
+            else => {},
+        }
+    }
+
+    const doctype = try DocumentType.init(qualified_name, public_id, system_id, frame);
+    if (self._document != frame.document) {
+        try frame.setNodeOwnerDocument(doctype.asNode(), self._document);
+    }
+    return doctype;
 }
 
 pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, frame: *Frame) !*Document {
@@ -63,10 +80,34 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString
     return document;
 }
 
-pub fn createDocument(_: *const DOMImplementation, namespace_: ?[]const u8, qualified_name: ?[]const u8, doctype: ?*DocumentType, frame: *Frame) !*Document {
+pub fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullable([]const u8), qualified_name_: js.Value, doctype: ?*DocumentType, frame: *Frame) !*Document {
+    // Both namespace (nullable) and qualifiedName are required arguments.
+    const namespace_ = namespace_nullable.value;
+
+    // Per Web IDL, qualifiedName is [LegacyNullToEmptyString]: null becomes
+    // the empty string, while undefined stringifies to "undefined". The raw
+    // js.Value keeps that distinction.
+    const qname: []const u8 = blk: {
+        if (qualified_name_.isNull()) {
+            break :blk "";
+        }
+        break :blk try qualified_name_.toStringSlice();
+    };
+
+    if (qname.len > 0) {
+        _ = try Document.validateAndExtract(namespace_, qname, .element);
+    }
+
     // Create XML Document
     const document = (try frame._factory.document(Node.Document.XMLDocument{ ._proto = undefined })).asDocument();
     document._url = "about:blank";
+    // Per spec the content type depends on the requested namespace.
+    document._content_type = blk: {
+        const ns = namespace_ orelse break :blk "application/xml";
+        if (std.mem.eql(u8, ns, "http://www.w3.org/1999/xhtml")) break :blk "application/xhtml+xml";
+        if (std.mem.eql(u8, ns, "http://www.w3.org/2000/svg")) break :blk "image/svg+xml";
+        break :blk "application/xml";
+    };
 
     // Append doctype if provided
     if (doctype) |dt| {
@@ -74,12 +115,20 @@ pub fn createDocument(_: *const DOMImplementation, namespace_: ?[]const u8, qual
     }
 
     // Create and append root element if qualified_name provided
-    if (qualified_name) |qname| {
-        if (qname.len > 0) {
-            const namespace = Node.Element.Namespace.parse(namespace_);
-            const root = try Frame.node_factory.createElementNS(frame, namespace, qname, null);
-            _ = try document.asNode().appendChild(root, frame);
+    if (qname.len > 0) {
+        const namespace = Node.Element.Namespace.parse(namespace_);
+        const root = try Frame.node_factory.createElementNS(frame, namespace, qname, null);
+
+        // Store the original URI for unknown namespaces so namespaceURI and
+        // lookupNamespaceURI can return it (mirrors Document.createElementNS).
+        if (namespace == .unknown) {
+            if (namespace_) |uri| {
+                const duped = try frame.dupeString(uri);
+                try frame._element_namespace_uris.put(frame.arena, root.as(Node.Element), duped);
+            }
         }
+
+        _ = try document.asNode().appendChild(root, frame);
     }
 
     return document;
@@ -98,7 +147,6 @@ pub const JsApi = struct {
         pub const name = "DOMImplementation";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
     pub const createDocumentType = bridge.function(DOMImplementation.createDocumentType, .{});

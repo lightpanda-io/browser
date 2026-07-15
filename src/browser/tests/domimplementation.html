@@ -221,8 +221,7 @@
 
     const root = doc.documentElement;
     testing.expectEqual('prefix:localName', root.tagName);
-    // TODO: Custom namespaces are being replaced with an empty value
-    testing.expectEqual('http://lightpanda.io/unsupported/namespace', root.namespaceURI);
+    testing.expectEqual('http://example.com', root.namespaceURI);
   }
 </script>
 

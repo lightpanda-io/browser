@@ -167,7 +167,12 @@ pub fn createAborted(reason_: ?js.Value, exec: *const Execution) !*AbortSignal {
     return signal;
 }
 
-pub fn createAny(signals: []const *AbortSignal, exec: *const Execution) !*AbortSignal {
+pub fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
+    // The parameter isn't optional. If we declared it as a slice directy, the
+    // bridge would treat it as a variadic and map it to empty rather than throwing
+    // a TypeError as it should.
+    const signals = try signals_value.toZig([]const *AbortSignal);
+
     const result = try init(exec);
     for (signals) |source| {
         if (source._aborted) {
@@ -279,7 +284,6 @@ pub const JsApi = struct {
 
     pub const Prototype = EventTarget;
 
-    pub const constructor = bridge.constructor(AbortSignal.init, .{});
     pub const aborted = bridge.accessor(AbortSignal.getAborted, null, .{});
     pub const reason = bridge.accessor(AbortSignal.getReason, null, .{});
     pub const onabort = bridge.accessor(AbortSignal.getOnAbort, AbortSignal.setOnAbort, .{});

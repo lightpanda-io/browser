@@ -22,6 +22,8 @@ const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const DOMTokenList = @import("../../collections.zig").DOMTokenList;
+
 const HtmlElement = @import("../Html.zig");
 
 const Link = @This();
@@ -187,6 +189,23 @@ pub fn setTarget(self: *Link, value: []const u8, frame: *Frame) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
 }
 
+pub fn getSizes(self: *Link, frame: *Frame) !?*DOMTokenList {
+    const element = self.asElement();
+    if (element._namespace != .html) {
+        return null;
+    }
+    return element.getTokenList(.sizes, frame);
+}
+
+pub fn getRelList(self: *Link, frame: *Frame) !?*DOMTokenList {
+    const element = self.asElement();
+    // relList is only valid for HTML <link> elements, not SVG or MathML
+    if (element._namespace != .html) {
+        return null;
+    }
+    return element.getRelList(frame);
+}
+
 pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     // if we're planning on navigating to another frame, don't trigger load event.
     if (frame.isGoingAway()) {
@@ -255,16 +274,8 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Link.getType, Link.setType, .{ .ce_reactions = true });
     pub const rev = bridge.accessor(Link.getRev, Link.setRev, .{ .ce_reactions = true });
     pub const target = bridge.accessor(Link.getTarget, Link.setTarget, .{ .ce_reactions = true });
-    pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
-
-    fn _getRelList(self: *Link, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
-        const element = self.asElement();
-        // relList is only valid for HTML <link> elements, not SVG or MathML
-        if (element._namespace != .html) {
-            return null;
-        }
-        return element.getRelList(frame);
-    }
+    pub const relList = bridge.accessor(Link.getRelList, null, .{ .null_as_undefined = true });
+    pub const sizes = bridge.accessor(Link.getSizes, null, .{ .null_as_undefined = true });
 };
 
 // Parser-created <link> elements are void (no closing tag) so they never
