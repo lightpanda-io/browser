@@ -127,7 +127,7 @@ pub fn is(self: *Node, comptime T: type) ?*T {
 /// NoModificationAllowedError for a null or document parent, while
 /// insertAdjacentElement/Text return null for a null parent and otherwise
 /// rely on the pre-insert validity checks (HierarchyRequestError).
-pub const AdjacentVariant = enum { html, node };
+const AdjacentVariant = enum { html, node };
 
 /// Given a position, returns target and previous nodes required for
 /// insertAdjacentHTML, insertAdjacentElement and insertAdjacentText.
@@ -1274,11 +1274,11 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
             var frag_it = frag.asNode().childrenIterator();
             while (frag_it.next()) |frag_child| {
                 try validateNodeInsertion(self, frag_child);
-                try children_to_add.append(frame.call_arena, frag_child);
+                try children_to_add.append(frame.local_arena, frag_child);
             }
         } else {
             try validateNodeInsertion(self, child);
-            try children_to_add.append(frame.call_arena, child);
+            try children_to_add.append(frame.local_arena, child);
         }
     }
 
@@ -1294,7 +1294,7 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (notify) {
-            try removed.append(frame.call_arena, child);
+            try removed.append(frame.local_arena, child);
         }
         frame.removeNode(self, child, .{ .will_be_reconnected = false, .notify_observers = false });
     }
@@ -1328,7 +1328,7 @@ pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, fr
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (notify) {
-            try removed.append(frame.call_arena, child);
+            try removed.append(frame.local_arena, child);
         }
         frame.removeNode(self, child, .{ .will_be_reconnected = false, .notify_observers = false });
     }
@@ -1345,7 +1345,7 @@ pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, fr
         var added: std.ArrayList(*Node) = .empty;
         var child_it = self.childrenIterator();
         while (child_it.next()) |child| {
-            try added.append(frame.call_arena, child);
+            try added.append(frame.local_arena, child);
         }
         if (removed.items.len > 0 or added.items.len > 0) {
             Frame.observers.notifyChildListChange(frame, self, added.items, removed.items, null, null);

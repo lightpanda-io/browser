@@ -487,7 +487,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
         var it = fragment.childrenIterator();
         while (it.next()) |child| {
             if (notify) {
-                try added.append(frame.call_arena, child);
+                try added.append(frame.local_arena, child);
             }
             frame.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
             try frame.insertNodeRelative(parent, child, .{ .before = node }, .{ .notify_observers = false });

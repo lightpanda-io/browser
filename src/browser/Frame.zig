@@ -2373,7 +2373,6 @@ pub fn dupeSSO(self: *Frame, value: []const u8) !String {
 const RemoveNodeOpts = struct {
     will_be_reconnected: bool,
     // Set to false when the caller queues its own combined mutation record
-    // (e.g. replaceChildren's single "replace all" record).
     notify_observers: bool = true,
 };
 pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
@@ -2509,7 +2508,6 @@ const InsertNodeOpts = struct {
     child_already_connected: bool = false,
     adopting_to_new_document: bool = false,
     // Set to false when the caller queues its own combined mutation record
-    // (e.g. replaceChildren's single "replace all" record).
     notify_observers: bool = true,
 };
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
