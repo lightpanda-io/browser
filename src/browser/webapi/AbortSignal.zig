@@ -168,9 +168,9 @@ pub fn createAborted(reason_: ?js.Value, exec: *const Execution) !*AbortSignal {
 }
 
 pub fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
-    // A js.Value parameter (not a slice) so the argument is required — the
-    // bridge would treat a trailing slice as variadic and default it to
-    // empty, but AbortSignal.any() must throw when called with no argument.
+    // The parameter isn't optional. If we declared it as a slice directy, the
+    // bridge would treat it as a variadic and map it to empty rather than throwing
+    // a TypeError as it should.
     const signals = try signals_value.toZig([]const *AbortSignal);
 
     const result = try init(exec);
@@ -284,9 +284,6 @@ pub const JsApi = struct {
 
     pub const Prototype = EventTarget;
 
-    // Per spec AbortSignal has no constructor; instances are created via the
-    // static methods and AbortController. (AbortSignal.init stays for
-    // internal use.)
     pub const aborted = bridge.accessor(AbortSignal.getAborted, null, .{});
     pub const reason = bridge.accessor(AbortSignal.getReason, null, .{});
     pub const onabort = bridge.accessor(AbortSignal.getOnAbort, AbortSignal.setOnAbort, .{});

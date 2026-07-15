@@ -16,10 +16,12 @@
 const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
-
 const URL = @import("../../../URL.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const DOMTokenList = @import("../../collections.zig").DOMTokenList;
+
 const HtmlElement = @import("../Html.zig");
 
 const Area = @This();
@@ -248,6 +250,15 @@ pub fn setProtocol(self: *Area, value: []const u8, frame: *Frame) !void {
     try setHref(self, new_href, frame);
 }
 
+pub fn getRelList(self: *Area, frame: *Frame) !?*DOMTokenList {
+    const element = self.asElement();
+    // relList is only valid for HTML <area> elements
+    if (element._namespace != .html) {
+        return null;
+    }
+    return element.getRelList(frame);
+}
+
 fn getResolvedHref(self: *Area, frame: *Frame) !?[:0]const u8 {
     const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return null;
     if (href.len == 0) {
@@ -289,16 +300,7 @@ pub const JsApi = struct {
     pub const rel = bridge.accessor(Area.getRel, Area.setRel, .{ .ce_reactions = true });
     pub const referrerPolicy = bridge.accessor(Area.getReferrerPolicy, Area.setReferrerPolicy, .{ .ce_reactions = true });
     pub const toString = bridge.function(Area.getHref, .{});
-    pub const relList = bridge.accessor(struct {
-        fn wrap(self: *Area, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
-            const element = self.asElement();
-            // relList is only valid for HTML <area> elements
-            if (element._namespace != .html) {
-                return null;
-            }
-            return element.getRelList(frame);
-        }
-    }.wrap, null, .{ .null_as_undefined = true });
+    pub const relList = bridge.accessor(Area.getRelList, null, .{ .null_as_undefined = true });
 };
 
 const testing = @import("../../../../testing.zig");
