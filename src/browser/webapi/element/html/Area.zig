@@ -289,7 +289,7 @@ pub const JsApi = struct {
     pub const rel = bridge.accessor(Area.getRel, Area.setRel, .{ .ce_reactions = true });
     pub const referrerPolicy = bridge.accessor(Area.getReferrerPolicy, Area.setReferrerPolicy, .{ .ce_reactions = true });
     pub const toString = bridge.function(Area.getHref, .{});
-    pub const relList = bridge.accessor(struct{
+    pub const relList = bridge.accessor(struct {
         fn wrap(self: *Area, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
             const element = self.asElement();
             // relList is only valid for HTML <area> elements
