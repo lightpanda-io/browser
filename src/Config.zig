@@ -109,7 +109,7 @@ fn caPathValidator(
         return error.InvalidArgument;
     }
 
-    return list.append(allocator, dir);
+    return list.append(allocator, try allocator.dupeZ(u8, dir));
 }
 
 /// Common CLI args.
