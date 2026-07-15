@@ -500,6 +500,65 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
     return try js.String.toSlice(.{ .local = local, .handle = handle });
 }
 
+// Per Web IDL, exceptions belong to the operation's relevant realm — the
+// receiver's — which differs from the calling realm for cross-realm calls
+// (v8 API callbacks run in the caller's context, and our JS wrappers are
+// shared across the page's contexts). For DOM nodes, the relevant realm is
+// the node document's frame; otherwise fall back to the calling realm.
+fn errorLocal(comptime T: type, local: *const Local, info: anytype) Local {
+    if (@TypeOf(info) != FunctionCallbackInfo) {
+        return local.*;
+    }
+
+    const frame = switch (local.ctx.global) {
+        .frame => |f| f,
+        .worker => return local.*,
+    };
+
+    const Node = @import("../webapi/Node.zig");
+    const Document = @import("../webapi/Document.zig");
+
+    const is_node_type = comptime blk: {
+        if (@typeInfo(T) != .@"struct" or !@hasDecl(T, "JsApi")) break :blk false;
+        break :blk @import("bridge.zig").inheritsOrIs(T.JsApi, Node.JsApi);
+    };
+    if (comptime !is_node_type) {
+        return local.*;
+    }
+
+    const instance = TaggedOpaque.fromJS(*T, info.getThis()) catch return local.*;
+    const node = protoNode(T, instance);
+
+    const doc: *Document = node.ownerDocument(frame) orelse switch (node._type) {
+        .document => |d| d,
+        else => return local.*,
+    };
+    const doc_frame = doc._frame orelse return local.*;
+    if (doc_frame == frame) {
+        return local.*;
+    }
+
+    const ctx = doc_frame.js;
+    const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&ctx.handle, ctx.isolate.handle) orelse return local.*);
+    return .{
+        .ctx = ctx,
+        .handle = local_v8_context,
+        .call_arena = ctx.call_arena,
+        .isolate = ctx.isolate,
+    };
+}
+
+// Upcast a Node-descendant instance to *Node by walking the _proto chain.
+// Not every node type defines an asNode() helper (e.g. Comment, Text), but
+// inheritsOrIs guarantees Node is in the chain
+fn protoNode(comptime T: type, instance: *T) *@import("../webapi/Node.zig") {
+    if (T == @import("../webapi/Node.zig")) {
+        return instance;
+    }
+    const Proto = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
+    return protoNode(Proto, instance._proto);
+}
+
 fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype) void {
     const isolate = local.isolate;
 
@@ -513,18 +572,34 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         }
     }
 
-    const js_err: *const v8.Value = switch (err) {
+    // early exit
+    switch (err) {
         error.TryCatchRethrow => return,
         // A JS exception is already pending in the isolate (e.g. a value's
         // toString threw during argument conversion); throwing anything here
         // would replace the original exception the script expects to see.
         error.JsException => return,
-        error.InvalidArgument => isolate.createTypeError("invalid argument"),
-        error.TypeError => isolate.createTypeError(""),
-        error.RangeError => isolate.createRangeError(""),
-        error.OutOfMemory => isolate.createError("out of memory"),
-        error.IllegalConstructor => isolate.createError("Illegal Constructor"),
-        else => domExceptionToJs(local, err) orelse isolate.createError(@errorName(err)),
+        else => {},
+    }
+
+    const err_local = errorLocal(T, local, info);
+
+    const js_err: *const v8.Value = blk: {
+        // Error constructors use the isolate's current context: enter the
+        // receiver's realm so the exception gets its prototypes.
+        const entered = err_local.ctx != local.ctx;
+        if (entered) v8.v8__Context__Enter(err_local.handle);
+        defer if (entered) v8.v8__Context__Exit(err_local.handle);
+
+        break :blk switch (err) {
+            error.InvalidArgument => isolate.createTypeError("invalid argument"),
+            error.TypeError => isolate.createTypeError(""),
+            error.RangeError => isolate.createRangeError(""),
+            error.OutOfMemory => isolate.createError("out of memory"),
+            error.IllegalConstructor => isolate.createError("Illegal Constructor"),
+            error.TryCatchRethrow, error.JsException => unreachable, // early exited a few lines up
+            else => domExceptionToJs(&err_local, err) orelse isolate.createError(@errorName(err)),
+        };
     };
 
     const js_exception = isolate.throwException(js_err);

@@ -1227,6 +1227,38 @@ pub fn getOnToggle(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
     return self.getAttributeFunction(.ontoggle, frame);
 }
 
+pub fn setOnTouchCancel(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchcancel, callback, frame);
+}
+
+pub fn getOnTouchCancel(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchcancel, frame);
+}
+
+pub fn setOnTouchEnd(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchend, callback, frame);
+}
+
+pub fn getOnTouchEnd(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchend, frame);
+}
+
+pub fn setOnTouchMove(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchmove, callback, frame);
+}
+
+pub fn getOnTouchMove(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchmove, frame);
+}
+
+pub fn setOnTouchStart(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchstart, callback, frame);
+}
+
+pub fn getOnTouchStart(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchstart, frame);
+}
+
 pub fn setOnTransitionCancel(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
     return self.setAttributeListener(.ontransitioncancel, callback, frame);
 }
@@ -1773,6 +1805,10 @@ pub const JsApi = struct {
     pub const onsuspend = bridge.accessor(HtmlElement.getOnSuspend, HtmlElement.setOnSuspend, .{});
     pub const ontimeupdate = bridge.accessor(HtmlElement.getOnTimeUpdate, HtmlElement.setOnTimeUpdate, .{});
     pub const ontoggle = bridge.accessor(HtmlElement.getOnToggle, HtmlElement.setOnToggle, .{});
+    pub const ontouchcancel = bridge.accessor(HtmlElement.getOnTouchCancel, HtmlElement.setOnTouchCancel, .{});
+    pub const ontouchend = bridge.accessor(HtmlElement.getOnTouchEnd, HtmlElement.setOnTouchEnd, .{});
+    pub const ontouchmove = bridge.accessor(HtmlElement.getOnTouchMove, HtmlElement.setOnTouchMove, .{});
+    pub const ontouchstart = bridge.accessor(HtmlElement.getOnTouchStart, HtmlElement.setOnTouchStart, .{});
     pub const ontransitioncancel = bridge.accessor(HtmlElement.getOnTransitionCancel, HtmlElement.setOnTransitionCancel, .{});
     pub const ontransitionend = bridge.accessor(HtmlElement.getOnTransitionEnd, HtmlElement.setOnTransitionEnd, .{});
     pub const ontransitionrun = bridge.accessor(HtmlElement.getOnTransitionRun, HtmlElement.setOnTransitionRun, .{});

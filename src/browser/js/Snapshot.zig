@@ -737,7 +737,7 @@ fn inheritsFromHtmlElement(comptime JsApi: type) bool {
     if (JsApi.bridge.type == HtmlElement) {
         return false;
     }
-    return inheritsOrIs(JsApi, HtmlElement.JsApi);
+    return bridge.inheritsOrIs(JsApi, HtmlElement.JsApi);
 }
 
 const Unforgeable = struct {
@@ -874,7 +874,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
 
     if (comptime flatten == false) {
         inline for (unforgeables) |u| {
-            if (comptime inheritsOrIs(JsApi, u.Owner)) {
+            if (comptime bridge.inheritsOrIs(JsApi, u.Owner)) {
                 // unforgeables attributes aren't only applied directly on the
                 // instance, they're also applied directly on every child instance
                 attachAccessorProperty(u.name, u.accessor, isolate, template, signature, instance);
@@ -948,23 +948,6 @@ const unforgeables: []const Unforgeable = blk: {
     }
     break :blk list;
 };
-
-// Whether Child is Ancestor or inherits from it, following the _proto chain.
-fn inheritsOrIs(comptime Child: type, comptime Ancestor: type) bool {
-    comptime {
-        const target = Ancestor.bridge.type;
-        var T = Child.bridge.type;
-        while (true) {
-            if (T == target) {
-                return true;
-            }
-            if (!@hasField(T, "_proto")) {
-                return false;
-            }
-            T = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
-        }
-    }
-}
 
 // Attach JsApi members to a template (public for reuse). This is called on all
 // types. But, for globals (window, WGS) it's called twice. The first time, it's

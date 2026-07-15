@@ -1091,6 +1091,11 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/PageTransitionEvent.zig"),
     @import("../webapi/event/PopStateEvent.zig"),
     @import("../webapi/event/HashChangeEvent.zig"),
+    @import("../webapi/event/BeforeUnloadEvent.zig"),
+    @import("../webapi/event/StorageEvent.zig"),
+    @import("../webapi/event/DeviceMotionEvent.zig"),
+    @import("../webapi/event/DeviceOrientationEvent.zig"),
+    @import("../webapi/event/TouchEvent.zig"),
     @import("../webapi/event/UIEvent.zig"),
     @import("../webapi/event/MouseEvent.zig"),
     @import("../webapi/event/PointerEvent.zig"),
@@ -1264,3 +1269,20 @@ pub const JsApis = blk: {
     }
     break :blk base ++ [_]type{@import("../webapi/WebDriver.zig").JsApi};
 };
+
+// Whether Child is Ancestor or inherits from it, following the _proto chain.
+pub fn inheritsOrIs(comptime Child: type, comptime Ancestor: type) bool {
+    comptime {
+        const target = Ancestor.bridge.type;
+        var T = Child.bridge.type;
+        while (true) {
+            if (T == target) {
+                return true;
+            }
+            if (!@hasField(T, "_proto")) {
+                return false;
+            }
+            T = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
+        }
+    }
+}
