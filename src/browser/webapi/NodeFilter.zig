@@ -44,6 +44,12 @@ pub fn init(opts_: ?FilterOpts) !NodeFilter {
     };
 }
 
+pub fn deinit(self: *const NodeFilter) void {
+    if (self._func) |func| {
+        func.release();
+    }
+}
+
 // Constants
 pub const FILTER_ACCEPT: i32 = 1;
 pub const FILTER_REJECT: i32 = 2;

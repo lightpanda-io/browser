@@ -205,13 +205,12 @@ pub fn importKey(
             const mask = common.usageMask(&.{ "deriveKey", "deriveBits" }, key_usages) catch |err| {
                 return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
             };
-            const key = try exec.arena.dupe(u8, raw);
-            const crypto_key = try exec._factory.create(CryptoKey{
+            const crypto_key = try CryptoKey.init(exec, .{
                 ._type = .derive,
                 ._kind = .secret,
                 ._extractable = extractable,
                 ._usages = mask,
-                ._key = key,
+                ._key = raw,
                 ._algorithm = .{ .name = derive_name },
             });
             return local.resolvePromise(crypto_key);

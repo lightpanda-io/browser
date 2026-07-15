@@ -93,12 +93,12 @@ pub fn generate(
     const allowed = allowedUsages(params.name).?;
     const mask = common.usageMask(allowed, key_usages) catch unreachable;
 
-    const key = try exec.arena.alloc(u8, params.length / 8);
+    const key = try exec.local_arena.alloc(u8, params.length / 8);
 
     const res = crypto.RAND_bytes(key.ptr, key.len);
     lp.assert(res == 1, "AES.generate", .{ .res = res });
 
-    const crypto_key = try exec._factory.create(CryptoKey{
+    const crypto_key = try CryptoKey.init(exec, .{
         ._type = .aes,
         ._kind = .secret,
         ._extractable = extractable,
@@ -133,13 +133,12 @@ pub fn import(
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
     }
 
-    const key = try exec.arena.dupe(u8, raw);
-    const crypto_key = try exec._factory.create(CryptoKey{
+    const crypto_key = try CryptoKey.init(exec, .{
         ._type = .aes,
         ._kind = .secret,
         ._extractable = extractable,
         ._usages = mask,
-        ._key = key,
+        ._key = raw,
         ._algorithm = .{ .name = canonical },
     });
 

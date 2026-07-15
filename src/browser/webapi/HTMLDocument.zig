@@ -188,8 +188,8 @@ pub fn getEmbeds(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag)
     return collections.NodeLive(.tag).init(self.asNode(), .embed, frame);
 }
 
-pub fn getApplets(_: *const HTMLDocument) collections.HTMLCollection {
-    return .{ ._data = .empty };
+pub fn getApplets(_: *const HTMLDocument, frame: *Frame) !*collections.HTMLCollection {
+    return frame._factory.create(collections.HTMLCollection{ ._data = .empty });
 }
 
 pub fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {

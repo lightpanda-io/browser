@@ -60,11 +60,8 @@ pub fn init(
         });
     }
 
-    const public_value = try exec.arena.alloc(u8, crypto.X25519_PUBLIC_VALUE_LEN);
-    errdefer exec.arena.free(public_value);
-
-    const private_key = try exec.arena.alloc(u8, crypto.X25519_PRIVATE_KEY_LEN);
-    errdefer exec.arena.free(private_key);
+    const public_value = try exec.local_arena.alloc(u8, crypto.X25519_PUBLIC_VALUE_LEN);
+    const private_key = try exec.local_arena.alloc(u8, crypto.X25519_PRIVATE_KEY_LEN);
 
     // There's no info about whether this can fail; so I assume it cannot.
     crypto.X25519_keypair(@ptrCast(public_value), @ptrCast(private_key));
@@ -91,7 +88,7 @@ pub fn init(
         private_key.len,
     ) orelse return error.OutOfMemory;
 
-    const private = try exec._factory.create(CryptoKey{
+    const private = try CryptoKey.init(exec, .{
         ._type = .x25519,
         ._kind = .private,
         ._extractable = extractable,
@@ -100,9 +97,8 @@ pub fn init(
         ._algorithm = .{ .name = "X25519" },
         ._vary = .{ .pkey = private_pkey },
     });
-    errdefer exec._factory.destroy(private);
 
-    const public = try exec._factory.create(CryptoKey{
+    const public = try CryptoKey.init(exec, .{
         ._type = .x25519,
         ._kind = .public,
         // Public keys are always extractable.

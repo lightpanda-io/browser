@@ -16,7 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
@@ -25,6 +28,7 @@ pub const FilterOpts = NodeFilter.FilterOpts;
 
 const DOMTreeWalker = @This();
 
+_rc: lp.RC(u8) = .{},
 _root: *Node,
 _what_to_show: u32,
 _filter: NodeFilter,
@@ -38,6 +42,19 @@ pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) 
         ._filter = node_filter,
         ._what_to_show = what_to_show,
     });
+}
+
+pub fn deinit(self: *DOMTreeWalker, page: *Page) void {
+    self._filter.deinit();
+    page.factory.destroy(self);
+}
+
+pub fn releaseRef(self: *DOMTreeWalker, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *DOMTreeWalker) void {
+    self._rc.acquire();
 }
 
 pub fn getRoot(self: *const DOMTreeWalker) *Node {

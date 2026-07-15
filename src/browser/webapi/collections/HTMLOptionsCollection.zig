@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -26,6 +27,23 @@ const HTMLOptionsCollection = @This();
 
 _proto: *HTMLCollection,
 _select: *@import("../element/html/Select.zig"),
+
+// The refcount lives on the proto, but anchoring the finalizer here lets
+// deinit reclaim this struct's slot along with the proto's.
+pub fn deinit(self: *HTMLOptionsCollection, page: *Page) void {
+    self._proto.deinit(page);
+    // Not destroy(): the proto is a separate slab allocation, not a
+    // contiguous factory chain.
+    page.factory.destroyStandalone(self);
+}
+
+pub fn acquireRef(self: *HTMLOptionsCollection) void {
+    self._proto.acquireRef();
+}
+
+pub fn releaseRef(self: *HTMLOptionsCollection, page: *Page) void {
+    self._proto._rc.release(self, page);
+}
 
 // Forward length to HTMLCollection
 pub fn length(self: *HTMLOptionsCollection, frame: *Frame) u32 {

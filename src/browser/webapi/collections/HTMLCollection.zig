@@ -17,7 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
@@ -55,6 +58,19 @@ _data: union(Mode) {
     form: NodeLive(.form),
     empty: void,
 },
+_rc: lp.RC(u8) = .{},
+
+pub fn deinit(self: *HTMLCollection, page: *Page) void {
+    page.factory.destroy(self);
+}
+
+pub fn releaseRef(self: *HTMLCollection, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *HTMLCollection) void {
+    self._rc.acquire();
+}
 
 pub fn length(self: *HTMLCollection, frame: *const Frame) u32 {
     return switch (self._data) {
@@ -118,6 +134,14 @@ pub const Iterator = GenericIterator(struct {
         form: TreeWalker.FullExcludeSelf,
         empty: void,
     },
+
+    pub fn acquireRef(self: *@This()) void {
+        self.list.acquireRef();
+    }
+
+    pub fn releaseRef(self: *@This(), page: *Page) void {
+        self.list.releaseRef(page);
+    }
 
     pub fn next(self: *@This(), _: *const Execution) ?*Element {
         return switch (self.list._data) {

@@ -70,6 +70,19 @@
   }
 </script>
 
+<script id=structured-clone>
+  {
+    const img = new ImageData(2, 2);
+    img.data[0] = 42;
+    const clone = structuredClone(img);
+    testing.expectEqual(2, clone.width);
+    testing.expectEqual(2, clone.height);
+    testing.expectEqual(42, clone.data[0]);
+    clone.data[0] = 7;
+    testing.expectEqual(42, img.data[0]);
+  }
+</script>
+
 <script id=too-large>
   testing.expectError("IndexSizeError", () => new ImageData(2_147_483_648, 2_147_483_648));
 </script>
