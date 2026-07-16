@@ -246,6 +246,11 @@ pub fn tick(self: *CDP) !bool {
     // so the flag can't be a stale leftover here. Exit.
     if (self.browser.env.terminatePending()) {
         log.warn(.cdp, "closing connection", .{ .reason = "pending terminate" });
+        // The worker thread is the sole writer of this socket, so sending the
+        // close frame here can't interleave with another write.
+        self.conn.send(&WS.CLOSE_GOING_AWAY) catch |err| {
+            log.warn(.app, "CDP terminate close", .{ .err = err });
+        };
         return false;
     }
 
@@ -1433,6 +1438,25 @@ test "cdp: disconnect latches so the worker keeps exiting" {
     // would never exit and Server.deinit() would spin on active_threads
     // (#2510). The latch keeps the terminal state sticky so the worker exits.
     try testing.expectError(error.ClientDisconnected, client.tick(0));
+}
+
+test "cdp: tick sends a close frame on pending terminate" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp = ctx.cdp();
+    cdp.browser.env.requestTerminate();
+    // Clear the pending terminate so deinit's V8 calls don't trip over the
+    // terminating-state asserts.
+    defer cdp.browser.env.cancelTerminate();
+
+    try testing.expectEqual(false, try cdp.tick());
+
+    // The client should receive a close frame (code 1001, going away), not
+    // just an abrupt socket close.
+    var buf: [WS.CLOSE_GOING_AWAY.len]u8 = undefined;
+    const n = try posix.read(ctx.socket, &buf);
+    try testing.expectEqualSlices(u8, &WS.CLOSE_GOING_AWAY, buf[0..n]);
 }
 
 test "cdp: syncRequest short-circuits after disconnect" {
