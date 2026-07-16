@@ -73,5 +73,5 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(GamepadEvent.init, .{});
-    pub const gamepad = bridge.accessor(GamepadEvent.getGamepad, null, .{ .null_as_undefined = false });
+    pub const gamepad = bridge.accessor(GamepadEvent.getGamepad, null, .{});
 };

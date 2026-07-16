@@ -105,7 +105,7 @@ pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !js
         .sources = persisted,
         .resolver = try resolver.persist(),
     };
-    errdefer action_sequence.sources.release();
+    errdefer action_sequence.resolver.release();
 
     // cannot be run synchronously, has to be run on the next tick
     try frame.js.scheduler.add(action_sequence, ActionSequence.run, 0, .{
@@ -130,6 +130,10 @@ const ActionSequence = struct {
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
         defer ls.deinit();
+
+        errdefer |err| {
+            ls.toLocal(self.resolver).reject("WebDriver.actionSequence", ls.local.newString(@errorName(err)));
+        }
 
         const sources = self.sources.local(&ls.local).toArray();
         for (0..sources.len()) |i| {
@@ -160,8 +164,7 @@ const ActionSequence = struct {
 
     fn deinit(self: *ActionSequence) void {
         self.sources.release();
-        // The persisted resolver handle is page-managed; resetting it here
-        // too would double-free the v8 global at page teardown.
+        self.resolver.release();
         self.frame.releaseArena(self.arena);
     }
 };
