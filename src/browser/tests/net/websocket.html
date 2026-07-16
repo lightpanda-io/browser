@@ -562,6 +562,29 @@
 }
 </script>
 
+<script id=close_while_connecting type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  ws.addEventListener('open', () => { received.push('open'); });
+  ws.addEventListener('close', (e) => {
+    received.push(['close', e.code, e.reason, e.wasClean]);
+    state.resolve();
+  });
+
+  ws.close(3000, 'changed my mind');
+  received.push(ws.readyState); // CLOSED = 3, immediately
+
+  await state.done(() => {
+    // open never fires; the close event is delivered asynchronously with
+    // the values close() was given and wasClean=false.
+    testing.expectEqual([3, ['close', 3000, 'changed my mind', false]], received);
+  });
+}
+</script>
+
 <script id=ws_within_callback type=module>
 {
   const state = await testing.async();
