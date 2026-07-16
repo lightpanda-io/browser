@@ -31,7 +31,9 @@ const v8 = js.v8;
 const log = lp.log;
 const JsApis = bridge.JsApis;
 const PageJsApis = bridge.PageJsApis;
-const WorkerJsApis = bridge.WorkerJsApis;
+const SharedWorkerJsApis = bridge.SharedWorkerJsApis;
+const DedicatedWorkerJsApis = bridge.DedicatedWorkerJsApis;
+
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Snapshot = @This();
@@ -209,8 +211,14 @@ pub fn create() !Snapshot {
 
         {
             const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
-            const index = try createSnapshotContext(.worker, &WorkerJsApis, DedicatedWorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
+            const index = try createSnapshotContext(.worker, &DedicatedWorkerJsApis, DedicatedWorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
             std.debug.assert(index == 1);
+        }
+
+        {
+            const SharedWorkerGlobalScope = @import("../webapi/SharedWorkerGlobalScope.zig");
+            const index = try createSnapshotContext(.worker, &SharedWorkerJsApis, SharedWorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
+            std.debug.assert(index == 2);
         }
     }
 

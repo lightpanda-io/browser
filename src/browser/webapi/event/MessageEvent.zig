@@ -36,14 +36,19 @@ _proto: *Event,
 _data: ?Data = null,
 _origin: []const u8 = "",
 _last_event_id: []const u8 = "",
-_source: ?*Window = null,
+_source: ?Source = null,
 _ports: []const *MessagePort = &.{},
+
+pub const Source = union(enum) {
+    window: *Window,
+    port: *MessagePort,
+};
 
 const MessageEventOptions = struct {
     data: ?Data = null,
     origin: ?[]const u8 = null,
     lastEventId: ?[]const u8 = null,
-    source: ?*Window = null,
+    source: ?Source = null,
     ports: []const *MessagePort = &.{},
 };
 
@@ -124,18 +129,24 @@ pub fn getLastEventId(self: *const MessageEvent) []const u8 {
     return self._last_event_id;
 }
 
-pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?Window.Access {
-    switch (exec.js.global) {
-        .frame => |frame| {
-            const source = self._source orelse return null;
-            return Window.Access.init(frame.window, source);
-        },
-        .worker => {
-            // source for worker should always be null
-            if (comptime IS_DEBUG) {
-                std.debug.assert(self._source == null);
-            }
-            return null;
+const SourceAccess = union(enum) {
+    window: Window.Access,
+    port: *MessagePort,
+};
+
+pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
+    const source = self._source orelse return null;
+    switch (source) {
+        .port => |port| return .{ .port = port },
+        .window => |window| switch (exec.js.global) {
+            .frame => |frame| return .{ .window = Window.Access.init(frame.window, window) },
+            .worker => {
+                // a window source should never reach a worker context
+                if (comptime IS_DEBUG) {
+                    std.debug.assert(false);
+                }
+                return null;
+            },
         },
     }
 }

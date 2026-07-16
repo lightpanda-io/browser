@@ -1114,6 +1114,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/MessagePort.zig"),
     @import("../webapi/BroadcastChannel.zig"),
     @import("../webapi/Worker.zig"),
+    @import("../webapi/SharedWorker.zig"),
     @import("../webapi/media/MediaError.zig"),
     @import("../webapi/media/TextTrackCue.zig"),
     @import("../webapi/media/VTTCue.zig"),
@@ -1182,11 +1183,13 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/collections/DOMStringList.zig"),
 });
 
-// APIs available on Worker context globals (constructors like URL, Headers, etc.)
+// APIs available on every Worker context global (constructors like URL,
+// Headers, etc.), regardless of worker kind. Each kind's snapshot context
+// adds its own global-scope type on top (DedicatedWorkerJsApis,
+// SharedWorkerJsApis below).
 // This is a subset of PageJsApis plus WorkerGlobalScope.
 // TODO: Expand this list to include all worker-appropriate APIs.
-pub const WorkerJsApis = flattenTypes(&.{
-    @import("../webapi/DedicatedWorkerGlobalScope.zig"),
+const worker_common_apis = [_]type{
     @import("../webapi/WorkerGlobalScope.zig"),
     @import("../webapi/WorkerLocation.zig"),
     @import("../webapi/Navigator.zig"),
@@ -1253,7 +1256,10 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/MessageChannel.zig"),
     @import("../webapi/MessagePort.zig"),
     @import("../webapi/collections/DOMStringList.zig"),
-});
+};
+
+pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_common_apis));
+pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedWorkerGlobalScope.zig")} ++ worker_common_apis));
 
 // Master list of ALL JS APIs across all contexts.
 // Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
@@ -1262,6 +1268,7 @@ pub const WorkerJsApis = flattenTypes(&.{
 pub const JsApis = blk: {
     const base = PageJsApis ++ [_]type{
         @import("../webapi/DedicatedWorkerGlobalScope.zig").JsApi,
+        @import("../webapi/SharedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerLocation.zig").JsApi,
     };

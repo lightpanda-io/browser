@@ -31,6 +31,7 @@ const App = @import("../../App.zig");
 const Frame = @import("../Frame.zig");
 const Window = @import("../webapi/Window.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
+const SharedWorkerGlobalScope = @import("../webapi/SharedWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
 
 const v8 = js.v8;
@@ -274,8 +275,12 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         break :blk @ptrCast(v8.v8__Global__Get(existing, isolate.handle));
     };
 
-    // Restore the context from the snapshot (0 = Page, 1 = Worker)
-    const snapshot_index: u32 = if (comptime is_frame) 0 else 1;
+    // Restore the context from the snapshot
+    // (0 = Page, 1 = DedicatedWorker, 2 = SharedWorker)
+    const snapshot_index: u32 = if (comptime is_frame) 0 else switch (global._type) {
+        .dedicated => 1,
+        .shared => 2,
+    };
     const v8_context = v8.v8__Context__FromSnapshot__Config(isolate.handle, snapshot_index, &.{
         .global_template = null,
         .global_object = reuse_global_object,
@@ -297,11 +302,19 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,
         .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
         .subtype = .node,
-    } else .{
-        .value = @ptrCast(global._type.dedicated),
-        .prototype_chain = (&DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
-        .prototype_len = @intCast(DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
-        .subtype = null,
+    } else switch (global._type) {
+        .dedicated => |scope| .{
+            .value = @ptrCast(scope),
+            .prototype_chain = (&DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
+            .prototype_len = @intCast(DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
+            .subtype = null,
+        },
+        .shared => |scope| .{
+            .value = @ptrCast(scope),
+            .prototype_chain = (&SharedWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
+            .prototype_len = @intCast(SharedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
+            .subtype = null,
+        },
     };
     v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
 
@@ -349,7 +362,9 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
 
     // Register in the identity map. Multiple contexts can be created for the
     // same global (via CDP), so we only register the first one.
-    const identity_ptr = if (comptime is_frame) @intFromPtr(global.window) else @intFromPtr(global._type.dedicated);
+    const identity_ptr = if (comptime is_frame) @intFromPtr(global.window) else switch (global._type) {
+        inline else => |scope| @intFromPtr(scope),
+    };
     const gop = try params.identity.identity_map.getOrPut(params.identity_arena, identity_ptr);
     if (gop.found_existing == false) {
         var global_global: v8.Global = undefined;

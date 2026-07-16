@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id="shared_worker_creation">
+  {
+    const worker = new SharedWorker('./echo-worker.js');
+    testing.expectTrue(worker instanceof SharedWorker);
+    testing.expectTrue(worker.port instanceof MessagePort);
+  }
+</script>
+
+<script id="shared_worker_echo" type=module>
+  // Also exercises post-before-load: the message is posted while the worker
+  // script's fetch is still in flight, so it must sit in the worker-side
+  // port's queue until the connect handler assigns port.onmessage.
+  {
+    const state = await testing.async();
+    const worker = new SharedWorker('./echo-worker.js');
+
+    worker.port.onmessage = (event) => {
+      state.resolve(event.data);
+    };
+    worker.port.postMessage({ greeting: 'hello' });
+
+    await state.done((response) => {
+      testing.expectEqual('hello', response.echo.greeting);
+      testing.expectEqual('shared-worker', response.from);
+      testing.expectEqual(true, response.sourceIsPort);
+    });
+  }
+</script>
+
+<script id="shared_worker_shared_instance" type=module>
+  // Two SharedWorker handles for the same (url, name) are distinct JS
+  // objects but connect to the same worker: the counter is shared.
+  {
+    const state = await testing.async();
+    const w1 = new SharedWorker('./counter-worker.js');
+    const w2 = new SharedWorker('./counter-worker.js');
+    testing.expectTrue(w1 !== w2);
+    testing.expectTrue(w1.port !== w2.port);
+
+    const incr = (w) => new Promise((resolve) => {
+      w.port.onmessage = (e) => resolve(e.data);
+      w.port.postMessage('incr');
+    });
+
+    const c1 = await incr(w1);
+    const c2 = await incr(w2);
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(1, c1.count);
+      testing.expectEqual(2, c2.count);
+      testing.expectEqual('', c1.name);
+    });
+  }
+</script>
+
+<script id="shared_worker_named_isolation" type=module>
+  // Different names on the same url are different workers, and each worker
+  // sees its own name. The second argument can be a string or an options
+  // object.
+  {
+    const state = await testing.async();
+    const wa = new SharedWorker('./counter-worker.js', 'a');
+    const wb = new SharedWorker('./counter-worker.js', { name: 'b' });
+
+    const incr = (w) => new Promise((resolve) => {
+      w.port.onmessage = (e) => resolve(e.data);
+      w.port.postMessage('incr');
+    });
+
+    const ca = await incr(wa);
+    const cb = await incr(wb);
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(1, ca.count);
+      testing.expectEqual('a', ca.name);
+      testing.expectEqual(1, cb.count);
+      testing.expectEqual('b', cb.name);
+    });
+  }
+</script>
+
+<script id="shared_worker_add_event_listener" type=module>
+  // addEventListener('message') on the page-side port does not auto-start
+  // it; an explicit start() is required. The worker script likewise uses
+  // addEventListener('connect') + port.start().
+  {
+    const state = await testing.async();
+    const worker = new SharedWorker('./listener-worker.js');
+
+    worker.port.addEventListener('message', (event) => {
+      state.resolve(event.data);
+    });
+    worker.port.start();
+    worker.port.postMessage('ping');
+
+    await state.done((response) => {
+      testing.expectEqual('listener:ping', response);
+    });
+  }
+</script>
+
+<script id="shared_worker_structured_clone" type=module>
+  // Messages cross a context boundary: the receiver gets an independent
+  // structured clone, and unserializable values throw a DataCloneError.
+  {
+    const state = await testing.async();
+    const worker = new SharedWorker('./echo-worker.js');
+
+    let threw = false;
+    try {
+      worker.port.postMessage(function () {});
+    } catch (e) {
+      threw = true;
+      testing.expectEqual('DataCloneError', e.name);
+    }
+    testing.expectEqual(true, threw);
+
+    const payload = { date: new Date('2024-06-15T12:30:00Z'), arr: [1, 2, 3] };
+    worker.port.onmessage = (event) => {
+      state.resolve(event.data);
+    };
+    worker.port.postMessage(payload);
+    payload.arr.push(4); // must not be visible to the worker
+
+    await state.done((response) => {
+      testing.expectTrue(response.echo.date instanceof Date);
+      testing.expectEqual(payload.date.getTime(), response.echo.date.getTime());
+      testing.expectEqual(3, response.echo.arr.length);
+    });
+  }
+</script>

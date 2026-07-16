@@ -53,6 +53,7 @@ const VisualViewport = @import("webapi/VisualViewport.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const DOMNodeIterator = @import("webapi/DOMNodeIterator.zig");
 const Worker = @import("webapi/Worker.zig");
+const MessagePort = @import("webapi/MessagePort.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
@@ -197,6 +198,9 @@ _live_node_iterators: std.DoublyLinkedList = .{},
 // List of open BroadcastChannels, used to route postMessage between same-named
 // channels in this frame's origin
 _broadcast_channels: std.DoublyLinkedList = .{},
+
+// List of MessagePorts living in this frame's context.
+_message_ports: std.DoublyLinkedList = .{},
 
 // MutationObserver / IntersectionObserver bookkeeping. See frame/observers.zig.
 _mutation: observers.Mutation = .{},
@@ -475,6 +479,11 @@ pub fn deinit(self: *Frame) void {
 
     if (self._queued_navigation) |qn| {
         page.releaseArena(qn.arena);
+    }
+
+    while (self._message_ports.first) |node| {
+        const port: *MessagePort = @alignCast(@fieldParentPtr("_node", node));
+        port.close(); // removes from self._message_ports
     }
 
     {
