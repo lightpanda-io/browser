@@ -156,35 +156,58 @@ fn promptInteractiveChoice(header: []const u8, items: []const [:0]const u8, defa
     }
 }
 
-fn clearChoiceRender(line_count: usize) void {
-    moveChoiceRenderStart(line_count);
-    for (0..line_count) |i| {
-        std.debug.print(ansi.clear_line, .{});
-        if (i + 1 < line_count) std.debug.print("\r\n", .{});
-    }
-    moveChoiceRenderStart(line_count);
+/// Emit a whole redraw frame in one write — per-line writes can tear
+/// visually mid-frame (same approach as Spinner's renderLocked). A frame
+/// that outgrows the buffer is emitted truncated.
+fn emitFrame(bytes: []const u8) void {
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
 }
 
-fn moveChoiceRenderStart(line_count: usize) void {
+const frame_buf_len = 4096;
+
+fn clearChoiceRender(line_count: usize) void {
+    var buf: [frame_buf_len]u8 = undefined;
+    var fw: std.Io.Writer = .fixed(&buf);
+    blk: {
+        moveChoiceRenderStart(&fw, line_count) catch break :blk;
+        for (0..line_count) |i| {
+            fw.writeAll(ansi.clear_line) catch break :blk;
+            if (i + 1 < line_count) fw.writeAll("\r\n") catch break :blk;
+        }
+        moveChoiceRenderStart(&fw, line_count) catch break :blk;
+    }
+    emitFrame(fw.buffered());
+}
+
+fn moveChoiceRenderStart(w: *std.Io.Writer, line_count: usize) std.Io.Writer.Error!void {
     if (line_count > 1) {
-        std.debug.print("\x1b[{d}F", .{line_count - 1});
+        try w.print("\x1b[{d}F", .{line_count - 1});
     } else {
-        std.debug.print("\r", .{});
+        try w.writeAll("\r");
     }
 }
 
 fn renderChoice(header: []const u8, items: []const [:0]const u8, default: ?usize, selected: usize, first_render: bool) void {
-    if (!first_render) moveChoiceRenderStart(items.len + 2);
-    std.debug.print(ansi.clear_line ++ "{s}\r\n", .{header});
+    var buf: [frame_buf_len]u8 = undefined;
+    var fw: std.Io.Writer = .fixed(&buf);
+    writeChoiceFrame(&fw, header, items, default, selected, first_render) catch {};
+    emitFrame(fw.buffered());
+}
+
+fn writeChoiceFrame(w: *std.Io.Writer, header: []const u8, items: []const [:0]const u8, default: ?usize, selected: usize, first_render: bool) std.Io.Writer.Error!void {
+    if (!first_render) try moveChoiceRenderStart(w, items.len + 2);
+    try w.print(ansi.clear_line ++ "{s}\r\n", .{header});
     for (items, 0..) |item, idx| {
         const on_row = idx == selected;
         const marker: []const u8 = if (on_row) ">" else " ";
         const style: []const u8 = if (on_row) ansi.bold ++ ansi.teal else "";
         const reset: []const u8 = if (on_row) ansi.reset else "";
         const default_marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
-        std.debug.print(ansi.clear_line ++ "  {s} {s}{s}{s}{s}\r\n", .{ marker, style, item, default_marker, reset });
+        try w.print(ansi.clear_line ++ "  {s} {s}{s}{s}{s}\r\n", .{ marker, style, item, default_marker, reset });
     }
-    std.debug.print(ansi.clear_line ++ "{s}Use Up/Down then Enter. Esc cancels.{s}", .{ ansi.dim, ansi.reset });
+    try w.print(ansi.clear_line ++ "{s}Use Up/Down then Enter. Esc cancels.{s}", .{ ansi.dim, ansi.reset });
 }
 
 fn readChoiceInput() !ChoiceInput {
