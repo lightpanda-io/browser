@@ -1027,6 +1027,12 @@ pub fn focus(self: *Element, frame: *Frame) !void {
         return;
     }
 
+    // Per HTML spec §6.4.4, an element must be "being rendered" (not
+    // display:none on self or any ancestor) to be focusable.
+    if (!self.checkVisibilityCached(null, frame)) {
+        return;
+    }
+
     const FocusEvent = @import("event/FocusEvent.zig");
 
     const new_target = self.asEventTarget();
