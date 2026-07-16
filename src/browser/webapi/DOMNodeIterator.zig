@@ -36,9 +36,7 @@ _filter: NodeFilter,
 _reference_node: *Node,
 _pointer_before_reference_node: bool,
 _active: bool = false,
-// Intrusive link for Frame._live_node_iterators (pre-removing steps).
-// Iterators are slab-allocated and live as long as the frame, so they are
-// never unlinked.
+_frame_loader_id: u32,
 _iterator_link: std.DoublyLinkedList.Node = .{},
 
 pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) !*DOMNodeIterator {
@@ -48,23 +46,48 @@ pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) 
         ._filter = node_filter,
         ._reference_node = root,
         ._what_to_show = what_to_show,
+        ._frame_loader_id = frame._loader_id,
         ._pointer_before_reference_node = true,
     });
     frame._live_node_iterators.append(&iterator._iterator_link);
     return iterator;
 }
 
+pub fn deinit(self: *DOMNodeIterator, page: *Page) void {
+    if (page.findFrameByLoaderId(self._frame_loader_id)) |frame| {
+        frame._live_node_iterators.remove(&self._iterator_link);
+    }
+    self._filter.deinit();
+    page.factory.destroy(self);
+}
+
+pub fn releaseRef(self: *DOMNodeIterator, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *DOMNodeIterator) void {
+    self._rc.acquire();
+}
+
+pub fn getRoot(self: *const DOMNodeIterator) *Node {
+    return self._root;
+}
+
 // DOM "node iterator pre-removing steps", run while the tree still contains
 // to_be_removed.
 pub fn nodeWillBeRemoved(self: *DOMNodeIterator, to_be_removed: *Node) void {
-    // Removing the root or one of its ancestors leaves the iterator alone.
-    if (to_be_removed == self._root or to_be_removed.contains(self._root)) return;
-    if (to_be_removed != self._reference_node and !to_be_removed.contains(self._reference_node)) return;
+    if (to_be_removed.contains(self._root)) {
+        // Removing the root or one of its ancestors leaves the iterator alone.
+        return;
+    }
+    if (to_be_removed != self._reference_node and to_be_removed.contains(self._reference_node) == false) {
+        return;
+    }
 
     if (self._pointer_before_reference_node) {
         // The first node following to_be_removed's subtree, if any.
         var node = to_be_removed;
-        while (true) {
+        while (node != self._root) {
             if (node.nextSibling()) |sibling| {
                 self._reference_node = sibling;
                 return;
@@ -85,23 +108,6 @@ pub fn nodeWillBeRemoved(self: *DOMNodeIterator, to_be_removed: *Node) void {
     } else {
         self._reference_node = to_be_removed.parentNode() orelse self._root;
     }
-}
-
-pub fn deinit(self: *DOMNodeIterator, page: *Page) void {
-    self._filter.deinit();
-    page.factory.destroy(self);
-}
-
-pub fn releaseRef(self: *DOMNodeIterator, page: *Page) void {
-    self._rc.release(self, page);
-}
-
-pub fn acquireRef(self: *DOMNodeIterator) void {
-    self._rc.acquire();
-}
-
-pub fn getRoot(self: *const DOMNodeIterator) *Node {
-    return self._root;
 }
 
 pub fn getReferenceNode(self: *const DOMNodeIterator) *Node {

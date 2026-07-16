@@ -25,8 +25,7 @@ _opts: ?FilterOpts,
 
 pub const FilterOpts = union(enum) {
     function: js.Function.Global,
-    // Any object is a valid callback interface; whether its acceptNode
-    // member is callable is only checked when the filter is invoked.
+    // Per spec, the validity of this has to be checked in each acceptNode call.
     object: js.Object.Global,
 };
 
@@ -67,10 +66,7 @@ pub fn acceptNode(self: *const NodeFilter, node: *Node, local: *const js.Local) 
     switch (opts) {
         .function => |func| return local.toLocal(func).callRethrow(i32, .{node}),
         .object => |obj| {
-            // Per WebIDL "call a user object's operation": the acceptNode
-            // member is looked up on every invocation (rethrowing getter
-            // errors), must be callable (TypeError otherwise), and is
-            // invoked with the filter object as its this value.
+            // Per spec, the acceptNode member is looked up on every invocation
             const filter_obj = obj.local(local);
             const member = try filter_obj.get("acceptNode");
             if (!member.isFunction()) {

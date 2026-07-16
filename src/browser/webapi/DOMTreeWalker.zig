@@ -33,8 +33,6 @@ _root: *Node,
 _what_to_show: u32,
 _filter: NodeFilter,
 _current: *Node,
-// Set while the filter callback runs; a walker method called from inside
-// its own filter must throw InvalidStateError.
 _active: bool = false,
 
 pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) !*DOMTreeWalker {
