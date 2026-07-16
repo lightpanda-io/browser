@@ -295,8 +295,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .cells => {
                     // HTMLTableRowElement.cells: td and th children.
                     const el = node.is(Element) orelse return false;
-                    const tag = el.getTag();
-                    return tag == .td or tag == .th;
+                    return el.is(Element.Html.TableCell) != null;
                 },
                 .selected_options => {
                     const el = node.is(Element) orelse return false;
