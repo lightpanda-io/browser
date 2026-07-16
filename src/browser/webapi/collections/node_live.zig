@@ -283,6 +283,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                 },
                 .name => {
                     const el = node.is(Element) orelse return false;
+                    // getElementsByName only considers HTML elements.
+                    if (el._namespace != .html) return false;
                     const name_attr = el.getAttributeSafe(comptime .wrap("name")) orelse return false;
                     return std.mem.eql(u8, name_attr, self._filter);
                 },

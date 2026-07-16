@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const Node = @import("../Node.zig");
 const Attribute = @import("../element/Attribute.zig");
@@ -159,7 +160,7 @@ pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selecto
     return selectors.items;
 }
 
-pub fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
+fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     var parser = Parser{ .input = input };
     var segments: std.ArrayList(Segment) = .empty;
     var current_compound: std.ArrayList(Part) = .empty;
@@ -961,10 +962,16 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         self.input = self.input[1..];
     }
 
+    // Kept as-written in original_name for the case-sensitive match on
+    // foreign elements; like the rest of the AST, it borrows the input.
     const attr_name = try self.attributeName(arena);
 
     // Normalize the name to lowercase for fast matching (consistent with Attribute.normalizeNameForLookup)
-    const name = try Attribute.normalizeNameForLookupAlloc(arena, .wrap(attr_name));
+    const name = if (Attribute.needsLowerCasing(attr_name))
+        try Attribute.normalizeNameForLookupAlloc(arena, .wrap(attr_name))
+    else
+        lp.String.wrap(attr_name);
+
     var case_insensitive = false;
     _ = self.skipSpaces();
 
@@ -974,7 +981,12 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         if (self.peek() == ']') {
             self.input = self.input[1..];
         }
-        return .{ .name = name, .matcher = .presence, .case_insensitive = case_insensitive };
+        return .{
+            .name = name,
+            .matcher = .presence,
+            .original_name = .wrap(attr_name),
+            .case_insensitive = case_insensitive,
+        };
     }
 
     const matcher_type = try self.attributeMatcher();
@@ -1012,7 +1024,12 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         .presence => unreachable,
     };
 
-    return .{ .name = name, .matcher = matcher, .case_insensitive = case_insensitive };
+    return .{
+        .name = name,
+        .matcher = matcher,
+        .original_name = .wrap(attr_name),
+        .case_insensitive = case_insensitive,
+    };
 }
 
 fn attributeName(self: *Parser, arena: Allocator) ![]const u8 {
