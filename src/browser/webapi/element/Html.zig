@@ -106,7 +106,7 @@ const HtmlElement = @This();
 _type: Type,
 _proto: *Element,
 
-// Special constructor for custom elements.
+// Special constructor for custom elements (autonomous, `extends HTMLElement`).
 // Two paths:
 //  - Upgrade path: customElements.define / createElement / upgrade set
 //    `_upgrading_element` before calling newInstance, and we just return it.
@@ -117,6 +117,15 @@ pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
         return node.is(Element) orelse return error.IllegalConstructor;
     }
     return Frame.node_factory.constructCustomElement(frame, new_target);
+}
+
+// Shared constructor callback for builtin html element interfaces. These types
+// cannot be instantinated (e.g. new HTMLDivElement), but a custom element can
+// be extended, so super() has to create them. All of these types have their
+// constructors routed here.
+pub fn upgradeConstruct(frame: *Frame) !*Element {
+    const node = frame._upgrading_element orelse return error.TypeError;
+    return node.is(Element) orelse return error.TypeError;
 }
 
 pub const Type = union(enum) {
@@ -216,13 +225,14 @@ pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
     return self._proto._proto._proto;
 }
 
-pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer) !void {
+pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !void {
     const tag = self.asElement().getTag();
     switch (innerTextDisplay(self, tag)) {
         .skip, .replaced => return,
         else => {},
     }
-    var state = InnerTextState{ .writer = writer, .preserve = tag == .pre };
+
+    var state = InnerTextState{ .writer = writer, .frame = frame, .preserve = tag == .pre };
     try self.collectInnerText(&state);
 }
 
@@ -277,7 +287,7 @@ pub fn insertAdjacentHTML(
     const fragment = (try DocumentFragment.init(frame)).asNode();
     try frame.parseHtmlAsChildren(fragment, html);
 
-    const target_node, const prev_node = try self.asElement().asNode().findAdjacentNodes(position);
+    const target_node, const prev_node = try self.asNode().findAdjacentNodes(position, .html);
 
     var iter = fragment.childrenIterator();
     while (iter.next()) |child_node| {
@@ -1217,6 +1227,38 @@ pub fn getOnToggle(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
     return self.getAttributeFunction(.ontoggle, frame);
 }
 
+pub fn setOnTouchCancel(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchcancel, callback, frame);
+}
+
+pub fn getOnTouchCancel(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchcancel, frame);
+}
+
+pub fn setOnTouchEnd(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchend, callback, frame);
+}
+
+pub fn getOnTouchEnd(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchend, frame);
+}
+
+pub fn setOnTouchMove(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchmove, callback, frame);
+}
+
+pub fn getOnTouchMove(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchmove, frame);
+}
+
+pub fn setOnTouchStart(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchstart, callback, frame);
+}
+
+pub fn getOnTouchStart(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchstart, frame);
+}
+
 pub fn setOnTransitionCancel(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
     return self.setAttributeListener(.ontransitioncancel, callback, frame);
 }
@@ -1326,6 +1368,10 @@ pub fn reflectEnumerated(
 
 const InnerTextState = struct {
     writer: *std.Io.Writer,
+
+    // Needed to reach the StyleManager for CSS-driven visibility (display:none).
+    frame: *Frame,
+
     // number of line breaks we've accumulated for the block. Emitted lazily that
     // leading/trailing breaks aren't written and so that we can emit the max
     // requested, which can change as we render children.
@@ -1441,6 +1487,14 @@ fn handleChildElement(
     saw_cell: *bool,
     saw_row: *bool,
 ) !void {
+    // doesn't use StyleManger's isHidden, because we don't care if the element
+    // is hidden through its parent. If you can el.innerText on an element, the
+    // visibility of el.parent doesn't matter. So we only care about visibility
+    // on the element itself and then on each child. This is much simpler too.
+    if (state.frame._style_manager.hasDisplayNone(he.asElement())) {
+        return;
+    }
+
     if (he._type == .br) {
         try state.flushBreaks();
         try state.writer.writeByte('\n');
@@ -1585,7 +1639,7 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
 
     // both nodes are Text nodes
 
-    const merged = try std.mem.concat(frame.call_arena, u8, &.{ left.getData().str(), right.getData().str() });
+    const merged = try std.mem.concat(frame.local_arena, u8, &.{ left.getData().str(), right.getData().str() });
     // set the left node to the merged value
     try left.setData(merged, frame);
 
@@ -1597,7 +1651,7 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
 }
 
 fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
-    const arena = frame.call_arena;
+    const arena = frame.local_arena;
     var nodes: std.ArrayList(Node.NodeOrText) = .empty;
 
     var rest = value;
@@ -1630,22 +1684,23 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
+    pub const upgrade_constructor = bridge.constructor(HtmlElement.upgradeConstruct, .{});
 
     pub const innerText = bridge.accessor(_innerText, _setInnerText, .{ .ce_reactions = true });
-    fn _innerText(self: *HtmlElement, frame: *const Frame) ![]const u8 {
+    fn _innerText(self: *HtmlElement, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
-        try self.getInnerText(&buf.writer);
+        try self.getInnerText(&buf.writer, frame);
         return buf.written();
     }
     fn _setInnerText(self: *HtmlElement, value: js.Value, frame: *Frame) !void {
         // `[LegacyNullToEmptyString]`: a JS null becomes "", not "null".
         return self.setInnerText(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
-    pub const outerText = bridge.accessor(_innerText, _setOuterText, .{ .ce_reactions = true, .dom_exception = true });
+    pub const outerText = bridge.accessor(_innerText, _setOuterText, .{ .ce_reactions = true });
     fn _setOuterText(self: *HtmlElement, value: js.Value, frame: *Frame) !void {
         return self.setOuterText(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
-    pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
+    pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .ce_reactions = true });
     pub const click = bridge.function(HtmlElement.click, .{});
 
     pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
@@ -1653,9 +1708,9 @@ pub const JsApi = struct {
     pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
-    pub const showPopover = bridge.function(HtmlElement.showPopover, .{ .dom_exception = true });
-    pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{ .dom_exception = true });
-    pub const togglePopover = bridge.function(HtmlElement.togglePopover, .{ .dom_exception = true });
+    pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
+    pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{});
+    pub const togglePopover = bridge.function(HtmlElement.togglePopover, .{});
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{ .ce_reactions = true });
     pub const nonce = bridge.accessor(HtmlElement.getNonce, HtmlElement.setNonce, .{ .ce_reactions = true });
@@ -1750,6 +1805,10 @@ pub const JsApi = struct {
     pub const onsuspend = bridge.accessor(HtmlElement.getOnSuspend, HtmlElement.setOnSuspend, .{});
     pub const ontimeupdate = bridge.accessor(HtmlElement.getOnTimeUpdate, HtmlElement.setOnTimeUpdate, .{});
     pub const ontoggle = bridge.accessor(HtmlElement.getOnToggle, HtmlElement.setOnToggle, .{});
+    pub const ontouchcancel = bridge.accessor(HtmlElement.getOnTouchCancel, HtmlElement.setOnTouchCancel, .{});
+    pub const ontouchend = bridge.accessor(HtmlElement.getOnTouchEnd, HtmlElement.setOnTouchEnd, .{});
+    pub const ontouchmove = bridge.accessor(HtmlElement.getOnTouchMove, HtmlElement.setOnTouchMove, .{});
+    pub const ontouchstart = bridge.accessor(HtmlElement.getOnTouchStart, HtmlElement.setOnTouchStart, .{});
     pub const ontransitioncancel = bridge.accessor(HtmlElement.getOnTransitionCancel, HtmlElement.setOnTransitionCancel, .{});
     pub const ontransitionend = bridge.accessor(HtmlElement.getOnTransitionEnd, HtmlElement.setOnTransitionEnd, .{});
     pub const ontransitionrun = bridge.accessor(HtmlElement.getOnTransitionRun, HtmlElement.setOnTransitionRun, .{});

@@ -66,7 +66,7 @@ pub fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
 
     if (self.getOwnerNode()) |owner| {
         if (owner.is(Element.Html.Style)) |style| {
-            const text = try style.asNode().getTextContentAlloc(frame.call_arena);
+            const text = try style.asNode().getTextContentAlloc(frame.local_arena);
             try self.replaceSync(text, frame);
         }
     }
@@ -208,8 +208,8 @@ pub const JsApi = struct {
     pub const disabled = bridge.accessor(CSSStyleSheet.getDisabled, CSSStyleSheet.setDisabled, .{});
     pub const cssRules = bridge.accessor(CSSStyleSheet.getCssRules, null, .{});
     pub const ownerRule = bridge.accessor(CSSStyleSheet.getOwnerRule, null, .{});
-    pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{ .dom_exception = true });
-    pub const deleteRule = bridge.function(CSSStyleSheet.deleteRule, .{ .dom_exception = true });
+    pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{});
+    pub const deleteRule = bridge.function(CSSStyleSheet.deleteRule, .{});
     pub const replace = bridge.function(CSSStyleSheet.replace, .{});
     pub const replaceSync = bridge.function(CSSStyleSheet.replaceSync, .{});
 };

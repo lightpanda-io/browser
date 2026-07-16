@@ -6,6 +6,7 @@ env:
   AWS_BUCKET: ${{ vars.NIGHTLY_BUILD_AWS_BUCKET }}
   AWS_REGION: ${{ vars.NIGHTLY_BUILD_AWS_REGION }}
   AWS_CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.AWS_CF_DISTRIBUTION_NIGHTLY }}
+  AWS_CLOUDFRONT_GET_ID: ${{ vars.AWS_CF_GET }}
 
   RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
   VERSION_FLAG: ${{ github.ref_type == 'tag' && format('-Dversion={0}', github.ref_name) || '-Dversion=nightly' }}
@@ -22,6 +23,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   build-linux:
@@ -142,6 +144,41 @@ jobs:
     needs: build-linux
     uses: ./.github/workflows/package-debian.yml
 
+  update-versions:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Download linux x86_64 binary (to read the version)
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-x86_64-linux
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Generate and publish versions.json"
+        run: |
+          chmod +x lightpanda-x86_64-linux
+          VERSION=$(./lightpanda-x86_64-linux version)
+          aws s3 cp s3://lpd-nightly-build/get/versions.json current.json --content-type application/json
+          docker run --rm -v "$PWD:/work" -w /work \
+            ghcr.io/lightpanda-io/version-fmt:latest \
+            -release "${RELEASE}" -version "${VERSION}" /work/current.json > new.json
+          aws s3 cp new.json s3://lpd-nightly-build/get/versions.json --content-type application/json
+          aws cloudfront create-invalidation --distribution-id ${{ env.AWS_CLOUDFRONT_GET_ID }} --paths "/versions.json"
+
   invalidate-cloudfront:
     needs: [build-linux, build-macos]
     runs-on: ubuntu-22.04
@@ -170,4 +207,25 @@ jobs:
         run: |
             gh workflow run ci \
               --repo lightpanda-io/browser-docker \
+              --field tag="${{ env.RELEASE }}"
+
+  update-homebrew-formula:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate token for homebrew-browser
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: homebrew-browser
+
+      - name: Trigger homebrew formula update
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+            gh workflow run "Update Formula" \
+              --repo lightpanda-io/homebrew-browser \
               --field tag="${{ env.RELEASE }}"

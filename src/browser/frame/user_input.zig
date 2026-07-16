@@ -27,6 +27,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const Frame = @import("../Frame.zig");
+const js = @import("../js/js.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
@@ -78,6 +79,7 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
         });
     }
     try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, 0);
+    try focusEditingHostForMouseDown(frame, target);
 }
 
 pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
@@ -200,6 +202,128 @@ fn deltaToScroll(d: f64) i32 {
 }
 
 // callback when the "click" event reaches the frame.
+// Whether the element has a click activation behavior that handleClick
+// implements.
+fn hasClickActivationBehavior(node: *Node) bool {
+    const element = node.is(Element) orelse return false;
+    const html_element = element.is(Element.Html) orelse return false;
+    return switch (html_element._type) {
+        .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
+        .input, .button, .select, .textarea, .label => true,
+        .generic => |generic| generic._tag == .summary,
+        else => false,
+    };
+}
+
+// Clicks on editable content are for editing: they don't activate the
+// element or any enclosing link.
+// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
+// String wrap runs at runtime, mirroring Html.getIsContentEditable.
+fn isEditingHost(node: *Node) bool {
+    const element = node.is(Element) orelse return false;
+    const value = element.getAttributeSafe(.wrap("contenteditable")) orelse return false;
+    return std.ascii.eqlIgnoreCase(value, "false") == false;
+}
+
+// A mousedown on editable content focuses its editing host: the outermost
+// element of the contiguous editable chain containing the target.
+pub fn focusEditingHostForMouseDown(frame: *Frame, target: *Element) !void {
+    var node: ?*Node = target.asNode();
+    var editable: ?*Node = null;
+    while (node) |n| : (node = n._parent) {
+        if (isEditingHost(n)) {
+            editable = n;
+            break;
+        }
+    }
+    var host = editable orelse return;
+    while (host._parent) |p| {
+        if (!isEditingHost(p)) {
+            break;
+        }
+        host = p;
+    }
+    const host_element = host.is(Element) orelse return;
+    try host_element.focus(frame);
+}
+
+// Per the DOM dispatch algorithm, a click's activation target is the event
+// target itself when it has activation behavior, otherwise — for bubbling
+// events only — the nearest ancestor that has one.
+pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
+    if (isEditingHost(target)) {
+        return null;
+    }
+    if (hasClickActivationBehavior(target)) {
+        return target;
+    }
+    if (!bubbles) {
+        return null;
+    }
+    var node = target._parent;
+    while (node) |n| : (node = n._parent) {
+        if (isEditingHost(n)) {
+            return null;
+        }
+        if (hasClickActivationBehavior(n)) {
+            return n;
+        }
+    }
+    return null;
+}
+
+fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
+    const arena = try frame.getArena(.tiny, "javascript-url");
+    errdefer frame.releaseArena(arena);
+
+    const task = try arena.create(JavascriptUrlTask);
+    task.* = .{
+        .frame = frame,
+        .arena = arena,
+        // TODO: the URL body should be percent-decoded; hrefs written in
+        // markup rarely are.
+        .source = try arena.dupe(u8, source),
+    };
+    try frame.js.scheduler.add(task, JavascriptUrlTask.run, 0, .{
+        .name = "javascript-url",
+        .finalizer = JavascriptUrlTask.finalize,
+    });
+}
+
+const JavascriptUrlTask = struct {
+    frame: *Frame,
+    arena: std.mem.Allocator,
+    source: []const u8,
+
+    fn run(ptr: *anyopaque) !?u32 {
+        const self: *JavascriptUrlTask = @ptrCast(@alignCast(ptr));
+        const frame = self.frame;
+        defer self.deinit();
+
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        const script = ls.local.compile(self.source, "javascript:") catch |err| {
+            log.warn(.browser, "javascript-url compile", .{ .err = err, .type = frame._type, .url = frame.url });
+            return null;
+        };
+        _ = script.run() catch |err| {
+            log.warn(.browser, "javascript-url run", .{ .err = err, .type = frame._type, .url = frame.url });
+        };
+        return null;
+    }
+
+    fn finalize(ptr: *anyopaque) void {
+        const self: *JavascriptUrlTask = @ptrCast(@alignCast(ptr));
+        self.deinit();
+    }
+
+    fn deinit(self: *JavascriptUrlTask) void {
+        self.frame.releaseArena(self.arena);
+    }
+};
+
 pub fn handleClick(frame: *Frame, target: *Node) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
@@ -213,7 +337,10 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
             }
 
             if (std.mem.startsWith(u8, href, "javascript:")) {
-                return;
+                // Navigating to a javascript: URL evaluates the script in the
+                // node's frame as a queued task. (A string completion value
+                // would replace the document; we ignore results.)
+                return runJavascriptUrl(target.ownerFrame(frame), href["javascript:".len..]);
             }
 
             if (try element.hasAttribute(comptime .wrap("download"), frame)) {

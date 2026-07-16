@@ -20,8 +20,9 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const URL = @import("../../URL.zig");
 const Page = @import("../../Page.zig");
-const HttpClient = @import("../../HttpClient.zig");
+const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const Blob = @import("../Blob.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
@@ -52,7 +53,7 @@ _type: Type,
 _status_text: []const u8,
 _url: [:0]const u8,
 _is_redirected: bool,
-_http_response: ?HttpClient.Response = null,
+_http_transfer: ?*Transfer = null,
 _body_used: bool = false,
 
 const Body = union(enum) {
@@ -111,10 +112,94 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Respon
     return self;
 }
 
+pub fn createError(exec: *const Execution) !*Response {
+    const session = exec.session;
+    const arena = try session.getArena(.large, "Response.error");
+    errdefer session.releaseArena(arena);
+
+    const self = try arena.create(Response);
+    self.* = .{
+        ._arena = arena,
+        ._status = 0,
+        ._status_text = "",
+        ._url = "",
+        ._body = .empty,
+        ._type = .@"error",
+        ._is_redirected = false,
+        ._headers = try Headers.init(null, exec),
+    };
+    return self;
+}
+
+pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !*Response {
+    const status = status_ orelse 302;
+    switch (status) {
+        301, 302, 303, 307, 308 => {},
+        else => return error.RangeError,
+    }
+
+    const session = exec.session;
+    const arena = try session.getArena(.large, "Response.redirect");
+    errdefer session.releaseArena(arena);
+
+    const location = try URL.resolve(arena, exec.base(), url_, .{ .encoding = exec.charset.* });
+
+    const headers = try Headers.init(null, exec);
+    try headers.set("location", location, exec);
+
+    const self = try arena.create(Response);
+    self.* = .{
+        ._arena = arena,
+        ._status = status,
+        ._status_text = "",
+        ._url = "",
+        ._body = .empty,
+        ._type = .default,
+        ._is_redirected = false,
+        ._headers = headers,
+    };
+    return self;
+}
+
+pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Response {
+    const session = exec.session;
+    const arena = try session.getArena(.medium, "Response.json");
+    errdefer session.releaseArena(arena);
+
+    const json = data.toJson(arena) catch |err| switch (err) {
+        error.JsException => return error.TryCatchRethrow,
+        else => return err,
+    };
+    if (std.mem.eql(u8, json, "undefined")) {
+        return error.TypeError;
+    }
+
+    const opts = opts_ orelse InitOpts{};
+    const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
+
+    const headers = try Headers.init(opts.headers, exec);
+    if (!headers.has("content-type", exec)) {
+        try headers.append("content-type", "application/json", exec);
+    }
+
+    const self = try arena.create(Response);
+    self.* = .{
+        ._arena = arena,
+        ._status = opts.status,
+        ._status_text = status_text,
+        ._url = "",
+        ._body = .{ .bytes = json },
+        ._type = .default,
+        ._is_redirected = false,
+        ._headers = headers,
+    };
+    return self;
+}
+
 pub fn deinit(self: *Response, page: *Page) void {
-    if (self._http_response) |resp| {
+    if (self._http_transfer) |resp| {
         resp.abort(error.Abort);
-        self._http_response = null;
+        self._http_transfer = null;
     }
     page.releaseArena(self._arena);
 }
@@ -399,7 +484,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         ._type = self._type,
         ._is_redirected = self._is_redirected,
         ._headers = try Headers.init(.{ .obj = self._headers }, exec),
-        ._http_response = null,
+        ._http_transfer = null,
     };
     return cloned;
 }
@@ -414,6 +499,12 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(Response.init, .{});
+
+    pub const @"error" = bridge.function(Response.createError, .{ .static = true });
+    pub const redirect = bridge.function(Response.createRedirect, .{ .static = true });
+    // Response.json (staticc) conflicts with resposne.json, hence the `js_name` option
+    pub const json_static = bridge.function(Response.createJson, .{ .static = true, .js_name = "json" });
+
     pub const ok = bridge.accessor(Response.isOK, null, .{});
     pub const status = bridge.accessor(Response.getStatus, null, .{});
     pub const statusText = bridge.accessor(Response.getStatusText, null, .{});

@@ -62,6 +62,14 @@
   testing.expectEqual(document.URL, document.documentURI);
   testing.expectEqual('', document.referrer);
   testing.expectEqual(testing.HOST, document.domain);
+
+  document.domain = testing.HOST;
+  testing.expectEqual(testing.HOST, document.domain);
+  testing.expectError('SecurityError', () => { document.domain = 'example.org'; });
+  testing.expectError('SecurityError', () => { document.domain = 'com'; });
+  testing.expectError('SecurityError', () => { document.domain = ''; });
+  // Rejected assignments must not have changed the domain.
+  testing.expectEqual(testing.HOST, document.domain);
 </script>
 
 <script id=programmatic_document_metadata>

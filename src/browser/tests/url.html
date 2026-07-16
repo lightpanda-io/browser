@@ -333,31 +333,88 @@
 <script id=parse_static>
   testing.expectEqual('function', typeof URL.parse);
 
-  // Parseable input returns a URL instance (mirrors the constructor).
+  // Parseable absolute URLs (no base) -> a URL instance. parse mirrors the
+  // constructor: it returns an object exactly when `new URL(...)` would not
+  // throw, and null otherwise.
   {
-    const url = URL.parse('https://example.com/path?a=b#h');
+    const url = URL.parse('https://example.com:8080/path?a=b#hash');
     testing.expectEqual(true, url instanceof URL);
-    testing.expectEqual('https://example.com/path?a=b#h', url.href);
+    testing.expectEqual('https://example.com:8080/path?a=b#hash', url.href);
   }
 
-  // Relative input resolves against a valid base.
+  // The returned object is a fully-functional URL: its components are
+  // populated and its accessors behave like a constructed instance.
   {
-    const url = URL.parse('/x', 'http://example.com/a/b');
-    testing.expectEqual('http://example.com/x', url.href);
+    const url = URL.parse('https://user:pass@example.com:8080/p/q?x=1#frag');
+    testing.expectEqual('https:', url.protocol);
+    testing.expectEqual('user', url.username);
+    testing.expectEqual('pass', url.password);
+    testing.expectEqual('example.com', url.hostname);
+    testing.expectEqual('8080', url.port);
+    testing.expectEqual('example.com:8080', url.host);
+    testing.expectEqual('/p/q', url.pathname);
+    testing.expectEqual('?x=1', url.search);
+    testing.expectEqual('#frag', url.hash);
+    testing.expectEqual('https://example.com:8080', url.origin);
+    testing.expectEqual('1', url.searchParams.get('x'));
   }
 
-  // Unlike the constructor, a parse failure returns null instead of throwing.
+  // The returned object is mutable like any other URL instance.
   {
-    testing.expectEqual(null, URL.parse('foo.js'));
+    const url = URL.parse('https://example.com/path');
+    url.pathname = '/changed';
+    testing.expectEqual('https://example.com/changed', url.href);
+  }
+
+  // Non-special but parseable schemes -> a URL instance.
+  {
+    testing.expectEqual(true, URL.parse('about:blank') instanceof URL);
+    testing.expectEqual(true, URL.parse('mailto:foo@bar.com') instanceof URL);
+    testing.expectEqual(true, URL.parse('data:text/plain,hello') instanceof URL);
+    testing.expectEqual(true, URL.parse('file:///etc/hosts') instanceof URL);
+  }
+
+  // Relative or malformed input (no base) -> null instead of throwing.
+  {
     testing.expectEqual(null, URL.parse(''));
-    testing.expectEqual(null, URL.parse('http://example.com', 'invalid base'));
+    testing.expectEqual(null, URL.parse('foo.js'));
+    testing.expectEqual(null, URL.parse('/path/to/file'));
+    testing.expectEqual(null, URL.parse('?query=value'));
+    testing.expectEqual(null, URL.parse('#fragment'));
+    testing.expectEqual(null, URL.parse('//only-host'));
+    testing.expectEqual(null, URL.parse('http://'));
   }
 
-  // Each call returns a distinct object.
+  // Relative input resolved against a valid base -> a URL instance with the
+  // input resolved against the base.
   {
-    const a = URL.parse('https://example.com/');
-    const b = URL.parse('https://example.com/');
-    testing.expectEqual(false, a === b);
+    testing.expectEqual('http://example.com/path/subpath', URL.parse('subpath', 'http://example.com/path/').href);
+    testing.expectEqual('http://example.com/newpath', URL.parse('/newpath', 'http://example.com/path').href);
+    testing.expectEqual('http://example.com/path?a=b', URL.parse('?a=b', 'http://example.com/path').href);
+    testing.expectEqual('http://example.com/path#hash', URL.parse('#hash', 'http://example.com/path').href);
+    testing.expectEqual('http://example.com/a/foo', URL.parse('../foo', 'http://example.com/a/b/c').href);
+    testing.expectEqual('http://other.com/p', URL.parse('//other.com/p', 'http://example.com/').href);
+  }
+
+  // Absolute input with a valid base -> the input wins, the base is ignored.
+  {
+    testing.expectEqual('http://example.com/absolute', URL.parse('http://example.com/absolute', 'http://base.com').href);
+  }
+
+  // The base is parsed unconditionally: an unparseable base -> null, even when
+  // the input itself is absolute (mirrors the constructor throwing).
+  {
+    testing.expectEqual(null, URL.parse('http://example.com/absolute', 'invalid base'));
+    testing.expectEqual(null, URL.parse('foo.js', 'not a url'));
+    testing.expectEqual(null, URL.parse('subpath', 'relative/path'));
+    testing.expectEqual(null, URL.parse('http://example.com', ''));
+  }
+
+  // An undefined base is treated as "no base given".
+  {
+    testing.expectEqual(true, URL.parse('https://example.com', undefined) instanceof URL);
+    testing.expectEqual(null, URL.parse('foo.js', undefined));
+    testing.expectEqual(null, URL.parse('subpath', undefined));
   }
 </script>
 
@@ -572,12 +629,13 @@
     testing.expectEqual('https://[::1]:9000/path', url.href);
   }
 
-  // A trailing colon clears the port.
+  // A trailing colon supplies an empty port, which the parser ignores: the
+  // existing port is left untouched (matches Chrome and Firefox).
   {
     const url = new URL('https://example.com:8080/path');
     url.host = 'newhost.com:';
-    testing.expectEqual('newhost.com', url.host);
-    testing.expectEqual('https://newhost.com/path', url.href);
+    testing.expectEqual('newhost.com:8080', url.host);
+    testing.expectEqual('https://newhost.com:8080/path', url.href);
   }
 
   // An invalid host is silently ignored, leaving it unchanged (the setter must
@@ -1261,5 +1319,45 @@
     testing.expectEqual(1, url.searchParams.getAll('c').length);
     testing.expectEqual(3, url.searchParams.size);
     testing.expectEqual('?a=%7E&b=%7E&c=foo', url.search);
+  }
+</script>
+
+<script id=wpt_searchparams_appends_equals>
+  // url-constructor: a query key with no value serializes back with a
+  // trailing '=' via URLSearchParams.
+  {
+    const url = new URL('http://foo.bar/baz?qux');
+    testing.expectEqual('qux=', url.searchParams.toString());
+  }
+</script>
+
+<script id=wpt_searchparams_encodes_question_mark>
+  // url-constructor: '?' inside a key must be percent-encoded as %3F when
+  // re-serialized through searchParams.
+  {
+    const url = new URL('??a=b&c=d', 'http://example.org/foo/bar');
+    testing.expectEqual('%3Fa=b&c=d', url.searchParams.toString());
+  }
+</script>
+
+<script id=wpt_setter_host_with_slash>
+  // url-setters: setting host to a value containing a '/' takes only the part
+  // before the delimiter as the host (the rest is ignored).
+  {
+    const url = new URL('http://example.net/path');
+    url.host = 'example.com/stuff';
+    testing.expectEqual('example.com', url.host);
+    testing.expectEqual('http://example.com/path', url.href);
+  }
+</script>
+
+<script id=wpt_setter_hostname_strips_tab>
+  // url-setters: a tab in a hostname is stripped (here clearing the host),
+  // the setter must not throw.
+  {
+    const url = new URL('sc://x/');
+    url.hostname = '\t';
+    testing.expectEqual('', url.hostname);
+    testing.expectEqual('sc:///', url.href);
   }
 </script>

@@ -43,7 +43,7 @@ pub const forms = @import("browser/forms.zig");
 pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const tools = @import("browser/tools.zig");
-pub const HttpClient = @import("browser/HttpClient.zig");
+pub const HttpClient = @import("network/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
 pub const Agent = @import("agent/Agent.zig");
@@ -51,11 +51,15 @@ pub const Command = @import("script/command.zig").Command;
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
 pub const Schema = @import("script/Schema.zig");
+pub const skill = @import("script/skill.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
+pub const core_dump = @import("core_dump.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
+pub const Updater = @import("Updater.zig");
+
+pub var metrics = @import("Metrics.zig"){};
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
@@ -68,7 +72,7 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
-/// Loads `url` in a fresh session and waits per `opts`.
+/// Loads each url in `urls` in a fresh session and waits per `opts`.
 ///
 /// Errors:
 ///   - `error.Timeout` if the wait deadline (`opts.wait_ms`) expires.
@@ -77,7 +81,7 @@ pub const FetchOpts = struct {
 ///     `session.cancel_hook = .{...}`; without it, this error never fires.
 ///   - Other errors from navigation / parsing / I/O surface as their
 ///     underlying tag.
-pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !void {
+pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
     defer notification.deinit();
 
@@ -98,98 +102,97 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     // Stash scripts user want to inject.
     session.inject_scripts = opts.inject_script.items;
 
-    {
-        const frame = try session.createPage();
-        // frame isn't safe to use after navigate, it can be swapped out
-
-        // // Comment this out to get a profile of the JS code in v8/profile.json.
-        // // You can open this in Chrome's profiler.
-        // // I've seen it generate invalid JSON, but I'm not sure why. It
-        // // happens rarely, and I manually fix the file.
-        // frame.js.startCpuProfiler();
-        // defer {
-        //     if (frame.js.stopCpuProfiler()) |profile| {
-        //         std.fs.cwd().writeFile(.{
-        //             .sub_path = ".lp-cache/cpu_profile.json",
-        //             .data = profile,
-        //         }) catch |err| {
-        //             log.err(.app, "profile write error", .{ .err = err });
-        //         };
-        //     } else |err| {
-        //         log.err(.app, "profile error", .{ .err = err });
-        //     }
-        // }
-
-        // // Comment this out to get a heap V8 heap profil
-        // frame.js.startHeapProfiler();
-        // defer {
-        //     if (frame.js.stopHeapProfiler()) |profile| {
-        //         std.fs.cwd().writeFile(.{
-        //             .sub_path = ".lp-cache/allocating.heapprofile",
-        //             .data = profile.@"0",
-        //         }) catch |err| {
-        //             log.err(.app, "allocating write error", .{ .err = err });
-        //         };
-        //         std.fs.cwd().writeFile(.{
-        //             .sub_path = ".lp-cache/snapshot.heapsnapshot",
-        //             .data = profile.@"1",
-        //         }) catch |err| {
-        //             log.err(.app, "heapsnapshot write error", .{ .err = err });
-        //         };
-        //     } else |err| {
-        //         log.err(.app, "profile error", .{ .err = err });
-        //     }
-        // }
-
-        const encoded_url = try URL.ensureEncoded(frame.call_arena, url, "UTF-8");
+    // One page per url. `PageHandle.frame()` always re-resolves the live frame,
+    // so the handles stay valid across navigate / wait. The Runner's wait paths
+    // already operate over every live page in the session.
+    var pages: std.ArrayList(Session.PageHandle) = try .initCapacity(session.arena, urls.len);
+    for (urls) |url| {
+        const page = try session.createPage();
+        const frame = page.frame().?;
+        // not guaranteed to be valid after navigate
+        const encoded_url = try URL.resolveNavigation(frame.call_arena, url, .{});
         _ = try frame.navigate(encoded_url, .{
             .reason = .address_bar,
             .kind = .{ .push = null },
         });
+        pages.appendAssumeCapacity(page);
     }
-    var runner = try session.runner(.{});
+
+    var runner = session.runner(.{});
 
     var timer = try std.time.Timer.start();
 
     if (opts.wait_until) |wu| {
-        try runner.wait(.{ .ms = opts.wait_ms, .until = wu });
+        try runner.waitForAll(opts.wait_ms, .{ .until = wu });
     } else if (opts.wait_selector == null and opts.wait_script == null) {
         // We default to .done if both wait_selector and wait_script are null
         // This allows the caller to ONLY --wait-selector or ONLY --wait-script
         // or combine --wait-until WITH --wait-selector/script
-        try runner.wait(.{ .ms = opts.wait_ms, .until = .done });
+        try runner.waitForAll(opts.wait_ms, .{ .until = .done });
     }
 
     if (opts.wait_selector) |selector| {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
-        if (remaining == 0) return error.Timeout;
-        _ = try runner.waitForSelector(selector, remaining);
+        if (remaining == 0) {
+            return error.Timeout;
+        }
+        for (session.pages.items) |p| {
+            if (p.replacement == null) {
+                _ = try runner.waitForSelector(p.frame._frame_id, selector, remaining);
+            }
+        }
     }
 
     if (opts.wait_script) |wait_script| {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
-        if (remaining == 0) return error.Timeout;
-        try runner.waitForScript(wait_script, remaining);
+        if (remaining == 0) {
+            return error.Timeout;
+        }
+        for (session.pages.items) |p| {
+            if (p.replacement == null) {
+                try runner.waitForScript(p.frame._frame_id, wait_script, remaining);
+            }
+        }
     }
 
     const writer = opts.writer orelse return;
 
     if (opts.json) {
-        var aw: std.Io.Writer.Allocating = .init(app.allocator);
-        defer aw.deinit();
-
-        if (opts.dump_mode) |mode| blk: {
-            const frame = session.currentFrame() orelse break :blk;
-            try dumpContent(app, mode, opts.dump, frame, &aw.writer);
+        // A single url keeps the original bare-object output. Multiple urls are
+        // wrapped in an extensible `{"results": [...]}` envelope: a bare
+        // top-level array is hard to evolve (consumers index it directly),
+        // whereas an object lets us add sibling fields later without breaking
+        // anyone reading `results`.
+        const wrap = pages.items.len > 1;
+        if (wrap) {
+            try writer.writeAll("{\"results\":[");
         }
+        for (pages.items, 0..) |page, i| {
+            if (i != 0) {
+                try writer.writeByte(',');
+            }
 
-        const frame = session.currentFrame();
-        try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written());
+            var aw: std.Io.Writer.Allocating = .init(app.allocator);
+            defer aw.deinit();
+
+            if (opts.dump_mode) |mode| blk: {
+                const frame = page.frame() orelse break :blk;
+                try dumpContent(app, mode, opts.dump, frame, &aw.writer);
+            }
+
+            try writeJsonEnvelope(writer, page.frame(), opts.dump_mode, aw.written());
+        }
+        if (wrap) {
+            try writer.writeAll("]}");
+        }
+        try writer.writeByte('\n');
     } else {
+        // main validates that non-JSON dump is only reached with a single url.
+        const page = pages.items[0];
         if (opts.dump_mode) |mode| blk: {
-            const frame = session.currentFrame() orelse {
+            const frame = page.frame() orelse {
                 try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
                 break :blk;
             };
@@ -225,6 +228,19 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
     }
 }
 
+pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
+    var client = try Updater.init(allocator, config);
+    defer client.deinit();
+
+    var stdout = std.fs.File.stdout();
+    var buf: [4096]u8 = undefined;
+    var writer = stdout.writer(&buf);
+    const w = &writer.interface;
+    try client.inform(w);
+}
+
+// Writes a single page's result object. Framing (the enclosing array and any
+// separators / trailing newline) is the caller's responsibility.
 fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: []const u8) !void {
     const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
     try std.json.Stringify.value(.{
@@ -234,7 +250,6 @@ fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.
         .dump = if (dump_mode) |mode| @tagName(mode) else "",
         .content = content,
     }, .{}, writer);
-    try writer.writeByte('\n');
 }
 
 fn dumpWPT(frame: *Frame, writer: *std.Io.Writer) !void {

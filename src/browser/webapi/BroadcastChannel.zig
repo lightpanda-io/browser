@@ -88,7 +88,7 @@ pub fn postMessage(self: *BroadcastChannel, message: js.Value, exec: *Execution)
         const cloned = message.structuredCloneTo(&ls.local) catch {
             return error.DataClone;
         };
-        break :blk try cloned.temp();
+        break :blk try cloned.persist();
     };
     errdefer snapshot.release();
 
@@ -134,7 +134,7 @@ const PostMessageCallback = struct {
     sender: *BroadcastChannel,
     // A self-owned structured-clone snapshot of the posted message. Re-cloned
     // (never shared) into each receiver's MessageEvent, then released.
-    message: js.Value.Temp,
+    message: js.Value.Global,
     exec: *Execution,
     post_sequence: u64,
 
@@ -160,11 +160,11 @@ const PostMessageCallback = struct {
 
         const sender = self.sender;
         const page = self.exec.page;
-        const origin = self.exec.js.origin;
+        const origin = self.exec.origin();
 
         // MessageEvent.origin is the serialization of the sender's origin (same
         // for every receiver); an opaque origin serializes to "null".
-        const sender_origin = self.exec.origin() orelse "null";
+        const sender_origin = origin orelse "null";
 
         // Snapshot every same-origin global up front. Dispatch (below) runs user
         // JS that can create or tear down frames/workers, so we must not hold a
@@ -174,7 +174,14 @@ const PostMessageCallback = struct {
         const arena = try page.getArena(.tiny, "BroadcastChannel.postMessage");
         defer page.releaseArena(arena);
 
-        for (try page.executionsForOrigin(arena, origin)) |exec| {
+        // Opaque origins have no string form and are unique per execution, so
+        // the sender is the only same-origin context
+        const executions = if (origin) |o|
+            try page.executionsForOrigin(arena, o)
+        else
+            (&self.exec)[0..1];
+
+        for (executions) |exec| {
             // The MessageEvent and its cloned `data` must live in the receiver's
             // realm, and its listeners are in the receiver's event manager.
             // localScope enters the receiver's v8 context, so both happen there.
@@ -214,7 +221,7 @@ const PostMessageCallback = struct {
                     continue;
                 };
 
-                const cloned_temp = cloned.temp() catch |err| {
+                const cloned_temp = cloned.persist() catch |err| {
                     log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                     continue;
                 };
@@ -251,7 +258,7 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(BroadcastChannel.init, .{});
 
     pub const name = bridge.accessor(BroadcastChannel.getName, null, .{});
-    pub const postMessage = bridge.function(BroadcastChannel.postMessage, .{ .dom_exception = true });
+    pub const postMessage = bridge.function(BroadcastChannel.postMessage, .{});
     pub const close = bridge.function(BroadcastChannel.close, .{});
 
     pub const onmessage = bridge.accessor(BroadcastChannel.getOnMessage, BroadcastChannel.setOnMessage, .{});

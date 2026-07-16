@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Node = @import("../Node.zig");
 const Frame = @import("../../Frame.zig");
+const Browser = @import("../../Browser.zig");
 
 const Parser = @import("Parser.zig");
 pub const List = @import("List.zig");
@@ -44,29 +45,76 @@ pub fn mapErrorToDOM(err: anyerror) anyerror {
     };
 }
 
-pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {
+pub fn parseLeaky(arena: Allocator, input: []const u8) ![]const Selector {
     if (input.len == 0) {
         return error.SyntaxError;
     }
-    return .{ .selectors = try Parser.parseList(arena, input) };
+    return Parser.parseList(arena, input);
 }
 
-pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
-    const parsed = try parseLeaky(frame.call_arena, input);
-    return parsed.query(root, frame);
+/// One-off synthesized selectors use the `*Uncached` variants instead.
+pub fn cachedParse(browser: *Browser, input: []const u8) ![]const Selector {
+    return browser.selector_cache.parse(input);
 }
 
-pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
-    if (input.len == 0) {
-        return error.SyntaxError;
+/// On the Browser because a parsed selector references no Frame/Context, so
+/// entries survive navigation. Per-entry arena so eviction can free one entry.
+pub const Cache = struct {
+    // Caps retained memory, not correctness; oldest entry evicted on overflow.
+    const max_entries = 1024;
+
+    allocator: Allocator,
+    map: std.StringArrayHashMapUnmanaged(Entry) = .empty,
+
+    const Entry = struct {
+        arena: std.heap.ArenaAllocator,
+        selectors: []const Selector,
+    };
+
+    pub fn init(allocator: Allocator) Cache {
+        return .{ .allocator = allocator };
     }
 
-    const arena = try frame.getArena(.small, "querySelectorAll");
-    errdefer frame.releaseArena(arena);
+    pub fn deinit(self: *Cache) void {
+        for (self.map.values()) |*entry| {
+            entry.arena.deinit();
+        }
+        self.map.deinit(self.allocator);
+    }
 
+    fn parse(self: *Cache, input: []const u8) ![]const Selector {
+        if (input.len == 0) {
+            return error.SyntaxError;
+        }
+        if (self.map.get(input)) |entry| {
+            return entry.selectors;
+        }
+
+        // The AST borrows slices of its input, so dupe the key into the arena.
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        errdefer arena.deinit();
+        const entry_arena = arena.allocator();
+        const owned = try entry_arena.dupe(u8, input);
+        const selectors = try Parser.parseList(entry_arena, owned);
+
+        if (self.map.count() >= max_entries) {
+            self.evictOldest();
+        }
+        try self.map.put(self.allocator, owned, .{ .arena = arena, .selectors = selectors });
+        return selectors;
+    }
+
+    // Insertion order is preserved, so index 0 is the oldest.
+    fn evictOldest(self: *Cache) void {
+        const key = self.map.keys()[0];
+        var arena = self.map.values()[0].arena;
+        std.debug.assert(self.map.orderedRemove(key));
+        arena.deinit();
+    }
+};
+
+fn collectAll(arena: Allocator, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
-
-    const selectors = try Parser.parseList(arena, input);
     for (selectors) |selector| {
         try List.collect(arena, root, selector, &nodes, frame);
     }
@@ -79,54 +127,95 @@ pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
     return list;
 }
 
-pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
-    if (input.len == 0) {
-        return error.SyntaxError;
-    }
-
-    const arena = frame.call_arena;
-    const selectors = try Parser.parseList(arena, input);
-
+fn matchesAny(selectors: []const Selector, el: *Node.Element, scope: *Node, frame: *Frame) bool {
     for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, el.asNode(), frame)) {
+        if (List.matches(el.asNode(), selector, scope, frame)) {
             return true;
         }
     }
     return false;
+}
+
+pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
+    return query(try cachedParse(frame._session.browser, input), root, frame);
+}
+
+pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
+    const arena = try frame.getArena(.small, "querySelectorAll");
+    errdefer frame.releaseArena(arena);
+    return collectAll(arena, try cachedParse(frame._session.browser, input), root, frame);
+}
+
+pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
+    return matchesAny(try cachedParse(frame._session.browser, input), el, el.asNode(), frame);
 }
 
 // Like matches, but allows the caller to specify a scope node distinct from el.
 // Used by closest() so that :scope always refers to the original context element.
-pub fn matchesWithScope(el: *Node.Element, input: []const u8, scope: *Node.Element, frame: *Frame) !bool {
+pub fn matchesWithScope(el: *Node.Element, selector: []const Selector, scope: *Node.Element, frame: *Frame) !bool {
+    return matchesAny(selector, el, scope.asNode(), frame);
+}
+
+/// Uncached counterparts for one-off selectors (SelectorPath): parse into
+/// `arena` instead of caching. querySelectorAllUncached takes no arena — it uses
+/// the pooled arena backing its List.
+pub fn querySelectorUncached(arena: Allocator, root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
     if (input.len == 0) {
         return error.SyntaxError;
     }
+    return query(try Parser.parseList(arena, input), root, frame);
+}
 
-    const arena = frame.call_arena;
-    const selectors = try Parser.parseList(arena, input);
-
-    for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, scope.asNode(), frame)) {
-            return true;
-        }
+pub fn querySelectorAllUncached(root: *Node, input: []const u8, frame: *Frame) !*List {
+    if (input.len == 0) {
+        return error.SyntaxError;
     }
-    return false;
+    const arena = try frame.getArena(.small, "querySelectorAllUncached");
+    errdefer frame.releaseArena(arena);
+    return collectAll(arena, try Parser.parseList(arena, input), root, frame);
+}
+
+pub fn matchesUncached(arena: Allocator, el: *Node.Element, input: []const u8, frame: *Frame) !bool {
+    if (input.len == 0) {
+        return error.SyntaxError;
+    }
+    return matchesAny(try Parser.parseList(arena, input), el, el.asNode(), frame);
 }
 
 pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bool {
-    if (class_name.len == 0 or class_name.len > class_attr.len) return false;
+    return classAttributeContainsCase(class_attr, class_name, false);
+}
+
+pub fn classAttributeContainsCase(class_attr: []const u8, class_name: []const u8, case_insensitive: bool) bool {
+    if (class_name.len == 0 or class_name.len > class_attr.len) {
+        return false;
+    }
 
     var search = class_attr;
-    while (std.mem.indexOf(u8, search, class_name)) |pos| {
-        const is_start = pos == 0 or search[pos - 1] == ' ';
+    while (true) {
+        const pos = (if (case_insensitive)
+            std.ascii.indexOfIgnoreCase(search, class_name)
+        else
+            std.mem.indexOf(u8, search, class_name)) orelse break;
+
+        const is_start = pos == 0 or isClassWhitespace(search[pos - 1]);
         const end = pos + class_name.len;
-        const is_end = end == search.len or search[end] == ' ';
+        const is_end = end == search.len or isClassWhitespace(search[end]);
 
         if (is_start and is_end) return true;
 
         search = search[pos + 1 ..];
     }
     return false;
+}
+
+// The class attribute tokens are separated by ASCII whitespace (which,
+// unlike std.ascii.isWhitespace, does not include vertical tab).
+fn isClassWhitespace(c: u8) bool {
+    return switch (c) {
+        '\t', '\n', 0x0C, '\r', ' ' => true,
+        else => false,
+    };
 }
 
 pub const Part = union(enum) {
@@ -293,31 +382,27 @@ pub const Selector = struct {
     }
 };
 
-pub const Parsed = struct {
-    selectors: []const Selector,
-
-    pub fn query(self: Parsed, root: *Node, frame: *Frame) !?*Node.Element {
-        for (self.selectors) |selector| {
-            // Fast path: single compound with only an ID selector
-            if (selector.segments.len == 0 and selector.first.parts.len == 1) {
-                const first = selector.first.parts[0];
-                if (first == .id) {
-                    const el = frame.getElementByIdFromNode(root, first.id) orelse continue;
-                    // Check if the element is within the root subtree
-                    const node = el.asNode();
-                    if (node != root and root.contains(node)) {
-                        return el;
-                    }
-                    continue;
-                }
-            }
-
-            if (List.initOne(root, selector, frame)) |node| {
-                if (node.is(Node.Element)) |el| {
+pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.Element {
+    for (selectors) |selector| {
+        // Fast path: single compound with only an ID selector
+        if (selector.segments.len == 0 and selector.first.parts.len == 1) {
+            const first = selector.first.parts[0];
+            if (first == .id) {
+                const el = frame.getElementByIdFromNode(root, first.id) orelse continue;
+                // Check if the element is within the root subtree
+                const node = el.asNode();
+                if (node != root and root.contains(node)) {
                     return el;
                 }
+                continue;
             }
         }
-        return null;
+
+        if (List.initOne(root, selector, frame)) |node| {
+            if (node.is(Node.Element)) |el| {
+                return el;
+            }
+        }
     }
-};
+    return null;
+}

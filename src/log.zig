@@ -19,6 +19,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const IS_TEST = builtin.is_test;
+
 const Thread = std.Thread;
 
 const is_debug = builtin.mode == .Debug;
@@ -144,7 +146,9 @@ pub fn fatal(scope: Scope, msg: []const u8, data: anytype) void {
 }
 
 pub fn note(scope: Scope, msg: []const u8, data: anytype) void {
-    log(scope, .note, msg, data);
+    if (comptime IS_TEST == false) {
+        log(scope, .note, msg, data);
+    }
 }
 
 pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
@@ -168,7 +172,11 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
 
     var buf: [4096]u8 = undefined;
     var stderr = std.fs.File.stderr();
-    var writer = stderr.writer(&buf);
+    // writerStreaming, not writer: the default positional mode starts each
+    // fresh Writer at offset 0, so when stderr is redirected to a regular file
+    // every log line overwrites the previous one. Streaming writes at the fd
+    // offset, which is what append-style logging needs.
+    var writer = stderr.writerStreaming(&buf);
 
     logTo(scope, level, msg, data, &writer.interface) catch |log_err| {
         std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
@@ -509,7 +517,7 @@ fn elapsed() struct { time: f64, unit: []const u8 } {
 
 const datetime = @import("datetime.zig");
 fn timestamp(comptime mode: datetime.TimestampMode) u64 {
-    if (comptime @import("builtin").is_test) {
+    if (IS_TEST) {
         return 1739795092929;
     }
     return datetime.milliTimestamp(mode);

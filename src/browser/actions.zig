@@ -189,23 +189,24 @@ pub fn setChecked(node: *DOMNode, checked: bool, frame: *Frame) !void {
         return error.InvalidNodeType;
     }
 
-    input.setChecked(checked, frame) catch |err| {
-        lp.log.err(.app, "setChecked failed", .{ .err = err });
+    if (input.getChecked() == checked) {
+        return;
+    }
+    if (input._input_type == .radio and !checked) {
+        // A click can never uncheck a radio.
+        return error.InvalidNodeType;
+    }
+
+    // The click's activation behavior (EventManager.ActivationState) toggles
+    // the state and fires input and change; setting the state up front would
+    // make the click undo it, and dispatching input/change here would double
+    // them up.
+    try click(node, frame);
+
+    if (input.getChecked() != checked) {
+        lp.log.err(.app, "setChecked click prevented", .{});
         return error.ActionFailed;
-    };
-
-    // Match browser event order: click fires first, then input and change.
-    const click_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-    }, frame);
-
-    frame._event_manager.dispatch(el.asEventTarget(), click_event.asEvent()) catch |err| {
-        lp.log.err(.app, "dispatch click event failed", .{ .err = err });
-    };
-
-    try dispatchInputAndChangeEvents(el, frame);
+    }
 }
 
 pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
@@ -272,24 +273,24 @@ fn remainingMs(timeout_ms: u32, timer: *std.time.Timer) u32 {
     return @max(1, timeout_ms -| elapsed);
 }
 
-pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Session) !*DOMNode {
+pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, frame_id: u32, session: *Session) !*DOMNode {
     var timer = try std.time.Timer.start();
-    var runner = try session.runner(.{});
-    try runner.wait(.{ .ms = timeout_ms, .until = .load });
+    var runner = session.runner(.{});
+    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .load });
 
-    const el = try runner.waitForSelector(selector, remainingMs(timeout_ms, &timer));
+    const el = try runner.waitForSelector(frame_id, selector, remainingMs(timeout_ms, &timer));
     return el.asNode();
 }
 
-pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, session: *Session) !void {
+pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, frame_id: u32, session: *Session) !void {
     var timer = try std.time.Timer.start();
-    var runner = try session.runner(.{});
-    try runner.wait(.{ .ms = timeout_ms, .until = .load });
+    var runner = session.runner(.{});
+    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .load });
 
-    return runner.waitForScript(script, remainingMs(timeout_ms, &timer));
+    return runner.waitForScript(frame_id, script, remainingMs(timeout_ms, &timer));
 }
 
-pub fn waitForState(state: lp.Config.WaitUntil, timeout_ms: u32, session: *Session) !void {
-    var runner = try session.runner(.{});
-    try runner.wait(.{ .ms = timeout_ms, .until = state });
+pub fn waitForState(state: lp.Config.WaitUntil, timeout_ms: u32, frame_id: u32, session: *Session) !void {
+    var runner = session.runner(.{});
+    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = state });
 }

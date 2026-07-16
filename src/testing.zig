@@ -343,6 +343,19 @@ const HtmlRunnerOpts = struct {
     load_external_stylesheets: bool = false,
 };
 
+// Create a fresh page on `test_session` and return its root frame — for tests
+// that just need a frame to build a DOM in. The page lives on the session;
+// release it with `defer testing.test_session.closeAllPages()`.
+pub fn createFrame() !*Frame {
+    return (try test_session.createPage()).frame().?;
+}
+
+pub fn waitForFrame() !void {
+    var runner = test_session.runner(.{});
+    const frame_id = test_session.pages.items[0].frame._frame_id;
+    return runner.waitForFrame(frame_id, 2000, .{ .until = .done });
+}
+
 pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
     defer reset();
 
@@ -405,8 +418,8 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
 }
 
 fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
-    const frame = try test_session.createPage();
-    defer test_session.removePage();
+    const page = try test_session.createPage();
+    defer page.close();
 
     const url = try std.fmt.allocPrintSentinel(
         arena_allocator,
@@ -414,6 +427,8 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         .{test_file},
         0,
     );
+
+    const frame = page.frame().?;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -427,8 +442,8 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         try frame.navigate(url, .{});
     }
 
-    var runner = try test_session.runner(.{});
-    try runner.wait(.{ .ms = 2000, .until = .load });
+    var runner = test_session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
 
     var wait_ms: u32 = timeout_ms;
     var timer = try std.time.Timer.start();
@@ -445,7 +460,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         if (js_val.isTrue()) {
             return;
         }
-        const sleep_ms: usize = switch (try runner.tick(.{ .ms = 20 })) {
+        const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
             .done => 20,
             .ok => |next_ms| @min(next_ms, 20),
         };
@@ -463,9 +478,9 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
 const PageTestOpts = struct {
     wait_until_done: bool = true,
 };
-pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Frame {
-    const frame = try test_session.createPage();
-    errdefer test_session.removePage();
+pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.PageHandle {
+    const page = try test_session.createPage();
+    errdefer page.close();
 
     const url = try std.fmt.allocPrintSentinel(
         arena_allocator,
@@ -474,12 +489,12 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Frame {
         0,
     );
 
-    try frame.navigate(url, .{});
-    var runner = try test_session.runner(.{});
+    try page.navigate(url, .{});
     if (opts.wait_until_done) {
-        try runner.wait(.{ .ms = 2000 });
+        var runner = test_session.runner(.{});
+        try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
     }
-    return frame;
+    return page;
 }
 
 const TestHTTPServer = @import("TestHTTPServer.zig");
@@ -492,6 +507,12 @@ var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
 var test_ws_server: ?TestWSServer = null;
 var test_ws_server_thread: ?std.Thread = null;
+
+// Server-side state for the /sse/* endpoints. sse_flag proves progressive
+// delivery (see /sse/streaming); sse_reconnect_hits makes /sse/reconnect
+// serve a different stream on the second connection.
+var sse_flag = std.atomic.Value(bool).init(false);
+var sse_reconnect_hits = std.atomic.Value(usize).init(0);
 
 var test_config: Config = undefined;
 
@@ -700,6 +721,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/defer-marker.js")) {
+        // A deferred script body. Used by the regression test for a
+        // <script defer> whose completion is deferred by a later
+        // <link rel=stylesheet>'s synchronous fetch — it must still execute.
+        return req.respond("window.__deferRan = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/javascript" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/500")) {
         return req.respond("Internal Server Error", .{
             .status = .internal_server_error,
@@ -713,6 +745,97 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/octet-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/simple")) {
+        // A complete stream: default + custom event types, multi-line data,
+        // an id, and a comment. The connection closes right after; the test
+        // close()s before the (1s) reconnect fires.
+        return req.respond("retry: 1000\ndata: first\n\n: comment\nid: 42\nevent: custom\ndata: a\ndata: b\n\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/event-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/streaming")) {
+        sse_flag.store(false, .release);
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/event-stream" },
+                },
+            },
+        });
+        try res.writer.writeAll("data: first\n\n");
+        try res.writer.flush();
+        try res.flush();
+
+        // Proof of progressive delivery: "second" is only sent once the
+        // client has reacted to "first" (by fetching /sse/flag), which it
+        // can only do if "first" was delivered while this response was
+        // still streaming.
+        var waited: usize = 0;
+        while (!sse_flag.load(.acquire) and waited < 5000) : (waited += 10) {
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
+        if (sse_flag.load(.acquire)) {
+            // split mid-line to exercise buffering across chunks
+            try res.writer.writeAll("data: sec");
+            try res.writer.flush();
+            try res.flush();
+            std.Thread.sleep(20 * std.time.ns_per_ms);
+            try res.writer.writeAll("ond\n\n");
+            try res.writer.flush();
+            try res.flush();
+        }
+        return res.end();
+    }
+
+    if (std.mem.eql(u8, path, "/sse/flag")) {
+        sse_flag.store(true, .release);
+        return req.respond("", .{});
+    }
+
+    if (std.mem.eql(u8, path, "/sse/reconnect")) {
+        if (sse_reconnect_hits.fetchAdd(1, .monotonic) == 0) {
+            return req.respond("retry: 10\ndata: one\n\n", .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/event-stream" },
+                },
+            });
+        }
+        return req.respond("data: two\n\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/event-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/long_retry")) {
+        return req.respond("retry: 60000\ndata: x\n\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/event-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/404")) {
+        return req.respond("data: x\n\n", .{
+            .status = .not_found,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/event-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/badmime")) {
+        return req.respond("data: x\n\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
             },
         });
     }
@@ -833,6 +956,13 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
+        if (std.mem.indexOf(u8, path, "delay_ms=")) |pos| {
+            const digits_start = pos + "delay_ms=".len;
+            var end = digits_start;
+            while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
+            const delay_ms = std.fmt.parseInt(u64, path[digits_start..end], 10) catch 0;
+            std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+        }
         // strip off leading / so that it's relative to CWD
         return TestHTTPServer.sendFile(req, path[1..]);
     }

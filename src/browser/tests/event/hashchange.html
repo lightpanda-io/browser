@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=hashChangeConstructor>
+{
+  const event = new HashChangeEvent('hashchange');
+  testing.expectEqual('hashchange', event.type);
+  testing.expectEqual('', event.oldURL);
+  testing.expectEqual('', event.newURL);
+  testing.expectEqual(false, event.bubbles);
+  testing.expectEqual(false, event.cancelable);
+  testing.expectTrue(event instanceof Event);
+  testing.expectTrue(event instanceof HashChangeEvent);
+}
+</script>
+
+<script id=hashChangeWithOptions>
+{
+  const event = new HashChangeEvent('hashchange', {
+    oldURL: 'http://example.com/#a',
+    newURL: 'http://example.com/#b',
+    bubbles: true,
+    cancelable: true,
+  });
+  testing.expectEqual('http://example.com/#a', event.oldURL);
+  testing.expectEqual('http://example.com/#b', event.newURL);
+  testing.expectEqual(true, event.bubbles);
+  testing.expectEqual(true, event.cancelable);
+}
+</script>
+
+<script id=hashChangeDispatch>
+{
+  let received = null;
+  window.addEventListener('hashchange', (e) => { received = e; }, { once: true });
+
+  const event = new HashChangeEvent('hashchange', {
+    oldURL: 'http://example.com/#old',
+    newURL: 'http://example.com/#new',
+  });
+  window.dispatchEvent(event);
+
+  testing.expectEqual('http://example.com/#old', received.oldURL);
+  testing.expectEqual('http://example.com/#new', received.newURL);
+}
+</script>
+
+<script id=hashChangeFiresOnFragmentNavigation type=module>
+{
+  // hashchange is fired by queuing a task (not synchronously): the handler
+  // below is registered AFTER the first `location.hash` change yet still
+  // observes it, and each fragment change fires its own event.
+  const state = await testing.async();
+  const root = location.href.split('#')[0];
+
+  const oldURLs = [];
+  const newURLs = [];
+
+  location.hash = '#foo';
+
+  window.onhashchange = (e) => {
+    if (newURLs.length === 0) {
+      testing.expectEqual('hashchange', e.type);
+      testing.expectTrue(e.isTrusted);
+      testing.expectEqual(window, e.target);
+      testing.expectTrue(e instanceof HashChangeEvent);
+      testing.expectEqual(false, e.bubbles);
+      testing.expectEqual(false, e.cancelable);
+    }
+    oldURLs.push(e.oldURL);
+    newURLs.push(e.newURL);
+    if (newURLs.length === 2) state.resolve();
+  };
+
+  location.hash = '#bar';
+
+  await state.done(() => {
+    testing.expectEqual([root, root + '#foo'], oldURLs);
+    testing.expectEqual([root + '#foo', root + '#bar'], newURLs);
+    window.onhashchange = null;
+  });
+}
+</script>
+
+<script id=hashChangeFiresOnHistoryTraversal type=module>
+{
+  // Traversing history (history.back) between entries that share a document
+  // but differ only by fragment must also fire hashchange. The decision is
+  // owned by Navigation.navigateInner (single resolved-URL source of truth),
+  // not re-derived in History.goInner.
+  const state = await testing.async();
+
+  const events = [];
+  window.onhashchange = (e) => {
+    events.push([e.oldURL, e.newURL]);
+    if (events.length === 2) state.resolve();
+  };
+
+  // Relative to the document's current URL (a prior block leaves a fragment
+  // here): pushState creates a fragment-only entry without firing hashchange,
+  // then back/forward traverse between the two entries.
+  const before = location.href;
+  history.pushState(null, '', '#section');  // entry .../#section; no hashchange
+  const after = location.href;
+  history.back();                           // traverse: after -> before
+  history.forward();                        // traverse: before -> after
+
+  await state.done(() => {
+    testing.expectEqual([
+      [after, before],
+      [before, after],
+    ], events);
+    window.onhashchange = null;
+  });
+}
+</script>

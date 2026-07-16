@@ -94,16 +94,15 @@ const TestContext = struct {
             if (bc.target_id == null) {
                 bc.target_id = "TID-000000000Z".*;
             }
-            const frame = try bc.session.createPage();
+            const page = try bc.session.createPage();
             const full_url = try std.fmt.allocPrintSentinel(
                 base.arena_allocator,
                 "http://127.0.0.1:9582/src/browser/tests/{s}",
                 .{url},
                 0,
             );
-            try frame.navigate(full_url, .{});
-            var runner = try bc.session.runner(.{});
-            try runner.wait(.{ .ms = 2000 });
+            try page.navigate(full_url, .{});
+            try waitForPage(bc);
         }
         return bc;
     }
@@ -205,8 +204,8 @@ const TestContext = struct {
 
             if (self.cdp_.browser_context) |*bc| {
                 if (bc.session.hasPage()) {
-                    var runner = try bc.session.runner(.{});
-                    _ = try runner.tick(.{ .ms = 1000 });
+                    var runner = bc.session.runner(.{});
+                    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
                 }
             }
             std.Thread.sleep(5 * std.time.ns_per_ms);
@@ -318,4 +317,9 @@ pub fn context() !TestContext {
         .cdp_socket = pair[1],
         .socket = pair[0],
     };
+}
+
+pub fn waitForPage(bc: *CDP.BrowserContext) !void {
+    var runner = bc.session.runner(.{});
+    try runner.waitForFrame(bc.page_handle.?.frame_id, 2000, .{ .until = .done });
 }

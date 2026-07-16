@@ -356,7 +356,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                                 defer try_catch.deinit();
 
                                 ls.local.eval(inject_script, "inject_script") catch |err| {
-                                    const caught = try_catch.caughtOrError(frame.call_arena, err);
+                                    const caught = try_catch.caughtOrError(frame.local_arena, err);
                                     log.err(.app, "inject script error", .{ .err = caught });
                                 };
                             }
@@ -829,6 +829,12 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     ._definition = definition,
                 });
 
+                // Fragment-parse context element. It will not be inserted and
+                // we should not run the custom element's constructor.
+                if (frame._skip_custom_element_upgrade) {
+                    return node;
+                }
+
                 const def = definition orelse {
                     const element = node.as(Element);
                     const custom = element.is(Element.Html.Custom).?;
@@ -862,18 +868,15 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
 
                 // After constructor runs, invoke attributeChangedCallback for initial attributes
                 const element = node.as(Element);
-                if (element._attributes) |attributes| {
-                    var it = attributes.iterator();
-                    while (it.next()) |attr| {
-                        Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(
-                            element,
-                            attr._name,
-                            null, // old_value is null for initial attributes
-                            attr._value,
-                            null,
-                            frame,
-                        );
-                    }
+                for (element.attributeEntries()) |*attr| {
+                    Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(
+                        element,
+                        .wrap(attr.name()),
+                        null, // old_value is null for initial attributes
+                        .wrap(attr.value()),
+                        null,
+                        frame,
+                    );
                 }
 
                 return node;
@@ -882,16 +885,47 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
             return createHtmlElementT(frame, Element.Html.Unknown, namespace, attribute_iterator, .{ ._proto = undefined, ._tag_name = tag_name });
         },
         .svg => {
-            const tag_name = try String.init(frame.arena, name, .{});
-            if (std.ascii.eqlIgnoreCase(name, "svg")) {
-                return createSvgElementT(frame, Element.Svg, name, attribute_iterator, .{
-                    ._proto = undefined,
-                    ._type = .svg,
-                    ._tag_name = tag_name,
-                });
+            const Graphics = Element.Svg.Graphics;
+            const Geometry = Graphics.Geometry;
+            // SVG tag names are case-sensitive; no lowering before matching.
+            switch (name.len) {
+                1 => switch (name[0]) {
+                    'g' => return createSvgGraphicsElementT(frame, Graphics.G, name, attribute_iterator),
+                    'a' => return createSvgGraphicsElementT(frame, Graphics.A, name, attribute_iterator),
+                    else => {},
+                },
+                3 => switch (@as(u24, @bitCast(name[0..3].*))) {
+                    asUint("svg") => return createSvgGraphicsElementT(frame, Graphics.Svg, name, attribute_iterator),
+                    asUint("use") => return createSvgGraphicsElementT(frame, Graphics.Use, name, attribute_iterator),
+                    else => {},
+                },
+                4 => switch (@as(u32, @bitCast(name[0..4].*))) {
+                    asUint("defs") => return createSvgGraphicsElementT(frame, Graphics.Defs, name, attribute_iterator),
+                    asUint("rect") => return createSvgGeometryElementT(frame, Geometry.Rect, name, attribute_iterator),
+                    asUint("line") => return createSvgGeometryElementT(frame, Geometry.Line, name, attribute_iterator),
+                    asUint("path") => return createSvgGeometryElementT(frame, Geometry.Path, name, attribute_iterator),
+                    else => {},
+                },
+                5 => switch (@as(u40, @bitCast(name[0..5].*))) {
+                    asUint("image") => return createSvgGraphicsElementT(frame, Graphics.Image, name, attribute_iterator),
+                    else => {},
+                },
+                6 => switch (@as(u48, @bitCast(name[0..6].*))) {
+                    asUint("circle") => return createSvgGeometryElementT(frame, Geometry.Circle, name, attribute_iterator),
+                    else => {},
+                },
+                7 => switch (@as(u56, @bitCast(name[0..7].*))) {
+                    asUint("ellipse") => return createSvgGeometryElementT(frame, Geometry.Ellipse, name, attribute_iterator),
+                    asUint("polygon") => return createSvgGeometryElementT(frame, Geometry.Polygon, name, attribute_iterator),
+                    else => {},
+                },
+                8 => switch (@as(u64, @bitCast(name[0..8].*))) {
+                    asUint("polyline") => return createSvgGeometryElementT(frame, Geometry.Polyline, name, attribute_iterator),
+                    else => {},
+                },
+                else => {},
             }
 
-            // Other SVG elements (rect, circle, text, g, etc.)
             const lower = std.ascii.lowerString(&frame.buf, name);
             const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
             return createSvgElementT(frame, Element.Svg.Generic, name, attribute_iterator, .{ ._proto = undefined, ._tag = tag });
@@ -907,6 +941,7 @@ fn createHtmlElementT(frame: *Frame, comptime E: type, namespace: Element.Namesp
     const html_element_ptr = try frame._factory.htmlElement(html_element);
     const element = html_element_ptr.asElement();
     element._namespace = namespace;
+    element._attributes.normalize = namespace == .html;
     try populateElementAttributes(frame, element, attribute_iterator);
 
     // Check for customized built-in element via "is" attribute
@@ -932,36 +967,42 @@ fn createHtmlMediaElementT(frame: *Frame, comptime E: type, namespace: Element.N
 
 fn createSvgElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype, svg_element: E) !*Node {
     const svg_element_ptr = try frame._factory.svgElement(tag_name, svg_element);
-    var element = svg_element_ptr.asElement();
+    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
+}
+
+fn createSvgGraphicsElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype) !*Node {
+    const svg_element_ptr = try frame._factory.svgGraphicsElement(tag_name, E{ ._proto = undefined });
+    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
+}
+
+fn createSvgGeometryElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype) !*Node {
+    const svg_element_ptr = try frame._factory.svgGeometryElement(tag_name, E{ ._proto = undefined });
+    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
+}
+
+fn initSvgElement(frame: *Frame, element: *Element, attribute_iterator: anytype) !*Node {
     element._namespace = .svg;
+    element._attributes.normalize = false;
     try populateElementAttributes(frame, element, attribute_iterator);
     return element.asNode();
 }
 
 fn populateElementAttributes(frame: *Frame, element: *Element, list: anytype) !void {
-    if (@TypeOf(list) == ?*Element.Attribute.List) {
+    if (@TypeOf(list) == *Element.Attribute.List or @TypeOf(list) == *const Element.Attribute.List) {
         // from cloneNode
-
-        var existing = list orelse return;
-
-        var attributes = try frame.arena.create(Element.Attribute.List);
-        attributes.* = .{
-            .normalize = existing.normalize,
-        };
-
-        var it = existing.iterator();
-        while (it.next()) |attr| {
-            try attributes.putNew(attr._name.str(), attr._value.str(), frame);
-        }
-        element._attributes = attributes;
-        return;
+        return element._attributes.cloneFrom(list, frame);
     }
 
     // from the parser
-    if (@TypeOf(list) == @TypeOf(null) or list.count() == 0) {
+    if (@TypeOf(list) == @TypeOf(null)) {
         return;
     }
-    var attributes = try element.createAttributeList(frame);
+    const count = list.count();
+    if (count == 0) {
+        return;
+    }
+    var attributes = &element._attributes;
+    try attributes.ensureTotalCapacity(count, frame);
     while (list.next()) |attr| {
         try attributes.putNew(attr.name.local.slice(), attr.value.slice(), frame);
     }
@@ -988,7 +1029,7 @@ pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element 
     }
 
     const tag_name = try String.init(frame.arena, definition.name, .{});
-    const node = try createHtmlElementT(frame, Element.Html.Custom, .html, @as(?*Element.Attribute.List, null), .{
+    const node = try createHtmlElementT(frame, Element.Html.Custom, .html, null, .{
         ._proto = undefined,
         ._tag_name = tag_name,
         ._definition = definition,

@@ -21,7 +21,10 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Window = @import("Window.zig");
 const URL = @import("../URL.zig");
+const idna = @import("../../sys/idna.zig");
+const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -51,6 +54,11 @@ _type: Type,
 _proto: *Node,
 _frame: ?*Frame = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
+// content type override for documents created via DOMImplementation.createDocument
+_content_type: ?[]const u8 = null,
+// encoding override: documents synthesized by script (createHTMLDocument,
+// createDocument) are UTF-8 regardless of the frame's encoding
+_charset: ?[]const u8 = null,
 _ready_state: ReadyState = .loading,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
@@ -84,6 +92,22 @@ pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
         self._on_selectionchange = try listen.persistWithThis(self);
     } else {
         self._on_selectionchange = null;
+    }
+}
+
+// Stored in the frame's attribute-listener map (like element and ShadowRoot
+// property handlers), which the dispatch propagation path consults for any
+// event target.
+pub fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
+    return (self._frame orelse frame)._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
+}
+
+pub fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+    const owner = self._frame orelse frame;
+    if (Window.getFunctionFromSetter(setter)) |cb| {
+        try owner._event_target_attr_listeners.put(owner.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
+    } else {
+        _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = .onclick });
     }
 }
 
@@ -138,7 +162,36 @@ pub fn setLocation(self: *Document, url: [:0]const u8) !void {
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
 }
 
+// Approximation of quirks mode: an HTML document without a doctype is in quirks mode.
+pub fn isQuirksMode(self: *const Document) bool {
+    if (self._type != .html) {
+        return false;
+    }
+    var it = self._proto.childrenIterator();
+    while (it.next()) |child| {
+        if (child._type == .document_type) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn getCompatMode(self: *const Document) []const u8 {
+    return if (self.isQuirksMode()) "BackCompat" else "CSS1Compat";
+}
+
+pub fn getCharset(self: *const Document) []const u8 {
+    if (self._charset) |charset| {
+        return charset;
+    }
+    const doc_frame = self._frame orelse return "UTF-8";
+    return doc_frame.charset;
+}
+
 pub fn getContentType(self: *const Document) []const u8 {
+    if (self._content_type) |content_type| {
+        return content_type;
+    }
     return switch (self._type) {
         .html => "text/html",
         .xml => "application/xml",
@@ -147,7 +200,105 @@ pub fn getContentType(self: *const Document) []const u8 {
 }
 
 pub fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
-    return URL.getHostname((self._frame orelse frame).url);
+    const doc_frame = self._frame orelse frame;
+
+    // When document.domain has been set, the effective domain is encoded in
+    // the origin key with a leading '!' marker. The key is a "!scheme://host"
+    // serialization with the port already dropped, so the host *is* the
+    // effective domain.
+    const key = doc_frame.js.origin.key;
+    if (key.len != 0 and key[0] == '!') {
+        return URL.getHost(key[1..]);
+    }
+
+    // Derive from the origin, not the URL: an about:blank child inherits the
+    // parent origin while keeping url == "about:blank". Opaque origin => "".
+    const origin = doc_frame.origin orelse return "";
+    return URL.getOriginHostname(origin);
+}
+
+pub fn setDomain(self: *Document, value: []const u8) !void {
+    // e.g. (new Document().domain = '')
+    const doc_frame = self._frame orelse return error.SecurityError;
+    const origin = doc_frame.origin orelse return error.SecurityError;
+
+    const arena = doc_frame.local_arena;
+    const requested = if (idna.needsAscii(value)) try idna.toAscii(arena, value) else value;
+
+    // Validate against the current effective domain. Once relaxed,
+    // document.domain can only broaden further.
+    const base = self.getDomain(doc_frame);
+    if (isRelaxableTo(base, requested) == false) {
+        return error.SecurityError;
+    }
+
+    // When the domain is explicitly set, it only matches other explicitly set
+    // domains. We do this by prepending a '!' to the origin, so that it can
+    // only ever match another explicitly set domain.
+    // The scheme is preserved (http and https must never collide) and the
+    // port is dropped, per spec.
+    const scheme_end = (std.mem.indexOf(u8, origin, "://") orelse return error.SecurityError) + 3;
+    const key = try std.mem.concat(arena, u8, &.{ "!", origin[0..scheme_end], requested });
+    try doc_frame.js.setOrigin(key);
+}
+
+pub fn getCookie(_: *Document, frame: *Frame) ![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.local_arena), .{
+        .is_http = false,
+        .is_navigation = true,
+    });
+    return buf.items;
+}
+
+pub fn setCookie(_: *Document, cookie_str: []const u8, frame: *Frame) ![]const u8 {
+    // we use the cookie jar's allocator to parse the cookie because it
+    // outlives the frame's arena.
+    const Cookie = @import("storage/Cookie.zig");
+    const c = Cookie.parse(frame._session.cookie_jar.allocator, frame.url, cookie_str) catch {
+        // Invalid cookies should be silently ignored, not throw errors
+        return "";
+    };
+    if (c.http_only) {
+        c.deinit();
+        return ""; // HttpOnly cookies cannot be set from JS
+    }
+    try frame._session.cookie_jar.add(c, std.time.timestamp(), false);
+    return cookie_str;
+}
+
+// Returns true if the requested domain is valid for the given host
+fn isRelaxableTo(host: []const u8, requested: []const u8) bool {
+    if (requested.len == 0) {
+        return false;
+    }
+
+    // Pure opt-in: relaxing to your own host is always allowed (and it's the
+    // only valid value for IPs)
+    if (std.mem.eql(u8, host, requested)) {
+        return true;
+    }
+
+    // request must be a subset of host, so it must be smaller
+    if (host.len <= requested.len) {
+        return false;
+    }
+
+    if (host[host.len - requested.len - 1] != '.') {
+        return false;
+    }
+
+    if (std.mem.endsWith(u8, host, requested) == false) {
+        return false;
+    }
+
+    // it can't be a bare TLD, "com"
+    if (std.mem.indexOfScalar(u8, requested, '.') == null) {
+        return false;
+    }
+
+    // and it can't be a public suffix (e.g. "gov.uk")
+    return public_suffix_list.lookup(requested) == false;
 }
 
 const CreateElementOptions = struct {
@@ -183,7 +334,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
 }
 
 pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8, frame: *Frame) !*Element {
-    try validateElementName(name);
+    _ = try validateAndExtract(namespace, name, .element);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
     const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
@@ -302,7 +453,7 @@ pub fn querySelectorAll(self: *Document, input: String, frame: *Frame) !*Selecto
 
 pub fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
     if (self._implementation) |impl| return impl;
-    const impl = try frame._factory.create(DOMImplementation{});
+    const impl = try frame._factory.create(DOMImplementation{ ._document = self });
     self._implementation = impl;
     return impl;
 }
@@ -357,8 +508,8 @@ pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []
 }
 
 const Range = @import("Range.zig");
-pub fn createRange(_: *const Document, frame: *Frame) !*Range {
-    return Range.init(frame);
+pub fn createRange(self: *Document, frame: *Frame) !*Range {
+    return Range.initIn(self.asNode(), frame);
 }
 
 pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@import("Event.zig") {
@@ -368,56 +519,98 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
     }
     const normalized = std.ascii.lowerString(&frame.buf, event_type);
 
-    if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents")) {
-        return Event.init("", null, frame._page);
-    }
+    const event: *Event = blk: {
+        if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents") or std.mem.eql(u8, normalized, "svgevents")) {
+            break :blk try Event.init("", null, frame._page);
+        }
 
-    if (std.mem.eql(u8, normalized, "customevent") or std.mem.eql(u8, normalized, "customevents")) {
-        const CustomEvent = @import("event/CustomEvent.zig");
-        return (try CustomEvent.init("", null, frame._page)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "customevent")) {
+            const CustomEvent = @import("event/CustomEvent.zig");
+            break :blk (try CustomEvent.init("", null, frame._page)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "keyboardevent")) {
-        const KeyboardEvent = @import("event/KeyboardEvent.zig");
-        return (try KeyboardEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "keyboardevent")) {
+            const KeyboardEvent = @import("event/KeyboardEvent.zig");
+            break :blk (try KeyboardEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "inputevent")) {
-        const InputEvent = @import("event/InputEvent.zig");
-        return (try InputEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "inputevent")) {
+            const InputEvent = @import("event/InputEvent.zig");
+            break :blk (try InputEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
-        const MouseEvent = @import("event/MouseEvent.zig");
-        return (try MouseEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
+            const MouseEvent = @import("event/MouseEvent.zig");
+            break :blk (try MouseEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "messageevent")) {
-        const MessageEvent = @import("event/MessageEvent.zig");
-        return (try MessageEvent.init("", null, frame._page)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "dragevent")) {
+            const DragEvent = @import("event/DragEvent.zig");
+            break :blk (try DragEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "uievent") or std.mem.eql(u8, normalized, "uievents")) {
-        const UIEvent = @import("event/UIEvent.zig");
-        return (try UIEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "messageevent")) {
+            const MessageEvent = @import("event/MessageEvent.zig");
+            break :blk (try MessageEvent.init("", null, frame._page)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "focusevent") or std.mem.eql(u8, normalized, "focusevents")) {
-        const FocusEvent = @import("event/FocusEvent.zig");
-        return (try FocusEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "hashchangeevent")) {
+            const HashChangeEvent = @import("event/HashChangeEvent.zig");
+            break :blk (try HashChangeEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "textevent") or std.mem.eql(u8, normalized, "textevents")) {
-        const TextEvent = @import("event/TextEvent.zig");
-        return (try TextEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "uievent") or std.mem.eql(u8, normalized, "uievents")) {
+            const UIEvent = @import("event/UIEvent.zig");
+            break :blk (try UIEvent.init("", null, frame)).asEvent();
+        }
 
-    if (std.mem.eql(u8, normalized, "compositionevent")) {
-        const CompositionEvent = @import("event/CompositionEvent.zig");
-        return (try CompositionEvent.init("", null, frame)).asEvent();
-    }
+        if (std.mem.eql(u8, normalized, "focusevent")) {
+            const FocusEvent = @import("event/FocusEvent.zig");
+            break :blk (try FocusEvent.init("", null, frame)).asEvent();
+        }
 
-    return error.NotSupported;
+        if (std.mem.eql(u8, normalized, "textevent")) {
+            const TextEvent = @import("event/TextEvent.zig");
+            break :blk (try TextEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "compositionevent")) {
+            const CompositionEvent = @import("event/CompositionEvent.zig");
+            break :blk (try CompositionEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "beforeunloadevent")) {
+            const BeforeUnloadEvent = @import("event/BeforeUnloadEvent.zig");
+            break :blk (try BeforeUnloadEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "devicemotionevent")) {
+            const DeviceMotionEvent = @import("event/DeviceMotionEvent.zig");
+            break :blk (try DeviceMotionEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "deviceorientationevent")) {
+            const DeviceOrientationEvent = @import("event/DeviceOrientationEvent.zig");
+            break :blk (try DeviceOrientationEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "storageevent")) {
+            const StorageEvent = @import("event/StorageEvent.zig");
+            break :blk (try StorageEvent.init("", null, frame)).asEvent();
+        }
+
+        if (std.mem.eql(u8, normalized, "touchevent")) {
+            const TouchEvent = @import("event/TouchEvent.zig");
+            break :blk (try TouchEvent.init("", null, frame)).asEvent();
+        }
+
+        return error.NotSupported;
+    };
+
+    // createEvent returns an uninitialized event: dispatching it before one
+    // of the init*Event calls throws an InvalidStateError.
+    event._initialized = false;
+    return event;
 }
 
 pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMTreeWalker.FilterOpts, frame: *Frame) !*DOMTreeWalker {
@@ -619,7 +812,22 @@ pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, frame: *
     return self.asNode().replaceChildren(nodes, frame);
 }
 
+pub fn moveBefore(self: *Document, node: js.Value, child: js.Value, frame: *Frame) !void {
+    return self.asNode().moveBefore(node, child, frame);
+}
+
 pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
+    return self.elementFromPointImpl(x, y, false, frame);
+}
+
+// The faux layout gives most elements no useful horizontal extent, so
+// viewport-relative hit-testing (WebDriver scroll actions) matches on the
+// vertical axis only.
+pub fn elementFromVerticalPoint(self: *Document, y: f64, frame: *Frame) !?*Element {
+    return self.elementFromPointImpl(0, y, true, frame);
+}
+
+fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: *Frame) !?*Element {
     // DFS in document order; topmost = last visited element whose rect contains (x, y).
     //
     // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
@@ -634,7 +842,7 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Eleme
 
     const root = self.asNode();
     var stack: std.ArrayList(*Node) = .empty;
-    try stack.append(frame.call_arena, root);
+    try stack.append(frame.local_arena, root);
 
     var visibility_cache: Element.VisibilityCache = .{};
     var preorder_index: f64 = 0;
@@ -657,7 +865,8 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Eleme
                 const top = pos;
                 const right = pos + dims.width;
                 const bottom = pos + dims.height;
-                if (x >= left and x <= right and y >= top and y <= bottom) {
+                const x_contained = ignore_x or (x >= left and x <= right);
+                if (x_contained and y >= top and y <= bottom) {
                     topmost = element;
                 }
             }
@@ -666,7 +875,7 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Eleme
         // Add children to stack in reverse order so we process them in document order
         var child = node.lastChild();
         while (child) |c| {
-            try stack.append(frame.call_arena, c);
+            try stack.append(frame.local_arena, c);
             child = c.previousSibling();
         }
     }
@@ -679,7 +888,7 @@ pub fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]cons
     var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
     var result: std.ArrayList(*Element) = .empty;
     while (current) |el| {
-        try result.append(frame.call_arena, el);
+        try result.append(frame.local_arena, el);
         current = el.parentElement();
     }
     return result.items;
@@ -1089,26 +1298,118 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
     }
 }
 
-fn validateElementName(name: []const u8) !void {
+// DOM §1.4 "Name validation" productions.
+
+pub fn isValidElementLocalName(name: []const u8) bool {
     if (name.len == 0) {
-        return error.InvalidCharacterError;
+        return false;
     }
-
-    const first = name[0];
-    // Element names cannot start with: digits, period, hyphen
-    if ((first >= '0' and first <= '9') or first == '.' or first == '-') {
-        return error.InvalidCharacterError;
+    if (std.ascii.isAlphabetic(name[0])) {
+        // Names the HTML parser can construct: anything except ASCII
+        // whitespace, NUL, '/' or '>'.
+        for (name[1..]) |c| {
+            switch (c) {
+                '\t', '\n', 0x0C, '\r', ' ', 0, '/', '>' => return false,
+                else => {},
+            }
+        }
+        return true;
     }
-
+    // Otherwise the first code point must be ':', '_' or beyond ASCII, and
+    // the rest restricted to alphanumerics, '-', '.', ':', '_' or non-ASCII.
+    if (name[0] != ':' and name[0] != '_' and name[0] < 0x80) {
+        return false;
+    }
     for (name[1..]) |c| {
-        const is_valid = std.ascii.isAlphanumeric(c) or
-            c == '_' or c == '-' or c == '.' or c == ':' or
-            c >= 128; // Allow non-ASCII UTF-8
+        const valid = std.ascii.isAlphanumeric(c) or
+            c == '-' or c == '.' or c == ':' or c == '_' or c >= 0x80;
+        if (!valid) {
+            return false;
+        }
+    }
+    return true;
+}
 
-        if (!is_valid) {
+pub fn isValidNamespacePrefix(prefix: []const u8) bool {
+    if (prefix.len == 0) {
+        return false;
+    }
+    for (prefix) |c| {
+        switch (c) {
+            '\t', '\n', 0x0C, '\r', ' ', 0, '/', '>' => return false,
+            else => {},
+        }
+    }
+    return true;
+}
+
+pub fn isValidAttributeLocalName(name: []const u8) bool {
+    if (name.len == 0) {
+        return false;
+    }
+    for (name) |c| {
+        switch (c) {
+            '\t', '\n', 0x0C, '\r', ' ', 0, '/', '=', '>' => return false,
+            else => {},
+        }
+    }
+    return true;
+}
+
+fn validateElementName(name: []const u8) !void {
+    if (!isValidElementLocalName(name)) {
+        return error.InvalidCharacterError;
+    }
+}
+
+pub const ValidatedName = struct {
+    prefix: ?[]const u8,
+    local_name: []const u8,
+    namespace: ?[]const u8,
+};
+
+// The DOM spec's "validate and extract a namespace and qualifiedName".
+pub fn validateAndExtract(namespace_: ?[]const u8, qualified_name: []const u8, comptime context: enum { element, attribute }) !ValidatedName {
+    var namespace: ?[]const u8 = namespace_;
+    if (namespace) |ns| {
+        if (ns.len == 0) {
+            namespace = null;
+        }
+    }
+
+    var prefix: ?[]const u8 = null;
+    var local_name = qualified_name;
+    if (std.mem.indexOfScalar(u8, qualified_name, ':')) |colon| {
+        prefix = qualified_name[0..colon];
+        local_name = qualified_name[colon + 1 ..];
+        if (!isValidNamespacePrefix(prefix.?)) {
             return error.InvalidCharacterError;
         }
     }
+
+    const local_valid = switch (context) {
+        .element => isValidElementLocalName(local_name),
+        .attribute => isValidAttributeLocalName(local_name),
+    };
+    if (!local_valid) {
+        return error.InvalidCharacterError;
+    }
+
+    if (prefix != null and namespace == null) {
+        return error.NamespaceError;
+    }
+    if (prefix) |p| {
+        if (std.mem.eql(u8, p, "xml") and (namespace == null or !std.mem.eql(u8, namespace.?, "http://www.w3.org/XML/1998/namespace"))) {
+            return error.NamespaceError;
+        }
+    }
+    const is_xmlns = std.mem.eql(u8, qualified_name, "xmlns") or (prefix != null and std.mem.eql(u8, prefix.?, "xmlns"));
+    const ns_is_xmlns = namespace != null and std.mem.eql(u8, namespace.?, "http://www.w3.org/2000/xmlns/");
+    if (is_xmlns != ns_is_xmlns) {
+        return error.NamespaceError;
+    }
+
+    return .{ .prefix = prefix, .local_name = local_name, .namespace = namespace };
 }
 
 // When a frame's URL is about:blank, or as soon as a frame is
@@ -1150,7 +1451,6 @@ pub const JsApi = struct {
         pub const name = "Document";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const constructor = bridge.constructor(_constructor, .{});
@@ -1158,10 +1458,17 @@ pub const JsApi = struct {
         return frame._factory.node(Document{
             ._proto = undefined,
             ._type = .generic,
+            ._url = "about:blank",
+            ._charset = "UTF-8",
         });
     }
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
+    pub const onclick = bridge.accessor(Document.getOnClick, Document.setOnClick, .{});
+    pub const ontouchstart = bridge.accessor(handlerAccessor(.ontouchstart).get, handlerAccessor(.ontouchstart).set, .{});
+    pub const ontouchend = bridge.accessor(handlerAccessor(.ontouchend).get, handlerAccessor(.ontouchend).set, .{});
+    pub const ontouchmove = bridge.accessor(handlerAccessor(.ontouchmove).get, handlerAccessor(.ontouchmove).set, .{});
+    pub const ontouchcancel = bridge.accessor(handlerAccessor(.ontouchcancel).get, handlerAccessor(.ontouchcancel).set, .{});
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
@@ -1174,22 +1481,23 @@ pub const JsApi = struct {
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
     pub const fonts = bridge.accessor(Document.getFonts, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
-    pub const domain = bridge.accessor(Document.getDomain, null, .{});
-    pub const createElement = bridge.function(Document.createElement, .{ .dom_exception = true });
-    pub const createElementNS = bridge.function(Document.createElementNS, .{ .dom_exception = true });
+    pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{});
+    pub const cookie = bridge.accessor(Document.getCookie, Document.setCookie, .{});
+    pub const createElement = bridge.function(Document.createElement, .{});
+    pub const createElementNS = bridge.function(Document.createElementNS, .{});
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
-    pub const createAttribute = bridge.function(Document.createAttribute, .{ .dom_exception = true });
-    pub const createAttributeNS = bridge.function(Document.createAttributeNS, .{ .dom_exception = true });
-    pub const createCDATASection = bridge.function(Document.createCDATASection, .{ .dom_exception = true });
-    pub const createProcessingInstruction = bridge.function(Document.createProcessingInstruction, .{ .dom_exception = true });
+    pub const createAttribute = bridge.function(Document.createAttribute, .{});
+    pub const createAttributeNS = bridge.function(Document.createAttributeNS, .{});
+    pub const createCDATASection = bridge.function(Document.createCDATASection, .{});
+    pub const createProcessingInstruction = bridge.function(Document.createProcessingInstruction, .{});
     pub const createRange = bridge.function(Document.createRange, .{});
-    pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
+    pub const createEvent = bridge.function(Document.createEvent, .{});
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});
     pub const createNodeIterator = bridge.function(Document.createNodeIterator, .{});
-    pub const evaluate = bridge.function(Document.evaluate, .{ .dom_exception = true });
-    pub const createExpression = bridge.function(Document.createExpression, .{ .dom_exception = true });
+    pub const evaluate = bridge.function(Document.evaluate, .{});
+    pub const createExpression = bridge.function(Document.createExpression, .{});
     pub const createNSResolver = bridge.function(Document.createNSResolver, .{});
     pub const getElementById = bridge.function(_getElementById, .{});
     fn _getElementById(self: *Document, value_: ?js.Value, frame: *Frame) !?*Element {
@@ -1202,24 +1510,25 @@ pub const JsApi = struct {
         }
         return self.getElementById(try value.toZig([]const u8), frame);
     }
-    pub const querySelector = bridge.function(Document.querySelector, .{ .dom_exception = true });
-    pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });
+    pub const querySelector = bridge.function(Document.querySelector, .{});
+    pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{});
     pub const getElementsByTagName = bridge.function(Document.getElementsByTagName, .{});
     pub const getElementsByTagNameNS = bridge.function(Document.getElementsByTagNameNS, .{});
     pub const getSelection = bridge.function(Document.getSelection, .{});
     pub const getElementsByClassName = bridge.function(Document.getElementsByClassName, .{});
     pub const getElementsByName = bridge.function(Document.getElementsByName, .{});
-    pub const adoptNode = bridge.function(Document.adoptNode, .{ .dom_exception = true, .ce_reactions = true });
-    pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true, .ce_reactions = true });
-    pub const append = bridge.function(Document.append, .{ .dom_exception = true, .ce_reactions = true });
-    pub const prepend = bridge.function(Document.prepend, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replaceChildren = bridge.function(Document.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
+    pub const adoptNode = bridge.function(Document.adoptNode, .{ .ce_reactions = true });
+    pub const importNode = bridge.function(Document.importNode, .{ .ce_reactions = true });
+    pub const append = bridge.function(Document.append, .{ .ce_reactions = true });
+    pub const prepend = bridge.function(Document.prepend, .{ .ce_reactions = true });
+    pub const moveBefore = bridge.function(Document.moveBefore, .{ .ce_reactions = true });
+    pub const replaceChildren = bridge.function(Document.replaceChildren, .{ .ce_reactions = true });
     pub const elementFromPoint = bridge.function(Document.elementFromPoint, .{});
     pub const elementsFromPoint = bridge.function(Document.elementsFromPoint, .{});
-    pub const write = bridge.function(Document.write, .{ .dom_exception = true, .ce_reactions = true });
-    pub const writeln = bridge.function(Document.writeln, .{ .dom_exception = true, .ce_reactions = true });
-    pub const open = bridge.function(Document.open, .{ .dom_exception = true, .ce_reactions = true });
-    pub const close = bridge.function(Document.close, .{ .dom_exception = true, .ce_reactions = true });
+    pub const write = bridge.function(Document.write, .{ .ce_reactions = true });
+    pub const writeln = bridge.function(Document.writeln, .{ .ce_reactions = true });
+    pub const open = bridge.function(Document.open, .{ .ce_reactions = true });
+    pub const close = bridge.function(Document.close, .{ .ce_reactions = true });
     pub const doctype = bridge.accessor(Document.getDocType, null, .{});
     pub const firstElementChild = bridge.accessor(Document.getFirstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});
@@ -1239,13 +1548,31 @@ pub const JsApi = struct {
     pub const characterSet = bridge.accessor(getCharacterSet, null, .{});
     pub const charset = bridge.accessor(getCharacterSet, null, .{});
     pub const inputEncoding = bridge.accessor(getCharacterSet, null, .{});
-    pub const compatMode = bridge.property("CSS1Compat", .{ .template = false });
-
+    pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
     fn getCharacterSet(self: *const Document) []const u8 {
-        const doc_frame = self._frame orelse return "UTF-8";
-        return doc_frame.charset;
+        return self.getCharset();
     }
     pub const referrer = bridge.property("", .{ .template = false });
+
+    // Generates a getter/setter pair backed by the frame's attribute-listener
+    // map, like onclick above, for other document event handler properties.
+    fn handlerAccessor(comptime handler: @import("global_event_handlers.zig").Handler) type {
+        return struct {
+            pub fn get(self: *Document, frame: *Frame) ?js.Function.Global {
+                const owner = self._frame orelse frame;
+                return owner._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = handler });
+            }
+
+            pub fn set(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+                const owner = self._frame orelse frame;
+                if (Window.getFunctionFromSetter(setter)) |cb| {
+                    try owner._event_target_attr_listeners.put(owner.arena, .{ .target = self.asEventTarget(), .handler = handler }, cb);
+                } else {
+                    _ = owner._event_target_attr_listeners.remove(.{ .target = self.asEventTarget(), .handler = handler });
+                }
+            }
+        };
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -1255,4 +1582,32 @@ test "WebApi: Document" {
 
 test "WebApi: Document.evaluate" {
     try testing.htmlRunner("xpath/document_evaluate.html", .{});
+}
+
+test "Document: isRelaxableTo" {
+    // Pure opt-in (relax to self) is always allowed, including IP hosts.
+    try testing.expectEqual(true, isRelaxableTo("a.example.com", "a.example.com"));
+    try testing.expectEqual(true, isRelaxableTo("127.0.0.1", "127.0.0.1"));
+
+    // Relaxing to a registrable superdomain.
+    try testing.expectEqual(true, isRelaxableTo("a.example.com", "example.com"));
+    try testing.expectEqual(true, isRelaxableTo("a.b.example.com", "example.com"));
+    try testing.expectEqual(true, isRelaxableTo("a.b.example.com", "b.example.com"));
+
+    // Bare TLDs (single label) are never registrable. Multi-label public
+    // suffixes are rejected via the PSL — note the test build stubs the PSL
+    // to {gov.uk, api.gov.uk}, so those are the entries exercised here.
+    try testing.expectEqual(false, isRelaxableTo("a.example.com", "com"));
+    try testing.expectEqual(false, isRelaxableTo("foo.gov.uk", "gov.uk"));
+    try testing.expectEqual(false, isRelaxableTo("a.api.gov.uk", "api.gov.uk"));
+    // ...but a registrable domain sitting under that suffix is fine.
+    try testing.expectEqual(true, isRelaxableTo("a.dept.gov.uk", "dept.gov.uk"));
+
+    // Must be a label-boundary suffix, not a substring suffix.
+    try testing.expectEqual(false, isRelaxableTo("a.example.com", "ample.com"));
+    try testing.expectEqual(false, isRelaxableTo("notexample.com", "example.com"));
+
+    // Unrelated domain, and the empty string.
+    try testing.expectEqual(false, isRelaxableTo("a.example.com", "example.org"));
+    try testing.expectEqual(false, isRelaxableTo("a.example.com", ""));
 }

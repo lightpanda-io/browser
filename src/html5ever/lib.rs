@@ -29,9 +29,10 @@ use std::os::raw::{c_uchar, c_void};
 use types::*;
 
 use encoding_rs::Encoding;
+use html5ever::driver::parse_fragment_for_element;
 use html5ever::interface::tree_builder::QuirksMode;
 use html5ever::tendril::{StrTendril, TendrilSink};
-use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, Parser, QualName};
+use html5ever::{ns, parse_document, LocalName, ParseOpts, Parser, QualName};
 
 #[no_mangle]
 pub extern "C" fn html5ever_parse_document(
@@ -461,9 +462,12 @@ pub extern "C" fn encoding_max_encode_buffer_length(
 pub extern "C" fn html5ever_parse_fragment(
     html: *mut c_uchar,
     len: usize,
+    context_name: *const c_uchar,
+    context_name_len: usize,
     document: Ref,
     ctx: Ref,
     create_element_callback: CreateElementCallback,
+    create_context_element_callback: CreateElementCallback,
     get_data_callback: GetDataCallback,
     append_callback: AppendCallback,
     parse_error_callback: ParseErrorCallback,
@@ -510,12 +514,52 @@ pub extern "C" fn html5ever_parse_fragment(
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
-    parse_fragment(
+
+    // The initial state of the parser is dertmined by the context element.
+    // E.g., parsing the content of a script tag behaves differently than
+    // parsing the content of the body.
+    let context_local = if context_name.is_null() || context_name_len == 0 {
+        LocalName::from("body")
+    } else {
+        let name_bytes = unsafe { std::slice::from_raw_parts(context_name, context_name_len) };
+        match std::str::from_utf8(name_bytes) {
+            Ok(name) => LocalName::from(name),
+            Err(_) => LocalName::from("body"),
+        }
+    };
+
+    // Only a document's input stream may have a single leading U+FEFF BOM
+    // stripped; fragment parsing (innerHTML, setHTMLUnsafe, etc.) must preserve
+    // a leading U+FEFF as a ZWNBSP.
+    let opts = ParseOpts {
+        tokenizer: html5ever::tokenizer::TokenizerOpts {
+            discard_bom: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let context_qname = QualName::new(None, ns!(html), context_local);
+    let context_data = arena.alloc(sink::ElementData {
+        qname: context_qname.clone(),
+        mathml_annotation_xml_integration_point: false,
+    });
+    let mut context_attrs = CAttributeIterator { vec: vec![], pos: 0 };
+    let context_elem = unsafe {
+        (create_context_element_callback)(
+            ctx,
+            context_data as *mut _ as *mut c_void,
+            CQualName::create(&context_qname),
+            &mut context_attrs as *mut _ as *mut c_void,
+        )
+    };
+
+    parse_fragment_for_element(
         sink,
-        Default::default(),
-        QualName::new(None, ns!(html), LocalName::from("body")),
-        vec![], // attributes
-        false,  // context_element_allows_scripting
+        opts,
+        context_elem,
+        false, // context_element_allows_scripting
+        None,  // form_element
     )
     .from_utf8()
     .one(bytes);

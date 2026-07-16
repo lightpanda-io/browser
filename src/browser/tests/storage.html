@@ -51,11 +51,14 @@
   localStorage.setItem('number', '123');
   testing.expectEqual('123', localStorage.getItem('number'));
 
+  // null/undefined keys are stringified per WebIDL (DOMString coercion).
   localStorage.setItem(null, 'null_key_value');
-  testing.expectEqual(null, localStorage.getItem(null));
+  testing.expectEqual('null_key_value', localStorage.getItem(null));
+  testing.expectEqual('null_key_value', localStorage.getItem('null'));
 
   localStorage.setItem(undefined, 'undefined_key_value');
-  testing.expectEqual(null, localStorage.getItem(undefined));
+  testing.expectEqual('undefined_key_value', localStorage.getItem(undefined));
+  testing.expectEqual('undefined_key_value', localStorage.getItem('undefined'));
 
   localStorage.clear();
   testing.expectEqual(0, localStorage.length);

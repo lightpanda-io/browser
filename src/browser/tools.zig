@@ -169,7 +169,14 @@ pub const save_synthesis_prompt =
     \\didn't use. Never round-trip a result through `lp.*`, and never append
     \\no-op page.extract(...) probes or `page.evaluate("return lp....")` tails to
     \\surface output.
-    \\Output ONLY JavaScript source — no markdown fences, no commentary.
+    \\Annotate the script with short `//` intent comments so a later reader grasps
+    \\it at a glance: one comment above each logical block (navigate, extract a
+    \\list, fan out to detail pages, aggregate, return) stating what that block
+    \\accomplishes toward the goal — NOT restating the API call. One comment per
+    \\step, not per line; skip self-evident lines.
+    \\Output ONLY JavaScript source — no markdown fences and no prose outside the
+    \\code, but DO annotate the script with the `//` intent comments described
+    \\above.
 ;
 
 /// Script-language rules for consumers that never see the full
@@ -1205,7 +1212,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     }
 
     // Script may have queued a navigation (e.g. `top.location = …`).
-    try awaitQueuedNavigation(session);
+    try awaitQueuedNavigation(session, page._frame_id);
     const after = session.currentFrame() orelse return result;
     if (before == null or before.? == after) return result;
 
@@ -1260,9 +1267,7 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
         const promise = js_result.toPromise();
         promise.markAsHandled();
 
-        var runner = page._session.runner(.{}) catch {
-            return .{ .text = "promise: no runner available", .is_error = true };
-        };
+        var runner = page._session.runner(.{});
         var timer = std.time.Timer.start() catch unreachable;
         while (promise.state() == .pending) {
             const elapsed_ms: u32 = @intCast(timer.read() / std.time.ns_per_ms);
@@ -1270,7 +1275,7 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
                 return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
             }
             const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
-            _ = runner.tick(.{ .ms = budget }) catch |err| switch (err) {
+            _ = runner.tickForFrame(page._frame_id, budget, .{ .until = .done }) catch |err| switch (err) {
                 error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
                 else => return .{ .text = "promise: tick failed", .is_error = true },
             };
@@ -1422,11 +1427,13 @@ fn mapActionError(err: anytype) ToolError {
 
 /// If the previous action queued a navigation (form submit, link click,
 /// Enter on an input), drive the runner until it completes or times out.
-fn awaitQueuedNavigation(session: *lp.Session) ToolError!void {
-    const page = session.currentPage() orelse return;
-    if (page.queued_navigation.items.len == 0) return;
-    var runner = session.runner(.{}) catch return ToolError.InternalError;
-    runner.wait(.{ .ms = 10000, .until = .done }) catch |err|
+fn awaitQueuedNavigation(session: *lp.Session, frame_id: u32) ToolError!void {
+    const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
+    if (navigated == false) {
+        return;
+    }
+    var runner = session.runner(.{});
+    runner.waitForFrame(frame_id, 10000, .{ .until = .done }) catch |err|
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 }
 
@@ -1444,7 +1451,9 @@ fn formatActionResult(
 /// caller (LLM, MCP client) can see whether the action triggered navigation.
 fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, body: []const u8) ToolError![]const u8 {
     const before = session.currentFrame();
-    try awaitQueuedNavigation(session);
+    if (before) |b| {
+        try awaitQueuedNavigation(session, b._frame_id);
+    }
     const page = try requireFrame(session);
     // A queued navigation that swaps the root frame tears down the previous
     // Page (`Session.replaceRootImmediate` / `commitPendingPage`), so every
@@ -1519,11 +1528,11 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    _ = try requireFrame(session);
+    const frame = try requireFrame(session);
 
     const timeout_ms = args.timeout orelse default_wait_timeout_ms;
 
-    const node = lp.actions.waitForSelector(args.selector, timeout_ms, session) catch |err| switch (err) {
+    const node = lp.actions.waitForSelector(args.selector, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.InvalidSelector => return ToolError.InvalidParams,
         error.Cancelled => return ToolError.Cancelled,
         // Timeout w/o a match: same outcome as `/hover selector=…` on a missing
@@ -1546,11 +1555,11 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    _ = try requireFrame(session);
+    const frame = try requireFrame(session);
 
     const timeout_ms = args.timeout orelse default_wait_timeout_ms;
 
-    lp.actions.waitForScript(args.script, timeout_ms, session) catch |err| switch (err) {
+    lp.actions.waitForScript(args.script, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
         error.Timeout => return ToolError.Timeout,
         error.ScriptError => return ToolError.InvalidParams,
@@ -1562,7 +1571,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
 
     // script may have queued a navigation (e.g. top.location=…); drain it so
     // the next command reads post-navigation state
-    try awaitQueuedNavigation(session);
+    try awaitQueuedNavigation(session, frame._frame_id);
 
     return "Script returned truthy.";
 }
@@ -1574,11 +1583,11 @@ fn execWaitForState(arena: std.mem.Allocator, session: *lp.Session, arguments: ?
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    _ = try requireFrame(session);
+    const frame = try requireFrame(session);
 
     const timeout_ms = args.timeout orelse default_wait_timeout_ms;
 
-    lp.actions.waitForState(args.state, timeout_ms, session) catch |err| switch (err) {
+    lp.actions.waitForState(args.state, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
         error.Timeout => return ToolError.Timeout,
         else => {
@@ -1824,25 +1833,64 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
 /// is deliberately avoided as a default: on real sites trackers/timers keep the
 /// network from ever fully idling, so it just rides the timeout.
 const default_nav_wait: lp.Config.WaitUntil = .load;
+const default_nav_timeout_ms: u32 = 10000;
 
-fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
-    if (session.hasPage()) {
-        registry.reset();
-        session.removePage();
-    }
+pub const StartedGoto = struct {
+    frame_id: u32,
+    timeout_ms: u32,
+};
+
+/// Open a fresh top-level page and start its navigation. The frame is non-null
+/// right after createPage but navigate can change/null it, so callers re-fetch.
+fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHandle {
     const page = session.createPage() catch return ToolError.NavigationFailed;
-    _ = page.navigate(url, .{
+    _ = page.frame().?.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     }) catch return ToolError.NavigationFailed;
+    return page;
+}
 
-    var runner = session.runner(.{}) catch return ToolError.NavigationFailed;
-    const result = runner.waitResult(.{
-        .ms = timeout orelse 10000,
-        .until = default_nav_wait,
-    }) catch |err| return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+/// Start a navigation without waiting for it to load, so the agent script Runtime
+/// can drive several gotos concurrently. `receiver_frame_id`, when set, is the
+/// page a re-goto on the same `Page` object replaces — only that page is closed,
+/// and only its nodes are evicted from the registry; sibling pages' node IDs stay
+/// valid.
+pub fn startGoto(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    arguments: ?std.json.Value,
+    receiver_frame_id: ?u32,
+) ToolError!StartedGoto {
+    // This path bypasses `call`, so it needs its own `$LP_*` substitution pass.
+    const args = try parseArgs(GotoParams, arena, try substituteStringArgs(arena, .goto, arguments));
+    if (receiver_frame_id) |fid| {
+        if (session.livePage(fid)) |page| {
+            registry.resetFrame(arena, &page.frame);
+            session.closePage(fid);
+        }
+    }
+    const page = try openPage(session, args.url);
+    return .{ .frame_id = page.frame_id, .timeout_ms = args.timeout orelse default_nav_timeout_ms };
+}
 
-    const frame = session.currentFrame() orelse return ToolError.NavigationFailed;
+fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
+    if (session.primaryPage()) |old_page| {
+        registry.reset();
+        old_page.close();
+    }
+    const page = try openPage(session, url);
+
+    var runner = session.runner(.{});
+    const condition = lp.Session.Runner.WaitCondition{ .frame_id = page.frame_id, .until = default_nav_wait };
+    var conditions = [_]lp.Session.Runner.WaitCondition{condition};
+    const result = runner.waitResult(timeout orelse default_nav_timeout_ms, &conditions) catch |err| {
+        return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+    };
+
+    // re-fetch frame, navigate might have changed it.
+    const frame = page.frame() orelse return ToolError.NavigationFailed;
     if (frame._last_navigate_error != null) return ToolError.NavigationFailed;
     return result;
 }

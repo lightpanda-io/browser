@@ -22,6 +22,11 @@ const lp = @import("lightpanda");
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
 
+// Not ideal, but its children have special constructor rules (can be extended
+// can't be instantiated). And rather than coming up with a generic definition
+// for this one case, we just hardcode it.
+const HtmlElement = @import("../webapi/element/Html.zig");
+
 const v8 = js.v8;
 const log = lp.log;
 const JsApis = bridge.JsApis;
@@ -203,8 +208,8 @@ pub fn create() !Snapshot {
         }
 
         {
-            const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
-            const index = try createSnapshotContext(.worker, &WorkerJsApis, WorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
+            const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
+            const index = try createSnapshotContext(.worker, &WorkerJsApis, DedicatedWorkerGlobalScope.JsApi, isolate, snapshot_creator.?, &templates);
             std.debug.assert(index == 1);
         }
     }
@@ -314,13 +319,8 @@ fn createSnapshotContext(
                 const name = JsApi.Meta.name;
                 const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 var maybe_result: v8.MaybeBool = undefined;
-                // Web IDL: interface objects on the global are non-enumerable
-                // by default. Opt back in via JsApi.Meta.enumerable = true.
-                var properties: v8.PropertyAttribute = v8.DontEnum;
-                if (@hasDecl(JsApi.Meta, "enumerable") and JsApi.Meta.enumerable == true) {
-                    properties = v8.None;
-                }
-                v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, properties, &maybe_result);
+                // Web IDL: interface objects on the global are non-enumerable.
+                v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, v8.DontEnum, &maybe_result);
             }
         }
 
@@ -407,6 +407,9 @@ fn countExternalReferences() comptime_int {
     // +1 for the illegal constructor callback shared by various types
     count += 1;
 
+    // +1 for the upgrade constructor shared by built-in element interfaces
+    count += 1;
+
     // +1 for the noop function shared by various types
     count += 1;
 
@@ -448,10 +451,18 @@ fn countExternalReferences() comptime_int {
                 if (value.enumerator != null) {
                     count += 1;
                 }
+                if (value.setter != null) count += 1;
+                if (value.deleter != null) count += 1;
+                if (value.query != null) count += 1;
+                if (value.definer != null) count += 1;
             } else if (T == bridge.NamedIndexed) {
                 count += 1;
                 if (value.setter != null) count += 1;
                 if (value.deleter != null) count += 1;
+                if (value.query != null) count += 1;
+                if (value.definer != null) count += 1;
+                if (value.descriptor != null) count += 1;
+                if (value.enumerator != null) count += 1;
             }
         }
     }
@@ -472,6 +483,9 @@ fn collectExternalReferences() [countExternalReferences()]isize {
     var references = std.mem.zeroes([countExternalReferences()]isize);
 
     references[idx] = @bitCast(@intFromPtr(&illegalConstructorCallback));
+    idx += 1;
+
+    references[idx] = @bitCast(@intFromPtr(HtmlElement.JsApi.upgrade_constructor.func));
     idx += 1;
 
     references[idx] = @bitCast(@intFromPtr(&bridge.Function.noopFunction));
@@ -524,6 +538,22 @@ fn collectExternalReferences() [countExternalReferences()]isize {
                     references[idx] = @bitCast(@intFromPtr(enumerator));
                     idx += 1;
                 }
+                if (value.setter) |setter| {
+                    references[idx] = @bitCast(@intFromPtr(setter));
+                    idx += 1;
+                }
+                if (value.deleter) |deleter| {
+                    references[idx] = @bitCast(@intFromPtr(deleter));
+                    idx += 1;
+                }
+                if (value.query) |query| {
+                    references[idx] = @bitCast(@intFromPtr(query));
+                    idx += 1;
+                }
+                if (value.definer) |definer| {
+                    references[idx] = @bitCast(@intFromPtr(definer));
+                    idx += 1;
+                }
             } else if (T == bridge.NamedIndexed) {
                 references[idx] = @bitCast(@intFromPtr(value.getter));
                 idx += 1;
@@ -533,6 +563,22 @@ fn collectExternalReferences() [countExternalReferences()]isize {
                 }
                 if (value.deleter) |deleter| {
                     references[idx] = @bitCast(@intFromPtr(deleter));
+                    idx += 1;
+                }
+                if (value.query) |query| {
+                    references[idx] = @bitCast(@intFromPtr(query));
+                    idx += 1;
+                }
+                if (value.definer) |definer| {
+                    references[idx] = @bitCast(@intFromPtr(definer));
+                    idx += 1;
+                }
+                if (value.descriptor) |descriptor| {
+                    references[idx] = @bitCast(@intFromPtr(descriptor));
+                    idx += 1;
+                }
+                if (value.enumerator) |enumerator| {
+                    references[idx] = @bitCast(@intFromPtr(enumerator));
                     idx += 1;
                 }
             }
@@ -656,14 +702,15 @@ fn protoIndexLookup(comptime JsApi: type) ?u16 {
 
 // Generate a constructor template for a JsApi type (public for reuse)
 pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
-    const callback = blk: {
+    const callback, const arity = comptime blk: {
         if (@hasDecl(JsApi, "constructor")) {
-            break :blk JsApi.constructor.func;
+            break :blk .{ JsApi.constructor.func, JsApi.constructor.arity };
         }
-        break :blk illegalConstructorCallback;
+        if (inheritsFromHtmlElement(JsApi)) {
+            break :blk .{ HtmlElement.JsApi.upgrade_constructor.func, @as(c_int, HtmlElement.JsApi.upgrade_constructor.arity) };
+        }
+        break :blk .{ &illegalConstructorCallback, @as(c_int, 0) };
     };
-
-    const arity: c_int = if (@hasDecl(JsApi, "constructor")) JsApi.constructor.arity else 0;
     const template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
         .length = arity,
         .callback = callback,
@@ -684,12 +731,21 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
     return template;
 }
 
-// Attach JsApi members to a template (public for reuse). This is called on all
-// types. But, for globals (window, WGS) it's called twice. The first time, it's
-// called like any other interface. The 2nd time, it's called with flatten == true
-// and define_on != null. This is the "flattening" pass, and it defines all of
-// the functions/accessors on directly on the global instance. Thus, globals have
-// it defined on both their prototype (first pass) and their own instance (2nd pass).
+// hard-coded special case for HtmlElement which can be extended but not
+// instantiated.
+fn inheritsFromHtmlElement(comptime JsApi: type) bool {
+    if (JsApi.bridge.type == HtmlElement) {
+        return false;
+    }
+    return bridge.inheritsOrIs(JsApi, HtmlElement.JsApi);
+}
+
+const Unforgeable = struct {
+    Owner: type,
+    name: [:0]const u8,
+    accessor: bridge.Accessor,
+};
+
 fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, define_on: ?*const v8.ObjectTemplate) void {
     const instance = v8.v8__FunctionTemplate__InstanceTemplate(template);
     const prototype = v8.v8__FunctionTemplate__PrototypeTemplate(template);
@@ -725,48 +781,12 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     continue;
                 }
 
-                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                const getter_signature = if (value.static) null else signature;
-                const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
-                    .callback = value.getter,
-                    .signature = getter_signature,
-                }).?;
-                // WebIDL: getter function's .name should be "get X"
-                const getter_name_str = "get " ++ name;
-                const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name_str.ptr, v8.kNormal, @intCast(getter_name_str.len));
-                v8.v8__FunctionTemplate__SetClassName(getter_callback, getter_name_v8);
-
-                const setter_callback = if (value.setter) |setter| blk: {
-                    const cb = v8.v8__FunctionTemplate__New__Config(isolate, &.{
-                        .callback = setter,
-                        .signature = getter_signature,
-                        .length = 1,
-                    }).?;
-                    const setter_name_str = "set " ++ name;
-                    const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));
-                    v8.v8__FunctionTemplate__SetClassName(cb, setter_name_v8);
-                    break :blk cb;
-                } else null;
-
-                var attribute: v8.PropertyAttribute = 0;
-                if (value.setter == null) {
-                    attribute |= v8.ReadOnly;
+                if (comptime value.unforgeable) {
+                    // this accessor will be handled in the unforgeables loop
+                    // later in this function.
+                    continue;
                 }
-                if (value.deletable == false) {
-                    attribute |= v8.DontDelete;
-                }
-
-                if (value.static) {
-                    v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
-                } else {
-                    const accessor_attr = if (own_properties) attribute else attribute | v8.DontEnum;
-                    v8.v8__ObjectTemplate__SetAccessorProperty__Config(define_on orelse prototype, &.{
-                        .key = js_name,
-                        .getter = getter_callback,
-                        .setter = setter_callback,
-                        .attribute = accessor_attr,
-                    });
-                }
+                attachAccessorProperty(name, value, isolate, template, signature, define_on orelse prototype);
             },
             bridge.Function => {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
@@ -780,24 +800,28 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     .length = value.arity,
                     .signature = func_signature,
                 }).?;
-                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+                // A member may override its JS-visible name (see Response.json_static)
+                const fn_name = value.js_name orelse name;
+                const js_name = v8.v8__String__NewFromUtf8(isolate, fn_name.ptr, v8.kNormal, @intCast(fn_name.len));
                 v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
                 if (value.static and !own_properties) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {
-                    const fn_attr: v8.PropertyAttribute = if (own_properties) v8.None else v8.DontEnum;
-                    v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), fn_attr);
+                    // Web IDL: operations on the interface prototype object
+                    // (and mirrored onto [Global] instances) are enumerable.
+                    v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), v8.None);
                 }
             },
             bridge.Indexed => {
                 var configuration: v8.IndexedPropertyHandlerConfiguration = .{
                     .getter = value.getter,
                     .enumerator = value.enumerator,
-                    .setter = null,
-                    .query = null,
-                    .deleter = null,
-                    .definer = null,
+                    .setter = value.setter,
+                    .query = value.query,
+                    .deleter = value.deleter,
+                    .definer = if (value.definer) |definer| @ptrCast(definer) else null,
                     .descriptor = null,
+                    .index_of = null,
                     .data = null,
                     .flags = 0,
                 };
@@ -807,11 +831,11 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 var configuration: v8.NamedPropertyHandlerConfiguration = .{
                     .getter = value.getter,
                     .setter = value.setter,
-                    .query = null,
+                    .query = value.query,
                     .deleter = value.deleter,
-                    .enumerator = null,
-                    .definer = null,
-                    .descriptor = null,
+                    .enumerator = value.enumerator,
+                    .definer = if (value.definer) |definer| @ptrCast(definer) else null,
+                    .descriptor = if (value.descriptor) |descriptor| @ptrCast(descriptor) else null,
                     .data = null,
                     .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
                 };
@@ -824,7 +848,8 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     v8.v8__Symbol__GetAsyncIterator(isolate)
                 else
                     v8.v8__Symbol__GetIterator(isolate);
-                v8.v8__Template__Set(@ptrCast(prototype), js_name, @ptrCast(function_template), v8.None);
+                // Web IDL: @@iterator is { writable, enumerable: false, configurable }.
+                v8.v8__Template__Set(@ptrCast(prototype), js_name, @ptrCast(function_template), v8.DontEnum);
             },
             bridge.Property => {
                 const js_value = switch (value.value) {
@@ -844,6 +869,16 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
             },
             bridge.Constructor => {},
             else => {},
+        }
+    }
+
+    if (comptime flatten == false) {
+        inline for (unforgeables) |u| {
+            if (comptime bridge.inheritsOrIs(JsApi, u.Owner)) {
+                // unforgeables attributes aren't only applied directly on the
+                // instance, they're also applied directly on every child instance
+                attachAccessorProperty(u.name, u.accessor, isolate, template, signature, instance);
+            }
         }
     }
 
@@ -895,5 +930,73 @@ fn globalScopeChain(comptime GlobalScopeApi: type) []const type {
             JsApi = JsApis[proto_index];
         }
         return chain;
+    }
+}
+
+// Every [LegacyUnforgeable] accessor. We collect this once so we don't need to
+// keep scanning for this in attachClass
+const unforgeables: []const Unforgeable = blk: {
+    @setEvalBranchQuota(100_000);
+    var list: []const Unforgeable = &.{};
+    for (JsApis) |Api| {
+        for (@typeInfo(Api).@"struct".decls) |d| {
+            const value = @field(Api, d.name);
+            if (@TypeOf(value) == bridge.Accessor and value.unforgeable and !value.static) {
+                list = list ++ &[_]Unforgeable{.{ .Owner = Api, .name = d.name, .accessor = value }};
+            }
+        }
+    }
+    break :blk list;
+};
+
+// Attach JsApi members to a template (public for reuse). This is called on all
+// types. But, for globals (window, WGS) it's called twice. The first time, it's
+// called like any other interface. The 2nd time, it's called with flatten == true
+// and define_on != null. This is the "flattening" pass, and it defines all of
+// the functions/accessors on directly on the global instance. Thus, globals have
+// it defined on both their prototype (first pass) and their own instance (2nd pass).
+fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, signature: anytype, target: anytype) void {
+    const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+    const getter_signature = if (value.static) null else signature;
+    const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+        .callback = value.getter,
+        .signature = getter_signature,
+    }).?;
+    // WebIDL: getter function's .name should be "get X"
+    const getter_name_str = "get " ++ name;
+    const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name_str.ptr, v8.kNormal, @intCast(getter_name_str.len));
+    v8.v8__FunctionTemplate__SetClassName(getter_callback, getter_name_v8);
+
+    const setter_callback = if (value.setter) |setter| blk: {
+        const cb = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+            .callback = setter,
+            .signature = getter_signature,
+            .length = 1,
+        }).?;
+        const setter_name_str = "set " ++ name;
+        const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));
+        v8.v8__FunctionTemplate__SetClassName(cb, setter_name_v8);
+        break :blk cb;
+    } else null;
+
+    var attribute: v8.PropertyAttribute = 0;
+    if (value.setter == null) {
+        attribute |= v8.ReadOnly;
+    }
+    if (value.deletable == false) {
+        attribute |= v8.DontDelete;
+    }
+
+    if (value.static) {
+        v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
+    } else {
+        // Web IDL: attributes on the interface prototype object
+        // (and mirrored onto [Global] instances) are enumerable.
+        v8.v8__ObjectTemplate__SetAccessorProperty__Config(target, &.{
+            .key = js_name,
+            .getter = getter_callback,
+            .setter = setter_callback,
+            .attribute = attribute,
+        });
     }
 }

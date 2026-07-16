@@ -104,7 +104,7 @@ pub const Namespace = enum(u8) {
 _type: Type,
 _proto: *Node,
 _namespace: Namespace = .html,
-_attributes: ?*Attribute.List = null,
+_attributes: Attribute.List = .{},
 
 pub const Type = union(enum) {
     html: *Html,
@@ -126,7 +126,7 @@ pub fn is(self: *Element, comptime T: type) ?*T {
             if (T == Svg) {
                 return svg;
             }
-            if (comptime std.mem.startsWith(u8, type_name, "webapi.element.svg.")) {
+            if (comptime std.mem.startsWith(u8, type_name, "browser.webapi.element.svg.")) {
                 return svg.is(T);
             }
         },
@@ -150,15 +150,6 @@ pub fn asConstNode(self: *const Element) *const Node {
     return self._proto;
 }
 
-pub fn attributesEql(self: *const Element, other: *Element) bool {
-    if (self._attributes) |attr_list| {
-        const other_list = other._attributes orelse return false;
-        return attr_list.eql(other_list);
-    }
-    // Make sure no attrs in both sides.
-    return other._attributes == null;
-}
-
 /// TODO: localName and prefix comparison.
 pub fn isEqualNode(self: *Element, other: *Element) bool {
     const self_tag = self.getTagNameDump();
@@ -169,8 +160,7 @@ pub fn isEqualNode(self: *Element, other: *Element) bool {
         return false;
     }
 
-    // Compare attributes.
-    if (!self.attributesEql(other)) {
+    if (self._attributes.eql(&other._attributes) == false) {
         return false;
     }
 
@@ -382,21 +372,18 @@ pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, frame: 
     }
 
     // Step 2: search xmlns attributes
-    if (self._attributes) |attrs| {
-        var iter = attrs.iterator();
-        while (iter.next()) |entry| {
-            if (prefix == null) {
-                if (entry._name.eql(comptime .wrap("xmlns"))) {
-                    const val = entry._value.str();
+    for (self._attributes.entries()) |*entry| {
+        if (prefix == null) {
+            if (std.mem.eql(u8, entry.name(), "xmlns")) {
+                const val = entry.value();
+                return if (val.len == 0) null else val;
+            }
+        } else {
+            const name = entry.name();
+            if (std.mem.startsWith(u8, name, "xmlns:")) {
+                if (std.mem.eql(u8, name["xmlns:".len..], prefix.?)) {
+                    const val = entry.value();
                     return if (val.len == 0) null else val;
-                }
-            } else {
-                const name = entry._name.str();
-                if (std.mem.startsWith(u8, name, "xmlns:")) {
-                    if (std.mem.eql(u8, name["xmlns:".len..], prefix.?)) {
-                        const val = entry._value.str();
-                        return if (val.len == 0) null else val;
-                    }
                 }
             }
         }
@@ -420,13 +407,10 @@ pub fn lookupPrefixForElement(self: *Element, namespace: []const u8, frame: *Fra
     }
 
     // Step 2: search xmlns: attribute declarations for one whose value is the namespace
-    if (self._attributes) |attrs| {
-        var iter = attrs.iterator();
-        while (iter.next()) |entry| {
-            const name = entry._name.str();
-            if (std.mem.startsWith(u8, name, "xmlns:") and std.mem.eql(u8, entry._value.str(), namespace)) {
-                return name["xmlns:".len..];
-            }
+    for (self._attributes.entries()) |*entry| {
+        const name = entry.name();
+        if (std.mem.startsWith(u8, name, "xmlns:") and std.mem.eql(u8, entry.value(), namespace)) {
+            return name["xmlns:".len..];
         }
     }
 
@@ -453,9 +437,9 @@ pub fn getLocalName(self: *Element) []const u8 {
 }
 
 // Wrapper methods that delegate to Html implementations
-pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
+pub fn getInnerText(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
     const he = self.is(Html) orelse return error.NotHtmlElement;
-    return he.getInnerText(writer);
+    return he.getInnerText(writer, frame);
 }
 
 pub fn setInnerText(self: *Element, text: []const u8, frame: *Frame) !void {
@@ -482,14 +466,60 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node._parent orelse return;
 
-    frame.domChanged();
-    if (html.len > 0) {
-        const fragment = (try Node.DocumentFragment.init(frame)).asNode();
-        try frame.parseHtmlAsChildren(fragment, html);
-        try frame.insertAllChildrenBefore(fragment, parent, node);
+    // The parent of a documentElement is the Document, which cannot be modified.
+    if (parent._type == .document) {
+        return error.NoModificationAllowed;
     }
 
-    frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    frame.domChanged();
+
+    // Observers of the parent must see a single mutation record replacing
+    // this node with the parsed nodes.
+    const notify = Frame.observers.hasMutationObservers(frame);
+    var added: std.ArrayList(*Node) = .empty;
+
+    var fragment: ?*Node = null;
+    if (html.len > 0) {
+        const frag = (try Node.DocumentFragment.init(frame)).asNode();
+        try frame.parseHtmlAsChildren(frag, html);
+        fragment = frag;
+    }
+
+    // Parsing (and each insertion below) can synchronously run a custom
+    // element constructor that mutates the live tree; per the spec's replace
+    // step, a node that is no longer our parent's child cannot be replaced.
+    if (node._parent != parent) {
+        return error.NotFound;
+    }
+
+    // Captured after the parse: a constructor may have reshuffled siblings.
+    const previous_sibling = node.previousSibling();
+    const next_sibling = node.nextSibling();
+
+    if (fragment) |frag| {
+        const dest_connected = parent.isConnected();
+        var it = frag.childrenIterator();
+        while (it.next()) |child| {
+            if (node._parent != parent) {
+                return error.NotFound;
+            }
+            if (notify) {
+                try added.append(frame.call_arena, child);
+            }
+            frame.removeNode(frag, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
+            try frame.insertNodeRelative(parent, child, .{ .before = node }, .{ .notify_observers = false });
+        }
+    }
+
+    if (node._parent != parent) {
+        return error.NotFound;
+    }
+    frame.removeNode(parent, node, .{ .will_be_reconnected = false, .notify_observers = false });
+
+    if (notify) {
+        const removed = [_]*Node{node};
+        Frame.observers.notifyChildListChange(frame, parent, added.items, &removed, previous_sibling, next_sibling);
+    }
 }
 
 pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
@@ -565,14 +595,13 @@ pub fn setClassName(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("class"), .wrap(value), frame);
 }
 
-pub fn attributeIterator(self: *Element) Attribute.InnerIterator {
-    const attributes = self._attributes orelse return .{};
-    return attributes.iterator();
+/// DANGER: Invalidated by mutation of the attribute list.
+pub fn attributeEntries(self: *const Element) []const Attribute.List.Entry {
+    return self._attributes.entries();
 }
 
 pub fn getAttribute(self: *const Element, name: String, frame: *Frame) !?String {
-    const attributes = self._attributes orelse return null;
-    return attributes.get(name, frame);
+    return self._attributes.get(name, frame);
 }
 
 /// For simplicity, the namespace is currently ignored and only the local name is used.
@@ -592,19 +621,32 @@ pub fn getAttributeNS(
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
-    const attributes = self._attributes orelse return null;
-    return attributes.getSafe(name);
+    return self._attributes.getSafe(name);
 }
 
 pub fn hasAttribute(self: *const Element, name: String, frame: *Frame) !bool {
-    const attributes = self._attributes orelse return false;
-    const value = try attributes.get(name, frame);
+    const value = try self._attributes.get(name, frame);
     return value != null;
 }
 
+/// Like getAttributeNS, the namespace is currently ignored.
+pub fn hasAttributeNS(
+    self: *const Element,
+    maybe_namespace: ?[]const u8,
+    local_name: String,
+    frame: *Frame,
+) !bool {
+    if (maybe_namespace) |namespace| {
+        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
+            log.warn(.not_implemented, "Element.hasAttributeNS", .{ .namespace = namespace });
+        }
+    }
+
+    return self.hasAttribute(local_name, frame);
+}
+
 pub fn hasAttributeSafe(self: *const Element, name: String) bool {
-    const attributes = self._attributes orelse return false;
-    return attributes.hasSafe(name);
+    return self._attributes.hasSafe(name);
 }
 
 // Per HTML "concept-fe-disabled", only listed elements participate in the
@@ -665,19 +707,16 @@ pub fn isDisabled(self: *Element) bool {
 }
 
 pub fn hasAttributes(self: *const Element) bool {
-    const attributes = self._attributes orelse return false;
-    return attributes.isEmpty() == false;
+    return self._attributes.isEmpty() == false;
 }
 
 pub fn getAttributeNode(self: *Element, name: String, frame: *Frame) !?*Attribute {
-    const attributes = self._attributes orelse return null;
-    return attributes.getAttribute(name, self, frame);
+    return self._attributes.getAttribute(name, self, frame);
 }
 
 pub fn setAttribute(self: *Element, name: String, value: String, frame: *Frame) !void {
     try Attribute.validateAttributeName(name);
-    const attributes = try self.getOrCreateAttributeList(frame);
-    _ = try attributes.put(name, value, self, frame);
+    _ = try self._attributes.put(name, value, self, frame);
 }
 
 pub fn setAttributeNS(
@@ -710,20 +749,7 @@ pub fn setAttributeNS(
 }
 
 pub fn setAttributeSafe(self: *Element, name: String, value: String, frame: *Frame) !void {
-    const attributes = try self.getOrCreateAttributeList(frame);
-    _ = try attributes.putSafe(name, value, self, frame);
-}
-
-pub fn getOrCreateAttributeList(self: *Element, frame: *Frame) !*Attribute.List {
-    return self._attributes orelse return self.createAttributeList(frame);
-}
-
-pub fn createAttributeList(self: *Element, frame: *Frame) !*Attribute.List {
-    lp.assert(self._attributes == null, "Element.createAttributeList non-null _attributes", .{});
-    const a = try frame.arena.create(Attribute.List);
-    a.* = .{ .normalize = self._namespace == .html };
-    self._attributes = a;
-    return a;
+    _ = try self._attributes.putSafe(name, value, self, frame);
 }
 
 pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
@@ -786,9 +812,14 @@ pub fn insertAdjacentElement(
     position: []const u8,
     element: *Element,
     frame: *Frame,
-) !void {
-    const target_node, const prev_node = try self.asNode().findAdjacentNodes(position);
+) !?*Element {
+    const target_node, const prev_node = self.asNode().findAdjacentNodes(position, .node) catch |err| switch (err) {
+        // beforebegin/afterend with no parent is a no-op returning null.
+        error.AdjacentNoParent => return null,
+        else => return err,
+    };
     _ = try target_node.insertBefore(element.asNode(), prev_node, frame);
+    return element;
 }
 
 pub fn insertAdjacentText(
@@ -797,8 +828,12 @@ pub fn insertAdjacentText(
     data: []const u8,
     frame: *Frame,
 ) !void {
+    const target_node, const prev_node = self.asNode().findAdjacentNodes(where, .node) catch |err| switch (err) {
+        // beforebegin/afterend with no parent is a no-op.
+        error.AdjacentNoParent => return,
+        else => return err,
+    };
     const text_node = try Frame.node_factory.createTextNode(frame, data);
-    const target_node, const prev_node = try self.asNode().findAdjacentNodes(where);
     _ = try target_node.insertBefore(text_node, prev_node, frame);
 }
 
@@ -811,13 +846,11 @@ pub fn setAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !?*Attr
         _ = try el.removeAttributeNode(attr, frame);
     }
 
-    const attributes = try self.getOrCreateAttributeList(frame);
-    return attributes.putAttribute(attr, self, frame);
+    return self._attributes.putAttribute(attr, self, frame);
 }
 
 pub fn removeAttribute(self: *Element, name: String, frame: *Frame) !void {
-    const attributes = self._attributes orelse return;
-    return attributes.delete(name, self, frame);
+    return self._attributes.delete(name, self, frame);
 }
 
 pub fn toggleAttribute(self: *Element, name: String, force: ?bool, frame: *Frame) !bool {
@@ -847,16 +880,13 @@ pub fn removeAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !*At
 }
 
 pub fn getAttributeNames(self: *const Element, frame: *Frame) ![][]const u8 {
-    const attributes = self._attributes orelse return &.{};
-    return attributes.getNames(frame);
+    return self._attributes.getNames(frame.local_arena);
 }
 
 pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.NamedNodeMap {
     const gop = try frame._attribute_named_node_map_lookup.getOrPut(frame.arena, @intFromPtr(self));
     if (!gop.found_existing) {
-        const attributes = try self.getOrCreateAttributeList(frame);
-        const named_node_map = try frame._factory.create(Attribute.NamedNodeMap{ ._list = attributes, ._element = self });
-        gop.value_ptr.* = named_node_map;
+        gop.value_ptr.* = try frame._factory.create(Attribute.NamedNodeMap{ ._element = self });
     }
     return gop.value_ptr.*;
 }
@@ -905,6 +935,23 @@ pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
     return gop.value_ptr.*;
 }
 
+// The other DOMTokenList-reflected attributes (class and rel have dedicated
+// lookups above).
+pub const TokenListAttribute = enum { sizes, sandbox, @"for" };
+pub const TokenListKey = struct { element: *Element, attribute: TokenListAttribute };
+pub const TokenListLookup = std.AutoHashMapUnmanaged(TokenListKey, *collections.DOMTokenList);
+
+pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, frame: *Frame) !*collections.DOMTokenList {
+    const gop = try frame._element_token_lists.getOrPut(frame.arena, .{ .element = self, .attribute = attribute });
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
+            ._element = self,
+            ._attribute_name = comptime .wrap(@tagName(attribute)),
+        });
+    }
+    return gop.value_ptr.*;
+}
+
 pub fn getDataset(self: *Element, frame: *Frame) !*DOMStringMap {
     const gop = try frame._element_datasets.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
@@ -936,6 +983,12 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
         // If a child is the ref node. We keep it at its own current position.
         if (child == ref_node) {
             rm_ref_node = false;
+            continue;
+        }
+
+        // A DocumentFragment contributes its children, not itself
+        if (child.is(Node.DocumentFragment)) |_| {
+            try frame.insertAllChildrenBefore(child, parent, ref_node);
             continue;
         }
 
@@ -1045,6 +1098,10 @@ pub fn prepend(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !v
     }
 }
 
+pub fn moveBefore(self: *Element, node: js.Value, child: js.Value, frame: *Frame) !void {
+    return self.asNode().moveBefore(node, child, frame);
+}
+
 pub fn before(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
@@ -1133,10 +1190,12 @@ pub fn animate(_: *Element, _: ?js.Object, _: ?js.Object, frame: *Frame) !*Anima
     return Animation.init(frame);
 }
 
-pub fn closest(self: *Element, selector: []const u8, frame: *Frame) !?*Element {
-    if (selector.len == 0) {
+pub fn closest(self: *Element, input: []const u8, frame: *Frame) !?*Element {
+    if (input.len == 0) {
         return error.SyntaxError;
     }
+
+    const selector = try Selector.cachedParse(frame._session.browser, input);
 
     var current: ?*Element = self;
     while (current) |el| {
@@ -1193,8 +1252,8 @@ pub fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, 
 
     if (self.getStyle(frame)) |style| {
         const decl = style.asCSSStyleDeclaration();
-        width = CSS.parseDimension(decl.getPropertyValue("width", frame)) orelse 5.0;
-        height = CSS.parseDimension(decl.getPropertyValue("height", frame)) orelse 5.0;
+        width = CSS.parseDimensionViewport(decl.getPropertyValue("width", frame), frame) orelse 5.0;
+        height = CSS.parseDimensionViewport(decl.getPropertyValue("height", frame), frame) orelse 5.0;
     }
 
     if (width == 5.0 or height == 5.0) {
@@ -1236,22 +1295,22 @@ pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
     return dims.height;
 }
 
-pub fn getBoundingClientRect(self: *Element, frame: *Frame) DOMRect {
-    if (!self.checkVisibilityCached(null, frame)) {
-        return .{
-            ._x = 0.0,
-            ._y = 0.0,
-            ._width = 0.0,
-            ._height = 0.0,
-        };
-    }
-
-    return self.getBoundingClientRectForVisible(frame);
+pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
+    return DOMRect.create(self.boundingClientRectValues(frame), frame._factory);
 }
 
-// Some cases need a the BoundingClientRect but have already done the
-// visibility check.
-pub fn getBoundingClientRectForVisible(self: *Element, frame: *Frame) DOMRect {
+// Plain rect values, no JS-backed allocation: the internal fast path shared by
+// getBoundingClientRect, getClientRects, and IntersectionObserver. A DOMRect is
+// only materialized at the JS boundary.
+pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
+    if (!self.checkVisibilityCached(null, frame)) {
+        return .{};
+    }
+    return self.boundingClientRectValuesForVisible(frame);
+}
+
+// Some cases need the bounding rect but have already done the visibility check.
+pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect.Data {
     const y = calculateDocumentPosition(self.asNode());
     const dims = self.getElementDimensions(frame);
 
@@ -1259,19 +1318,19 @@ pub fn getBoundingClientRectForVisible(self: *Element, frame: *Frame) DOMRect {
     const x = calculateSiblingPosition(self.asNode());
 
     return .{
-        ._x = x,
-        ._y = y,
-        ._width = dims.width,
-        ._height = dims.height,
+        .x = x,
+        .y = y,
+        .width = dims.width,
+        .height = dims.height,
     };
 }
 
-pub fn getClientRects(self: *Element, frame: *Frame) ![]DOMRect {
+pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
     if (!self.checkVisibilityCached(null, frame)) {
         return &.{};
     }
-    const rects = try frame.call_arena.alloc(DOMRect, 1);
-    rects[0] = self.getBoundingClientRectForVisible(frame);
+    const rects = try frame.local_arena.alloc(*DOMRect, 1);
+    rects[0] = try DOMRect.create(self.boundingClientRectValuesForVisible(frame), frame._factory);
     return rects;
 }
 
@@ -1494,7 +1553,15 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, frame: *Fr
 
 pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     const tag_name = self.getTagNameDump();
-    const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, self._attributes);
+    const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, &self._attributes);
+
+    // A namespace outside the built-in set lives in a side table; the clone
+    // must report the same namespaceURI.
+    if (self._namespace == .unknown) {
+        if (frame._element_namespace_uris.get(self)) |uri| {
+            try frame._element_namespace_uris.put(frame.arena, node.as(Element), uri);
+        }
+    }
 
     // Allow element-specific types to copy their runtime state
     _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), deep, frame }) catch |err| {
@@ -1611,11 +1678,8 @@ pub fn format(self: *Element, writer: *std.Io.Writer) !void {
     try writer.writeByte('<');
     try writer.writeAll(self.getTagNameDump());
 
-    if (self._attributes) |attributes| {
-        var it = attributes.iterator();
-        while (it.next()) |attr| {
-            try writer.print(" {f}", .{attr});
-        }
+    for (self._attributes.entries()) |*attr| {
+        try writer.print(" {f}", .{attr});
     }
     try writer.writeByte('>');
 }
@@ -1705,11 +1769,12 @@ pub fn getTag(self: *const Element) Tag {
             .head => .head,
             .unknown => .unknown,
         },
-        .svg => |se| switch (se._type) {
-            .svg => .svg,
-            .generic => |g| g._tag,
-        },
+        .svg => |se| se.getTag(),
     };
+}
+
+pub fn ownerFrame(self: *const Element, default: *Frame) *Frame {
+    return self._proto.ownerFrame(default);
 }
 
 pub const Tag = enum {
@@ -1903,25 +1968,28 @@ pub const JsApi = struct {
         pub const name = "Element";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const tagName = bridge.accessor(_tagName, null, .{});
     fn _tagName(self: *Element, frame: *Frame) []const u8 {
         return self.getTagNameSpec(&frame.buf);
     }
-    pub const namespaceURI = bridge.accessor(Element.getNamespaceURI, null, .{});
+    // the frame-aware variant returns the original URI for namespaces
+    // outside the built-in set instead of the placeholder
+    pub const namespaceURI = bridge.accessor(Element.getNamespaceUri, null, .{});
 
     pub const innerText = bridge.accessor(_innerText, Element.setInnerText, .{ .ce_reactions = true });
-    fn _innerText(self: *Element, frame: *const Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
-        try self.getInnerText(&buf.writer);
+    fn _innerText(self: *Element, frame: *Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+        try self.getInnerText(&buf.writer, frame);
         return buf.written();
     }
 
     pub const outerHTML = bridge.accessor(_getOuterHTML, _setOuterHTML, .{ .ce_reactions = true });
     fn _getOuterHTML(self: *Element, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        // local_arena: serialization is read-only and the returned string is
+        // converted to v8 before this call returns. No JS runs in between.
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.getOuterHTML(&buf.writer, frame);
         return buf.written();
     }
@@ -1932,7 +2000,9 @@ pub const JsApi = struct {
 
     pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
     fn _getInnerHTML(self: *Element, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        // local_arena: read-only serialization, result converted to v8 before
+        // returning; no JS runs in between.
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.getInnerHTML(&buf.writer, frame);
         return buf.written();
     }
@@ -1943,12 +2013,12 @@ pub const JsApi = struct {
 
     pub const prefix = bridge.accessor(Element._prefix, null, .{});
 
-    pub const setAttribute = bridge.function(_setAttribute, .{ .dom_exception = true, .ce_reactions = true });
+    pub const setAttribute = bridge.function(_setAttribute, .{ .ce_reactions = true });
     fn _setAttribute(self: *Element, name: String, value: js.Value, frame: *Frame) !void {
         return self.setAttribute(name, .wrap(try value.toStringSlice()), frame);
     }
 
-    pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .dom_exception = true, .ce_reactions = true });
+    pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .ce_reactions = true });
     fn _setAttributeNS(self: *Element, maybe_ns: ?[]const u8, qn: []const u8, value: js.Value, frame: *Frame) !void {
         return self.setAttributeNS(maybe_ns, qn, .wrap(try value.toStringSlice()), frame);
     }
@@ -1965,22 +2035,23 @@ pub const JsApi = struct {
     pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
+    pub const hasAttributeNS = bridge.function(Element.hasAttributeNS, .{});
     pub const hasAttributes = bridge.function(Element.hasAttributes, .{});
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{ .ce_reactions = true });
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{ .ce_reactions = true });
-    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .dom_exception = true, .ce_reactions = true });
+    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .ce_reactions = true });
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
-    pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true, .ce_reactions = true });
+    pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .ce_reactions = true });
     pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
     pub const assignedSlot = bridge.accessor(Element.getAssignedSlot, null, .{});
-    pub const attachShadow = bridge.function(_attachShadow, .{ .dom_exception = true });
-    pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
-    pub const setHTMLUnsafe = bridge.function(Element.setHTMLUnsafe, .{ .dom_exception = true, .ce_reactions = true });
-    pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .dom_exception = true, .ce_reactions = true });
-    pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .dom_exception = true, .ce_reactions = true });
+    pub const attachShadow = bridge.function(_attachShadow, .{});
+    pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .ce_reactions = true });
+    pub const setHTMLUnsafe = bridge.function(Element.setHTMLUnsafe, .{ .ce_reactions = true });
+    pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .ce_reactions = true });
+    pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .ce_reactions = true });
 
     const ShadowRootInit = struct {
         mode: String,
@@ -2009,22 +2080,23 @@ pub const JsApi = struct {
             .serializable = init.serializable,
         }, frame);
     }
-    pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replaceWith = bridge.function(Element.replaceWith, .{ .dom_exception = true, .ce_reactions = true });
+    pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .ce_reactions = true });
+    pub const replaceWith = bridge.function(Element.replaceWith, .{ .ce_reactions = true });
     pub const remove = bridge.function(Element.remove, .{ .ce_reactions = true });
-    pub const append = bridge.function(Element.append, .{ .dom_exception = true, .ce_reactions = true });
-    pub const prepend = bridge.function(Element.prepend, .{ .dom_exception = true, .ce_reactions = true });
-    pub const before = bridge.function(Element.before, .{ .dom_exception = true, .ce_reactions = true });
-    pub const after = bridge.function(Element.after, .{ .dom_exception = true, .ce_reactions = true });
+    pub const append = bridge.function(Element.append, .{ .ce_reactions = true });
+    pub const prepend = bridge.function(Element.prepend, .{ .ce_reactions = true });
+    pub const moveBefore = bridge.function(Element.moveBefore, .{ .ce_reactions = true });
+    pub const before = bridge.function(Element.before, .{ .ce_reactions = true });
+    pub const after = bridge.function(Element.after, .{ .ce_reactions = true });
     pub const firstElementChild = bridge.accessor(Element.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Element.lastElementChild, null, .{});
     pub const nextElementSibling = bridge.accessor(Element.nextElementSibling, null, .{});
     pub const previousElementSibling = bridge.accessor(Element.previousElementSibling, null, .{});
     pub const childElementCount = bridge.accessor(Element.getChildElementCount, null, .{});
-    pub const matches = bridge.function(Element.matches, .{ .dom_exception = true });
-    pub const querySelector = bridge.function(Element.querySelector, .{ .dom_exception = true });
-    pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{ .dom_exception = true });
-    pub const closest = bridge.function(Element.closest, .{ .dom_exception = true });
+    pub const matches = bridge.function(Element.matches, .{});
+    pub const querySelector = bridge.function(Element.querySelector, .{});
+    pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{});
+    pub const closest = bridge.function(Element.closest, .{});
     pub const getAnimations = bridge.function(Element.getAnimations, .{});
     pub const animate = bridge.function(Element.animate, .{});
     pub const checkVisibility = bridge.function(Element.checkVisibility, .{});

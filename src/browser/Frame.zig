@@ -40,9 +40,9 @@ const FileList = @import("webapi/FileList.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
-const Text = @import("webapi/cdata/Text.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
+const AnimatedString = @import("webapi/svg/AnimatedString.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
@@ -51,18 +51,18 @@ const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const VisualViewport = @import("webapi/VisualViewport.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
-const MutationObserver = @import("webapi/MutationObserver.zig");
-const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
+const DOMNodeIterator = @import("webapi/DOMNodeIterator.zig");
 const Worker = @import("webapi/Worker.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
+const HashChangeEvent = @import("webapi/event/HashChangeEvent.zig");
 const popover = @import("webapi/element/popover.zig");
 const slotting = @import("webapi/element/slotting.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 
-const HttpClient = @import("HttpClient.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 const sys_url = @import("../sys/url.zig");
 
 const timestamp = @import("../datetime.zig").timestamp;
@@ -109,10 +109,17 @@ _fragment_scripts_runnable: bool = false,
 // See Attribute.List for what this is. TL;DR: proper DOM Attribute Nodes are
 // fat yet rarely needed. We only create them on-demand, but still need proper
 // identity (a given attribute should return the same *Attribute), so we do
-// a look here. We don't store this in the Element or Attribute.List.Entry
-// because that would require additional space per element / Attribute.List.Entry
-// even though we'll create very few (if any) actual *Attributes.
-_attribute_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute) = .empty,
+// a look here, keyed by (list, name). We don't store this in the Element or
+// Attribute.List.Entry because that would require additional space per
+// element / Attribute.List.Entry even though we'll create very few (if any)
+// actual *Attributes.
+_attribute_lookup: Element.Attribute.List.Lookup = .empty,
+
+// Canonical pool for attribute names that aren't in String.intern's.
+// Every Attribute's entry's name is either a String intern or held here.
+// This is both a memory optimization (deduping attribute names) and a performance
+// optimization (since we can compare strings by just their pointer)
+_attribute_names: std.StringHashMapUnmanaged(void) = .empty,
 
 // Same as _atlribute_lookup, but instead of individual attributes, this is for
 // the return of elements.attributes.
@@ -121,13 +128,19 @@ _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attri
 // Lazily-created style, classList, and dataset objects. Only stored for elements
 // that actually access these features via JavaScript, saving 24 bytes per element.
 _element_styles: Element.StyleLookup = .empty,
+// Computed-style views handed out by window.getComputedStyle. The computed
+// variant is a stateless lazy view, so one per element suffices — and Chrome
+// returns the same object for repeated calls, so identity is also conformance.
+_element_computed_styles: Element.StyleLookup = .empty,
 _element_datasets: Element.DatasetLookup = .empty,
 _element_class_lists: Element.ClassListLookup = .empty,
 _element_rel_lists: Element.RelListLookup = .empty,
+_element_token_lists: Element.TokenListLookup = .empty,
 _element_shadow_roots: Element.ShadowRootLookup = .empty,
 _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
+_svg_animated_strings: AnimatedString.Lookup = .empty,
 
 // Same as above, but for Nodes (slot assigments apply to both Element AND
 // Text nodes)
@@ -177,6 +190,9 @@ _http_owner: HttpClient.Owner = .{},
 
 // List of active live ranges (for mutation updates per DOM spec)
 _live_ranges: std.DoublyLinkedList = .{},
+// Live NodeIterators for the DOM pre-removing steps. Iterators are
+// slab-allocated (frame lifetime) and never unlinked.
+_live_node_iterators: std.DoublyLinkedList = .{},
 
 // List of open BroadcastChannels, used to route postMessage between same-named
 // channels in this frame's origin
@@ -199,6 +215,12 @@ _customized_builtin_disconnected_callback_invoked: std.AutoHashMapUnmanaged(*Ele
 // This is set when an element is being upgraded (constructor is called).
 // The constructor can access this to get the element being upgraded.
 _upgrading_element: ?*Node = null,
+
+// Set when materializing the fragment parser's context element. The element
+// is never inserted into the tree so if its a custom element ,we must not run
+// its constructor (else we'll end up in an endless loop if the constructor
+// sets this.innerHTML = '...', which happens).
+_skip_custom_element_upgrade: bool = false,
 
 // List of custom elements that were created before their definition was registered
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
@@ -253,9 +275,14 @@ js: *JS.Context,
 // An arena for the lifetime of the frame.
 arena: Allocator,
 
-// An arena with a lifetime guaranteed to be for 1 invoking of a Zig function
-// from JS. Best arena to use, when possible.
+// An arena with a lifetime for at least the scope of one Zig invocation from
+// JS. Prefer local_arena where possible. Use call_arena when allocations may
+// need to call back into JS (event dispatch, forEach callback, ....)
 call_arena: Allocator,
+
+// An arena with a lifetime guaranteed to be for exactly 1 invoking of a Zig
+// function from JS. Best arena to use, when possible.
+local_arena: Allocator,
 
 parent: ?*Frame,
 window: *Window,
@@ -275,6 +302,11 @@ workers: std.ArrayList(*Worker) = .{},
 _pending_loads: u32,
 
 _parent_notified: bool = false,
+
+// whether our parent's load event is waiting for us to load. For a root page,
+// this is meaningless. For an iframe, it's false when loading=lazy. We'll still
+// load the iframe, but we won't delay the parent
+_delays_parent_load: bool = true,
 
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
@@ -308,6 +340,9 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     const call_arena = try session.getArena(.medium, "call_arena");
     errdefer session.releaseArena(call_arena);
 
+    const local_arena = try session.getArena(.medium, "local_arena");
+    errdefer session.releaseArena(local_arena);
+
     const factory = &page.factory;
     const document = (try factory.document(Node.Document.HTMLDocument{
         ._proto = undefined,
@@ -322,6 +357,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .document = document,
         .window = undefined,
         .call_arena = call_arena,
+        .local_arena = local_arena,
         ._frame_id = frame_id,
         ._page = page,
         ._session = session,
@@ -384,6 +420,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .identity = &page.identity,
         .identity_arena = arena,
         .call_arena = self.call_arena,
+        .local_arena = self.local_arena,
     });
     errdefer browser.env.destroyContext(self.js);
 
@@ -482,6 +519,7 @@ pub fn deinit(self: *Frame) void {
     self._style_manager.deinit();
 
     page.releaseArena(self.call_arena);
+    page.releaseArena(self.local_arena);
 }
 
 pub fn trackWorker(self: *Frame, worker: *Worker) !void {
@@ -572,15 +610,15 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     self._load_state = .parsing;
     self._last_navigate_error = null;
 
-    const req_id = self._session.browser.http_client.nextReqId();
     log.info(.frame, "navigate", .{
         .url = request_url,
         .method = opts.method,
         .reason = opts.reason,
         .body = opts.body != null,
-        .req_id = req_id,
         .type = self._type,
     });
+
+    const http_client = &session.browser.http_client;
 
     // Handle synthetic navigations: about:blank and blob: URLs
     const is_about_blank = std.mem.eql(u8, "about:blank", request_url);
@@ -636,14 +674,21 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             };
             const parse_arena = try self.getArena(.medium, "Frame.parseBlob");
             defer self.releaseArena(parse_arena);
+            // A script executed mid-parse can revoke the blob URL, letting GC
+            // free the buffer under the parser; parse a copy.
+            const html = try parse_arena.dupe(u8, blob._slice);
             var parser = Parser.init(parse_arena, self.document.asNode(), self, .{ .allow_declarative_shadow = true });
-            parser.parse(blob._slice);
+            parser.parse(html);
         } else {
             self.document.injectBlank(self) catch |err| {
                 log.err(.browser, "inject blank", .{ .err = err });
                 return error.InjectBlankFailed;
             };
         }
+
+        // No real request is made, but CDP still correlates the navigation
+        // events by request id, so consume one.
+        const req_id = http_client.incrReqId();
 
         session.notification.dispatch(.frame_navigate, &.{
             .opts = opts,
@@ -654,13 +699,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .timestamp = timestamp(.monotonic),
         });
 
-        // Record telemetry for navigation
-        session.browser.app.telemetry.record(.{
-            .navigate = .{
-                .tls = false, // about:blank and blob: are not TLS
-                .proxy = session.browser.app.config.httpProxy() != null,
-            },
-        });
+        self.recordNavigateTelemetry(false);
 
         session.notification.dispatch(.frame_navigated, &.{
             .req_id = req_id,
@@ -675,9 +714,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .timestamp = timestamp(.monotonic),
         });
 
-        // force next request id manually b/c we won't create a real req.
-        _ = session.browser.http_client.incrReqId();
-
         if (self.parent == null) {
             session.navigation._current_navigation_kind = opts.kind;
             try session.navigation.commitNavigation(self);
@@ -686,8 +722,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         self.documentIsComplete();
         return;
     }
-
-    const http_client = &session.browser.http_client;
 
     self._http_status = null;
     self._http_headers = .empty;
@@ -700,7 +734,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     };
     self.origin = try URL.getOrigin(self.arena, self.url);
 
-    self._req_id = req_id;
     self._navigated_options = .{
         .cdp_id = opts.cdp_id,
         .reason = opts.reason,
@@ -709,51 +742,12 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
     };
 
-    var headers = try http_client.newHeaders();
-    try headers.add(lp.Config.HttpHeaders.navigation_accept);
-    if (opts.header) |hdr| {
-        try headers.add(hdr);
-    }
-    if (opts.referer) |ref| {
-        const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
-        try headers.add(ref_header);
-    }
-
-    // A root navigation issued against a pending Page (i.e. one allocated by
-    // Session.initiateRootNavigation) flags both the notification and the
-    // HTTP request itself: CDP skips its node-registry reset until commit,
-    // and the in-flight transfer survives the OLD page's frame.deinit which
-    // calls http_client.abortList() on the shared frame_id during
-    // commitPendingPage.
-    const is_pending_root = self._page._state == .pending;
-
-    // We dispatch frame_navigate event before sending the request.
-    // It ensures the event frame_navigated is not dispatched before this one.
-    session.notification.dispatch(.frame_navigate, &.{
-        .opts = opts,
-        .url = self.url,
-        .req_id = req_id,
-        .frame_id = self._frame_id,
-        .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
-        .is_pending_root = is_pending_root,
-    });
-
-    // Record telemetry for navigation
-    session.browser.app.telemetry.record(.{ .navigate = .{
-        .tls = std.ascii.startsWithIgnoreCase(self.url, "https://"),
-        .proxy = session.browser.app.config.httpProxy() != null,
-    } });
-
-    session.navigation._current_navigation_kind = opts.kind;
-
-    self.makeRequest(.{
+    const transfer = try http_client.newRequest(.{
         .ctx = self,
         .url = self.url,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
         .method = opts.method,
-        .headers = headers,
         .body = opts.body,
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = opts.initiator_url orelse self.url,
@@ -763,10 +757,68 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .data_callback = frameDataCallback,
         .done_callback = frameDoneCallback,
         .error_callback = frameErrorCallback,
-    }) catch |err| {
+        // The frame tracks its navigation by id (_req_id), never by pointer.
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, &self._http_owner);
+    self._req_id = transfer.id;
+
+    {
+        // Ours until submit; clean up if header setup fails.
+        errdefer transfer.deinit();
+        try transfer.req.headers.add(lp.Config.HttpHeaders.navigation_accept);
+        if (opts.header) |hdr| {
+            try transfer.req.headers.add(hdr);
+        }
+        if (opts.referer) |ref| {
+            const ref_header = try std.mem.concatWithSentinel(transfer.arena, u8, &.{ "Referer: ", ref }, 0);
+            try transfer.req.headers.add(ref_header);
+        }
+    }
+
+    // A root navigation issued against a pending Page (i.e. one allocated by
+    // Session.initiateRootNavigation) flags both the notification and the
+    // HTTP request itself: CDP skips its node-registry reset until commit,
+    // and the in-flight transfer survives the OLD page's frame.deinit which
+    // calls http_client.abortList() on the shared frame_id during
+    // commitPendingPage.
+    const is_pending_root = self._page.replaces != null;
+
+    // We dispatch frame_navigate event before sending the request.
+    // It ensures the event frame_navigated is not dispatched before this one.
+    session.notification.dispatch(.frame_navigate, &.{
+        .opts = opts,
+        .url = self.url,
+        .req_id = transfer.id,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .timestamp = timestamp(.monotonic),
+        .is_pending_root = is_pending_root,
+    });
+
+    // Record telemetry for navigation
+    self.recordNavigateTelemetry(std.ascii.startsWithIgnoreCase(self.url, "https://"));
+
+    session.navigation._current_navigation_kind = opts.kind;
+
+    transfer.submit() catch |err| {
         log.err(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
         return err;
     };
+}
+
+fn recordNavigateTelemetry(self: *Frame, tls: bool) void {
+    const TE = @import("../telemetry/telemetry.zig").Event;
+    const context: TE.Navigate.Context = if (self.parent != null)
+        .iframe
+    else if (self.window._opener != null)
+        .popup
+    else
+        .page;
+    lp.metrics.navigate.incr(context);
+    self._session.browser.app.telemetry.record(.{ .navigate = .{
+        .tls = tls,
+        .context = context,
+    } });
 }
 
 // Navigation can happen in many places, such as executing a <script> tag or
@@ -816,7 +868,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
             arena,
             frame_base,
             request_url,
-            .{ .always_dupe = true, .encoding = originator.charset },
+            .{ .encoding = originator.charset },
         );
         break :blk .{ u, false };
     };
@@ -832,6 +884,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     // fragment). Identical URLs fall through and trigger a real reload.
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
+        const old_url = target.url;
         target.url = try target.arena.dupeZ(u8, resolved_url);
 
         const location = try Location.init(target.url, target);
@@ -842,6 +895,9 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
+
+        try target.queueHashChange(old_url, target.url);
+
         // don't defer this, the caller is responsible for freeing it on error
         session.releaseArena(arena);
         return;
@@ -930,6 +986,11 @@ pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
     return self._session.browser.http_client.request(req, &self._http_owner);
 }
 
+// Two-phase variant; see HttpClient.newRequest for the ownership contract.
+pub fn newRequest(self: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
+    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+}
+
 // Synchronously abort every transfer and WebSocket owned by this frame
 // and all of its descendants.
 pub fn abortTransfers(self: *Frame) void {
@@ -938,8 +999,6 @@ pub fn abortTransfers(self: *Frame) void {
     }
     const http_client = &self._session.browser.http_client;
     http_client.abortOwner(&self._http_owner);
-    // abortOwner misses deferred contexts whose transfer already completed.
-    http_client.deferring_layer.cancelFrame(self._frame_id);
 }
 
 pub fn documentIsLoaded(self: *Frame) void {
@@ -992,7 +1051,7 @@ pub fn scriptsCompletedLoading(self: *Frame) void {
     self.pendingLoadCompleted();
 }
 
-pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
+pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void {
     // When parsing HTML, fire any load event for an iframe on the next tick.
     const parsing_html = switch (self._parse_state) {
         .html => true,
@@ -1002,15 +1061,14 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
         self.queueElementEvent(iframe._proto, .load) catch |err| {
             log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe._src });
         };
-        self.pendingLoadCompleted();
+        if (delays_load) {
+            self.pendingLoadCompleted();
+        }
         return;
     }
 
-    var ls: JS.Local.Scope = undefined;
-    self.js.localScope(&ls);
-    defer ls.deinit();
-
-    const entered = self.js.enter(&ls.handle_scope);
+    var hs: JS.HandleScope = undefined;
+    const entered = self.js.enter(&hs);
     defer entered.exit();
 
     blk: {
@@ -1023,7 +1081,9 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
         };
     }
 
-    self.pendingLoadCompleted();
+    if (delays_load) {
+        self.pendingLoadCompleted();
+    }
 }
 
 fn pendingLoadCompleted(self: *Frame) void {
@@ -1108,11 +1168,11 @@ fn notifyParentLoadComplete(self: *Frame) void {
     }
 
     self._parent_notified = true;
-    parent.iframeCompletedLoading(self.iframe.?);
+    parent.iframeCompletedLoading(self.iframe.?, self._delays_parent_load);
 }
 
-fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
-    var self: *Frame = @ptrCast(@alignCast(response.ctx));
+fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
+    var self: *Frame = @ptrCast(@alignCast(transfer.req.ctx));
 
     // Commit point for a pending root navigation. The session has been
     // holding the OLD page alive during the round-trip; now that response
@@ -1120,11 +1180,11 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
     // frame_remove (clears OLD V8 context group + CDP node_registry),
     // tears down the OLD page, flips the pointer, and dispatches
     // frame_created against the new (now active) frame.
-    if (self._page._state == .pending) {
-        try self._session.commitPendingPage();
+    if (self._page.replaces != null) {
+        try self._session.commitPendingPage(self._page);
     }
 
-    const response_url = response.url();
+    const response_url = transfer.req.url;
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
         self.url = try self.arena.dupeZ(u8, response_url);
@@ -1136,7 +1196,7 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
     // Page.reload doesn't re-POST form data to the redirect target. Conservative
     // default — 307/308 technically preserve the method per RFC 7231, but
     // resubmitting form data is the more dangerous failure mode.
-    if ((response.redirectCount() orelse 0) > 0) {
+    if ((transfer.redirectCount() orelse 0) > 0) {
         if (self._navigated_options) |*no| {
             no.method = .GET;
             no.body = null;
@@ -1153,14 +1213,14 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
     if (comptime IS_DEBUG) {
         log.debug(.frame, "navigate header", .{
             .url = self.url,
-            .status = response.status(),
-            .content_type = response.contentType(),
+            .status = transfer.responseStatus(),
+            .content_type = transfer.contentType(),
             .type = self._type,
         });
     }
 
-    self._http_status = response.status();
-    var it = response.headerIterator();
+    self._http_status = transfer.responseStatus();
+    var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
         try self._http_headers.append(self.arena, .{
             .name = try self.arena.dupe(u8, hdr.name),
@@ -1185,7 +1245,7 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
     // If the response is a file download, stream its body to disk instead of
     // parsing it as a page. This sets _parse_state to .download, which the
     // data/done callbacks below special-case.
-    _ = try self.maybeStartDownload(response);
+    _ = try self.maybeStartDownload(transfer);
 
     return .proceed;
 }
@@ -1194,7 +1254,7 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResu
 // treated as a download when Browser.setDownloadBehavior opted in
 // (allow/allowAndName) and the response carries Content-Disposition: attachment.
 // See issue #2701.
-fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
+fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     const session = self._session;
     switch (session.download_behavior) {
         .allow, .allow_and_name => {},
@@ -1202,7 +1262,7 @@ fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
     }
 
     const disposition: HttpClient.Header = blk: {
-        var it = response.headerIterator();
+        var it = transfer.responseHeaderIterator();
         while (it.next()) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "content-disposition")) {
                 break :blk hdr;
@@ -1248,7 +1308,7 @@ fn maybeStartDownload(self: *Frame, response: HttpClient.Response) !bool {
         return false;
     };
 
-    const total: ?u64 = if (response.contentLength()) |cl| cl else null;
+    const total: ?u64 = if (transfer.getContentLength()) |cl| cl else null;
 
     self._parse_state = .{ .download = .{
         .guid = guid,
@@ -1327,14 +1387,18 @@ fn urlBasename(arena: Allocator, url: []const u8) !?[]const u8 {
     return try arena.dupe(u8, name);
 }
 
-fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
-    var self: *Frame = @ptrCast(@alignCast(response.ctx));
+fn isUtf16Encoding(charset: []const u8) bool {
+    return std.mem.eql(u8, charset, "UTF-16LE") or std.mem.eql(u8, charset, "UTF-16BE");
+}
+
+fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    var self: *Frame = @ptrCast(@alignCast(transfer.req.ctx));
 
     if (self._parse_state == .pre) {
         // we lazily do this, because we might need the first chunk of data
         // to sniff the content type
         var mime: Mime = blk: {
-            if (response.contentType()) |ct| {
+            if (transfer.contentType()) |ct| {
                 break :blk try Mime.parse(ct);
             }
             break :blk Mime.sniff(data);
@@ -1342,8 +1406,10 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
 
         // If the HTTP Content-Type header didn't specify a charset and this is HTML,
         // prescan the first 1024 bytes for a <meta charset> declaration.
+        var html_prescan_found_charset = false;
         if (mime.content_type == .text_html and mime.is_default_charset) {
             if (Mime.prescanCharset(data)) |charset| {
+                html_prescan_found_charset = true;
                 if (charset.len <= 40) {
                     @memcpy(mime.charset[0..charset.len], charset);
                     mime.charset[charset.len] = 0;
@@ -1367,14 +1433,15 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
                 const charset_str = mime.charsetString();
                 const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
                 if (info.isValid()) {
-                    self.charset = info.name();
+                    const name = info.name();
+                    self.charset = if (html_prescan_found_charset and isUtf16Encoding(name)) "UTF-8" else name;
                 }
                 self._parse_state = .{ .html = .{
                     .buffer = .empty,
                     .arena = try self.getArena(.large, "Frame.navigate"),
                 } };
             },
-            .application_json, .text_javascript, .text_css, .text_plain => {
+            .application_json, .text_javascript, .text_css, .text_plain, .text_markdown => {
                 var arr: std.ArrayList(u8) = .empty;
                 try arr.appendSlice(self.arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
                 self._parse_state = .{ .text = arr };
@@ -1566,8 +1633,8 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // pending Page; the OLD active Page (and its V8 context) is untouched.
     // We do NOT run frameDoneCallback against the pending frame — the frame
     // is about to be freed.
-    if (self._page._state == .pending) {
-        self._session.discardPendingPage();
+    if (self._page.replaces != null) {
+        self._session.discardPendingPage(self._page);
         return;
     }
 
@@ -1653,7 +1720,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     try Frame.init(new_frame, frame_id, self._page, .{ .parent = self });
     errdefer new_frame.deinit();
 
-    self._pending_loads += 1;
+    const delays_load = iframe.isLazyLoading() == false;
+    new_frame._delays_parent_load = delays_load;
+    if (delays_load) {
+        self._pending_loads += 1;
+    }
     new_frame.iframe = iframe;
     iframe._window = new_frame.window;
     errdefer iframe._window = null;
@@ -1704,7 +1775,9 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
             _ = self.child_frames.swapRemove(idx);
         }
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
-        self._pending_loads -= 1;
+        if (delays_load) {
+            self._pending_loads -= 1;
+        }
         iframe._window = null;
         return error.IFrameLoadError;
     };
@@ -1767,7 +1840,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
                 frame = frame.parent orelse break :base_blk "";
             }
         };
-        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .always_dupe = true, .encoding = self.charset });
+        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .encoding = self.charset });
     };
 
     const popup = try page.frame_arena.create(Frame);
@@ -1778,6 +1851,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     errdefer popup.deinit();
 
     popup.window._opener = opts.opener;
+
     if (opts.name.len > 0 and
         !std.ascii.eqlIgnoreCase(opts.name, "_blank") and
         !std.ascii.eqlIgnoreCase(opts.name, "_self") and
@@ -1796,6 +1870,13 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
         log.warn(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
         return err;
     };
+
+    // A bit hacky. The type of window we return depends on whether or not its
+    // origin is the same as the opener. I believe that we're supposed to do
+    // this check lazily, per function invocation. But we don't have that in
+    // place right now. So the best we can do is set the origin now, before the
+    // async navigation completed.
+    try popup.js.setOrigin(popup.origin);
 
     return popup;
 }
@@ -1931,6 +2012,49 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
     }
 }
 
+const HashChangeCallback = struct {
+    frame: *Frame,
+    old_url: []const u8,
+    new_url: []const u8,
+
+    // Called by the scheduler if the task is dropped before it runs (e.g. the
+    // page is torn down).
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *HashChangeCallback = @ptrCast(@alignCast(ctx));
+        self.frame._factory.destroy(self);
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *HashChangeCallback = @ptrCast(@alignCast(ctx));
+        defer self.frame._factory.destroy(self);
+
+        const frame = self.frame;
+        const target = frame.window.asEventTarget();
+        if (!frame._event_manager.hasDirectListeners(target, "hashchange", frame.window._on_hashchange)) {
+            return null;
+        }
+
+        const event = (try HashChangeEvent.initTrusted(comptime .wrap("hashchange"), .{
+            .oldURL = self.old_url,
+            .newURL = self.new_url,
+        }, frame)).asEvent();
+        try frame._event_manager.dispatchDirect(target, event, frame.window._on_hashchange, .{ .context = "Hash Change" });
+        return null;
+    }
+};
+
+pub fn queueHashChange(self: *Frame, old_url: []const u8, new_url: []const u8) !void {
+    const callback = try self._factory.create(HashChangeCallback{
+        .frame = self,
+        .old_url = old_url,
+        .new_url = new_url,
+    });
+    try self.js.scheduler.add(callback, HashChangeCallback.run, 0, .{
+        .name = "frame.hashChange",
+        .finalizer = HashChangeCallback.cancelled,
+    });
+}
+
 // Hard cap on a single external stylesheet body. CSS rule storage is per-
 // arena so a hostile sheet could otherwise inflate page memory; 2 MiB is
 // well above anything seen on real sites (Tailwind's `preflight + utilities`
@@ -2006,6 +2130,12 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     };
 
     const http_client = &session.browser.http_client;
+
+    // `syncRequest` below registers a blocking request for this frame; the
+    // client's dispatcher holds back every OTHER transfer's callbacks for
+    // the frame while it's registered (they'd run JS on the parser's stack)
+    // and delivers them on the next tick after the sync fetch returns.
+
     var headers = try http_client.newHeaders();
     try headers.add("Accept: text/css,*/*;q=0.1");
     try self.headersForRequest(&headers);
@@ -2032,6 +2162,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .cookie_origin = self.url,
         .resource_type = .stylesheet,
         .notification = session.notification,
+        .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }) catch |err| {
         log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
@@ -2127,6 +2258,27 @@ fn dispatchQueuedEvents(self: *Frame) !void {
 
 pub fn scheduleCustomElementBackupDrain(self: *Frame) !void {
     try self.js.queueCustomElementBackupDrain();
+}
+
+// Run the network-idle notification checks for this frame and, recursively,
+// its child frames. CDP clients (e.g. puppeteer's networkidle0) expect the
+// networkIdle/networkAlmostIdle lifecycle events on every frame, like Chrome
+// emits them, not just on the root frame.
+pub fn checkIdleNotifications(self: *Frame, total_http_activity: usize) void {
+    switch (self._parse_state) {
+        .html, .complete => {
+            if (self._notified_network_almost_idle.check(total_http_activity <= 2)) {
+                self.notifyNetworkAlmostIdle();
+            }
+            if (self._notified_network_idle.check(total_http_activity == 0)) {
+                self.notifyNetworkIdle();
+            }
+        },
+        else => {},
+    }
+    for (self.child_frames.items) |child| {
+        child.checkIdleNotifications(total_http_activity);
+    }
 }
 
 pub fn notifyNetworkIdle(self: *Frame) void {
@@ -2227,8 +2379,19 @@ pub fn dupeSSO(self: *Frame, value: []const u8) !String {
 
 const RemoveNodeOpts = struct {
     will_be_reconnected: bool,
+    // Set to false when the caller queues its own combined mutation record
+    notify_observers: bool = true,
 };
 pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
+    // NodeIterator pre-removing steps must run while the tree is intact.
+    if (self._live_node_iterators.first != null) {
+        var it: ?*std.DoublyLinkedList.Node = self._live_node_iterators.first;
+        while (it) |link| : (it = link.next) {
+            const iterator: *DOMNodeIterator = @fieldParentPtr("_iterator_link", link);
+            iterator.nodeWillBeRemoved(child);
+        }
+    }
+
     // Capture siblings before removing
     const previous_sibling = child.previousSibling();
     const next_sibling = child.nextSibling();
@@ -2261,7 +2424,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
     slotting.removalSteps(parent, child, self);
 
-    if (observers.hasMutationObservers(self)) {
+    if (opts.notify_observers and observers.hasMutationObservers(self)) {
         const removed = [_]*Node{child};
         observers.notifyChildListChange(self, parent, &.{}, &removed, previous_sibling, next_sibling);
     }
@@ -2324,31 +2487,54 @@ pub fn appendNode(self: *Frame, parent: *Node, child: *Node, opts: InsertNodeOpt
 }
 
 pub fn appendAllChildren(self: *Frame, parent: *Node, target: *Node) !void {
-    self.domChanged();
-    const dest_connected = target.isConnected();
-
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        const child_was_connected = child.isConnected();
-        self.removeNode(parent, child, .{ .will_be_reconnected = dest_connected });
-        try self.appendNode(target, child, .{ .child_already_connected = child_was_connected });
-    }
+    return self.moveAllChildren(parent, target, null, .records);
 }
 
 pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref_node: *Node) !void {
+    return self.moveAllChildren(fragment, parent, ref_node, .records);
+}
+
+pub const MoveChildrenNotify = enum { records, silent_parent };
+
+// Moves every child of `source` into `parent` (before `ref_node`, or
+// appended). Per the DOM insert algorithm for fragments, observers get one
+// removal record on the source and one addition record on the parent, not
+// one record per child. `.silent_parent` suppresses only the parent record
+// (replaceChild queues its own combined record); the source record is queued
+// regardless — the spec's insert algorithm notes it "intentionally does not
+// pay attention to suppressObservers".
+pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*Node, notify_mode: MoveChildrenNotify) !void {
     self.domChanged();
     const dest_connected = parent.isConnected();
+    const notify = observers.hasMutationObservers(self);
 
-    var it = fragment.childrenIterator();
+    var moved: std.ArrayList(*Node) = .empty;
+    const previous_sibling = if (ref_node) |ref| ref.previousSibling() else parent.lastChild();
+
+    var it = source.childrenIterator();
     while (it.next()) |child| {
+        if (notify) {
+            try moved.append(self.call_arena, child);
+        }
         const child_was_connected = child.isConnected();
-        self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
-        try self.insertNodeRelative(
-            parent,
-            child,
-            .{ .before = ref_node },
-            .{ .child_already_connected = child_was_connected },
-        );
+        self.removeNode(source, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
+        if (ref_node) |ref| {
+            try self.insertNodeRelative(
+                parent,
+                child,
+                .{ .before = ref },
+                .{ .child_already_connected = child_was_connected, .notify_observers = false },
+            );
+        } else {
+            try self.appendNode(parent, child, .{ .child_already_connected = child_was_connected, .notify_observers = false });
+        }
+    }
+
+    if (notify and moved.items.len > 0) {
+        observers.notifyChildListChange(self, source, &.{}, moved.items, null, null);
+        if (notify_mode == .records) {
+            observers.notifyChildListChange(self, parent, moved.items, &.{}, previous_sibling, ref_node);
+        }
     }
 }
 
@@ -2360,6 +2546,8 @@ const InsertNodeRelative = union(enum) {
 const InsertNodeOpts = struct {
     child_already_connected: bool = false,
     adopting_to_new_document: bool = false,
+    // Set to false when the caller queues its own combined mutation record
+    notify_observers: bool = true,
 };
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
@@ -2415,50 +2603,21 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
     }
 
-    const parent_is_connected = parent.isConnected();
-
-    // Tri-state behavior for mutations:
-    // 1. from_parser=true, parse_mode=document -> no mutations (initial document parse)
-    // 2. from_parser=true, parse_mode=fragment -> mutations (innerHTML additions)
-    // 3. from_parser=false, parse_mode=document -> mutation (js manipulation)
-    // split like this because from_parser can be comptime known.
-    const should_notify = if (comptime from_parser)
-        self._parse_mode == .fragment
-    else
-        true;
-
-    if (should_notify) {
-        if (comptime from_parser == false) {
-            // When the parser adds the node, nodeIsReady is only called when the
-            // nodeComplete() callback is executed. nodeIsReady resolves the
-            // node's owning frame itself (only for the few node types that have
-            // ready work), so pass the incumbent `self`.
-            try self.nodeIsReady(false, child);
-
-            // Check if text was added to a script that hasn't started yet.
-            if (child._type == .cdata and parent_is_connected) {
-                if (parent.is(Element.Html.Script)) |script| {
-                    if (!script._executed) {
-                        try self.nodeIsReady(false, parent);
-                    }
-                }
-            }
-        }
-
-        // Notify mutation observers about childList change
-        if (observers.hasMutationObservers(self)) {
-            const previous_sibling = child.previousSibling();
-            const next_sibling = child.nextSibling();
-            const added = [_]*Node{child};
-            observers.notifyChildListChange(self, parent, &added, &.{}, previous_sibling, next_sibling);
-        }
-    }
-
+    // The parser path does its own (limited) notification and
+    // connected-callback work, then returns.
     if (comptime from_parser) {
+        // Main-document parser insertions notify per node: scripts running
+        // during parsing can observe the document. Fragment parses
+        // (innerHTML et al.) stay silent; Node.setHTML queues one combined
+        // "replace all" record instead.
+        if (self._parse_mode != .fragment) {
+            self.notifyChildInserted(parent, child);
+        }
+
         if (child.is(Element)) |el| {
-            // Invoke connectedCallback for custom elements during parsing
-            // For main document parsing, we know nodes are connected (fast path)
-            // For fragment parsing (innerHTML), we need to check connectivity
+            // Invoke connectedCallback for custom elements during parsing.
+            // For main document parsing we know nodes are connected (fast path);
+            // for fragment parsing (innerHTML) we check connectivity.
             if (child.isConnected() or child.isInShadowTree()) {
                 if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
                     try self.addElementId(parent, el, id);
@@ -2467,6 +2626,25 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
             }
         }
         return;
+    }
+
+    const parent_is_connected = parent.isConnected();
+
+    // nodeIsReady resolves the node's owning frame itself (only for the few node
+    // types that have ready work), so pass the incumbent `self`.
+    try self.nodeIsReady(false, child);
+
+    // Check if text was added to a script that hasn't started yet.
+    if (child._type == .cdata and parent_is_connected) {
+        if (parent.is(Element.Html.Script)) |script| {
+            if (!script._executed) {
+                try self.nodeIsReady(false, parent);
+            }
+        }
+    }
+
+    if (opts.notify_observers) {
+        self.notifyChildInserted(parent, child);
     }
 
     if (opts.child_already_connected and !opts.adopting_to_new_document) {
@@ -2506,6 +2684,17 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
             try Element.Html.Custom.enqueueConnectedCallbackOnElement(false, el, self);
         }
     }
+}
+
+fn notifyChildInserted(self: *Frame, parent: *Node, child: *Node) void {
+    if (!observers.hasMutationObservers(self)) {
+        return;
+    }
+
+    const previous_sibling = child.previousSibling();
+    const next_sibling = child.nextSibling();
+    const added = [_]*Node{child};
+    observers.notifyChildListChange(self, parent, &added, &.{}, previous_sibling, next_sibling);
 }
 
 pub fn attributeChange(self: *Frame, element: *Element, name: String, value: String, old_value: ?String) void {
@@ -2679,21 +2868,11 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: F
     }
     node._children = first._children;
 
-    if (observers.hasMutationObservers(self)) {
-        var it = node.childrenIterator();
-        while (it.next()) |child| {
-            child._parent = node;
-            // Notify mutation observers for each unwrapped child
-            const previous_sibling = child.previousSibling();
-            const next_sibling = child.nextSibling();
-            const added = [_]*Node{child};
-            observers.notifyChildListChange(self, node, &added, &.{}, previous_sibling, next_sibling);
-        }
-    } else {
-        var it = node.childrenIterator();
-        while (it.next()) |child| {
-            child._parent = node;
-        }
+    // No mutation records for the unwrapped children either; see the comment
+    // about fragment parses in _insertNodeRelative.
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        child._parent = node;
     }
 }
 
@@ -3010,6 +3189,11 @@ const SubmitFormOpts = struct {
 pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
 
+    if (submit_opts.fire_event and form.asNode().isConnected() == false) {
+        // interactive submission (e.g. submit button) noop if the form is disconnected
+        return;
+    }
+
     // see the `_constructing_entry_list` field documentation
     if (form._constructing_entry_list) {
         return;
@@ -3043,7 +3227,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const target_frame = blk: {
         const target_name = target_name_ orelse {
-            break :blk form_element.asNode().ownerFrame(self);
+            break :blk form_element.ownerFrame(self);
         };
         break :blk self.resolveTargetFrame(target_name) orelse {
             log.warn(.not_implemented, "target", .{ .type = self._type, .url = self.url, .target = target_name });
@@ -3274,9 +3458,10 @@ test "Page: isSameOrigin" {
 }
 
 test "Frame: httpMetadata after navigation" {
-    const frame = try testing.pageTest("page/meta.html", .{});
-    defer testing.test_session.removePage();
-    const meta = frame.httpMetadata();
+    const page = try testing.pageTest("page/meta.html", .{});
+    defer page.close();
+
+    const meta = page.frame().?.httpMetadata();
     try testing.expect(meta.status != null);
     try std.testing.expectEqual(@as(u16, 200), meta.status.?);
     try testing.expect(meta.headers.len > 0);
@@ -3284,17 +3469,21 @@ test "Frame: httpMetadata after navigation" {
 }
 
 test "Frame: httpMetadata 404" {
-    const frame = try testing.pageTest("nonexistent_page_xyz.html", .{});
-    defer testing.test_session.removePage();
-    const meta = frame.httpMetadata();
+    const page = try testing.pageTest("nonexistent_page_xyz.html", .{});
+    defer page.close();
+
+    const meta = page.frame().?.httpMetadata();
     try testing.expect(meta.status != null);
     try testing.expectEqual(404, meta.status.?);
 }
 
 test "Frame: 401" {
-    var frame = try testing.pageTest("401", .{});
     defer testing.reset();
-    defer frame._session.removePage();
+
+    var page = try testing.pageTest("401", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
 
     var buf = std.Io.Writer.Allocating.init(testing.allocator);
     defer buf.deinit();

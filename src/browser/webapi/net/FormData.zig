@@ -199,15 +199,15 @@ fn deleteByName(self: *FormData, name: String, exec: *Execution) void {
 }
 
 pub fn keys(self: *FormData, exec: *const js.Execution) !*KeyIterator {
-    return KeyIterator.init(.{ .fd = self, .list = self }, exec);
+    return KeyIterator.init(.{ .fd = self }, exec);
 }
 
 pub fn values(self: *FormData, exec: *const js.Execution) !*ValueIterator {
-    return ValueIterator.init(.{ .fd = self, .list = self }, exec);
+    return ValueIterator.init(.{ .fd = self }, exec);
 }
 
 pub fn entries(self: *FormData, exec: *const js.Execution) !*EntryIterator {
-    return EntryIterator.init(.{ .fd = self, .list = self }, exec);
+    return EntryIterator.init(.{ .fd = self }, exec);
 }
 
 pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {
@@ -350,10 +350,15 @@ pub const Iterator = struct {
     index: u32 = 0,
     fd: *FormData,
 
-    // See KeyValueList.Iterator.list — required by the GenericIterator wrapper.
-    list: *anyopaque,
-
     pub const Entry = struct { []const u8, []const u8 };
+
+    pub fn acquireRef(self: *Iterator) void {
+        self.fd.acquireRef();
+    }
+
+    pub fn releaseRef(self: *Iterator, page: *Page) void {
+        self.fd.releaseRef(page);
+    }
 
     pub fn next(self: *Iterator, _: *const Execution) ?Iterator.Entry {
         const index = self.index;
@@ -503,7 +508,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(FormData.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(FormData.init, .{});
     pub const has = bridge.function(FormData.has, .{});
     pub const get = bridge.function(FormData.get, .{});
     pub const set = bridge.function(FormData.set, .{});
@@ -610,8 +615,8 @@ fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []con
 
 test "FormData: multipart with file" {
     const allocator = testing.arena_allocator;
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
     defer file._proto.releaseRef(frame._page);
@@ -648,8 +653,8 @@ test "FormData: multipart with file" {
 
 test "FormData: multipart with empty file defaults to octet-stream" {
     const allocator = testing.arena_allocator;
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const file = try buildTestFile(allocator, frame._page, "", "", "");
     defer file._proto.releaseRef(frame._page);
@@ -682,8 +687,8 @@ test "FormData: multipart with empty file defaults to octet-stream" {
 
 test "FormData: multipart escapes file name and filename" {
     const allocator = testing.arena_allocator;
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const file = try buildTestFile(allocator, frame._page, "a\"b\r\nc.txt", "text/plain", "x");
     defer file._proto.releaseRef(frame._page);
@@ -716,8 +721,8 @@ test "FormData: multipart escapes file name and filename" {
 
 test "FormData: file entry collapses to filename in urlencode" {
     const allocator = testing.arena_allocator;
-    const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
     defer file._proto.releaseRef(frame._page);

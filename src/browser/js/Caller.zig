@@ -33,6 +33,7 @@ const v8 = js.v8;
 const log = lp.log;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const CALL_ARENA_RETAIN = 1024 * 16;
+const LOCAL_ARENA_RETAIN = 1024 * 16;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Caller = @This();
@@ -101,13 +102,22 @@ pub fn deinit(self: *Caller) void {
         _ = arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
     }
 
+    // Unlike call_arena, local_arena is reset on _every_ return, since its
+    // users promise not to hold data across a nested call. In debug, free
+    // back to the backing allocator so a stale pointer trips the
+    // DebugAllocator's use-after-free detection; in release, retain a buffer
+    // to avoid realloc churn.
+    {
+        const local_arena: *ArenaAllocator = @ptrCast(@alignCast(ctx.local_arena.ptr));
+        _ = local_arena.reset(if (comptime IS_DEBUG) .free_all else .{ .retain_with_limit = LOCAL_ARENA_RETAIN });
+    }
+
     ctx.call_depth = call_depth;
     ctx.local = self.prev_local;
     ctx.global.setJs(self.prev_context);
 }
 
 pub const CallOpts = struct {
-    dom_exception: bool = false,
     null_as_undefined: bool = false,
     as_typed_array: bool = false,
     // Constructor-only. When true, `new.target` is pulled from the
@@ -126,12 +136,12 @@ pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *cons
     const info = FunctionCallbackInfo{ .handle = handle };
 
     if (!info.isConstructCall()) {
-        handleError(T, @TypeOf(func), local, error.InvalidArgument, info, opts);
+        handleError(T, @TypeOf(func), local, error.InvalidArgument, info);
         return;
     }
 
     self._constructor(func, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
+        handleError(T, @TypeOf(func), local, err, info);
     };
 }
 
@@ -173,7 +183,7 @@ fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo, compti
     info.getReturnValue().set(this.handle);
 }
 
-pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -182,13 +192,12 @@ pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndex(T, local, func, idx, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
     };
 }
 
-fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -200,7 +209,7 @@ fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, inf
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
-pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -209,13 +218,12 @@ pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedIndex(T, local, func, name, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
     };
 }
 
-fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -227,7 +235,60 @@ fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
-pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn setIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _setIndex(T, local, func, idx, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
+    };
+}
+
+fn _setIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "1") = idx;
+    @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
+    if (@typeInfo(F).@"fn".params.len == 4) {
+        @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
+    }
+    const ret = @call(.auto, func, args);
+    return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
+}
+
+pub fn deleteOrDefineIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _deleteOrDefineIndex(T, local, func, idx, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
+    };
+}
+
+fn _deleteOrDefineIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "1") = idx;
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
+    }
+    const ret = @call(.auto, func, args);
+    return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
+}
+
+pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -236,13 +297,12 @@ pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setNamedIndex(T, local, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
     };
 }
 
-fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -252,10 +312,10 @@ fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
         @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, false, local, ret, info, opts);
+    return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
 }
 
-pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn deleteOrDefineNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -263,13 +323,13 @@ pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *c
     defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
-    return _deleteNamedIndex(T, local, func, name, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
-        return 0;
+    return _deleteOrDefineNamedIndex(T, local, func, name, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
     };
 }
 
-fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _deleteOrDefineNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -278,10 +338,10 @@ fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name:
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, false, local, ret, info, opts);
+    return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
 }
 
-pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
     const local = &self.local;
 
     var hs: js.HandleScope = undefined;
@@ -290,13 +350,12 @@ pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *co
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getEnumerator(T, local, func, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info, opts);
-        // not intercepted
-        return 0;
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
     };
 }
 
-fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
@@ -307,7 +366,84 @@ fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: Pr
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
-fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+pub fn getIndexQuery(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo) u32 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _getIndexQuery(T, local, func, idx, info) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
+    };
+}
+
+fn _getIndexQuery(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo) !u32 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "1") = idx;
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
+    }
+    return queryReturn(local, @call(.auto, func, args), info);
+}
+
+pub fn getNamedQuery(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo) u32 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _getNamedQuery(T, local, func, name, info) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info);
+        return js.Intercepted.no;
+    };
+}
+
+fn _getNamedQuery(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo) !u32 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
+    }
+    return queryReturn(local, @call(.auto, func, args), info);
+}
+
+// A query callback either returns a bool (true -> the property exists as an
+// enumerable, writable, configurable data property, PropertyAttribute.None)
+// or the v8.PropertyAttribute bits directly (e.g. v8.ReadOnly).
+// error.NotHandled falls through to the ordinary property lookup.
+fn queryReturn(local: *const Local, ret: anytype, info: PropertyCallbackInfo) !u32 {
+    const val = switch (@typeInfo(@TypeOf(ret))) {
+        .error_union => |eu| ret catch |err| {
+            if (comptime isInErrorSet(error.NotHandled, eu.error_set)) {
+                if (err == error.NotHandled) {
+                    return js.Intercepted.no;
+                }
+            }
+            return err;
+        },
+        else => ret,
+    };
+    if (@TypeOf(val) == bool) {
+        if (val == false) {
+            return js.Intercepted.no;
+        }
+        info.getReturnValue().set(try local.zigValueToJs(@as(u32, v8.None), .{}));
+    } else {
+        info.getReturnValue().set(try local.zigValueToJs(@as(u32, val), .{}));
+    }
+    return js.Intercepted.yes;
+}
+
+fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     // need to unwrap this error immediately for when opts.null_as_undefined == true
     // and we need to compare it to null;
     const non_error_ret = switch (@typeInfo(@TypeOf(ret))) {
@@ -318,13 +454,11 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
                 // if error.NotHandled is part of the error set.
                 if (isInErrorSet(error.NotHandled, eu.error_set)) {
                     if (err == error.NotHandled) {
-                        // not intercepted
-                        return 0;
+                        return js.Intercepted.no;
                     }
                 }
-                handleError(T, F, local, err, info, opts);
-                // not intercepted
-                return 0;
+                handleError(T, F, local, err, info);
+                return js.Intercepted.no;
             };
         },
         else => ret,
@@ -333,8 +467,19 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
     if (comptime with_value) {
         info.getReturnValue().set(try local.zigValueToJs(non_error_ret, opts));
     }
-    // intercepted
-    return 1;
+    return js.Intercepted.yes;
+}
+
+// Setter/deleter interceptors normally return void: intercepting is enough
+// to mark the operation successful. When they return a bool instead, it is
+// forwarded as the v8 return value; false marks the operation as failed,
+// which makes v8 throw a TypeError in strict mode.
+fn returnsBool(comptime F: type) bool {
+    const RT = @typeInfo(F).@"fn".return_type.?;
+    return switch (@typeInfo(RT)) {
+        .error_union => |eu| eu.payload == bool,
+        else => RT == bool,
+    };
 }
 
 fn isInErrorSet(err: anyerror, comptime T: type) bool {
@@ -355,7 +500,66 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
     return try js.String.toSlice(.{ .local = local, .handle = handle });
 }
 
-fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype, comptime opts: CallOpts) void {
+// Per Web IDL, exceptions belong to the operation's relevant realm — the
+// receiver's — which differs from the calling realm for cross-realm calls
+// (v8 API callbacks run in the caller's context, and our JS wrappers are
+// shared across the page's contexts). For DOM nodes, the relevant realm is
+// the node document's frame; otherwise fall back to the calling realm.
+fn errorLocal(comptime T: type, local: *const Local, info: anytype) Local {
+    if (@TypeOf(info) != FunctionCallbackInfo) {
+        return local.*;
+    }
+
+    const frame = switch (local.ctx.global) {
+        .frame => |f| f,
+        .worker => return local.*,
+    };
+
+    const Node = @import("../webapi/Node.zig");
+    const Document = @import("../webapi/Document.zig");
+
+    const is_node_type = comptime blk: {
+        if (@typeInfo(T) != .@"struct" or !@hasDecl(T, "JsApi")) break :blk false;
+        break :blk @import("bridge.zig").inheritsOrIs(T.JsApi, Node.JsApi);
+    };
+    if (comptime !is_node_type) {
+        return local.*;
+    }
+
+    const instance = TaggedOpaque.fromJS(*T, info.getThis()) catch return local.*;
+    const node = protoNode(T, instance);
+
+    const doc: *Document = node.ownerDocument(frame) orelse switch (node._type) {
+        .document => |d| d,
+        else => return local.*,
+    };
+    const doc_frame = doc._frame orelse return local.*;
+    if (doc_frame == frame) {
+        return local.*;
+    }
+
+    const ctx = doc_frame.js;
+    const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&ctx.handle, ctx.isolate.handle) orelse return local.*);
+    return .{
+        .ctx = ctx,
+        .handle = local_v8_context,
+        .call_arena = ctx.call_arena,
+        .isolate = ctx.isolate,
+    };
+}
+
+// Upcast a Node-descendant instance to *Node by walking the _proto chain.
+// Not every node type defines an asNode() helper (e.g. Comment, Text), but
+// inheritsOrIs guarantees Node is in the chain
+fn protoNode(comptime T: type, instance: *T) *@import("../webapi/Node.zig") {
+    if (T == @import("../webapi/Node.zig")) {
+        return instance;
+    }
+    const Proto = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
+    return protoNode(Proto, instance._proto);
+}
+
+fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype) void {
     const isolate = local.isolate;
 
     if (comptime IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
@@ -368,28 +572,46 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         }
     }
 
-    const js_err: *const v8.Value = switch (err) {
+    // early exit
+    switch (err) {
         error.TryCatchRethrow => return,
-        error.InvalidArgument => isolate.createTypeError("invalid argument"),
-        error.TypeError => isolate.createTypeError(""),
-        error.Idna => isolate.createTypeError("invalid domain"),
-        error.RangeError => isolate.createRangeError(""),
-        error.OutOfMemory => isolate.createError("out of memory"),
-        error.IllegalConstructor => isolate.createError("Illegal Constructor"),
-        else => blk: {
-            if (comptime opts.dom_exception) {
-                const DOMException = @import("../webapi/DOMException.zig");
-                if (DOMException.fromError(err)) |ex| {
-                    const value = local.zigValueToJs(ex, .{}) catch break :blk isolate.createError("internal error");
-                    break :blk value.handle;
-                }
-            }
-            break :blk isolate.createError(@errorName(err));
-        },
+        // A JS exception is already pending in the isolate (e.g. a value's
+        // toString threw during argument conversion); throwing anything here
+        // would replace the original exception the script expects to see.
+        error.JsException => return,
+        else => {},
+    }
+
+    const err_local = errorLocal(T, local, info);
+
+    const js_err: *const v8.Value = blk: {
+        // Error constructors use the isolate's current context: enter the
+        // receiver's realm so the exception gets its prototypes.
+        const entered = err_local.ctx != local.ctx;
+        if (entered) v8.v8__Context__Enter(err_local.handle);
+        defer if (entered) v8.v8__Context__Exit(err_local.handle);
+
+        break :blk switch (err) {
+            error.InvalidArgument => isolate.createTypeError("invalid argument"),
+            error.TypeError => isolate.createTypeError(""),
+            error.RangeError => isolate.createRangeError(""),
+            error.OutOfMemory => isolate.createError("out of memory"),
+            error.IllegalConstructor => isolate.createError("Illegal Constructor"),
+            error.TryCatchRethrow, error.JsException => unreachable, // early exited a few lines up
+            else => domExceptionToJs(&err_local, err) orelse isolate.createError(@errorName(err)),
+        };
     };
 
     const js_exception = isolate.throwException(js_err);
     info.getReturnValue().setValueHandle(js_exception);
+}
+
+// Convert a Zig error to a DOMException. If the error is unknown, return null.
+fn domExceptionToJs(local: *const Local, err: anyerror) ?*const v8.Value {
+    const DOMException = @import("../webapi/DOMException.zig");
+    const ex = DOMException.fromError(err) orelse return null;
+    const value = local.zigValueToJs(ex, .{}) catch return local.isolate.createError("internal error");
+    return value.handle;
 }
 
 // This is extracted to speed up compilation. When left inlined in handleError,
@@ -565,13 +787,14 @@ pub const Function = struct {
         static: bool = false,
         wpt_only: bool = false,
         deletable: bool = true,
-        dom_exception: bool = false,
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
         cache: ?Caching = null,
         embedded_receiver: bool = false,
         exposed: Exposed = .both,
         ce_reactions: bool = false,
+        js_name: ?[:0]const u8 = null,
+        unforgeable: bool = false,
 
         pub const Exposed = enum { both, window, worker };
 
@@ -647,11 +870,7 @@ pub const Function = struct {
         };
 
         const js_value = _call(T, &caller.local, info, func, opts) catch |err| {
-            handleError(T, @TypeOf(func), &caller.local, err, info, .{
-                .dom_exception = opts.dom_exception,
-                .as_typed_array = opts.as_typed_array,
-                .null_as_undefined = opts.null_as_undefined,
-            });
+            handleError(T, @TypeOf(func), &caller.local, err, info);
             return;
         };
 
@@ -674,7 +893,6 @@ pub const Function = struct {
         }
         const res = @call(.auto, func, args);
         const js_value = try local.zigValueToJs(res, .{
-            .dom_exception = opts.dom_exception,
             .as_typed_array = opts.as_typed_array,
             .null_as_undefined = opts.null_as_undefined,
         });
@@ -878,14 +1096,13 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             // type instantiation of jsValueToZig may not include such errors
             // in its inferred error set.
             @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch |err| {
+                if (err == error.JsException) {
+                    // an exception thrown by user code (e.g. a toString
+                    // getter) is pending; propagate it untouched
+                    return err;
+                }
                 const DOMException = @import("../webapi/DOMException.zig");
                 if (DOMException.fromError(err) != null) {
-                    // I don't love this. But we have [a few] cases when trying to
-                    // map a JS Value that we have a specific DOMException to throw.
-                    // Ideally we should only do this if dom_exception = true in the
-                    // bridge definition. But we don't have access to that here.
-                    // Instead, we just rely on the fact that local.jsValueToZig
-                    // only throws a DOMException-known error when it should.
                     return err;
                 }
                 return error.InvalidArgument;

@@ -21,14 +21,13 @@ const posix = std.posix;
 
 const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");
+const crypto = @import("../sys/libcrypto.zig");
 const IpFilter = @import("IpFilter.zig");
 
 const log = @import("lightpanda").log;
-const assert = @import("lightpanda").assert;
 
 pub const ENABLE_DEBUG = false;
 
-pub const Blob = libcurl.CurlBlob;
 pub const WaitFd = libcurl.CurlWaitFd;
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
@@ -309,11 +308,6 @@ pub const ResponseHead = struct {
     redirect_count: u32,
     _content_type_len: usize = 0,
     _content_type: [MAX_CONTENT_TYPE_LEN]u8 = undefined,
-    // this is normally an empty list, but if the response is being injected
-    // than it'll be populated. It isn't meant to be used directly, but should
-    // be used through the transfer.responseHeaderIterator() which abstracts
-    // whether the headers are from a live curl easy handle, or injected.
-    _injected_headers: []const Header = &.{},
 
     pub fn contentType(self: *ResponseHead) ?[]u8 {
         if (self._content_type_len == 0) {
@@ -329,11 +323,13 @@ pub const ResponseHead = struct {
 /// Returns CURL_SOCKET_BAD to block; otherwise creates and returns a real socket fd.
 /// clientp is a *const IpFilter passed via CURLOPT_OPENSOCKETDATA.
 fn opensocketCallback(
-    purpose: libcurl.CurlSockType,
-    address: *libcurl.CurlSockAddr,
     clientp: ?*anyopaque,
-) libcurl.CurlSocket {
+    _: c_uint,
+    addr: [*c]libcurl.CurlSockAddr,
+) callconv(.c) libcurl.CurlSocket {
+    const address: *libcurl.CurlSockAddr = @ptrCast(addr);
     const filter: *const IpFilter = @ptrCast(@alignCast(clientp orelse return libcurl.CURL_SOCKET_BAD));
+
     if (filter.isBlockedSockaddr(address)) {
         if (address.family == posix.AF.INET or address.family == posix.AF.INET6) {
             const ip = std.net.Address.initPosix(@ptrCast(&address.addr));
@@ -343,7 +339,7 @@ fn opensocketCallback(
         }
         return libcurl.CURL_SOCKET_BAD;
     }
-    _ = purpose; // purpose is informational; we always open the same socket type
+
     const fd = posix.socket(
         @intCast(address.family),
         @intCast(address.socktype),
@@ -354,30 +350,26 @@ fn opensocketCallback(
 
 pub const Connection = struct {
     _easy: *libcurl.Curl,
-    in_use: bool,
     transport: Transport,
     node: std.DoublyLinkedList.Node = .{},
-    debug_remove_err: ?anyerror = null,
-    debug_added: u8 = 0,
-    debug_removed: u8 = 0,
 
     pub const Transport = union(enum) {
         none, // used for cases that manage their own connection, e.g. telemetry
-        http: *@import("../browser/HttpClient.zig").Transfer,
+        http: *@import("HttpClient.zig").Transfer,
         websocket: *@import("../browser/webapi/net/WebSocket.zig"),
     };
 
     pub fn init(
-        ca_blob: ?libcurl.CurlBlob,
+        x509_store: *crypto.X509_STORE,
         config: *const Config,
         ip_filter: ?*const IpFilter,
     ) !Connection {
         const easy = libcurl.curl_easy_init() orelse return error.FailedToInitializeEasy;
 
-        var self = Connection{ ._easy = easy, .in_use = false, .transport = .none };
+        var self = Connection{ ._easy = easy, .transport = .none };
         errdefer self.deinit();
 
-        try self.reset(config, ca_blob, ip_filter);
+        try self.reset(config, x509_store, ip_filter);
         return self;
     }
 
@@ -501,7 +493,7 @@ pub const Connection = struct {
     pub fn reset(
         self: *Connection,
         config: *const Config,
-        ca_blob: ?libcurl.CurlBlob,
+        x509_store: *crypto.X509_STORE,
         ip_filter: ?*const IpFilter,
     ) !void {
         libcurl.curl_easy_reset(self._easy);
@@ -524,15 +516,28 @@ pub const Connection = struct {
             try libcurl.curl_easy_setopt(self._easy, .proxy, null);
         }
 
-        // tls
-        if (ca_blob) |ca| {
-            try libcurl.curl_easy_setopt(self._easy, .ca_info_blob, ca);
-            if (http_proxy != null) {
-                try libcurl.curl_easy_setopt(self._easy, .proxy_ca_info_blob, ca);
-            }
-        } else {
-            assert(config.tlsVerifyHost() == false, "Http.init tls_verify_host", .{});
+        // TLS.
+        if (config.tlsVerifyHost()) {
+            // Provide certificate store to connection's SSL_CTX.
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ctx_function, &(struct {
+                fn wrap(
+                    _: *libcurl.Curl,
+                    raw_ssl_ctx: *anyopaque,
+                    raw_x509_store: *anyopaque,
+                ) callconv(.c) libcurl.CurlCode {
+                    const ssl_ctx: *crypto.SSL_CTX = @ptrCast(raw_ssl_ctx);
+                    const store: *crypto.X509_STORE = @ptrCast(raw_x509_store);
 
+                    const result = crypto.SSL_CTX_set1_verify_cert_store(ssl_ctx, store);
+                    if (result != 1) {
+                        return libcurl.CURLE.ABORTED_BY_CALLBACK;
+                    }
+                    return libcurl.CURLE.OK;
+                }
+            }).wrap);
+            // Pass our store to CURLOPT_SSL_CTX_FUNCTION.
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ctx_data, x509_store);
+        } else {
             try libcurl.curl_easy_setopt(self._easy, .ssl_verify_host, false);
             try libcurl.curl_easy_setopt(self._easy, .ssl_verify_peer, false);
 
@@ -564,7 +569,7 @@ pub const Connection = struct {
         }
     }
 
-    fn discardBody(_: [*]const u8, count: usize, len: usize, _: ?*anyopaque) usize {
+    fn discardBody(_: [*]const u8, count: usize, len: usize, _: ?*anyopaque) callconv(.c) usize {
         return count * len;
     }
 
@@ -613,6 +618,13 @@ pub const Connection = struct {
         var count: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .redirect_count, &count);
         return @intCast(count);
+    }
+
+    // Total transfer time (name lookup to completion) in microseconds.
+    pub fn getTotalTimeMicros(self: *const Connection) !c_long {
+        var micros: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .total_time_t, &micros);
+        return micros;
     }
 
     pub fn getConnectHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
@@ -664,6 +676,14 @@ pub const Connection = struct {
         try self.secretHeaders(&header_list, http_headers);
         try self.setHeaders(&header_list);
 
+        try libcurl.curl_easy_perform(self._easy);
+        return self.getResponseCode();
+    }
+
+    // Synchronous transfer that adds no request headers. request() injects the
+    // browser User-Agent / sec-ch-ua machinery meant for page fetches; callers
+    // that manage their own connection (telemetry) use this leaner path.
+    pub fn perform(self: *const Connection) !u16 {
         try libcurl.curl_easy_perform(self._easy);
         return self.getResponseCode();
     }
@@ -740,7 +760,63 @@ pub const Handles = struct {
     }
 };
 
-fn debugCallback(_: *libcurl.Curl, msg_type: libcurl.CurlInfoType, raw: [*c]u8, len: usize, _: *anyopaque) c_int {
+pub const StatusCategory = enum {
+    @"2xx",
+    @"4xx",
+    @"5xx",
+    other,
+};
+
+pub fn statusCategory(status: u16) StatusCategory {
+    return switch (status) {
+        200...299 => .@"2xx",
+        400...499 => .@"4xx",
+        500...599 => .@"5xx",
+        else => .other,
+    };
+}
+
+// Coarse failure classes for the http_error metric. Anything we don't
+// explicitly bucket lands in `other`.
+pub const ErrorReason = enum {
+    timeout,
+    connect,
+    tls,
+    too_large,
+    aborted,
+    robots_blocked,
+    other,
+};
+
+pub fn errorReason(err: anyerror) ErrorReason {
+    return switch (err) {
+        error.OperationTimedout => .timeout,
+        error.CouldntConnect,
+        error.CouldntResolveHost,
+        error.CouldntResolveProxy,
+        error.NoConnectionAvailable,
+        => .connect,
+        error.SslConnectError,
+        error.PeerFailedVerification,
+        error.SslCertproblem,
+        error.SslCacertBadfile,
+        error.SslIssuerError,
+        error.SslPinnedpubkeynotmatch,
+        error.SslInvalidcertstatus,
+        error.UseSslFailed,
+        => .tls,
+        error.ResponseTooLarge => .too_large,
+        error.Abort,
+        error.AbortedByCallback,
+        error.AbortAuthChallenge,
+        error.SyncWaitInterrupted,
+        => .aborted,
+        error.RobotsBlocked => .robots_blocked,
+        else => .other,
+    };
+}
+
+fn debugCallback(_: *libcurl.Curl, msg_type: libcurl.CurlInfoType, raw: [*c]u8, len: usize, _: ?*anyopaque) callconv(.c) c_int {
     const data = raw[0..len];
     switch (msg_type) {
         .text => std.debug.print("libcurl [text]: {s}\n", .{data}),
@@ -844,7 +920,7 @@ test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
 
     const filter = IpFilter.init(true, null);
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
-    const result = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
+    const result = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
     try testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
 }
 
@@ -853,7 +929,7 @@ test "opensocketCallback: public IPv4 opens a real socket" {
     const filter = IpFilter.init(true, null);
     var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
 
-    const fd = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
+    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
     defer posix.close(fd);
 
     // A real fd is always >= 0
@@ -862,7 +938,7 @@ test "opensocketCallback: public IPv4 opens a real socket" {
 
 test "opensocketCallback: null clientp returns CURL_SOCKET_BAD (fail-closed)" {
     var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
-    const result = opensocketCallback(.ipcxn, &sa, null);
+    const result = opensocketCallback(null, @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
     try testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
 }
 
@@ -870,7 +946,7 @@ test "opensocketCallback: block_private=false allows private IP" {
     // When block_private is false the filter blocks nothing
     const filter = IpFilter.init(false, null);
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
-    const fd = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
+    const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
     defer posix.close(fd);
 
     try testing.expect(fd >= 0);

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!--
+MessageEvent.source is the WindowProxy of the frame the message came from, so it
+is reference-equal to that frame's iframe.contentWindow — for a cross-origin
+sender as well as a same-origin one. The two children below differ only by origin:
+localhost is cross-origin to the 127.0.0.1 test page, 127.0.0.1 is same-origin;
+both must satisfy event.source === iframe.contentWindow.
+-->
+
+<script id="message_source_identity" type=module>
+{
+  const state = await testing.async();
+  const ALT_BASE = testing.BASE_URL.replace('127.0.0.1', 'localhost');
+  const ALT_ORIGIN = testing.ORIGIN.replace('127.0.0.1', 'localhost');
+
+  function loadAndAwait(src, expectedOrigin) {
+    return new Promise((resolve) => {
+      const iframe = document.createElement('iframe');
+      const onmsg = (e) => {
+        if (e.origin !== expectedOrigin) return;
+        window.removeEventListener('message', onmsg);
+        resolve({ iframe, event: e });
+      };
+      window.addEventListener('message', onmsg);
+      iframe.src = src;
+      document.documentElement.appendChild(iframe);
+    });
+  }
+
+  // localhost is a different origin than the 127.0.0.1 test page: cross-origin sender.
+  const cross = await loadAndAwait(ALT_BASE + 'frames/support/post_to_parent.html', ALT_ORIGIN);
+  // 127.0.0.1 is the test page's own origin: same-origin control.
+  const same = await loadAndAwait(testing.BASE_URL + 'frames/support/post_to_parent.html', testing.ORIGIN);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual('hello', cross.event.data);
+    testing.expectEqual(ALT_ORIGIN, cross.event.origin);
+    testing.expectFalse(cross.event.source === null);
+    testing.expectTrue(cross.event.source === cross.iframe.contentWindow);
+
+    testing.expectEqual('hello', same.event.data);
+    testing.expectEqual(testing.ORIGIN, same.event.origin);
+    testing.expectTrue(same.event.source === same.iframe.contentWindow);
+  });
+}
+</script>

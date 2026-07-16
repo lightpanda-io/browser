@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 
 const FormData = @import("FormData.zig");
 const KeyValueList = @import("../KeyValueList.zig");
@@ -29,8 +30,18 @@ const String = lp.String;
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
+pub fn registerTypes() []const type {
+    return &.{
+        URLSearchParams,
+        KeyIterator,
+        ValueIterator,
+        EntryIterator,
+    };
+}
+
 const URLSearchParams = @This();
 
+_rc: lp.RC(u8) = .{},
 _arena: Allocator,
 _params: KeyValueList,
 
@@ -41,7 +52,9 @@ const InitOpts = union(enum) {
 };
 
 pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
-    const arena = exec.arena;
+    const arena = try exec.getArena(.small, "URLSearchParams");
+    errdefer exec.releaseArena(arena);
+
     const params: KeyValueList = blk: {
         const opts = opts_ orelse break :blk .empty;
         switch (opts) {
@@ -73,10 +86,24 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
         }
     };
 
-    return exec._factory.create(URLSearchParams{
+    const self = try arena.create(URLSearchParams);
+    self.* = .{
         ._arena = arena,
         ._params = params,
-    });
+    };
+    return self;
+}
+
+pub fn deinit(self: *URLSearchParams, page: *Page) void {
+    page.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *URLSearchParams, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *URLSearchParams) void {
+    self._rc.acquire();
 }
 
 pub fn updateFromString(self: *URLSearchParams, query_string: []const u8, exec: *const Execution) !void {
@@ -111,16 +138,16 @@ pub fn delete(self: *URLSearchParams, name: []const u8, value: ?[]const u8) void
     self._params.delete(name, value);
 }
 
-pub fn keys(self: *URLSearchParams, exec: *const Execution) !*KeyValueList.KeyIterator {
-    return KeyValueList.KeyIterator.init(.{ .list = self, .kv = &self._params }, exec);
+pub fn keys(self: *URLSearchParams, exec: *const Execution) !*KeyIterator {
+    return KeyIterator.init(.{ .list = self }, exec);
 }
 
-pub fn values(self: *URLSearchParams, exec: *const Execution) !*KeyValueList.ValueIterator {
-    return KeyValueList.ValueIterator.init(.{ .list = self, .kv = &self._params }, exec);
+pub fn values(self: *URLSearchParams, exec: *const Execution) !*ValueIterator {
+    return ValueIterator.init(.{ .list = self }, exec);
 }
 
-pub fn entries(self: *URLSearchParams, exec: *const Execution) !*KeyValueList.EntryIterator {
-    return KeyValueList.EntryIterator.init(.{ .list = self, .kv = &self._params }, exec);
+pub fn entries(self: *URLSearchParams, exec: *const Execution) !*EntryIterator {
+    return EntryIterator.init(.{ .list = self }, exec);
 }
 
 pub fn toString(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
@@ -295,22 +322,35 @@ inline fn decodeHex(char: u8) u8 {
 
 pub const Iterator = struct {
     index: u32 = 0,
-    list: *const URLSearchParams,
+    list: *URLSearchParams,
 
-    const Entry = struct { []const u8, []const u8 };
+    pub const Entry = struct { []const u8, []const u8 };
 
-    pub fn next(self: *Iterator, _: *const Execution) !?Iterator.Entry {
+    pub fn acquireRef(self: *Iterator) void {
+        self.list.acquireRef();
+    }
+
+    pub fn releaseRef(self: *Iterator, page: *Page) void {
+        self.list.releaseRef(page);
+    }
+
+    pub fn next(self: *Iterator, _: *const Execution) ?Iterator.Entry {
         const index = self.index;
-        const items = self.list._params.items;
-        if (index >= items.len) {
+        const entries_ = self.list._params._entries.items;
+        if (index >= entries_.len) {
             return null;
         }
         self.index = index + 1;
 
-        const e = &items[index];
+        const e = &entries_[index];
         return .{ e.name.str(), e.value.str() };
     }
 };
+
+const GenericIterator = @import("../collections/iterator.zig").Entry;
+pub const KeyIterator = GenericIterator(Iterator, "0");
+pub const ValueIterator = GenericIterator(Iterator, "1");
+pub const EntryIterator = GenericIterator(Iterator, null);
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(URLSearchParams);

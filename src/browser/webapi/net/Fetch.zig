@@ -18,18 +18,20 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const HttpClient = @import("../../HttpClient.zig");
 
 const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
+const HttpClient = @import("../../../network/HttpClient.zig");
 
-const Request = @import("Request.zig");
-const Response = @import("Response.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 const DOMException = @import("../DOMException.zig");
 
+const Request = @import("Request.zig");
+const Response = @import("Response.zig");
+
 const log = lp.log;
 const Execution = js.Execution;
+const Transfer = HttpClient.Transfer;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();
@@ -41,6 +43,7 @@ _response: *Response,
 _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
 _signal: ?*AbortSignal,
+_manual_redirect: bool,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -54,6 +57,10 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         resolver.rejectError("fetch init error", .{ .type_error = "Failed to construct Request" });
         return resolver.promise();
     };
+    // This Request is never exposed to JS. makeRequest dupes the url/body
+    // into the transfer, so nothing references it once we return.
+    request.acquireRef();
+    defer request.releaseRef(exec.page);
 
     if (request._signal) |signal| {
         if (signal._aborted) {
@@ -74,6 +81,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._response = response,
         ._owns_response = true,
         ._signal = request._signal,
+        ._manual_redirect = request._redirect == .manual,
     };
 
     const session = exec.session;
@@ -94,12 +102,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .@"same-origin" => if (exec.isSameOrigin(request._url)) &session.cookie_jar else null,
     };
 
-    // Synchronous failures from request layers (e.g. RobotsLayer returning
-    // RobotsBlocked when robots.txt is already cached) are dispatched to
-    // httpErrorCallback by Client.request, which rejects the promise and
-    // releases response._arena. Propagating the error from here would also
-    // fire the `errdefer response.deinit` above and double-free the arena.
-    exec.makeRequest(.{
+    const transfer = exec.newRequest(.{
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
@@ -110,27 +113,36 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .resource_type = .fetch,
         .cookie_jar = cookie_jar,
         .cookie_origin = exec.url.*,
+        .redirect = switch (request._redirect) {
+            .follow => .follow,
+            .manual => .manual,
+            .@"error" => .@"error",
+        },
         .notification = session.notification,
-        .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
-    }) catch {};
+    }) catch {
+        // OOM-class; nothing was committed and no callback fired.
+        return resolver.promise();
+    };
+
+    // Held for Response.deinit's abort; the error, shutdown and done
+    // callbacks clear it.
+    response._http_transfer = transfer;
+
+    // Failures inside submit are dispatched to httpErrorCallback, which
+    // rejects the promise and releases response._arena. Propagating the
+    // error from here would also fire the `errdefer response.deinit` above
+    // and double-free the arena.
+    transfer.submit() catch {};
     return resolver.promise();
 }
 
-fn httpStartCallback(response: HttpClient.Response) !void {
-    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
-    if (comptime IS_DEBUG) {
-        log.debug(.http, "request start", .{ .url = self._url, .source = "fetch" });
-    }
-    self._response._http_response = response;
-}
-
-fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
-    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
+fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
+    const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
 
     if (self._signal) |signal| {
         if (signal._aborted) {
@@ -139,7 +151,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
     }
 
     const arena = self._response._arena;
-    if (response.contentLength()) |cl| {
+    if (transfer.getContentLength()) |cl| {
         try self._buf.ensureTotalCapacity(arena, cl);
     }
 
@@ -149,14 +161,25 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
         log.debug(.http, "request header", .{
             .source = "fetch",
             .url = self._url,
-            .status = response.status(),
+            .status = transfer.responseStatus(),
         });
     }
 
-    res._status = response.status().?;
-    res._status_text = std.http.Status.phrase(@enumFromInt(response.status().?)) orelse "";
-    res._url = try arena.dupeZ(u8, response.url());
-    res._is_redirected = response.redirectCount().? > 0;
+    res._status = transfer.responseStatus().?;
+    res._status_text = std.http.Status.phrase(@enumFromInt(transfer.responseStatus().?)) orelse "";
+    res._url = try arena.dupeZ(u8, transfer.req.url);
+    res._is_redirected = transfer.redirectCount().? > 0;
+
+    // redirect: "manual" surfaces the unfollowed 3xx as an opaque-redirect
+    // filtered response: status 0, no headers, no body.
+    if (self._manual_redirect and HttpClient.isRedirectStatus(res._status)) {
+        res._status = 0;
+        res._status_text = "";
+        res._url = "";
+        res._type = .opaqueredirect;
+        res._is_redirected = false;
+        return .proceed;
+    }
 
     // Determine response type based on origin comparison
     const exec = self._exec;
@@ -177,7 +200,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
         res._type = .basic;
     }
 
-    var it = response.headerIterator();
+    var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
         try res._headers.append(hdr.name, hdr.value, exec);
     }
@@ -185,8 +208,8 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
     return .proceed;
 }
 
-fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
-    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
+fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+    const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
 
     // Check if aborted
     if (self._signal) |signal| {
@@ -201,7 +224,7 @@ fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     var response = self._response;
-    response._http_response = null;
+    response._http_transfer = null;
     response._body = .{ .bytes = self._buf.items };
 
     log.info(.http, "request complete", .{
@@ -231,7 +254,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     });
 
     var response = self._response;
-    response._http_response = null;
+    response._http_transfer = null;
 
     // Capture this before we reject. Rejection could trigger httpShutdownCallback
     // (via a microtask callback). But if we're here, then we'll take care of
@@ -259,7 +282,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
 
     if (self._owns_response) {
         var response = self._response;
-        response._http_response = null;
+        response._http_transfer = null;
         response.deinit(self._exec.page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.

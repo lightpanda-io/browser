@@ -253,3 +253,37 @@
     testing.expectEqual(testing.BASE_URL + 'element/html/over%209000!', a.href);
   }
 </script>
+
+<script id=reflecting_getter_about_blank_base>
+  // Regression: with an `about:blank` document base, the WHATWG URL parser
+  // can't join a relative reference to a cannot-be-a-base URL. A reflecting
+  // URL getter must still NOT throw — per spec it returns the raw content
+  // attribute unchanged. (A thrown TypeError here used to break the WPT
+  // harness's get_stack(), which reads script.src, and hung the run.)
+  {
+    let base = document.createElement('base');
+    document.head.appendChild(base);
+    base.href = 'about:blank';
+
+    let a = document.createElement('a');
+    a.setAttribute('href', 'foo/bar');
+    testing.expectEqual('foo/bar', a.href);
+
+    let s = document.createElement('script');
+    s.src = 'resources/x.js';
+    testing.expectEqual('resources/x.js', s.src);
+
+    let img = document.createElement('img');
+    img.setAttribute('src', 'pic.png');
+    testing.expectEqual('pic.png', img.src);
+
+    // An absolute reference still resolves normally against an about:blank base.
+    let abs = document.createElement('a');
+    abs.setAttribute('href', 'https://example.com/x');
+    testing.expectEqual('https://example.com/x', abs.href);
+
+    // Restore the document base so later test blocks are unaffected.
+    base.href = '';
+    document.head.removeChild(base);
+  }
+</script>

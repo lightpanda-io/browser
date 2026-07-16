@@ -146,6 +146,10 @@ pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, 
     return self.asNode().replaceChildren(nodes, frame);
 }
 
+pub fn moveBefore(self: *DocumentFragment, node: js.Value, child: js.Value, frame: *Frame) !void {
+    return self.asNode().moveBefore(node, child, frame);
+}
+
 pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Frame) !void {
     const dump = @import("../dump.zig");
     return dump.children(self.asNode(), .{ .shadow = .complete }, writer, frame);
@@ -188,7 +192,6 @@ pub const JsApi = struct {
         pub const name = "DocumentFragment";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const constructor = bridge.constructor(DocumentFragment.init, .{});
@@ -205,19 +208,20 @@ pub const JsApi = struct {
         return self.getElementById(try value.toZig([]const u8));
     }
 
-    pub const querySelector = bridge.function(DocumentFragment.querySelector, .{ .dom_exception = true });
-    pub const querySelectorAll = bridge.function(DocumentFragment.querySelectorAll, .{ .dom_exception = true });
+    pub const querySelector = bridge.function(DocumentFragment.querySelector, .{});
+    pub const querySelectorAll = bridge.function(DocumentFragment.querySelectorAll, .{});
     pub const children = bridge.accessor(DocumentFragment.getChildren, null, .{});
     pub const childElementCount = bridge.accessor(DocumentFragment.getChildElementCount, null, .{});
     pub const firstElementChild = bridge.accessor(DocumentFragment.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(DocumentFragment.lastElementChild, null, .{});
-    pub const append = bridge.function(DocumentFragment.append, .{ .dom_exception = true, .ce_reactions = true });
-    pub const prepend = bridge.function(DocumentFragment.prepend, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
+    pub const append = bridge.function(DocumentFragment.append, .{ .ce_reactions = true });
+    pub const prepend = bridge.function(DocumentFragment.prepend, .{ .ce_reactions = true });
+    pub const moveBefore = bridge.function(DocumentFragment.moveBefore, .{ .ce_reactions = true });
+    pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .ce_reactions = true });
 
     pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
     fn _getInnerHTML(self: *DocumentFragment, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.getInnerHTML(&buf.writer, frame);
         return buf.written();
     }

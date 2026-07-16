@@ -42,6 +42,10 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// clear the live spinner so script output starts on a clean line instead
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
+/// In-flight async `goto`s; emptied before each `runSource` returns.
+pending_gotos: std.ArrayList(PendingGoto),
+/// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
+run_timer: std.time.Timer,
 
 /// The runtime installs exactly the recorded browser tools as script
 /// primitives — the same set the recorder writes — so every recorded call
@@ -58,6 +62,21 @@ const recorded_tool_count = blk: {
 const PrimitiveData = struct {
     runtime: *Runtime,
     tool: BrowserTool,
+};
+
+/// An async `goto` not yet settled. The resolver and receiver (`this`) are
+/// Globals so they survive the microtask drains between driver iterations.
+const PendingGoto = struct {
+    frame_id: u32,
+    resolver: v8.Global,
+    receiver: v8.Global,
+    /// `run_timer` reading (ms) past which the navigation is abandoned.
+    deadline_ms: u64,
+
+    fn reset(self: *PendingGoto) void {
+        v8.v8__Global__Reset(&self.resolver);
+        v8.v8__Global__Reset(&self.receiver);
+    }
 };
 
 const ConsoleMethod = enum {
@@ -115,6 +134,8 @@ pub fn init(
         .call_arena = .init(allocator),
         .primitive_data = undefined,
         .console_data = undefined,
+        .pending_gotos = .empty,
+        .run_timer = undefined,
     };
     errdefer self.call_arena.deinit();
 
@@ -122,6 +143,7 @@ pub fn init(
     // + terminate/microtask carrier; the agent context is bare (no WebAPIs).
     self.env = lp.js.Env.init(app, .{}) catch return error.RuntimeInitFailed;
     errdefer self.env.deinit();
+    self.env.protectHeapLimit();
 
     try self.createContext();
     errdefer self.resetContext();
@@ -130,6 +152,10 @@ pub fn init(
 }
 
 pub fn deinit(self: *Runtime) void {
+    // Free leftover Globals while the isolate is still alive (a run terminated
+    // mid-flight can leave some).
+    for (self.pending_gotos.items) |*pending| pending.reset();
+    self.pending_gotos.deinit(self.allocator);
     self.resetContext();
     self.env.deinit();
     self.call_arena.deinit();
@@ -241,6 +267,7 @@ fn setObjectProperty(
 /// runtime's call arena and valid until deinit or the next run.
 pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
     _ = self.call_arena.reset(.retain_capacity);
+    self.run_timer = std.time.Timer.start() catch return try self.dupeError("internal: timer unavailable");
 
     var hs: lp.js.HandleScope = undefined;
     hs.init(self.env.isolate);
@@ -282,11 +309,10 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     const completion = v8.v8__Script__Run(script, context) orelse
         return try self.formatCaught(context, &try_catch, "script failed");
 
-    // `goto` runs synchronously and resolves its Promise before returning, so a
-    // single microtask drain settles the whole `await` chain — no event-loop
-    // driver. (Truly-async navigation is a later change.)
+    // `goto` only *starts* a navigation, so the root Promise is usually still
+    // pending; drive the in-flight ones to completion.
     const root: *const v8.Promise = @ptrCast(completion);
-    self.env.performIsolateMicrotasks();
+    self.driveAsync(context, &try_catch, root);
     if (v8.v8__TryCatch__HasCaught(&try_catch)) {
         return try self.formatCaught(context, &try_catch, "script failed");
     }
@@ -418,20 +444,17 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         error.InvalidArguments => return self.throwTypeError("invalid arguments"),
     };
 
-    // `goto` is the one async-shaped primitive: it returns a Promise (resolved
-    // synchronously once the blocking navigation settles).
     if (tool == .goto) return self.invokeGoto(arena, context, info, args);
 
-    // Other primitives are page methods. The receiver must be navigated, and —
-    // since a single synchronous page has only one live frame — still be the
-    // current one; a later `goto` (on any handle) replaces the page and stales
-    // every other handle.
+    // Route the call at the receiver's own frame: sibling pages may coexist, so
+    // `pages[0]` is not necessarily this handle's page.
     const frame_id = self.receiverFrameId(context, info) orelse
         return self.throwError("page is not navigated or has been closed; call page.goto(url) first");
-    const live = self.session.currentFrame();
-    if (live == null or live.?._frame_id != frame_id) {
-        return self.throwError("page handle is no longer valid; the page was closed or replaced");
-    }
+    if (self.session.findFrameByFrameId(frame_id) == null)
+        return self.throwError("page handle is no longer valid; the page was closed");
+
+    self.session.setToolFrameOverride(frame_id);
+    defer self.session.setToolFrameOverride(null);
 
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
@@ -451,10 +474,9 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     }
 }
 
-/// Navigate the receiver Page synchronously and hand back a resolved Promise of
-/// the page object, so `await page.goto(url)` yields the page. The blocking
-/// `goto` tool runs the navigation to completion before this returns; on success
-/// the receiver's `__lpFrameId` is (re)bound to the freshly-loaded frame.
+/// Start the receiver Page's navigation and return a *pending* Promise of the
+/// page object; `driveAsync` settles it once the frame loads. This is what lets
+/// `Promise.all([a.goto(x), b.goto(y)])` fetch both in parallel.
 fn invokeGoto(
     self: *Runtime,
     arena: std.mem.Allocator,
@@ -468,22 +490,146 @@ fn invokeGoto(
         return self.throwError("internal: promise alloc failed");
     self.setReturnValue(info, @ptrCast(promise));
 
-    const result = self.callTool(arena, .goto, args) catch |err| switch (err) {
-        error.OutOfMemory => return self.rejectResolver(context, resolver, "out of memory"),
-    };
+    const this = v8.v8__FunctionCallbackInfo__This(info) orelse
+        return self.rejectResolver(context, resolver, "navigation failed");
 
-    switch (result) {
-        .ok => {
-            const this = v8.v8__FunctionCallbackInfo__This(info) orelse
-                return self.rejectResolver(context, resolver, "navigation failed");
-            const frame = self.session.currentFrame() orelse
-                return self.rejectResolver(context, resolver, "navigation failed");
-            self.bindFrameId(context, this, frame._frame_id) catch
-                return self.rejectResolver(context, resolver, "internal: page bind failed");
+    // Non-null on a re-goto: startGoto replaces only that page, not its siblings.
+    const receiver_frame_id = self.receiverFrameId(context, info);
+    // startGoto is browser-side work; run it under the browser's isolate.
+    // Settle the resolver only after the block: a `return` inside it runs
+    // script-isolate work before the deferred exit.
+    const maybe_started: ?browser_tools.StartedGoto = blk: {
+        self.session.browser.env.isolate.enter();
+        defer self.session.browser.env.isolate.exit();
+        break :blk browser_tools.startGoto(arena, self.session, self.registry, args, receiver_frame_id) catch null;
+    };
+    const started = maybe_started orelse
+        return self.rejectResolver(context, resolver, "navigation failed");
+
+    var pending: PendingGoto = .{
+        .frame_id = started.frame_id,
+        .resolver = undefined,
+        .receiver = undefined,
+        .deadline_ms = self.run_timer.read() / std.time.ns_per_ms + started.timeout_ms,
+    };
+    v8.v8__Global__New(self.env.isolate.handle, resolver, &pending.resolver);
+    v8.v8__Global__New(self.env.isolate.handle, this, &pending.receiver);
+    self.pending_gotos.append(self.allocator, pending) catch {
+        pending.reset();
+        return self.rejectResolver(context, resolver, "out of memory");
+    };
+}
+
+/// Drive every in-flight `goto` to completion: each pass ticks the browser over
+/// the pending frames, settles those that finished, then drains microtasks so
+/// awaiting continuations run (and may start more gotos). Ends when the root
+/// Promise settles, no gotos remain, or the script is cancelled.
+fn driveAsync(self: *Runtime, context: *const v8.Context, try_catch: *const v8.TryCatch, root: *const v8.Promise) void {
+    var runner = self.session.runner(.{});
+
+    var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena_state.deinit();
+
+    // Settle anything resolved synchronously, so a goto-free run still drains.
+    self.env.performIsolateMicrotasks();
+
+    while (true) {
+        const state = promiseState(root);
+        if (state == v8.kFulfilled or state == v8.kRejected) break;
+        if (v8.v8__TryCatch__HasCaught(try_catch)) break;
+        if (self.pending_gotos.items.len == 0) break;
+        if (self.session.isCancelled()) {
+            self.failAllPending(context, "navigation cancelled");
+            break;
+        }
+
+        _ = arena_state.reset(.retain_capacity);
+        const conditions = arena_state.allocator().alloc(lp.Session.Runner.WaitCondition, self.pending_gotos.items.len) catch {
+            self.failAllPending(context, "out of memory");
+            break;
+        };
+        for (self.pending_gotos.items, conditions) |pending, *condition| {
+            condition.* = .{ .frame_id = pending.frame_id, .until = .load };
+        }
+
+        // Browser-side tick: run under the browser's isolate, exit before the
+        // agent-side settling below (the Runtime owns a separate isolate).
+        var tick_failed = false;
+        {
+            self.session.browser.env.isolate.enter();
+            defer self.session.browser.env.isolate.exit();
+            _ = runner.tick(50, conditions) catch {
+                tick_failed = true;
+            };
+        }
+        if (tick_failed) {
+            self.failAllPending(context, "navigation failed");
+            break;
+        }
+
+        self.settleCompleted(context, conditions);
+        self.env.performIsolateMicrotasks();
+    }
+
+    // Reject anything still in flight (fire-and-forget goto, or a broken-out loop).
+    self.failAllPending(context, "navigation abandoned");
+}
+
+/// Settle each pending goto that finished or timed out, compacting survivors back
+/// in place. `conditions[i]` lines up with `pending_gotos.items[i]` (same pass).
+fn settleCompleted(self: *Runtime, context: *const v8.Context, conditions: []const lp.Session.Runner.WaitCondition) void {
+    const now_ms = self.run_timer.read() / std.time.ns_per_ms;
+    var write: usize = 0;
+    for (conditions, 0..) |condition, i| {
+        const pending = &self.pending_gotos.items[i];
+        const outcome: ?Outcome = switch (condition.status) {
+            .complete => .loaded,
+            .err => .failed,
+            .pending => if (now_ms >= pending.deadline_ms) .timed_out else null,
+        };
+        if (outcome) |o| {
+            self.settlePending(context, pending, o);
+        } else {
+            self.pending_gotos.items[write] = pending.*;
+            write += 1;
+        }
+    }
+    self.pending_gotos.shrinkRetainingCapacity(write);
+}
+
+const Outcome = enum { loaded, failed, timed_out };
+
+/// Resolve or reject one pending goto's Promise and free its Globals.
+fn settlePending(self: *Runtime, context: *const v8.Context, pending: *PendingGoto, outcome: Outcome) void {
+    const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
+    switch (outcome) {
+        .loaded => done: {
+            const frame = self.session.findFrameByFrameId(pending.frame_id);
+            if (frame == null or frame.?._last_navigate_error != null) {
+                self.rejectResolver(context, resolver, "navigation failed");
+                break :done;
+            }
+            const this: *const v8.Object = @ptrCast(v8.v8__Global__Get(&pending.receiver, self.env.isolate.handle));
+            self.bindFrameId(context, this, pending.frame_id) catch {
+                self.rejectResolver(context, resolver, "internal: page bind failed");
+                break :done;
+            };
             self.resolveResolver(context, resolver, @ptrCast(this));
         },
-        .fail => |message| self.rejectResolver(context, resolver, message),
+        .failed => self.rejectResolver(context, resolver, "navigation failed"),
+        .timed_out => self.rejectResolver(context, resolver, "navigation timed out"),
     }
+    pending.reset();
+}
+
+/// Reject every still-pending goto and clear the list, freeing all Globals.
+fn failAllPending(self: *Runtime, context: *const v8.Context, message: []const u8) void {
+    for (self.pending_gotos.items) |*pending| {
+        const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
+        self.rejectResolver(context, resolver, message);
+        pending.reset();
+    }
+    self.pending_gotos.clearRetainingCapacity();
 }
 
 fn resolveResolver(_: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, value: *const v8.Value) void {
@@ -846,7 +992,7 @@ fn terminateRuntimeSoon(runtime: *Runtime) void {
 
 test "agent script runtime: goto and evaluate dispatch through browser tools" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -897,7 +1043,7 @@ test "agent script runtime: a method on an un-navigated page errors" {
 
 test "agent script runtime: page.close stales the handle" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -916,9 +1062,9 @@ test "agent script runtime: page.close stales the handle" {
     try testing.expect(std.mem.indexOf(u8, message, "closed") != null);
 }
 
-test "agent script runtime: a stale page handle is a hard error" {
+test "agent script runtime: parallel gotos coexist and route per page" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -926,21 +1072,133 @@ test "agent script runtime: a stale page handle is a hard error" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    // The first page goes stale once a second goto replaces the page; reading
-    // through it must throw, not silently hit the current page.
-    const message = (try runtime.runSource(
+    // Sibling pages stay live; each handle's tools must read its own page.
+    try runTestScript(runtime,
         \\const a = new Page();
-        \\await a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\await new Page().goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
-        \\a.extract({ btn: "#btn" });
-    , "agent-runtime-stale-handle.js")).?;
+        \\const b = new Page();
+        \\await Promise.all([
+        \\  a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  b.goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
+        \\]);
+        \\const da = a.extract({ btn: "#btn" });
+        \\const db = b.extract({ s0: "#sel0" });
+        \\if (da.btn !== "Click Me") throw new Error("page a read wrong page: " + JSON.stringify(da));
+        \\if (db.s0 !== "selector-0-content") throw new Error("page b read wrong page: " + JSON.stringify(db));
+    );
+}
 
-    try testing.expect(std.mem.indexOf(u8, message, "no longer valid") != null);
+test "agent script runtime: goto resolves $LP_* placeholders" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    _ = setenv(@constCast("LP_RUNTIME_GOTO_BASE"), @constCast("http://localhost:9582"), 1);
+    defer _ = unsetenv(@constCast("LP_RUNTIME_GOTO_BASE"));
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("$LP_RUNTIME_GOTO_BASE/src/browser/tests/mcp_actions.html");
+        \\const { btn } = page.extract({ btn: "#btn" });
+        \\if (btn !== "Click Me") throw new Error("wrong page: " + btn);
+    );
+}
+
+extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
+extern fn unsetenv(name: [*:0]u8) c_int;
+
+test "agent script runtime: goto with invalid arguments rejects instead of crashing" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // A goto that fails to start (vs. mid-flight) settles on the startGoto
+    // error path.
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\let caught = "";
+        \\try { await page.goto(null); } catch (e) { caught = String(e); }
+        \\if (!caught.toLowerCase().includes("navigation")) throw new Error("expected a navigation rejection, got: " + caught);
+    );
+}
+
+test "agent script runtime: a tool-triggered navigation keeps the handle routable" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // click commits a replacement Page mid-call; the frame override and the
+    // handle's frame id must both survive the swap.
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_nav.html");
+        \\page.click("#navlink");
+        \\const href = page.evaluate("location.href");
+        \\if (href !== "about:blank") throw new Error("expected about:blank, got: " + href);
+    );
+}
+
+test "agent script runtime: re-goto on the same page object replaces its page" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await page.goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
+        \\const data = page.extract({ s1: "#sel1" });
+        \\if (data.s1 !== "selector-1-content") throw new Error("re-goto did not replace the page: " + JSON.stringify(data));
+    );
+}
+
+test "agent script runtime: a failed navigation rejects the goto promise" {
+    const filter: testing.LogFilter = .init(&.{.frame});
+    defer filter.deinit();
+
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // An unreachable URL must reject (not hang); the short timeout bounds it.
+    try runTestScript(runtime,
+        \\let caught = "";
+        \\try {
+        \\  await new Page().goto("http://localhost:1/", { timeout: 2000 });
+        \\} catch (e) {
+        \\  caught = String(e);
+        \\}
+        \\if (!caught.toLowerCase().includes("navigation")) throw new Error("expected a navigation rejection, got: " + caught);
+    );
 }
 
 test "agent script runtime: extract returns a JavaScript object" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -995,7 +1253,7 @@ test "agent script runtime: extract returns a JavaScript object" {
 
 test "agent script runtime: extract tolerates list selectors that match nothing" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1024,7 +1282,7 @@ test "agent script runtime: extract tolerates list selectors that match nothing"
 
 test "agent script runtime: strict-mode scripts can call primitives" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1063,7 +1321,7 @@ test "agent script runtime: promise microtasks run to completion" {
 
 test "agent script runtime: primitives re-entered from argument callbacks stay isolated" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1086,7 +1344,7 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
 
 test "agent script runtime: terminate interrupts local JavaScript" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1104,7 +1362,7 @@ test "agent script runtime: terminate interrupts local JavaScript" {
 
 test "agent script runtime: agent variables persist and page globals are isolated" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1129,7 +1387,7 @@ test "agent script runtime: agent variables persist and page globals are isolate
 
 test "agent script runtime: page evaluate cannot see agent primitives or bindings" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1165,7 +1423,7 @@ test "agent script runtime: console is available in agent context" {
 
 test "agent script runtime: tool errors throw and stop execution" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1192,7 +1450,7 @@ test "agent script runtime: tool errors throw and stop execution" {
 
 test "agent script runtime: builtin argument marshalling (positional + options)" {
     defer testing.reset();
-    defer if (testing.test_session.hasPage()) testing.test_session.removePage();
+    defer testing.test_session.closeAllPages();
 
     var registry = CDPNode.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1216,11 +1474,14 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
         \\if (page.evaluate("window.inputVal") !== "hello") throw new Error("fill two-positional failed");
         \\page.selectOption("#sel", "opt2");
         \\if (page.evaluate("window.selChanged") !== "opt2") throw new Error("selectOption two-positional failed");
-        \\// Bool positional, and the default-true shorthand when omitted. Assert via the
-        \\// tool's own report (the synthetic click toggles the DOM state, so .checked is
-        \\// not a reliable observation of the `checked` argument).
+        \\// Bool positional, and the default-true shorthand when omitted.
         \\if (!page.setChecked("#chk").includes("to checked")) throw new Error("setChecked default-true failed");
+        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "true") throw new Error("setChecked(true) did not check the box");
         \\if (!page.setChecked("#chk", false).includes("to unchecked")) throw new Error("setChecked bool positional failed");
+        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "false") throw new Error("setChecked(false) did not uncheck the box");
+        \\// Repeat call to the same state is an idempotent no-op, not a toggle.
+        \\page.setChecked("#chk", false);
+        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "false") throw new Error("setChecked no-op toggled the box");
         \\// Selector-first press, and a null selector for a page/focused key press.
         \\page.press("#keyTarget", "Enter");
         \\if (page.evaluate("window.keyPressed") !== "Enter") throw new Error("selector-first press failed");

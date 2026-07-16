@@ -183,28 +183,110 @@
   replaceParent.replaceChild(replaceNew, replaceOld);
 
   await state.done((mutations) => {
-    // replaceChild generates two separate mutation records in modern spec:
-    // 1. First record for insertBefore (new node added)
-    // 2. Second record for removeChild (old node removed)
-    testing.expectEqual(2, mutations.length);
+    // Per the DOM "replace" algorithm, replaceChild queues one combined
+    // mutation record with both the added and the removed node.
+    testing.expectEqual(1, mutations.length);
 
-    // First mutation: insertion of new node
     testing.expectEqual('childList', mutations[0].type);
     testing.expectEqual(replaceParent, mutations[0].target);
     testing.expectEqual(1, mutations[0].addedNodes.length);
     testing.expectEqual(replaceNew, mutations[0].addedNodes[0]);
-    testing.expectEqual(0, mutations[0].removedNodes.length);
+    testing.expectEqual(1, mutations[0].removedNodes.length);
+    testing.expectEqual(replaceOld, mutations[0].removedNodes[0]);
     testing.expectEqual(null, mutations[0].previousSibling);
-    testing.expectEqual(replaceOld, mutations[0].nextSibling);
+    testing.expectEqual(null, mutations[0].nextSibling);
+  });
+</script>
 
-    // Second mutation: removal of old node
+<div id="replace-frag-parent"><div id="replace-frag-old">Old</div></div>
+
+<script id="childlist_replace_child_fragment" type=module>
+  const state = await testing.async();
+  const parent = document.getElementById('replace-frag-parent');
+  const oldChild = document.getElementById('replace-frag-old');
+
+  const fragment = document.createDocumentFragment();
+  const frag1 = document.createElement('div');
+  const frag2 = document.createElement('div');
+  fragment.append(frag1, frag2);
+
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(parent, { childList: true });
+  observer.observe(fragment, { childList: true });
+
+  parent.replaceChild(fragment, oldChild);
+
+  await state.done((mutations) => {
+    // The fragment's removal record is queued even though the replacement
+    // itself suppresses observers (the spec's insert algorithm notes the
+    // fragment record "intentionally does not pay attention to
+    // suppressObservers"), followed by the parent's combined record.
+    testing.expectEqual(2, mutations.length);
+
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(fragment, mutations[0].target);
+    testing.expectEqual(0, mutations[0].addedNodes.length);
+    testing.expectEqual(2, mutations[0].removedNodes.length);
+    testing.expectEqual(frag1, mutations[0].removedNodes[0]);
+    testing.expectEqual(frag2, mutations[0].removedNodes[1]);
+    testing.expectEqual(null, mutations[0].previousSibling);
+    testing.expectEqual(null, mutations[0].nextSibling);
+
     testing.expectEqual('childList', mutations[1].type);
-    testing.expectEqual(replaceParent, mutations[1].target);
-    testing.expectEqual(0, mutations[1].addedNodes.length);
+    testing.expectEqual(parent, mutations[1].target);
+    testing.expectEqual(2, mutations[1].addedNodes.length);
+    testing.expectEqual(frag1, mutations[1].addedNodes[0]);
+    testing.expectEqual(frag2, mutations[1].addedNodes[1]);
     testing.expectEqual(1, mutations[1].removedNodes.length);
-    testing.expectEqual(replaceOld, mutations[1].removedNodes[0]);
-    testing.expectEqual(replaceNew, mutations[1].previousSibling);
+    testing.expectEqual(oldChild, mutations[1].removedNodes[0]);
+    testing.expectEqual(null, mutations[1].previousSibling);
     testing.expectEqual(null, mutations[1].nextSibling);
+  });
+</script>
+
+<div id="replace-adjacent-parent"><div id="replace-adjacent-a">A</div><div id="replace-adjacent-new">New</div><div id="replace-adjacent-old">Old</div><div id="replace-adjacent-b">B</div></div>
+
+<script id="childlist_replace_child_adjacent" type=module>
+  const state = await testing.async();
+  const parent = document.getElementById('replace-adjacent-parent');
+  const a = document.getElementById('replace-adjacent-a');
+  const newChild = document.getElementById('replace-adjacent-new');
+  const oldChild = document.getElementById('replace-adjacent-old');
+  const b = document.getElementById('replace-adjacent-b');
+
+  const observer = new MutationObserver((records) => {
+    observer.disconnect();
+    state.resolve(records);
+  });
+  observer.observe(parent, { childList: true });
+
+  // Replacing a child with its immediate previous sibling: the combined
+  // record's previousSibling is captured before newChild is removed from
+  // its old position, so it is newChild itself.
+  parent.replaceChild(newChild, oldChild);
+
+  await state.done((mutations) => {
+    testing.expectEqual(2, mutations.length);
+
+    testing.expectEqual('childList', mutations[0].type);
+    testing.expectEqual(parent, mutations[0].target);
+    testing.expectEqual(0, mutations[0].addedNodes.length);
+    testing.expectEqual(1, mutations[0].removedNodes.length);
+    testing.expectEqual(newChild, mutations[0].removedNodes[0]);
+    testing.expectEqual(a, mutations[0].previousSibling);
+    testing.expectEqual(oldChild, mutations[0].nextSibling);
+
+    testing.expectEqual('childList', mutations[1].type);
+    testing.expectEqual(parent, mutations[1].target);
+    testing.expectEqual(1, mutations[1].addedNodes.length);
+    testing.expectEqual(newChild, mutations[1].addedNodes[0]);
+    testing.expectEqual(1, mutations[1].removedNodes.length);
+    testing.expectEqual(oldChild, mutations[1].removedNodes[0]);
+    testing.expectEqual(newChild, mutations[1].previousSibling);
+    testing.expectEqual(b, mutations[1].nextSibling);
   });
 </script>
 
@@ -269,41 +351,18 @@
   innerHtmlParent.innerHTML = '<span>New 1</span><span>New 2</span><span>New 3</span>';
 
   await state.done((mutations) => {
-    // innerHTML triggers mutations for both removals and additions
-    // With tri-state: from_parser=true + parse_mode=fragment -> mutations fire
-    // HTML wrapper element is filtered out, so: 3 removals + 3 additions = 6
-    testing.expectEqual(6, mutations.length);
+    // Per the "replace all" algorithm, innerHTML queues a single mutation
+    // record combining all removed and added nodes.
+    testing.expectEqual(1, mutations.length);
 
-    // First 3: removals
     testing.expectEqual('childList', mutations[0].type);
-    testing.expectEqual(1, mutations[0].removedNodes.length);
+    testing.expectEqual(3, mutations[0].removedNodes.length);
     testing.expectEqual(oldChildren[0], mutations[0].removedNodes[0]);
-    testing.expectEqual(0, mutations[0].addedNodes.length);
-
-    testing.expectEqual('childList', mutations[1].type);
-    testing.expectEqual(1, mutations[1].removedNodes.length);
-    testing.expectEqual(oldChildren[1], mutations[1].removedNodes[0]);
-    testing.expectEqual(0, mutations[1].addedNodes.length);
-
-    testing.expectEqual('childList', mutations[2].type);
-    testing.expectEqual(1, mutations[2].removedNodes.length);
-    testing.expectEqual(oldChildren[2], mutations[2].removedNodes[0]);
-    testing.expectEqual(0, mutations[2].addedNodes.length);
-
-    // Last 3: additions (unwrapped span elements)
-    testing.expectEqual('childList', mutations[3].type);
-    testing.expectEqual(0, mutations[3].removedNodes.length);
-    testing.expectEqual(1, mutations[3].addedNodes.length);
-    testing.expectEqual('SPAN', mutations[3].addedNodes[0].nodeName);
-
-    testing.expectEqual('childList', mutations[4].type);
-    testing.expectEqual(0, mutations[4].removedNodes.length);
-    testing.expectEqual(1, mutations[4].addedNodes.length);
-    testing.expectEqual('SPAN', mutations[4].addedNodes[0].nodeName);
-
-    testing.expectEqual('childList', mutations[5].type);
-    testing.expectEqual(0, mutations[5].removedNodes.length);
-    testing.expectEqual(1, mutations[5].addedNodes.length);
-    testing.expectEqual('SPAN', mutations[5].addedNodes[0].nodeName);
+    testing.expectEqual(oldChildren[1], mutations[0].removedNodes[1]);
+    testing.expectEqual(oldChildren[2], mutations[0].removedNodes[2]);
+    testing.expectEqual(3, mutations[0].addedNodes.length);
+    testing.expectEqual('SPAN', mutations[0].addedNodes[0].nodeName);
+    testing.expectEqual('SPAN', mutations[0].addedNodes[1].nodeName);
+    testing.expectEqual('SPAN', mutations[0].addedNodes[2].nodeName);
   });
 </script>

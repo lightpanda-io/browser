@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
@@ -132,6 +133,20 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
     };
 }
 
+// Enqueues an atomic-move reaction (moveBefore). Unlike connect/disconnect there
+// is no dedup state to flip: a move always fires, and the element's connected
+// state is unchanged by the move.
+pub fn enqueueMoveCallbackOnElement(element: *Element, frame: *Frame) void {
+    if (element.is(Custom)) |custom| {
+        if (custom._definition == null) return;
+    } else {
+        if (frame.getCustomizedBuiltInDefinition(element) == null) return;
+    }
+    frame._ce_reactions.enqueueMove(frame, element) catch |err| {
+        log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+    };
+}
+
 pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
         if (custom._definition == null) return;
@@ -163,37 +178,36 @@ pub fn fireReaction(reaction: Reaction, frame: *Frame) void {
         .connected => |el| {
             if (el.is(Custom)) |custom| {
                 custom.invokeCallback("connectedCallback", .{}, frame);
-            } else if (frame.getCustomizedBuiltInDefinition(el)) |definition| {
-                invokeCallbackOnElement(el, definition, "connectedCallback", .{}, frame);
+            } else if (frame.getCustomizedBuiltInDefinition(el)) |_| {
+                invokeCallbackOnElement(el, "connectedCallback", .{}, frame);
             }
         },
         .disconnected => |el| {
             if (el.is(Custom)) |custom| {
                 custom.invokeCallback("disconnectedCallback", .{}, frame);
-            } else if (frame.getCustomizedBuiltInDefinition(el)) |definition| {
-                invokeCallbackOnElement(el, definition, "disconnectedCallback", .{}, frame);
+            } else if (frame.getCustomizedBuiltInDefinition(el)) |_| {
+                invokeCallbackOnElement(el, "disconnectedCallback", .{}, frame);
             }
         },
         .adopted => |a| {
             if (a.element.is(Custom)) |custom| {
                 custom.invokeCallback("adoptedCallback", .{ a.old_document, a.new_document }, frame);
-            } else if (frame.getCustomizedBuiltInDefinition(a.element)) |definition| {
-                invokeCallbackOnElement(a.element, definition, "adoptedCallback", .{ a.old_document, a.new_document }, frame);
+            } else if (frame.getCustomizedBuiltInDefinition(a.element)) |_| {
+                invokeCallbackOnElement(a.element, "adoptedCallback", .{ a.old_document, a.new_document }, frame);
             }
         },
         .attribute_changed => |a| {
             if (a.element.is(Custom)) |custom| {
                 custom.invokeCallback("attributeChangedCallback", .{ a.name, a.old_value, a.new_value, a.namespace }, frame);
-            } else if (frame.getCustomizedBuiltInDefinition(a.element)) |definition| {
-                invokeCallbackOnElement(a.element, definition, "attributeChangedCallback", .{ a.name, a.old_value, a.new_value, a.namespace }, frame);
+            } else if (frame.getCustomizedBuiltInDefinition(a.element)) |_| {
+                invokeCallbackOnElement(a.element, "attributeChangedCallback", .{ a.name, a.old_value, a.new_value, a.namespace }, frame);
             }
         },
+        .move => |el| invokeCallbackOnElement(el, "move", .{}, frame),
     }
 }
 
-fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefinition, comptime callback_name: [:0]const u8, args: anytype, frame: *Frame) void {
-    _ = definition;
-
+fn invokeCallbackOnElement(element: *Element, comptime callback_name: [:0]const u8, args: anytype, frame: *Frame) void {
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -202,8 +216,20 @@ fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefiniti
     const js_val = ls.local.zigValueToJs(element, .{}) catch return;
     const js_element = js_val.toObject();
 
-    // Call the callback method if it exists
-    js_element.callMethod(void, callback_name, args) catch return;
+    if (comptime std.mem.eql(u8, callback_name, "move") == false) {
+        // Call the callback method if it exists
+        js_element.callMethod(void, callback_name, args) catch {};
+        return;
+    }
+
+    // for "move", we call "connectedMoveCallback" if it exists, else we fallback
+    // to  "disconnectedCallback" + "connectedCallback"
+    if (js_element.has("connectedMoveCallback")) {
+        js_element.callMethod(void, "connectedMoveCallback", .{}) catch return;
+    } else {
+        js_element.callMethod(void, "disconnectedCallback", .{}) catch return;
+        js_element.callMethod(void, "connectedCallback", .{}) catch return;
+    }
 }
 
 // Check if element has "is" attribute and attach customized built-in definition

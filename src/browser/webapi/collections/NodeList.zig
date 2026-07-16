@@ -45,7 +45,8 @@ pub fn deinit(self: *NodeList, page: *Page) void {
     switch (self._data) {
         .child_nodes => |cn| cn.deinit(page),
         .selector_list => |list| list.deinit(page),
-        else => {},
+        .radio_node_list => |rnl| rnl._form_collection.releaseRef(page),
+        .name => {},
     }
 }
 
@@ -142,7 +143,6 @@ pub const JsApi = struct {
         pub const name = "NodeList";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const length = bridge.accessor(NodeList.length, null, .{});

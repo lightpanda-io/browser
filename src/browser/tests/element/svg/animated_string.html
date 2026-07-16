@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=root class="chart wide">
+  <use id=use1 xlink:href="#icon"></use>
+  <use id=use2 href="#modern" xlink:href="#legacy"></use>
+  <a id=link1></a>
+</svg>
+<div id=plain class="html-class"></div>
+
+<script id=className>
+{
+  const root = $('#root');
+  testing.expectEqual('object', typeof root.className);
+  testing.expectEqual(true, root.className instanceof SVGAnimatedString);
+  testing.expectEqual('chart wide', root.className.baseVal);
+  testing.expectEqual('chart wide', root.className.animVal);
+
+  // [SameObject]
+  testing.expectEqual(true, root.className === root.className);
+
+  root.className.baseVal = 'chart narrow';
+  testing.expectEqual('chart narrow', root.getAttribute('class'));
+  testing.expectEqual('chart narrow', root.className.animVal);
+  testing.expectEqual(true, root.classList.contains('narrow'));
+
+  root.setAttribute('class', 'other');
+  testing.expectEqual('other', root.className.baseVal);
+
+  // The SVG className accessor doesn't leak onto HTML elements.
+  testing.expectEqual('html-class', $('#plain').className);
+}
+</script>
+
+<script id=href>
+{
+  // The parser stores xlink:href under its local name, href.
+  const use1 = $('#use1');
+  testing.expectEqual(true, use1.href instanceof SVGAnimatedString);
+  testing.expectEqual('#icon', use1.href.baseVal);
+  testing.expectEqual('#icon', use1.href.animVal);
+  testing.expectEqual(true, use1.href === use1.href);
+  testing.expectEqual('#modern', $('#use2').href.baseVal);
+
+  // Writes land in xlink:href in browsers (it's the attribute that's set)
+  // but in href for us since the parser stored it there; assert the common
+  // observable.
+  use1.href.baseVal = '#other';
+  testing.expectEqual('#other', use1.href.baseVal);
+
+  // setAttributeNS stores under the local name, so a runtime xlink:href
+  // lands in href and reflects like the parsed variant. (Browsers keep the
+  // xlink:href attribute but reflect it the same way.)
+  const use3 = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use3.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#runtime');
+  testing.expectEqual('#runtime', use3.href.baseVal);
+
+  // A namespace-less setAttribute('xlink:href') is a literal attribute in no
+  // namespace: not reflected, in browsers or here.
+  const use4 = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use4.setAttribute('xlink:href', '#literal');
+  testing.expectEqual('', use4.href.baseVal);
+  use4.href.baseVal = '#written';
+  testing.expectEqual('#written', use4.getAttribute('href'));
+  testing.expectEqual(true, use4.hasAttribute('xlink:href'));
+
+  // No href attribute at all: set writes to href.
+  const link = $('#link1');
+  testing.expectEqual('', link.href.baseVal);
+  link.href.baseVal = '/docs';
+  testing.expectEqual('/docs', link.getAttribute('href'));
+}
+</script>

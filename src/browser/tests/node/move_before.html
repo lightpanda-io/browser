@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=parent>
+  <div id=a></div>
+  <div id=b></div>
+  <div id=c></div>
+</div>
+
+<script id=moveBefore_reorder>
+{
+  function ids(parent) {
+    return Array.from(parent.children).map((e) => e.id);
+  }
+
+  const parent = $('#parent');
+  const a = $('#a');
+  const b = $('#b');
+  const c = $('#c');
+
+  // moveBefore returns undefined and reorders in place
+  testing.expectEqual(undefined, parent.moveBefore(c, a));
+  testing.expectEqual(['c', 'a', 'b'], ids(parent));
+
+  // null reference child appends
+  parent.moveBefore(c, null);
+  testing.expectEqual(['a', 'b', 'c'], ids(parent));
+
+  // moving a node before itself is a no-op
+  parent.moveBefore(a, a);
+  testing.expectEqual(['a', 'b', 'c'], ids(parent));
+  parent.moveBefore(c, c);
+  testing.expectEqual(['a', 'b', 'c'], ids(parent));
+}
+</script>
+
+<script id=moveBefore_validation>
+{
+  const parent = $('#parent');
+  const a = $('#a');
+
+  // Missing second argument is a TypeError (child is required but nullable).
+  testing.expectError('TypeError', () => parent.moveBefore(a));
+  testing.expectError('TypeError', () => parent.moveBefore(null, null));
+  testing.expectError('TypeError', () => parent.moveBefore({}, null));
+
+  // Reference child whose parent is not `parent` -> NotFoundError.
+  const other = document.createElement('div');
+  document.body.appendChild(other);
+  testing.withError((err) => {
+    testing.expectEqual('NotFoundError', err.name);
+  }, () => parent.moveBefore(a, other));
+  other.remove();
+
+  // Moving a node into its own descendant -> HierarchyRequestError.
+  testing.withError((err) => {
+    testing.expectEqual('HierarchyRequestError', err.name);
+  }, () => a.moveBefore(parent, null));
+
+  // Connected target into a disconnected parent (different roots) -> throws.
+  const disconnected = document.createElement('div');
+  testing.withError((err) => {
+    testing.expectEqual('HierarchyRequestError', err.name);
+  }, () => disconnected.moveBefore(a, null));
+
+  // A DocumentFragment is neither Element nor CharacterData -> throws.
+  testing.withError((err) => {
+    testing.expectEqual('HierarchyRequestError', err.name);
+  }, () => parent.moveBefore(new DocumentFragment(), null));
+}
+</script>
+
+<script id=moveBefore_disconnected_same_tree>
+{
+  // A move entirely within one disconnected tree is allowed.
+  const root = document.createElement('div');
+  const dest = root.appendChild(document.createElement('div'));
+  const p = root.appendChild(document.createElement('p'));
+
+  dest.moveBefore(p, null);
+  testing.expectEqual(p, dest.firstChild);
+  testing.expectEqual(dest, p.parentNode);
+}
+</script>
+
+<script id=moveBefore_connected_move_callback>
+{
+  // When connectedMoveCallback is defined, an atomic move fires it instead of
+  // disconnectedCallback/connectedCallback.
+  let log = [];
+  class MoveAware extends HTMLElement {
+    connectedMoveCallback() { log.push('move'); }
+    connectedCallback() { log.push('connected'); }
+    disconnectedCallback() { log.push('disconnected'); }
+  }
+  customElements.define('mb-move-aware', MoveAware);
+
+  const from = document.body.appendChild(document.createElement('div'));
+  const to = document.body.appendChild(document.createElement('div'));
+  const el = from.appendChild(document.createElement('mb-move-aware'));
+
+  log = [];
+  to.moveBefore(el, null);
+  testing.expectEqual(['move'], log);
+  testing.expectEqual(to, el.parentNode);
+
+  from.remove();
+  to.remove();
+}
+</script>

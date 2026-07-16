@@ -195,14 +195,12 @@ pub fn urlEncode(self: *const KeyValueList, comptime mode: URLEncodeMode, alloca
 
 fn urlEncodeEntry(entry: Entry, comptime mode: URLEncodeMode, allocator_: ?Allocator, charset: []const u8, writer: *std.Io.Writer) !void {
     try urlEncodeValue(entry.name.str(), mode, allocator_, charset, writer);
+    try writer.writeByte('=');
 
-    // for a form, for an empty value, we'll do "spice="
-    // but for a query, we do "spice"
-    if ((comptime mode == .query) and entry.value.len == 0) {
+    if (entry.value.len == 0) {
         return;
     }
 
-    try writer.writeByte('=');
     try urlEncodeValue(entry.value.str(), mode, allocator_, charset, writer);
 }
 
@@ -260,7 +258,7 @@ fn urlEncodeValue(value: []const u8, comptime mode: URLEncodeMode, allocator_: ?
 
 /// Percent-encode a UTF-8 value - bytes >= 0x80 are percent-encoded directly.
 fn urlEncodeValueUtf8(value: []const u8, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
-    if (!urlEncodeShouldEscape(value, mode)) {
+    if (!urlEncodeShouldEscape(value)) {
         return writer.writeAll(value);
     }
 
@@ -270,7 +268,7 @@ fn urlEncodeValueUtf8(value: []const u8, comptime mode: URLEncodeMode, writer: *
         if (comptime mode == .form) {
             if (try writeFormLineEnd(value, &i, b, writer)) continue;
         }
-        if (urlEncodeUnreserved(b, mode)) {
+        if (urlEncodeUnreserved(b)) {
             try writer.writeByte(b);
         } else if (b == ' ') {
             try writer.writeByte('+');
@@ -288,7 +286,7 @@ fn urlEncodeValueLegacy(value: []const u8, comptime mode: URLEncodeMode, writer:
         if (comptime mode == .form) {
             if (try writeFormLineEnd(value, &i, b, writer)) continue;
         }
-        if (urlEncodeUnreserved(b, mode)) {
+        if (urlEncodeUnreserved(b)) {
             try writer.writeByte(b);
         } else if (b == ' ') {
             try writer.writeByte('+');
@@ -320,19 +318,18 @@ fn writeFormLineEnd(value: []const u8, i: *usize, b: u8, writer: *std.Io.Writer)
     return false;
 }
 
-fn urlEncodeShouldEscape(value: []const u8, comptime mode: URLEncodeMode) bool {
+fn urlEncodeShouldEscape(value: []const u8) bool {
     for (value) |b| {
-        if (!urlEncodeUnreserved(b, mode)) {
+        if (!urlEncodeUnreserved(b)) {
             return true;
         }
     }
     return false;
 }
 
-fn urlEncodeUnreserved(b: u8, comptime mode: URLEncodeMode) bool {
+fn urlEncodeUnreserved(b: u8) bool {
     return switch (b) {
         'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '*' => true,
-        '~' => comptime mode == .form,
         else => false,
     };
 }
@@ -389,6 +386,19 @@ test "KeyValueList: urlEncode UTF-8" {
 
     // é (U+00E9) in UTF-8 is C3 A9, percent-encoded as %C3%A9
     try testing.expectString("cafe=caf%C3%A9", buf.written());
+}
+
+test "KeyValueList: urlEncode .form percent-encodes ~" {
+    // '~' is in the application/x-www-form-urlencoded percent-encode set, so it
+    // must become %7E in both .form and .query modes (not left literal).
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "q", "a~b");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("q=a%7Eb", buf.written());
 }
 
 test "KeyValueList: urlEncode UTF-8 CJK" {

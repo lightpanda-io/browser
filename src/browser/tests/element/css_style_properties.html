@@ -159,6 +159,35 @@
 <div id=crash1 style="background-position: 5% .1em"></div>
 <script id="crash_case_1">
 {
-  testing.expectEqual('5% .1em', $('#crash1').style.backgroundPosition);
+  // Per CSSOM, bare ".1em" serializes with a leading zero -> "0.1em"
+  testing.expectEqual('5% 0.1em', $('#crash1').style.backgroundPosition);
+}
+</script>
+
+<div id=opacity-detect style="opacity:.55"></div>
+<script id="leadingZeroNormalization">
+{
+  // jQuery's support.opacity feature-detect reads an inline "opacity:.55"
+  // back and matches it against /^0.55$/; bare ".55" must serialize as "0.55".
+  testing.expectEqual('0.55', $('#opacity-detect').style.opacity);
+
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  // leading-dot value via property assignment
+  div.style.opacity = '.5';
+  testing.expectEqual('0.5', div.style.opacity);
+
+  // negative leading-dot, with unit, preserved otherwise
+  div.style.marginLeft = '-.5px';
+  testing.expectEqual('-0.5px', div.style.marginLeft);
+
+  // existing leading digit is untouched
+  div.style.lineHeight = '1.5';
+  testing.expectEqual('1.5', div.style.lineHeight);
+
+  // multiple numbers in one value
+  div.style.margin = '.5em .25em';
+  testing.expectEqual('0.5em 0.25em', div.style.margin);
 }
 </script>

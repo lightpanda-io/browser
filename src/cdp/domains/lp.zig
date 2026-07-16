@@ -45,6 +45,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         waitForSelector,
         handleJavaScriptDialog,
         configureLoading,
+        version,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -61,7 +62,14 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .waitForSelector => return waitForSelector(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
         .configureLoading => return configureLoading(cmd),
+        .version => return version(cmd),
     }
+}
+
+fn version(cmd: *CDP.Command) !void {
+    return cmd.sendResult(.{
+        .version = lp.build_config.version,
+    }, .{});
 }
 
 fn configureLoading(cmd: *CDP.Command) !void {
@@ -92,7 +100,7 @@ fn getSemanticTree(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.backendNodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
@@ -133,7 +141,7 @@ fn getMarkdown(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.nodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
@@ -156,7 +164,7 @@ fn getInteractiveElements(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const root = if (params.nodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
@@ -178,7 +186,7 @@ fn getNodeDetails(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
 
@@ -191,7 +199,7 @@ fn getNodeDetails(cmd: anytype) !void {
 
 fn getStructuredData(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const data = try structured_data.collectStructuredData(
         frame.document.asNode(),
@@ -210,7 +218,7 @@ fn getStructuredData(cmd: anytype) !void {
 // is enabled, since the robots layer is what populates the store.
 fn getContentSignal(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const network = bc.cdp.browser.http_client.network;
 
     const empty: []const Robots.ContentSignal = &.{};
@@ -227,7 +235,7 @@ fn getContentSignal(cmd: anytype) !void {
 
 fn detectForms(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const forms_data = try lp.forms.collectForms(
         cmd.arena,
@@ -250,7 +258,7 @@ fn clickNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
@@ -272,7 +280,7 @@ fn fillNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
@@ -295,7 +303,7 @@ fn scrollNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const maybe_node_id = params.nodeId orelse params.backendNodeId;
 
@@ -321,12 +329,12 @@ fn waitForSelector(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    _ = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const timeout_ms = params.timeout orelse 5000;
     const selector_z = try cmd.arena.dupeZ(u8, params.selector);
 
-    const node = lp.actions.waitForSelector(selector_z, timeout_ms, bc.session) catch |err| {
+    const node = lp.actions.waitForSelector(selector_z, timeout_ms, frame._frame_id, bc.session) catch |err| {
         if (err == error.InvalidSelector) return error.InvalidParam;
         if (err == error.Timeout) return error.InternalError;
         return error.InternalError;
@@ -386,6 +394,19 @@ fn handleJavaScriptDialog(cmd: anytype) !void {
 }
 
 const testing = @import("../testing.zig");
+test "cdp.lp: version" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.version",
+    });
+
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
+    try testing.expectEqualSlices(u8, lp.build_config.version, result.get("version").?.string);
+}
+
 test "cdp.lp: getMarkdown" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -458,11 +479,12 @@ test "cdp.lp: action tools" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     // Test Click
     const btn = frame.document.getElementById("btn", frame).?.asNode();
@@ -519,11 +541,12 @@ test "cdp.lp: waitForSelector" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createPage();
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try bc.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try testing.waitForPage(bc);
 
     // 1. Existing element
     try ctx.processMessage(.{
@@ -594,7 +617,7 @@ test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values
 
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-D2", .url = "cdp/dialog.html", .target_id = "FID-000000000X".* });
 
-    const frame = bc.session.currentFrame() orelse unreachable;
+    const frame = bc.mainFrame() orelse unreachable;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();

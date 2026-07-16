@@ -361,6 +361,15 @@ pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
     return self.isElementHidden(el, .{});
 }
 
+/// Computed display:none coming only from inline style or an author stylesheet
+/// rule — the UA stylesheet's hidden elements (<head>, <script>, [hidden], …)
+/// are NOT counted, so document scaffolding is preserved. Used by the HTML
+/// dump's "invisible" strip mode.
+pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element) bool {
+    self.rebuildIfDirty() catch return false;
+    return self.isElementHidden(el, .{ .ua_display_none = false });
+}
+
 /// Centralizes UA-stylesheet display:none truth so `getComputedStyle().display`
 /// (via `hasDisplayNone`) and `el.checkVisibility()` (via `isHidden`) agree.
 /// Spec: HTML Rendering §15.3.1 "Hidden elements".
@@ -558,8 +567,10 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     // element — per CSS Cascade §6.1 any normal-origin author rule beats UA
     // origin regardless of specificity, so `.x { display: flex }` on a
     // `<div class="x" hidden>` must report visible.
-    if (options.check_display and display_priority == 0) {
-        if (matchesUaDisplayNoneRule(el)) display_none = true;
+    if (options.check_display and options.ua_display_none and display_priority == 0) {
+        if (matchesUaDisplayNoneRule(el)) {
+            display_none = true;
+        }
     }
 
     return (display_none orelse false) or (visibility_hidden orelse false) or (opacity_zero orelse false);
@@ -881,17 +892,31 @@ const CheckVisibilityOptions = struct {
     check_display: bool = true,
     check_visibility: bool = false,
     check_opacity: bool = false,
+    ua_display_none: bool = true,
 };
 
 // Inline styles always win over stylesheets - use max u64 as sentinel
 const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
 fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*CSSStyleProperty {
-    const style = el.getOrCreateStyle(frame) catch |err| {
-        log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
-        return null;
+    const style = frame._element_styles.get(el) orelse blk: {
+        // No JS-set style object and no style attribute -> nothing inline to read.
+        if (el.getAttributeSafe(comptime .wrap("style")) == null) return null;
+        break :blk el.getOrCreateStyle(frame) catch |err| {
+            log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
+            return null;
+        };
     };
     return style.asCSSStyleDeclaration().findProperty(property_name);
+}
+
+/// Resolved value of an element's inline `style=` declaration for `property_name`,
+/// or null when the element has no such declaration. Reads the element's parsed
+/// inline style (the same source `el.style` exposes), so `getComputedStyle` and
+/// `el.style` agree on inline values instead of resolving them independently.
+pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+    const property = getInlineStyleProperty(el, property_name, self.frame) orelse return null;
+    return property._value.str();
 }
 
 const testing = @import("../testing.zig");

@@ -11,6 +11,10 @@
 <p id=d4><span>Hello</span>
   <span>World</span></p>
 
+<style>.ihide { display: none }</style>
+<div id=d5>a<span class=ihide>X</span>b<span style="display:none">Y</span>c</div>
+<div id=d6>before<div class=ihide>deep <span>nested</span></div>after</div>
+
 <script id=innerHTML>
   const d1 = $('#d1');
   testing.expectEqual('hello <em>world</em>', d1.innerHTML);
@@ -175,4 +179,81 @@
   testing.expectEqual("This is a\ntext", d2.innerText);
   testing.expectEqual("Hello World", $('#d3').innerText);
   testing.expectEqual("Hello World", $('#d4').innerText);
+
+  // display:none subtrees are excluded from innerText, whether the rule comes
+  // from an inline style or a stylesheet (the common real-world case: content
+  // hidden via a CSS class). A hidden block does not contribute a line break.
+  testing.expectEqual("abc", $('#d5').innerText);
+  testing.expectEqual("beforeafter", $('#d6').innerText);
+
+  // .innerText read ON a display:none root equals textContent. The own-element
+  // check must keep visible child elements (an ancestor-walk would prune the
+  // <span> while keeping its sibling text nodes, yielding "ac").
+  d1.innerHTML = '<div id=dn style="display:none">a<span>b</span>c</div>';
+  testing.expectEqual("abc", $('#dn').innerText);
+
+  // A display:none <br> contributes no line break.
+  d1.innerHTML = 'a<br style="display:none">b';
+  testing.expectEqual("ab", d1.innerText);
+
+  // Guard: visibility:hidden text stays INCLUDED (the check is display-only),
+  // so a future switch to a visibility-aware check can't silently over-exclude.
+  d1.innerHTML = '<span style="visibility:hidden">X</span>Y';
+  testing.expectEqual("XY", d1.innerText);
+</script>
+
+<script id=rawTextContext>
+  // Setting innerHTML on a raw-text element (script/style/textarea/title) must
+  // parse the content in the matching raw-text tokenizer state. In particular a
+  // '<' followed by a letter is plain text, NOT the start of a tag — otherwise
+  // the body is truncated at the first '<' (e.g. `for(;l<localStorage.length;)`
+  // would be swallowed, leaving a half-statement that fails to compile).
+  const script = document.createElement('script');
+  const body = 'window.__x=0; for(let l=0;l<localStorage.length+3;){window.__x=l;l++;}';
+  script.innerHTML = body;
+  testing.expectEqual(body, script.innerHTML);
+  testing.expectEqual(1, script.childNodes.length);
+  testing.expectEqual(body, script.textContent);
+
+  const style = document.createElement('style');
+  style.innerHTML = 'a<b{color:red}';
+  testing.expectEqual('a<b{color:red}', style.innerHTML);
+  testing.expectEqual(1, style.childNodes.length);
+
+  // textarea / title are RCDATA: '<' + letter stays text (not a tag) and
+  // character references are decoded on parse. On serialization the content is
+  // re-escaped (RCDATA elements are NOT raw-text-serialized), so the round-trip
+  // shows '<' as &lt; and the decoded '&' re-escaped as &amp;.
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = 'x < y &amp; z';
+  testing.expectEqual('x < y & z', textarea.value);
+  testing.expectEqual('x &lt; y &amp; z', textarea.innerHTML);
+
+  const title = document.createElement('title');
+  title.innerHTML = '1 < 2 < three';
+  testing.expectEqual(1, title.childNodes.length);
+  testing.expectEqual('1 < 2 < three', title.textContent);
+  testing.expectEqual('1 &lt; 2 &lt; three', title.innerHTML);
+
+  // A normal element stays in the data state: '<b>' is a real child element.
+  d1.innerHTML = 'a<b>bold</b>';
+  testing.expectEqual('a<b>bold</b>', d1.innerHTML);
+  testing.expectEqual('B', d1.lastChild.tagName);
+</script>
+
+<script id=leadingBOM>
+  // A leading U+FEFF (BOM / ZWNBSP) is only stripped from a document's input
+  // stream, never from a parsed fragment. innerHTML must preserve it, otherwise
+  // round-tripped markup (e.g. React hydrating BOM-prefixed CMS strings) breaks.
+  // Uses the \uFEFF escape rather than a raw BOM byte so the assertion does not
+  // depend on this file's charset.
+  const el = document.createElement('div');
+  el.innerHTML = '\uFEFFabc';
+  testing.expectEqual(4, el.textContent.length);
+  testing.expectEqual(0xFEFF, el.textContent.charCodeAt(0));
+  testing.expectEqual('\uFEFFabc', el.textContent);
+
+  // An interior BOM is likewise preserved.
+  el.innerHTML = 'x\uFEFFy';
+  testing.expectEqual('x\uFEFFy', el.textContent);
 </script>

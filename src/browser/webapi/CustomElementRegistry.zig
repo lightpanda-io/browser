@@ -213,11 +213,10 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
 
     // Enqueue attributeChangedCallback for existing observed attributes
     const element = custom.asElement();
-    var attr_it = element.attributeIterator();
-    while (attr_it.next()) |attr| {
-        const name = attr._name;
+    for (element.attributeEntries()) |*attr| {
+        const name = lp.String.wrap(attr.name());
         if (definition.isAttributeObserved(name)) {
-            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, attr._value, null, frame);
+            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, .wrap(attr.value()), null, frame);
         }
     }
 
@@ -281,10 +280,10 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
     };
 
-    pub const define = bridge.function(CustomElementRegistry.define, .{ .dom_exception = true, .ce_reactions = true });
+    pub const define = bridge.function(CustomElementRegistry.define, .{ .ce_reactions = true });
     pub const get = bridge.function(CustomElementRegistry.get, .{ .null_as_undefined = true });
     pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{ .ce_reactions = true });
-    pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{ .dom_exception = true });
+    pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{});
 };
 
 const testing = @import("../../testing.zig");

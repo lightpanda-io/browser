@@ -30,10 +30,11 @@ pub const Opts = struct {
     strip: Opts.Strip = .{},
     shadow: Opts.Shadow = .rendered,
 
-    pub const Strip = packed struct(u3) {
+    pub const Strip = packed struct(u4) {
         js: bool = false,
         ui: bool = false,
         css: bool = false,
+        invisible: bool = false,
     };
 
     pub const Shadow = enum {
@@ -99,7 +100,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             }
         },
         .element => |el| {
-            if (shouldStripElement(el, opts)) {
+            if (shouldStripElement(el, opts, frame)) {
                 return;
             }
 
@@ -265,7 +266,12 @@ fn isVoidElement(el: *const Node.Element) bool {
     };
 }
 
-fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
+fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
+    // Fast path: with no strip flags set (every innerHTML/outerHTML call)
+    if (@as(u4, @bitCast(opts.strip)) == 0) {
+        return false;
+    }
+
     const tag_name = el.getTagNameDump();
 
     if (opts.strip.js) {
@@ -306,19 +312,30 @@ fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
         if (std.mem.eql(u8, tag_name, "iframe")) return true;
     }
 
+    if (opts.strip.invisible and frame._style_manager.hasAuthorDisplayNone(el)) {
+        return true;
+    }
+
     return false;
 }
 
 fn shouldEscapeText(node_: ?*Node) bool {
+    // Raw text elements serialize their text content literally rather than
+    // HTML-escaping it
     const node = node_ orelse return true;
-    if (node.is(Node.Element.Html.Script) != null) {
-        return false;
-    }
-    // When scripting is enabled, <noscript> is a raw text element per the HTML spec
-    // (https://html.spec.whatwg.org/multipage/parsing.html#serialising-html-fragments).
-    // Its text content must not be HTML-escaped during serialization.
-    if (node.is(Node.Element.Html.Generic)) |generic| {
-        if (generic._tag == .noscript) return false;
+    const element = node.is(Node.Element) orelse return true;
+    const html_element = node.is(Node.Element.Html) orelse return true;
+
+    switch (html_element._type) {
+        .style, .script, .iframe => return false,
+        else => {
+            const tag = element.getTagNameLower();
+            inline for (.{ "xmp", "noembed", "noframes", "plaintext", "noscript" }) |raw_text_tag| {
+                if (std.mem.eql(u8, tag, raw_text_tag)) {
+                    return false;
+                }
+            }
+        },
     }
     return true;
 }
@@ -357,4 +374,63 @@ fn writeEscapedByte(input: []const u8, index: usize, writer: *std.Io.Writer) ![]
         else => unreachable,
     }
     return input[index + 1 ..];
+}
+
+const testing = @import("../testing.zig");
+
+// A fresh page per assertion: `with_base` mutates the document (it inserts a
+// <base> element), so reusing one frame across opts would leak that mutation
+// into later dumps.
+fn expectDump(opts: Opts, expected: []const u8) !void {
+    defer testing.reset();
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try root(frame.window._document, opts, &aw.writer, frame);
+    try testing.expectString(expected, aw.written());
+}
+
+test "dump: default dumps the whole document" {
+    try expectDump(.{},
+        \\<!DOCTYPE html>
+        \\<html><head><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
+    );
+}
+
+test "dump: with_base injects a <base> element" {
+    try expectDump(.{ .with_base = true },
+        \\<!DOCTYPE html>
+        \\<html><head><base base="http://127.0.0.1:9582/src/browser/tests/dump.html"></base><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
+    );
+}
+
+test "dump: strip.js removes script and noscript" {
+    try expectDump(.{ .strip = .{ .js = true } },
+        \\<!DOCTYPE html>
+        \\<html><head><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><p>visible &amp; well</p></body></html>
+    );
+}
+
+test "dump: strip.css removes style and stylesheet links" {
+    try expectDump(.{ .strip = .{ .css = true } },
+        \\<!DOCTYPE html>
+        \\<html><head><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
+    );
+}
+
+test "dump: strip.ui removes css plus visual elements" {
+    try expectDump(.{ .strip = .{ .ui = true } },
+        \\<!DOCTYPE html>
+        \\<html><head><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
+    );
+}
+
+test "dump: strip.invisible removes author display:none elements" {
+    try expectDump(.{ .strip = .{ .invisible = true } },
+        \\<!DOCTYPE html>
+        \\<html><head><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
+    );
 }

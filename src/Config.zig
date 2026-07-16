@@ -114,6 +114,9 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
+    .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
+    .{ .name = "v8_max_heap_mb", .type = ?u32 },
+    .{ .name = "watchdog_ms", .type = ?u32 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -200,13 +203,14 @@ const Commands = cli.Builder(.{
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
             // Don't widen this without growing the reader buffer in the HTTP path.
             .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
+            .{ .name = "disable_metrics", .type = bool },
         },
         .shared_options = CommonOptions,
     },
     .{
         .name = "fetch",
-        // This argument can be given out of order.
-        .positional = .{ .name = "url", .type = ?[:0]const u8 },
+        // One or more URLs; can be given out of order, interleaved with options.
+        .positional = .{ .name = "url", .type = [:0]const u8, .multiple = true },
         .options = .{
             .{ .name = "dump", .type = ?DumpFormat, .validator = dumpValidator },
             .{ .name = "with_base", .type = bool },
@@ -232,12 +236,15 @@ const Commands = cli.Builder(.{
             },
             .{ .name = "terminate_ms", .type = ?u32 },
             .{ .name = "json", .type = bool },
+            .{ .name = "metrics", .type = bool },
         },
         .shared_options = CommonOptions,
     },
     .{
         .name = "mcp",
         .options = .{
+            .{ .name = "port", .type = ?u16 },
+            .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "cdp_port", .type = ?u16 },
         },
         .shared_options = CommonOptions,
@@ -260,7 +267,9 @@ const Commands = cli.Builder(.{
         },
         .shared_options = CommonOptions,
     },
-    .{ .name = "version", .options = .{} },
+    .{ .name = "version", .options = .{
+        .{ .name = "check", .type = bool },
+    } },
 });
 
 pub const RunMode = Commands.Enum;
@@ -272,7 +281,11 @@ exec_name: []const u8,
 http_headers: HttpHeaders,
 
 fn modeNeedsHttp(mode: Mode) bool {
-    return mode != .help and mode != .version;
+    return switch (mode) {
+        .help => false,
+        .version => |opts| opts.check,
+        else => true,
+    };
 }
 
 pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
@@ -305,6 +318,8 @@ pub fn interactive(self: *const Config) bool {
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
+        // `version --check` talks to the release endpoint; always verify.
+        .version => true,
         else => unreachable,
     };
 }
@@ -330,6 +345,16 @@ pub fn disableWorkers(self: *const Config) bool {
     };
 }
 
+pub fn watchdogMs(self: *const Config) ?u32 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| {
+            const ms = opts.watchdog_ms orelse 30000;
+            return if (ms == 0) null else ms;
+        },
+        else => unreachable,
+    };
+}
+
 pub fn enableExternalStylesheets(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.enable_external_stylesheets,
@@ -337,9 +362,24 @@ pub fn enableExternalStylesheets(self: *const Config) bool {
     };
 }
 
+pub fn v8Flags(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_flags_unsafe,
+        else => unreachable,
+    };
+}
+
+pub fn v8MaxHeapMb(self: *const Config) ?u32 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_max_heap_mb,
+        else => unreachable,
+    };
+}
+
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
+        .version => null,
         else => unreachable,
     };
 }
@@ -347,20 +387,20 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
-        .help, .version => null,
+        else => null,
     };
 }
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 10,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 40,
         else => unreachable,
     };
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 4,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 6,
         else => unreachable,
     };
 }
@@ -368,6 +408,7 @@ pub fn httpMaxHostOpen(self: *const Config) u8 {
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_connect_timeout orelse 0,
+        .version => 0,
         else => unreachable,
     };
 }
@@ -375,6 +416,7 @@ pub fn httpConnectTimeout(self: *const Config) u31 {
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_timeout orelse 5000,
+        .version => 5000,
         else => unreachable,
     };
 }
@@ -449,14 +491,14 @@ pub fn logFilterScopes(self: *const Config) std.ArrayList(log.FilterRule) {
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent_suffix,
-        .help, .version => null,
+        else => null,
     };
 }
 
 pub fn userAgent(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent,
-        .help, .version => null,
+        else => null,
     };
 }
 
@@ -504,7 +546,7 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
             .keyid = opts.web_bot_auth_keyid orelse return null,
             .domain = opts.web_bot_auth_domain orelse return null,
         },
-        .help, .version => null,
+        else => null,
     };
 }
 
@@ -543,6 +585,20 @@ pub fn cdpMaxMessageSize(self: *const Config) u32 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_message_size,
         else => unreachable,
+    };
+}
+
+pub fn metricsEndpointEnabled(self: *const Config) bool {
+    return switch (self.mode) {
+        .serve => |opts| !opts.disable_metrics,
+        else => unreachable,
+    };
+}
+
+pub fn dumpMetricsOnExit(self: *const Config) bool {
+    return switch (self.mode) {
+        .fetch => |opts| opts.metrics,
+        else => false,
     };
 }
 

@@ -35,8 +35,10 @@ const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Conversation = @import("Conversation.zig");
 const Terminal = @import("Terminal.zig");
+const ansi = @import("ansi.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
+const picker = @import("picker.zig");
 const save = @import("save.zig");
 const welcome = @import("welcome.zig");
 const string = @import("../string.zig");
@@ -75,121 +77,15 @@ const default_system_prompt = browser_tools.driver_guidance ++
     \\- If the user asks for account-scoped data (karma, profile, inbox, …)
     \\  and the page shows you're not signed in, log in proactively (per
     \\  the Credentials section above) before reporting unavailable.
-;
+    \\
+++ lp.skill.semantics_note;
 
-/// Skill-like documentation for writing Lightpanda agent script
-/// Used in the system prompt of the `/save` command.
-const script_skill =
-    \\# Writing Lightpanda agent scripts
-    \\
-    \\Run with:
-    \\
-    \\```console
-    \\./lightpanda agent script.js
-    \\```
-    \\
-    \\## Mental model (get this right first)
-    \\
-    \\The script runs in its **own V8 context** — neither the page nor Node.js:
-    \\
-    \\- `Page` is the only global. `new Page()` makes a page and `await page.goto(url)` navigates it; every other primitive is a **method on that page**: `const page = new Page(); await page.goto(url); page.extract({...}); page.click(sel);`.
-    \\- No `window`, `document`, DOM, `localStorage` — read pages with `page.extract(...)`, run page-side JS only via `page.evaluate("...")`.
-    \\- No `require`, `process`, `fs`, npm. Standard ECMAScript built-ins only (`JSON`, `Map`, template literals, …).
-    \\- `page.goto(...)` is **async — always `await` it**. Page methods are **synchronous**: `const data = page.extract({...})`, never `await page.extract(...)`. The script body runs as an async function, so top-level `await` is allowed.
-    \\- **Re-navigating reuses the same page**: `await page.goto(url2)` keeps `page` valid and points it at the new URL. Work through one page at a time and read it before navigating away.
-    \\- Page `evaluate("...")` cannot see script variables — interpolate values into the string. Script code cannot see page variables.
-    \\- Variables persist across navigations within one run, so cross-page aggregation is plain JS.
-    \\- **`return <value>` is the script's output**, printed automatically (objects/arrays as JSON). End with `return page.extract({...});` or `return results;`. A bare trailing expression is NOT printed; neither is `console.log(JSON.stringify(...))`.
-    \\
-    \\## Primitives
-    \\
-    \\`Page` is the only global; `new Page()` makes a page and everything else is a method on it.
-    \\
-    \\| Call | Notes |
-    \\|------|-------|
-    \\| `new Page()` | Makes a page object. No navigation yet — call `page.goto(url)` before any other method. |
-    \\| `await page.goto(url[, { timeout }])` | **Async — must be `await`ed.** Navigates the page (re-navigating reuses the same object). Waits for `load`. Default timeout 10000 ms. Rejects on navigation failure; a **timeout does NOT reject** (the page may still be usable). |
-    \\| `page.close()` | Marks the page done; later method calls on it error. The page is otherwise reclaimed at script end. |
-    \\| `page.extract(schema)` | The only primitive returning a real JS value (object/array). See schema below. |
-    \\| `page.evaluate(script[, { url, timeout, save }])` | Page-side JS escape hatch; returns text (JSON for objects/arrays). |
-    \\| `page.click(sel)` / `page.hover(sel)` | |
-    \\| `page.fill(sel, value)` / `page.selectOption(sel, value)` | |
-    \\| `page.setChecked(sel[, checked])` | `checked` defaults to `true`. |
-    \\| `page.press(sel, key)` / `page.press(null, key)` / `page.press({ key })` | Selector first! `page.press("Enter")` binds "Enter" to `selector` and fails. |
-    \\| `page.scroll()` / `page.scroll({ x, y })` | |
-    \\| `page.waitForSelector(sel[, { timeout }])` | `waitFor*` default timeout 5000 ms. |
-    \\| `page.waitForScript(js[, { timeout }])` | Re-evaluates page JS until truthy. |
-    \\| `page.waitForState(state[, { timeout }])` | `"load"`, `"domcontentloaded"`, `"networkalmostidle"`, `"networkidle"`, `"done"`. |
-    \\
-    \\Calling convention: leading positionals + optional trailing options object, or one object with everything (`page.waitForSelector("#row", { timeout: 2000 })` ≡ `page.waitForSelector({ selector: "#row", timeout: 2000 })`). A bare option positional (`page.waitForSelector("#row", 2000)`) and a field passed both ways are `invalid arguments`. `null` skips a positional. Arguments must be JSON-serializable.
-    \\
-    \\CSS selectors only — `backendNodeId`s don't exist here. Standard CSS only: no jQuery `:contains()` or Playwright `:has-text()`.
-    \\
-    \\## extract schema
-    \\
-    \\Keys = output field names; values pick what to lift (not a JSON Schema):
-    \\
-    \\```js
-    \\const { stories } = page.extract({
-    \\  stories: [{
-    \\    selector: "tr.athing",          // one record per match
-    \\    limit: 5,
-    \\    fields: {                        // resolved relative to each match
-    \\      title: ".titleline > a",      // first match's text (null if missing)
-    \\      url: { selector: ".titleline > a", attr: "href" },
-    \\      text: ""                       // "" = the matched element's own text
-    \\    }
-    \\  }]
-    \\});
-    \\```
-    \\
-    \\- `"sel"` → first match's text; `["sel"]` → all matches' text; `{ selector, attr }` / `[{ selector, attr }]` → attribute(s); `limit: N` caps any array form.
-    \\- Every value is a string or null — parse numbers in script logic.
-    \\- Empty arrays are valid results; if **every** field misses, extract throws ("no schema selector matched any element") → your selectors are wrong, not the page empty.
-    \\- An object schema always returns an object (destructure it); a bare array schema returns the array directly.
-    \\- No `save:` option in scripts — keep results in variables.
-    \\
-    \\## Best practices
-    \\
-    \\1. **Navigate, settle, read.** After `await page.goto` on a dynamic page (feeds, search results, comment threads), call `page.waitForState("networkidle")` or `page.waitForSelector(...)` before extracting. Most static pages are complete at `load` — don't wait blindly.
-    \\2. **List-to-detail: read the list, then walk it.** Extract the list of links, then for each item `await page.goto(item.url)` and `page.extract(...)`, assembling plain JS objects — read each detail page before navigating to the next:
-    \\   ```js
-    \\   const page = new Page();
-    \\   await page.goto(listUrl);
-    \\   const { items } = page.extract({ items: [{ selector: "a.row", fields: { url: { attr: "href" } } }] });
-    \\   const details = [];
-    \\   for (const it of items) {
-    \\     await page.goto(it.url);
-    \\     details.push({ ...it, ...page.extract({ /* schema */ }) });
-    \\   }
-    \\   return details;
-    \\   ```
-    \\3. **`evaluate` is a last resort, not a reading tool.** A `querySelectorAll`-and-parse `page.evaluate` block is always wrong: lift the raw strings with `page.extract`, then trim/split/parse them in top-level JS. Reserve `page.evaluate` for behavior that must run inside the page and no builtin covers — and remember its state dies on every navigation/reload, while script variables persist.
-    \\4. **Credentials via `$LP_*` placeholders** in any string argument (`page.fill("#pw", "$LP_HN_PASSWORD")`). Never inline a real secret; placeholders resolve inside the Lightpanda process.
-    \\5. **Unique selectors.** Disambiguate with attributes/position: `input[type="submit"][value="login"]`, not `input[type="submit"]`.
-    \\6. **Let failures fail.** Primitives throw on error and stop the script — only `try/catch` where you have a real fallback (e.g. optional cookie banner: `try { page.click("#accept") } catch {}`).
-    \\7. **End with `return <result>`.** `console.log` is for debug output only and doesn't JSON-format objects.
-    \\8. Modern, readable JS: `const`/`let`, `for (const x of xs)`, template literals, destructuring, 2-space indent.
-    \\
-    \\## Common errors
-    \\
-    \\| Error | Cause / fix |
-    \\|-------|-------------|
-    \\| `extract is not defined` (or click/fill/…) | These are methods on the page object, not globals → `const page = new Page(); await page.goto(url); page.extract(...)` |
-    \\| `Page must be called with new` | `Page(...)` called without `new` → `const page = new Page();` |
-    \\| `page is not navigated or has been closed` | A method on a fresh `new Page()` (or a closed page) → `await page.goto(url)` first |
-    \\| `page handle is no longer valid` | Used a page after a later `goto` replaced it → read a page before navigating away |
-    \\| `document is not defined` | DOM API in script context → use `page.extract` or `page.evaluate` |
-    \\| `require is not defined` | Not Node.js |
-    \\| `no page loaded - run page.goto(url) first` | Page method before navigation |
-    \\| `invalid arguments` | Wrong arity/shape, non-JSON value, or a field set both positionally and in options |
-    \\| `extract: no schema selector matched any element` | All schema fields missed → fix selectors |
-    \\| `press` fails with one string arg | Selector-first: use `page.press(null, "Enter")` or `page.press({ key: "Enter" })` |
-;
-
-// Sytem prompt of the `/save` command
-// With the save instructions and the skill-like agent script documentation.
-const save_system_prompt = browser_tools.save_synthesis_prompt ++ "\n\n" ++ script_skill;
+// System prompt of the `/save` command: the save instructions plus the
+// script skill (`lp.skill`), whose primitives reference is rendered from
+// the tool schemas at first use — hence lazy rather than comptime.
+var save_prompts_once = std.once(initSavePrompts);
+var save_system_prompt: []const u8 = undefined;
+var save_revision_system_prompt: []const u8 = undefined;
 
 // Swapped in instead of `save_system_prompt` when the user message carries a
 // previously saved script: the "this session" framing above would otherwise
@@ -202,7 +98,23 @@ const save_revision_note =
     \\a change, and add what this session contributes. Output the complete
     \\updated script — never a fragment, diff, or continuation.
 ;
-const save_revision_system_prompt = browser_tools.save_synthesis_prompt ++ "\n" ++ save_revision_note ++ "\n" ++ script_skill;
+
+/// Panics on OOM like `Schema.all()` — the inputs are static, process-lifetime
+/// strings, so failure is a build bug, not a runtime condition.
+fn initSavePrompts() void {
+    const a = std.heap.page_allocator;
+    save_system_prompt = std.mem.concat(a, u8, &.{
+        browser_tools.save_synthesis_prompt, "\n\n", lp.skill.text(),
+    }) catch @panic("OOM building save prompt");
+    save_revision_system_prompt = std.mem.concat(a, u8, &.{
+        browser_tools.save_synthesis_prompt, "\n", save_revision_note, "\n", lp.skill.text(),
+    }) catch @panic("OOM building save prompt");
+}
+
+fn savePrompt(revision: bool) []const u8 {
+    save_prompts_once.call();
+    return if (revision) save_revision_system_prompt else save_system_prompt;
+}
 
 const synthesis_prompt =
     \\You have used your tool budget or cannot finish the exploration.
@@ -221,6 +133,9 @@ const synthesis_prompt =
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 model_credentials: ?Credentials,
+/// Allocated credentials key (Vertex gcloud token) — other keys are unowned
+/// env pointers. The AI client references it: free only after client deinit.
+owned_key: ?[:0]const u8,
 /// True when the no-LLM state is a persisted preference (remembered null
 /// provider or runtime `/provider null`), so `reportSaved` writes
 /// `provider = null`. A transient `--no-llm` run leaves it false so saving
@@ -259,6 +174,15 @@ synthetic_tool_call_id: u32 = 0,
 total_usage: zenai.provider.Usage = .{},
 /// Set when the last turn ended in a model refusal (safety stop).
 last_turn_refused: bool = false,
+/// Whether assistant text streams to the terminal as the model produces it.
+/// Toggled via `/stream`; persisted in `.lp-agent.zon`.
+stream_enabled: bool,
+/// True while assistant text is streaming to stdout (spinner paused). Cleared
+/// by `endStreamedText`, which also emits the closing newline.
+stream_active: bool = false,
+/// True when any assistant text streamed during the current turn, so `runTurn`
+/// skips the buffered `printAssistant` that would double-print it.
+streamed_text: bool = false,
 available_providers: []const []const u8,
 /// Cached reachability of each `local_providers` entry, so the per-keystroke
 /// `/provider` hinter probes each local server at most once.
@@ -339,6 +263,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (banner_before) welcome.print(resolve);
 
     const resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
+    // Before the ai_client errdefer, so on unwind the client goes first.
+    errdefer if (resolved) |r| if (r.key_owned) allocator.free(r.credentials.key);
 
     if (will_repl and !banner_before and resolved != null) welcome.print(resolve);
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
@@ -369,10 +295,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credentials.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
+    const stream_enabled = settings.resolveStream(remembered);
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity }) catch {};
+            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -393,6 +320,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .allocator = allocator,
         .ai_client = null,
         .model_credentials = llm,
+        .owned_key = if (resolved) |r| (if (r.key_owned) r.credentials.key else null) else null,
         .no_llm_persisted = remembered_no_llm,
         .model_base_url = opts.base_url,
         .model_completions = null,
@@ -407,6 +335,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
         .model = model,
         .effort = effort,
+        .stream_enabled = stream_enabled,
         .script_file = opts.script_file,
         .one_shot_task = opts.task,
         .one_shot_save = opts.save,
@@ -429,12 +358,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
     if (will_repl) {
-        self.terminal.attachCompleter();
-        self.terminal.completion_source = .{
+        self.terminal.attachCompleter(.{
             .context = @ptrCast(self),
             .providers = completionProviders,
             .models = completionModels,
-        };
+        });
         // The model-list cache fills lazily on the first `/model` completion,
         // so startup never blocks on the network.
         Terminal.setIdleCallback(&idlePump, @ptrCast(self));
@@ -454,6 +382,7 @@ pub fn deinit(self: *Agent) void {
     self.browser.deinit();
     self.notification.deinit();
     if (self.ai_client) |ai_client| ai_client.deinit(self.allocator);
+    if (self.owned_key) |k| self.allocator.free(k);
     self.allocator.free(self.model);
     for (self.available_providers) |p| self.allocator.free(p);
     self.allocator.free(self.available_providers);
@@ -543,10 +472,41 @@ fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
 /// The side effects of `drainCancellation` without surfacing the error, for
 /// void callers (e.g. `/save` synthesis) that just need to clean up.
 fn resetAfterCancel(self: *Agent, baseline: usize) void {
+    self.endStreamedText();
     self.conversation.rollback(baseline);
     self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
     self.http_interrupt.reset();
+}
+
+/// On the first delta it pauses the spinner, whose stderr frames would
+/// otherwise interleave with this stdout text.
+fn streamAssistantDelta(ctx: *anyopaque, delta: []const u8) void {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    if (delta.len == 0) return;
+    if (!self.stream_active) {
+        self.terminal.spinner.pause();
+        self.stream_active = true;
+    }
+    self.streamed_text = true;
+    self.terminal.printAssistantDelta(delta);
+}
+
+/// Close an in-progress streamed line with a newline. Idempotent, so every
+/// `runTools` exit path can call it unconditionally.
+fn endStreamedText(self: *Agent) void {
+    if (!self.stream_active) return;
+    self.terminal.endAssistantStream();
+    self.stream_active = false;
+}
+
+/// The text-delta hook, or null when `/stream off` — a null hook makes
+/// `runTools` fall back to a buffered response. Streaming is an interactive
+/// REPL affordance; one-shot (`--task`) and script modes keep stdout to the
+/// buffered final answer so wrappers can parse it cleanly.
+fn streamHook(self: *Agent) ?zenai.provider.Client.TextDeltaHook {
+    if (!self.stream_enabled or !self.terminal.isRepl()) return null;
+    return .{ .context = @ptrCast(self), .onText = streamAssistantDelta };
 }
 
 /// One agent turn: the prompt sent to the model, plus optional context — a
@@ -618,9 +578,14 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
         },
     };
     if (!input.suppress_answer) {
-        if (text) |t|
-            self.terminal.printAssistant(t)
-        else if (self.last_turn_refused)
+        if (text) |t| {
+            // Streaming already emitted the text incrementally (plus a closing
+            // newline); only the buffered path needs to print it here. Safe as a
+            // turn-wide flag: the stream accumulator reconstructs `t` from the
+            // same deltas it emitted, and the synthesis fallback also streams, so
+            // `streamed_text` implies `t` was already shown in full.
+            if (!self.streamed_text) self.terminal.printAssistant(t);
+        } else if (self.last_turn_refused)
             self.terminal.printInfo("(model declined to respond — safety refusal)", .{})
         else
             self.terminal.printInfo("(no response from model)", .{});
@@ -633,8 +598,7 @@ fn runRepl(self: *Agent) void {
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
     if (self.ai_client != null) {
-        const a = Terminal.ansi;
-        std.debug.print("  model: {s}{s}  {s}effort: {s}{s}{s}\n", .{ a.dim, self.model, a.reset, a.dim, @tagName(self.effort), a.reset });
+        std.debug.print("  model: {s}{s}  {s}effort: {s}{s}  {s}stream: {s}{s}{s}\n", .{ ansi.dim, self.model, ansi.reset, ansi.dim, @tagName(self.effort), ansi.reset, ansi.dim, if (self.stream_enabled) "on" else "off", ansi.reset });
     }
 
     repl: while (true) {
@@ -684,7 +648,15 @@ fn runRepl(self: *Agent) void {
             continue :repl;
         }
 
-        const slash_split: ?Schema.Split = Schema.parseSlashCommand(trimmed);
+        // A slash command whose `'''…'''` body is still open continues on the
+        // following lines until the block closes (the multi-line /extract
+        // form). Ctrl-D on the continuation prompt abandons the command.
+        const command_text: []const u8 = if (trimmed[0] == '/' and Schema.hasUnclosedTripleQuote(trimmed))
+            Terminal.readContinuation(aa, trimmed) orelse continue :repl
+        else
+            trimmed;
+
+        const slash_split: ?Schema.Split = Schema.parseSlashCommand(command_text);
         if (slash_split) |split| {
             if (SlashCommand.findMeta(split.name)) |meta| {
                 if (self.handleMeta(aa, meta, split.rest)) break :repl;
@@ -693,7 +665,7 @@ fn runRepl(self: *Agent) void {
         }
 
         var diag: Schema.Diag = .{};
-        const cmd = Command.parseDiag(aa, line, &diag) catch |err| switch (err) {
+        const cmd = Command.parseDiag(aa, command_text, &diag) catch |err| switch (err) {
             error.NotASlashCommand => {
                 if (self.ai_client == null) {
                     self.terminal.printError("Basic REPL (LLM disabled) accepts only commands. Try /help, or " ++ llm_setup_hint ++ " to enable natural-language prompts.", .{});
@@ -725,7 +697,7 @@ fn runRepl(self: *Agent) void {
                 if (!result.is_error) {
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse cmd);
                 }
-                self.recordSlashToolCall(trimmed, tc.name(), tc.args, result) catch |err| {
+                self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
                 };
             },
@@ -741,6 +713,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .help => self.printSlashHelp(arena, rest),
         .verbosity => self.setEnumOption("verbosity", &self.terminal.verbosity, rest),
         .effort => self.setEnumOption("effort", &self.effort, rest),
+        .stream => self.handleStream(rest),
         .usage => self.handleUsage(),
         .clear => self.handleClear(),
         .reset => self.handleReset(),
@@ -767,6 +740,24 @@ fn setEnumOption(self: *Agent, comptime name: []const u8, target: anytype, rest:
     };
     target.* = level;
     self.reportSaved(name, @tagName(level));
+}
+
+/// `/stream`: bare prints the current state; `on`/`off` sets and persists it.
+fn handleStream(self: *Agent, rest: []const u8) void {
+    if (rest.len == 0) {
+        self.terminal.printInfo("stream: {s}", .{if (self.stream_enabled) "on" else "off"});
+        return;
+    }
+    const on = if (std.ascii.eqlIgnoreCase(rest, "on") or std.ascii.eqlIgnoreCase(rest, "true"))
+        true
+    else if (std.ascii.eqlIgnoreCase(rest, "off") or std.ascii.eqlIgnoreCase(rest, "false"))
+        false
+    else {
+        self.terminal.printError("usage: /stream [on|off] (got {s})", .{rest});
+        return;
+    };
+    self.stream_enabled = on;
+    self.reportSaved("stream", if (on) "on" else "off");
 }
 
 /// Print cumulative session token usage, broken down so the cache's effect is
@@ -879,7 +870,7 @@ fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
     }
-    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity })) {
+    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
@@ -914,11 +905,28 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("unknown provider: {s} (or 'null' to disable the LLM)", .{trimmed});
         return;
     };
-    if (self.model_credentials) |current| if (provider == current.provider) {
+    // Re-selecting vertex falls through — that's the token-refresh path.
+    const vertex_project = provider == .vertex and settings.vertexProjectMode();
+    if (self.model_credentials) |current| if (provider == current.provider and !vertex_project) {
         self.terminal.printInfo("provider: {s}", .{@tagName(provider)});
         return;
     };
+    if (vertex_project) {
+        const token = settings.gcloudAccessToken(self.allocator) catch |err| {
+            self.terminal.printError("could not obtain a Vertex access token: {s} (details above)", .{@errorName(err)});
+            return;
+        };
+        self.setProvider(.{ .provider = .vertex, .key = token }, token) catch |err| {
+            self.allocator.free(token);
+            self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
+        };
+        return;
+    }
     const key = zenai.provider.envApiKey(provider) orelse {
+        if (provider == .vertex) {
+            self.terminal.printError("vertex needs VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud)", .{});
+            return;
+        }
         self.terminal.printError("no API key for {s}; set {s}", .{ @tagName(provider), zenai.provider.envVarName(provider) });
         return;
     };
@@ -931,7 +939,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
         return;
     }
-    self.setProvider(.{ .provider = provider, .key = key }) catch |err| {
+    self.setProvider(.{ .provider = provider, .key = key }, null) catch |err| {
         self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
     };
 }
@@ -941,6 +949,8 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
 fn disableProvider(self: *Agent) void {
     if (self.ai_client) |client| client.deinit(self.allocator);
     self.ai_client = null;
+    if (self.owned_key) |k| self.allocator.free(k);
+    self.owned_key = null;
     self.model_credentials = null;
     self.model_completions = null;
     self.no_llm_persisted = true;
@@ -954,12 +964,18 @@ fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
     return std.posix.getenv("HF_BILL_TO");
 }
 
-fn setProvider(self: *Agent, credentials: Credentials) !void {
+/// `owned_key` transfers ownership of an allocated `credentials.key` (Vertex
+/// gcloud token) on success; on error the caller still owns it.
+fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8) !void {
     const new_client = try zenai.provider.Client.init(self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider) });
     errdefer new_client.deinit(self.allocator);
 
-    const new_model = try self.allocator.dupe(u8, zenai.provider.defaultModel(credentials.provider));
+    // A same-provider re-select (vertex token refresh) must not reset the model.
+    const same_provider = if (self.model_credentials) |c| c.provider == credentials.provider else false;
+    const new_model = try self.allocator.dupe(u8, if (same_provider) self.model else zenai.provider.defaultModel(credentials.provider));
     if (self.ai_client) |client| client.deinit(self.allocator);
+    if (self.owned_key) |k| self.allocator.free(k);
+    self.owned_key = owned_key;
     new_client.setInterrupt(&self.http_interrupt);
     self.ai_client = new_client;
     self.model_credentials = credentials;
@@ -1077,7 +1093,7 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
             "append — add the recorded commands at the end",
             "replace — overwrite with the recorded commands",
         };
-    const idx = Terminal.promptNumberedChoice(header, labels, 0) catch {
+    const idx = picker.promptNumberedChoice(header, labels, 0) catch {
         self.terminal.printInfo("Save cancelled.", .{});
         return null;
     };
@@ -1132,7 +1148,8 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
 fn saveOneShot(self: *Agent) void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
-    self.synthesizeSaveTo(arena.allocator(), self.one_shot_save.?, .replace, self.one_shot_task.?);
+    const path = save.ensureJsExtension(arena.allocator(), self.one_shot_save.?) catch self.one_shot_save.?;
+    self.synthesizeSaveTo(arena.allocator(), path, .replace, self.one_shot_task.?);
 }
 
 /// LLM synthesis + write for an already-resolved destination. Shared by the
@@ -1157,7 +1174,7 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     // regular turns keep the driver prompt. (`messages[0]` is the system
     // message — rollback and prune never touch it.)
     const plain_system = self.conversation.messages.items[0].content;
-    self.conversation.messages.items[0].content = if (previous_script != null) save_revision_system_prompt else save_system_prompt;
+    self.conversation.messages.items[0].content = savePrompt(previous_script != null);
     defer self.conversation.messages.items[0].content = plain_system;
 
     const ma = self.conversation.arena.allocator();
@@ -1311,6 +1328,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 "/effort " ++ Config.tagHint(Config.Effort) ++ " — set per-turn reasoning effort (currently: {s}); saved to {s}. Bare /effort prints the level.",
                 .{ @tagName(self.effort), settings.remembered_path },
             ),
+            .stream => self.terminal.printInfo(
+                "/stream [on|off] — stream assistant text as it's generated (currently: {s}); saved to {s}. Bare /stream prints the state.",
+                .{ if (self.stream_enabled) "on" else "off", settings.remembered_path },
+            ),
             .usage => self.terminal.printInfo(
                 "/usage — show cumulative token usage and cache hit rate for this session",
                 .{},
@@ -1351,7 +1372,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         }
     }
     const tool_schema = Schema.findByName(target) orelse {
-        if (Terminal.closestCommand(target)) |near| {
+        if (SlashCommand.closestCommand(target)) |near| {
             self.terminal.printError("unknown command: {s}. Did you mean " ++ Terminal.highlightCmd("/help {s}") ++ "?", .{ target, near });
         } else {
             self.terminal.printError("unknown command: {s}", .{target});
@@ -1526,10 +1547,17 @@ fn recordSlashToolCall(
 fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []const u8 {
     const e = client.lastError();
     const status = e.status orelse return @errorName(err);
+    const hint = if (status == 401 and client == .vertex)
+        if (self.owned_key != null)
+            " (Vertex token may have expired; run /provider vertex to refresh)"
+        else
+            " (Vertex express mode needs an express API key — a Gemini Developer key won't work)"
+    else
+        "";
     if (e.message) |m| {
-        if (std.fmt.bufPrint(&self.api_error_buf, "HTTP {d} — {s}", .{ status, m })) |s| return s else |_| {}
+        if (std.fmt.bufPrint(&self.api_error_buf, "HTTP {d} — {s}{s}", .{ status, m, hint })) |s| return s else |_| {}
     }
-    return std.fmt.bufPrint(&self.api_error_buf, "HTTP {d}", .{status}) catch @errorName(err);
+    return std.fmt.bufPrint(&self.api_error_buf, "HTTP {d}{s}", .{ status, hint }) catch @errorName(err);
 }
 
 /// Returned text lives in `conversation.arena`, valid only until the next prune.
@@ -1539,6 +1567,11 @@ fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []
 fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const ma = self.conversation.arena.allocator();
     self.api_error_detail = null;
+    self.streamed_text = false;
+    // Defensive: if an exit path ever missed `endStreamedText`, a stale-true
+    // `stream_active` would skip the spinner pause on the next turn's first
+    // delta and let frames interleave with the text. Reset it at the source.
+    self.stream_active = false;
     self.http_interrupt.reset();
 
     try self.conversation.ensureSystemPrompt();
@@ -1584,8 +1617,12 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // non-thinking models.
             .effort = self.effort,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+            // Suppressed turns (e.g. `--save` capture) must keep stdout clean;
+            // streaming would bypass the `suppress_answer` guard in `runTurn`.
+            .stream = if (input.suppress_answer) null else self.streamHook(),
         },
     ) catch |err| {
+        self.endStreamedText();
         self.terminal.spinner.cancel();
         // Ctrl-C can land while runTools unwinds an HTTP error — surface
         // UserCancelled, not ApiError, so the user sees the outcome they asked for.
@@ -1595,6 +1632,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         self.conversation.rollback(msg_baseline);
         return error.ApiError;
     };
+    self.endStreamedText();
     self.terminal.spinner.stop();
     defer result.deinit();
     self.total_usage.add(result.usage);
@@ -1668,13 +1706,16 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // `.none` stays off to opt out on models that reject it.
                 .effort = if (self.effort == .none) .none else .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+                .stream = if (input.suppress_answer) null else self.streamHook(),
             },
         ) catch |err| {
+            self.endStreamedText();
             if (self.cancel_requested.load(.acquire)) return self.drainCancellation(msg_baseline);
             log.err(.app, "AI synthesis error", .{ .err = err });
             self.conversation.rollback(synth_baseline);
             break :blk null;
         };
+        self.endStreamedText();
         defer synth.deinit();
         self.total_usage.add(synth.usage);
 
@@ -1757,6 +1798,8 @@ fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
+    // Close any assistant text streamed this turn before the tool spinner shows.
+    self.endStreamedText();
     // The spinner doesn't render args, and `agentToolDone` skips the body line
     // at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
@@ -1796,10 +1839,16 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     }
     const resolved = (try settings.resolveCredentials(allocator, opts, null, false)) orelse return error.MissingProvider;
     const llm = resolved.credentials;
+    defer if (resolved.key_owned) allocator.free(llm.key);
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = try zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, opts.base_url);
+    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, opts.base_url) catch |err| {
+        if (llm.provider == .vertex and !settings.vertexProjectMode()) {
+            std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
+        }
+        return err;
+    };
 
     var stdout_file = std.fs.File.stdout().writer(&.{});
     const w = &stdout_file.interface;
@@ -1864,6 +1913,17 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
 test {
     _ = save;
     _ = settings;
+    _ = picker;
+}
+
+test "savePrompt: save instructions followed by the rendered script skill" {
+    const prompt = savePrompt(false);
+    try std.testing.expect(std.mem.startsWith(u8, prompt, browser_tools.save_synthesis_prompt));
+    try std.testing.expect(std.mem.endsWith(u8, prompt, lp.skill.text()));
+
+    const revision = savePrompt(true);
+    try std.testing.expect(std.mem.indexOf(u8, revision, save_revision_note) != null);
+    try std.testing.expect(std.mem.endsWith(u8, revision, lp.skill.text()));
 }
 
 test "capToolOutput: passes through when under cap" {

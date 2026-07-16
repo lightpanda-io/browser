@@ -319,7 +319,7 @@ fn resolveQueryUrl(exec: *const Execution, _override: ?[]const u8) ![:0]const u8
     const current = exec.url.*;
     const override = _override orelse return current;
 
-    const resolved = try URL.resolve(exec.call_arena, exec.base(), override, .{ .always_dupe = true });
+    const resolved = try URL.resolve(exec.call_arena, exec.base(), override, .{});
     if (!exec.isSameOrigin(resolved)) return error.SecurityError;
 
     switch (exec.js.global) {
@@ -530,10 +530,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const get = bridge.function(CookieStore.get, .{ .dom_exception = true });
-    pub const getAll = bridge.function(CookieStore.getAll, .{ .dom_exception = true });
-    pub const set = bridge.function(CookieStore.set, .{ .dom_exception = true });
-    pub const delete = bridge.function(CookieStore.delete, .{ .dom_exception = true });
+    pub const get = bridge.function(CookieStore.get, .{});
+    pub const getAll = bridge.function(CookieStore.getAll, .{});
+    pub const set = bridge.function(CookieStore.set, .{});
+    pub const delete = bridge.function(CookieStore.delete, .{});
     pub const onchange = bridge.accessor(CookieStore.getOnChange, CookieStore.setOnChange, .{});
 };
 

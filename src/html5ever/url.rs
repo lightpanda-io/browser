@@ -19,6 +19,8 @@
 // host string becomes its punycode form, or an error.
 
 use ::url::Url;
+use encoding_rs::{EncoderResult, Encoding};
+use std::borrow::Cow;
 use std::os::raw::c_uchar;
 use std::slice;
 
@@ -280,6 +282,11 @@ pub struct OwnedString {
     pub len: usize,
 }
 
+const EMPTY_OWNED_STRING: OwnedString = OwnedString {
+    ptr: std::ptr::null_mut(),
+    len: 0,
+};
+
 #[no_mangle]
 pub unsafe extern "C" fn free_owned_string(owned: OwnedString) {
     if owned.ptr.is_null() || owned.len == 0 {
@@ -328,17 +335,40 @@ pub unsafe extern "C" fn url_get_port(url: *const Url) -> i32 {
     }
 }
 
+fn clean_hostname_input(url: &Url, raw: &str) -> String {
+    let special = matches!(
+        url.scheme(),
+        "http" | "https" | "ws" | "wss" | "ftp" | "file"
+    );
+    let mut out = String::with_capacity(raw.len());
+    let mut in_brackets = false;
+    for c in raw.chars() {
+        match c {
+            '\t' | '\n' | '\r' => continue,
+            '[' => in_brackets = true,
+            ']' => in_brackets = false,
+            '/' | '?' | '#' => break,
+            '\\' if special => break,
+            ':' if !in_brackets => break,
+            _ => {}
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// WHATWG `hostname` setter: sets the host without touching the port.
 #[no_mangle]
 pub unsafe extern "C" fn url_set_hostname(url: *mut Url, ptr: *const c_uchar, len: usize) -> i32 {
     let url = unsafe { &mut *url };
 
-    let slice = match str_from(ptr, len) {
+    let raw = match str_from(ptr, len) {
         Some(s) => s,
         None => return -1,
     };
+    let host = clean_hostname_input(url, raw);
 
-    match url.set_host(Some(slice)) {
+    match url.set_host(Some(host.as_str())) {
         Ok(()) => 0,
         Err(_) => -1,
     }
@@ -399,6 +429,18 @@ pub unsafe extern "C" fn url_set_host(url: *mut Url, ptr: *const c_uchar, len: u
         None => return -1,
     };
 
+    // The WHATWG host setter parses in "host state", which stops at the first
+    // '/', '?', '#' (and '\' for special schemes); the remainder is ignored
+    // rather than making the whole value invalid.
+    let special = matches!(
+        url.scheme(),
+        "http" | "https" | "ws" | "wss" | "ftp" | "file"
+    );
+    let end = input
+        .find(|c| c == '/' || c == '?' || c == '#' || (special && c == '\\'))
+        .unwrap_or(input.len());
+    let input = &input[..end];
+
     // Find the port separator ':', but only outside an IPv6 [...] literal.
     let colon = if input.starts_with('[') {
         input
@@ -419,21 +461,28 @@ pub unsafe extern "C" fn url_set_host(url: *mut Url, ptr: *const c_uchar, len: u
 
     let (host, port_str) = (&input[..i], &input[i + 1..]);
 
+    // A trailing colon with no digits ("host:") supplies an empty port, which
+    // the WHATWG host setter ignores: set the host only, leaving any existing
+    // port untouched (matches Chrome and Firefox).
+    if port_str.is_empty() {
+        return if url.set_host(Some(host)).is_ok() {
+            0
+        } else {
+            -1
+        };
+    }
+
     // Validate the port up-front so we never apply the host and then fail.
-    let new_port: Option<u16> = if port_str.is_empty() {
-        None // "host:" clears the port
-    } else {
-        match port_str.parse::<u16>() {
-            Ok(p) => Some(p),
-            Err(_) => return -1,
-        }
+    let new_port: u16 = match port_str.parse::<u16>() {
+        Ok(p) => p,
+        Err(_) => return -1,
     };
 
     if url.set_host(Some(host)).is_err() {
         return -1;
     }
     // set_port only errors on cannot-be-a-base, already ruled out by set_host.
-    let _ = url.set_port(new_port);
+    let _ = url.set_port(Some(new_port));
     0
 }
 
@@ -567,4 +616,169 @@ pub unsafe extern "C" fn url_get_href(
     let href = url.as_str();
     *out_ptr = href.as_ptr();
     *out_len = href.len();
+}
+
+fn encode_query_ncr(encoding: &'static Encoding, s: &str) -> Cow<'static, [u8]> {
+    // fast path: fully mappable
+    let (out, _, had_errors) = encoding.encode(s);
+    if !had_errors {
+        return Cow::Owned(out.into_owned());
+    }
+
+    let mut encoder = encoding.new_encoder();
+    let mut result = Vec::with_capacity(s.len() * 2);
+    let mut input = s;
+    loop {
+        let needed = encoder
+            .max_buffer_length_from_utf8_without_replacement(input.len())
+            .unwrap();
+        let start = result.len();
+        result.resize(start + needed, 0);
+        let (r, read, written) =
+            encoder.encode_from_utf8_without_replacement(input, &mut result[start..], true);
+        result.truncate(start + written);
+        input = &input[read..];
+        match r {
+            EncoderResult::InputEmpty => break,
+            EncoderResult::Unmappable(c) => {
+                result.extend_from_slice(format!("%26%23{}%3B", c as u32).as_bytes());
+            }
+            // Output was sized with max_buffer_length, so it cannot run out.
+            EncoderResult::OutputFull => unreachable!(),
+        }
+    }
+    Cow::Owned(result)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn url_resolve_with_encoding(
+    base_ptr: *const c_uchar,
+    base_len: usize,
+    input_ptr: *const c_uchar,
+    input_len: usize,
+    enc_ptr: *const c_uchar,
+    enc_len: usize,
+    err: *mut i32,
+) -> OwnedString {
+    let base_slice = match str_from(base_ptr, base_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+    // An empty base means the input must be an absolute URL.
+    let base = if base_slice.is_empty() {
+        None
+    } else {
+        match Url::parse(base_slice) {
+            Ok(u) => Some(u),
+            Err(_) => {
+                *err = -1;
+                return EMPTY_OWNED_STRING;
+            }
+        }
+    };
+
+    let slice = match str_from(input_ptr, input_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+
+    let encoding_slice = match str_from(enc_ptr, enc_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+    // Per the URL spec, queries use the document encoding's *output encoding*.
+    let encoding = Encoding::for_label(encoding_slice.as_bytes())
+        .map(|encoding| encoding.output_encoding())
+        .filter(|&encoding| encoding != encoding_rs::UTF_8);
+
+    let result = match encoding {
+        Some(encoding) => Url::options()
+            .base_url(base.as_ref())
+            .encoding_override(Some(&move |s| encode_query_ncr(encoding, s)))
+            .parse(slice),
+        // Fallback to default.
+        None => match &base {
+            Some(base) => base.join(slice),
+            None => Url::parse(slice),
+        },
+    };
+
+    match result {
+        Ok(url) => {
+            *err = 0;
+            let s = String::from(url); // Moves the serialization, no copy.
+            let len = s.len();
+            let ptr = Box::into_raw(s.into_bytes().into_boxed_slice()) as *mut c_uchar;
+            OwnedString { ptr, len }
+        }
+        Err(_) => {
+            *err = -1;
+            EMPTY_OWNED_STRING
+        }
+    }
+}
+
+/// Similar to url_parse_with_base; returns a href instead.
+#[no_mangle]
+pub unsafe extern "C" fn url_resolve_without_encoding(
+    base_ptr: *const c_uchar,
+    base_len: usize,
+    input_ptr: *const c_uchar,
+    input_len: usize,
+    err: *mut i32,
+) -> OwnedString {
+    let base_slice = match str_from(base_ptr, base_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+    // An empty base means the input must be an absolute URL.
+    let base = if base_slice.is_empty() {
+        None
+    } else {
+        match Url::parse(base_slice) {
+            Ok(u) => Some(u),
+            Err(_) => {
+                *err = -1;
+                return EMPTY_OWNED_STRING;
+            }
+        }
+    };
+
+    let input = match str_from(input_ptr, input_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+
+    let result = match &base {
+        Some(base) => base.join(input),
+        None => Url::parse(input),
+    };
+    match result {
+        Ok(url) => {
+            *err = 0;
+            let s = String::from(url); // Moves the serialization, no copy.
+            let len = s.len();
+            let ptr = Box::into_raw(s.into_bytes().into_boxed_slice()) as *mut c_uchar;
+            OwnedString { ptr, len }
+        }
+        Err(_) => {
+            *err = -1;
+            EMPTY_OWNED_STRING
+        }
+    }
 }

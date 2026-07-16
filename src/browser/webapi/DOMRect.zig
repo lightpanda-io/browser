@@ -16,55 +16,73 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+const Factory = @import("../Factory.zig");
+
+const RO = @import("DOMRectReadOnly.zig");
+
+pub const Data = RO.Data;
+
 const DOMRect = @This();
 
-const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
+_proto: *RO,
 
-_x: f64,
-_y: f64,
-_width: f64,
-_height: f64,
-
-pub fn init(x: f64, y: f64, width: f64, height: f64, frame: *Frame) !*DOMRect {
-    return frame._factory.create(DOMRect{
-        ._x = x,
-        ._y = y,
-        ._width = width,
-        ._height = height,
-    });
+pub fn init(x_: ?f64, y_: ?f64, width_: ?f64, height_: ?f64, exec: *const js.Execution) !*DOMRect {
+    return create(.{
+        .x = x_ orelse 0,
+        .y = y_ orelse 0,
+        .width = width_ orelse 0,
+        .height = height_ orelse 0,
+    }, exec._factory);
 }
+
+pub fn create(rect: Data, factory: *Factory) !*DOMRect {
+    return factory.domRect(rect);
+}
+
+pub fn fromRect(other_: ?Data, exec: *const js.Execution) !*DOMRect {
+    return create(other_ orelse .{}, exec._factory);
+}
+
+pub fn structuredSerialize(self: *const DOMRect, writer: *js.StructuredWriter) !void {
+    try self._proto.structuredSerialize(writer);
+}
+
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*DOMRect {
+    return page.factory.domRect(try RO.readData(reader));
+}
+
+// DOMRect redeclares x/y/width/height as writable, so DOMRect.prototype needs its
+// own read-write accessors distinct from the read-only ones on
+// DOMRectReadOnly.prototype. The setters are the point; each accessor bundles a
+// getter too, so we pair them with DOMRect-typed getters that read through
+// `_proto`. top/right/bottom/left stay read-only and are inherited from the base.
 
 pub fn getX(self: *const DOMRect) f64 {
-    return self._x;
+    return self._proto._x;
 }
-
 pub fn getY(self: *const DOMRect) f64 {
-    return self._y;
+    return self._proto._y;
 }
-
 pub fn getWidth(self: *const DOMRect) f64 {
-    return self._width;
+    return self._proto._width;
 }
-
 pub fn getHeight(self: *const DOMRect) f64 {
-    return self._height;
+    return self._proto._height;
 }
 
-pub fn getTop(self: *const DOMRect) f64 {
-    return @min(self._y, self._y + self._height);
+pub fn setX(self: *DOMRect, v: f64) void {
+    self._proto._x = v;
 }
-
-pub fn getRight(self: *const DOMRect) f64 {
-    return @max(self._x, self._x + self._width);
+pub fn setY(self: *DOMRect, v: f64) void {
+    self._proto._y = v;
 }
-
-pub fn getBottom(self: *const DOMRect) f64 {
-    return @max(self._y, self._y + self._height);
+pub fn setWidth(self: *DOMRect, v: f64) void {
+    self._proto._width = v;
 }
-
-pub fn getLeft(self: *const DOMRect) f64 {
-    return @min(self._x, self._x + self._width);
+pub fn setHeight(self: *DOMRect, v: f64) void {
+    self._proto._height = v;
 }
 
 pub const JsApi = struct {
@@ -77,12 +95,12 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(DOMRect.init, .{});
-    pub const x = bridge.accessor(DOMRect.getX, null, .{});
-    pub const y = bridge.accessor(DOMRect.getY, null, .{});
-    pub const width = bridge.accessor(DOMRect.getWidth, null, .{});
-    pub const height = bridge.accessor(DOMRect.getHeight, null, .{});
-    pub const top = bridge.accessor(DOMRect.getTop, null, .{});
-    pub const right = bridge.accessor(DOMRect.getRight, null, .{});
-    pub const bottom = bridge.accessor(DOMRect.getBottom, null, .{});
-    pub const left = bridge.accessor(DOMRect.getLeft, null, .{});
+    pub const fromRect = bridge.function(DOMRect.fromRect, .{ .static = true });
+
+    // Writable components (the read-only top/right/bottom/left are inherited
+    // from DOMRectReadOnly.prototype).
+    pub const x = bridge.accessor(DOMRect.getX, DOMRect.setX, .{});
+    pub const y = bridge.accessor(DOMRect.getY, DOMRect.setY, .{});
+    pub const width = bridge.accessor(DOMRect.getWidth, DOMRect.setWidth, .{});
+    pub const height = bridge.accessor(DOMRect.getHeight, DOMRect.setHeight, .{});
 };

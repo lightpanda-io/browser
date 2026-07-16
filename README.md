@@ -48,7 +48,7 @@ brew install lightpanda-io/browser/lightpanda
 
 Latest nightly from Arch Linux User Repository:
 ```console
-yay -S lightpanda-nightly-bi
+yay -S lightpanda-nightly-bin
 ```
 
 **Download from the nightly builds**
@@ -168,10 +168,11 @@ Run `/save` to export one from your current session, then replay it with
 you can prototype with the LLM and ship the output to production without a
 model at runtime.
 
-It supports Anthropic, OpenAI, Gemini, Hugging Face, and local models via
-Ollama. You can also run without an LLM using `--no-llm`, which drops you into
-the REPL. See the [agent documentation](https://lightpanda.io/docs/usage/agent)
-for the full reference.
+It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Hugging Face, and
+local models via Ollama. You can also run without an LLM using `--no-llm`,
+which drops you into the REPL. See the
+[agent documentation](https://lightpanda.io/docs/usage/agent) for the full
+reference.
 
 ```console
 ./lightpanda agent                                    # auto-detects API key from env
@@ -179,6 +180,8 @@ for the full reference.
 ./lightpanda agent --no-llm                           # basic REPL, no LLM
 ./lightpanda agent session.js                         # run a recorded script
 ./lightpanda agent --provider gemini --task "..."     # force a specific provider
+VERTEX_API_KEY=... ./lightpanda agent --provider vertex             # Vertex AI, express mode
+GOOGLE_CLOUD_PROJECT=my-proj ./lightpanda agent --provider vertex   # Vertex AI, token via gcloud auth
 ```
 
 ### Native MCP and skill
@@ -197,6 +200,28 @@ Add to your MCP configuration:
 }
 ```
 
+#### HTTP transport and independent sessions
+
+For serving several agents from one process, start the MCP server over HTTP
+instead of stdio by giving it a port (add `--host x.x.x.x` to specify the
+interface to listen on):
+
+```bash
+lightpanda mcp --port 9223
+```
+
+Clients POST JSON-RPC to `http://host:9223/mcp`. Each connection is routed to
+its own **browsing session** — its own page, cookies and memory — so agents no
+longer clobber each other's page:
+
+- A client that `initialize`s without an `Mcp-Session-Id` header is assigned a
+  fresh session; the id comes back in the response's `Mcp-Session-Id` header.
+  Send it on subsequent requests to stay on that session (**isolation**).
+- Two agents that send the **same** `Mcp-Session-Id` share one browsing context
+  (**sharing** — e.g. a workflow where several agents work the same page).
+- The `session_new`, `session_list` and `session_close` tools manage sessions
+  explicitly. Sending `DELETE /mcp` with an `Mcp-Session-Id` closes that session.
+
 [Read full documentation](https://lightpanda.io/docs/open-source/guides/mcp-server)
 
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
@@ -204,6 +229,10 @@ A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpand
 ### Telemetry
 
 By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
+
+### Core dumps
+
+Set `LIGHTPANDA_DISABLE_CORE_DUMP` (to any value) to suppress crash core dumps by zeroing the soft `RLIMIT_CORE` at startup.
 
 ## Status
 

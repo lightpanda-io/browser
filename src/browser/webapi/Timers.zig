@@ -29,10 +29,20 @@ const js = @import("../js/js.zig");
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 
+const CLAMP_MS = 4;
+const CLAMP_NESTING = 5;
+
 const Timers = @This();
 
 _timer_id: u30 = 0,
 _callbacks: CallbackHashMap = .{},
+
+// We keep the depth of the timers (a setTimeout calling a setTimeout). When
+// the depth reaches CLAMP_NESTING, the minimum timeout is 4ms. This is per-
+// spec and it's necessary to prevent some sites from virtually breaking because
+// they repeatedly do heavy work in endlessly looping setTimeout with a short
+// timeout (often of 0ms)
+_nesting_level: u8 = 0,
 
 const Key = u32;
 const CallbackHashMap = std.HashMapUnmanaged(
@@ -58,7 +68,7 @@ pub const Mode = enum {
 
 pub const ScheduleOpts = struct {
     repeat: bool,
-    params: []js.Value.Temp,
+    params: []js.Value.Global,
     name: []const u8,
     low_priority: bool = false,
     mode: Mode = .normal,
@@ -67,7 +77,7 @@ pub const ScheduleOpts = struct {
 pub fn schedule(
     self: *Timers,
     exec: *js.Execution,
-    cb: js.Function.Temp,
+    cb: js.Function.Global,
     delay_ms: u32,
     opts: ScheduleOpts,
 ) !u32 {
@@ -82,9 +92,12 @@ pub fn schedule(
     const timer_id = self._timer_id +% 1;
     self._timer_id = timer_id;
 
-    var persisted_params: []js.Value.Temp = &.{};
+    const nesting = @min(self._nesting_level + 1, CLAMP_NESTING + 1);
+    const delay = if (nesting > CLAMP_NESTING and delay_ms < CLAMP_MS) CLAMP_MS else delay_ms;
+
+    var persisted_params: []js.Value.Global = &.{};
     if (opts.params.len > 0) {
-        persisted_params = try arena.dupe(js.Value.Temp, opts.params);
+        persisted_params = try arena.dupe(js.Value.Global, opts.params);
     }
 
     const gop = try self._callbacks.getOrPut(exec.arena, timer_id);
@@ -102,13 +115,14 @@ pub fn schedule(
         .arena = arena,
         .mode = opts.mode,
         .name = opts.name,
+        .nesting = nesting,
         .timer_id = timer_id,
         .params = persisted_params,
-        .repeat_ms = if (opts.repeat) if (delay_ms == 0) 1 else delay_ms else null,
+        .repeat_ms = if (opts.repeat) if (delay == 0) 1 else delay else null,
     };
     gop.value_ptr.* = callback;
 
-    try exec.js.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
+    try exec.js.scheduler.add(callback, ScheduleCallback.run, delay, .{
         .name = opts.name,
         .low_priority = opts.low_priority,
         .finalizer = ScheduleCallback.cancelled,
@@ -128,15 +142,15 @@ pub fn clear(self: *Timers, id: u32) void {
 // compiled into an anonymous function body, matching how legacy browsers
 // (and all current UAs) interpret `setTimeout("foo()", 100)`.
 pub const LegacyHandler = union(enum) {
-    function: js.Function.Temp,
+    function: js.Function.Global,
     string: js.String,
 
-    pub fn resolve(handler: LegacyHandler, exec: *js.Execution) !js.Function.Temp {
+    pub fn resolve(handler: LegacyHandler, exec: *js.Execution) !js.Function.Global {
         switch (handler) {
             .function => |fun| return fun,
             .string => |str| {
                 const fun = try exec.js.local.?.compileFunction(str, &.{}, &.{});
-                return fun.temp();
+                return fun.persist();
             },
         }
     }
@@ -152,14 +166,18 @@ const ScheduleCallback = struct {
     // delay, in ms, to repeat. When null, removed after first invocation.
     repeat_ms: ?u32,
 
-    cb: js.Function.Temp,
+    // The nesting of this task. When it executes, this nesting will become
+    // the Timer's _nesting_level so that any new timers will become nesting + 1
+    nesting: u8,
+
+    cb: js.Function.Global,
 
     mode: Mode,
     exec: *js.Execution,
     timers: *Timers,
     arena: Allocator,
     removed: bool = false,
-    params: []const js.Value.Temp,
+    params: []const js.Value.Global,
 
     fn cancelled(ptr: *anyopaque) void {
         var self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
@@ -185,6 +203,11 @@ const ScheduleCallback = struct {
         self.exec.js.localScope(&ls);
         defer ls.deinit();
 
+        const timers = self.timers;
+        const prev_nesting = timers._nesting_level;
+        timers._nesting_level = self.nesting;
+        defer timers._nesting_level = prev_nesting;
+
         switch (self.mode) {
             .idle => {
                 const IdleDeadline = @import("IdleDeadline.zig");
@@ -193,13 +216,11 @@ const ScheduleCallback = struct {
                 };
             },
             .animation_frame => {
-                // requestAnimationFrame is window-only; if a worker ever
-                // schedules with this mode it's a programming error.
-                const window = switch (self.exec.js.global) {
-                    .frame => |frame| frame.window,
-                    .worker => unreachable,
+                const now = switch (self.exec.js.global) {
+                    .frame => |frame| frame.window._performance.now(),
+                    .worker => |worker| worker._performance.now(),
                 };
-                ls.toLocal(self.cb).call(void, .{window._performance.now()}) catch |err| {
+                ls.toLocal(self.cb).call(void, .{now}) catch |err| {
                     log.warn(.js, "RAF", .{ .name = self.name, .err = err });
                 };
             },
@@ -212,6 +233,12 @@ const ScheduleCallback = struct {
         ls.local.runMicrotasks();
 
         if (self.repeat_ms) |ms| {
+            // each repeat re-enters the timer initialization steps, so the
+            // nesting level keeps growing and sub-4ms intervals get clamped.
+            self.nesting = @min(self.nesting + 1, CLAMP_NESTING + 1);
+            if (self.nesting > CLAMP_NESTING and ms < CLAMP_MS) {
+                return CLAMP_MS;
+            }
             return ms;
         }
         defer self.deinit();

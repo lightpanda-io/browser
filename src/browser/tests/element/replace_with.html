@@ -363,3 +363,65 @@
   testing.expectEqual(newChild14, parent14.firstChild);
   testing.expectEqual(null, oldChild14.parentNode);
 </script>
+
+<!-- Test 15: Replace with a DocumentFragment expands its children -->
+<div id="test15">
+  <div id="parent15"><div id="old15">Old</div></div>
+</div>
+
+<script id=test15-document-fragment>
+  const old15 = $('#old15');
+  const parent15 = $('#parent15');
+
+  const frag15 = document.createDocumentFragment();
+  const a15 = document.createElement('div');
+  a15.id = 'a15';
+  const b15 = document.createElement('div');
+  b15.id = 'b15';
+  frag15.append(a15, b15);
+
+  old15.replaceWith(frag15);
+
+  // The fragment's children must be inserted, not the fragment node itself.
+  testing.expectEqual(null, document.getElementById('old15'));
+  testing.expectEqual(2, parent15.childElementCount);
+  testing.expectEqual(a15, parent15.children[0]);
+  testing.expectEqual(b15, parent15.children[1]);
+  // Each child's parent is the real element parent (not the fragment),
+  // and they are properly connected.
+  testing.expectEqual(parent15, a15.parentNode);
+  testing.expectEqual(parent15, b15.parentNode);
+  testing.expectEqual(true, a15.isConnected);
+  testing.expectEqual(parent15, a15.parentElement);
+  // The fragment is left empty.
+  testing.expectEqual(0, frag15.childNodes.length);
+</script>
+
+<!-- Test 16: connectedCallback during fragment replaceWith sees a real element parent -->
+<script id=test16-fragment-upgrade-parent>
+  let seenParentNodeType16 = null;
+  let seenParentElement16 = null;
+  class FragChild extends HTMLElement {
+    connectedCallback() {
+      seenParentNodeType16 = this.parentNode && this.parentNode.nodeType;
+      seenParentElement16 = this.parentElement;
+    }
+  }
+  customElements.define('frag-child', FragChild);
+
+  const parent16 = document.createElement('div');
+  const placeholder16 = document.createElement('div');
+  parent16.appendChild(placeholder16);
+  document.body.appendChild(parent16);
+
+  const frag16 = document.createDocumentFragment();
+  const child16 = document.createElement('frag-child');
+  frag16.appendChild(child16);
+
+  placeholder16.replaceWith(frag16);
+
+  // Inside connectedCallback, the element must have a real element parent,
+  // not a DocumentFragment (regression: reddit suspense-replace crash).
+  testing.expectEqual(1, seenParentNodeType16); // ELEMENT_NODE
+  testing.expectEqual(parent16, seenParentElement16);
+</script>

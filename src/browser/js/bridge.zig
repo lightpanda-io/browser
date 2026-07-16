@@ -46,11 +46,23 @@ pub fn Builder(comptime T: type) type {
         }
 
         pub fn indexed(comptime getter_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
-            return Indexed.init(T, getter_func, enumerator_func, opts);
+            return Indexed.init(T, getter_func, null, null, null, null, enumerator_func, opts);
         }
 
-        pub fn namedIndexed(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
-            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, opts);
+        pub fn indexedReadWrite(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, query_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
+            return Indexed.init(T, getter_func, setter_func, deleter_func, query_func, null, enumerator_func, opts);
+        }
+
+        pub fn indexedFull(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, query_func: anytype, definer_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
+            return Indexed.init(T, getter_func, setter_func, deleter_func, query_func, definer_func, enumerator_func, opts);
+        }
+
+        pub fn namedIndexed(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, enumerator_func: anytype, query_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
+            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, enumerator_func, query_func, null, null, opts);
+        }
+
+        pub fn namedIndexedFull(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, enumerator_func: anytype, query_func: anytype, definer_func: anytype, descriptor_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
+            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, enumerator_func, query_func, definer_func, descriptor_func, opts);
         }
 
         pub fn iterator(comptime func: anytype, comptime opts: Iterator.Opts) Iterator {
@@ -110,7 +122,6 @@ pub const Constructor = struct {
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
-        dom_exception: bool = false,
         // When true, the constructor function receives `new.target` (as a
         // js.Function) as its first parameter. Used by HTMLElement to support
         // direct instantiation of custom elements via `new MyElement()`.
@@ -142,7 +153,6 @@ pub const Constructor = struct {
                     defer if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
 
                     caller.constructor(T, func, handle.?, .{
-                        .dom_exception = opts.dom_exception,
                         .new_target = opts.new_target,
                     });
                 }
@@ -156,6 +166,7 @@ pub const Function = struct {
     arity: usize,
     noop: bool = false,
     wpt_only: bool = false,
+    js_name: ?[:0]const u8 = null,
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
@@ -165,6 +176,7 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .wpt_only = opts.wpt_only,
+            .js_name = opts.js_name,
             .exposed = opts.exposed,
             // Non-static methods receive `self` as their first param; static
             // methods don't, so don't skip the first param for them.
@@ -218,6 +230,7 @@ pub const Accessor = struct {
     static: bool = false,
     deletable: bool = true,
     wpt_only: bool = false,
+    unforgeable: bool = false, // Web IDL [LegacyUnforgeable]
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
@@ -229,6 +242,7 @@ pub const Accessor = struct {
             .static = opts.static,
             .wpt_only = opts.wpt_only,
             .deletable = opts.deletable,
+            .unforgeable = opts.unforgeable,
             .exposed = opts.exposed,
         };
 
@@ -259,23 +273,29 @@ pub const Accessor = struct {
 };
 
 pub const Indexed = struct {
-    getter: *const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8,
-    enumerator: ?*const fn (handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8,
+    getter: *const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
+    enumerator: ?*const fn (handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
+    setter: ?*const fn (idx: u32, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    deleter: ?*const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    query: ?*const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    // v8 expects an Intercepted (u32) return; the stale void-returning
+    // typedef in binding.h is papered over with a @ptrCast at install time.
+    definer: ?*const fn (idx: u32, desc: ?*v8.PropertyDescriptor, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
 
     const Opts = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
     };
 
-    fn init(comptime T: type, comptime getter: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
+    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, query: anytype, definer: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
         var indexed = Indexed{
             .enumerator = null,
             .getter = struct {
-                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
                     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                     var caller: Caller = undefined;
                     if (!caller.init(v8_isolate)) {
-                        return 0;
+                        return js.Intercepted.no;
                     }
                     defer caller.deinit();
 
@@ -289,14 +309,81 @@ pub const Indexed = struct {
 
         if (@typeInfo(@TypeOf(enumerator)) != .null) {
             indexed.enumerator = struct {
-                fn wrap(handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+                fn wrap(handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
                     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                     var caller: Caller = undefined;
                     if (!caller.init(v8_isolate)) {
-                        return 0;
+                        return js.Intercepted.no;
                     }
                     defer caller.deinit();
                     return caller.getEnumerator(T, enumerator, handle.?, .{});
+                }
+            }.wrap;
+        }
+
+        if (@typeInfo(@TypeOf(setter)) != .null) {
+            indexed.setter = struct {
+                fn wrap(idx: u32, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return js.Intercepted.no;
+                    }
+                    defer caller.deinit();
+
+                    return caller.setIndex(T, setter, idx, c_value.?, handle.?, .{
+                        .as_typed_array = opts.as_typed_array,
+                        .null_as_undefined = opts.null_as_undefined,
+                    });
+                }
+            }.wrap;
+        }
+
+        if (@typeInfo(@TypeOf(deleter)) != .null) {
+            indexed.deleter = struct {
+                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return js.Intercepted.no;
+                    }
+                    defer caller.deinit();
+
+                    return caller.deleteOrDefineIndex(T, deleter, idx, handle.?, .{
+                        .as_typed_array = opts.as_typed_array,
+                        .null_as_undefined = opts.null_as_undefined,
+                    });
+                }
+            }.wrap;
+        }
+
+        if (@typeInfo(@TypeOf(query)) != .null) {
+            indexed.query = struct {
+                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return js.Intercepted.no;
+                    }
+                    defer caller.deinit();
+
+                    return caller.getIndexQuery(T, query, idx, handle.?);
+                }
+            }.wrap;
+        }
+
+        if (@typeInfo(@TypeOf(definer)) != .null) {
+            indexed.definer = struct {
+                fn wrap(idx: u32, _: ?*v8.PropertyDescriptor, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return js.Intercepted.no;
+                    }
+                    defer caller.deinit();
+
+                    // same (self, index) -> bool shape as a deleter
+                    return caller.deleteOrDefineIndex(T, definer, idx, handle.?, .{});
                 }
             }.wrap;
         }
@@ -306,9 +393,15 @@ pub const Indexed = struct {
 };
 
 pub const NamedIndexed = struct {
-    getter: *const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8,
-    setter: ?*const fn (c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 = null,
-    deleter: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 = null,
+    getter: *const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
+    setter: ?*const fn (c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    deleter: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    query: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    // v8 expects an Intercepted (u32) return; the stale void-returning
+    // typedefs in binding.h are papered over with a @ptrCast at install time.
+    definer: ?*const fn (c_name: ?*const v8.Name, desc: ?*v8.PropertyDescriptor, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    descriptor: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
+    enumerator: ?*const fn (handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 = null,
 
     const Opts = struct {
         as_typed_array: bool = false,
@@ -319,13 +412,13 @@ pub const NamedIndexed = struct {
         ce_reactions: bool = false,
     };
 
-    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, comptime opts: Opts) NamedIndexed {
+    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, enumerator: anytype, query: anytype, definer: anytype, descriptor: anytype, comptime opts: Opts) NamedIndexed {
         const getter_fn = struct {
-            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
                 if (!caller.init(v8_isolate)) {
-                    return 0;
+                    return js.Intercepted.no;
                 }
                 defer caller.deinit();
 
@@ -337,11 +430,11 @@ pub const NamedIndexed = struct {
         }.wrap;
 
         const setter_fn = if (@typeInfo(@TypeOf(setter)) == .null) null else struct {
-            fn wrap(c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+            fn wrap(c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
                 if (!caller.init(v8_isolate)) {
-                    return 0;
+                    return js.Intercepted.no;
                 }
                 defer caller.deinit();
 
@@ -365,11 +458,11 @@ pub const NamedIndexed = struct {
         }.wrap;
 
         const deleter_fn = if (@typeInfo(@TypeOf(deleter)) == .null) null else struct {
-            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
                 if (!caller.init(v8_isolate)) {
-                    return 0;
+                    return js.Intercepted.no;
                 }
                 defer caller.deinit();
 
@@ -385,10 +478,65 @@ pub const NamedIndexed = struct {
                     if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
                 };
 
-                return caller.deleteNamedIndex(T, deleter, c_name.?, handle.?, .{
+                return caller.deleteOrDefineNamedIndex(T, deleter, c_name.?, handle.?, .{
                     .as_typed_array = opts.as_typed_array,
                     .null_as_undefined = opts.null_as_undefined,
                 });
+            }
+        }.wrap;
+
+        const definer_fn = if (@typeInfo(@TypeOf(definer)) == .null) null else struct {
+            fn wrap(c_name: ?*const v8.Name, _: ?*v8.PropertyDescriptor, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
+                }
+                defer caller.deinit();
+
+                // same (self, name) -> bool shape as a deleter
+                return caller.deleteOrDefineNamedIndex(T, definer, c_name.?, handle.?, .{});
+            }
+        }.wrap;
+
+        const descriptor_fn = if (@typeInfo(@TypeOf(descriptor)) == .null) null else struct {
+            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
+                }
+                defer caller.deinit();
+
+                // same (self, name) -> value shape as a getter; the returned
+                // struct is converted to a JS property descriptor object
+                return caller.getNamedIndex(T, descriptor, c_name.?, handle.?, .{});
+            }
+        }.wrap;
+
+        const enumerator_fn = if (@typeInfo(@TypeOf(enumerator)) == .null) null else struct {
+            fn wrap(handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
+                }
+                defer caller.deinit();
+
+                return caller.getEnumerator(T, enumerator, handle.?, .{});
+            }
+        }.wrap;
+
+        const query_fn = if (@typeInfo(@TypeOf(query)) == .null) null else struct {
+            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
+                }
+                defer caller.deinit();
+
+                return caller.getNamedQuery(T, query, c_name.?, handle.?);
             }
         }.wrap;
 
@@ -396,6 +544,10 @@ pub const NamedIndexed = struct {
             .getter = getter_fn,
             .setter = setter_fn,
             .deleter = deleter_fn,
+            .query = query_fn,
+            .definer = definer_fn,
+            .descriptor = descriptor_fn,
+            .enumerator = enumerator_fn,
         };
     }
 };
@@ -480,14 +632,14 @@ pub const Property = struct {
     }
 };
 
-pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
 
     // During snapshot creation, there's no Context in embedder data yet.
     // I hate this check, but there doesn't seem to be a way to add this method
     // to the global, without triggering it during snapshot creation.
-    const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate) orelse return 0;
-    const ctx: *Context = @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(v8_context, 1) orelse return 0));
+    const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate) orelse return js.Intercepted.no;
+    const ctx: *Context = @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(v8_context, 1) orelse return js.Intercepted.no));
 
     var caller: Caller = undefined;
     caller.initWithContext(ctx, v8_context);
@@ -500,7 +652,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
     defer hs.deinit();
 
     const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
-        return 0;
+        return js.Intercepted.no;
     };
 
     // Only Page contexts have document.getElementById lookup
@@ -508,10 +660,10 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         .frame => |frame| {
             const document = frame.document;
             if (document.getElementById(property, frame)) |el| {
-                const js_val = local.zigValueToJs(el, .{}) catch return 0;
+                const js_val = local.zigValueToJs(el, .{}) catch return js.Intercepted.no;
                 var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
                 pc.getReturnValue().set(js_val);
-                return 1;
+                return js.Intercepted.yes;
             }
         },
         .worker => {}, // no global lookup in a worker
@@ -521,7 +673,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         if (std.mem.startsWith(u8, property, "__")) {
             // some frameworks will extend built-in types using a __ prefix
             // these should always be safe to ignore.
-            return 0;
+            return js.Intercepted.no;
         }
 
         const ignored = std.StaticStringMap(void).initComptime(.{
@@ -553,28 +705,27 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         });
         if (!ignored.has(property)) {
             var buf: [2048]u8 = undefined;
-            const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return 0;
-            logUnknownProperty(local, key) catch return 0;
+            const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return js.Intercepted.no;
+            logUnknownProperty(local, key) catch return js.Intercepted.no;
         }
     }
 
-    // not intercepted
-    return 0;
+    return js.Intercepted.no;
 }
 
 // Only used for debugging
-pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8.Name, ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8.Name, ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
     if (comptime !IS_DEBUG) {
         @compileError("unknownObjectPropertyCallback should only be used in debug builds");
     }
 
     return struct {
-        fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+        fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
             const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
 
             var caller: Caller = undefined;
             if (!caller.init(v8_isolate)) {
-                return 0;
+                return js.Intercepted.no;
             }
             defer caller.deinit();
 
@@ -585,45 +736,44 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
             defer hs.deinit();
 
             const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
-                return 0;
+                return js.Intercepted.no;
             };
 
             if (std.mem.startsWith(u8, property, "__")) {
                 // some frameworks will extend built-in types using a __ prefix
                 // these should always be safe to ignore.
-                return 0;
+                return js.Intercepted.no;
             }
 
             if (std.mem.startsWith(u8, property, "jQuery")) {
-                return 0;
+                return js.Intercepted.no;
             }
 
             if (JsApi == @import("../webapi/cdata/Text.zig").JsApi or JsApi == @import("../webapi/cdata/Comment.zig").JsApi) {
                 if (std.mem.eql(u8, property, "tagName")) {
                     // knockout does this, a lot.
-                    return 0;
+                    return js.Intercepted.no;
                 }
             }
 
             if (JsApi == @import("../webapi/element/Html.zig").JsApi or JsApi == @import("../webapi/Element.zig").JsApi or JsApi == @import("../webapi/element/html/Custom.zig").JsApi) {
                 // react ?
-                if (std.mem.eql(u8, property, "props")) return 0;
-                if (std.mem.eql(u8, property, "hydrated")) return 0;
-                if (std.mem.eql(u8, property, "isHydrated")) return 0;
+                if (std.mem.eql(u8, property, "props")) return js.Intercepted.no;
+                if (std.mem.eql(u8, property, "hydrated")) return js.Intercepted.no;
+                if (std.mem.eql(u8, property, "isHydrated")) return js.Intercepted.no;
             }
 
             if (JsApi == @import("../webapi/Console.zig").JsApi) {
-                if (std.mem.eql(u8, property, "firebug")) return 0;
+                if (std.mem.eql(u8, property, "firebug")) return js.Intercepted.no;
             }
 
             const ignored = std.StaticStringMap(void).initComptime(.{});
             if (!ignored.has(property)) {
                 var buf: [2048]u8 = undefined;
-                const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return 0;
-                logUnknownProperty(local, key) catch return 0;
+                const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return js.Intercepted.no;
+                logUnknownProperty(local, key) catch return js.Intercepted.no;
             }
-            // not intercepted
-            return 0;
+            return js.Intercepted.no;
         }
     }.wrap;
 }
@@ -821,9 +971,12 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/DOMImplementation.zig"),
     @import("../webapi/DOMTreeWalker.zig"),
     @import("../webapi/DOMNodeIterator.zig"),
+    @import("../webapi/DOMRectReadOnly.zig"),
     @import("../webapi/DOMRect.zig"),
     @import("../webapi/DOMMatrixReadOnly.zig"),
     @import("../webapi/DOMMatrix.zig"),
+    @import("../webapi/DOMPointReadOnly.zig"),
+    @import("../webapi/DOMPoint.zig"),
     @import("../webapi/DOMParser.zig"),
     @import("../webapi/XMLSerializer.zig"),
     @import("../webapi/AbstractRange.zig"),
@@ -907,6 +1060,23 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/html/ValidityState.zig"),
     @import("../webapi/element/Svg.zig"),
     @import("../webapi/element/svg/Generic.zig"),
+    @import("../webapi/element/svg/Graphics.zig"),
+    @import("../webapi/element/svg/Geometry.zig"),
+    @import("../webapi/element/svg/Svg.zig"),
+    @import("../webapi/element/svg/G.zig"),
+    @import("../webapi/element/svg/A.zig"),
+    @import("../webapi/element/svg/Use.zig"),
+    @import("../webapi/element/svg/Image.zig"),
+    @import("../webapi/element/svg/Defs.zig"),
+    @import("../webapi/element/svg/Rect.zig"),
+    @import("../webapi/element/svg/Circle.zig"),
+    @import("../webapi/element/svg/Ellipse.zig"),
+    @import("../webapi/element/svg/Line.zig"),
+    @import("../webapi/element/svg/Path.zig"),
+    @import("../webapi/element/svg/Polygon.zig"),
+    @import("../webapi/element/svg/Polyline.zig"),
+    @import("../webapi/svg/AnimatedString.zig"),
+    @import("../webapi/svg/Number.zig"),
     @import("../webapi/encoding/TextDecoder.zig"),
     @import("../webapi/encoding/TextEncoder.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
@@ -920,6 +1090,13 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/NavigationCurrentEntryChangeEvent.zig"),
     @import("../webapi/event/PageTransitionEvent.zig"),
     @import("../webapi/event/PopStateEvent.zig"),
+    @import("../webapi/event/HashChangeEvent.zig"),
+    @import("../webapi/event/BeforeUnloadEvent.zig"),
+    @import("../webapi/event/StorageEvent.zig"),
+    @import("../webapi/event/DeviceMotionEvent.zig"),
+    @import("../webapi/event/GamepadEvent.zig"),
+    @import("../webapi/event/DeviceOrientationEvent.zig"),
+    @import("../webapi/event/TouchEvent.zig"),
     @import("../webapi/event/UIEvent.zig"),
     @import("../webapi/event/MouseEvent.zig"),
     @import("../webapi/event/PointerEvent.zig"),
@@ -956,6 +1133,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/net/XMLHttpRequestUpload.zig"),
     @import("../webapi/net/WebSocket.zig"),
+    @import("../webapi/net/EventSource.zig"),
     @import("../webapi/event/CloseEvent.zig"),
     @import("../webapi/streams/ReadableStream.zig"),
     @import("../webapi/streams/ReadableStreamDefaultReader.zig"),
@@ -967,6 +1145,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/Node.zig"),
     @import("../webapi/storage/storage.zig"),
     @import("../webapi/storage/CookieStore.zig"),
+    @import("../webapi/storage/idb/idb.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/Window.zig"),
@@ -1000,12 +1179,14 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/XPathResult.zig"),
     @import("../webapi/XPathExpression.zig"),
     @import("../webapi/XPathEvaluator.zig"),
+    @import("../webapi/collections/DOMStringList.zig"),
 });
 
 // APIs available on Worker context globals (constructors like URL, Headers, etc.)
 // This is a subset of PageJsApis plus WorkerGlobalScope.
 // TODO: Expand this list to include all worker-appropriate APIs.
 pub const WorkerJsApis = flattenTypes(&.{
+    @import("../webapi/DedicatedWorkerGlobalScope.zig"),
     @import("../webapi/WorkerGlobalScope.zig"),
     @import("../webapi/WorkerLocation.zig"),
     @import("../webapi/Navigator.zig"),
@@ -1019,8 +1200,12 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/event/PromiseRejectionEvent.zig"),
     @import("../webapi/event/CloseEvent.zig"),
     @import("../webapi/DOMException.zig"),
+    @import("../webapi/DOMRectReadOnly.zig"),
+    @import("../webapi/DOMRect.zig"),
     @import("../webapi/DOMMatrixReadOnly.zig"),
     @import("../webapi/DOMMatrix.zig"),
+    @import("../webapi/DOMPointReadOnly.zig"),
+    @import("../webapi/DOMPoint.zig"),
     @import("../webapi/net/URLSearchParams.zig"),
     @import("../webapi/encoding/TextEncoder.zig"),
     @import("../webapi/encoding/TextDecoder.zig"),
@@ -1052,13 +1237,22 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/net/XMLHttpRequestUpload.zig"),
     @import("../webapi/net/WebSocket.zig"),
+    @import("../webapi/net/EventSource.zig"),
     @import("../webapi/FileReader.zig"),
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
     @import("../webapi/storage/CookieStore.zig"),
+    @import("../webapi/storage/idb/idb.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/BroadcastChannel.zig"),
+    @import("../webapi/event/CustomEvent.zig"),
+    @import("../webapi/event/ProgressEvent.zig"),
+    @import("../webapi/Notification.zig"),
+    @import("../webapi/FileList.zig"),
+    @import("../webapi/MessageChannel.zig"),
+    @import("../webapi/MessagePort.zig"),
+    @import("../webapi/collections/DOMStringList.zig"),
 });
 
 // Master list of ALL JS APIs across all contexts.
@@ -1067,6 +1261,7 @@ pub const WorkerJsApis = flattenTypes(&.{
 // subsets (PageJsApis, WorkerSnapshot.JsApis).
 pub const JsApis = blk: {
     const base = PageJsApis ++ [_]type{
+        @import("../webapi/DedicatedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerLocation.zig").JsApi,
     };
@@ -1075,3 +1270,20 @@ pub const JsApis = blk: {
     }
     break :blk base ++ [_]type{@import("../webapi/WebDriver.zig").JsApi};
 };
+
+// Whether Child is Ancestor or inherits from it, following the _proto chain.
+pub fn inheritsOrIs(comptime Child: type, comptime Ancestor: type) bool {
+    comptime {
+        const target = Ancestor.bridge.type;
+        var T = Child.bridge.type;
+        while (true) {
+            if (T == target) {
+                return true;
+            }
+            if (!@hasField(T, "_proto")) {
+                return false;
+            }
+            T = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
+        }
+    }
+}

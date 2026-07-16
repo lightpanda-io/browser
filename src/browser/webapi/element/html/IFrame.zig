@@ -16,12 +16,17 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
-const Window = @import("../../Window.zig");
-const Document = @import("../../Document.zig");
+
 const Node = @import("../../Node.zig");
+const Window = @import("../../Window.zig");
 const Element = @import("../../Element.zig");
+const Document = @import("../../Document.zig");
+const DOMTokenList = @import("../../collections.zig").DOMTokenList;
+
 const HtmlElement = @import("../Html.zig");
 
 const IFrame = @This();
@@ -47,9 +52,15 @@ pub fn getContentDocument(self: *const IFrame) ?*Document {
     return window._document;
 }
 
-pub fn getSrc(self: *IFrame, frame: *Frame) ![:0]const u8 {
+// loading=lazy iframes are still but don't delay the page's "load" event
+pub fn isLazyLoading(self: *IFrame) bool {
+    const loading = self.asElement().getAttributeSafe(comptime .wrap("loading")) orelse return false;
+    return std.ascii.eqlIgnoreCase(loading, "lazy");
+}
+
+pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
     if (self._src.len == 0) return "";
-    return self.asNode().resolveURL(self._src, frame, .{});
+    return self.asNode().resolveURLReflect(self._src, frame, .{});
 }
 
 pub fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
@@ -72,6 +83,14 @@ pub fn setName(self: *IFrame, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
+pub fn getSandbox(self: *IFrame, frame: *Frame) !?*DOMTokenList {
+    const element = self.asElement();
+    if (element._namespace != .html) {
+        return null;
+    }
+    return element.getTokenList(.sandbox, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IFrame);
 
@@ -85,6 +104,7 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{ .ce_reactions = true });
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
     pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
+    pub const sandbox = bridge.accessor(IFrame.getSandbox, null, .{ .null_as_undefined = true });
 };
 
 pub const Build = struct {

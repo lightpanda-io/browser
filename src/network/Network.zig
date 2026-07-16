@@ -25,6 +25,7 @@ const Config = @import("../Config.zig");
 
 const CDP = @import("../cdp/CDP.zig");
 const libcurl = @import("../sys/libcurl.zig");
+const crypto = @import("../sys/libcrypto.zig");
 
 const http = @import("http.zig");
 const IpFilter = @import("IpFilter.zig");
@@ -81,14 +82,13 @@ pub const CdpLink = struct {
 // Number of fixed pollfds entries (wakeup pipe + listener).
 const PSEUDO_POLLFDS = 2;
 
-const MAX_TICK_CALLBACKS = 16;
-
 allocator: Allocator,
 
 app: *App,
 cache: ?Cache,
 config: *const Config,
-ca_blob: ?http.Blob,
+/// Holds certificate bundle.
+x509_store: *crypto.X509_STORE,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
 
@@ -109,17 +109,6 @@ accept: std.atomic.Value(bool) = .init(true),
 wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
 
 shutdown: std.atomic.Value(bool) = .init(false),
-
-// Multi is a heavy structure that can consume up to 2MB of RAM.
-// Currently, Network is used sparingly, and we only create it on demand.
-// When Network becomes truly shared, it should become a regular field.
-multi: ?*libcurl.CurlM = null,
-submission_mutex: std.Thread.Mutex = .{},
-submission_queue: DoublyLinkedList = .{},
-
-callbacks: [MAX_TICK_CALLBACKS]TickCallback = undefined,
-callbacks_len: usize = 0,
-callbacks_mutex: std.Thread.Mutex = .{},
 
 // Registered CDP read endpoints. Producer-side (the worker doing
 // register/unregister) and consumer-side (this thread's run loop) are
@@ -149,12 +138,9 @@ cdp_start: usize,
 /// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
 ip_filter: ?*IpFilter = null,
 
-const TickCallback = struct {
-    ctx: *anyopaque,
-    fun: *const fn (*anyopaque) void,
-};
-
-fn globalInit(allocator: Allocator) void {
+/// Calling `init` also calls this function; only marked public for situations
+/// networking is needed without `App`.
+pub fn globalInit(allocator: Allocator) void {
     // Only route curl's own allocations through our allocator in Debug, so the
     // leak detector sees them. In Release it'd just wrap c_allocator (curl's
     // default malloc anyway) at the cost of a per-allocation header.
@@ -168,7 +154,9 @@ fn globalInit(allocator: Allocator) void {
     };
 }
 
-fn globalDeinit() void {
+/// Calling `deinit` also calls this function; only marked public for situations
+/// networking is needed without `App`.
+pub fn globalDeinit() void {
     libcurl.curl_global_cleanup();
 }
 
@@ -178,19 +166,12 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     const pipe = try posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
 
-    // IMPORTANT: This is a bit messy, and it exists specifically because
-    // self.multi is optional. self.multi is optional so that, when telemetry is
-    // disabled, we don't need the overhead of a multi. If self.multi wasn't
-    // optional, then we wouldn't need to use posix.poll, we could use
-    // curl_multi_poll. This is to do in a follow up.
-
-    // The structure is: 0 is wakeup, 1 is listener, rest for curl fds:
-    //   [0]                                          wakeup pipe
-    //   [1]                                          listener
-    //   [PSEUDO_POLLFDS .. + httpMaxConcurrent]      curl multi fds
-    //   [.. + maxConnections]                        CDP socket fds
+    // pollfds layout:
+    //   [0]                                  wakeup pipe
+    //   [1]                                  listener
+    //   [PSEUDO_POLLFDS .. + max_cdp]        CDP socket fds
     const max_cdp = config.maxConnections();
-    const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + config.httpMaxConcurrent() + max_cdp);
+    const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + max_cdp);
     errdefer allocator.free(pollfds);
 
     const cdp_poll_snapshot = try allocator.alloc(?*CdpLink, max_cdp);
@@ -200,10 +181,15 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
     pollfds[0] = .{ .fd = pipe[0], .events = posix.POLL.IN, .revents = 0 };
 
-    var ca_blob: ?http.Blob = null;
-    if (config.tlsVerifyHost()) {
-        ca_blob = try loadCerts(allocator);
-    }
+    const x509_store = blk: {
+        if (config.tlsVerifyHost()) {
+            break :blk try createX509Store(allocator);
+        }
+        break :blk crypto.X509_STORE_new() orelse {
+            return error.FailedToCreateX509Store;
+        };
+    };
+    errdefer crypto.X509_STORE_free(x509_store);
 
     // IP filter for blocking requests to private/internal networks.
     const block_private = config.blockPrivateNetworks();
@@ -229,7 +215,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     var available: DoublyLinkedList = .{};
     for (0..count) |i| {
-        connections[i] = try http.Connection.init(ca_blob, config, ip_filter);
+        connections[i] = try http.Connection.init(x509_store, config, ip_filter);
         available.append(&connections[i].node);
     }
 
@@ -257,12 +243,12 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     return .{
         .allocator = allocator,
         .config = config,
-        .ca_blob = ca_blob,
+        .x509_store = x509_store,
 
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
         .cdp_poll_snapshot = cdp_poll_snapshot,
-        .cdp_start = PSEUDO_POLLFDS + config.httpMaxConcurrent(),
+        .cdp_start = PSEUDO_POLLFDS,
 
         .available = available,
         .connections = connections,
@@ -281,10 +267,6 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 }
 
 pub fn deinit(self: *Network) void {
-    if (self.multi) |multi| {
-        libcurl.curl_multi_cleanup(multi) catch {};
-    }
-
     for (&self.wakeup_pipe) |*fd| {
         if (fd.* >= 0) {
             posix.close(fd.*);
@@ -295,10 +277,7 @@ pub fn deinit(self: *Network) void {
     self.allocator.free(self.pollfds);
     self.allocator.free(self.cdp_poll_snapshot);
 
-    if (self.ca_blob) |ca_blob| {
-        const data: [*]u8 = @ptrCast(ca_blob.data);
-        self.allocator.free(data[0..ca_blob.len]);
-    }
+    crypto.X509_STORE_free(self.x509_store);
 
     for (self.connections) |*conn| {
         conn.deinit();
@@ -366,30 +345,6 @@ pub fn bind(
 pub fn unbind(self: *Network) void {
     self.accept.store(false, .release);
     self.wakeupPoll();
-}
-
-pub fn onTick(self: *Network, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
-    self.callbacks_mutex.lock();
-    defer self.callbacks_mutex.unlock();
-
-    lp.assert(self.callbacks_len < MAX_TICK_CALLBACKS, "too many ticks", .{});
-
-    self.callbacks[self.callbacks_len] = .{
-        .ctx = ctx,
-        .fun = callback,
-    };
-    self.callbacks_len += 1;
-
-    self.wakeupPoll();
-}
-
-pub fn fireTicks(self: *Network) void {
-    self.callbacks_mutex.lock();
-    defer self.callbacks_mutex.unlock();
-
-    for (self.callbacks[0..self.callbacks_len]) |*callback| {
-        callback.fun(callback.ctx);
-    }
 }
 
 // Hand a CDP WebSocket's read side over to the main network thread. The caller
@@ -609,15 +564,15 @@ fn shutdownCdpLinks(self: *Network) void {
 
 pub fn run(self: *Network) void {
     var drain_buf: [64]u8 = undefined;
-    var running_handles: c_int = 0;
 
     const poll_fd = &self.pollfds[0];
     const listen_fd = &self.pollfds[1];
 
-    // Please note that receiving a shutdown command does not terminate all connections.
-    // When gracefully shutting down a server, we at least want to send the remaining
-    // telemetry, but we stop accepting new connections. It is the responsibility
-    // of external code to terminate its requests upon shutdown.
+    // Receiving a shutdown command does not terminate existing connections: we
+    // stop accepting new ones but leave in-flight requests to external code to
+    // terminate. This loop only services the listener and the CDP read sockets;
+    // page fetches run on per-worker HttpClient multis and telemetry on its own
+    // thread, so nothing here drives libcurl.
     while (true) {
         if (self.listener != null and !self.accept.load(.acquire)) {
             posix.close(self.listener.?.socket);
@@ -625,43 +580,10 @@ pub fn run(self: *Network) void {
             self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
         }
 
-        self.drainQueue();
-
-        if (self.multi) |multi| {
-            // Kickstart newly added handles (DNS/connect) so that
-            // curl registers its sockets before we poll.
-            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
-                lp.log.err(.app, "curl perform", .{ .err = err });
-            };
-
-            self.preparePollFds(multi);
-        }
-
         self.prepareCdpPollFds();
 
-        // for ontick to work, you need to wake up periodically
-        const timeout = blk: {
-            const min_timeout = 250; // 250ms
-            if (self.multi == null) {
-                break :blk min_timeout;
-            }
-
-            // curl_multi_timeout reports -1 when curl has no timeout
-            // preference (idle) and 0 when it wants to be serviced
-            // immediately. Treat both as "no curl-imposed deadline" and
-            // fall back to min_timeout — otherwise @min(min_timeout, -1)
-            // would be -1, i.e. poll() blocks forever, starving onTick
-            // (telemetry's periodic flush) and removing the safety net
-            // that bounds any missed wakeup to min_timeout.
-            const curl_timeout = self.getCurlTimeout();
-            if (curl_timeout <= 0) {
-                break :blk min_timeout;
-            }
-
-            break :blk @min(min_timeout, curl_timeout);
-        };
-
-        _ = posix.poll(self.pollfds, timeout) catch |err| {
+        // wait until we get a CDP message or a signal on the wakeup pipe
+        _ = posix.poll(self.pollfds, -1) catch |err| {
             lp.log.err(.app, "poll", .{ .err = err });
             continue;
         };
@@ -679,35 +601,14 @@ pub fn run(self: *Network) void {
             self.acceptConnections();
         }
 
-        if (self.multi) |multi| {
-            // Drive transfers and process completions.
-            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
-                lp.log.err(.app, "curl perform", .{ .err = err });
-            };
-            self.processCompletions(multi);
-        }
-
         self.processCdpEvents();
 
-        self.fireTicks();
-
         if (self.shutdown.load(.acquire)) {
-            // Drain any live CDP links so their workers can exit (issue #2510).
-            // Idempotent — no-op once drained, safe to call every iteration
+            // Drain any live CDP links so their workers can exit (issue #2510),
+            // then stop. Page fetches and telemetry don't run on this loop, so
+            // there is nothing else to flush here.
             self.shutdownCdpLinks();
-
-            if (running_handles == 0) {
-                // Check if fireTicks submitted new requests (e.g. telemetry
-                // flush). If so, continue the loop to drain and send them
-                // before exiting.
-                self.submission_mutex.lock();
-                const has_pending = self.submission_queue.first != null;
-                self.submission_mutex.unlock();
-
-                if (!has_pending) {
-                    break;
-                }
-            }
+            break;
         }
     }
 
@@ -725,44 +626,8 @@ pub fn run(self: *Network) void {
     }
 }
 
-pub fn submitRequest(self: *Network, conn: *http.Connection) void {
-    self.submission_mutex.lock();
-    self.submission_queue.append(&conn.node);
-    self.submission_mutex.unlock();
-    self.wakeupPoll();
-}
-
 fn wakeupPoll(self: *Network) void {
     _ = posix.write(self.wakeup_pipe[1], &.{1}) catch {};
-}
-
-fn drainQueue(self: *Network) void {
-    self.submission_mutex.lock();
-    defer self.submission_mutex.unlock();
-
-    if (self.submission_queue.first == null) return;
-
-    const multi = self.multi orelse blk: {
-        const m = libcurl.curl_multi_init() orelse {
-            lp.assert(false, "curl multi init failed", .{});
-            unreachable;
-        };
-        self.multi = m;
-        break :blk m;
-    };
-
-    while (self.submission_queue.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        conn.setPrivate(conn) catch |err| {
-            lp.log.err(.app, "curl set private", .{ .err = err });
-            self.releaseConnection(conn);
-            continue;
-        };
-        libcurl.curl_multi_add_handle(multi, conn._easy) catch |err| {
-            lp.log.err(.app, "curl multi add", .{ .err = err });
-            self.releaseConnection(conn);
-        };
-    }
 }
 
 pub fn stop(self: *Network) void {
@@ -800,68 +665,6 @@ fn acceptConnections(self: *Network) void {
     }
 }
 
-fn preparePollFds(self: *Network, multi: *libcurl.CurlM) void {
-    // Only the curl slice — NOT through to the end of pollfds. The CDP
-    // socket fds live in [cdp_start..] and are owned by
-    // prepareCdpPollFds, which only rebuilds them when cdp_dirty is set
-    // (a steady-state optimization). Slicing to the end here would
-    // @memset those fds to -1 every iteration once a multi exists (which
-    // happens as soon as telemetry sends its first request), silently
-    // dropping every live CDP socket from the poll set — Network then
-    // never reads another CDP message (#2508) nor observes peer
-    // EOF/shutdown (#2507).
-    const curl_fds = self.pollfds[PSEUDO_POLLFDS..self.cdp_start];
-    @memset(curl_fds, .{ .fd = -1, .events = 0, .revents = 0 });
-
-    var fd_count: c_uint = 0;
-    const wait_fds: []libcurl.CurlWaitFd = @ptrCast(curl_fds);
-    libcurl.curl_multi_waitfds(multi, wait_fds, &fd_count) catch |err| {
-        lp.log.err(.app, "curl waitfds", .{ .err = err });
-    };
-}
-
-fn getCurlTimeout(self: *Network) i32 {
-    const multi = self.multi orelse return -1;
-    var timeout_ms: c_long = -1;
-    libcurl.curl_multi_timeout(multi, &timeout_ms) catch return -1;
-    return @intCast(@min(timeout_ms, std.math.maxInt(i32)));
-}
-
-fn processCompletions(self: *Network, multi: *libcurl.CurlM) void {
-    var msgs_in_queue: c_int = 0;
-    while (libcurl.curl_multi_info_read(multi, &msgs_in_queue)) |msg| {
-        switch (msg.data) {
-            .done => |maybe_err| {
-                if (maybe_err) |err| {
-                    lp.log.warn(.app, "curl transfer error", .{ .err = err });
-                }
-            },
-            else => continue,
-        }
-
-        const easy: *libcurl.Curl = msg.easy_handle;
-        var ptr: *anyopaque = undefined;
-        libcurl.curl_easy_getinfo(easy, .private, &ptr) catch
-            lp.assert(false, "curl getinfo private", .{});
-        const conn: *http.Connection = @ptrCast(@alignCast(ptr));
-
-        libcurl.curl_multi_remove_handle(multi, easy) catch {};
-        self.releaseConnection(conn);
-    }
-}
-
-comptime {
-    if (@sizeOf(posix.pollfd) != @sizeOf(libcurl.CurlWaitFd)) {
-        @compileError("pollfd and CurlWaitFd size mismatch");
-    }
-    if (@offsetOf(posix.pollfd, "fd") != @offsetOf(libcurl.CurlWaitFd, "fd") or
-        @offsetOf(posix.pollfd, "events") != @offsetOf(libcurl.CurlWaitFd, "events") or
-        @offsetOf(posix.pollfd, "revents") != @offsetOf(libcurl.CurlWaitFd, "revents"))
-    {
-        @compileError("pollfd and CurlWaitFd layout mismatch");
-    }
-}
-
 pub fn getConnection(self: *Network) ?*http.Connection {
     self.conn_mutex.lock();
     defer self.conn_mutex.unlock();
@@ -880,7 +683,7 @@ pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
             self.ws_count -= 1;
         },
         else => {
-            conn.reset(self.config, self.ca_blob, self.ip_filter) catch |err| {
+            conn.reset(self.config, self.x509_store, self.ip_filter) catch |err| {
                 lp.assert(false, "couldn't reset curl easy", .{ .err = err });
             };
             self.conn_mutex.lock();
@@ -905,7 +708,7 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     };
 
     // don't do this under lock
-    conn.* = http.Connection.init(self.ca_blob, self.config, self.ip_filter) catch {
+    conn.* = http.Connection.init(self.x509_store, self.config, self.ip_filter) catch {
         self.ws_mutex.lock();
         defer self.ws_mutex.unlock();
         self.ws_pool.destroy(conn);
@@ -917,126 +720,88 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     return conn;
 }
 
-// Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is
-// what Zig has), with lines wrapped at 64 characters and with a basic header
-// and footer
-const LineWriter = struct {
-    col: usize = 0,
-    inner: std.ArrayList(u8).Writer,
+const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{FailedToCreateX509Store};
 
-    pub fn writeAll(self: *LineWriter, data: []const u8) !void {
-        var writer = self.inner;
+/// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
+/// Allocations made through passed `allocator` are freed before this function returns.
+pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE {
+    const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
+    errdefer crypto.X509_STORE_free(store);
 
-        var col = self.col;
-        const len = 64 - col;
+    switch (comptime builtin.os.tag) {
+        .linux, .openbsd, .netbsd, .freebsd => blk: {
+            // Iterate over known directories.
+            inline for ([_][:0]const u8{
+                "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
+                "/etc/pki/tls/certs", // Fedora/RHEL
+            }) |dir| {
+                if (loadHashedDirectory(store, dir)) {
+                    break :blk;
+                }
+            }
 
-        var remain = data;
-        if (remain.len > len) {
-            col = 0;
-            try writer.writeAll(data[0..len]);
-            try writer.writeByte('\n');
-            remain = data[len..];
-        }
+            // Iterate over known files.
+            inline for ([_][*:0]const u8{
+                "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu/Gentoo
+                "/etc/pki/tls/certs/ca-bundle.crt", // Fedora/RHEL 6
+                "/etc/ssl/ca-bundle.pem", // OpenSUSE
+                "/etc/pki/tls/cacert.pem", // OpenELEC
+                "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS/RHEL 7
+                "/etc/ssl/cert.pem", // Alpine, *BSD
+            }) |file| {
+                if (crypto.X509_STORE_load_locations(store, file, null) == 1) {
+                    break :blk;
+                }
+            }
 
-        while (remain.len > 64) {
-            try writer.writeAll(remain[0..64]);
-            try writer.writeByte('\n');
-            remain = remain[64..];
-        }
-        try writer.writeAll(remain);
-        self.col = col + remain.len;
-    }
-};
+            log.warn(.app, "No system certificates", .{});
+        },
+        else => {
+            // Prefer stdlib's cert scanner.
+            var bundle: std.crypto.Certificate.Bundle = .{};
+            try bundle.rescan(allocator);
+            defer bundle.deinit(allocator);
 
-// TODO: on BSD / Linux, we could just read the PEM file directly.
-// This whole rescan + decode is really just needed for MacOS. On Linux
-// bundle.rescan does find the .pem file(s) which could be in a few different
-// places, so it's still useful, just not efficient.
-fn loadCerts(allocator: Allocator) !libcurl.CurlBlob {
-    var bundle: std.crypto.Certificate.Bundle = .{};
-    try bundle.rescan(allocator);
-    defer bundle.deinit(allocator);
+            const bytes = bundle.bytes.items;
+            if (bytes.len == 0) {
+                log.warn(.app, "No system certificates", .{});
+                return store;
+            }
+            var it = bundle.map.valueIterator();
+            while (it.next()) |index| {
+                // d2i_X509 reads the cert's own DER length header to find its end and
+                // advances `ptr` past it, so we just hand it the rest of the buffer.
+                var ptr: [*]const u8 = bytes.ptr + index.*;
+                const x509 = crypto.d2i_X509(null, &ptr, @intCast(bytes.len - index.*)) orelse {
+                    log.warn(.app, "Skipping unparseable system cert", .{});
+                    continue;
+                };
+                defer crypto.X509_free(x509); // add_cert takes its own ref; drop ours.
 
-    const bytes = bundle.bytes.items;
-    if (bytes.len == 0) {
-        lp.log.warn(.app, "No system certificates", .{});
-        return .{
-            .len = 0,
-            .flags = 0,
-            .data = bytes.ptr,
-        };
-    }
-
-    const encoder = std.base64.standard.Encoder;
-    var arr: std.ArrayList(u8) = .empty;
-
-    const encoded_size = encoder.calcSize(bytes.len);
-    const buffer_size = encoded_size +
-        (bundle.map.count() * 75) + // start / end per certificate + extra, just in case
-        (encoded_size / 64) // newline per 64 characters
-    ;
-    try arr.ensureTotalCapacity(allocator, buffer_size);
-    errdefer arr.deinit(allocator);
-    var writer = arr.writer(allocator);
-
-    var it = bundle.map.valueIterator();
-    while (it.next()) |index| {
-        const cert = try std.crypto.Certificate.der.Element.parse(bytes, index.*);
-
-        try writer.writeAll("-----BEGIN CERTIFICATE-----\n");
-        var line_writer = LineWriter{ .inner = writer };
-        try encoder.encodeWriter(&line_writer, bytes[index.*..cert.slice.end]);
-        try writer.writeAll("\n-----END CERTIFICATE-----\n");
+                const result = crypto.X509_STORE_add_cert(store, x509);
+                if (result != 1) {
+                    log.warn(.app, "Failed to add X509 cert to store", .{});
+                }
+            }
+        },
     }
 
-    // Final encoding should not be larger than our initial size estimate
-    lp.assert(buffer_size > arr.items.len, "Http loadCerts", .{ .estimate = buffer_size, .len = arr.items.len });
-
-    // Allocate exactly the size needed and copy the data
-    const result = try allocator.dupe(u8, arr.items);
-    // Free the original oversized allocation
-    arr.deinit(allocator);
-
-    return .{
-        .len = result.len,
-        .data = result.ptr,
-        .flags = 0,
-    };
+    return store;
 }
 
-const testing = @import("../testing.zig");
+fn loadHashedDirectory(store: *crypto.X509_STORE, dir: [:0]const u8) bool {
+    var handle = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch return false;
+    defer handle.close();
 
-test "Network: preparePollFds leaves the CDP fd region untouched" {
-    // Regression for #2507 / #2508. Once a multi exists (telemetry creates
-    // one in optimized builds), preparePollFds runs every loop iteration.
-    // It rebuilds only the curl slice [PSEUDO_POLLFDS..cdp_start]; the CDP
-    // region [cdp_start..] is owned by prepareCdpPollFds, which keeps its
-    // entries across iterations and only rebuilds when cdp_dirty is set.
-    // A slice that ran to the end of pollfds @memset those CDP sockets to
-    // -1, silently dropping every live CDP connection from the poll set —
-    // so Network stopped reading CDP messages (#2508) and never observed
-    // peer EOF/shutdown (#2507). curl global is initialized by the test
-    // harness (App.init -> Network.init).
-    const multi = libcurl.curl_multi_init() orelse return error.FailedToInitMulti;
-    defer libcurl.curl_multi_cleanup(multi) catch {};
+    var hashed = false;
+    var it = handle.iterate();
+    while (it.next() catch return false) |entry| {
+        if (std.mem.endsWith(u8, entry.name, ".0")) {
+            hashed = true;
+            break;
+        }
+    }
+    if (!hashed) return false;
 
-    const curl_slots = 4;
-    const cdp_slots = 3;
-    var pollfds: [PSEUDO_POLLFDS + curl_slots + cdp_slots]posix.pollfd = undefined;
-    @memset(&pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
-
-    // preparePollFds only reads self.pollfds and self.cdp_start.
-    var nw: Network = undefined;
-    nw.pollfds = &pollfds;
-    nw.cdp_start = PSEUDO_POLLFDS + curl_slots;
-
-    // Two live CDP sockets parked in the CDP region, mimicking the steady
-    // state between cdp_dirty rebuilds.
-    pollfds[nw.cdp_start] = .{ .fd = 4242, .events = posix.POLL.IN, .revents = 0 };
-    pollfds[nw.cdp_start + 1] = .{ .fd = 4243, .events = posix.POLL.IN, .revents = 0 };
-
-    nw.preparePollFds(multi);
-
-    try testing.expectEqual(@as(posix.fd_t, 4242), pollfds[nw.cdp_start].fd);
-    try testing.expectEqual(@as(posix.fd_t, 4243), pollfds[nw.cdp_start + 1].fd);
+    return crypto.X509_STORE_load_locations(store, null, dir.ptr) == 1;
 }

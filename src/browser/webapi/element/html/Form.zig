@@ -115,12 +115,12 @@ pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
 
 pub fn getAction(self: *Form, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const owner_url = element.asNode().ownerFrame(frame).url;
+    const owner_url = element.ownerFrame(frame).url;
     const action = element.getAttributeSafe(comptime .wrap("action")) orelse return owner_url;
     if (action.len == 0) {
         return owner_url;
     }
-    return element.asNode().resolveURL(action, frame, .{});
+    return element.asNode().resolveURLReflect(action, frame, .{});
 }
 
 pub fn setAction(self: *Form, value: []const u8, frame: *Frame) !void {
@@ -258,7 +258,7 @@ pub const JsApi = struct {
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
-    pub const requestSubmit = bridge.function(Form.requestSubmit, .{ .dom_exception = true });
+    pub const requestSubmit = bridge.function(Form.requestSubmit, .{});
     pub const checkValidity = bridge.function(Form.checkValidity, .{});
     pub const reportValidity = bridge.function(Form.reportValidity, .{});
 };

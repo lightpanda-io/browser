@@ -18,69 +18,103 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
-const Frame = @import("Frame.zig");
+const Browser = @import("Browser.zig");
 const Session = @import("Session.zig");
-const HttpClient = @import("HttpClient.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 
 const Node = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 
 const log = lp.log;
-const IS_DEBUG = builtin.mode == .Debug;
 
 const Runner = @This();
 
-frame: *Frame,
 session: *Session,
+browser: *Browser,
 http_client: *HttpClient,
 
 pub const Opts = struct {};
 
-pub fn init(session: *Session, _: Opts) !Runner {
-    const frame = session.currentFrame() orelse return error.NoPage;
-
+pub fn init(session: *Session, _: Opts) Runner {
     return .{
-        .frame = frame,
         .session = session,
+        .browser = session.browser,
         .http_client = &session.browser.http_client,
     };
 }
 
-pub const WaitOpts = struct {
-    ms: u32,
+pub const WaitCondition = struct {
+    frame_id: u32,
     until: lp.Config.WaitUntil = .done,
+    status: Status = .pending,
+
+    const Status = union(enum) {
+        pending,
+        complete,
+        err: anyerror,
+    };
 };
 
+const WaitForFrameOpts = struct {
+    until: lp.Config.WaitUntil = .done,
+};
+pub fn waitForFrame(self: *Runner, frame_id: u32, timeout_ms: u32, opts: WaitForFrameOpts) !void {
+    const condition = WaitCondition{ .frame_id = frame_id, .until = opts.until };
+    var conditions = [_]WaitCondition{condition};
+    _ = try self._wait(false, timeout_ms, &conditions);
+    try firstConditionError(&conditions);
+}
+
+pub fn waitForFrameCDP(self: *Runner, frame_id: u32, timeout_ms: u32, until: lp.Config.WaitUntil) !void {
+    const condition = WaitCondition{ .frame_id = frame_id, .until = until };
+    var conditions = [_]WaitCondition{condition};
+    // Unlike waitForFrame, we deliberately don't surface a per-frame error here.
+    // The frame we're waiting on can legitimately disappear mid-wait.
+    _ = try self._wait(true, timeout_ms, &conditions);
+}
+
+// Helper to wait for all currently loaded frames
+pub fn waitForAll(self: *Runner, timeout_ms: u32, opts: WaitForFrameOpts) !void {
+    const session = self.session;
+    const arena = try session.getArena(.tiny, "Runner.waitForAll");
+    defer session.releaseArena(arena);
+
+    var pages_to_wait: usize = 0;
+    for (session.pages.items) |page| {
+        if (page.replacement == null) {
+            pages_to_wait += 1;
+        }
+    }
+
+    const conditions = try arena.alloc(WaitCondition, pages_to_wait);
+    var i: usize = 0;
+    for (session.pages.items) |page| {
+        if (page.replacement == null) {
+            conditions[i] = .{ .frame_id = page.frame._frame_id, .until = opts.until };
+            i += 1;
+        }
+    }
+    _ = try self._wait(false, timeout_ms, conditions);
+    try firstConditionError(conditions);
+}
+
+pub fn wait(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !void {
+    try self._wait(false, timeout_ms, conditions);
+}
+
 pub const WaitResult = enum { completed, timeout };
-
-pub fn wait(self: *Runner, opts: WaitOpts) !void {
-    _ = try self._wait(false, opts);
-}
-
-pub fn waitCDP(self: *Runner, opts: WaitOpts) !void {
-    _ = try self._wait(true, opts);
-}
-
-// `wait` that surfaces whether the goal was reached or the timeout fired.
-pub fn waitResult(self: *Runner, opts: WaitOpts) !WaitResult {
-    return self._wait(false, opts);
+pub fn waitResult(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !WaitResult {
+    return self._wait(false, timeout_ms, conditions);
 }
 
 // Wait until either a parse-state / load goal is reached or `opts.ms`
 // elapses. Returns as soon as _tick reports .done.
-fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !WaitResult {
-    const session = self.session;
-    const browser = session.browser;
+fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []WaitCondition) !WaitResult {
+    const browser = self.browser;
 
     var timer = try std.time.Timer.start();
-
-    const tick_opts = TickOpts{
-        .ms = 200,
-        .until = opts.until,
-    };
 
     // Periodic V8 GC hint during long waits. V8 is otherwise only nudged on
     // session/page teardown (Browser.zig, Page.zig), so a page that stays
@@ -91,9 +125,21 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !WaitResult {
     var gc_hint_timer = std.time.Timer.start() catch unreachable;
 
     while (true) {
+        // The CDP path can have its session closed mid-wait: a command
+        // dispatched by the previous tick (e.g. disposeBrowserContext) can call
+        // browser.closeSession (see the `browser` field comment). So re-derive
+        // the live session each pass there and end the wait once it's gone.
+        // Non-CDP callers hold a stable session, so they skip the check.
+        const session = if (comptime is_cdp)
+            (if (browser.session) |*s| s else return .completed)
+        else
+            self.session;
+
         // Cooperative cancellation. Set by the agent so SIGINT can break
         // out of a long wait without the user sitting through the timeout.
-        if (session.isCancelled()) return error.Cancelled;
+        if (session.isCancelled()) {
+            return error.Cancelled;
+        }
 
         if (gc_hint_timer.read() >= gc_hint_period_ns) {
             gc_hint_timer.reset();
@@ -101,14 +147,11 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !WaitResult {
         }
         session.processDestroyQueues();
 
-        const tick_result = self._tick(is_cdp, tick_opts) catch |err| {
+        const tick_result = self._tick(is_cdp, 200, conditions) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 error.ClientDisconnected => {}, // CDP layer already logged this
-                else => log.err(.browser, "session wait", .{
-                    .err = err,
-                    .url = self.frame.url,
-                }),
+                else => log.err(.browser, "session wait", .{ .err = err }),
             }
             return err;
         };
@@ -124,16 +167,16 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !WaitResult {
                 // can observe CDP commands. We have nothing useful to do here
                 // but we can ask the http_client to wait for CDP messages.
                 const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-                if (elapsed >= opts.ms) {
+                if (elapsed >= timeout_ms) {
                     return .timeout;
                 }
-                try self.http_client.tick(@min(opts.ms - elapsed, 200), .all);
+                try self.http_client.tick(@min(timeout_ms - elapsed, 200));
                 break :done_blk 0;
             },
         };
 
         const ms_elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-        if (ms_elapsed >= opts.ms) {
+        if (ms_elapsed >= timeout_ms) {
             return .timeout;
         }
         if (next_ms > 0) {
@@ -142,155 +185,155 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !WaitResult {
     }
 }
 
-pub const TickOpts = struct {
-    ms: u32,
-    until: lp.Config.WaitUntil = .done,
-};
-
 pub const TickResult = union(enum) {
     done,
     ok: u32,
 };
-pub fn tick(self: *Runner, opts: TickOpts) !TickResult {
-    return self._tick(false, opts);
+pub fn tickForFrame(self: *Runner, frame_id: u32, timeout_ms: u32, opts: WaitForFrameOpts) !TickResult {
+    const condition = WaitCondition{ .frame_id = frame_id, .until = opts.until };
+    var conditions = [_]WaitCondition{condition};
+    const result = try self.tick(timeout_ms, &conditions);
+    try firstConditionError(&conditions);
+    return result;
+}
+pub fn tick(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !TickResult {
+    return self._tick(false, timeout_ms, conditions);
 }
 
-fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
-    // Refresh self.frame from session. In case of pending page, we want to
-    // take its state while loading. If we use only the current frame, we will
-    // return a .done result immediately.
-    self.frame = self.session.pendingOrCurrentFrame() orelse return .done;
-    const frame = self.frame;
+fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []WaitCondition) !TickResult {
+    const session = self.session;
+    const browser = self.browser;
     const http_client = self.http_client;
 
-    switch (frame._parse_state) {
-        .pre, .raw, .text, .image, .download => {
-            // The main frame hasn't started/finished navigating.
-            // There's no JS to run, and no reason to run the scheduler
-            // — unless we're the CDP worker, in which case we want
-            // http_client.tick to drain the inbox.
-            if (http_client.http_active == 0 and http_client.next_tick_count == 0 and (comptime is_cdp) == false) {
-                // haven't started navigating, I guess.
-                return .done;
-            }
-            try http_client.tick(@intCast(opts.ms), .all);
-            return .{ .ok = 0 };
-        },
-        .html, .complete => {
-            const session = self.session;
-            if (session.currentPage()) |page| {
-                if (page.queued_navigation.items.len != 0) {
-                    try session.processQueuedNavigation();
-                    self.frame = session.currentFrame().?; // might have changed
-                    return .{ .ok = 0 };
-                }
-            }
-            const browser = session.browser;
+    // Arms the watchdog (and proves liveness): a stall anywhere in this tick
+    // ages this stamp until the watchdog fires.
+    http_client.heartbeat.touch();
 
-            // The HTML page was parsed. We now either have JS scripts to
-            // download, or scheduled tasks to execute, or both.
-
-            // scheduler.run could trigger new http transfers, so do not
-            // store http_client.http_active BEFORE this call and then use
-            // it AFTER.
-            try browser.runMacrotasks();
-
-            const http_active = http_client.http_active;
-            const http_next_tick = http_client.next_tick_count;
-            const total_network_activity = http_active + http_next_tick + http_client.interception_layer.intercepted;
-            if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
-                frame.notifyNetworkAlmostIdle();
-            }
-            if (frame._notified_network_idle.check(total_network_activity == 0)) {
-                frame.notifyNetworkIdle();
-            }
-
-            switch (opts.until) {
-                .done => {},
-                .domcontentloaded => if (frame._load_state == .load or frame._load_state == .complete) {
-                    return .done;
-                },
-                .load => if (frame._load_state == .complete) {
-                    return .done;
-                },
-                .networkidle => if (frame._notified_network_idle == .done) {
-                    return .done;
-                },
-                .networkalmostidle => if (frame._notified_network_almost_idle == .done) {
-                    return .done;
-                },
-            }
-
-            if (http_active == 0 and http_next_tick == 0 and http_client.ws_active == 0 and http_client.queue.first == null and http_client.ready_queue.first == null and (comptime is_cdp) == false) {
-                // ready_queue is also part of the check: makeRequest now
-                // wraps its handles.perform() in a performing=true window,
-                // and any synchronous libcurl callback that ends up
-                // calling trackConn during that window (e.g. JS creating
-                // a WebSocket) will append to ready_queue. Without this
-                // check we could observe it non-empty after
-                // http_client.tick returns.
-                //
-                // intercepted is only non-zero in serve mode, and
-                // serve mode implies cdp_client != null — so if we got
-                // here, intercepted == 0.
-                if (comptime IS_DEBUG) {
-                    std.debug.assert(http_client.interception_layer.intercepted == 0);
-                }
-
-                if (browser.hasBackgroundTasks()) {
-                    // _we_ have nothing to run, but v8 is working on
-                    // background tasks. We'll wait for them.
-                    browser.waitForBackgroundTasks();
-                }
-
-                // We never advertise a wait time of more than 20, there can
-                // always be new background tasks to run.
-                if (browser.msToNextMacrotask()) |ms_to_next_task| {
-                    return .{ .ok = @min(ms_to_next_task, 20) };
-                }
-                return .done;
-            }
-
-            // We're here because we either have active HTTP
-            // connections, or there's a CDP client whose inbox we have
-            // to drain via http_client.tick. We should continue to run
-            // tasks, so we minimize how long we'll poll for network I/O.
-            var ms_to_wait = @min(opts.ms, browser.msToNextMacrotask() orelse 200);
-            if (ms_to_wait > 10 and browser.hasBackgroundTasks()) {
-                // if we have background tasks, we don't want to wait too
-                // long for a message from the client. We want to go back
-                // to the top of the loop and run macrotasks.
-                ms_to_wait = 10;
-            }
-            try http_client.tick(@intCast(@min(opts.ms, ms_to_wait)), .all);
-            return .{ .ok = 0 };
-        },
-        .err => |err| {
-            frame._parse_state = .{ .raw_done = @errorName(err) };
-            return err;
-        },
-        .raw_done => {
-            if (comptime is_cdp) {
-                try http_client.tick(@intCast(opts.ms), .all);
-                return .{ .ok = 0 };
-            }
-            return .done;
-        },
+    // Drain queued navigations across every live page (one page per call)
+    // A navigation can swap a frame pointer or the page set,
+    // so restart the tick to re-resolve cleanly.
+    if (try session.processQueuedNavigation()) {
+        return .{ .ok = 0 };
     }
+
+    if (hasRunnablePage(session)) {
+        try browser.runMacrotasks();
+    }
+
+    const activity = http_client.activity();
+    const total_http_activity = activity.http;
+    const total_network_activity = activity.total();
+
+    const ms_to_next_macrotask = browser.msToNextMacrotask();
+    const network_idle = activity.idle();
+    const is_done = ms_to_next_macrotask == null and network_idle;
+
+    // _we_ have nothing to run, but v8 is working on background tasks. We'll
+    // wait for them. Don't do this for CDP, since new CDP messages can always
+    // come in at any time.
+    if ((comptime is_cdp) == false and network_idle and browser.hasBackgroundTasks()) {
+        // We _are_ calling into v8, but these background tasks are v8-specific,
+        // meaning v8 is working, not stuck. We don't want the watchdog to kill this.
+        http_client.heartbeat.enterWait();
+        defer http_client.heartbeat.exitWait();
+        browser.waitForBackgroundTasks();
+        return .{ .ok = 0 };
+    }
+
+    var want_http_tick = false;
+
+    for (conditions) |*condition| {
+        if (condition.status != .pending) {
+            // this condition is at a terminal state
+            continue;
+        }
+
+        const page = session.pendingOrLivePage(condition.frame_id) orelse {
+            condition.status = .{ .err = error.FrameNotFound };
+            continue;
+        };
+
+        const frame = &page.frame;
+        switch (frame._parse_state) {
+            .err => |err| {
+                frame._parse_state = .{ .raw_done = @errorName(err) };
+                condition.status = .{ .err = err };
+            },
+            .raw_done => {
+                condition.status = .complete;
+            },
+            .pre, .raw, .text, .image, .download => {
+                if (total_network_activity == 0) {
+                    condition.status = .complete;
+                } else {
+                    want_http_tick = true;
+                }
+            },
+            .html, .complete => {
+                frame.checkIdleNotifications(total_http_activity);
+
+                const met = switch (condition.until) {
+                    .done => is_done,
+                    .domcontentloaded => frame._load_state == .load or frame._load_state == .complete,
+                    .load => frame._load_state == .complete,
+                    .networkidle => frame._notified_network_idle == .done,
+                    .networkalmostidle => frame._notified_network_almost_idle == .done,
+                };
+
+                // `met` resolves the condition. Otherwise, as long as there's
+                // still work in flight (network or pending macrotasks), keep
+                // ticking. `is_done` means the page went fully idle without
+                // reaching the goal — there's nothing left to wait on, so
+                // resolve rather than spin forever.
+                if (met or is_done) {
+                    condition.status = .complete;
+                } else {
+                    want_http_tick = true;
+                }
+            },
+        }
+    }
+
+    if ((comptime is_cdp) or want_http_tick) {
+        var ms_to_wait = @min(timeout_ms, ms_to_next_macrotask orelse 200);
+        if (browser.hasBackgroundTasks()) {
+            // background work will queue more to do soon — don't block long
+            // for a client message; loop back and run macrotasks instead.
+            ms_to_wait = @min(ms_to_wait, 10);
+        }
+        try http_client.tick(@intCast(ms_to_wait));
+        return .{ .ok = 0 };
+    }
+
+    // WebSocket often remain open forever. We can't wait for them to "complete".
+    // But, if we have web socket connections, we still want to make progress on
+    // them, so we tick with no delay.
+    if (activity.ws_conns > 0 or activity.ws_events > 0) {
+        try http_client.tick(0);
+    }
+
+    return .done;
 }
 
-pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !*Node.Element {
-    const arena = try self.session.getArena(.small, "Runner.waitForSelector");
-    defer self.session.releaseArena(arena);
+pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeout_ms: u32) !*Node.Element {
+    const session = self.session;
+    const arena = try session.getArena(.small, "Runner.waitForSelector");
+    defer session.releaseArena(arena);
 
     var timer = try std.time.Timer.start();
-    const parsed_selector = try Selector.parseLeaky(arena, selector);
+    const selector = try Selector.parseLeaky(arena, input);
 
     while (true) {
-        if (self.session.isCancelled()) return error.Cancelled;
-        // self.frame can change between ticks
-        const frame = self.frame;
-        if (try parsed_selector.query(frame.document.asNode(), frame)) |el| {
+        if (session.isCancelled()) {
+            return error.Cancelled;
+        }
+
+        const page = session.pendingOrLivePage(frame_id) orelse {
+            return error.FrameNotFound;
+        };
+        const frame = &page.frame;
+
+        if (try Selector.query(selector, frame.document.asNode(), frame)) |el| {
             return el;
         }
 
@@ -298,7 +341,7 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
         if (elapsed >= timeout_ms) {
             return error.Timeout;
         }
-        switch (try self.tick(.{ .ms = timeout_ms - elapsed })) {
+        switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
             // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
             .done => std.Thread.sleep(std.time.ns_per_ms * @as(u64, @min(timeout_ms - elapsed, 50))),
             .ok => |recommended_sleep_ms| {
@@ -310,7 +353,8 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
     }
 }
 
-pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void {
+pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms: u32) !void {
+    const session = self.session;
     var timer = try std.time.Timer.start();
 
     // Compile the script once and re-use the compiled form. A tick can create a
@@ -319,8 +363,13 @@ pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void 
     // each tick. Compilation is context-independent, so we can do it up front
     // in whatever context the frame currently has.
     var compiled: js.Script.Unbound.Global = blk: {
+        const page = session.pendingOrLivePage(frame_id) orelse {
+            return error.FrameNotFound;
+        };
+        const frame = &page.frame;
+
         var ls: js.Local.Scope = undefined;
-        runner.frame.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         var try_catch: js.TryCatch = undefined;
@@ -328,7 +377,7 @@ pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void 
         defer try_catch.deinit();
 
         const s = ls.local.compile(src, "wait_script") catch |err| {
-            const caught = try_catch.caughtOrError(runner.frame.call_arena, err);
+            const caught = try_catch.caughtOrError(frame.local_arena, err);
             log.err(.app, "wait script error", .{ .err = caught });
             return error.ScriptError;
         };
@@ -337,8 +386,14 @@ pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void 
     defer compiled.deinit();
 
     while (true) {
-        if (runner.session.isCancelled()) return error.Cancelled;
-        const frame = runner.frame;
+        if (session.isCancelled()) {
+            return error.Cancelled;
+        }
+
+        const page = session.pendingOrLivePage(frame_id) orelse {
+            return error.FrameNotFound;
+        };
+        const frame = &page.frame;
 
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
@@ -350,7 +405,7 @@ pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void 
 
         const script = compiled.get(ls.local.isolate).bindToCurrentContext(&ls.local);
         const value = script.run() catch |err| {
-            const caught = try_catch.caughtOrError(frame.call_arena, err);
+            const caught = try_catch.caughtOrError(frame.local_arena, err);
             log.err(.app, "wait script error", .{ .err = caught });
             return error.ScriptError;
         };
@@ -363,7 +418,7 @@ pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void 
         if (elapsed >= timeout_ms) {
             return error.Timeout;
         }
-        switch (try runner.tick(.{ .ms = timeout_ms - elapsed })) {
+        switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
             // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
             .done => std.Thread.sleep(std.time.ns_per_ms * @as(u64, @min(timeout_ms - elapsed, 50))),
             .ok => |recommended_sleep_ms| {
@@ -375,41 +430,103 @@ pub fn waitForScript(runner: *Runner, src: [:0]const u8, timeout_ms: u32) !void 
     }
 }
 
-const testing = @import("../testing.zig");
-test "Runner: no page" {
-    try testing.expectError(error.NoPage, Runner.init(testing.test_session, .{}));
+fn firstConditionError(conditions: []const WaitCondition) !void {
+    for (conditions) |condition| {
+        switch (condition.status) {
+            .err => |err| return err,
+            else => {},
+        }
+    }
 }
 
-test "Runner: waitForSelector timeout" {
-    const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removePage();
+fn hasRunnablePage(session: *Session) bool {
+    for (session.pages.items) |page| {
+        switch (page.frame._parse_state) {
+            .html, .complete => return true,
+            else => {},
+        }
+    }
+    return false;
+}
 
-    var runner = try frame._session.runner(.{});
-    try testing.expectError(error.Timeout, runner.waitForSelector("#nope", 10));
+const testing = @import("../testing.zig");
+test "Runner: waitForSelector timeout" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try testing.expectError(error.Timeout, runner.waitForSelector(page.frame_id, "#nope", 10));
 }
 
 test "Runner: waitForSelector" {
     defer testing.reset();
-    const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removePage();
+    const page = try testing.pageTest("runner/runner1.html", .{});
 
-    var runner = try frame._session.runner(.{});
-    const el = try runner.waitForSelector("#sel1", 10);
+    var runner = page.session.runner(.{});
+    const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
 }
 
 test "Runner: waitForScript timeout" {
-    const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removePage();
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
 
-    var runner = try frame._session.runner(.{});
-    try testing.expectError(error.Timeout, runner.waitForScript("document.querySelector('#nope')", 10));
+    var runner = page.session.runner(.{});
+    try testing.expectError(error.Timeout, runner.waitForScript(page.frame_id, "document.querySelector('#nope')", 10));
 }
 
 test "Runner: waitForScript" {
-    const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removePage();
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
 
-    var runner = try frame._session.runner(.{});
-    try runner.waitForScript("document.querySelector('#sel1')", 10);
+    var runner = page.session.runner(.{});
+    try runner.waitForScript(page.frame_id, "document.querySelector('#sel1')", 10);
+}
+
+test "Runner: networkidle notifies child frames" {
+    const page = try testing.pageTest("runner/iframe_idle.html", .{});
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    const frame = page.frame().?;
+    try testing.expectEqual(2, frame.child_frames.items.len);
+
+    // A `.networkidle` wait resolves via `is_done` once the page is fully
+    // idle, which can happen before the 500ms idle-notification hold. Keep
+    // ticking (like the CDP serve loop does) until the notifications fire.
+    var attempts: usize = 0;
+    while (frame._notified_network_idle != .done and attempts < 50) : (attempts += 1) {
+        _ = try runner.tickForFrame(page.frame_id, 20, .{ .until = .networkidle });
+        std.Thread.sleep(25 * std.time.ns_per_ms);
+    }
+
+    try testing.expectEqual(true, frame._notified_network_idle == .done);
+    for (frame.child_frames.items) |child| {
+        try testing.expectEqual(true, child._notified_network_almost_idle == .done);
+        try testing.expectEqual(true, child._notified_network_idle == .done);
+    }
+}
+
+test "Runner: lazy iframe does not delay the load event" {
+    const page = try testing.pageTest("runner/iframe_lazy.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+
+    const frame = page.frame().?;
+    try testing.expectEqual(true, frame._load_state == .complete);
+    try testing.expectEqual(2, frame.child_frames.items.len);
+
+    // The lazy child's delayed response is still in flight: the parent's
+    // load event fired without waiting for it.
+    const lazy_child = frame.child_frames.items[0];
+    try testing.expectEqual(false, lazy_child._delays_parent_load);
+    try testing.expectEqual(false, lazy_child._load_state == .complete);
+
+    // It still loads to completion and notifies the parent (which fires the
+    // iframe element's load event, but doesn't touch _pending_loads).
+    try runner.waitForFrame(page.frame_id, 3000, .{ .until = .done });
+    try testing.expectEqual(true, lazy_child._load_state == .complete);
+    try testing.expectEqual(true, lazy_child._parent_notified);
 }

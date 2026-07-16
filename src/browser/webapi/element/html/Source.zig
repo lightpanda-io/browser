@@ -25,7 +25,7 @@ pub fn getSrc(self: *const Source, frame: *Frame) ![]const u8 {
     if (src.len == 0) {
         return "";
     }
-    return element.asConstNode().resolveURL(src, frame, .{});
+    return element.asConstNode().resolveURLReflect(src, frame, .{});
 }
 
 pub fn setSrc(self: *Source, value: []const u8, frame: *Frame) !void {

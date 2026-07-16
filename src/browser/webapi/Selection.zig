@@ -534,20 +534,20 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
 
     if (isTextNode(focus_node)) {
         if (forward) {
-            const i = nextWordEnd(new_node.getData().str(), new_offset);
+            const i = wordEndOffset(new_node, new_offset);
             if (i > new_offset) {
                 new_offset = i;
             } else if (nextTextNode(focus_node)) |next| {
                 new_node = next;
-                new_offset = nextWordEnd(next.getData().str(), 0);
+                new_offset = wordEndOffset(next, 0);
             }
         } else {
-            const i = prevWordStart(new_node.getData().str(), new_offset);
+            const i = wordStartOffset(new_node, new_offset);
             if (i < new_offset) {
                 new_offset = i;
             } else if (prevTextNode(focus_node)) |prev| {
                 new_node = prev;
-                new_offset = prevWordStart(prev.getData().str(), @intCast(prev.getData().len));
+                new_offset = wordStartOffset(prev, prev.getLength());
             }
         }
     } else {
@@ -558,7 +558,7 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
             const child = focus_node.getChildAt(focus_offset) orelse {
                 if (nextTextNodeAfter(focus_node)) |next| {
                     new_node = next;
-                    new_offset = nextWordEnd(next.getData().str(), 0);
+                    new_offset = wordEndOffset(next, 0);
                 }
                 return self.applyModify(alter, new_node, new_offset, frame);
             };
@@ -568,7 +568,7 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
             };
 
             new_node = t;
-            new_offset = nextWordEnd(t.getData().str(), 0);
+            new_offset = wordEndOffset(t, 0);
         } else {
             var idx = focus_offset;
             while (idx > 0) {
@@ -578,7 +578,7 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
                 while (bottom.lastChild()) |c| bottom = c;
                 if (isTextNode(bottom)) {
                     new_node = bottom;
-                    new_offset = prevWordStart(bottom.getData().str(), bottom.getLength());
+                    new_offset = wordStartOffset(bottom, bottom.getLength());
                     break;
                 }
             }
@@ -586,6 +586,22 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
     }
 
     try self.applyModify(alter, new_node, new_offset, frame);
+}
+
+// nextWordEnd/prevWordStart scan UTF-8 bytes, but selection/range offsets
+// are UTF-16 code units; these wrappers convert on the way in and out.
+fn wordEndOffset(node: *Node, utf16_offset: u32) u32 {
+    const data = node.getData().str();
+    const byte_offset = Node.CData.utf16OffsetToUtf8Floor(data, utf16_offset);
+    const byte_end = nextWordEnd(data, @intCast(byte_offset));
+    return @intCast(Node.CData.utf16Len(data[0..byte_end]));
+}
+
+fn wordStartOffset(node: *Node, utf16_offset: u32) u32 {
+    const data = node.getData().str();
+    const byte_offset = Node.CData.utf16OffsetToUtf8Floor(data, utf16_offset);
+    const byte_start = prevWordStart(data, @intCast(byte_offset));
+    return @intCast(Node.CData.utf16Len(data[0..byte_start]));
 }
 
 fn applyModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset: u32, frame: *Frame) !void {
@@ -730,21 +746,21 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Selection.getType, null, .{});
 
     pub const addRange = bridge.function(Selection.addRange, .{});
-    pub const collapse = bridge.function(Selection.collapse, .{ .dom_exception = true });
+    pub const collapse = bridge.function(Selection.collapse, .{});
     pub const collapseToEnd = bridge.function(Selection.collapseToEnd, .{});
-    pub const collapseToStart = bridge.function(Selection.collapseToStart, .{ .dom_exception = true });
+    pub const collapseToStart = bridge.function(Selection.collapseToStart, .{});
     pub const containsNode = bridge.function(Selection.containsNode, .{});
     pub const deleteFromDocument = bridge.function(Selection.deleteFromDocument, .{ .ce_reactions = true });
     pub const empty = bridge.function(Selection.removeAllRanges, .{});
-    pub const extend = bridge.function(Selection.extend, .{ .dom_exception = true });
+    pub const extend = bridge.function(Selection.extend, .{});
     // unimplemented: getComposedRanges
-    pub const getRangeAt = bridge.function(Selection.getRangeAt, .{ .dom_exception = true });
+    pub const getRangeAt = bridge.function(Selection.getRangeAt, .{});
     pub const modify = bridge.function(Selection.modify, .{});
     pub const removeAllRanges = bridge.function(Selection.removeAllRanges, .{});
-    pub const removeRange = bridge.function(Selection.removeRange, .{ .dom_exception = true });
-    pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{ .dom_exception = true });
-    pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{ .dom_exception = true });
-    pub const setPosition = bridge.function(Selection.collapse, .{ .dom_exception = true });
+    pub const removeRange = bridge.function(Selection.removeRange, .{});
+    pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
+    pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{});
+    pub const setPosition = bridge.function(Selection.collapse, .{});
     pub const toString = bridge.function(Selection.toString, .{});
 };
 

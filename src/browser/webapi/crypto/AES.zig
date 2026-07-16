@@ -93,12 +93,12 @@ pub fn generate(
     const allowed = allowedUsages(params.name).?;
     const mask = common.usageMask(allowed, key_usages) catch unreachable;
 
-    const key = try exec.arena.alloc(u8, params.length / 8);
+    const key = try exec.local_arena.alloc(u8, params.length / 8);
 
     const res = crypto.RAND_bytes(key.ptr, key.len);
     lp.assert(res == 1, "AES.generate", .{ .res = res });
 
-    const crypto_key = try exec._factory.create(CryptoKey{
+    const crypto_key = try CryptoKey.init(exec, .{
         ._type = .aes,
         ._kind = .secret,
         ._extractable = extractable,
@@ -133,13 +133,12 @@ pub fn import(
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
     }
 
-    const key = try exec.arena.dupe(u8, raw);
-    const crypto_key = try exec._factory.create(CryptoKey{
+    const crypto_key = try CryptoKey.init(exec, .{
         ._type = .aes,
         ._kind = .secret,
         ._extractable = extractable,
         ._usages = mask,
-        ._key = key,
+        ._key = raw,
         ._algorithm = .{ .name = canonical },
     });
 
@@ -260,7 +259,7 @@ fn ctr(
             std.mem.writeInt(u128, &wrapped, readBlock(counter) & ~mask, .big);
             const second = try cbcOrCtr(cipher, key, &wrapped, data[split..], encrypting, false, exec);
 
-            const out = try exec.call_arena.alloc(u8, data.len);
+            const out = try exec.local_arena.alloc(u8, data.len);
             @memcpy(out[0..split], first);
             @memcpy(out[split..], second);
             return out;
@@ -308,7 +307,7 @@ fn cbcOrCtr(
     }
 
     // Block ciphers may emit up to one extra block on top of the input.
-    const out = try exec.call_arena.alloc(u8, data.len + 16);
+    const out = try exec.local_arena.alloc(u8, data.len + 16);
     var out_len: c_int = 0;
     if (cipherUpdate(ctx, out.ptr, &out_len, @ptrCast(data.ptr), @intCast(data.len), encrypting) != 1) {
         return error.OperationError;
@@ -365,7 +364,7 @@ fn gcm(
     }
 
     if (encrypting) {
-        const out = try exec.call_arena.alloc(u8, data.len + tag_len);
+        const out = try exec.local_arena.alloc(u8, data.len + tag_len);
         var out_len: c_int = 0;
         if (data.len > 0 and cipherUpdate(ctx, out.ptr, &out_len, @ptrCast(data.ptr), @intCast(data.len), true) != 1) {
             return error.OperationError;
@@ -391,7 +390,7 @@ fn gcm(
         return error.OperationError;
     }
 
-    const out = try exec.call_arena.alloc(u8, ct.len + 16);
+    const out = try exec.local_arena.alloc(u8, ct.len + 16);
     var out_len: c_int = 0;
     if (ct.len > 0 and cipherUpdate(ctx, out.ptr, &out_len, @ptrCast(ct.ptr), @intCast(ct.len), false) != 1) {
         return error.OperationError;

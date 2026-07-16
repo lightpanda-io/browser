@@ -49,11 +49,13 @@ const log = lp.log;
 ///     for none.
 ///   - `shared_options: tuple` (optional) — extra options merged into this
 ///     command. Useful for common flags shared across commands.
-///   - `positional: struct` (optional) — a single positional argument with
-///     `.name` and `.type`. Type must be an optional pointer-to-u8 slice
-///     (e.g. `?[:0]const u8`); it defaults to `null` and may appear anywhere
-///     in argv. Passing it more than once returns
-///     `error.TooManyPositionalArguments`.
+///   - `positional: struct` (optional) — a positional argument with `.name`
+///     and `.type` that may appear anywhere in argv. By default it holds a
+///     single value: `.type` must be an optional pointer-to-u8 slice (e.g.
+///     `?[:0]const u8`), it defaults to `null`, and passing it more than once
+///     returns `error.TooManyPositionalArguments`. With `.multiple = true`,
+///     `.type` is the (non-optional) element slice (e.g. `[:0]const u8`), the
+///     field becomes a `std.ArrayList(type)`, and each occurrence appends.
 ///
 /// ## Option descriptor fields
 ///
@@ -269,15 +271,7 @@ pub fn Builder(comptime commands: anytype) type {
                     else
                         .{}) ++
                     (if (@hasField(Command, "positional"))
-                        [1]std.builtin.Type.StructField{
-                            .{
-                                .name = command.positional.name,
-                                .type = command.positional.type,
-                                .default_value_ptr = @ptrCast(&@as(command.positional.type, null)),
-                                .is_comptime = false,
-                                .alignment = @alignOf(command.positional.type),
-                            },
-                        }
+                        [1]std.builtin.Type.StructField{positionalField(command.positional)}
                     else
                         .{});
 
@@ -306,6 +300,26 @@ pub fn Builder(comptime commands: anytype) type {
                 },
             });
         };
+
+        /// Builds the `StructField` for a command's positional argument. A plain
+        /// positional is an optional that defaults to `null`; a `multiple`
+        /// positional collects every occurrence into an `ArrayList` that
+        /// defaults to empty.
+        fn positionalField(comptime positional: anytype) std.builtin.Type.StructField {
+            const is_multiple = @hasField(@TypeOf(positional), "multiple") and positional.multiple;
+            const T = if (is_multiple) std.ArrayList(positional.type) else positional.type;
+            const default: *const anyopaque = if (is_multiple)
+                @ptrCast(&@as(T, .{}))
+            else
+                @ptrCast(&@as(T, null));
+            return .{
+                .name = positional.name,
+                .type = T,
+                .default_value_ptr = default,
+                .is_comptime = false,
+                .alignment = @alignOf(T),
+            };
+        }
 
         /// Parses executable name, command and options via single call.
         pub fn parse(allocator: Allocator) !struct { []const u8, Union } {
@@ -683,14 +697,17 @@ pub fn Builder(comptime commands: anytype) type {
                 // ---------------------------------^
                 if (comptime @hasField(@TypeOf(command), "positional")) {
                     const positional = command.positional;
+                    const is_multiple = comptime @hasField(@TypeOf(positional), "multiple") and positional.multiple;
 
-                    // Already given one.
-                    if (@field(c, positional.name) != null) {
+                    // A single (non-multiple) positional may only be given once.
+                    if (!is_multiple and @field(c, positional.name) != null) {
                         return error.TooManyPositionalArguments;
                     }
 
-                    // The positional must be an optional type.
-                    const info = @typeInfo(@typeInfo(positional.type).optional.child);
+                    // Element type: the optional's child for a single positional,
+                    // the slice element itself for a `multiple` one.
+                    const Child = if (is_multiple) positional.type else @typeInfo(positional.type).optional.child;
+                    const info = @typeInfo(Child);
 
                     const str = @as([]const u8, option_name);
                     switch (info) {
@@ -715,7 +732,11 @@ pub fn Builder(comptime commands: anytype) type {
                                 break :blk buf;
                             };
 
-                            @field(c, positional.name) = v;
+                            if (is_multiple) {
+                                try @field(c, positional.name).append(allocator, v);
+                            } else {
+                                @field(c, positional.name) = v;
+                            }
                         },
                         inline else => @compileError("not supported"),
                     }
@@ -725,10 +746,13 @@ pub fn Builder(comptime commands: anytype) type {
                 }
             }
 
-            // A non-optional positional that is still null after parsing is missing.
+            // A non-optional, single positional that is still null after parsing
+            // is missing. A `multiple` positional is never required here — the
+            // caller decides whether an empty list is acceptable.
             if (comptime @hasField(@TypeOf(command), "positional")) {
+                const is_multiple = @hasField(@TypeOf(command.positional), "multiple") and command.positional.multiple;
                 const is_optional = @typeInfo(command.positional.type) == .optional;
-                if (!is_optional and @field(c, command.positional.name) == null) {
+                if (!is_multiple and !is_optional and @field(c, command.positional.name) == null) {
                     return error.MissingArgument;
                 }
             }

@@ -31,9 +31,11 @@ const App = @import("../../App.zig");
 const Frame = @import("../Frame.zig");
 const Window = @import("../webapi/Window.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
+const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
 
 const v8 = js.v8;
 const log = lp.log;
+
 const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -129,6 +131,14 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     errdefer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
 
     params.external_references = &snapshot.external_references;
+
+    if (app.config.v8MaxHeapMb()) |mb| {
+        v8.v8__ResourceConstraints__ConfigureDefaultsFromHeapSize(
+            &params.constraints,
+            0,
+            @as(usize, mb) * 1024 * 1024,
+        );
+    }
 
     var isolate = js.Isolate.init(params);
     errdefer isolate.deinit();
@@ -227,6 +237,7 @@ pub const ContextParams = struct {
     identity: *js.Identity,
     identity_arena: Allocator,
     call_arena: Allocator,
+    local_arena: Allocator,
     debug_name: []const u8 = "Context",
 };
 
@@ -287,9 +298,9 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
         .subtype = .node,
     } else .{
-        .value = @ptrCast(global),
-        .prototype_chain = (&WorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
-        .prototype_len = @intCast(WorkerGlobalScope.JsApi.Meta.prototype_chain.len),
+        .value = @ptrCast(global._type.dedicated),
+        .prototype_chain = (&DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
+        .prototype_len = @intCast(DedicatedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
         .subtype = null,
     };
     v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
@@ -313,6 +324,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .handle = context_global,
         .templates = self.templates,
         .call_arena = params.call_arena,
+        .local_arena = params.local_arena,
         .microtask_queue = microtask_queue,
         .script_manager = if (comptime is_frame) &global._script_manager.base else &global._script_manager,
         .scheduler = .init(context_arena),
@@ -330,13 +342,14 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .page = context.page,
         .session = page.session,
         .call_arena = params.call_arena,
+        .local_arena = params.local_arena,
         ._factory = global._factory,
         ._scheduler = &context.scheduler,
     };
 
     // Register in the identity map. Multiple contexts can be created for the
     // same global (via CDP), so we only register the first one.
-    const identity_ptr = if (comptime is_frame) @intFromPtr(global.window) else @intFromPtr(global);
+    const identity_ptr = if (comptime is_frame) @intFromPtr(global.window) else @intFromPtr(global._type.dedicated);
     const gop = try params.identity.identity_map.getOrPut(params.identity_arena, identity_ptr);
     if (gop.found_existing == false) {
         var global_global: v8.Global = undefined;
@@ -386,7 +399,10 @@ pub fn runMicrotasks(self: *Env) void {
 
         const v8_isolate = self.isolate.handle;
 
-        if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
+        // terminatePending: once a forcible terminate is requested (and not
+        // canceled), refuse to start new work — IsExecutionTerminating alone
+        // goes false again as soon as the killed script finishes unwinding.
+        if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate) or self.terminatePending()) {
             return;
         }
 
@@ -404,7 +420,7 @@ pub fn runMicrotasks(self: *Env) void {
 }
 
 pub fn runMacrotasks(self: *Env) !void {
-    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) {
+    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle) or self.terminatePending()) {
         return;
     }
 
@@ -537,6 +553,45 @@ pub fn terminate(self: *Env) void {
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
+// We need a stable pointer for *Env, so can't be setup in init.
+pub fn protectHeapLimit(self: *Env) void {
+    v8.v8__Isolate__AddNearHeapLimitCallback(self.isolate.handle, nearHeapLimit, self);
+    // TODO: uncomment this when https://github.com/lightpanda-io/zig-v8-fork/pull/187 lands
+    // if our nearHeapLimit extends the memory, we want to  restore the original
+    // value, since the isolate can be long lived (relative to the page/script
+    // that caused the memory spike).
+    // v8.v8__Isolate__AutomaticallyRestoreInitialHeapLimit(self.isolate.handle, 0.5);
+}
+
+// v8 is telling us it's about to run out of memory for this isolate. We'll
+// do two things:
+// 1 - Terminate the execution (attempting to prevent v8 from OOM'ing the process)
+// 2 - Grant more headroom so execution can reach a stack-guard check, where
+//     the terminate lands
+//
+// The terminate must go through requestTerminate (RequestInterrupt), NOT a
+// direct TerminateExecution: we're mid-GC, which is an arbitrary point —
+// possibly inside a microtask run — and flagging termination there lets the
+// run complete with a result while the isolate is terminating, tripping
+// V8's DCHECK(maybe_result.is_null()) in MicrotaskQueue::RunMicrotasks. The
+// interrupt lands at a stack-guard check, where termination unwinds the way
+// V8 expects.
+fn nearHeapLimit(data: ?*anyopaque, current_limit: usize, initial_limit: usize) callconv(.c) usize {
+    const self: *Env = @ptrCast(@alignCast(data.?));
+    lp.metrics.js_heap_limits.incr();
+    log.err(.app, "JS heap limit reached", .{
+        .initial_limit = initial_limit,
+        .current_limit = current_limit,
+    });
+    self.requestTerminate();
+
+    const cap = initial_limit + 256 * 1024 * 1024;
+    if (current_limit >= cap) {
+        return current_limit;
+    }
+    return @min(cap, current_limit + 64 * 1024 * 1024);
+}
+
 // Called from the network thread, caused v8 to eventually call terminateInterrupt
 pub fn requestTerminate(self: *Env) void {
     self.terminate_requested.store(true, .release);
@@ -579,8 +634,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
         return;
     }
 
-    const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
-    const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
+    const v8_isolate = v8.v8__Isolate__GetCurrent().?;
     const isolate = js.Isolate{ .handle = v8_isolate };
     const ctx, const v8_context = Context.fromIsolate(isolate) orelse return;
 
@@ -644,24 +698,41 @@ const PrivateSymbols = struct {
 
 const testing = @import("../../testing.zig");
 test "Env: Worker context " {
-    const session = testing.test_session;
-    const frame = try session.createPage();
-    defer session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
 
     var ls: js.Local.Scope = undefined;
-    worker._worker_scope.js.localScope(&ls);
+    worker._worker_scope._proto.js.localScope(&ls);
     defer ls.deinit();
 
     try testing.expectEqual(true, (try ls.local.exec("typeof Node === 'undefined'", null)).isTrue());
     try testing.expectEqual(true, (try ls.local.exec("typeof WorkerGlobalScope !== 'undefined'", null)).isTrue());
+
+    // A dedicated worker's global is a DedicatedWorkerGlobalScope, which inherits
+    // from WorkerGlobalScope. Both instanceof checks must hold (real sites, e.g.
+    // Shopify's Web Pixel sandbox, use `self instanceof DedicatedWorkerGlobalScope`
+    // to tell a worker apart from an iframe).
+    try testing.expectEqual(true, (try ls.local.exec("typeof DedicatedWorkerGlobalScope !== 'undefined'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("self instanceof DedicatedWorkerGlobalScope", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("self instanceof WorkerGlobalScope", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("self.constructor.name === 'DedicatedWorkerGlobalScope'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("self === globalThis", null)).isTrue());
+
+    // postMessage/close/onmessage live on DedicatedWorkerGlobalScope.prototype
+    // (per spec), not on WorkerGlobalScope.prototype.
+    try testing.expectEqual(true, (try ls.local.exec("DedicatedWorkerGlobalScope.prototype.hasOwnProperty('postMessage')", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("!WorkerGlobalScope.prototype.hasOwnProperty('postMessage')", null)).isTrue());
+
+    // AnimationFrameProvider mixin is exposed on the dedicated worker global.
+    try testing.expectEqual(true, (try ls.local.exec("typeof self.requestAnimationFrame === 'function'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("typeof self.cancelAnimationFrame === 'function'", null)).isTrue());
 }
 
 test "Env: Frame context" {
-    const session = testing.test_session;
-    const frame = try session.createPage();
-    defer session.removePage();
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
 
     // Frame already has a context created, use it directly
     const ctx = frame.js;
@@ -672,4 +743,5 @@ test "Env: Frame context" {
 
     try testing.expectEqual(true, (try ls.local.exec("typeof Node !== 'undefined'", null)).isTrue());
     try testing.expectEqual(true, (try ls.local.exec("typeof WorkerGlobalScope === 'undefined'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("typeof DedicatedWorkerGlobalScope === 'undefined'", null)).isTrue());
 }

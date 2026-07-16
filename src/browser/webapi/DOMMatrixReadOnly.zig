@@ -627,7 +627,7 @@ pub fn inverse(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
 }
 
 pub fn toFloat32Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f32) {
-    const out = try exec.call_arena.alloc(f32, 16);
+    const out = try exec.local_arena.alloc(f32, 16);
     for (0..16) |i| {
         out[i] = @floatCast(self._m[i]);
     }
@@ -635,7 +635,7 @@ pub fn toFloat32Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution)
 }
 
 pub fn toFloat64Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f64) {
-    const out = try exec.call_arena.dupe(f64, &self._m);
+    const out = try exec.local_arena.dupe(f64, &self._m);
     return .{ .values = out };
 }
 
@@ -648,7 +648,7 @@ pub fn toString(self: *const DOMMatrixReadOnly, exec: *const js.Execution) ![]co
                 return error.InvalidStateError;
             }
         }
-        return std.fmt.allocPrint(exec.call_arena, "matrix({d}, {d}, {d}, {d}, {d}, {d})", .{
+        return std.fmt.allocPrint(exec.local_arena, "matrix({d}, {d}, {d}, {d}, {d}, {d})", .{
             m[0], m[1], m[4], m[5], m[12], m[13],
         });
     }
@@ -657,7 +657,7 @@ pub fn toString(self: *const DOMMatrixReadOnly, exec: *const js.Execution) ![]co
             return error.InvalidStateError;
         }
     }
-    return std.fmt.allocPrint(exec.call_arena, "matrix3d({d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d})", .{
+    return std.fmt.allocPrint(exec.local_arena, "matrix3d({d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d})", .{
         m[0],  m[1],  m[2],  m[3],
         m[4],  m[5],  m[6],  m[7],
         m[8],  m[9],  m[10], m[11],
@@ -803,7 +803,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(DOMMatrixReadOnly.init, .{ .dom_exception = true });
+    pub const constructor = bridge.constructor(DOMMatrixReadOnly.init, .{});
 
     pub const fromMatrix = bridge.function(DOMMatrixReadOnly.fromMatrix, .{ .static = true });
     pub const fromFloat32Array = bridge.function(DOMMatrixReadOnly.fromFloat32Array, .{ .static = true });
@@ -852,7 +852,7 @@ pub const JsApi = struct {
     pub const toFloat32Array = bridge.function(DOMMatrixReadOnly.toFloat32Array, .{});
     pub const toFloat64Array = bridge.function(DOMMatrixReadOnly.toFloat64Array, .{});
     // The stringifier depends on CSS serialization and is Window-only.
-    pub const toString = bridge.function(DOMMatrixReadOnly.toString, .{ .dom_exception = true, .exposed = .window });
+    pub const toString = bridge.function(DOMMatrixReadOnly.toString, .{ .exposed = .window });
 
     // m11..m44 getters are generated from the storage index.
     fn getM(comptime idx: usize) fn (*const DOMMatrixReadOnly) f64 {

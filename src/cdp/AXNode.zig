@@ -989,7 +989,7 @@ fn writeName(
         },
         .cdata => |cd| switch (cd._type) {
             .text => |*text| {
-                try writeString(text.getWholeText(), w);
+                try writeString(text.ownData(), w);
                 return .contents;
             },
             else => null,
@@ -1011,7 +1011,7 @@ fn writeName(
 
                     if (doc.getElementById(trimmed_id, frame)) |referenced_el| {
                         // Get the text content of the referenced element
-                        try referenced_el.getInnerText(&buf.writer);
+                        try referenced_el.getInnerText(&buf.writer, frame);
                         try buf.writer.writeByte(' ');
                         has_content = true;
                     }
@@ -1109,7 +1109,7 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *F
         switch (child._type) {
             .cdata => |cd| switch (cd._type) {
                 .text => |*text| {
-                    const content = std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace);
+                    const content = std.mem.trim(u8, text.ownData(), &std.ascii.whitespace);
                     if (content.len > 0) {
                         try writer.writeAll(content);
                         try writer.writeByte(' ');
@@ -1262,7 +1262,7 @@ fn writeLabelInnerText(
     w: anytype,
 ) !bool {
     var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
-    try label_el.getInnerText(&buf.writer);
+    try label_el.getInnerText(&buf.writer, frame);
     const text = std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
     if (text.len == 0) return false;
     try writeString(text, w);
@@ -1514,8 +1514,10 @@ test "AXNode: writer" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/dom3.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/dom3.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
@@ -1604,8 +1606,10 @@ test "AXNode: writer prunes hidden and resolves labels" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
@@ -1737,8 +1741,10 @@ test "AXNode: Writer query filters by role" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
@@ -1776,8 +1782,10 @@ test "AXNode: writer maps password input to textbox" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     const body = (try doc.querySelector(comptime .wrap("body"), frame)).?;
@@ -1851,8 +1859,10 @@ test "AXNode: Writer query filters by accessible name" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
@@ -1890,8 +1900,10 @@ test "AXNode: Writer query combined role+name filter promotes hidden-input label
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
@@ -1941,8 +1953,10 @@ test "AXNode: Writer query no match returns empty array" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
@@ -1977,8 +1991,10 @@ test "AXNode: nameFromContentRole" {
 }
 
 test "AXNode: getName name-from-content honors explicit role" {
-    var frame = try testing.pageTest("cdp/accname.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/accname.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     const Case = struct { selector: []const u8, expected: ?[]const u8 };

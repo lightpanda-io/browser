@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<body>
+  <span id="s1" data-cp="5F" data-bytes="A1B2" data-cycle="A1B2" nonstandardattr="ns1">x</span>
+  <script>
+    // Called by the parent test: these execute in this frame's realm.
+    function readAttr(name) {
+      return document.getElementById('s1').getAttribute(name);
+    }
+    function setAttr(name, value) {
+      document.getElementById('s1').setAttribute(name, value);
+    }
+    function removeAttr(name) {
+      document.getElementById('s1').removeAttribute(name);
+    }
+
+    window.addEventListener('message', (e) => {
+      if (e.data !== 'cycle-attr') return;
+      const el = document.getElementById('s1');
+      el.removeAttribute('data-cycle');
+      el.setAttribute('data-cycle', 'C3');
+      parent.postMessage('attr-cycled', '*');
+    });
+  </script>
+</body>

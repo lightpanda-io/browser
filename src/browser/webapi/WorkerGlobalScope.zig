@@ -26,15 +26,15 @@ const lp = @import("lightpanda");
 const JS = @import("../js/js.zig");
 const URL = @import("../URL.zig");
 const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const Session = @import("../Session.zig");
-const HttpClient = @import("../HttpClient.zig");
+const HttpClient = @import("../../network/HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 
 const Blob = @import("Blob.zig");
 const Event = @import("Event.zig");
-const Worker = @import("Worker.zig");
 const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
 const Navigator = @import("Navigator.zig");
@@ -42,10 +42,11 @@ const Timers = @import("Timers.zig");
 const EventTarget = @import("EventTarget.zig");
 const Performance = @import("Performance.zig");
 const WorkerLocation = @import("WorkerLocation.zig");
-const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
+const idb = @import("storage/idb/idb.zig");
 const CookieStore = @import("storage/CookieStore.zig");
+const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
 const builtin = @import("builtin");
 const IS_DEBUG = builtin.mode == .Debug;
@@ -54,6 +55,10 @@ const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 const WorkerGlobalScope = @This();
+
+_type: Type,
+_frame: *Frame,
+_is_module: bool,
 
 // Meant to follow the same field naming as Page so that an anytype of generic
 // can access these the same for a Page of a WGS.
@@ -66,6 +71,7 @@ _http_owner: HttpClient.Owner = .{},
 
 arena: Allocator,
 call_arena: Allocator,
+local_arena: Allocator,
 url: [:0]const u8,
 // Same-origin constraint: a worker's origin is inherited from its parent frame.
 origin: ?[]const u8 = null,
@@ -77,12 +83,7 @@ js: *JS.Context,
 // Blob URL registry for URL.createObjectURL/revokeObjectURL.
 _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 
-// Reference back to the Worker object (for postMessage to frame)
-_worker: *Worker,
-
-// HTTP attribution. Mirrors Frame's fields so that generic code over
-// (Frame|WorkerGlobalScope) can read them uniformly. Populated from the
-// owning Worker at init.
+// HTTP attribution
 _frame_id: u32,
 _loader_id: u32,
 
@@ -93,64 +94,70 @@ _event_manager: EventManagerBase,
 // workers don't have <script> tags.
 _script_manager: ScriptManagerBase,
 
-// List of open BroadcastChannels, used to route postMessage between same-named
+// List of open BroadcastChannels, used to route  HTTP attribution. Mirrors Frame's fiage between same-named
 // channels in this worker's origin
 _broadcast_channels: std.DoublyLinkedList = .{},
 
 // These fields represent the "Window"-like component of the WGS
-_closed: bool = false,
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
 _navigator: Navigator = .init,
 _performance: Performance,
+_idb_factory: ?*idb.IDBFactory = null,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
-_on_message: ?JS.Function.Global = null,
-_on_messageerror: ?JS.Function.Global = null,
 _cookie_store: ?*CookieStore = null,
 
 _location: WorkerLocation,
 
 _timers: Timers = .{},
 
-// Messages received before the worker script finished evaluating. Per the
-// HTML spec, postMessage'd data is buffered while the worker is loading
-// and delivered once the worker is ready (i.e. once onmessage can be set).
-// Drained by drainPendingMessages, called from Worker.loadInitialScript
-// after the initial script has been evaluated.
-_pending_messages: std.ArrayList(?JS.Value.Temp) = .empty,
+pub const Type = union(enum) {
+    dedicated: *DedicatedWorkerGlobalScope,
+};
 
-pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
-    const arena = worker._arena;
-    const parent = worker._frame;
-    const session = worker._frame._session;
+pub fn init(
+    arena: Allocator,
+    url: [:0]const u8,
+    child: Type,
+    is_module: bool,
+    frame_id: u32,
+    loader_id: u32,
+    frame: *Frame,
+) !*WorkerGlobalScope {
+    const session = frame._session;
 
     const call_arena = try session.getArena(.small, "WorkerGlobalScope.call_arena");
     errdefer session.releaseArena(call_arena);
 
-    const factory = parent._factory;
+    const local_arena = try session.getArena(.small, "WorkerGlobalScope.local_arena");
+    errdefer session.releaseArena(local_arena);
+
+    const factory = frame._factory;
     const self = try factory.eventTargetWithAllocator(arena, WorkerGlobalScope{
         .url = url,
         .arena = arena,
-        .origin = parent.origin,
+        .origin = frame.origin,
         .js = undefined,
         .call_arena = call_arena,
+        .local_arena = local_arena,
+        ._frame = frame,
+        ._page = frame._page,
         ._session = session,
-        ._page = parent._page,
         ._identity = .{},
+        ._type = child,
         ._proto = undefined,
         ._factory = factory,
-        ._worker = worker,
-        ._frame_id = worker._frame_id,
-        ._loader_id = worker._loader_id,
+        ._is_module = is_module,
+        ._frame_id = frame_id,
+        ._loader_id = loader_id,
         ._event_manager = .init(arena),
         ._script_manager = undefined,
         ._location = .{ ._url = url },
         ._performance = .init(),
     });
-    errdefer factory.destroy(self);
 
     self._http_owner.blob_urls = &self._blob_urls;
 
@@ -162,6 +169,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
 
     self.js = try session.browser.env.createWorkerContext(self, .{
         .call_arena = call_arena,
+        .local_arena = local_arena,
         .identity_arena = arena,
         .identity = &self._identity,
     });
@@ -182,14 +190,6 @@ pub fn deinit(self: *WorkerGlobalScope) void {
 
     browser.http_client.abortOwner(&self._http_owner);
 
-    // Release any messages that were buffered while waiting for the
-    // worker script to load but never got drained (e.g. worker script
-    // failed to fetch). Backing array lives on self.arena so the storage
-    // itself is freed with the arena.
-    for (self._pending_messages.items) |maybe_data| {
-        if (maybe_data) |d| d.release();
-    }
-
     self._identity.deinit();
     self._script_manager.deinit();
 
@@ -199,6 +199,7 @@ pub fn deinit(self: *WorkerGlobalScope) void {
     }
     browser.env.destroyContext(self.js);
     session.releaseArena(self.call_arena);
+    session.releaseArena(self.local_arena);
 }
 
 pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
@@ -235,7 +236,7 @@ pub fn hasDirectListeners(self: *WorkerGlobalScope, target: *EventTarget, typ: [
 // Workers don't have their own Referer; per spec, dedicated worker requests
 // use the parent document's URL. Delegate to the owning frame.
 pub fn headersForRequest(self: *WorkerGlobalScope, headers: *HttpClient.Headers) !void {
-    return self._worker._frame.headersForRequest(headers);
+    return self._frame.headersForRequest(headers);
 }
 
 pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
@@ -251,20 +252,25 @@ pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
     return self._session.browser.http_client.request(req, &self._http_owner);
 }
 
+// Two-phase variant; see HttpClient.newRequest for the ownership contract.
+pub fn newRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !*HttpClient.Transfer {
+    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+}
+
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
     return self;
+}
+
+pub fn setSelf(self: *WorkerGlobalScope, value: JS.Value) void {
+    self.replaceGlobalProperty(value, "self");
 }
 
 pub fn getConsole(self: *WorkerGlobalScope) *Console {
     return &self._console;
 }
 
-pub fn setConsole(_: *WorkerGlobalScope, value: JS.Value) void {
-    replaceGlobalProperty(value, "console");
-}
-
-pub fn setSelf(_: *WorkerGlobalScope, value: JS.Value) void {
-    replaceGlobalProperty(value, "self");
+pub fn setConsole(self: *WorkerGlobalScope, value: JS.Value) void {
+    self.replaceGlobalProperty(value, "console");
 }
 
 pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
@@ -314,92 +320,6 @@ pub fn setOnUnhandledRejection(self: *WorkerGlobalScope, setter: ?FunctionSetter
     self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
 
-pub fn getOnMessage(self: *const WorkerGlobalScope) ?JS.Function.Global {
-    return self._on_message;
-}
-
-pub fn setOnMessage(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
-    self._on_message = getFunctionFromSetter(setter);
-}
-
-pub fn getOnMessageError(self: *const WorkerGlobalScope) ?JS.Function.Global {
-    return self._on_messageerror;
-}
-
-pub fn setOnMessageError(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
-    self._on_messageerror = getFunctionFromSetter(setter);
-}
-
-// Posts a message from the worker back to the frame.
-// The message is cloned via structured clone and dispatched on the Worker object.
-pub fn postMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
-    try self._worker.receiveMessage(data);
-}
-
-// Called internally by Worker when it wants to post a message to us
-pub fn receiveMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
-    if (self._closed) {
-        return;
-    }
-
-    const cloned_data: ?JS.Value.Temp = blk: {
-        // Enter our context to clone the message
-        var ls: JS.Local.Scope = undefined;
-        self.js.localScope(&ls);
-        defer ls.deinit();
-
-        // clones from where it currently is (the Worker's Page context) to our Context
-        const cloned = data.structuredCloneTo(&ls.local) catch break :blk null;
-        break :blk cloned.temp() catch break :blk null;
-    };
-
-    if (!self._worker._script_loaded) {
-        // Buffer until Worker.loadInitialScript calls drainPendingMessages.
-        // Without this, postMessage'd data races against the worker's
-        // script load: if onmessage hasn't been registered yet (because
-        // the worker hasn't been evaluated), the dispatched event finds
-        // no listener and the message is silently dropped.
-        try self._pending_messages.append(self.arena, cloned_data);
-        return;
-    }
-
-    try self.scheduleMessage(cloned_data);
-}
-
-fn scheduleMessage(self: *WorkerGlobalScope, cloned_data: ?JS.Value.Temp) !void {
-    const session = self._session;
-
-    const message_arena = try session.getArena(.tiny, "WorkerGlobalScope.receiveMessage");
-    errdefer session.releaseArena(message_arena);
-
-    const callback = try message_arena.create(ReceiveMessageCallback);
-    callback.* = .{
-        .data = cloned_data,
-        .worker_scope = self,
-        .arena = message_arena,
-    };
-
-    try self.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
-        .name = "WorkerGlobalScope.receiveMessage",
-        .low_priority = false,
-        .finalizer = ReceiveMessageCallback.cancelled,
-    });
-}
-
-// Called by Worker.loadInitialScript once the initial script has been
-// evaluated and onmessage has had a chance to be registered. Any messages
-// that arrived while the worker was loading are scheduled for delivery in
-// the order they were received.
-pub fn drainPendingMessages(self: *WorkerGlobalScope) void {
-    for (self._pending_messages.items) |cloned_data| {
-        self.scheduleMessage(cloned_data) catch |err| {
-            log.warn(.browser, "worker drain msg failed", .{ .err = err });
-            if (cloned_data) |d| d.release();
-        };
-    }
-    self._pending_messages.clearRetainingCapacity();
-}
-
 const base64 = @import("encoding/base64.zig");
 pub fn btoa(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) ![]const u8 {
     return base64.encode(exec.call_arena, input);
@@ -433,21 +353,15 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
     const target = self.asEventTarget();
     if (self._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
-            .reason = if (rejection.reason()) |r| try r.temp() else null,
-            .promise = try rejection.promise().temp(),
+            .reason = if (rejection.reason()) |r| try r.persist() else null,
+            .promise = try rejection.promise().persist(),
         }, self._page)).asEvent();
         try self.dispatch(target, event, attribute_callback, .{});
     }
 }
 
-pub fn close(self: *WorkerGlobalScope) void {
-    // TOOD: we should also stop new tasks from being scheduled
-    self.js.scheduler.reset();
-    self._closed = true;
-}
-
 pub fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
-    if (self._worker._type == .module) {
+    if (self._is_module) {
         // not allowed to be called when the worker type is module (scripts should
         // use actual imports).
         return error.TypeError;
@@ -483,6 +397,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .cookie_origin = self.url,
         .resource_type = .script,
         .notification = session.notification,
+        .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }) catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
@@ -492,8 +407,6 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         log.warn(.http, "importScript", .{ .url = resolved_url, .status = response.status });
         return error.NetworkError;
     }
-
-    defer http_client.deferring_layer.flushFrame(self._frame_id);
 
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
@@ -514,7 +427,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
-        .@"error" = try err.temp(),
+        .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
@@ -570,7 +483,7 @@ pub fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
     self.js.queueMicrotaskFunc(cb);
 }
 
-pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Temp, exec: *JS.Execution) !u32 {
+pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
         .repeat = false,
@@ -583,7 +496,7 @@ pub fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Temp, exec: *JS.Execution) !u32 {
+pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
         .repeat = true,
@@ -596,80 +509,35 @@ pub fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-// `console` and `self` are [Replaceable] assignment redefines them as own data
-// properties on the global rather than throwing through the getter-only accessor
-// in strict mode.
-fn replaceGlobalProperty(value: JS.Value, comptime name: []const u8) void {
-    const global = value.local.getGlobal();
+pub fn getIndexedDB(self: *WorkerGlobalScope, exec: *JS.Execution) !*idb.IDBFactory {
+    if (self._idb_factory) |f| {
+        return f;
+    }
+    const f = try exec._factory.create(idb.IDBFactory{});
+    self._idb_factory = f;
+    return f;
+}
+
+// Some properties are readonly but [Replaceable]. They get assigned as own
+// data properties on the underlying v8::object that represents the global (the
+// WorkerGlobalScope)
+fn replaceGlobalProperty(self: *WorkerGlobalScope, value: JS.Value, comptime name: []const u8) void {
+    const global = self.js.globalObject(value.local);
     _ = global.defineOwnProperty(name, value, 0);
 }
 
-const FunctionSetter = union(enum) {
+pub const FunctionSetter = union(enum) {
     func: JS.Function.Global,
     anything: JS.Value,
 };
 
-fn getFunctionFromSetter(setter_: ?FunctionSetter) ?JS.Function.Global {
+pub fn getFunctionFromSetter(setter_: ?FunctionSetter) ?JS.Function.Global {
     const setter = setter_ orelse return null;
     return switch (setter) {
         .func => |func| func,
         .anything => null,
     };
 }
-
-const ReceiveMessageCallback = struct {
-    data: ?JS.Value.Temp,
-    arena: Allocator,
-    worker_scope: *WorkerGlobalScope,
-
-    fn cancelled(ctx: *anyopaque) void {
-        const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
-        if (self.data) |d| d.release();
-        self.deinit();
-    }
-
-    fn deinit(self: *ReceiveMessageCallback) void {
-        self.worker_scope._session.releaseArena(self.arena);
-    }
-
-    fn run(ctx: *anyopaque) !?u32 {
-        const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
-        defer self.deinit();
-
-        const worker_scope = self.worker_scope;
-        const target = worker_scope.asEventTarget();
-
-        // If data is null, structured clone failed - fire messageerror
-        if (self.data == null) {
-            const on_messageerror = worker_scope._on_messageerror;
-            if (!worker_scope._event_manager.hasDirectListeners(target, "messageerror", on_messageerror)) {
-                return null;
-            }
-            const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
-                .bubbles = false,
-                .cancelable = false,
-            }, worker_scope._page)).asEvent();
-            try worker_scope.dispatch(target, event, on_messageerror, .{});
-            return null;
-        }
-
-        const on_message = worker_scope._on_message;
-
-        // Check if there are any listeners before creating the event
-        if (!worker_scope._event_manager.hasDirectListeners(target, "message", on_message)) {
-            self.data.?.release();
-            return null;
-        }
-
-        const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-            .data = .{ .value = self.data.? },
-            .bubbles = false,
-            .cancelable = false,
-        }, worker_scope._page)).asEvent();
-        try worker_scope.dispatch(target, event, on_message, .{});
-        return null;
-    }
-};
 
 pub const JsApi = struct {
     pub const bridge = JS.Bridge(WorkerGlobalScope);
@@ -680,7 +548,6 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
     pub const console = bridge.accessor(WorkerGlobalScope.getConsole, WorkerGlobalScope.setConsole, .{});
     pub const crypto = bridge.accessor(WorkerGlobalScope.getCrypto, null, .{});
     pub const navigator = bridge.accessor(WorkerGlobalScope.getNavigator, null, .{});
@@ -693,29 +560,26 @@ pub const JsApi = struct {
             return wgs.performance();
         }
     }.wrap, null, .{});
+    pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
     pub const cookieStore = bridge.accessor(WorkerGlobalScope.getCookieStore, null, .{});
+    pub const indexedDB = bridge.accessor(WorkerGlobalScope.getIndexedDB, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});
     pub const onunhandledrejection = bridge.accessor(WorkerGlobalScope.getOnUnhandledRejection, WorkerGlobalScope.setOnUnhandledRejection, .{});
 
-    pub const btoa = bridge.function(WorkerGlobalScope.btoa, .{ .dom_exception = true });
-    pub const atob = bridge.function(WorkerGlobalScope.atob, .{ .dom_exception = true });
+    pub const btoa = bridge.function(WorkerGlobalScope.btoa, .{});
+    pub const atob = bridge.function(WorkerGlobalScope.atob, .{});
     pub const structuredClone = bridge.function(WorkerGlobalScope.structuredClone, .{});
-    pub const postMessage = bridge.function(WorkerGlobalScope.postMessage, .{});
     pub const reportError = bridge.function(WorkerGlobalScope.reportError, .{});
-    pub const close = bridge.function(WorkerGlobalScope.close, .{});
     pub const fetch = bridge.function(WorkerGlobalScope.fetch, .{});
-    pub const importScripts = bridge.function(WorkerGlobalScope.importScripts, .{ .dom_exception = true });
+    pub const importScripts = bridge.function(WorkerGlobalScope.importScripts, .{});
     pub const queueMicrotask = bridge.function(WorkerGlobalScope.queueMicrotask, .{});
     pub const setTimeout = bridge.function(WorkerGlobalScope.setTimeout, .{});
     pub const clearTimeout = bridge.function(WorkerGlobalScope.clearTimeout, .{});
     pub const setInterval = bridge.function(WorkerGlobalScope.setInterval, .{});
     pub const clearInterval = bridge.function(WorkerGlobalScope.clearInterval, .{});
-
-    pub const onmessage = bridge.accessor(WorkerGlobalScope.getOnMessage, WorkerGlobalScope.setOnMessage, .{});
-    pub const onmessageerror = bridge.accessor(WorkerGlobalScope.getOnMessageError, WorkerGlobalScope.setOnMessageError, .{});
 
     // Return false since workers don't have secure-context-only APIs
     pub const isSecureContext = bridge.property(false, .{ .template = false });

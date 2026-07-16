@@ -81,18 +81,18 @@ pub fn init(
     }
 
     // Should we reject this in promise too?
-    const key = try exec.arena.alloc(u8, block_size);
+    const key = try exec.local_arena.alloc(u8, block_size);
 
     // HMAC is simply CSPRNG.
     const res = crypto.RAND_bytes(key.ptr, key.len);
     lp.assert(res == 1, "HMAC.init", .{ .res = res });
 
-    const crypto_key = try exec._factory.create(CryptoKey{
+    const crypto_key = try CryptoKey.init(exec, .{
         ._type = .hmac,
         ._extractable = extractable,
         ._usages = mask,
         ._key = key,
-        ._algorithm = .{ .name = "HMAC", .hash = try exec.arena.dupe(u8, hash_name) },
+        ._algorithm = .{ .name = "HMAC", .hash = hash_name },
         ._vary = .{ .digest = digest },
     });
 
@@ -122,16 +122,13 @@ pub fn import(
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
     }
 
-    const key = try exec.arena.dupe(u8, raw);
-    errdefer exec.arena.free(key);
-
-    const crypto_key = try exec._factory.create(CryptoKey{
+    const crypto_key = try CryptoKey.init(exec, .{
         ._type = .hmac,
         ._kind = .secret,
         ._extractable = extractable,
         ._usages = mask,
-        ._key = key,
-        ._algorithm = .{ .name = "HMAC", .hash = try exec.arena.dupe(u8, hash_name) },
+        ._key = raw,
+        ._algorithm = .{ .name = "HMAC", .hash = hash_name },
         ._vary = .{ .digest = digest },
     });
 
@@ -151,7 +148,7 @@ pub fn sign(
         return resolver.promise();
     }
 
-    const buffer = try exec.call_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
+    const buffer = try exec.local_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
     var out_len: u32 = 0;
     // Try to sign.
     _ = crypto.HMAC(
@@ -163,7 +160,6 @@ pub fn sign(
         buffer.ptr,
         &out_len,
     ) orelse {
-        exec.call_arena.free(buffer);
         // Failure.
         resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
         return resolver.promise();

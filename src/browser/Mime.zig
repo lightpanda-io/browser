@@ -40,6 +40,8 @@ pub const ContentTypeEnum = enum {
     text_javascript,
     text_plain,
     text_css,
+    text_markdown,
+    text_event_stream,
     image_jpeg,
     image_gif,
     image_png,
@@ -55,6 +57,8 @@ pub const ContentType = union(ContentTypeEnum) {
     text_javascript: void,
     text_plain: void,
     text_css: void,
+    text_markdown: void,
+    text_event_stream: void,
     image_jpeg: void,
     image_gif: void,
     image_png: void,
@@ -72,7 +76,9 @@ pub fn contentTypeString(mime: *const Mime) []const u8 {
         .text_html => "text/html",
         .text_javascript => "application/javascript",
         .text_plain => "text/plain",
+        .text_markdown => "text/markdown",
         .text_css => "text/css",
+        .text_event_stream => "text/event-stream",
         .image_jpeg => "image/jpeg",
         .image_png => "image/png",
         .image_gif => "image/gif",
@@ -342,7 +348,7 @@ pub fn isHTML(self: *const Mime) bool {
 
 pub fn isText(mime: *const Mime) bool {
     return switch (mime.content_type) {
-        .text_xml, .text_html, .text_javascript, .text_plain, .text_css => true,
+        .text_xml, .text_html, .text_javascript, .text_plain, .text_css, .text_markdown => true,
         .application_json => true,
         else => false,
     };
@@ -359,6 +365,8 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
         @"text/html",
         @"text/css",
         @"text/plain",
+        @"text/markdown",
+        @"text/event-stream",
 
         @"text/javascript",
         @"application/javascript",
@@ -377,6 +385,8 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
             .@"text/javascript", .@"application/javascript", .@"application/x-javascript" => .{ .text_javascript = {} },
             .@"text/plain" => .{ .text_plain = {} },
             .@"text/css" => .{ .text_css = {} },
+            .@"text/markdown" => .{ .text_markdown = {} },
+            .@"text/event-stream" => .{ .text_event_stream = {} },
             .@"image/jpeg" => .{ .image_jpeg = {} },
             .@"image/png" => .{ .image_png = {} },
             .@"image/gif" => .{ .image_gif = {} },
@@ -790,6 +800,7 @@ test "Mime: parse common" {
 
     try expect(.{ .content_type = .{ .application_json = {} } }, "application/json");
     try expect(.{ .content_type = .{ .text_css = {} } }, "text/css");
+    try expect(.{ .content_type = .{ .text_markdown = {} } }, "text/markdown");
 
     try expect(.{ .content_type = .{ .image_jpeg = {} } }, "image/jpeg");
     try expect(.{ .content_type = .{ .image_png = {} } }, "image/png");

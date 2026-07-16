@@ -41,7 +41,7 @@ const MutationObserver = @This();
 
 _rc: lp.RC(u8) = .{},
 _arena: Allocator,
-_callback: js.Function.Temp,
+_callback: js.Function.Global,
 _observing: std.ArrayList(Observing) = .{},
 _pending_records: std.ArrayList(*MutationRecord) = .{},
 
@@ -74,7 +74,7 @@ pub const ObserveOptions = struct {
     attributeFilter: ?[]const []const u8 = null,
 };
 
-pub fn init(callback: js.Function.Temp, frame: *Frame) !*MutationObserver {
+pub fn init(callback: js.Function.Global, frame: *Frame) !*MutationObserver {
     const arena = try frame.getArena(.small, "MutationObserver");
     errdefer frame.releaseArena(arena);
     const self = try arena.create(MutationObserver);
@@ -188,7 +188,7 @@ pub fn disconnect(self: *MutationObserver, frame: *Frame) void {
 }
 
 pub fn takeRecords(self: *MutationObserver, frame: *Frame) ![]*MutationRecord {
-    const records = try frame.call_arena.dupe(*MutationRecord, self._pending_records.items);
+    const records = try frame.local_arena.dupe(*MutationRecord, self._pending_records.items);
     self._pending_records.clearRetainingCapacity();
     return records;
 }
@@ -350,7 +350,7 @@ pub fn deliverRecords(self: *MutationObserver, frame: *Frame) !void {
     defer ls.deinit();
 
     var caught: js.TryCatch.Caught = undefined;
-    ls.toLocal(self._callback).tryCall(void, .{ records, self }, &caught) catch |err| {
+    ls.toLocal(self._callback).tryCallWithThis(void, self, .{ records, self }, &caught) catch |err| {
         log.err(.frame, "MutObserver.deliverRecords", .{ .err = err, .caught = caught });
         return err;
     };

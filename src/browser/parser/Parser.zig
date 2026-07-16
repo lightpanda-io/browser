@@ -259,12 +259,20 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
 }
 
 pub fn parseFragment(self: *Parser, html: []const u8) void {
+    const context_name: []const u8 = if (self.container.node.is(Element)) |el|
+        el.getLocalName()
+    else
+        "";
+
     h5e.html5ever_parse_fragment(
         html.ptr,
         html.len,
+        context_name.ptr,
+        context_name.len,
         &self.container,
         self,
         createElementCallback,
+        createContextElementCallback,
         getDataCallback,
         appendCallback,
         parseErrorCallback,
@@ -432,6 +440,25 @@ fn createXMLElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualNa
     return _createElementCallbackWithDefaultnamespace(ctx, data, qname, attributes, .xml);
 }
 
+// html5ever_parse_fragment materializes the fragment's context element through
+// this dedicated callback, never through createElementCallback. The context
+// element is a throwaway: html5ever only queries its name (and, for a
+// <template> context, its content), it is never inserted into the tree. It
+// must be built bare — running a custom element constructor here is unbounded
+// recursion when the constructor sets innerHTML: that re-parse needs a context
+// element of the same custom tag, reconstructing forever (stack overflow). No
+// _ce_reactions window is needed: nothing can enqueue reactions on a bare
+// create.
+fn createContextElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    self.frame._skip_custom_element_upgrade = true;
+    defer self.frame._skip_custom_element_upgrade = false;
+    return self._createElementCallback(data, qname, attributes, .unknown) catch |err| {
+        self.err = .{ .err = err, .source = .create_element };
+        return null;
+    };
+}
+
 fn _createElementCallbackWithDefaultnamespace(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
     const cp = self.frame._ce_reactions.push();
@@ -532,7 +559,7 @@ fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.Attrib
     const element = node.as(Element);
     const frame = self.frame;
 
-    const attr_list = try element.getOrCreateAttributeList(frame);
+    const attr_list = &element._attributes;
     while (attributes.next()) |attr| {
         const name = attr.name.local.slice();
         const value = attr.value.slice();

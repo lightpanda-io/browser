@@ -69,6 +69,26 @@ pub const Registry = struct {
         _ = self.node_pool.reset(.{ .retain_with_limit = 1024 });
     }
 
+    /// Evict only the nodes owned by `frame`'s page, leaving sibling pages' node
+    /// IDs valid. Must run before the page's arena is freed — attribution walks
+    /// each node's live parent chain.
+    pub fn resetFrame(self: *Registry, arena: Allocator, frame: *Frame) void {
+        const page = frame._page;
+        var doomed: std.ArrayListUnmanaged(*Node) = .empty;
+        var it = self.lookup_by_id.valueIterator();
+        while (it.next()) |node_ptr| {
+            const node = node_ptr.*;
+            if (node.dom.ownerFrame(frame)._page == page) {
+                doomed.append(arena, node) catch return;
+            }
+        }
+        for (doomed.items) |node| {
+            _ = self.lookup_by_id.remove(node.id);
+            _ = self.lookup_by_node.remove(node.dom);
+            self.node_pool.destroy(node);
+        }
+    }
+
     pub fn register(self: *Registry, dom_node: *DOMNode) !*Node {
         const node_lookup_gop = try self.lookup_by_node.getOrPut(self.allocator, dom_node);
         if (node_lookup_gop.found_existing) {
@@ -286,10 +306,9 @@ pub const Writer = struct {
             if (element.hasAttributes()) {
                 try w.objectField("attributes");
                 try w.beginArray();
-                var it = element.attributeIterator();
-                while (it.next()) |attr| {
-                    try w.write(attr._name.str());
-                    try w.write(attr._value.str());
+                for (element.attributeEntries()) |*attr| {
+                    try w.write(attr.name());
+                    try w.write(attr.value());
                 }
                 try w.endArray();
             }
@@ -345,8 +364,10 @@ test "cdp Node: Registry register" {
     try testing.expectEqual(0, registry.lookup_by_id.count());
     try testing.expectEqual(0, registry.lookup_by_node.count());
 
-    var frame = try testing.pageTest("cdp/registry1.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/registry1.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     {
@@ -372,6 +393,36 @@ test "cdp Node: Registry register" {
         try testing.expectEqual(2, node.id);
         try testing.expectEqual(dom_node, node.dom);
     }
+}
+
+test "cdp Node: Registry resetFrame" {
+    var registry = Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var page_a = try testing.pageTest("cdp/registry1.html", .{});
+    defer page_a.close();
+    var page_b = try testing.pageTest("cdp/registry2.html", .{});
+    defer page_b.close();
+
+    const frame_a = page_a.frame().?;
+    const frame_b = page_b.frame().?;
+
+    const a_node = (try frame_a.window._document.querySelector(.wrap("#a1"), frame_a)).?.asNode();
+    const b_node = (try frame_b.window._document.querySelector(.wrap("a"), frame_b)).?.asNode();
+    const ra = try registry.register(a_node);
+    const rb = try registry.register(b_node);
+    try testing.expectEqual(2, registry.lookup_by_id.count());
+
+    registry.resetFrame(arena.allocator(), frame_a);
+
+    try testing.expectEqual(null, registry.lookup_by_id.get(ra.id));
+    try testing.expectEqual(null, registry.lookup_by_node.get(a_node));
+    try testing.expectEqual(1, registry.lookup_by_id.count());
+    try testing.expectEqual(rb, registry.lookup_by_id.get(rb.id).?);
+    try testing.expectEqual(b_node, registry.lookup_by_node.get(b_node).?.dom);
 }
 
 test "cdp Node: search list" {
@@ -402,8 +453,10 @@ test "cdp Node: search list" {
     }
 
     {
-        var frame = try testing.pageTest("cdp/registry2.html", .{});
-        defer frame._session.removePage();
+        var page = try testing.pageTest("cdp/registry2.html", .{});
+        defer page.close();
+
+        const frame = page.frame().?;
         var doc = frame.window._document;
 
         {
@@ -442,8 +495,10 @@ test "cdp Node: Writer" {
     var registry = Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/registry3.html", .{});
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/registry3.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
     var doc = frame.window._document;
 
     {

@@ -109,10 +109,11 @@ pub const Event = union(enum) {
     buffer_overflow: BufferOverflow,
     llm: LLM,
 
-    const Navigate = struct {
+    pub const Navigate = struct {
         tls: bool,
-        proxy: bool,
-        driver: enum { cdp } = .cdp,
+        context: Context,
+
+        pub const Context = enum { page, iframe, popup };
     };
 
     const BufferOverflow = struct {

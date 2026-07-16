@@ -125,7 +125,7 @@
       headers: { "Sender": "me", "Target": "you" }
       }
     );
-    testing.expectEqual("https://google.com", request2.url);
+    testing.expectEqual("https://google.com/", request2.url);
     testing.expectEqual("POST", request2.method);
     testing.expectEqual("omit", request2.credentials);
     testing.expectEqual("reload", request2.cache);

@@ -27,6 +27,16 @@ const Config = lp.Config;
 const SigHandler = @import("Sighandler.zig");
 pub const panic = lp.crash_handler.panic;
 
+pub const std_options: std.Options = .{
+    // std.crypto.random's default backend mmaps a thread-local 528-byte state
+    // page on first use and never unmaps it — there is no thread-exit hook.
+    // With one detached thread per CDP connection (Server.handleConnection),
+    // that leaks one resident page per connection (uuidv4 in
+    // Page.getOrCreateOrigin touches it), ~4KB/conn of unbounded RSS growth.
+    // Route every std.crypto.random call to the getrandom syscall instead.
+    .crypto_always_getrandom = true,
+};
+
 pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
@@ -54,14 +64,20 @@ pub fn main() !void {
 }
 
 fn run(allocator: Allocator, main_arena: Allocator) !void {
+    lp.core_dump.disableIfRequested();
+
     const args = try Config.parseArgs(main_arena);
     defer args.deinit(main_arena);
 
     switch (args.mode) {
         .help => |tag| return args.printUsageAndExit(tag, true),
-        .version => {
-            var stdout = std.fs.File.stdout().writer(&.{});
-            try stdout.interface.print("{s}\n", .{lp.build_config.version});
+        .version => |opts| {
+            if (opts.check) {
+                try lp.checkVersion(allocator, &args);
+            } else {
+                var stdout = std.fs.File.stdout().writer(&.{});
+                try stdout.interface.print("{s}\n", .{lp.build_config.version});
+            }
             return std.process.cleanExit();
         },
         .agent => |opts| if (opts.list_models) {
@@ -94,6 +110,12 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
     app.telemetry.record(.{ .run = {} });
 
+    defer if (app.config.dumpMetricsOnExit()) {
+        var stdout = std.fs.File.stdout();
+        var writer = stdout.writer(&.{});
+        lp.metrics.write(&writer.interface);
+    };
+
     switch (args.mode) {
         .serve => |opts| {
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
@@ -122,8 +144,34 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             app.network.run();
         },
         .fetch => |opts| {
-            const url = opts.url;
-            log.debug(.app, "startup", .{ .mode = "fetch", .dump_mode = opts.dump, .url = url, .snapshot = app.snapshot.fromEmbedded() });
+            const urls = opts.url.items;
+
+            if (urls.len == 0) {
+                log.fatal(.app, "missing URL", .{});
+                return error.MissingArgument;
+            }
+
+            // Plain (non-JSON) dump writes one document to stdout with no
+            // framing, so it can't disambiguate more than one page.
+            if (urls.len == 1) {
+                log.debug(.app, "startup", .{
+                    .mode = "fetch",
+                    .dump_mode = opts.dump,
+                    .url = urls[0],
+                    .snapshot = app.snapshot.fromEmbedded(),
+                });
+            } else {
+                if (opts.json == false) {
+                    log.fatal(.app, "multiple URLs require --json", .{});
+                    return error.InvalidArgument;
+                }
+                log.debug(.app, "startup", .{
+                    .mode = "fetch",
+                    .dump_mode = opts.dump,
+                    .url_count = urls.len,
+                    .snapshot = app.snapshot.fromEmbedded(),
+                });
+            }
 
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
@@ -157,15 +205,34 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 try sighandler.deadline(ms);
             }
 
-            var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, &ft, url.?, fetch_opts });
-            defer worker_thread.join();
-
-            app.network.run();
+            var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, &ft, urls, fetch_opts });
+            worker_thread.join();
         },
         .mcp => |opts| {
             log.info(.mcp, "starting server", .{});
 
             log.opts.format = .logfmt;
+
+            // --port serves MCP over HTTP instead of stdio. It and --cdp-port
+            // both need app.network's single listener, so they can't combine.
+            if (opts.port) |port| {
+                if (opts.cdp_port != null) {
+                    log.fatal(.mcp, "port conflicts with cdp-port", .{ .hint = "both need the single network listener" });
+                    return;
+                }
+                const address = std.net.Address.parseIp(opts.host, port) catch |err| {
+                    log.fatal(.mcp, "invalid address", .{ .err = err, .host = opts.host, .port = port });
+                    return;
+                };
+                const http_server = try lp.mcp.HttpServer.init(allocator, app);
+                defer http_server.deinit();
+                // Shutdown rides the already-registered Network.stop handler:
+                // a signal stops the accept loop, run() returns, deinit joins.
+                http_server.run(address) catch |err| {
+                    log.fatal(.mcp, "mcp http error", .{ .err = err });
+                };
+                return;
+            }
 
             var cdp_server: ?*lp.Server = null;
             if (opts.cdp_port) |port| {
@@ -181,7 +248,12 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             var worker_thread = try std.Thread.spawn(.{}, mcpThread, .{ allocator, app });
             defer worker_thread.join();
 
-            app.network.run();
+            // mcp talks over stdio on mcpThread. Only run the CDP accept/read
+            // loop when an optional CDP server was started; otherwise the main
+            // thread just waits for the worker.
+            if (cdp_server != null) {
+                app.network.run();
+            }
         },
         .agent => |opts| {
             log.info(.app, "starting agent", .{});
@@ -204,9 +276,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                     &cancelled,
                     &sig_bridge,
                 });
-                defer worker_thread.join();
-
-                app.network.run();
+                worker_thread.join();
             }
 
             if (cancelled) return error.UserCancelled;
@@ -282,7 +352,7 @@ const FetchTerminator = struct {
     }
 };
 
-fn fetchThread(app: *App, ft: *FetchTerminator, url: [:0]const u8, fetch_opts: lp.FetchOpts) void {
+fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetch_opts: lp.FetchOpts) void {
     defer app.network.stop();
 
     var browser: lp.Browser = undefined;
@@ -298,8 +368,8 @@ fn fetchThread(app: *App, ft: *FetchTerminator, url: [:0]const u8, fetch_opts: l
     // process-of) shutting down browser/env
     defer ft.releaseBrowser();
 
-    lp.fetch(app, &browser, url, fetch_opts) catch |err| {
-        log.fatal(.app, "fetch error", .{ .err = err, .url = url });
+    lp.fetch(app, &browser, urls, fetch_opts) catch |err| {
+        log.fatal(.app, "fetch error", .{ .err = err, .url_count = urls.len });
     };
 }
 

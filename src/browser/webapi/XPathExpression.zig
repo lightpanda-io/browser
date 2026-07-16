@@ -101,5 +101,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const evaluate = bridge.function(XPathExpression.evaluate, .{ .dom_exception = true });
+    pub const evaluate = bridge.function(XPathExpression.evaluate, .{});
 };

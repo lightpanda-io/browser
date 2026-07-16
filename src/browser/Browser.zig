@@ -24,8 +24,11 @@ const Notification = @import("../Notification.zig");
 
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
+const Watchdog = @import("../Watchdog.zig");
 const Session = @import("Session.zig");
-const HttpClient = @import("HttpClient.zig");
+const Selector = @import("webapi/selector/Selector.zig");
+const Viewport = @import("Viewport.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
 
 const ArenaPool = App.ArenaPool;
@@ -43,6 +46,9 @@ allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: HttpClient,
 
+// Shared across pages, survives navigation. See Selector.Cache.
+selector_cache: Selector.Cache,
+
 // Permission state set via CDP Browser.grantPermissions / setPermission /
 // resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
 // by navigator.permissions.query(). Scoped to the Browser so it persists
@@ -50,8 +56,20 @@ http_client: HttpClient,
 // browser context. Keys are owned by `allocator`; values are enum tags.
 permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 
+// Runtime viewport override set via Emulation.setDeviceMetricsOverride and
+// cleared via clearDeviceMetricsOverride. Null means use the compile-time
+// Viewport.default. Scoped to the Browser so it persists across page
+// navigations (matching how Chrome scopes the override to the connection).
+// Every viewport consumer reads it through Page.getViewport so they all
+// observe the same (possibly overridden) value.
+viewport_override: ?Viewport = null,
+
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
+
+// Registered with App.watchdog for the lifetime of the env. The watchdog
+// checker thread reads it until Browser.deinit unregisters.
+watchdog_entry: Watchdog.Entry,
 
 // Pool for FinalizerCallback.Identity structs — the records V8 weak-callback
 // parameters point at. Scoped to the Browser (i.e. the V8 Isolate's lifetime)
@@ -100,12 +118,24 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .http_client = undefined,
         .page_pool = std.heap.MemoryPool(Page).init(allocator),
         .fc_identity_pool = .init(allocator),
+        .selector_cache = .init(allocator),
+        .watchdog_entry = undefined,
     };
+    self.env.protectHeapLimit();
     try self.http_client.init(allocator, &app.network, cdp);
+
+    self.watchdog_entry = .{
+        .env = &self.env,
+        .heartbeat = &self.http_client.heartbeat,
+    };
+    app.watchdog.register(&self.watchdog_entry);
 }
 
 pub fn deinit(self: *Browser) void {
     self.closeSession();
+    // After this returns, the watchdog thread holds no reference to our env
+    // or http_client — required before either is torn down.
+    self.app.watchdog.unregister(&self.watchdog_entry);
     self.env.deinit();
     // After env.deinit() the Isolate is gone, so no further weak finalizer can
     // fire — only now is it safe to free the pool backing their parameters.
@@ -114,6 +144,7 @@ pub fn deinit(self: *Browser) void {
     self.http_client.deinit();
     self.clearPermissions();
     self.permissions.deinit(self.allocator);
+    self.selector_cache.deinit();
 }
 
 // Set (or overwrite) the stored state for a permission. The name is duped into
@@ -138,6 +169,12 @@ pub fn clearPermissions(self: *Browser) void {
         self.allocator.free(key.*);
     }
     self.permissions.clearRetainingCapacity();
+}
+
+// The viewport every consumer should read: the runtime override if set,
+// otherwise the compile-time default.
+pub fn getViewport(self: *const Browser) Viewport {
+    return self.viewport_override orelse Viewport.default;
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {

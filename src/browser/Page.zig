@@ -17,16 +17,17 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
-const v8 = js.v8;
 
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
 
+const v8 = js.v8;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -81,11 +82,10 @@ identity: js.Identity = .{},
 // weak-callback safety.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *js.FinalizerCallback) = .empty,
 
-// Tracked global v8 objects that need to be released when the Page tears down.
-globals: std.ArrayList(v8.Global) = .empty,
-
-// Temporary v8 globals that can be released early. Key is global.data_ptr.
-temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+// Persisted v8 handles owned by this Page. Handles that outlive the Page are
+// reset on teardown; handles that can be released early are dropped
+// individually. See js.GlobalTracker.
+globals: js.GlobalTracker,
 
 // Double buffered so that, as we process one list of queued navigations, new
 // entries are added to the separate buffer. Prevents endless navigation loops
@@ -116,24 +116,22 @@ popups: std.ArrayList(*Frame) = .empty,
 // ideal from a memory point of view).
 closed_frames: std.ArrayList(*Frame) = .empty,
 
-// Lifecycle state. A Page is `.pending` while we hold it as the in-flight
-// destination of a root navigation — its V8 context exists but is not yet the
-// session's active context. Flipped to `.active` by Session.commitPendingPage
-// when response headers arrive. Frame.navigate / frameHeaderDoneCallback
-// branch on this to stamp `is_pending_root` on the frame_navigate
-// notification (so CDP doesn't reset its node registry yet) and
-_state: enum { active, pending } = .active,
+// In-flight navigation for a root page. When not null, this page will "replace"
+// the referenced page once the response header arrives. This is necessary
+// because, during navigation, both the "old" and "new" pages remain addressable
+// in CDP
+replaces: ?*Page = null,
 
-// Runtime viewport override set via Emulation.setDeviceMetricsOverride and
-// cleared via Emulation.clearDeviceMetricsOverride. Null means use the
-// compile-time Viewport.default. Read every viewport consumer through
-// getViewport so they all observe the same (possibly overridden) value.
-viewport_override: ?Viewport = null,
+// Inverse of `replaces`. While we don't strictly need both, it does streamline
+// code. The two are kept in sync.
+replacement: ?*Page = null,
 
-// The viewport every consumer should read: the runtime override if set,
-// otherwise the compile-time default.
+// The viewport every consumer should read. The runtime override (set via
+// Emulation.setDeviceMetricsOverride) is stored on the Browser so it persists
+// across page navigations; delegate to it here, keeping a single read path for
+// every viewport consumer.
 pub fn getViewport(self: *const Page) Viewport {
-    return self.viewport_override orelse Viewport.default;
+    return self.session.browser.getViewport();
 }
 
 // Initialize a Page and its root Frame.
@@ -146,6 +144,7 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
         .frame = undefined,
         .frame_arena = frame_arena,
         .factory = Factory.init(frame_arena),
+        .globals = .init(session.browser.app.allocator),
     };
     self.queued_navigation = &self.queued_navigation_1;
 
@@ -168,6 +167,7 @@ pub fn deinit(self: *Page) void {
     self.frame.deinit();
 
     const session = self.session;
+    lp.metrics.js_heap_size_bytes.observe(session.browser.env.isolate.getHeapStatistics().total_physical_size);
     defer session.browser.env.memoryPressureNotification(.moderate);
 
     self.identity.deinit();
@@ -182,20 +182,7 @@ pub fn deinit(self: *Page) void {
         self.finalizer_callbacks = .empty;
     }
 
-    {
-        for (self.globals.items) |*global| {
-            v8.v8__Global__Reset(global);
-        }
-        self.globals = .empty;
-    }
-
-    {
-        var it = self.temps.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-        self.temps = .empty;
-    }
+    self.globals.deinit();
 
     if (comptime IS_DEBUG) {
         std.debug.assert(self.origins.count() == 0);
@@ -322,7 +309,7 @@ fn findPopupBy(self: *Page, comptime field: []const u8, id: u32) ?*Frame {
 //
 // The returned set is fixed, so a caller may run user JS (which can create or
 // tear down frames/workers) while walking it without invalidating the slice.
-pub fn executionsForOrigin(self: *Page, arena: Allocator, origin: *js.Origin) ![]*js.Execution {
+pub fn executionsForOrigin(self: *Page, arena: Allocator, origin: []const u8) ![]*js.Execution {
     var list: std.ArrayList(*js.Execution) = .empty;
     try appendFrameExecutions(&self.frame, origin, arena, &list);
     for (self.popups.items) |popup| {
@@ -331,14 +318,18 @@ pub fn executionsForOrigin(self: *Page, arena: Allocator, origin: *js.Origin) ![
     return list.items;
 }
 
-fn appendFrameExecutions(frame: *Frame, origin: *js.Origin, arena: Allocator, list: *std.ArrayList(*js.Execution)) !void {
-    if (frame.js.origin == origin) {
-        try list.append(arena, &frame.js.execution);
+fn appendFrameExecutions(frame: *Frame, origin: []const u8, arena: Allocator, list: *std.ArrayList(*js.Execution)) !void {
+    if (frame.origin) |fo| {
+        if (std.mem.eql(u8, fo, origin)) {
+            try list.append(arena, &frame.js.execution);
+        }
     }
     for (frame.workers.items) |worker| {
-        const wgs = worker._worker_scope;
-        if (wgs.js.origin == origin) {
-            try list.append(arena, &wgs.js.execution);
+        const wgs = worker._worker_scope._proto;
+        if (wgs.origin) |wo| {
+            if (std.mem.eql(u8, wo, origin)) {
+                try list.append(arena, &wgs.js.execution);
+            }
         }
     }
     for (frame.child_frames.items) |child| {

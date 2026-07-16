@@ -103,7 +103,7 @@ pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
         return "";
     };
 
-    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try title_element.asNode().getTextContent(&buf.writer);
     const text = buf.written();
 
@@ -114,7 +114,7 @@ pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
     var started = false;
     var in_whitespace = false;
     var result: std.ArrayList(u8) = .empty;
-    try result.ensureTotalCapacity(frame.call_arena, text.len);
+    try result.ensureTotalCapacity(frame.local_arena, text.len);
 
     for (text) |c| {
         const is_ascii_ws = c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0C';
@@ -188,8 +188,8 @@ pub fn getEmbeds(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag)
     return collections.NodeLive(.tag).init(self.asNode(), .embed, frame);
 }
 
-pub fn getApplets(_: *const HTMLDocument) collections.HTMLCollection {
-    return .{ ._data = .empty };
+pub fn getApplets(_: *const HTMLDocument, frame: *Frame) !*collections.HTMLCollection {
+    return frame._factory.create(collections.HTMLCollection{ ._data = .empty });
 }
 
 pub fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {
@@ -222,31 +222,6 @@ pub fn setLang(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
 
 pub fn getAll(self: *HTMLDocument, frame: *Frame) !*collections.HTMLAllCollection {
     return frame._factory.create(collections.HTMLAllCollection.init(self.asNode(), frame));
-}
-
-pub fn getCookie(_: *HTMLDocument, frame: *Frame) ![]const u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.call_arena), .{
-        .is_http = false,
-        .is_navigation = true,
-    });
-    return buf.items;
-}
-
-pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, frame: *Frame) ![]const u8 {
-    // we use the cookie jar's allocator to parse the cookie because it
-    // outlives the frame's arena.
-    const Cookie = @import("storage/Cookie.zig");
-    const c = Cookie.parse(frame._session.cookie_jar.allocator, frame.url, cookie_str) catch {
-        // Invalid cookies should be silently ignored, not throw errors
-        return "";
-    };
-    if (c.http_only) {
-        c.deinit();
-        return ""; // HttpOnly cookies cannot be set from JS
-    }
-    try frame._session.cookie_jar.add(c, std.time.timestamp(), false);
-    return cookie_str;
 }
 
 pub fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
@@ -289,7 +264,7 @@ pub const JsApi = struct {
 
     pub const dir = bridge.accessor(HTMLDocument.getDir, HTMLDocument.setDir, .{ .ce_reactions = true });
     pub const head = bridge.accessor(HTMLDocument.getHead, null, .{});
-    pub const body = bridge.accessor(HTMLDocument.getBody, HTMLDocument.setBody, .{ .dom_exception = true, .ce_reactions = true });
+    pub const body = bridge.accessor(HTMLDocument.getBody, HTMLDocument.setBody, .{ .ce_reactions = true });
     pub const lang = bridge.accessor(HTMLDocument.getLang, HTMLDocument.setLang, .{});
     pub const title = bridge.accessor(HTMLDocument.getTitle, HTMLDocument.setTitle, .{ .ce_reactions = true });
     pub const images = bridge.accessor(HTMLDocument.getImages, null, .{});
@@ -302,6 +277,5 @@ pub const JsApi = struct {
     pub const plugins = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
-    pub const cookie = bridge.accessor(HTMLDocument.getCookie, HTMLDocument.setCookie, .{});
     pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
 };

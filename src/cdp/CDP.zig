@@ -21,17 +21,20 @@ const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const Inbox = @import("../Inbox.zig");
-const Network = @import("../network/Network.zig");
 const Notification = @import("../Notification.zig");
+
 const WS = @import("../network/WS.zig");
+const Network = @import("../network/Network.zig");
+const Transfer = @import("../network/HttpClient.zig").Transfer;
+
 const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
 const Frame = @import("../browser/Frame.zig");
+const Page = @import("../browser/Page.zig");
 const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
-const Transfer = @import("../browser/HttpClient.zig").Transfer;
 
 const Connection = @import("Connection.zig");
 const Incrementing = @import("id.zig").Incrementing;
@@ -47,6 +50,7 @@ pub const URL_BASE = "chrome://newtab/";
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const SessionIdGen = Incrementing(u32, "SID");
+const BrowserSessionIdGen = Incrementing(u32, "BSID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
 // webmcp tool invocation
 pub const InvocationIdGen = Incrementing(u32, "INV");
@@ -69,7 +73,13 @@ link: Network.CdpLink,
 target_auto_attach: bool = false,
 
 session_id_gen: SessionIdGen = .{},
+browser_session_id_gen: BrowserSessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
+
+// Session from Target.attachToBrowserTarget. Distinct from the page
+// session (BrowserContext.session_id) as it targets the browser itself and
+// outlives any browser context.
+browser_session_id: ?[]const u8 = null,
 
 browser_context: ?BrowserContext,
 
@@ -238,6 +248,19 @@ pub fn sendJSON(self: *CDP, message: anytype) !void {
 }
 
 pub fn tick(self: *CDP) !bool {
+    // terminatePending means someone decided this browser must die (e.g. the
+    // heap limit was reached). Nothing in the CDP path ever calls cancelTerminate
+    // so the flag can't be a stale leftover here. Exit.
+    if (self.browser.env.terminatePending()) {
+        log.warn(.cdp, "closing connection", .{ .reason = "pending terminate" });
+        // The worker thread is the sole writer of this socket, so sending the
+        // close frame here can't interleave with another write.
+        self.conn.send(&WS.CLOSE_GOING_AWAY) catch |err| {
+            log.warn(.app, "CDP terminate close", .{ .err = err });
+        };
+        return false;
+    }
+
     // Liveness is enforced by TCP keepalive configured in
     // Server.configureSocket; the wakeup lets V8 run or terminate.
     const wait_ms: u32 = 1000; // 1s
@@ -247,7 +270,7 @@ pub fn tick(self: *CDP) !bool {
             // No active page yet (or a teardown is in flight). Fall
             // back to ticking the http client directly so CDP messages
             // still get dispatched.
-            self.browser.http_client.tick(wait_ms, .all) catch |err| switch (err) {
+            self.browser.http_client.tick(wait_ms) catch |err| switch (err) {
                 error.ClientDisconnected => return false,
                 else => {
                     log.err(.app, "http tick", .{ .err = err });
@@ -262,9 +285,10 @@ pub fn tick(self: *CDP) !bool {
 }
 
 fn pageWait(self: *CDP, ms: u32) !void {
-    const session = &(self.browser.session orelse return error.NoPage);
-    var runner = try session.runner(.{});
-    return runner.waitCDP(.{ .ms = ms });
+    const bc = &(self.browser_context orelse return error.NoPage);
+    const page = bc.page_handle orelse return error.NoPage;
+    var runner = bc.session.runner(.{});
+    return runner.waitForFrameCDP(page.frame_id, ms, .done);
 }
 
 // Parse-then-dispatch entry point. Used by:
@@ -287,6 +311,8 @@ pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []con
 // keeping `str` and the backing storage for `input`'s string slices
 // alive for the duration of the call.
 fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, input: InputMessage) !void {
+    lp.metrics.cdp_commands.incr();
+
     var command = Command{
         .input = .{
             .json = str,
@@ -317,6 +343,10 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
         };
     } else {
         dispatchCommand(&command, input.method) catch |err| {
+            switch (err) {
+                error.UnknownDomain, error.UnknownMethod => lp.metrics.cdp_unknown_commands.incr(),
+                else => {},
+            }
             command.sendError(-31998, @errorName(err), .{}) catch return err;
         };
     }
@@ -411,6 +441,11 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
 }
 
 fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+    if (self.browser_session_id) |browser_session_id| {
+        if (std.mem.eql(u8, browser_session_id, input_session_id)) {
+            return true;
+        }
+    }
     const browser_context = &(self.browser_context orelse return false);
     const session_id = browser_context.session_id orelse return false;
     return std.mem.eql(u8, session_id, input_session_id);
@@ -498,6 +533,13 @@ pub const BrowserContext = struct {
     // deal with "pages" for now). Since we only allow 1 open page at a
     // time, we only have 1 target_id.
     target_id: ?[14]u8,
+
+    // Navigation-safe handle to this context's page, set when `frameCreated`
+    // fires. A BrowserContext is single-target by protocol, so it resolves its
+    // (live) page/frame through this handle — see `mainFrame` / `mainPage`. The
+    // handle's frame_id is stable across navigations (the replacement reuses
+    // it). null until the first page is created.
+    page_handle: ?Session.PageHandle = null,
 
     // The CDP session_id. After the target/page is created, the client
     // "attaches" to it (either explicitly or automatically). We return a
@@ -627,7 +669,7 @@ pub const BrowserContext = struct {
         const http_client = &browser.http_client;
         for (self.intercept_state.pendingIntercepts()) |transfer_id| {
             if (http_client.findTransfer(transfer_id)) |transfer| {
-                transfer.abort(error.ClientDisconnect);
+                transfer.abortParked(error.ClientDisconnect);
             }
         }
 
@@ -682,10 +724,14 @@ pub const BrowserContext = struct {
         const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
         errdefer browser.arena_pool.release(call_arena);
 
+        const local_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.local_arena");
+        errdefer browser.arena_pool.release(local_arena);
+
         const world = try arena.create(IsolatedWorld);
         world.* = .{
             .arena = arena,
             .call_arena = call_arena,
+            .local_arena = local_arena,
             .context = null,
             .browser = browser,
             .name = try arena.dupe(u8, world_name),
@@ -707,12 +753,11 @@ pub const BrowserContext = struct {
     }
 
     pub fn axnodeWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
-        // Bind the writer to the frame that owns the root node, not whatever
-        // happens to be `currentFrame`. Name resolution (`Label.findLabelByFor`
-        // against `ownerDocument`) and visibility checks (`frame._style_manager`)
-        // are per-frame; getting this wrong on cross-frame queries produces
-        // names/visibility from the wrong document.
-        const fallback = self.session.currentFrame() orelse return error.FrameNotLoaded;
+        // Bind the writer to the frame that owns the root node. Name resolution
+        // (`Label.findLabelByFor` against `ownerDocument`) and visibility
+        // checks (`frame._style_manager`) are per-frame; getting this wrong on
+        // cross-frame queries produces names/visibility from the wrong document.
+        const fallback = self.mainFrame() orelse return error.FrameNotLoaded;
         const frame = root.dom.ownerFrame(fallback);
         const cache = try frame.call_arena.create(Element.VisibilityCache);
         cache.* = .empty;
@@ -729,14 +774,31 @@ pub const BrowserContext = struct {
         };
     }
 
+    // The root frame of this context's live Page.
+    pub fn mainFrame(self: *const BrowserContext) ?*Frame {
+        return &(self.mainPage() orelse return null).frame;
+    }
+
+    // True while this context's page is mid-commit (a root navigation's
+    // replacement is being promoted).
+    pub fn inCommit(self: *const BrowserContext) bool {
+        return (self.page_handle orelse return false).inCommit();
+    }
+
+    // The live Page for this single-target context, or null if no page is
+    // loaded.
+    pub fn mainPage(self: *const BrowserContext) ?*Page {
+        return (self.page_handle orelse return null).page();
+    }
+
     pub fn getURL(self: *const BrowserContext) ?[:0]const u8 {
-        const frame = self.session.currentFrame() orelse return null;
+        const frame = self.mainFrame() orelse return null;
         const url = frame.url;
         return if (url.len == 0) null else url;
     }
 
     pub fn getTitle(self: *const BrowserContext) ?[]const u8 {
-        const frame = self.session.currentFrame() orelse return null;
+        const frame = self.mainFrame() orelse return null;
         return frame.getTitle() catch |err| {
             log.err(.cdp, "page title", .{ .err = err });
             return null;
@@ -944,8 +1006,7 @@ pub const BrowserContext = struct {
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.
                 .must_encode = blk: {
-                    const response = msg.response;
-                    if (response.contentType()) |ct| {
+                    if (msg.transfer.contentType()) |ct| {
                         const mime = try Mime.parse(ct);
 
                         if (!mime.isText()) {
@@ -1093,6 +1154,7 @@ const ScriptOnNewDocument = struct {
 const IsolatedWorld = struct {
     arena: Allocator,
     call_arena: Allocator,
+    local_arena: Allocator,
     browser: *Browser,
     name: []const u8,
     context: ?*js.Context = null,
@@ -1105,6 +1167,7 @@ const IsolatedWorld = struct {
     pub fn deinit(self: *IsolatedWorld) void {
         self.removeContext();
         self.browser.arena_pool.release(self.call_arena);
+        self.browser.arena_pool.release(self.local_arena);
         self.browser.arena_pool.release(self.arena);
     }
 
@@ -1130,6 +1193,7 @@ const IsolatedWorld = struct {
                 .identity = &self.identity,
                 .identity_arena = self.arena,
                 .call_arena = self.call_arena,
+                .local_arena = self.local_arena,
                 .debug_name = "IsolatedContext",
             });
             self.context = ctx;
@@ -1379,13 +1443,32 @@ test "cdp: disconnect latches so the worker keeps exiting" {
     }
 
     // First tick drains the .disconnect and tears the link down.
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
 
     // The inbox is now empty. Without the latch this second tick would fall
     // through to perform/poll with no producer left to wake it, so the worker
     // would never exit and Server.deinit() would spin on active_threads
     // (#2510). The latch keeps the terminal state sticky so the worker exits.
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
+}
+
+test "cdp: tick sends a close frame on pending terminate" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp = ctx.cdp();
+    cdp.browser.env.requestTerminate();
+    // Clear the pending terminate so deinit's V8 calls don't trip over the
+    // terminating-state asserts.
+    defer cdp.browser.env.cancelTerminate();
+
+    try testing.expectEqual(false, try cdp.tick());
+
+    // The client should receive a close frame (code 1001, going away), not
+    // just an abrupt socket close.
+    var buf: [WS.CLOSE_GOING_AWAY.len]u8 = undefined;
+    const n = try posix.read(ctx.socket, &buf);
+    try testing.expectEqualSlices(u8, &WS.CLOSE_GOING_AWAY, buf[0..n]);
 }
 
 test "cdp: syncRequest short-circuits after disconnect" {
@@ -1399,7 +1482,7 @@ test "cdp: syncRequest short-circuits after disconnect" {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
         client.inbox.push(arena, .{ .disconnect = null });
     }
-    try testing.expectError(error.ClientDisconnected, client.tick(0, .all));
+    try testing.expectError(error.ClientDisconnected, client.tick(0));
 
     // A synchronous fetch attempted after the latch returns ClientDisconnected
     // without starting the request. syncRequest also frees req.headers on this
@@ -1418,5 +1501,6 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .cookie_origin = "",
         .resource_type = .fetch,
         .notification = undefined,
+        .shutdown_callback = @import("../network/HttpClient.zig").noopShutdown,
     }));
 }

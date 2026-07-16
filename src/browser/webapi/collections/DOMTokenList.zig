@@ -45,7 +45,7 @@ const Lookup = std.StringArrayHashMapUnmanaged(void);
 const WHITESPACE = " \t\n\r\x0C";
 
 pub fn length(self: *const DOMTokenList, frame: *Frame) !u32 {
-    const tokens = try self.getTokens(frame.call_arena);
+    const tokens = try self.getTokens(frame.local_arena);
     return @intCast(tokens.count());
 }
 
@@ -53,7 +53,7 @@ pub fn length(self: *const DOMTokenList, frame: *Frame) !u32 {
 pub fn item(self: *const DOMTokenList, index: usize, frame: *Frame) !?[]const u8 {
     var i: usize = 0;
 
-    const allocator = frame.call_arena;
+    const allocator = frame.local_arena;
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
 
     var it = std.mem.tokenizeAny(u8, self.getValue(), WHITESPACE);
@@ -67,6 +67,22 @@ pub fn item(self: *const DOMTokenList, index: usize, frame: *Frame) !?[]const u8
         }
     }
     return null;
+}
+
+/// https://dom.spec.whatwg.org/#dom-domtokenlist-supports
+/// Only `rel` defines supported tokens here; per spec every other backing
+/// attribute throws. Loaders probe `relList.supports("modulepreload")` and
+/// fall back to fetch()-based legacy loading when it fails.
+pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bool {
+    if (!std.ascii.eqlIgnoreCase(self._attribute_name.str(), "rel")) {
+        return error.TypeError;
+    }
+    const supported = [_][]const u8{ "stylesheet", "preload", "modulepreload" };
+    const lower = try std.ascii.allocLowerString(frame.local_arena, token);
+    for (supported) |s| {
+        if (std.mem.eql(u8, lower, s)) return true;
+    }
+    return false;
 }
 
 pub fn contains(self: *const DOMTokenList, search: []const u8) !bool {
@@ -84,7 +100,7 @@ pub fn add(self: *DOMTokenList, tokens: []const []const u8, frame: *Frame) !void
         try validateToken(token);
     }
 
-    const allocator = frame.call_arena;
+    const allocator = frame.local_arena;
     var lookup = try self.getTokens(allocator);
     try lookup.ensureUnusedCapacity(allocator, tokens.len);
 
@@ -100,7 +116,7 @@ pub fn remove(self: *DOMTokenList, tokens: []const []const u8, frame: *Frame) !v
         try validateToken(token);
     }
 
-    var lookup = try self.getTokens(frame.call_arena);
+    var lookup = try self.getTokens(frame.local_arena);
     for (tokens) |token| {
         _ = lookup.orderedRemove(token);
     }
@@ -151,8 +167,8 @@ pub fn replace(self: *DOMTokenList, old_token: []const u8, new_token: []const u8
         return error.InvalidCharacterError;
     }
 
-    const allocator = frame.call_arena;
-    var lookup = try self.getTokens(frame.call_arena);
+    const allocator = frame.local_arena;
+    var lookup = try self.getTokens(allocator);
 
     // Check if old_token exists
     if (!lookup.contains(old_token)) {
@@ -298,7 +314,6 @@ pub const JsApi = struct {
         pub const name = "DOMTokenList";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const enumerable = false;
     };
 
     pub const length = bridge.accessor(DOMTokenList.length, null, .{});
@@ -310,11 +325,12 @@ pub const JsApi = struct {
         return self.item(@intCast(index), frame);
     }
 
-    pub const contains = bridge.function(DOMTokenList.contains, .{ .dom_exception = true });
-    pub const add = bridge.function(DOMTokenList.add, .{ .dom_exception = true, .ce_reactions = true });
-    pub const remove = bridge.function(DOMTokenList.remove, .{ .dom_exception = true, .ce_reactions = true });
-    pub const toggle = bridge.function(DOMTokenList.toggle, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replace = bridge.function(DOMTokenList.replace, .{ .dom_exception = true, .ce_reactions = true });
+    pub const contains = bridge.function(DOMTokenList.contains, .{});
+    pub const supports = bridge.function(DOMTokenList.supports, .{});
+    pub const add = bridge.function(DOMTokenList.add, .{ .ce_reactions = true });
+    pub const remove = bridge.function(DOMTokenList.remove, .{ .ce_reactions = true });
+    pub const toggle = bridge.function(DOMTokenList.toggle, .{ .ce_reactions = true });
+    pub const replace = bridge.function(DOMTokenList.replace, .{ .ce_reactions = true });
     pub const value = bridge.accessor(DOMTokenList.getValue, DOMTokenList.setValue, .{ .ce_reactions = true });
     pub const toString = bridge.function(DOMTokenList.getValue, .{});
     pub const keys = bridge.function(DOMTokenList.keys, .{});

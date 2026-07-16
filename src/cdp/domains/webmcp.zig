@@ -61,7 +61,7 @@ fn enable(cmd: *CDP.Command) !void {
 
     // Replay any tools registered before enable. We walk the current
     // frame only; subframes will be added when they register.
-    if (bc.session.currentFrame()) |frame| {
+    if (bc.mainFrame()) |frame| {
         const mc = frame.window.getModelContext();
         const tools = mc.tools();
         if (tools.len > 0) {
@@ -346,7 +346,7 @@ test "cdp.WebMCP: register fires toolsAdded after enable" {
 
     // Register a fresh tool from JS, expect a new toolsAdded event.
     var ls: @import("../../browser/js/js.zig").Local.Scope = undefined;
-    bc.session.currentFrame().?.js.localScope(&ls);
+    bc.mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(
         \\navigator.modelContext.registerTool({
@@ -371,7 +371,7 @@ test "cdp.WebMCP: invokeTool fires toolInvoked + toolResponded" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id.toFrameId(bc.session.currentFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.mainFrame().?._frame_id);
 
     try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -411,7 +411,7 @@ test "cdp.WebMCP: invokeTool unknown name" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id.toFrameId(bc.session.currentFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.mainFrame().?._frame_id);
 
     try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -447,7 +447,7 @@ test "cdp.WebMCP: cancelInvocation" {
 
     // Register a never-settling tool so we have an invocation to cancel.
     var ls: @import("../../browser/js/js.zig").Local.Scope = undefined;
-    bc.session.currentFrame().?.js.localScope(&ls);
+    bc.mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(
         \\navigator.modelContext.registerTool({
@@ -460,7 +460,7 @@ test "cdp.WebMCP: cancelInvocation" {
         .tools = &.{.{ .name = "hang" }},
     }, .{ .session_id = "SID-M" });
 
-    const frame_id = id.toFrameId(bc.session.currentFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.mainFrame().?._frame_id);
     try ctx.processMessage(.{
         .id = 2,
         .method = "WebMCP.invokeTool",

@@ -50,6 +50,8 @@ pub const FieldEntry = struct {
     /// Allowed values when the schema constrains the field with `enum`; empty
     /// otherwise. The REPL completer/hinter offers these as value suggestions.
     enum_values: []const []const u8 = &.{},
+    /// The schema's per-parameter `description` string; empty when absent.
+    description: []const u8 = "",
 
     /// `backendNodeId` is ephemeral, never replayable. Boolean fields
     /// matching the schema default are cosmetic noise.
@@ -408,6 +410,7 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
                     .field_type = fieldTypeOf(entry.value_ptr.*),
                     .default_true = booleanDefaultTrue(entry.value_ptr.*),
                     .enum_values = try enumValuesOf(arena, entry.value_ptr.*),
+                    .description = descriptionOf(entry.value_ptr.*),
                 };
             }
             info.fields = fields;
@@ -460,6 +463,13 @@ fn booleanDefaultTrue(value: std.json.Value) bool {
     if (value != .object) return false;
     const d = value.object.get("default") orelse return false;
     return d == .bool and d.bool;
+}
+
+fn descriptionOf(value: std.json.Value) []const u8 {
+    if (value != .object) return "";
+    const d = value.object.get("description") orelse return "";
+    if (d != .string) return "";
+    return d.string;
 }
 
 fn enumValuesOf(arena: std.mem.Allocator, value: std.json.Value) ![]const []const u8 {
@@ -580,6 +590,21 @@ pub fn hasUnclosedTripleQuote(input: []const u8) bool {
     return open != null;
 }
 
+/// End of the quoted run opening at `input[start]`, for the REPL's slash-arg
+/// highlighting: recognizes this grammar's `'''…'''` triple delimiter
+/// alongside plain quotes, mirroring `tokenize`'s quoting. Escapes are not
+/// honored (`tokenize` rejects them); an unterminated run extends to the end.
+pub fn quotedSpanEnd(input: []const u8, start: usize) usize {
+    const ch = input[start];
+    if (start + 2 < input.len and input[start + 1] == ch and input[start + 2] == ch) {
+        const close = std.mem.indexOfPos(u8, input, start + 3, input[start .. start + 3]) orelse
+            return input.len;
+        return close + 3;
+    }
+    const close = std.mem.indexOfScalarPos(u8, input, start + 1, ch) orelse return input.len;
+    return close + 1;
+}
+
 /// `body=true`: string is emitted as a `'''…'''` block (newlines OK).
 /// `body=false`: single-line kv quoting (no newlines representable).
 pub fn quotableInline(s: []const u8, body: bool) bool {
@@ -611,6 +636,8 @@ test "all: comptime tool defs reduce cleanly" {
         if (std.mem.eql(u8, f.name, "checked")) checked_default_true = f.default_true;
     }
     try testing.expect(checked_default_true);
+    const timeout = goto.findField("timeout").?;
+    try testing.expect(timeout.description.len > 0);
 }
 
 test "parseValue: single-required positional binds" {
@@ -821,6 +848,13 @@ test "tokenize: even-count backslashes before close-quote are literal" {
     const tokens = try tokenize(arena.allocator(), "value=\"\\\\\"");
     try testing.expectEqual(@as(usize, 1), tokens.len);
     try testing.expectString("value=\"\\\\\"", tokens[0]);
+}
+
+test "quotedSpanEnd" {
+    try testing.expectEqual(@as(usize, 4), quotedSpanEnd("'ab' x", 0));
+    try testing.expectEqual(@as(usize, 9), quotedSpanEnd("'''a b''' x", 0));
+    try testing.expectEqual(@as(usize, 5), quotedSpanEnd("'open", 0));
+    try testing.expectEqual(@as(usize, 7), quotedSpanEnd("'''open", 0));
 }
 
 test "hasUnclosedTripleQuote" {

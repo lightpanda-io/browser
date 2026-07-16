@@ -29,7 +29,30 @@ pub fn parseDimension(value: []const u8) ?f64 {
     if (value.len == 0) {
         return null;
     }
+    return parseNonEmptyDimension(value);
+}
 
+// parseDimension plus viewport-relative units, which the faux layout
+// resolves against the page viewport.
+pub fn parseDimensionViewport(value: []const u8, frame: *Frame) ?f64 {
+    if (value.len == 0) {
+        return null;
+    }
+
+    if (std.mem.endsWith(u8, value, "vh")) {
+        const n = std.fmt.parseFloat(f64, value[0 .. value.len - 2]) catch return null;
+        return n * @as(f64, @floatFromInt(frame._page.getViewport().height)) / 100.0;
+    }
+
+    if (std.mem.endsWith(u8, value, "vw")) {
+        const n = std.fmt.parseFloat(f64, value[0 .. value.len - 2]) catch return null;
+        return n * @as(f64, @floatFromInt(frame._page.getViewport().width)) / 100.0;
+    }
+
+    return parseNonEmptyDimension(value);
+}
+
+fn parseNonEmptyDimension(value: []const u8) ?f64 {
     var num_str = value;
     if (std.mem.endsWith(u8, value, "px")) {
         num_str = value[0 .. value.len - 2];
@@ -65,7 +88,7 @@ pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {
         return value;
     }
 
-    const result = try frame.call_arena.alloc(u8, out_len);
+    const result = try frame.local_arena.alloc(u8, out_len);
     var pos: usize = 0;
 
     if (needsEscape(true, first)) {

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+Attribute lookups must work across realms. Names not in the static intern
+table (data-*, custom attributes) are canonicalized per-frame, so a parent
+reading an iframe element's attributes (or vice versa) can't rely on
+pointer identity — it must fall back to comparing bytes. Regression: parent
+reads of iframe data-* returned null (WPT encoding/*).
+-->
+<iframe id="idf" src="support/cross_realm_attributes.html"></iframe>
+
+<script id="cross_realm_reads">
+  testing.onload(() => {
+    const el = document.getElementById('idf').contentDocument.getElementById('s1');
+
+    testing.expectEqual('5F', el.getAttribute('data-cp'));
+    testing.expectEqual('5F', el.dataset.cp);
+    testing.expectEqual('A1B2', el.dataset.bytes);
+    testing.expectEqual('ns1', el.getAttribute('nonstandardattr'));
+    testing.expectTrue(el.hasAttribute('nonstandardattr'));
+    testing.expectFalse(el.hasAttribute('data-nope'));
+    testing.expectEqual(null, el.getAttribute('data-nope'));
+  });
+</script>
+
+<script id="cross_realm_writes">
+  testing.onload(() => {
+    const el = document.getElementById('idf').contentDocument.getElementById('s1');
+    const count = el.attributes.length;
+
+    // Updating an existing attribute from the parent realm must find the
+    // entry (not append a duplicate).
+    el.setAttribute('data-cp', '60');
+    testing.expectEqual('60', el.getAttribute('data-cp'));
+    testing.expectEqual(count, el.attributes.length);
+
+    // A new name canonicalized by the parent realm must be readable from
+    // the iframe's own realm (and back).
+    el.setAttribute('data-parentset', 'pv');
+    const iwin = document.getElementById('idf').contentWindow;
+    testing.expectEqual('pv', iwin.readAttr('data-parentset'));
+    testing.expectEqual('60', iwin.readAttr('data-cp'));
+
+    el.removeAttribute('data-parentset');
+    testing.expectFalse(el.hasAttribute('data-parentset'));
+    testing.expectEqual(null, iwin.readAttr('data-parentset'));
+  });
+</script>
+
+<script id="cross_realm_attr_node_identity" type=module>
+{
+  const state = await testing.async();
+  const idf = document.getElementById('idf');
+  await new Promise((resolve) => {
+    if (idf.contentDocument.getElementById('s1')) return resolve();
+    idf.addEventListener('load', resolve);
+  });
+  const el = idf.contentDocument.getElementById('s1');
+
+  // Prime the Attr identity map from the parent, then have the iframe's own
+  // listener remove and re-add the attribute. The Attr identity map is keyed
+  // to the element's frame, so however the two sides' contexts resolve, the
+  // parent must see the re-added value, never a stale pre-delete wrapper.
+  const before = el.getAttributeNode('data-cycle');
+
+  const onmsg = (e) => {
+    if (e.data !== 'attr-cycled') return;
+    window.removeEventListener('message', onmsg);
+    state.resolve();
+  };
+  window.addEventListener('message', onmsg);
+  idf.contentWindow.postMessage('cycle-attr', '*');
+
+  await state.done(() => {
+    testing.expectEqual('A1B2', before.value);
+    testing.expectEqual('C3', el.getAttributeNode('data-cycle').value);
+  });
+}
+</script>
+</body>

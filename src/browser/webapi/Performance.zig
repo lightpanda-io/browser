@@ -47,7 +47,7 @@ _delivery_scheduled: bool = false,
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
-fn highResTimestamp() u64 {
+pub fn highResTimestamp() u64 {
     const ts = datetime.timespec();
     const micros = @as(u64, @intCast(ts.sec)) * 1_000_000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000)));
     // Round to nearest 5 microseconds (like Firefox default)
@@ -215,11 +215,11 @@ pub fn getEntries(self: *const Performance) []*Entry {
 }
 
 pub fn getEntriesByType(self: *const Performance, entry_type: []const u8, exec: *const Execution) ![]const *Entry {
-    return filterEntriesByType(exec.call_arena, self._entries.items, entry_type);
+    return filterEntriesByType(exec.local_arena, self._entries.items, entry_type);
 }
 
 pub fn getEntriesByName(self: *const Performance, name: []const u8, entry_type: ?[]const u8, exec: *const Execution) ![]const *Entry {
-    return filterEntriesByName(exec.call_arena, self._entries.items, name, entry_type);
+    return filterEntriesByName(exec.local_arena, self._entries.items, name, entry_type);
 }
 
 // Also used by PerformanceObserver
@@ -357,7 +357,7 @@ pub const JsApi = struct {
 
     pub const now = bridge.function(Performance.now, .{});
     pub const mark = bridge.function(Performance.mark, .{});
-    pub const measure = bridge.function(Performance.measure, .{ .dom_exception = true });
+    pub const measure = bridge.function(Performance.measure, .{});
     pub const clearMarks = bridge.function(Performance.clearMarks, .{});
     pub const clearMeasures = bridge.function(Performance.clearMeasures, .{});
     pub const setResourceTimingBufferSize = bridge.function(Performance.setResourceTimingBufferSize, .{ .noop = true });

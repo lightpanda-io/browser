@@ -139,7 +139,7 @@ fn walk(
             if (html_el.getHidden()) return;
         }
     } else if (node.is(CData.Text)) |text_node| {
-        const text = text_node.getWholeText();
+        const text = text_node.ownData();
         if (isAllWhitespace(text)) {
             return;
         }
@@ -194,7 +194,7 @@ fn walk(
     var name = try axn.getName(self.frame, self.arena);
 
     const has_explicit_label = if (node.is(Element)) |el|
-        el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
+        el.getAttributeSafe(comptime .wrap("aria-label")) != null or el.getAttributeSafe(comptime .wrap("title")) != null
     else
         false;
 
@@ -380,13 +380,12 @@ const JsonVisitor = struct {
                 try self.jw.write(value);
             }
 
-            if (el._attributes) |attrs| {
+            if (!el._attributes.isEmpty()) {
                 try self.jw.objectField("attributes");
                 try self.jw.beginObject();
-                var iter = attrs.iterator();
-                while (iter.next()) |attr| {
-                    try self.jw.objectField(attr._name.str());
-                    try self.jw.write(attr._value.str());
+                for (el.attributeEntries()) |*attr| {
+                    try self.jw.objectField(attr.name());
+                    try self.jw.write(attr.value());
                 }
                 try self.jw.endObject();
             }
@@ -415,7 +414,7 @@ const JsonVisitor = struct {
             try self.jw.objectField("nodeType");
             try self.jw.write(3);
             try self.jw.objectField("nodeValue");
-            try self.jw.write(text_node.getWholeText());
+            try self.jw.write(text_node.ownData());
         } else {
             try self.jw.objectField("nodeType");
             try self.jw.write(9);
@@ -473,7 +472,7 @@ const TextVisitor = struct {
                 name_to_print = n;
             }
         } else if (node.is(CData.Text)) |text_node| {
-            const trimmed = std.mem.trim(u8, text_node.getWholeText(), " \t\r\n");
+            const trimmed = std.mem.trim(u8, text_node.ownData(), " \t\r\n");
             if (trimmed.len > 0) {
                 name_to_print = trimmed;
             }
@@ -731,12 +730,14 @@ pub fn getNodeDetails(
 const testing = @import("testing.zig");
 
 test "SemanticTree backendDOMNodeId" {
+    defer testing.reset();
+
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/registry1.html", .{});
-    defer testing.reset();
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/registry1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
 
     const st: Self = .{
         .dom_node = frame.window._document.asNode(),
@@ -755,12 +756,13 @@ test "SemanticTree backendDOMNodeId" {
 }
 
 test "SemanticTree max_depth" {
+    defer testing.reset();
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
-    var frame = try testing.pageTest("cdp/registry1.html", .{});
-    defer testing.reset();
-    defer frame._session.removePage();
+    var page = try testing.pageTest("cdp/registry1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
 
     const st: Self = .{
         .dom_node = frame.window._document.asNode(),

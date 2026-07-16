@@ -49,7 +49,7 @@ pub fn init(element: ?*Element, is_computed: bool, frame: *Frame) !*CSSStyleDecl
             if (el.getAttributeSafe(comptime .wrap("style"))) |attr_value| {
                 var it = CssParser.parseDeclarationsList(attr_value);
                 while (it.next()) |declaration| {
-                    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
+                    try self.applyParsedDeclaration(declaration, frame);
                 }
             }
         }
@@ -96,11 +96,41 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     const prop = self.findProperty(wrapped) orelse {
         // Only return default values for computed styles
         if (self._is_computed) {
+            if (self._element) |element| {
+                // Resolve inline `style=` declarations through the element's
+                // parsed inline style, so computed values match `el.style`.
+                if (frame._style_manager.inlineStyleValue(element, wrapped)) |value| {
+                    return value;
+                }
+
+                // Computed width/height must agree with the synthetic layout
+                // metrics (offsetWidth/getBoundingClientRect). Returning ""
+                // makes measurement code see contradictory sizes — jQuery's
+                // "shrink text until it fits" loops then never terminate.
+                if (wrapped.eql(comptime .wrap("width"))) {
+                    return resolvedDimension(element, .width, frame);
+                }
+                if (wrapped.eql(comptime .wrap("height"))) {
+                    return resolvedDimension(element, .height, frame);
+                }
+            }
             return getDefaultPropertyValue(self, wrapped);
         }
         return "";
     };
     return prop._value.str();
+}
+
+fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
+    if (!element.checkVisibilityCached(null, frame)) {
+        return "auto";
+    }
+    const dims = element.getElementDimensions(frame);
+    const value = switch (dimension) {
+        .width => dims.width,
+        .height => dims.height,
+    };
+    return std.fmt.allocPrint(frame.local_arena, "{d}px", .{value}) catch "auto";
 }
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
@@ -124,6 +154,19 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
     try self.syncStyleAttribute(frame);
 }
 
+/// Apply one declaration parsed from a `style=` block. Unlike the imperative
+/// setProperty path, within a single declaration block a normal declaration must
+/// not override an earlier !important one (CSS cascade precedence).
+fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
+    if (!declaration.important) {
+        const normalized = normalizePropertyName(declaration.name, &frame.buf);
+        if (self.findProperty(.wrap(normalized))) |existing| {
+            if (existing._important) return;
+        }
+    }
+    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
+}
+
 fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, frame: *Frame) !void {
     if (value.len == 0) {
         _ = try self.removePropertyImpl(property_name, frame);
@@ -133,7 +176,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     const normalized = normalizePropertyName(property_name, &frame.buf);
 
     // Normalize the value for canonical serialization
-    const normalized_value = try normalizePropertyValue(frame.call_arena, normalized, value);
+    const normalized_value = try normalizePropertyValue(frame.local_arena, normalized, value);
 
     // Find existing property
     if (self.findProperty(.wrap(normalized))) |existing| {
@@ -188,7 +231,7 @@ pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) 
 }
 
 pub fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
-    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try self.format(&buf.writer);
     return buf.written();
 }
@@ -207,7 +250,7 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !
     // Parse and set new properties
     var it = CssParser.parseDeclarationsList(text);
     while (it.next()) |declaration| {
-        try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
+        try self.applyParsedDeclaration(declaration, frame);
     }
     try self.syncStyleAttribute(frame);
 }
@@ -245,7 +288,9 @@ fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
 }
 
 // Normalize CSS property values for canonical serialization
-fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []const u8) ![]const u8 {
+fn normalizePropertyValue(arena: Allocator, property_name: []const u8, raw_value: []const u8) ![]const u8 {
+    const value = try normalizeLeadingZeros(arena, raw_value);
+
     // Per CSSOM spec, unitless zero in length properties should serialize as "0px"
     if (std.mem.eql(u8, value, "0") and isLengthProperty(property_name)) {
         return "0px";
@@ -284,6 +329,51 @@ fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []
     }
 
     return value;
+}
+
+// Insert a leading "0" before any bare ".<digit>". A value might have multiple
+// such bare digits
+fn normalizeLeadingZeros(arena: Allocator, value: []const u8) ![]const u8 {
+    // A bare ".<digit>" needs at least 2 chars, and a trailing "." can never be
+    // followed by a digit. So we only ever scan up to value.len - 1, which lets
+    // us index value[i + 1] without a bounds check.
+    if (value.len < 2) {
+        return value;
+    }
+
+    var inserts: usize = 0;
+    for (value[0 .. value.len - 1], 0..) |c, i| {
+        if (c != '.') {
+            continue;
+        }
+        if (!std.ascii.isDigit(value[i + 1])) {
+            // next value isn't a digit
+            continue;
+        }
+        if (i > 0 and std.ascii.isDigit(value[i - 1])) {
+            // previous value is a digit
+            continue;
+        }
+        inserts += 1;
+    }
+    if (inserts == 0) {
+        return value;
+    }
+
+    const buf = try arena.alloc(u8, value.len + inserts);
+    var w: usize = 0;
+    for (value[0 .. value.len - 1], 0..) |c, i| {
+        if (c == '.' and std.ascii.isDigit(value[i + 1]) and (i == 0 or !std.ascii.isDigit(value[i - 1]))) {
+            buf[w] = '0';
+            w += 1;
+        }
+        buf[w] = c;
+        w += 1;
+    }
+    // The last char is copied unconditionally: it can't start a bare ".<digit>".
+    buf[w] = value[value.len - 1];
+    w += 1;
+    return buf[0..w];
 }
 
 // Canonicalize anchor-size() so that the dashed ident (anchor name) comes before the size keyword.
