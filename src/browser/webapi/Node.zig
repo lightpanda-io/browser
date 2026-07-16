@@ -431,6 +431,19 @@ pub fn getChildTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFaile
     }
 }
 
+// The byte length of what getChildTextContent writes; lets callers size a
+// buffer (or arena) before extracting.
+pub fn childTextContentLen(self: *Node) usize {
+    var len: usize = 0;
+    var it = self.childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(CData.Text)) |text| {
+            len += text._proto._data.str().len;
+        }
+    }
+    return len;
+}
+
 pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
     switch (self._type) {
         .element => |el| {

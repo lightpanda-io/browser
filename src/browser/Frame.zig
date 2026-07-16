@@ -71,6 +71,7 @@ const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
+pub const preload = @import("frame/preload.zig");
 pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
 pub const node_factory = @import("frame/node_factory.zig");
@@ -1558,6 +1559,8 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
 
                 const raw_html = html.buffer.items;
 
+                preload.prescan(self, raw_html);
+
                 if (std.mem.eql(u8, self.charset, "UTF-8")) {
                     parser.parse(raw_html);
                 } else {
@@ -2095,40 +2098,6 @@ pub fn queueHashChange(self: *Frame, old_url: []const u8, new_url: []const u8) !
 // build is ~400 KiB gzipped, ~3 MiB raw — at which point a site should be
 // splitting by route anyway).
 const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
-
-// start prefetching <link rel="preload" as="script" href=...>`
-pub fn preloadScriptHint(self: *Frame, element: *Element.Html, href: []const u8) bool {
-    if (self.isGoingAway() or self._parse_mode == .fragment) {
-        return false;
-    }
-
-    const arena = self.getArena(.small, "Frame.preloadScriptHint") catch return false;
-    defer self.releaseArena(arena);
-
-    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch return false;
-    if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
-        // data:/blob: are synthesized locally — no round-trip to hide.
-        return false;
-    }
-    return self._script_manager.preloadScript(element, resolved) catch false;
-}
-
-// start prefetching <link rel="modulepreload" href=...>
-pub fn preloadModuleHint(self: *Frame, element: *Element.Html, href: []const u8) bool {
-    if (self.isGoingAway() or self._parse_mode == .fragment) {
-        return false;
-    }
-
-    // The url becomes the imported_modules key, which must outlive the fetch
-    // so it lives on the frame arena
-    const resolved = URL.resolve(self.arena, self.base(), href, .{ .encoding = self.charset }) catch return false;
-    if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
-        // data:/blob: are synthesized locally — no round-trip to hide.
-        return false;
-    }
-
-    return self._script_manager.base.preloadModuleHint(element, resolved, self.url) catch false;
-}
 
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.
 // href is passed in as an optimization since the [currently] only callsite has
