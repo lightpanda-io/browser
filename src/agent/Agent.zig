@@ -38,6 +38,7 @@ const Terminal = @import("Terminal.zig");
 const ansi = @import("ansi.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
+const picker = @import("picker.zig");
 const save = @import("save.zig");
 const welcome = @import("welcome.zig");
 const string = @import("../string.zig");
@@ -357,12 +358,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
     if (will_repl) {
-        self.terminal.attachCompleter();
-        self.terminal.completion_source = .{
+        self.terminal.attachCompleter(.{
             .context = @ptrCast(self),
             .providers = completionProviders,
             .models = completionModels,
-        };
+        });
         // The model-list cache fills lazily on the first `/model` completion,
         // so startup never blocks on the network.
         Terminal.setIdleCallback(&idlePump, @ptrCast(self));
@@ -1093,7 +1093,7 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
             "append — add the recorded commands at the end",
             "replace — overwrite with the recorded commands",
         };
-    const idx = Terminal.promptNumberedChoice(header, labels, 0) catch {
+    const idx = picker.promptNumberedChoice(header, labels, 0) catch {
         self.terminal.printInfo("Save cancelled.", .{});
         return null;
     };
@@ -1372,7 +1372,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         }
     }
     const tool_schema = Schema.findByName(target) orelse {
-        if (Terminal.closestCommand(target)) |near| {
+        if (SlashCommand.closestCommand(target)) |near| {
             self.terminal.printError("unknown command: {s}. Did you mean " ++ Terminal.highlightCmd("/help {s}") ++ "?", .{ target, near });
         } else {
             self.terminal.printError("unknown command: {s}", .{target});
@@ -1913,6 +1913,7 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
 test {
     _ = save;
     _ = settings;
+    _ = picker;
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {

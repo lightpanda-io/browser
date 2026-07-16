@@ -26,7 +26,7 @@ const std = @import("std");
 const zenai = @import("zenai");
 const lp = @import("lightpanda");
 const Config = lp.Config;
-const Terminal = @import("Terminal.zig");
+const picker = @import("picker.zig");
 const string = @import("../string.zig");
 const Credentials = zenai.provider.Credentials;
 
@@ -156,14 +156,14 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     }
     // A single key needs no choice; non-interactive callers (--list-models,
     // one-shot tasks, pipes) must not block on a prompt — take the first.
-    if (!allow_pick or found.len == 1 or !Terminal.interactiveTty()) {
+    if (!allow_pick or found.len == 1 or !picker.interactiveTty()) {
         return try finishResolved(allocator, found[0], .detected);
     }
 
     var names: [zenai.provider.default_candidates.len][:0]const u8 = undefined;
     for (found, 0..) |cred, i| names[i] = @tagName(cred.provider);
     std.debug.print("\n", .{});
-    const idx = Terminal.promptNumberedChoice("  Select a provider:", names[0..found.len], 0) catch {
+    const idx = picker.promptNumberedChoice("  Select a provider:", names[0..found.len], 0) catch {
         return try finishResolved(allocator, found[0], .detected);
     };
     return try finishResolved(allocator, found[idx], .picked);
