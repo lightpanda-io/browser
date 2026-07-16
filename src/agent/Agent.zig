@@ -1192,7 +1192,6 @@ fn failSynthesis(self: *Agent, label: []const u8, reason: []const u8) ?[]const u
 /// always rolled back out of history; null (with a `label`-tagged report) on
 /// error, no text, or cancellation.
 fn metaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: []const u8, user_msg: []const u8, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
-    const provider_client = self.ai_client.?;
     self.conversation.ensureSystemPrompt() catch return self.failSynthesis(label, "out of memory");
 
     // Regular turns keep the driver prompt. (`messages[0]` is the system
@@ -1205,13 +1204,29 @@ fn metaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: [
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSynthesis(label, "out of memory");
     defer self.conversation.rollback(baseline);
 
+    return self.sendMetaTurn(arena, label, &self.conversation.messages, self.conversation.arena.allocator(), max_tokens, effort);
+}
+
+/// `metaTurn` minus the conversation: the turn sends `system` + `user_msg`
+/// alone, for judgments that must come from the message itself (the replay
+/// verdict) — session history would only add tokens and sway the verdict.
+fn soloTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: []const u8, user_msg: []const u8, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
+    var messages: std.ArrayList(zenai.provider.Message) = .empty;
+    messages.append(arena, .{ .role = .system, .content = system }) catch return self.failSynthesis(label, "out of memory");
+    messages.append(arena, .{ .role = .user, .content = user_msg }) catch return self.failSynthesis(label, "out of memory");
+    return self.sendMetaTurn(arena, label, &messages, arena, max_tokens, effort);
+}
+
+fn sendMetaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, messages: *std.ArrayList(zenai.provider.Message), message_arena: std.mem.Allocator, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
+    const provider_client = self.ai_client.?;
+    const baseline = self.conversation.messages.items.len;
     self.http_interrupt.reset();
     self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
-        &self.conversation.messages,
+        messages,
         self.allocator,
-        self.conversation.arena.allocator(),
+        message_arena,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
             .tools = &.{},
@@ -1238,8 +1253,8 @@ fn metaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: [
         return null;
     }
 
-    // `result.text` lives in the conversation arena, freed by the deferred
-    // rollback; the dupe happens before defers run.
+    // `result.text` lives in `message_arena`, which the caller may roll back
+    // on return; the dupe happens before that.
     const raw = result.text orelse return self.failSynthesis(label, "the model returned no text");
     return arena.dupe(u8, raw) catch self.failSynthesis(label, "out of memory");
 }
@@ -1685,7 +1700,6 @@ fn dupeExtractStats(arena: std.mem.Allocator, stats: []const ScriptRuntime.Extra
         o.* = .{
             .schema = try arena.dupe(u8, stat.schema),
             .field = if (stat.field) |f| try arena.dupe(u8, f) else null,
-            .is_list = stat.is_list,
             .calls = stat.calls,
             .empty = stat.empty,
         };
@@ -1733,8 +1747,7 @@ fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []con
         try fields.append(arena, stat.field);
         const schema = try capDetail(arena, stat.schema);
         if (stat.field) |field| {
-            const shape: []const u8 = if (stat.is_list) "list" else "field";
-            try aw.writer.print("- the \"{s}\" {s} in extract({s}) came back empty", .{ field, shape, schema });
+            try aw.writer.print("- the \"{s}\" field in extract({s}) came back empty", .{ field, schema });
         } else {
             try aw.writer.print("- extract({s}) returned no data", .{schema});
         }
@@ -1750,13 +1763,15 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
-    switch (self.runAndJudge(arena.allocator(), path)) {
+    // A re-run is free; a verdict turn and healing are not. The first pass
+    // gates on the local suspicion check alone — one retry filters a transient
+    // failure (a flaky page load), and the model judges the re-run's facts,
+    // the ones healing would act on.
+    switch (self.runScriptOutcome(arena.allocator(), path)) {
         .fatal => return false,
-        .clean => return true,
-        .broken => {},
+        .ok => |facts| if (suspicionOf(arena.allocator(), facts) == null) return true,
+        .script_error => {},
     }
-    // A re-run is free; healing is not — one retry filters a transient failure
-    // (a flaky page load) before the model is asked to fix a correct script.
     self.terminal.printInfo("Script run failed or looks broken; retrying once before healing.", .{});
     const finding: ScriptError = switch (self.runAndJudge(arena.allocator(), path)) {
         .fatal => return false,
@@ -1808,30 +1823,22 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
     var source = first.source;
     var error_detail = first.detail;
 
-    const tmp_path = std.fmt.allocPrint(arena, "{s}.heal.js", .{path}) catch {
-        self.terminal.printError("heal failed: out of memory", .{});
-        return false;
-    };
+    const tmp_path = std.fmt.allocPrint(arena, "{s}.heal.js", .{path}) catch return self.healOom();
 
     // The recorder is /save's stream: heal must neither synthesize from the
     // REPL's prior recordings nor leak its diagnose actions into a later /save.
-    const recorded = self.save_buffer.snapshot(arena) catch {
-        self.terminal.printError("heal failed: out of memory", .{});
-        return false;
-    };
-    self.save_buffer.reset();
-    defer self.save_buffer.restore(recorded) catch {
-        self.terminal.printWarning("commands recorded before the heal were lost (out of memory)", .{});
-    };
+    var prior: Recorder = .init(self.allocator);
+    std.mem.swap(Recorder, &self.save_buffer, &prior);
+    defer {
+        std.mem.swap(Recorder, &self.save_buffer, &prior);
+        prior.deinit();
+    }
 
     var attempt: usize = 1;
     while (attempt <= max_heal_attempts) : (attempt += 1) {
         self.terminal.printInfo("Healing {s} (attempt {d}/{d})", .{ path, attempt, max_heal_attempts });
 
-        const diagnose = buildHealDiagnoseMessage(arena, path, source, error_detail) catch {
-            self.terminal.printError("heal failed: out of memory", .{});
-            return false;
-        };
+        const diagnose = buildHealDiagnoseMessage(arena, path, source, error_detail) catch return self.healOom();
         if (!self.runTurn(.{ .prompt = diagnose, .capture_for_save = true, .label = "Heal" })) return false;
 
         const revised = self.synthesizeScriptText(arena, "heal", path, source, heal_revision_prompt) orelse return false;
@@ -1853,8 +1860,7 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
             .ok => |facts| {
                 if (cureFailure(arena, first, facts) catch {
                     self.removeTempScript(tmp_path);
-                    self.terminal.printError("heal failed: out of memory", .{});
-                    return false;
+                    return self.healOom();
                 }) |failure| {
                     self.terminal.printWarning("{s}", .{failure});
                     source = revised;
@@ -1889,12 +1895,19 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
     return false;
 }
 
+fn healOom(self: *Agent) bool {
+    self.terminal.printError("heal failed: out of memory", .{});
+    return false;
+}
+
 const verdict_system_prompt =
     \\You judge replays of saved browser-automation scripts. Given the script
     \\and facts about a run that completed without errors, decide whether the
     \\empty output means the script is broken (stale selectors after a site
     \\change) or legitimate (the page genuinely has no such data right now).
-    \\A `// lp:baseline` comment, when present, records how often each output
+    \\A `
+++ std.mem.trimRight(u8, Baseline.marker, " ") ++
+    \\` comment, when present, records how often each output
     \\field carried data when the script was saved — weigh it as evidence.
     \\Respond with JSON only:
     \\{"broken": true|false, "fields": ["<field>", ...], "reason": "<one sentence>"}
@@ -1913,7 +1926,7 @@ const Verdict = struct {
 /// Null on transport/parse failure or cancellation — the caller falls back to
 /// surfacing the facts instead of guessing.
 fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, suspicion: ScriptError) ?Verdict {
-    const user_msg = std.fmt.allocPrint(self.conversation.arena.allocator(),
+    const user_msg = std.fmt.allocPrint(arena,
         \\Replay of {s} completed without errors, but {s}
         \\
         \\The script (its comments and structure carry the intent):
@@ -1921,7 +1934,7 @@ fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, susp
         \\{s}
         \\```
     , .{ path, suspicion.detail, suspicion.source }) catch return null;
-    const raw = self.metaTurn(arena, "verdict", verdict_system_prompt, user_msg, 1024, self.effort) orelse return null;
+    const raw = self.soloTurn(arena, "verdict", verdict_system_prompt, user_msg, 1024, self.effort) orelse return null;
     return parseVerdict(arena, raw);
 }
 
@@ -1929,23 +1942,11 @@ fn parseVerdict(arena: std.mem.Allocator, raw: []const u8) ?Verdict {
     const start = std.mem.indexOfScalar(u8, raw, '{') orelse return null;
     const end = std.mem.lastIndexOfScalar(u8, raw, '}') orelse return null;
     if (end < start) return null;
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, raw[start .. end + 1], .{}) catch return null;
-    if (parsed != .object) return null;
-    const broken = parsed.object.get("broken") orelse return null;
-    if (broken != .bool) return null;
-
-    var fields: std.ArrayList(?[]const u8) = .empty;
-    if (parsed.object.get("fields")) |fv| {
-        if (fv == .array) for (fv.array.items) |item| {
-            if (item != .string) continue;
-            fields.append(arena, if (item.string.len == 0) null else item.string) catch return null;
-        };
-    }
-    const reason: []const u8 = if (parsed.object.get("reason")) |r|
-        (if (r == .string) r.string else "")
-    else
-        "";
-    return .{ .broken = broken.bool, .fields = fields.items, .reason = reason };
+    const Wire = struct { broken: bool, fields: []const []const u8 = &.{}, reason: []const u8 = "" };
+    const wire = std.json.parseFromSliceLeaky(Wire, arena, raw[start .. end + 1], .{ .ignore_unknown_fields = true }) catch return null;
+    const fields = arena.alloc(?[]const u8, wire.fields.len) catch return null;
+    for (wire.fields, fields) |f, *out| out.* = if (f.len == 0) null else f;
+    return .{ .broken = wire.broken, .fields = fields, .reason = wire.reason };
 }
 
 /// The finding to heal, per the model's verdict on suspicious facts; null when
@@ -2464,8 +2465,8 @@ test "cureFailure: running clean is not a cure" {
         .dry_fields = &.{ @as(?[]const u8, "comments"), null },
     };
     const cured_stats: []const ScriptRuntime.ExtractStat = &.{
-        .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 5, .empty = 2 },
-        .{ .schema = "[]", .field = null, .is_list = true, .calls = 1, .empty = 0 },
+        .{ .schema = "{}", .field = "comments", .calls = 5, .empty = 2 },
+        .{ .schema = "[]", .field = null, .calls = 1, .empty = 0 },
     };
     try std.testing.expectEqual(null, try cureFailure(aa, dry, testFacts(.data, cured_stats)));
 
@@ -2475,7 +2476,7 @@ test "cureFailure: running clean is not a cure" {
 
     // Still dry counts as uncured.
     const still_dry_stats: []const ScriptRuntime.ExtractStat = &.{
-        .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 5, .empty = 5 },
+        .{ .schema = "{}", .field = "comments", .calls = 5, .empty = 5 },
         cured_stats[1],
     };
     try std.testing.expect((try cureFailure(aa, dry, testFacts(.data, still_dry_stats))) != null);
@@ -2522,13 +2523,13 @@ test "suspicionOf: any all-empty field is suspect, none is not" {
     const aa = arena.allocator();
 
     const sparse: []const ScriptRuntime.ExtractStat = &.{
-        .{ .schema = "{}", .field = "comments", .is_list = true, .calls = 5, .empty = 2 },
+        .{ .schema = "{}", .field = "comments", .calls = 5, .empty = 2 },
     };
     try std.testing.expectEqual(null, suspicionOf(aa, testFacts(.data, sparse)));
 
     // Scalar all-empty is suspect too — judgment belongs to the model now.
     const dry_scalar: []const ScriptRuntime.ExtractStat = &.{
-        .{ .schema = "{}", .field = "title", .is_list = false, .calls = 3, .empty = 3 },
+        .{ .schema = "{}", .field = "title", .calls = 3, .empty = 3 },
     };
     const s = suspicionOf(aa, testFacts(.data, dry_scalar)).?;
     try std.testing.expectEqual(ScriptError.Kind.dry_extracts, s.kind);

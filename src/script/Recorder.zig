@@ -68,29 +68,6 @@ pub fn reset(self: *Recorder) void {
     _ = self.arena.reset(.retain_capacity);
 }
 
-pub const Snapshot = struct {
-    content: []const u8,
-    lines: u32,
-    page_declared: bool,
-};
-
-/// Copy the current recording so a scoped consumer (the heal loop) can reset
-/// the recorder for its own actions and hand the original back afterwards.
-pub fn snapshot(self: *Recorder, allocator: std.mem.Allocator) !Snapshot {
-    return .{
-        .content = try allocator.dupe(u8, self.bytes()),
-        .lines = self.lines,
-        .page_declared = self.page_declared,
-    };
-}
-
-pub fn restore(self: *Recorder, snap: Snapshot) !void {
-    self.reset();
-    try self.content.writer.writeAll(snap.content);
-    self.lines = snap.lines;
-    self.page_declared = snap.page_declared;
-}
-
 pub fn record(self: *Recorder, cmd: Command) !void {
     if (!cmd.isRecorded()) return;
     self.buf.clearRetainingCapacity();
@@ -178,35 +155,6 @@ test "record filters state-mutating commands and comments" {
     try recorder.record(parseLine(aa, "/scroll y=200"));
     try std.testing.expectEqualStrings("const page = new Page();\npage.scroll({ y: 200 });\n", recorder.bytes());
     try std.testing.expectEqual(@as(u32, 2), recorder.lines);
-}
-
-test "snapshot/restore scopes recordings" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    var recorder: Recorder = .init(std.testing.allocator);
-    defer recorder.deinit();
-
-    try recorder.record(parseLine(aa, "/goto https://example.com"));
-    const snap = try recorder.snapshot(aa);
-
-    recorder.reset();
-    try recorder.record(parseLine(aa, "/scroll y=200"));
-
-    try recorder.restore(snap);
-    try std.testing.expectEqualStrings(
-        "const page = new Page();\nawait page.goto(\"https://example.com\");\n",
-        recorder.bytes(),
-    );
-    try std.testing.expectEqual(@as(u32, 2), recorder.lines);
-
-    // page_declared came back with the snapshot: no second declaration.
-    try recorder.record(parseLine(aa, "/scroll y=200"));
-    try std.testing.expectEqualStrings(
-        "const page = new Page();\nawait page.goto(\"https://example.com\");\npage.scroll({ y: 200 });\n",
-        recorder.bytes(),
-    );
 }
 
 test "recordRaw writes the JS line verbatim" {

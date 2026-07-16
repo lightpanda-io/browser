@@ -46,7 +46,7 @@ console_observer: ?ConsoleObserver = null,
 pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
 run_timer: std.time.Timer,
-/// Per-run tally of extract list-field emptiness. call_arena-backed, so it is
+/// Per-run tally of extract field emptiness. call_arena-backed, so it is
 /// re-zeroed alongside the arena reset at the top of `runSource`.
 extract_stats: std.ArrayList(ExtractStat) = .empty,
 
@@ -279,7 +279,6 @@ pub const Completion = struct {
 /// reference the parsed value.
 pub const ExtractField = struct {
     field: ?[]const u8,
-    is_list: bool,
     empty: bool,
 };
 
@@ -287,7 +286,7 @@ pub fn classifyExtractFields(arena: std.mem.Allocator, result: std.json.Value) e
     switch (result) {
         .array => {
             const out = try arena.alloc(ExtractField, 1);
-            out[0] = .{ .field = null, .is_list = true, .empty = jsonIsEmpty(result) };
+            out[0] = .{ .field = null, .empty = jsonIsEmpty(result) };
             return out;
         },
         .object => |obj| {
@@ -297,7 +296,6 @@ pub fn classifyExtractFields(arena: std.mem.Allocator, result: std.json.Value) e
             while (it.next()) |entry| : (i += 1) {
                 out[i] = .{
                     .field = entry.key_ptr.*,
-                    .is_list = entry.value_ptr.* == .array,
                     .empty = jsonIsEmpty(entry.value_ptr.*),
                 };
             }
@@ -319,10 +317,6 @@ pub const ExtractStat = struct {
     schema: []const u8,
     /// Top-level field of the result; null when the schema itself is a list.
     field: ?[]const u8,
-    /// The field's value was an array on some call. Consumers gate the
-    /// no-baseline heal policy on this: lists signal collection intent,
-    /// scalars are legitimately sparse.
-    is_list: bool,
     calls: u32,
     empty: u32,
 };
@@ -338,7 +332,7 @@ pub const RunResult = union(enum) {
 pub const Ok = struct {
     /// The value the script returned; null when it returned `undefined`.
     completion: ?Completion,
-    /// Per-(schema, list-field) extract tallies for the run.
+    /// Per-(schema, field) extract tallies for the run.
     extract_stats: []const ExtractStat,
 };
 
@@ -607,8 +601,8 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     }
 }
 
-/// Tally each top-level field of an extract result; the Agent's heal policy
-/// decides which stats can trigger.
+/// Tally each top-level field of an extract result; callers judge what the
+/// tallies mean.
 fn recordExtractStats(self: *Runtime, arena: std.mem.Allocator, args: ?std.json.Value, result: std.json.Value) error{OutOfMemory}!void {
     const raw_schema = switch ((args orelse return).object.get("schema") orelse return) {
         .string => |s| s,
@@ -616,16 +610,15 @@ fn recordExtractStats(self: *Runtime, arena: std.mem.Allocator, args: ?std.json.
     };
     const schema = stripExtractSchemaRoot(raw_schema);
     for (try classifyExtractFields(arena, result)) |fc| {
-        try self.bumpExtractStat(schema, fc.field, fc.is_list, fc.empty);
+        try self.bumpExtractStat(schema, fc.field, fc.empty);
     }
 }
 
-fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_list: bool, is_empty: bool) error{OutOfMemory}!void {
+fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_empty: bool) error{OutOfMemory}!void {
     for (self.extract_stats.items) |*stat| {
         if (!std.mem.eql(u8, stat.schema, schema)) continue;
         if (!fieldEql(stat.field, field)) continue;
         stat.calls += 1;
-        if (is_list) stat.is_list = true;
         if (is_empty) stat.empty += 1;
         return;
     }
@@ -634,7 +627,6 @@ fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_li
     try self.extract_stats.append(arena, .{
         .schema = try arena.dupe(u8, schema),
         .field = if (field) |f| try arena.dupe(u8, f) else null,
-        .is_list = is_list,
         .calls = 1,
         .empty = @intFromBool(is_empty),
     });
@@ -1775,22 +1767,18 @@ test "agent script runtime: extract stats tally list-field emptiness" {
     try testing.expectEqual(5, stats.len);
 
     try testing.expectString("items", stats[0].field.?);
-    try testing.expectEqual(true, stats[0].is_list);
     try testing.expectEqual(2, stats[0].calls);
     try testing.expectEqual(2, stats[0].empty);
 
     try testing.expectString("btn", stats[1].field.?);
-    try testing.expectEqual(false, stats[1].is_list);
     try testing.expectEqual(1, stats[1].calls);
     try testing.expectEqual(0, stats[1].empty);
 
     try testing.expectString("buttons", stats[2].field.?);
-    try testing.expectEqual(true, stats[2].is_list);
     try testing.expectEqual(1, stats[2].calls);
     try testing.expectEqual(0, stats[2].empty);
 
     try testing.expectEqual(null, stats[3].field);
-    try testing.expectEqual(true, stats[3].is_list);
     try testing.expectString("[\".no-such-root\"]", stats[3].schema);
     try testing.expectEqual(1, stats[3].calls);
     try testing.expectEqual(1, stats[3].empty);
