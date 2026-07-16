@@ -50,6 +50,7 @@ pub const URL_BASE = "chrome://newtab/";
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const SessionIdGen = Incrementing(u32, "SID");
+const BrowserSessionIdGen = Incrementing(u32, "BSID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
 // webmcp tool invocation
 pub const InvocationIdGen = Incrementing(u32, "INV");
@@ -72,7 +73,13 @@ link: Network.CdpLink,
 target_auto_attach: bool = false,
 
 session_id_gen: SessionIdGen = .{},
+browser_session_id_gen: BrowserSessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
+
+// Session from Target.attachToBrowserTarget. Distinct from the page
+// session (BrowserContext.session_id) as it targets the browser itself and
+// outlives any browser context.
+browser_session_id: ?[]const u8 = null,
 
 browser_context: ?BrowserContext,
 
@@ -429,6 +436,11 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
 }
 
 fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+    if (self.browser_session_id) |browser_session_id| {
+        if (std.mem.eql(u8, browser_session_id, input_session_id)) {
+            return true;
+        }
+    }
     const browser_context = &(self.browser_context orelse return false);
     const session_id = browser_context.session_id orelse return false;
     return std.mem.eql(u8, session_id, input_session_id);
