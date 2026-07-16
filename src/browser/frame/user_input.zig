@@ -27,6 +27,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const Frame = @import("../Frame.zig");
+const js = @import("../js/js.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
@@ -271,6 +272,58 @@ pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
     return null;
 }
 
+fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
+    const arena = try frame.getArena(.tiny, "javascript-url");
+    errdefer frame.releaseArena(arena);
+
+    const task = try arena.create(JavascriptUrlTask);
+    task.* = .{
+        .frame = frame,
+        .arena = arena,
+        // TODO: the URL body should be percent-decoded; hrefs written in
+        // markup rarely are.
+        .source = try arena.dupe(u8, source),
+    };
+    try frame.js.scheduler.add(task, JavascriptUrlTask.run, 0, .{
+        .name = "javascript-url",
+        .finalizer = JavascriptUrlTask.finalize,
+    });
+}
+
+const JavascriptUrlTask = struct {
+    frame: *Frame,
+    arena: std.mem.Allocator,
+    source: []const u8,
+
+    fn run(ptr: *anyopaque) !?u32 {
+        const self: *JavascriptUrlTask = @ptrCast(@alignCast(ptr));
+        const frame = self.frame;
+        defer self.deinit();
+
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        const script = ls.local.compile(self.source, "javascript:") catch |err| {
+            log.warn(.browser, "javascript-url compile", .{ .err = err, .type = frame._type, .url = frame.url });
+            return null;
+        };
+        _ = script.run() catch |err| {
+            log.warn(.browser, "javascript-url run", .{ .err = err, .type = frame._type, .url = frame.url });
+        };
+        return null;
+    }
+
+    fn finalize(ptr: *anyopaque) void {
+        const self: *JavascriptUrlTask = @ptrCast(@alignCast(ptr));
+        self.deinit();
+    }
+
+    fn deinit(self: *JavascriptUrlTask) void {
+        self.frame.releaseArena(self.arena);
+    }
+};
+
 pub fn handleClick(frame: *Frame, target: *Node) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
@@ -284,7 +337,10 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
             }
 
             if (std.mem.startsWith(u8, href, "javascript:")) {
-                return;
+                // Navigating to a javascript: URL evaluates the script in the
+                // node's frame as a queued task. (A string completion value
+                // would replace the document; we ignore results.)
+                return runJavascriptUrl(target.ownerFrame(frame), href["javascript:".len..]);
             }
 
             if (try element.hasAttribute(comptime .wrap("download"), frame)) {
