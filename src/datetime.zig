@@ -621,6 +621,29 @@ fn paddingTwoDigits(value: usize) [2]u8 {
     return digits[value * 2 ..][0..2].*;
 }
 
+pub fn localTime(ts: i64) !LibcTm {
+    var tm: LibcTm = undefined;
+    if (localtime_r(&ts, &tm) == null) {
+        return error.InvalidArgument;
+    }
+    return tm;
+}
+
+const LibcTm = extern struct {
+    tm_sec: c_int,
+    tm_min: c_int,
+    tm_hour: c_int,
+    tm_mday: c_int,
+    tm_mon: c_int,
+    tm_year: c_int,
+    tm_wday: c_int,
+    tm_yday: c_int,
+    tm_isdst: c_int,
+    tm_gmtoff: c_long,
+    tm_zone: ?[*:0]const u8,
+};
+extern "c" fn localtime_r(timep: *const i64, result: *LibcTm) ?*LibcTm;
+
 const Parser = struct {
     input: []const u8,
     pos: usize,

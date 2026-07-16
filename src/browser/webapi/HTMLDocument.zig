@@ -49,8 +49,8 @@ pub fn asEventTarget(self: *HTMLDocument) *@import("EventTarget.zig") {
 // "blah:head" is an HTMLUnknownElement but still qualifies).
 pub fn getHead(self: *HTMLDocument) ?*Element {
     const doc_el = self._proto.getDocumentElement() orelse return null;
-    var child = doc_el.asNode().firstChild();
-    while (child) |node| : (child = node.nextSibling()) {
+    var it = doc_el.asNode().childrenIterator();
+    while (it.next()) |node| {
         const el = node.is(Element) orelse continue;
         if (el._namespace == .html and std.mem.eql(u8, el.getLocalName(), "head")) {
             return el;

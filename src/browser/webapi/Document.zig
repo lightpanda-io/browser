@@ -183,25 +183,23 @@ pub fn getCompatMode(self: *const Document) []const u8 {
 // document.lastModified: the response's Last-Modified header in local time,
 // "MM/DD/YYYY hh:mm:ss", defaulting to the current time.
 pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
-    var timestamp: i64 = std.time.timestamp();
-    if (self._frame) |doc_frame| {
-        if (doc_frame.document == self) {
-            for (doc_frame._http_headers.items) |header| {
+    const dt = @import("../../datetime.zig");
+
+    const timestamp = blk: {
+        if (self._frame) |owner| {
+            for (owner._http_headers.items) |header| {
                 if (std.ascii.eqlIgnoreCase(header.name, "last-modified")) {
-                    const DateTime = @import("../../datetime.zig").DateTime;
-                    if (DateTime.parse(header.value, .rfc822)) |dt| {
-                        timestamp = dt.unix(.seconds);
+                    if (dt.DateTime.parse(header.value, .rfc822)) |parsed| {
+                        break :blk parsed.unix(.seconds);
                     } else |_| {}
                     break;
                 }
             }
         }
-    }
+        break :blk std.time.timestamp();
+    };
 
-    var tm: LibcTm = undefined;
-    if (localtime_r(&timestamp, &tm) == null) {
-        return error.InvalidArgument;
-    }
+    const tm = try dt.localTime(timestamp);
     return std.fmt.allocPrint(frame.local_arena, "{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}:{d:0>2}", .{
         @as(u32, @intCast(tm.tm_mon + 1)),
         @as(u32, @intCast(tm.tm_mday)),
@@ -211,21 +209,6 @@ pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
         @as(u32, @intCast(tm.tm_sec)),
     });
 }
-
-const LibcTm = extern struct {
-    tm_sec: c_int,
-    tm_min: c_int,
-    tm_hour: c_int,
-    tm_mday: c_int,
-    tm_mon: c_int,
-    tm_year: c_int,
-    tm_wday: c_int,
-    tm_yday: c_int,
-    tm_isdst: c_int,
-    tm_gmtoff: c_long,
-    tm_zone: ?[*:0]const u8,
-};
-extern "c" fn localtime_r(timep: *const i64, result: *LibcTm) ?*LibcTm;
 
 pub fn getCharset(self: *const Document) []const u8 {
     if (self._charset) |charset| {
