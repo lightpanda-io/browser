@@ -40,6 +40,13 @@ _data: String = .empty,
 /// 4-byte UTF-8 sequences (codepoints >= U+10000) produce 2 UTF-16 code units (surrogate pair),
 /// everything else produces 1.
 pub fn utf16Len(data: []const u8) usize {
+    // All-ASCII data (the common case) is one code unit per byte.
+    for (data) |byte| {
+        if (byte >= 0x80) {
+            break;
+        }
+    } else return data.len;
+
     var count: usize = 0;
     var i: usize = 0;
     while (i < data.len) {
@@ -94,6 +101,41 @@ pub fn utf16OffsetToUtf8(data: []const u8, utf16_offset: usize) error{IndexSizeE
     // At end of string — valid only if offset equals total length
     if (utf16_pos == utf16_offset) return i;
     return error.IndexSizeError;
+}
+
+/// Convert a UTF-16 code unit offset to a UTF-8 byte offset, rounding an
+/// offset that lands inside a surrogate pair down to the code point's start
+/// and clamping an offset past the end to data.len. Unlike the exact-or-error
+/// variant above, this is total and monotonic, so converting a start/end pair
+/// always yields ordered byte offsets.
+pub fn utf16OffsetToUtf8Floor(data: []const u8, utf16_offset: usize) usize {
+    var utf16_pos: usize = 0;
+    var i: usize = 0;
+    while (i < data.len) {
+        if (utf16_pos == utf16_offset) return i;
+        const byte = data[i];
+        const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch {
+            i += 1;
+            utf16_pos += 1;
+            continue;
+        };
+        if (i + seq_len > data.len) {
+            utf16_pos += 1;
+            i += 1;
+            continue;
+        }
+        if (seq_len == 4) {
+            if (utf16_offset == utf16_pos + 1) {
+                // Between the two code units of a surrogate pair.
+                return i;
+            }
+            utf16_pos += 2;
+        } else {
+            utf16_pos += 1;
+        }
+        i += seq_len;
+    }
+    return i;
 }
 
 /// Convert a UTF-16 code unit range to UTF-8 byte offsets in a single pass.
@@ -525,6 +567,31 @@ test "utf16OffsetToUtf8" {
     // Empty string: only offset 0 is valid
     try std.testing.expectEqual(@as(usize, 0), try utf16OffsetToUtf8("", 0));
     try std.testing.expectError(error.IndexSizeError, utf16OffsetToUtf8("", 1));
+}
+
+test "utf16OffsetToUtf8Floor" {
+    // ASCII: identical to the exact variant, clamps past the end
+    try std.testing.expectEqual(@as(usize, 0), utf16OffsetToUtf8Floor("hello", 0));
+    try std.testing.expectEqual(@as(usize, 3), utf16OffsetToUtf8Floor("hello", 3));
+    try std.testing.expectEqual(@as(usize, 5), utf16OffsetToUtf8Floor("hello", 5));
+    try std.testing.expectEqual(@as(usize, 5), utf16OffsetToUtf8Floor("hello", 6)); // clamped
+
+    // Emoji "🌠AB" (4+1+1 = 6 bytes; 2+1+1 = 4 UTF-16 code units).
+    // Offset 1 lands inside the surrogate pair and rounds down to its start.
+    try std.testing.expectEqual(@as(usize, 0), utf16OffsetToUtf8Floor("🌠AB", 0));
+    try std.testing.expectEqual(@as(usize, 0), utf16OffsetToUtf8Floor("🌠AB", 1)); // mid-surrogate
+    try std.testing.expectEqual(@as(usize, 4), utf16OffsetToUtf8Floor("🌠AB", 2));
+    try std.testing.expectEqual(@as(usize, 5), utf16OffsetToUtf8Floor("🌠AB", 3));
+    try std.testing.expectEqual(@as(usize, 6), utf16OffsetToUtf8Floor("🌠AB", 4));
+    try std.testing.expectEqual(@as(usize, 6), utf16OffsetToUtf8Floor("🌠AB", 5)); // clamped
+
+    // Trailing surrogate pair: mid-surrogate at the very end still floors
+    try std.testing.expectEqual(@as(usize, 1), utf16OffsetToUtf8Floor("A🌠", 2)); // mid-surrogate
+    try std.testing.expectEqual(@as(usize, 5), utf16OffsetToUtf8Floor("A🌠", 3));
+
+    // Empty string
+    try std.testing.expectEqual(@as(usize, 0), utf16OffsetToUtf8Floor("", 0));
+    try std.testing.expectEqual(@as(usize, 0), utf16OffsetToUtf8Floor("", 1)); // clamped
 }
 
 test "utf16RangeToUtf8" {

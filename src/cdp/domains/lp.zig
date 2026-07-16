@@ -45,6 +45,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         waitForSelector,
         handleJavaScriptDialog,
         configureLoading,
+        version,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -61,7 +62,14 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .waitForSelector => return waitForSelector(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
         .configureLoading => return configureLoading(cmd),
+        .version => return version(cmd),
     }
+}
+
+fn version(cmd: *CDP.Command) !void {
+    return cmd.sendResult(.{
+        .version = lp.build_config.version,
+    }, .{});
 }
 
 fn configureLoading(cmd: *CDP.Command) !void {
@@ -386,6 +394,19 @@ fn handleJavaScriptDialog(cmd: anytype) !void {
 }
 
 const testing = @import("../testing.zig");
+test "cdp.lp: version" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.version",
+    });
+
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
+    try testing.expectEqualSlices(u8, lp.build_config.version, result.get("version").?.string);
+}
+
 test "cdp.lp: getMarkdown" {
     var ctx = try testing.context();
     defer ctx.deinit();

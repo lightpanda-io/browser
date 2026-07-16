@@ -98,27 +98,26 @@ fn camelToKebab(arena: Allocator, camel: String) !String {
     return try String.init(arena, result.items, .{});
 }
 
-// data-foo-bar -> fooBar
+// data-foo-bar -> fooBar. Returns null for non data-* attributes. Per spec,
+// only a '-' followed by an ASCII lowercase letter is folded into an
+// uppercase letter; any other '-' (e.g. trailing) is kept as-is, and the
+// bare "data-" attribute maps to the empty name.
 fn kebabToCamel(arena: Allocator, kebab: []const u8) !?[]const u8 {
     if (!std.mem.startsWith(u8, kebab, "data-")) {
         return null;
     }
 
     const data_part = kebab[5..]; // Skip "data-"
-    if (data_part.len == 0) {
-        return null;
-    }
 
     var result: std.ArrayList(u8) = .empty;
     try result.ensureTotalCapacity(arena, data_part.len);
 
-    var capitalize_next = false;
-    for (data_part) |c| {
-        if (c == '-') {
-            capitalize_next = true;
-        } else if (capitalize_next) {
-            result.appendAssumeCapacity(std.ascii.toUpper(c));
-            capitalize_next = false;
+    var i: usize = 0;
+    while (i < data_part.len) : (i += 1) {
+        const c = data_part[i];
+        if (c == '-' and i + 1 < data_part.len and std.ascii.isLower(data_part[i + 1])) {
+            result.appendAssumeCapacity(std.ascii.toUpper(data_part[i + 1]));
+            i += 1;
         } else {
             result.appendAssumeCapacity(c);
         }
@@ -136,5 +135,21 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, null, null, .{ .null_as_undefined = true, .ce_reactions = true });
+    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, getNames, null, .{ .null_as_undefined = true, .ce_reactions = true });
+
+    // The supported property names are the camel-cased names of the
+    // element's data-* attributes, in attribute order.
+    fn getNames(self: *DOMStringMap, frame: *Frame) !js.Array {
+        var names: std.ArrayList([]const u8) = .empty;
+        for (try self._element._attributes.getNames(frame.local_arena)) |attr_name| {
+            const camel = (try kebabToCamel(frame.local_arena, attr_name)) orelse continue;
+            try names.append(frame.local_arena, camel);
+        }
+
+        var arr = frame.js.local.?.newArray(@intCast(names.items.len));
+        for (names.items, 0..) |name, i| {
+            _ = try arr.set(@intCast(i), name, .{});
+        }
+        return arr;
+    }
 };

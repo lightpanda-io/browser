@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="constructor_sets_innerhtml">
+    {
+        // A custom element whose constructor sets innerHTML. The innerHTML
+        // setter fragment-parses with this element as the parsing context.
+        // html5ever's parse_fragment builds a throwaway context element of the
+        // same tag via our create_element callback; if we run its constructor
+        // it sets innerHTML again -> re-parses -> rebuilds the context element
+        // -> constructs forever (stack overflow). The context element must be
+        // built bare, so the constructor runs exactly once.
+        let calls = 0;
+        class CeCtorInnerHtml extends HTMLElement {
+            constructor() {
+                super();
+                calls += 1;
+                this.innerHTML = '<span>hi</span>';
+            }
+        }
+        customElements.define('ce-ctor-innerhtml', CeCtorInnerHtml);
+
+        const el = document.createElement('ce-ctor-innerhtml');
+        testing.expectEqual(1, calls);
+        testing.expectEqual('<span>hi</span>', el.innerHTML);
+    }
+</script>
+
+<script id="innerhtml_on_custom_element_host">
+    {
+        // Setting innerHTML on an existing custom-element instance parses with
+        // that element as context. The throwaway context element html5ever
+        // builds must NOT invoke the constructor a second time.
+        let calls = 0;
+        class CeHost extends HTMLElement {
+            constructor() {
+                super();
+                calls += 1;
+            }
+        }
+        customElements.define('ce-host', CeHost);
+
+        const host = document.createElement('ce-host');
+        testing.expectEqual(1, calls);
+        host.innerHTML = '<b>x</b>';
+        testing.expectEqual(1, calls);
+        testing.expectEqual('<b>x</b>', host.innerHTML);
+    }
+</script>
+
+<script id="fragment_children_still_upgrade">
+    {
+        // Only the context element is skipped: real custom elements that appear
+        // *inside* the parsed fragment must still be constructed.
+        let calls = 0;
+        class CeChild extends HTMLElement {
+            constructor() {
+                super();
+                calls += 1;
+            }
+        }
+        customElements.define('ce-child', CeChild);
+
+        const container = document.createElement('div');
+        container.innerHTML = '<ce-child></ce-child><ce-child></ce-child>';
+        testing.expectEqual(2, calls);
+        testing.expectEqual(2, container.querySelectorAll('ce-child').length);
+    }
+</script>

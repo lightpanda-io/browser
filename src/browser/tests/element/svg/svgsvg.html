@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=first>
+  <g>
+    <rect id=inner-rect></rect>
+    <svg id=nested>
+      <circle id=nested-circle></circle>
+    </svg>
+  </g>
+</svg>
+<svg id=second>
+  <rect id=other-rect></rect>
+</svg>
+
+<script id=getElementById>
+{
+  const first = $('#first');
+  testing.expectEqual($('#inner-rect'), first.getElementById('inner-rect'));
+  testing.expectEqual($('#nested-circle'), first.getElementById('nested-circle'));
+
+  // Scoped to the subtree, unlike document.getElementById.
+  testing.expectEqual(null, first.getElementById('other-rect'));
+  testing.expectEqual(null, $('#second').getElementById('inner-rect'));
+  testing.expectEqual(null, first.getElementById(''));
+  testing.expectEqual(null, first.getElementById('missing'));
+}
+</script>
+
+<script id=factories>
+{
+  // SVG2 defines SVGPoint/SVGMatrix/SVGRect as aliases of the DOM geometry
+  // types, which is what we return. Browsers (Chrome and Firefox both) still
+  // ship distinct legacy interfaces, so the instanceof and DOM-geometry-only
+  // members (w, is2D) fail there. The DOM types are functional supersets of
+  // the legacy ones, so site-facing behavior only gains members.
+  const svg = $('#first');
+
+  const point = svg.createSVGPoint();
+  testing.expectEqual(true, point instanceof DOMPoint);
+  testing.expectEqual(0, point.x);
+  testing.expectEqual(0, point.y);
+  testing.expectEqual(1, point.w);
+  point.x = 5;
+  testing.expectEqual(5, point.x);
+
+  const matrix = svg.createSVGMatrix();
+  testing.expectEqual(true, matrix instanceof DOMMatrix);
+  testing.expectEqual(1, matrix.a);
+  testing.expectEqual(0, matrix.b);
+  testing.expectEqual(1, matrix.d);
+  testing.expectEqual(true, matrix.is2D);
+
+  const rect = svg.createSVGRect();
+  testing.expectEqual(true, rect instanceof DOMRect);
+  testing.expectEqual(0, rect.x);
+  testing.expectEqual(0, rect.width);
+
+  const number = svg.createSVGNumber();
+  testing.expectEqual(true, number instanceof SVGNumber);
+  testing.expectEqual(0, number.value);
+  number.value = 4.5;
+  testing.expectEqual(4.5, number.value);
+}
+</script>
+
+<script id=owner>
+{
+  const first = $('#first');
+  const nested = $('#nested');
+
+  testing.expectEqual(null, first.ownerSVGElement);
+  testing.expectEqual(null, first.viewportElement);
+
+  testing.expectEqual(first, $('#inner-rect').ownerSVGElement);
+  testing.expectEqual(first, $('#inner-rect').viewportElement);
+  testing.expectEqual(first, nested.ownerSVGElement);
+  testing.expectEqual(nested, $('#nested-circle').ownerSVGElement);
+  testing.expectEqual($('#second'), $('#other-rect').ownerSVGElement);
+
+  // A foreignObject starts a new SVG document fragment.
+  first.innerHTML += '<foreignObject><div><svg id=foreign-svg></svg></div></foreignObject>';
+  testing.expectEqual(null, $('#foreign-svg').ownerSVGElement);
+}
+</script>

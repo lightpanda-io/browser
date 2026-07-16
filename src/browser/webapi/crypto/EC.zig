@@ -127,7 +127,7 @@ pub fn generate(
     errdefer crypto.EVP_PKEY_free(public_pkey);
     if (crypto.EVP_PKEY_set1_EC_KEY(public_pkey, pub_ec) != 1) return error.OutOfMemory;
 
-    const private = try exec._factory.create(CryptoKey{
+    const private = try CryptoKey.init(exec, .{
         ._type = .ec,
         ._kind = .private,
         ._extractable = extractable,
@@ -136,9 +136,8 @@ pub fn generate(
         ._algorithm = .{ .name = name, .named_curve = curve },
         ._vary = .{ .pkey = private_pkey },
     });
-    errdefer exec._factory.destroy(private);
 
-    const public = try exec._factory.create(CryptoKey{
+    const public = try CryptoKey.init(exec, .{
         ._type = .ec,
         ._kind = .public,
         // Public keys are always extractable.
@@ -192,7 +191,7 @@ pub fn import(
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
     }
 
-    const crypto_key = try exec._factory.create(CryptoKey{
+    const crypto_key = try CryptoKey.init(exec, .{
         ._type = .ec,
         ._kind = if (is_private) .private else .public,
         ._extractable = extractable,

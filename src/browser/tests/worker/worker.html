@@ -483,3 +483,26 @@
     });
   }
 </script>
+
+<script id="worker_from_blob_url_revoked_before_delivery" type=module>
+  // Revoking right after construction must not invalidate the queued
+  // script response: it's delivered on a later tick, after the blob's
+  // last reference may be gone.
+  {
+    const state = await testing.async();
+    const blob = new Blob(["onmessage = (e) => postMessage({ echo: e.data, from: 'revoked-blob-worker' });"], { type: 'text/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    const worker = new Worker(blobUrl);
+    URL.revokeObjectURL(blobUrl);
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    worker.postMessage({ greeting: 'still-works' });
+
+    await state.done((response) => {
+      testing.expectEqual('still-works', response.echo.greeting);
+      testing.expectEqual('revoked-blob-worker', response.from);
+    });
+  }
+</script>

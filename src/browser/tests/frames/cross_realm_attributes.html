@@ -49,4 +49,35 @@ reads of iframe data-* returned null (WPT encoding/*).
     testing.expectEqual(null, iwin.readAttr('data-parentset'));
   });
 </script>
+
+<script id="cross_realm_attr_node_identity" type=module>
+{
+  const state = await testing.async();
+  const idf = document.getElementById('idf');
+  await new Promise((resolve) => {
+    if (idf.contentDocument.getElementById('s1')) return resolve();
+    idf.addEventListener('load', resolve);
+  });
+  const el = idf.contentDocument.getElementById('s1');
+
+  // Prime the Attr identity map from the parent, then have the iframe's own
+  // listener remove and re-add the attribute. The Attr identity map is keyed
+  // to the element's frame, so however the two sides' contexts resolve, the
+  // parent must see the re-added value, never a stale pre-delete wrapper.
+  const before = el.getAttributeNode('data-cycle');
+
+  const onmsg = (e) => {
+    if (e.data !== 'attr-cycled') return;
+    window.removeEventListener('message', onmsg);
+    state.resolve();
+  };
+  window.addEventListener('message', onmsg);
+  idf.contentWindow.postMessage('cycle-attr', '*');
+
+  await state.done(() => {
+    testing.expectEqual('A1B2', before.value);
+    testing.expectEqual('C3', el.getAttributeNode('data-cycle').value);
+  });
+}
+</script>
 </body>

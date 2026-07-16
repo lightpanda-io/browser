@@ -78,7 +78,7 @@ pub fn postMessage(self: *MessagePort, message: js.Value, exec: *Execution) !voi
         const c = message.structuredCloneTo(&ls.local) catch {
             return error.DataClone;
         };
-        break :blk try c.temp();
+        break :blk try c.persist();
     };
     errdefer cloned.release();
 
@@ -131,7 +131,7 @@ pub fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
 
 const PostMessageCallback = struct {
     port: *MessagePort,
-    message: js.Value.Temp,
+    message: js.Value.Global,
     exec: *Execution,
 
     // Called by the scheduler if the task is dropped before it runs. `run` and

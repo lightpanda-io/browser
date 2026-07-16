@@ -92,14 +92,7 @@ pub fn format(self: Object, writer: *std.Io.Writer) !void {
 }
 
 pub fn persist(self: Object) !Global {
-    var ctx = self.local.ctx;
-
-    var global: v8.Global = undefined;
-    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-
-    try ctx.trackGlobal(global);
-
-    return .{ .handle = global };
+    return .{ .slot = try js.newTrackedSlot(self.local.ctx, self.handle) };
 }
 
 pub fn getFunction(self: Object, name: []const u8) !?js.Function {
@@ -171,21 +164,24 @@ pub fn toZig(self: Object, comptime T: type) !T {
 }
 
 pub const Global = struct {
-    handle: v8.Global,
+    slot: *js.GlobalSlot,
 
-    pub fn deinit(self: *Global) void {
-        v8.v8__Global__Reset(&self.handle);
+    pub fn deinit(self: Global) void {
+        self.slot.release();
     }
 
-    pub fn local(self: *const Global, l: *const js.Local) Object {
+    // TODO: deprecated. @GlobalSlot
+    pub const release = deinit;
+
+    pub fn local(self: Global, l: *const js.Local) Object {
         return .{
             .local = l,
-            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
+            .handle = @ptrCast(v8.v8__Global__Get(&self.slot.handle, l.isolate.handle)),
         };
     }
 
-    pub fn isEqual(self: *const Global, other: Object) bool {
-        return v8.v8__Global__IsEqual(&self.handle, other.handle);
+    pub fn isEqual(self: Global, other: Object) bool {
+        return v8.v8__Global__IsEqual(&self.slot.handle, other.handle);
     }
 };
 

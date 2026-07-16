@@ -48,7 +48,7 @@ brew install lightpanda-io/browser/lightpanda
 
 Latest nightly from Arch Linux User Repository:
 ```console
-yay -S lightpanda-nightly-bi
+yay -S lightpanda-nightly-bin
 ```
 
 **Download from the nightly builds**
@@ -199,6 +199,28 @@ Add to your MCP configuration:
   }
 }
 ```
+
+#### HTTP transport and independent sessions
+
+For serving several agents from one process, start the MCP server over HTTP
+instead of stdio by giving it a port (add `--host x.x.x.x` to specify the
+interface to listen on):
+
+```bash
+lightpanda mcp --port 9223
+```
+
+Clients POST JSON-RPC to `http://host:9223/mcp`. Each connection is routed to
+its own **browsing session** — its own page, cookies and memory — so agents no
+longer clobber each other's page:
+
+- A client that `initialize`s without an `Mcp-Session-Id` header is assigned a
+  fresh session; the id comes back in the response's `Mcp-Session-Id` header.
+  Send it on subsequent requests to stay on that session (**isolation**).
+- Two agents that send the **same** `Mcp-Session-Id` share one browsing context
+  (**sharing** — e.g. a workflow where several agents work the same page).
+- The `session_new`, `session_list` and `session_close` tools manage sessions
+  explicitly. Sending `DELETE /mcp` with an `Mcp-Session-Id` closes that session.
 
 [Read full documentation](https://lightpanda.io/docs/open-source/guides/mcp-server)
 

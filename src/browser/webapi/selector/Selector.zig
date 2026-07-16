@@ -183,19 +183,39 @@ pub fn matchesUncached(arena: Allocator, el: *Node.Element, input: []const u8, f
 }
 
 pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bool {
-    if (class_name.len == 0 or class_name.len > class_attr.len) return false;
+    return classAttributeContainsCase(class_attr, class_name, false);
+}
+
+pub fn classAttributeContainsCase(class_attr: []const u8, class_name: []const u8, case_insensitive: bool) bool {
+    if (class_name.len == 0 or class_name.len > class_attr.len) {
+        return false;
+    }
 
     var search = class_attr;
-    while (std.mem.indexOf(u8, search, class_name)) |pos| {
-        const is_start = pos == 0 or search[pos - 1] == ' ';
+    while (true) {
+        const pos = (if (case_insensitive)
+            std.ascii.indexOfIgnoreCase(search, class_name)
+        else
+            std.mem.indexOf(u8, search, class_name)) orelse break;
+
+        const is_start = pos == 0 or isClassWhitespace(search[pos - 1]);
         const end = pos + class_name.len;
-        const is_end = end == search.len or search[end] == ' ';
+        const is_end = end == search.len or isClassWhitespace(search[end]);
 
         if (is_start and is_end) return true;
 
         search = search[pos + 1 ..];
     }
     return false;
+}
+
+// The class attribute tokens are separated by ASCII whitespace (which,
+// unlike std.ascii.isWhitespace, does not include vertical tab).
+fn isClassWhitespace(c: u8) bool {
+    return switch (c) {
+        '\t', '\n', 0x0C, '\r', ' ' => true,
+        else => false,
+    };
 }
 
 pub const Part = union(enum) {

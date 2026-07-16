@@ -29,9 +29,10 @@ use std::os::raw::{c_uchar, c_void};
 use types::*;
 
 use encoding_rs::Encoding;
+use html5ever::driver::parse_fragment_for_element;
 use html5ever::interface::tree_builder::QuirksMode;
 use html5ever::tendril::{StrTendril, TendrilSink};
-use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, Parser, QualName};
+use html5ever::{ns, parse_document, LocalName, ParseOpts, Parser, QualName};
 
 #[no_mangle]
 pub extern "C" fn html5ever_parse_document(
@@ -466,6 +467,7 @@ pub extern "C" fn html5ever_parse_fragment(
     document: Ref,
     ctx: Ref,
     create_element_callback: CreateElementCallback,
+    create_context_element_callback: CreateElementCallback,
     get_data_callback: GetDataCallback,
     append_callback: AppendCallback,
     parse_error_callback: ParseErrorCallback,
@@ -537,12 +539,27 @@ pub extern "C" fn html5ever_parse_fragment(
         ..Default::default()
     };
 
-    parse_fragment(
+    let context_qname = QualName::new(None, ns!(html), context_local);
+    let context_data = arena.alloc(sink::ElementData {
+        qname: context_qname.clone(),
+        mathml_annotation_xml_integration_point: false,
+    });
+    let mut context_attrs = CAttributeIterator { vec: vec![], pos: 0 };
+    let context_elem = unsafe {
+        (create_context_element_callback)(
+            ctx,
+            context_data as *mut _ as *mut c_void,
+            CQualName::create(&context_qname),
+            &mut context_attrs as *mut _ as *mut c_void,
+        )
+    };
+
+    parse_fragment_for_element(
         sink,
         opts,
-        QualName::new(None, ns!(html), context_local),
-        vec![], // attributes
-        false,  // context_element_allows_scripting
+        context_elem,
+        false, // context_element_allows_scripting
+        None,  // form_element
     )
     .from_utf8()
     .one(bytes);

@@ -223,7 +223,7 @@ pub const DispatchDirectOptions = struct {
 
 /// Direct dispatch for non-DOM targets. No propagation - just calls the property
 /// handler and registered listeners. Caller is responsible for event ref counting.
-/// Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
+/// Handler can be: null, ?js.Function.Global or js.Function
 pub fn dispatchDirect(
     self: *EventManagerBase,
     arena: Allocator,
@@ -256,22 +256,13 @@ pub fn dispatchDirect(
     // Per spec, currentTarget is only set while listeners are being invoked
     defer event._current_target = null;
 
-    // Call the property handler (e.g., onmessage) if present
-    if (getFunction(handler, &ls.local)) |func| {
-        event._current_target = target;
-        _ = func.callWithThis(void, target, .{event}) catch |err| {
-            log.warn(.event, opts.context, .{ .err = err });
-        };
-    }
-
-    // Call listeners registered via addEventListener
-    const list = self.getListeners(target, event._type_string) orelse return;
-
     // This is a slightly simplified version of what you'll find in EventManager.
     // dispatchPhase. It is simpler because, for direct dispatching, we know
     // there's no ancestors and only the single target phase.
 
-    // Track dispatch depth for deferred removal
+    // Track dispatch depth for deferred removal. Bump it *before* the property
+    // handler runs so any listener it removes is deferred (keeping our sentinel
+    // node alive) rather than freed mid-dispatch.
     self.dispatch_depth += 1;
     defer {
         self.dispatch_depth -= 1;
@@ -285,8 +276,33 @@ pub fn dispatchDirect(
         }
     }
 
-    // Use the last listener in the list as sentinel - listeners added during dispatch will be after it
-    const last_node = list.last orelse return;
+    // Snapshot the listener list *before* invoking the property handler. Per
+    // spec the set of listeners is collected at the start of dispatch, so a
+    // listener added while we're dispatching — including one added by the
+    // property handler itself (e.g. onupgradeneeded calling addEventListener) —
+    // must not be invoked for this event.
+    const maybe_list = self.getListeners(target, event._type_string);
+    const sentinel = if (maybe_list) |list| list.last else null;
+
+    // Call the property handler (e.g., onmessage) if present
+    if (getFunction(handler, &ls.local)) |func| {
+        event._current_target = target;
+        var caught: js.TryCatch.Caught = undefined;
+        _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
+            if (err == error.JsException) {
+                event._listeners_did_throw = true;
+            } else {
+                log.warn(.event, opts.context, .{ .err = err, .caught = caught });
+            }
+        };
+    }
+
+    // No listeners were registered via addEventListener at dispatch start.
+    const last_node = sentinel orelse return;
+    const list = maybe_list.?;
+
+    // Use the last listener present at dispatch start as sentinel - listeners
+    // added during dispatch will be after it
     const last_listener: *Listener = @alignCast(@fieldParentPtr("node", last_node));
 
     // Iterate through the list, stopping after we've encountered the last_listener
@@ -344,7 +360,6 @@ fn getFunction(handler: anytype, local: *const js.Local) ?js.Function {
     }
     return switch (T) {
         js.Function => handler,
-        js.Function.Temp => local.toLocal(handler),
         js.Function.Global => local.toLocal(handler),
         else => @compileError("handler must be null or \\??js.Function(\\.(Temp|Global))?"),
     };
@@ -420,27 +435,88 @@ pub const Listener = struct {
         comptime context: []const u8,
     ) error{OutOfMemory}!void {
         switch (self.function) {
-            .value => |value| local.toLocal(value).callWithThis(void, event._current_target.?, .{event}) catch |err| {
-                log.warn(.event, context, .{ .err = err });
+            .value => |value| {
+                var try_catch: js.TryCatch = undefined;
+                try_catch.init(local);
+                defer try_catch.deinit();
+                local.toLocal(value).callWithThisRethrow(void, event._current_target.?, .{event}) catch |err| switch (err) {
+                    // The rethrow variant surfaces a thrown JS exception as
+                    // TryCatchRethrow so our enclosing TryCatch holds it.
+                    error.JsException, error.TryCatchRethrow => {
+                        event._listeners_did_throw = true;
+                        reportException(&try_catch, local);
+                    },
+                    else => log.warn(.event, context, .{ .err = err }),
+                };
             },
             .string => |string| {
                 const str = try arena.dupeZ(u8, string.str());
                 local.eval(str, null) catch |err| {
-                    log.warn(.event, context, .{ .err = err });
+                    if (err == error.JsException) {
+                        event._listeners_did_throw = true;
+                    } else {
+                        log.warn(.event, context, .{ .err = err });
+                    }
                 };
             },
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
-                const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
-                    log.warn(.event, context, .{ .err = err });
-                    break :blk null;
-                };
-                if (handle_event) |handleEvent| {
-                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
+
+                var try_catch: js.TryCatch = undefined;
+                try_catch.init(local);
+                defer try_catch.deinit();
+
+                // Get(handleEvent) can run a getter: a thrown exception is
+                // reported like an exception from the listener itself.
+                const handle_event_value = obj.get("handleEvent") catch |err| {
+                    if (err == error.JsException) {
+                        event._listeners_did_throw = true;
+                        reportException(&try_catch, local);
+                    } else {
                         log.warn(.event, context, .{ .err = err });
-                    };
+                    }
+                    return;
+                };
+
+                if (!handle_event_value.isFunction()) {
+                    // Per the callback interface invocation steps, a
+                    // non-callable handleEvent is a reported TypeError.
+                    event._listeners_did_throw = true;
+                    reportExceptionValue(local, .{
+                        .local = local,
+                        .handle = local.isolate.createTypeError("handleEvent is not a function"),
+                    });
+                    return;
                 }
+
+                const handle_event = js.Function{
+                    .local = local,
+                    .handle = @ptrCast(handle_event_value.handle),
+                };
+                handle_event.callWithThisRethrow(void, obj, .{event}) catch |err| switch (err) {
+                    error.JsException, error.TryCatchRethrow => {
+                        event._listeners_did_throw = true;
+                        reportException(&try_catch, local);
+                    },
+                    else => log.warn(.event, context, .{ .err = err }),
+                };
             },
+        }
+    }
+
+    // Reports a listener exception to the relevant global (firing
+    // window.onerror / an "error" event) without stopping the dispatch.
+    fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
+        const exc = try_catch.exceptionValue() orelse return;
+        reportExceptionValue(local, exc);
+    }
+
+    fn reportExceptionValue(local: *const js.Local, exc: js.Value) void {
+        switch (local.ctx.global) {
+            .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
+                log.warn(.event, "listener report error", .{ .err = err });
+            },
+            .worker => {},
         }
     }
 };

@@ -16,7 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
@@ -25,10 +28,12 @@ pub const FilterOpts = NodeFilter.FilterOpts;
 
 const DOMTreeWalker = @This();
 
+_rc: lp.RC(u8) = .{},
 _root: *Node,
 _what_to_show: u32,
 _filter: NodeFilter,
 _current: *Node,
+_active: bool = false,
 
 pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) !*DOMTreeWalker {
     const node_filter = try NodeFilter.init(filter);
@@ -40,6 +45,19 @@ pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) 
     });
 }
 
+pub fn deinit(self: *DOMTreeWalker, page: *Page) void {
+    self._filter.deinit();
+    page.factory.destroy(self);
+}
+
+pub fn releaseRef(self: *DOMTreeWalker, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *DOMTreeWalker) void {
+    self._rc.acquire();
+}
+
 pub fn getRoot(self: *const DOMTreeWalker) *Node {
     return self._root;
 }
@@ -49,7 +67,7 @@ pub fn getWhatToShow(self: *const DOMTreeWalker) u32 {
 }
 
 pub fn getFilter(self: *const DOMTreeWalker) ?FilterOpts {
-    return self._filter._original_filter;
+    return self._filter._opts;
 }
 
 pub fn getCurrentNode(self: *const DOMTreeWalker) *Node {
@@ -157,27 +175,52 @@ pub fn lastChild(self: *DOMTreeWalker, frame: *Frame) !?*Node {
 }
 
 pub fn previousSibling(self: *DOMTreeWalker, frame: *Frame) !?*Node {
-    var node = self.previousSiblingOrNull(self._current);
-    while (node) |n| {
-        if (try self.acceptNode(n, frame) == NodeFilter.FILTER_ACCEPT) {
-            self._current = n;
-            return n;
-        }
-        node = self.previousSiblingOrNull(n);
-    }
-    return null;
+    return self.traverseSiblings(.previous, frame);
 }
 
 pub fn nextSibling(self: *DOMTreeWalker, frame: *Frame) !?*Node {
-    var node = self.nextSiblingOrNull(self._current);
-    while (node) |n| {
-        if (try self.acceptNode(n, frame) == NodeFilter.FILTER_ACCEPT) {
-            self._current = n;
-            return n;
+    return self.traverseSiblings(.next, frame);
+}
+
+// The spec's "traverse siblings" algorithm: a skipped (but not rejected)
+// sibling's children are still candidates, and when the siblings run out the
+// walk climbs to the parent and continues from its siblings, stopping at the
+// root or at an accepted parent.
+fn traverseSiblings(self: *DOMTreeWalker, comptime direction: enum { next, previous }, frame: *Frame) !?*Node {
+    var node = self._current;
+    if (node == self._root) return null;
+
+    while (true) {
+        var sibling: ?*Node = if (direction == .next)
+            self.nextSiblingOrNull(node)
+        else
+            self.previousSiblingOrNull(node);
+
+        while (sibling) |sib| {
+            node = sib;
+            const result = try self.acceptNode(node, frame);
+            if (result == NodeFilter.FILTER_ACCEPT) {
+                self._current = node;
+                return node;
+            }
+            sibling = if (direction == .next)
+                self.firstChildOrNull(node)
+            else
+                self.lastChildOrNull(node);
+            if (result == NodeFilter.FILTER_REJECT or sibling == null) {
+                sibling = if (direction == .next)
+                    self.nextSiblingOrNull(node)
+                else
+                    self.previousSiblingOrNull(node);
+            }
         }
-        node = self.nextSiblingOrNull(n);
+
+        node = node.parentNode() orelse return null;
+        if (node == self._root) return null;
+        if (try self.acceptNode(node, frame) == NodeFilter.FILTER_ACCEPT) {
+            return null;
+        }
     }
-    return null;
 }
 
 pub fn previousNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
@@ -292,7 +335,11 @@ pub fn nextNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
 }
 
 // Helper methods
-fn acceptNode(self: *const DOMTreeWalker, node: *Node, frame: *Frame) !i32 {
+fn acceptNode(self: *DOMTreeWalker, node: *Node, frame: *Frame) !i32 {
+    if (self._active) {
+        return error.InvalidStateError;
+    }
+
     // First check whatToShow
     if (!NodeFilter.shouldShow(node, self._what_to_show)) {
         return NodeFilter.FILTER_SKIP;
@@ -302,6 +349,8 @@ fn acceptNode(self: *const DOMTreeWalker, node: *Node, frame: *Frame) !i32 {
     // For TreeWalker, REJECT means reject node and its descendants
     // SKIP means skip node but check its descendants
     // ACCEPT means accept the node
+    self._active = true;
+    defer self._active = false;
     return try self._filter.acceptNode(node, frame.js.local.?);
 }
 

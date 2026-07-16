@@ -508,6 +508,12 @@ var test_http_server_thread: ?std.Thread = null;
 var test_ws_server: ?TestWSServer = null;
 var test_ws_server_thread: ?std.Thread = null;
 
+// Server-side state for the /sse/* endpoints. sse_flag proves progressive
+// delivery (see /sse/streaming); sse_reconnect_hits makes /sse/reconnect
+// serve a different stream on the second connection.
+var sse_flag = std.atomic.Value(bool).init(false);
+var sse_reconnect_hits = std.atomic.Value(usize).init(0);
+
 var test_config: Config = undefined;
 
 test "tests:beforeAll" {
@@ -739,6 +745,97 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/octet-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/simple")) {
+        // A complete stream: default + custom event types, multi-line data,
+        // an id, and a comment. The connection closes right after; the test
+        // close()s before the (1s) reconnect fires.
+        return req.respond("retry: 1000\ndata: first\n\n: comment\nid: 42\nevent: custom\ndata: a\ndata: b\n\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/event-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/streaming")) {
+        sse_flag.store(false, .release);
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/event-stream" },
+                },
+            },
+        });
+        try res.writer.writeAll("data: first\n\n");
+        try res.writer.flush();
+        try res.flush();
+
+        // Proof of progressive delivery: "second" is only sent once the
+        // client has reacted to "first" (by fetching /sse/flag), which it
+        // can only do if "first" was delivered while this response was
+        // still streaming.
+        var waited: usize = 0;
+        while (!sse_flag.load(.acquire) and waited < 5000) : (waited += 10) {
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
+        if (sse_flag.load(.acquire)) {
+            // split mid-line to exercise buffering across chunks
+            try res.writer.writeAll("data: sec");
+            try res.writer.flush();
+            try res.flush();
+            std.Thread.sleep(20 * std.time.ns_per_ms);
+            try res.writer.writeAll("ond\n\n");
+            try res.writer.flush();
+            try res.flush();
+        }
+        return res.end();
+    }
+
+    if (std.mem.eql(u8, path, "/sse/flag")) {
+        sse_flag.store(true, .release);
+        return req.respond("", .{});
+    }
+
+    if (std.mem.eql(u8, path, "/sse/reconnect")) {
+        if (sse_reconnect_hits.fetchAdd(1, .monotonic) == 0) {
+            return req.respond("retry: 10\ndata: one\n\n", .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/event-stream" },
+                },
+            });
+        }
+        return req.respond("data: two\n\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/event-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/long_retry")) {
+        return req.respond("retry: 60000\ndata: x\n\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/event-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/404")) {
+        return req.respond("data: x\n\n", .{
+            .status = .not_found,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/event-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/sse/badmime")) {
+        return req.respond("data: x\n\n", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
             },
         });
     }

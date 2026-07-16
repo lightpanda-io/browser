@@ -16,28 +16,29 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const URL = @import("../../browser/URL.zig");
-const Layer = @import("../../browser/HttpClient.zig").Layer;
-const Transfer = @import("../../browser/HttpClient.zig").Transfer;
+const js = @import("../../../js/js.zig");
 
-const WebBotAuthLayer = @This();
+const Node = @import("../../Node.zig");
+const Element = @import("../../Element.zig");
 
-next: Layer = undefined,
+const Geometry = @import("Geometry.zig");
 
-pub fn layer(self: *WebBotAuthLayer) Layer {
-    return .{
-        .ptr = self,
-        .vtable = &.{ .request = request },
+const Ellipse = @This();
+_proto: *Geometry,
+
+pub fn asElement(self: *Ellipse) *Element {
+    return self._proto.asElement();
+}
+pub fn asNode(self: *Ellipse) *Node {
+    return self.asElement().asNode();
+}
+
+pub const JsApi = struct {
+    pub const bridge = js.Bridge(Ellipse);
+
+    pub const Meta = struct {
+        pub const name = "SVGEllipseElement";
+        pub const prototype_chain = bridge.prototypeChain();
+        pub var class_id: bridge.ClassId = undefined;
     };
-}
-
-fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
-    const self: *WebBotAuthLayer = @ptrCast(@alignCast(ptr));
-
-    const wba = transfer.client.network.web_bot_auth orelse @panic("WebBotAuthLayer shouldn't be active without WebBotAuth");
-
-    const authority = URL.getHost(transfer.req.url);
-    try wba.signRequest(transfer.arena, &transfer.req.headers, authority);
-
-    return self.next.request(transfer);
-}
+};

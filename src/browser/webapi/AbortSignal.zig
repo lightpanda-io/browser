@@ -35,14 +35,18 @@ const Dependend = union(enum) {
     signal: *AbortSignal,
     model_context_tool: *ModelContextTool,
 
-    fn markAborted(self: Dependend, reason_: ?Reason, exec: *const Execution) !void {
+    // Returns false if the dependent was already aborted, in which case no
+    // abort event must be dispatched for it.
+    fn markAborted(self: Dependend, reason_: ?Reason, exec: *const Execution) !bool {
         switch (self) {
             .signal => |dep| {
-                if (dep._aborted) return;
+                if (dep._aborted) return false;
                 try dep.markAborted(reason_, exec);
+                return true;
             },
             .model_context_tool => |dep| {
                 try dep.markAborted(exec);
+                return true;
             },
         }
     }
@@ -101,8 +105,9 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     // so we never need to recurse here.
     var to_dispatch: std.ArrayList(Dependend) = .{};
     for (self._dependents.items) |dep| {
-        try dep.markAborted(self._reason, exec);
-        try to_dispatch.append(exec.arena, dep);
+        if (try dep.markAborted(self._reason, exec)) {
+            try to_dispatch.append(exec.arena, dep);
+        }
     }
 
     try self.dispatchAbortEvent(exec);
@@ -123,7 +128,11 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
             .undefined => self._reason = reason,
         }
     } else {
-        self._reason = .{ .dom = DOMException.fromError(error.AbortError).? };
+        // Allocate the DOMException so the reason keeps a single JS identity:
+        // dependent signals must expose the very same DOMException instance.
+        const dom = try exec.arena.create(DOMException);
+        dom.* = DOMException.fromError(error.AbortError).?;
+        self._reason = .{ .dom = dom };
     }
 }
 
@@ -140,14 +149,30 @@ fn dispatchAbortEvent(self: *AbortSignal, exec: *const Execution) !void {
     }
 }
 
+// Converts an abort(reason) JS argument to a Reason. Per spec, only a
+// missing or undefined reason falls back to the default "AbortError"
+// DOMException: an explicit null (or any other value) is kept as-is.
+pub fn reasonFromJs(reason_: ?js.Value) !?Reason {
+    const reason = reason_ orelse return null;
+    if (reason.isUndefined()) {
+        return null;
+    }
+    return .{ .js_val = try reason.persist() };
+}
+
 // Static method to create an already-aborted signal
-pub fn createAborted(reason_: ?js.Value.Global, exec: *const Execution) !*AbortSignal {
+pub fn createAborted(reason_: ?js.Value, exec: *const Execution) !*AbortSignal {
     const signal = try init(exec);
-    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, exec);
+    try signal.abort(try reasonFromJs(reason_), exec);
     return signal;
 }
 
-pub fn createAny(signals: []const *AbortSignal, exec: *const Execution) !*AbortSignal {
+pub fn createAny(signals_value: js.Value, exec: *const Execution) !*AbortSignal {
+    // The parameter isn't optional. If we declared it as a slice directy, the
+    // bridge would treat it as a variadic and map it to empty rather than throwing
+    // a TypeError as it should.
+    const signals = try signals_value.toZig([]const *AbortSignal);
+
     const result = try init(exec);
     for (signals) |source| {
         if (source._aborted) {
@@ -207,7 +232,7 @@ pub fn throwIfAborted(self: *const AbortSignal, exec: *const Execution) !ThrowIf
 
 const Reason = union(enum) {
     js_val: js.Value.Global,
-    dom: DOMException,
+    dom: *DOMException,
     string: []const u8,
     undefined: void,
 };
@@ -218,10 +243,32 @@ const TimeoutCallback = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
-        self.signal.abort(.{ .dom = DOMException.fromError(error.TimeoutError).? }, self.exec) catch |err| {
+        self.timeoutAbort() catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };
         return null;
+    }
+
+    fn timeoutAbort(self: *TimeoutCallback) !void {
+        // Per spec, the abort is queued as a global task on the signal's
+        // global: it must not run when the global's document is no longer
+        // fully active (e.g. the iframe that created the signal was detached).
+        switch (self.exec.js.global) {
+            .frame => |frame| {
+                var current: ?@TypeOf(frame) = frame;
+                while (current) |f| : (current = f.parent) {
+                    const iframe = f.iframe orelse continue;
+                    if (!iframe.asNode().isConnected()) {
+                        return;
+                    }
+                }
+            },
+            .worker => {},
+        }
+
+        const dom = try self.exec.arena.create(DOMException);
+        dom.* = DOMException.fromError(error.TimeoutError).?;
+        try self.signal.abort(.{ .dom = dom }, self.exec);
     }
 };
 
@@ -237,7 +284,6 @@ pub const JsApi = struct {
 
     pub const Prototype = EventTarget;
 
-    pub const constructor = bridge.constructor(AbortSignal.init, .{});
     pub const aborted = bridge.accessor(AbortSignal.getAborted, null, .{});
     pub const reason = bridge.accessor(AbortSignal.getReason, null, .{});
     pub const onabort = bridge.accessor(AbortSignal.getOnAbort, AbortSignal.setOnAbort, .{});

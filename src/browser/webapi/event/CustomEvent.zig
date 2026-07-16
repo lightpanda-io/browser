@@ -30,11 +30,11 @@ const Allocator = std.mem.Allocator;
 const CustomEvent = @This();
 
 _proto: *Event,
-_detail: ?js.Value.Temp = null,
+_detail: ?js.Value.Global = null,
 _arena: Allocator,
 
 const CustomEventOptions = struct {
-    detail: ?js.Value.Temp = null,
+    detail: ?js.Value.Global = null,
 };
 
 const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
@@ -64,10 +64,16 @@ pub fn initCustomEvent(
     event_string: []const u8,
     bubbles: ?bool,
     cancelable: ?bool,
-    detail_: ?js.Value.Temp,
+    detail_: ?js.Value.Global,
 ) !void {
+    // Like initEvent, a no-op while the event is being dispatched.
+    if (self._proto._event_phase != .none) {
+        return;
+    }
+
     // This function can only be called after the constructor has called.
     // So we assume proto is initialized already by constructor.
+    self._proto._initialized = true;
     self._proto._type_string = try String.init(self._proto._arena, event_string, .{});
     self._proto._bubbles = bubbles orelse false;
     self._proto._cancelable = cancelable orelse false;
@@ -94,7 +100,7 @@ pub fn asEvent(self: *CustomEvent) *Event {
     return self._proto;
 }
 
-pub fn getDetail(self: *const CustomEvent) ?js.Value.Temp {
+pub fn getDetail(self: *const CustomEvent) ?js.Value.Global {
     return self._detail;
 }
 

@@ -28,6 +28,7 @@ const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
+const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -111,8 +112,25 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event, opts),
+        .xhr => |xhr| try self.dispatchDirect(target, event, xhr.inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .window => |w| try self.dispatchDirect(target, event, windowInlineHandler(w, event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
+}
+
+// Resolves the Window's property event handler for the given event type.
+fn windowInlineHandler(window: *@import("webapi/Window.zig"), typ: lp.String) ?js.Function.Global {
+    const global_event_handlers = @import("webapi/global_event_handlers.zig");
+    const handler_type = global_event_handlers.fromEventType(typ.str()) orelse return null;
+    return switch (handler_type) {
+        .onerror => window._on_error,
+        .onload => window._on_load,
+        .onblur => window._on_blur,
+        .onfocus => window._on_focus,
+        .onresize => window._on_resize,
+        .onscroll => window._on_scroll,
+        else => null,
+    };
 }
 
 // There are a lot of events that can be attached via addEventListener or as
@@ -124,7 +142,7 @@ pub const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
 
 // Direct dispatch for non-DOM targets (Window, XHR, AbortSignal) or DOM nodes with
 // property handlers. No propagation - just calls the handler and registered listeners.
-// Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
+// Handler can be: null, ?js.Function.Global or js.Function
 pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, handler: anytype, comptime opts: DispatchDirectOptions) !void {
     const frame = self.frame;
 
@@ -144,12 +162,19 @@ pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []cons
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts: DispatchOpts) !void {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     {
         const et = target.asEventTarget();
         event._target = et;
         event._dispatch_target = et; // Store original target for composedPath()
+
+        // Retarget the relatedTarget against the dispatch target up front
+        // (DOM dispatch step 4); listeners observe the retargeted value and
+        // it survives the dispatch.
+        if (event.relatedTargetPtr()) |related_ptr| {
+            if (related_ptr.*) |related| {
+                related_ptr.* = getAdjustedTarget(related, et);
+            }
+        }
     }
 
     const frame = self.frame;
@@ -179,6 +204,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     var path_len: usize = 0;
     var node_path_len: usize = 0;
     var path_buffer: [128]*EventTarget = undefined;
+    var clear_targets = false;
 
     // Defer runs even on early return - ensures event phase is reset
     // and default actions execute (unless prevented)
@@ -187,7 +213,14 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         event._current_target = null;
         event._stop_propagation = false;
         event._stop_immediate_propagation = false;
-        if (event._needs_retargeting and node_path_len > 0) {
+        if (clear_targets) {
+            // Don't leak nodes living in a shadow tree: reset the targets
+            // (decided on the pre-dispatch tree, see below).
+            event._target = null;
+            if (event.relatedTargetPtr()) |related_ptr| {
+                related_ptr.* = null;
+            }
+        } else if (event._needs_retargeting and node_path_len > 0) {
             const adjusted = getAdjustedTarget(event._dispatch_target, path_buffer[node_path_len - 1]);
             event._target = if (rootIsShadowRoot(adjusted)) null else adjusted;
         }
@@ -200,9 +233,16 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         if (event._prevent_default) {
             // can't return in a defer (╯°□°)╯︵ ┻━┻
         } else if (event._type_string.eql(comptime .wrap("click"))) {
-            Frame.user_input.handleClick(frame, target) catch |err| {
-                log.warn(.event, "frame.click", .{ .err = err });
-            };
+            // Per spec, only a MouseEvent "click" is an activation event, and
+            // the activation target is the nearest inclusive ancestor with
+            // activation behavior (ancestors only for bubbling events).
+            if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
+                if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
+                    Frame.user_input.handleClick(frame, activation_target) catch |err| {
+                        log.warn(.event, "frame.click", .{ .err = err });
+                    };
+                }
+            }
         } else if (event._type_string.eql(comptime .wrap("keydown"))) {
             Frame.user_input.handleKeydown(frame, target, event) catch |err| {
                 log.warn(.event, "frame.keydown", .{ .err = err });
@@ -258,6 +298,26 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         }
     }
 
+    // DOM dispatch: decide up front — on the pre-dispatch tree, so listener
+    // mutations can't affect it — whether target and relatedTarget must be
+    // reset after dispatch because they would expose nodes inside a shadow
+    // tree.
+    if (node_path_len > 0) {
+        const last = path_buffer[node_path_len - 1];
+        if (event._needs_retargeting) {
+            if (rootIsShadowRoot(getAdjustedTarget(event._dispatch_target, last))) {
+                clear_targets = true;
+            }
+        }
+        if (event.relatedTargetPtr()) |related_ptr| {
+            if (related_ptr.*) |related| {
+                if (rootIsShadowRoot(getAdjustedTarget(related, last))) {
+                    clear_targets = true;
+                }
+            }
+        }
+    }
+
     const path = path_buffer[0..path_len];
 
     // Phase 1: Capturing phase (root → target, excluding target)
@@ -284,10 +344,15 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             was_handled = true;
             event._current_target = target_et;
 
+            const prev_current_event = window._current_event;
+            window._current_event = currentEventForTarget(target_et, event);
+            defer window._current_event = prev_current_event;
+
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
-            ls.toLocal(inline_handler).callWithThis(void, target_et, .{event}) catch |err| {
-                log.warn(.event, "inline handler", .{ .err = err });
+            var caught: js.TryCatch.Caught = undefined;
+            ls.toLocal(inline_handler).tryCallWithThis(void, target_et, .{event}, &caught) catch |err| {
+                log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
             };
 
             if (event._stop_propagation) {
@@ -299,8 +364,18 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             }
         }
 
+        // Per spec, the target is invoked once during the capturing iteration
+        // and once during the bubbling iteration, each with its own snapshot
+        // of the listener list: a bubble listener added while running the
+        // target's capture listeners must run.
         if (self.base.getListeners(target_et, event._type_string)) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(null, opts));
+            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(true, opts));
+            if (event._stop_propagation) {
+                return;
+            }
+        }
+        if (self.base.getListeners(target_et, event._type_string)) |list| {
+            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(false, opts));
             if (event._stop_propagation) {
                 return;
             }
@@ -320,13 +395,18 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
                 was_handled = true;
                 event._current_target = current_target;
 
+                const prev_current_event = window._current_event;
+                window._current_event = currentEventForTarget(current_target, event);
+                defer window._current_event = prev_current_event;
+
                 const original_target = event._target;
                 if (event._needs_retargeting) {
                     event._target = getAdjustedTarget(original_target, current_target);
                 }
 
-                ls.toLocal(inline_handler).callWithThis(void, current_target, .{event}) catch |err| {
-                    log.warn(.event, "inline handler", .{ .err = err });
+                var caught: js.TryCatch.Caught = undefined;
+                ls.toLocal(inline_handler).tryCallWithThis(void, current_target, .{event}, &caught) catch |err| {
+                    log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
                 };
 
                 if (event._needs_retargeting) {
@@ -348,6 +428,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     }
 }
 
+fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
+    return if (rootIsShadowRoot(target)) null else event;
+}
+
 const DispatchPhaseOpts = struct {
     capture_only: ?bool = null,
     apply_ignore: bool = false,
@@ -363,6 +447,11 @@ const DispatchPhaseOpts = struct {
 fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime opts: DispatchPhaseOpts) !void {
     const frame = self.frame;
     const base = &self.base;
+
+    const window = frame.window;
+    const prev_current_event = window._current_event;
+    window._current_event = currentEventForTarget(current_target, event);
+    defer window._current_event = prev_current_event;
 
     // Track dispatch depth for deferred removal
     base.dispatch_depth += 1;
@@ -465,6 +554,17 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     // Look up the inline handler for this target
     const html_element = switch (target._type) {
         .node => |n| n.is(Element.Html) orelse return null,
+        // The Window stores its event handlers in dedicated fields; an event
+        // propagating to the window must fire them too.
+        .window => |w| return switch (handler_type) {
+            .onerror => w._on_error,
+            .onload => w._on_load,
+            .onblur => w._on_blur,
+            .onfocus => w._on_focus,
+            .onresize => w._on_resize,
+            .onscroll => w._on_scroll,
+            else => null,
+        },
         else => return null,
     };
 
@@ -477,8 +577,6 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
 // DOM spec "retarget": walk original_target out of shadow trees until the
 // node is visible from current_target's tree.
 fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarget) ?*EventTarget {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     const orig_node = switch ((original_target orelse return null)._type) {
         .node => |n| n,
         else => return original_target,
@@ -500,8 +598,6 @@ fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarge
 }
 
 fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     var n: ?*Node = node;
     while (n) |cur| {
         if (cur == ancestor) {
@@ -519,8 +615,6 @@ fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
 // Whether the target's tree root (without crossing shadow boundaries) is a
 // shadow root. Used for the spec's post-dispatch "clear targets" step.
 fn rootIsShadowRoot(target_: ?*EventTarget) bool {
-    const ShadowRoot = @import("webapi/ShadowRoot.zig");
-
     const target = target_ orelse return false;
     var current: *Node = switch (target._type) {
         .node => |n| n,
@@ -569,12 +663,18 @@ const ActivationState = struct {
 
     const Input = Element.Html.Input;
 
-    fn create(event: *const Event, target: *Node, frame: *Frame) !?ActivationState {
+    fn create(event: *Event, target: *Node, frame: *Frame) !?ActivationState {
         if (event._type_string.eql(comptime .wrap("click")) == false) {
             return null;
         }
 
-        const input = target.is(Element.Html.Input) orelse return null;
+        // Per spec, only a MouseEvent "click" is an activation event.
+        if (event.is(@import("webapi/event/MouseEvent.zig")) == null) {
+            return null;
+        }
+
+        const activation_node = Frame.user_input.findClickActivationTarget(target, event._bubbles) orelse return null;
+        const input = activation_node.is(Element.Html.Input) orelse return null;
         if (input._input_type != .checkbox and input._input_type != .radio) {
             return null;
         }

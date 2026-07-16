@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="deleteRow">
+  {
+    // Built by hand so the tree order deliberately differs from the spec's
+    // row order: the tfoot comes first and bare tr children sit between
+    // the sections.
+    const table = document.createElement('table');
+
+    const rows = {};
+    const addRow = (parent, id) => {
+      const tr = document.createElement('tr');
+      tr.id = id;
+      parent.appendChild(tr);
+      rows[id] = tr;
+    };
+    const addSection = (tag, ...ids) => {
+      const section = document.createElement(tag);
+      for (const id of ids) addRow(section, id);
+      table.appendChild(section);
+    };
+
+    addSection('tfoot', 'foot1');
+    addRow(table, 'top1');
+    addSection('thead', 'head1', 'head2');
+    addSection('tbody', 'body1');
+    addRow(table, 'top2');
+    addSection('tbody', 'body2');
+
+    // Spec order: thead rows first, then table-level tr and tbody rows in
+    // tree order, then tfoot rows:
+    //   head1, head2, top1, body1, top2, body2, foot1
+
+    // -1 removes the last row in spec order: the tfoot row, even though
+    // the tfoot is the table's first child.
+    table.deleteRow(-1);
+    testing.expectEqual(null, rows.foot1.parentNode);
+
+    // 6 rows left; out-of-range and < -1 both throw.
+    testing.expectError('IndexSizeError', () => table.deleteRow(6));
+    testing.expectError('IndexSizeError', () => table.deleteRow(-2));
+
+    // Index 3 of head1, head2, top1, body1, top2, body2 is the tbody row.
+    table.deleteRow(3);
+    testing.expectEqual(null, rows.body1.parentNode);
+
+    // deleteRow(0) drains the rest in spec order.
+    for (const id of ['head1', 'head2', 'top1', 'top2', 'body2']) {
+      testing.expectTrue(rows[id].parentNode !== null);
+      table.deleteRow(0);
+      testing.expectEqual(null, rows[id].parentNode);
+    }
+
+    // On a rowless table, -1 is a no-op but anything else throws.
+    table.deleteRow(-1);
+    testing.expectError('IndexSizeError', () => table.deleteRow(0));
+  }
+</script>
+
+<table id="tbodies">
+  <thead><tr></tr></thead>
+  <tbody id="b1"><tr></tr></tbody>
+  <tbody id="b2"><tr></tr></tbody>
+  <tfoot><tr></tr></tfoot>
+</table>
+
+<script id="tBodies">
+  {
+    const table = document.getElementById('tbodies');
+    testing.expectEqual(2, table.tBodies.length);
+    testing.expectEqual('b1', table.tBodies[0].id);
+    testing.expectEqual('b2', table.tBodies[1].id);
+
+    // The collection is live.
+    const bodies = table.tBodies;
+    table.removeChild(document.getElementById('b1'));
+    testing.expectEqual(1, bodies.length);
+    testing.expectEqual('b2', bodies[0].id);
+  }
+</script>

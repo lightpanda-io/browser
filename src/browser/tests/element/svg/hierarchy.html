@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=root width="200" height="100">
+  <g id=group>
+    <rect id=rect1 width="10" height="10"></rect>
+    <circle id=circle1 r="5"></circle>
+    <ellipse id=ellipse1></ellipse>
+    <line id=line1></line>
+    <polygon id=polygon1></polygon>
+    <polyline id=polyline1></polyline>
+  </g>
+  <path id=path1 d="M 0 0 L 10 10"></path>
+  <a id=link1></a>
+  <use id=use1></use>
+  <image id=image1></image>
+  <defs id=defs1></defs>
+  <filter id=filter1></filter>
+</svg>
+
+<script id=classes>
+{
+  testing.expectEqual('function', typeof SVGElement);
+  testing.expectEqual('function', typeof SVGGraphicsElement);
+  testing.expectEqual('function', typeof SVGGeometryElement);
+  testing.expectEqual('function', typeof SVGSVGElement);
+  testing.expectEqual('function', typeof SVGGElement);
+  testing.expectEqual('function', typeof SVGAElement);
+  testing.expectEqual('function', typeof SVGUseElement);
+  testing.expectEqual('function', typeof SVGImageElement);
+  testing.expectEqual('function', typeof SVGDefsElement);
+  testing.expectEqual('function', typeof SVGRectElement);
+  testing.expectEqual('function', typeof SVGCircleElement);
+  testing.expectEqual('function', typeof SVGEllipseElement);
+  testing.expectEqual('function', typeof SVGLineElement);
+  testing.expectEqual('function', typeof SVGPathElement);
+  testing.expectEqual('function', typeof SVGPolygonElement);
+  testing.expectEqual('function', typeof SVGPolylineElement);
+  testing.expectEqual('function', typeof SVGAnimatedString);
+  testing.expectEqual('function', typeof SVGNumber);
+}
+</script>
+
+<script id=instanceof>
+{
+  const root = $('#root');
+  testing.expectEqual(true, root instanceof SVGSVGElement);
+  testing.expectEqual(true, root instanceof SVGGraphicsElement);
+  testing.expectEqual(true, root instanceof SVGElement);
+  testing.expectEqual(true, root instanceof Element);
+  testing.expectEqual(false, root instanceof SVGGeometryElement);
+  testing.expectEqual('svg', root.tagName);
+
+  const rect = $('#rect1');
+  testing.expectEqual(true, rect instanceof SVGRectElement);
+  testing.expectEqual(true, rect instanceof SVGGeometryElement);
+  testing.expectEqual(true, rect instanceof SVGGraphicsElement);
+  testing.expectEqual(true, rect instanceof SVGElement);
+  testing.expectEqual(false, rect instanceof SVGSVGElement);
+  testing.expectEqual('rect', rect.tagName);
+  testing.expectEqual('10', rect.getAttribute('width'));
+
+  testing.expectEqual(true, $('#group') instanceof SVGGElement);
+  testing.expectEqual(true, $('#circle1') instanceof SVGCircleElement);
+  testing.expectEqual(true, $('#ellipse1') instanceof SVGEllipseElement);
+  testing.expectEqual(true, $('#line1') instanceof SVGLineElement);
+  testing.expectEqual(true, $('#polygon1') instanceof SVGPolygonElement);
+  testing.expectEqual(true, $('#polyline1') instanceof SVGPolylineElement);
+  testing.expectEqual(true, $('#path1') instanceof SVGPathElement);
+  testing.expectEqual(true, $('#link1') instanceof SVGAElement);
+  testing.expectEqual(true, $('#use1') instanceof SVGUseElement);
+  testing.expectEqual(true, $('#image1') instanceof SVGImageElement);
+  testing.expectEqual(true, $('#defs1') instanceof SVGDefsElement);
+
+  // Elements without a dedicated type stay generic, but are still SVGElement.
+  const filter = $('#filter1');
+  testing.expectEqual(true, filter instanceof SVGElement);
+  testing.expectEqual(false, filter instanceof SVGGraphicsElement);
+  testing.expectEqual('filter', filter.tagName);
+}
+</script>
+
+<script id=createElementNS>
+{
+  const NS = 'http://www.w3.org/2000/svg';
+  const rect = document.createElementNS(NS, 'rect');
+  testing.expectEqual(true, rect instanceof SVGRectElement);
+  testing.expectEqual('rect', rect.tagName);
+
+  // SVG tag names are case-sensitive: 'RECT' isn't a rect element.
+  const notRect = document.createElementNS(NS, 'RECT');
+  testing.expectEqual(false, notRect instanceof SVGRectElement);
+  testing.expectEqual(true, notRect instanceof SVGElement);
+  testing.expectEqual('RECT', notRect.tagName);
+
+  const svg = document.createElementNS(NS, 'svg');
+  testing.expectEqual(true, svg instanceof SVGSVGElement);
+
+  // querySelector still matches both dedicated and generic types.
+  testing.expectEqual($('#rect1'), document.querySelector('#root rect'));
+  testing.expectEqual($('#use1'), document.querySelector('#root use'));
+  testing.expectEqual($('#filter1'), document.querySelector('#root filter'));
+}
+</script>
+
+<script id=hasAttributeNS>
+{
+  // Parser-created attributes have a null namespace. We ignore attribute
+  // namespaces, so only null/'' lookups behave like a real browser here.
+  const rect = $('#rect1');
+  testing.expectEqual(true, rect.hasAttributeNS(null, 'width'));
+  testing.expectEqual(true, rect.hasAttributeNS('', 'width'));
+  testing.expectEqual(false, rect.hasAttributeNS(null, 'nope'));
+}
+</script>

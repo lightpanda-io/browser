@@ -11,7 +11,8 @@
     testing.expectEqual("test", event.type);
     testing.expectEqual("", event.data);
     testing.expectEqual(0, event.detail);
-    testing.expectEqual(window, event.view);
+    // per UIEventInit, view defaults to null for synthetic events
+    testing.expectEqual(null, event.view);
   }
 </script>
 

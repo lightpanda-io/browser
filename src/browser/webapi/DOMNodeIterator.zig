@@ -16,7 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
@@ -25,26 +29,85 @@ pub const FilterOpts = NodeFilter.FilterOpts;
 
 const DOMNodeIterator = @This();
 
+_rc: lp.RC(u8) = .{},
 _root: *Node,
 _what_to_show: u32,
 _filter: NodeFilter,
 _reference_node: *Node,
 _pointer_before_reference_node: bool,
 _active: bool = false,
+_frame_loader_id: u32,
+_iterator_link: std.DoublyLinkedList.Node = .{},
 
 pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) !*DOMNodeIterator {
     const node_filter = try NodeFilter.init(filter);
-    return frame._factory.create(DOMNodeIterator{
+    const iterator = try frame._factory.create(DOMNodeIterator{
         ._root = root,
         ._filter = node_filter,
         ._reference_node = root,
         ._what_to_show = what_to_show,
+        ._frame_loader_id = frame._loader_id,
         ._pointer_before_reference_node = true,
     });
+    frame._live_node_iterators.append(&iterator._iterator_link);
+    return iterator;
+}
+
+pub fn deinit(self: *DOMNodeIterator, page: *Page) void {
+    if (page.findFrameByLoaderId(self._frame_loader_id)) |frame| {
+        frame._live_node_iterators.remove(&self._iterator_link);
+    }
+    self._filter.deinit();
+    page.factory.destroy(self);
+}
+
+pub fn releaseRef(self: *DOMNodeIterator, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *DOMNodeIterator) void {
+    self._rc.acquire();
 }
 
 pub fn getRoot(self: *const DOMNodeIterator) *Node {
     return self._root;
+}
+
+// DOM "node iterator pre-removing steps", run while the tree still contains
+// to_be_removed.
+pub fn nodeWillBeRemoved(self: *DOMNodeIterator, to_be_removed: *Node) void {
+    if (to_be_removed.contains(self._root)) {
+        // Removing the root or one of its ancestors leaves the iterator alone.
+        return;
+    }
+    if (to_be_removed != self._reference_node and to_be_removed.contains(self._reference_node) == false) {
+        return;
+    }
+
+    if (self._pointer_before_reference_node) {
+        // The first node following to_be_removed's subtree, if any.
+        var node = to_be_removed;
+        while (node != self._root) {
+            if (node.nextSibling()) |sibling| {
+                self._reference_node = sibling;
+                return;
+            }
+            node = node.parentNode() orelse break;
+        }
+        self._pointer_before_reference_node = false;
+    }
+
+    // The node immediately preceding to_be_removed in tree order: the
+    // previous sibling's last inclusive descendant, or the parent.
+    if (to_be_removed.previousSibling()) |prev| {
+        var node = prev;
+        while (node.lastChild()) |child| {
+            node = child;
+        }
+        self._reference_node = node;
+    } else {
+        self._reference_node = to_be_removed.parentNode() orelse self._root;
+    }
 }
 
 pub fn getReferenceNode(self: *const DOMNodeIterator) *Node {
@@ -60,7 +123,7 @@ pub fn getWhatToShow(self: *const DOMNodeIterator) u32 {
 }
 
 pub fn getFilter(self: *const DOMNodeIterator) ?FilterOpts {
-    return self._filter._original_filter;
+    return self._filter._opts;
 }
 
 pub fn nextNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {

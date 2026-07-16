@@ -106,7 +106,7 @@ const HtmlElement = @This();
 _type: Type,
 _proto: *Element,
 
-// Special constructor for custom elements.
+// Special constructor for custom elements (autonomous, `extends HTMLElement`).
 // Two paths:
 //  - Upgrade path: customElements.define / createElement / upgrade set
 //    `_upgrading_element` before calling newInstance, and we just return it.
@@ -117,6 +117,15 @@ pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
         return node.is(Element) orelse return error.IllegalConstructor;
     }
     return Frame.node_factory.constructCustomElement(frame, new_target);
+}
+
+// Shared constructor callback for builtin html element interfaces. These types
+// cannot be instantinated (e.g. new HTMLDivElement), but a custom element can
+// be extended, so super() has to create them. All of these types have their
+// constructors routed here.
+pub fn upgradeConstruct(frame: *Frame) !*Element {
+    const node = frame._upgrading_element orelse return error.TypeError;
+    return node.is(Element) orelse return error.TypeError;
 }
 
 pub const Type = union(enum) {
@@ -278,7 +287,7 @@ pub fn insertAdjacentHTML(
     const fragment = (try DocumentFragment.init(frame)).asNode();
     try frame.parseHtmlAsChildren(fragment, html);
 
-    const target_node, const prev_node = try self.asElement().asNode().findAdjacentNodes(position);
+    const target_node, const prev_node = try self.asNode().findAdjacentNodes(position, .html);
 
     var iter = fragment.childrenIterator();
     while (iter.next()) |child_node| {
@@ -334,6 +343,28 @@ pub fn setHidden(self: *HtmlElement, hidden: bool, frame: *Frame) !void {
     } else {
         try self.asElement().removeAttribute(comptime .wrap("hidden"), frame);
     }
+}
+
+// The translate IDL attribute reflects the element's translation mode:
+// translate="yes"/"" enables it, "no" disables it, anything else (or no
+// attribute) inherits from the parent, defaulting to enabled.
+pub fn getTranslate(self: *HtmlElement) bool {
+    var node: ?*Node = self.asElement().asNode();
+    while (node) |n| : (node = n.parentNode()) {
+        const el = n.is(Element) orelse continue;
+        const value = el.getAttributeSafe(comptime .wrap("translate")) orelse continue;
+        if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "yes")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "no")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("translate"), .wrap(if (translate) "yes" else "no"), frame);
 }
 
 pub fn getPopover(self: *HtmlElement) ?[]const u8 {
@@ -1218,6 +1249,38 @@ pub fn getOnToggle(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
     return self.getAttributeFunction(.ontoggle, frame);
 }
 
+pub fn setOnTouchCancel(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchcancel, callback, frame);
+}
+
+pub fn getOnTouchCancel(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchcancel, frame);
+}
+
+pub fn setOnTouchEnd(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchend, callback, frame);
+}
+
+pub fn getOnTouchEnd(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchend, frame);
+}
+
+pub fn setOnTouchMove(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchmove, callback, frame);
+}
+
+pub fn getOnTouchMove(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchmove, frame);
+}
+
+pub fn setOnTouchStart(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
+    return self.setAttributeListener(.ontouchstart, callback, frame);
+}
+
+pub fn getOnTouchStart(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
+    return self.getAttributeFunction(.ontouchstart, frame);
+}
+
 pub fn setOnTransitionCancel(self: *HtmlElement, callback: ?js.Function.Global, frame: *Frame) !void {
     return self.setAttributeListener(.ontransitioncancel, callback, frame);
 }
@@ -1643,6 +1706,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
+    pub const upgrade_constructor = bridge.constructor(HtmlElement.upgradeConstruct, .{});
 
     pub const innerText = bridge.accessor(_innerText, _setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *HtmlElement, frame: *Frame) ![]const u8 {
@@ -1665,6 +1729,7 @@ pub const JsApi = struct {
     pub const autofocus = bridge.accessor(HtmlElement.getAutofocus, HtmlElement.setAutofocus, .{ .ce_reactions = true });
     pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
+    pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
     pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
     pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{});
@@ -1763,6 +1828,10 @@ pub const JsApi = struct {
     pub const onsuspend = bridge.accessor(HtmlElement.getOnSuspend, HtmlElement.setOnSuspend, .{});
     pub const ontimeupdate = bridge.accessor(HtmlElement.getOnTimeUpdate, HtmlElement.setOnTimeUpdate, .{});
     pub const ontoggle = bridge.accessor(HtmlElement.getOnToggle, HtmlElement.setOnToggle, .{});
+    pub const ontouchcancel = bridge.accessor(HtmlElement.getOnTouchCancel, HtmlElement.setOnTouchCancel, .{});
+    pub const ontouchend = bridge.accessor(HtmlElement.getOnTouchEnd, HtmlElement.setOnTouchEnd, .{});
+    pub const ontouchmove = bridge.accessor(HtmlElement.getOnTouchMove, HtmlElement.setOnTouchMove, .{});
+    pub const ontouchstart = bridge.accessor(HtmlElement.getOnTouchStart, HtmlElement.setOnTouchStart, .{});
     pub const ontransitioncancel = bridge.accessor(HtmlElement.getOnTransitionCancel, HtmlElement.setOnTransitionCancel, .{});
     pub const ontransitionend = bridge.accessor(HtmlElement.getOnTransitionEnd, HtmlElement.setOnTransitionEnd, .{});
     pub const ontransitionrun = bridge.accessor(HtmlElement.getOnTransitionRun, HtmlElement.setOnTransitionRun, .{});

@@ -43,7 +43,7 @@ pub const forms = @import("browser/forms.zig");
 pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const tools = @import("browser/tools.zig");
-pub const HttpClient = @import("browser/HttpClient.zig");
+pub const HttpClient = @import("network/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
 pub const Agent = @import("agent/Agent.zig");
@@ -51,12 +51,15 @@ pub const Command = @import("script/command.zig").Command;
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
 pub const Schema = @import("script/Schema.zig");
+pub const skill = @import("script/skill.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 pub const core_dump = @import("core_dump.zig");
 
 pub const Updater = @import("Updater.zig");
+
+pub var metrics = @import("Metrics.zig"){};
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,

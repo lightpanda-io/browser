@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 
@@ -31,10 +32,22 @@ const HTMLFormControlsCollection = @This();
 
 _proto: *HTMLCollection,
 
-pub const NamedItemResult = union(enum) {
-    element: *Element,
-    radio_node_list: *RadioNodeList,
-};
+// The refcount lives on the proto, but anchoring the finalizer here lets
+// deinit reclaim this struct's slot along with the proto's.
+pub fn deinit(self: *HTMLFormControlsCollection, page: *Page) void {
+    self._proto.deinit(page);
+    // Not destroy(): the proto is a separate slab allocation, not a
+    // contiguous factory chain.
+    page.factory.destroyStandalone(self);
+}
+
+pub fn acquireRef(self: *HTMLFormControlsCollection) void {
+    self._proto.acquireRef();
+}
+
+pub fn releaseRef(self: *HTMLFormControlsCollection, page: *Page) void {
+    self._proto._rc.release(self, page);
+}
 
 pub fn length(self: *HTMLFormControlsCollection, frame: *Frame) u32 {
     return self._proto.length(frame);
@@ -43,6 +56,11 @@ pub fn length(self: *HTMLFormControlsCollection, frame: *Frame) u32 {
 pub fn getAtIndex(self: *HTMLFormControlsCollection, index: usize, frame: *Frame) ?*Element {
     return self._proto.getAtIndex(index, frame);
 }
+
+pub const NamedItemResult = union(enum) {
+    element: *Element,
+    radio_node_list: *RadioNodeList,
+};
 
 pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame) !?NamedItemResult {
     if (name.len == 0) {
@@ -86,6 +104,10 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Fr
                 });
 
                 radio_node_list._proto = try frame._factory.create(NodeList{ ._data = .{ .radio_node_list = radio_node_list } });
+
+                // The RadioNodeList outlives this call; its NodeList releases
+                // the ref in deinit.
+                self.acquireRef();
 
                 return .{ .radio_node_list = radio_node_list };
             }

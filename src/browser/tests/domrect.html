@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<head>
+  <title>DOMRect Test</title>
+  <script src="testing.js"></script>
+</head>
+
+<body>
+</body>
+
+<script id=default_construct>
+  {
+    const r = new DOMRect();
+    testing.expectEqual(0, r.x);
+    testing.expectEqual(0, r.y);
+    testing.expectEqual(0, r.width);
+    testing.expectEqual(0, r.height);
+  }
+</script>
+
+<script id=construct_with_args>
+  {
+    const r = new DOMRect(1, 2, 3, 4);
+    testing.expectEqual(1, r.x);
+    testing.expectEqual(2, r.y);
+    testing.expectEqual(3, r.width);
+    testing.expectEqual(4, r.height);
+    testing.expectEqual(2, r.top);
+    testing.expectEqual(4, r.right);
+    testing.expectEqual(6, r.bottom);
+    testing.expectEqual(1, r.left);
+  }
+</script>
+
+<script id=negative_dimensions>
+  {
+    // top/left take the min edge, right/bottom the max edge.
+    const r = new DOMRect(10, 20, -4, -6);
+    testing.expectEqual(14, r.top);
+    testing.expectEqual(10, r.right);
+    testing.expectEqual(20, r.bottom);
+    testing.expectEqual(6, r.left);
+  }
+</script>
+
+<script id=mutable_setters>
+  {
+    const r = new DOMRect(1, 1, 1, 1);
+    r.x = 5;
+    r.y = 6;
+    r.width = 7;
+    r.height = 8;
+    testing.expectEqual(5, r.x);
+    testing.expectEqual(6, r.y);
+    testing.expectEqual(7, r.width);
+    testing.expectEqual(8, r.height);
+    // Inherited computed getters reflect the mutated values.
+    testing.expectEqual(6, r.top);
+    testing.expectEqual(12, r.right);
+  }
+</script>
+
+<script id=readonly_is_immutable>
+  {
+    const ro = new DOMRectReadOnly(1, 2, 3, 4);
+    testing.expectEqual(1, ro.x);
+    // Assigning a readonly attribute is a silent no-op in non-strict mode.
+    ro.x = 99;
+    testing.expectEqual(1, ro.x);
+    testing.expectEqual(3, ro.width);
+  }
+</script>
+
+<script id=prototype_chain>
+  {
+    const r = new DOMRect(1, 2, 3, 4);
+    testing.expectTrue(r instanceof DOMRect);
+    testing.expectTrue(r instanceof DOMRectReadOnly);
+
+    const ro = new DOMRectReadOnly(1, 2, 3, 4);
+    testing.expectTrue(ro instanceof DOMRectReadOnly);
+    testing.expectFalse(ro instanceof DOMRect);
+  }
+</script>
+
+<script id=from_rect>
+  {
+    const r = DOMRect.fromRect({ x: 5, y: 6, width: 7 });
+    testing.expectTrue(r instanceof DOMRect);
+    testing.expectEqual(5, r.x);
+    testing.expectEqual(6, r.y);
+    testing.expectEqual(7, r.width);
+    testing.expectEqual(0, r.height);
+
+    const ro = DOMRectReadOnly.fromRect({ width: 10, height: 20 });
+    testing.expectTrue(ro instanceof DOMRectReadOnly);
+    testing.expectFalse(ro instanceof DOMRect);
+    testing.expectEqual(10, ro.width);
+    testing.expectEqual(20, ro.height);
+  }
+</script>
+
+<script id=from_rect_empty>
+  {
+    const r = DOMRect.fromRect();
+    testing.expectEqual(0, r.x);
+    testing.expectEqual(0, r.y);
+    testing.expectEqual(0, r.width);
+    testing.expectEqual(0, r.height);
+  }
+</script>
+
+<script id=to_json>
+  {
+    const r = new DOMRect(1, 2, 3, 4);
+    const j = r.toJSON();
+    testing.expectEqual(1, j.x);
+    testing.expectEqual(2, j.y);
+    testing.expectEqual(3, j.width);
+    testing.expectEqual(4, j.height);
+    testing.expectEqual(2, j.top);
+    testing.expectEqual(4, j.right);
+    testing.expectEqual(6, j.bottom);
+    testing.expectEqual(1, j.left);
+  }
+</script>
+
+<script id=structured_clone>
+  {
+    const r = structuredClone(new DOMRect(1, 2, 3, 4));
+    testing.expectTrue(r instanceof DOMRect);
+    testing.expectTrue(r instanceof DOMRectReadOnly);
+    testing.expectEqual(1, r.x);
+    testing.expectEqual(2, r.y);
+    testing.expectEqual(3, r.width);
+    testing.expectEqual(4, r.height);
+
+    const ro = structuredClone(new DOMRectReadOnly(5, 6, 7, 8));
+    testing.expectTrue(ro instanceof DOMRectReadOnly);
+    testing.expectFalse(ro instanceof DOMRect);
+    testing.expectEqual(5, ro.x);
+    testing.expectEqual(6, ro.y);
+    testing.expectEqual(7, ro.width);
+    testing.expectEqual(8, ro.height);
+  }
+</script>
+
+<script id=bounding_client_rect>
+  {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const r = el.getBoundingClientRect();
+    testing.expectTrue(r instanceof DOMRect);
+    testing.expectTrue(r instanceof DOMRectReadOnly);
+  }
+</script>

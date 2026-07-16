@@ -195,11 +195,13 @@ pub const List = struct {
     }
 
     // Identity map access: a given (list, name) always yields the same
-    // *Attribute until the attribute is removed.
+    // *Attribute until the attribute is removed. The map must be the
+    // element's frame's, not the caller's frame.
     pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-        const gop = try frame._attribute_lookup.getOrPut(frame.arena, .{ .list = self, .name = entry._name_ptr });
+        const owner = if (element) |el| el.ownerFrame(frame) else frame;
+        const gop = try owner._attribute_lookup.getOrPut(owner.arena, .{ .list = self, .name = entry._name_ptr });
         if (!gop.found_existing) {
-            gop.value_ptr.* = try entry.toAttribute(element, frame);
+            gop.value_ptr.* = try entry.toAttribute(element, owner);
         }
         return gop.value_ptr.*;
     }
@@ -216,6 +218,7 @@ pub const List = struct {
 
     // The returned *Entry is only valid until the next mutation of the list.
     fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame) !*Entry {
+        const owner = element.ownerFrame(frame);
         const is_id = shouldAddToIdMap(result.normalized, element);
 
         var entry: *Entry = undefined;
@@ -224,16 +227,16 @@ pub const List = struct {
             // the old bytes are arena-owned or static; they outlive this update
             old_value = String.wrap(e.value());
             if (is_id) {
-                frame.removeElementId(element, e.value());
+                owner.removeElementId(element, e.value());
             }
-            e.setValue(try frame.dupeString(value.str()));
+            e.setValue(try owner.dupeString(value.str()));
             entry = e;
         } else {
-            try self.ensureUnusedCapacity(1, frame);
+            try self.ensureUnusedCapacity(1, owner);
             entry = &self._entries[self._len];
             entry.* = .init(
-                try canonicalizeName(result.normalized.str(), frame),
-                try frame.dupeString(value.str()),
+                try canonicalizeName(result.normalized.str(), owner),
+                try owner.dupeString(value.str()),
             );
             self._len += 1;
         }
@@ -242,10 +245,10 @@ pub const List = struct {
             const parent = element.asNode()._parent orelse {
                 return entry;
             };
-            try frame.addElementId(parent, element, entry.value());
+            try owner.addElementId(parent, element, entry.value());
         }
-        frame.domChanged();
-        frame.attributeChange(element, result.normalized, .wrap(entry.value()), old_value);
+        owner.domChanged();
+        owner.attributeChange(element, result.normalized, .wrap(entry.value()), old_value);
         return entry;
     }
 
@@ -283,7 +286,8 @@ pub const List = struct {
 
         const entry = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
-        try frame._attribute_lookup.put(frame.arena, .{ .list = self, .name = entry._name_ptr }, attribute);
+        const owner = element.ownerFrame(frame);
+        try owner._attribute_lookup.put(owner.arena, .{ .list = self, .name = entry._name_ptr }, attribute);
         return existing_attribute;
     }
 
@@ -312,23 +316,24 @@ pub const List = struct {
         const result = try self.getEntryAndNormalizedName(name, frame);
         const entry = result.entry orelse return;
 
+        const owner = element.ownerFrame(frame);
         const is_id = shouldAddToIdMap(result.normalized, element);
         const old_value = entry.value();
 
         if (is_id) {
-            frame.removeElementId(element, old_value);
+            owner.removeElementId(element, old_value);
         }
 
         // remove this BEFORE triggering anything, incase that re-enters delete
         // or some other callback.
-        _ = frame._attribute_lookup.remove(.{ .list = self, .name = entry._name_ptr });
+        _ = owner._attribute_lookup.remove(.{ .list = self, .name = entry._name_ptr });
         const index = (@intFromPtr(entry) - @intFromPtr(self._entries)) / @sizeOf(Entry);
         const list_entries = self._entries[0..self._len];
         std.mem.copyForwards(Entry, list_entries[index .. list_entries.len - 1], list_entries[index + 1 ..]);
         self._len -= 1;
 
-        frame.domChanged();
-        frame.attributeRemove(element, result.normalized, .wrap(old_value));
+        owner.domChanged();
+        owner.attributeRemove(element, result.normalized, .wrap(old_value));
     }
 
     pub fn getNames(self: *const List, allocator: Allocator) ![][]const u8 {
@@ -615,8 +620,26 @@ pub const NamedNodeMap = struct {
         };
 
         pub const length = bridge.accessor(NamedNodeMap.length, null, .{});
-        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, null, .{ .null_as_undefined = true });
-        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, null, null, .{ .null_as_undefined = true });
+        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, getIndexes, .{ .null_as_undefined = true });
+        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, getNames, null, .{ .null_as_undefined = true });
+
+        fn getIndexes(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+            const len = self.length();
+            var arr = frame.js.local.?.newArray(len);
+            for (0..len) |i| {
+                _ = try arr.set(@intCast(i), i, .{});
+            }
+            return arr;
+        }
+
+        fn getNames(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+            const names = try self.list().getNames(frame.local_arena);
+            var arr = frame.js.local.?.newArray(@intCast(names.len));
+            for (names, 0..) |name, i| {
+                _ = try arr.set(@intCast(i), name, .{});
+            }
+            return arr;
+        }
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });

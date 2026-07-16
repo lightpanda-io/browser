@@ -207,6 +207,10 @@ pub fn deinit(self: *Context) void {
     const env = self.env;
     defer env.app.arena_pool.release(self.arena);
 
+    // Unlink any IndexedDB gate participants first: the session-scoped engine
+    // must never wake a waiter into this scheduler once it's torn down.
+    self.page.session.idb.detachContext(self);
+
     var hs: js.HandleScope = undefined;
     const entered = self.enter(&hs);
     defer entered.exit();
@@ -271,14 +275,6 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
         const token_local = v8.v8__Global__Get(&origin.security_token, isolate.handle);
         v8.v8__Context__SetSecurityToken(ls.local.handle, token_local);
     }
-}
-
-pub fn trackGlobal(self: *Context, global: v8.Global) !void {
-    return self.page.globals.append(self.page.frame_arena, global);
-}
-
-pub fn trackTemp(self: *Context, global: v8.Global) !void {
-    return self.page.temps.put(self.page.frame_arena, global.data_ptr, global);
 }
 
 pub const IdentityResult = struct {
@@ -1130,7 +1126,7 @@ fn enqueueMicrotask(self: *Context, callback: anytype) void {
 // this should be safe (I think). In whatever HandleScope a microtask is enqueued,
 // PerformCheckpoint should be run. So the v8::Local<v8::Function> should remain
 // valid. If we have problems with this, a simple solution is to provide a Zig
-// wrapper for these callbacks which references a js.Function.Temp, on callback
+// wrapper for these callbacks which references a js.Function, on callback
 // it executes the function and then releases the global.
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     // Use context-specific microtask queue instead of isolate queue

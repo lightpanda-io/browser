@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const HttpClient = @import("HttpClient.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 
 const js = @import("js/js.zig");
 const URL = @import("URL.zig");
@@ -169,7 +169,7 @@ fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
         const entry = self.preloaded_scripts.getPtr(url) orelse return null;
         switch (entry.state) {
             .loading => {
-                _ = client.tick(200, .sync_wait) catch return null;
+                _ = client.tickSync(200) catch return null;
                 continue;
             },
             .done => |script| {
@@ -358,6 +358,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     .cookie_origin = frame.url,
                     .resource_type = .script,
                     .notification = frame._session.notification,
+                    .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
                 });
 
                 script.source = .{ .remote = response.body };
@@ -386,6 +387,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 .data_callback = Script.dataCallback,
                 .done_callback = Script.doneCallback,
                 .error_callback = Script.errorCallback,
+                // Nothing holds the transfer; teardown cleanup runs through
+                // the manager's script lists.
+                .shutdown_callback = HttpClient.noopShutdown,
             });
         }
 
@@ -395,9 +399,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     if (run_immediately == false) {
         return;
     }
-
-    // This will flush any deferred scripts.
-    defer self.base.client.deferring_layer.flushFrame(self.base.owner.frameId());
 
     if (script.status < 200 or script.status > 299) {
         log.info(.http, "script load error", .{ .status = script.status });
