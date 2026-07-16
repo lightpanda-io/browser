@@ -714,7 +714,7 @@ pub const HttpHeaders = struct {
     }
 };
 
-pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) void {
+pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: RunMode, success: bool) !void {
     const exec_name = self.exec_name;
     const Help = @import("help.zon");
     const is_debug = builtin.mode == .Debug;
@@ -722,34 +722,93 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
     const pretty_or_logfmt = if (comptime is_debug) "pretty" else "logfmt";
     const comptimePrint = std.fmt.comptimePrint;
 
-    switch (help_for) {
+    const text = switch (help_for) {
         // Requested help for everything.
-        .help => {
+        .help => text: {
             const template = comptimePrint(
                 \\{s}
                 \\
             , .{Help.general});
-            std.debug.print(template, .{exec_name});
+            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
         },
-        inline .fetch, .serve, .mcp, .agent => |tag| {
+        inline .fetch, .serve, .mcp, .agent => |tag| text: {
             const template = comptimePrint(
                 \\{s}
                 \\
                 \\{s}
                 \\
             , .{ @field(Help, @tagName(tag)), Help.common_options });
-            std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
+            break :text try std.fmt.allocPrint(allocator, template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
-        .version => {
+        .version => text: {
             const template = Help.version ++ "\n";
-            std.debug.print(template, .{exec_name});
+            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
         },
-    }
+    };
+    defer allocator.free(text);
 
     if (success) {
+        printPaged(allocator, text);
         return std.process.cleanExit();
     }
+    var stderr = std.fs.File.stderr().writer(&.{});
+    stderr.interface.writeAll(text) catch {};
     std.process.exit(1);
+}
+
+fn printPlain(text: []const u8) void {
+    var stdout = std.fs.File.stdout().writer(&.{});
+    stdout.interface.writeAll(text) catch {};
+}
+
+/// Pages explicitly requested help through $PAGER (fallback: less) when
+/// stdout is an interactive terminal; prints plainly otherwise.
+fn printPaged(allocator: Allocator, text: []const u8) void {
+    if (!std.posix.isatty(std.posix.STDOUT_FILENO)) {
+        return printPlain(text);
+    }
+    const term = std.posix.getenv("TERM") orelse "";
+    if (term.len == 0 or std.mem.eql(u8, term, "dumb")) {
+        return printPlain(text);
+    }
+
+    const pager = std.posix.getenv("PAGER") orelse "";
+    const argv: []const []const u8 = if (pager.len > 0)
+        &.{ "/bin/sh", "-c", pager }
+    else
+        &.{ "less", "-FIRX" };
+
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    child.spawn() catch return printPlain(text);
+
+    // The pager can exit before we finish writing (e.g. `q` in less, or
+    // `sh -c` failing to find $PAGER); without this the resulting SIGPIPE
+    // would kill us. The process exits right after, so no need to restore.
+    std.posix.sigaction(std.posix.SIG.PIPE, &.{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    }, null);
+
+    if (child.stdin) |stdin| {
+        var writer = stdin.writer(&.{});
+        // A write error here is the pager exiting early (user quit, or the
+        // command failed) — wait() below decides which.
+        writer.interface.writeAll(text) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+
+    const term_result = child.wait() catch return printPlain(text);
+    const clean_exit = term_result == .Exited and term_result.Exited == 0;
+    // Quitting the pager early is still exit 0; a non-zero exit means the
+    // pager failed (e.g. $PAGER not found) and the help was never shown.
+    if (!clean_exit) {
+        printPlain(text);
+    }
 }
 
 pub fn parseArgs(allocator: Allocator) !Config {
