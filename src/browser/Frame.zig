@@ -2487,31 +2487,54 @@ pub fn appendNode(self: *Frame, parent: *Node, child: *Node, opts: InsertNodeOpt
 }
 
 pub fn appendAllChildren(self: *Frame, parent: *Node, target: *Node) !void {
-    self.domChanged();
-    const dest_connected = target.isConnected();
-
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        const child_was_connected = child.isConnected();
-        self.removeNode(parent, child, .{ .will_be_reconnected = dest_connected });
-        try self.appendNode(target, child, .{ .child_already_connected = child_was_connected });
-    }
+    return self.moveAllChildren(parent, target, null, .records);
 }
 
 pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref_node: *Node) !void {
+    return self.moveAllChildren(fragment, parent, ref_node, .records);
+}
+
+pub const MoveChildrenNotify = enum { records, silent_parent };
+
+// Moves every child of `source` into `parent` (before `ref_node`, or
+// appended). Per the DOM insert algorithm for fragments, observers get one
+// removal record on the source and one addition record on the parent, not
+// one record per child. `.silent_parent` suppresses only the parent record
+// (replaceChild queues its own combined record); the source record is queued
+// regardless — the spec's insert algorithm notes it "intentionally does not
+// pay attention to suppressObservers".
+pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*Node, notify_mode: MoveChildrenNotify) !void {
     self.domChanged();
     const dest_connected = parent.isConnected();
+    const notify = observers.hasMutationObservers(self);
 
-    var it = fragment.childrenIterator();
+    var moved: std.ArrayList(*Node) = .empty;
+    const previous_sibling = if (ref_node) |ref| ref.previousSibling() else parent.lastChild();
+
+    var it = source.childrenIterator();
     while (it.next()) |child| {
+        if (notify) {
+            try moved.append(self.call_arena, child);
+        }
         const child_was_connected = child.isConnected();
-        self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
-        try self.insertNodeRelative(
-            parent,
-            child,
-            .{ .before = ref_node },
-            .{ .child_already_connected = child_was_connected },
-        );
+        self.removeNode(source, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
+        if (ref_node) |ref| {
+            try self.insertNodeRelative(
+                parent,
+                child,
+                .{ .before = ref },
+                .{ .child_already_connected = child_was_connected, .notify_observers = false },
+            );
+        } else {
+            try self.appendNode(parent, child, .{ .child_already_connected = child_was_connected, .notify_observers = false });
+        }
+    }
+
+    if (notify and moved.items.len > 0) {
+        observers.notifyChildListChange(self, source, &.{}, moved.items, null, null);
+        if (notify_mode == .records) {
+            observers.notifyChildListChange(self, parent, moved.items, &.{}, previous_sibling, ref_node);
+        }
     }
 }
 
@@ -2580,13 +2603,16 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
     }
 
-    // The parser path does its own (limited) connected-callback work, then
-    // returns.
+    // The parser path does its own (limited) notification and
+    // connected-callback work, then returns.
     if (comptime from_parser) {
-        // No mutation records from parser insertions: the initial document
-        // parse never notifies, and fragment parses (innerHTML et al.) queue
-        // one combined "replace all" record at the call site (Node.setHTML)
-        // instead of one per inserted child.
+        // Main-document parser insertions notify per node: scripts running
+        // during parsing can observe the document. Fragment parses
+        // (innerHTML et al.) stay silent; Node.setHTML queues one combined
+        // "replace all" record instead.
+        if (self._parse_mode != .fragment) {
+            self.notifyChildInserted(parent, child);
+        }
 
         if (child.is(Element)) |el| {
             // Invoke connectedCallback for custom elements during parsing.

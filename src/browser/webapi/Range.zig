@@ -347,19 +347,16 @@ pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
         } else {
             const text_data = container.getData().str();
             const byte_off = byteOffset(text_data, offset);
-            if (byte_off >= text_data.len) {
-                _ = try parent.insertBefore(node, container.nextSibling(), frame);
+            const text = if (byte_off < text_data.len) container.is(Node.CData.Text) else null;
+            if (text) |t| {
+                // Split the text node in place and insert before the second
+                // half. splitText keeps live ranges updated and produces the
+                // records browsers do (one for the split-off node, one for
+                // the inserted node).
+                const second = try t.splitText(offset, frame);
+                _ = try parent.insertBefore(node, second._proto.asNode(), frame);
             } else {
-                // Split the text node into before and after parts
-                const before_text = text_data[0..byte_off];
-                const after_text = text_data[byte_off..];
-
-                const before = try Frame.node_factory.createTextNode(frame, before_text);
-                const after = try Frame.node_factory.createTextNode(frame, after_text);
-
-                _ = try parent.replaceChild(before, container, frame);
-                _ = try parent.insertBefore(node, before.nextSibling(), frame);
-                _ = try parent.insertBefore(after, node.nextSibling(), frame);
+                _ = try parent.insertBefore(node, container.nextSibling(), frame);
             }
         }
     } else {
