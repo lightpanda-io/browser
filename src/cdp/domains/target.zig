@@ -254,7 +254,12 @@ fn attachToTarget(cmd: *CDP.Command) !void {
 fn attachToBrowserTarget(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
+    const cdp = cmd.cdp;
+    // This session targets the browser, not the page. It must not touch
+    // bc.session_id: a non-null bc.session_id means "attached to the page
+    // target", and a browser-only attachment would break that invariant
+    // (e.g. the createTarget assert).
+    const session_id = cdp.browser_session_id orelse cdp.browser_session_id_gen.next();
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
@@ -268,9 +273,9 @@ fn attachToBrowserTarget(cmd: *CDP.Command) !void {
         },
     }, .{});
 
-    bc.session_id = session_id;
+    cdp.browser_session_id = session_id;
 
-    return cmd.sendResult(.{ .sessionId = bc.session_id }, .{});
+    return cmd.sendResult(.{ .sessionId = session_id }, .{});
 }
 
 fn closeTarget(cmd: *CDP.Command) !void {
@@ -652,6 +657,45 @@ test "cdp.target: createTarget" {
         try testing.expectEqual(true, bc.target_id != null);
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
         try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
+    }
+}
+
+// A browser-target session (Target.attachToBrowserTarget) is distinct from
+// the page-target session. It used to be stored in bc.session_id, which broke
+// the "no target => no session_id" invariant asserted in createTarget.
+test "cdp.target: attachToBrowserTarget then createTarget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.createBrowserContext" });
+    const bc = &ctx.cdp().browser_context.?;
+    try ctx.expectSentResult(.{ .browserContextId = bc.id }, .{ .id = 1 });
+
+    {
+        try ctx.processMessage(.{ .id = 2, .method = "Target.attachToBrowserTarget" });
+        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = "BSID-1", .targetInfo = .{ .targetId = bc.id, .title = "", .url = "", .attached = true, .type = "browser", .canAccessOpener = false } }, .{});
+        try ctx.expectSentResult(.{ .sessionId = "BSID-1" }, .{ .id = 2 });
+
+        // the browser session must not occupy the page session slot
+        try testing.expectEqual(null, bc.session_id);
+    }
+
+    {
+        // this used to fail the "not null session_id" assertion
+        try ctx.processMessage(.{ .id = 3, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+        try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 3 });
+    }
+
+    {
+        // the browser session id is valid on subsequent commands
+        try ctx.processMessage(.{ .id = 4, .method = "Target.setDiscoverTargets", .sessionId = "BSID-1", .params = .{ .discover = true } });
+        try ctx.expectSentResult(null, .{ .id = 4, .session_id = "BSID-1" });
+    }
+
+    {
+        // unknown session ids are still rejected
+        try ctx.processMessage(.{ .id = 5, .method = "Target.setDiscoverTargets", .sessionId = "SID-NOPE", .params = .{ .discover = true } });
+        try ctx.expectSentError(-32001, "Unknown sessionId", .{ .id = 5 });
     }
 }
 
