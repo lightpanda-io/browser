@@ -1402,8 +1402,7 @@ pub fn getElementsByClassName(self: *Node, class_name: []const u8, frame: *Frame
         try class_names.append(arena, try frame.dupeString(name));
     }
 
-    const doc: ?*Document = if (self._type == .document) self._type.document else self.ownerDocument(frame);
-    const quirks = if (doc) |d| d.isQuirksMode() else false;
+    const quirks = if (self.ownerDocumentIncludingSelf(frame)) |doc| doc.isQuirksMode() else false;
     return collections.NodeLive(.class_name).init(self, .{
         .names = class_names.items,
         .case_insensitive = quirks,

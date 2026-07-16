@@ -162,15 +162,14 @@ pub fn setLocation(self: *Document, url: [:0]const u8) !void {
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
 }
 
-// Approximation of quirks mode: an HTML document without a doctype is in
-// quirks mode. (Legacy doctypes that also trigger quirks are not detected.)
+// Approximation of quirks mode: an HTML document without a doctype is in quirks mode.
 pub fn isQuirksMode(self: *const Document) bool {
     if (self._type != .html) {
         return false;
     }
-    var child = self._proto.firstChild();
-    while (child) |c| : (child = c.nextSibling()) {
-        if (c._type == .document_type) {
+    var it = self._proto.childrenIterator();
+    while (it.next()) |child| {
+        if (child._type == .document_type) {
             return false;
         }
     }

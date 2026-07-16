@@ -38,11 +38,15 @@ pub fn init(frame: *Frame) !*Range {
 }
 
 // Both boundary points start at (container, 0); document.createRange()
-// passes the document it was called on.
+// passes the document it was called on, which is not necessarily the
+// frame's main document.
 pub fn initIn(container: *Node, frame: *Frame) !*Range {
     const arena = try frame.getArena(.medium, "Range");
     errdefer frame.releaseArena(arena);
-    return frame._factory.abstractRangeIn(arena, Range{ ._proto = undefined }, container, frame);
+    const range = try frame._factory.abstractRange(arena, Range{ ._proto = undefined }, frame);
+    range._proto._start_container = container;
+    range._proto._end_container = container;
+    return range;
 }
 
 pub fn asAbstractRange(self: *Range) *AbstractRange {
@@ -452,11 +456,14 @@ pub fn deleteContents(self: *Range, frame: *Frame) !void {
 // range's boundary points. Appends the top-most contained nodes (those whose
 // parent isn't contained) under `node`, without descending into them.
 fn collectContained(self: *const Range, node: *Node, list: *std.ArrayList(*Node), arena: std.mem.Allocator) !void {
-    var child = node.firstChild();
-    while (child) |c| : (child = c.nextSibling()) {
+    var it = node.childrenIterator();
+    while (it.next()) |c| {
         if (self.nodeContained(c)) {
             try list.append(arena, c);
-        } else {
+        } else if (c.contains(self._proto._start_container) or c.contains(self._proto._end_container)) {
+            // A non-contained child either straddles a boundary point or lies
+            // entirely outside the range; only the former can have contained
+            // descendants, so don't descend into the rest.
             try self.collectContained(c, list, arena);
         }
     }
