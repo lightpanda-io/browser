@@ -276,7 +276,9 @@ fn ensurePreInsertValidity(parent: *Node, node: *Node, child: ?*Node, comptime m
                 switch (frag_child._type) {
                     .element => element_count += 1,
                     .cdata => |cd| {
-                        if (cd._type == .text) {
+                        // A Text node (CDATASection included) cannot be a
+                        // child of a document.
+                        if (cd._type == .text or cd._type == .cdata_section) {
                             return error.HierarchyError;
                         }
                     },
@@ -840,6 +842,17 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
         return old_child;
     }
 
+    // The combined record's siblings are captured before new_child is
+    // removed from its old position (spec: referenceChild and
+    // previousSibling are set before the adopt step), so new_child itself
+    // can be the record's previousSibling. A referenceChild that is
+    // new_child becomes new_child's next sibling.
+    const prev = old_child.previousSibling();
+    var next = old_child.nextSibling();
+    if (next == new_child) {
+        next = new_child.nextSibling();
+    }
+
     // Removing new_child from its current position (internal replacement)
     // notifies normally; the replacement itself queues one combined record
     // with both the added and the removed node.
@@ -858,9 +871,6 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
         }
     }
 
-    const prev = old_child.previousSibling();
-    const next = old_child.nextSibling();
-
     var added: std.ArrayList(*Node) = .empty;
     if (new_child.is(DocumentFragment)) |_| {
         if (notify) {
@@ -869,7 +879,7 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
                 try added.append(frame.call_arena, fragment_child);
             }
         }
-        try frame.moveAllChildren(new_child, self, old_child, .silent);
+        try frame.moveAllChildren(new_child, self, old_child, .silent_parent);
     } else {
         if (notify) {
             try added.append(frame.call_arena, new_child);

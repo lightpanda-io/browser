@@ -2494,17 +2494,19 @@ pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref
     return self.moveAllChildren(fragment, parent, ref_node, .records);
 }
 
-pub const MoveChildrenNotify = enum { records, silent };
+pub const MoveChildrenNotify = enum { records, silent_parent };
 
 // Moves every child of `source` into `parent` (before `ref_node`, or
 // appended). Per the DOM insert algorithm for fragments, observers get one
 // removal record on the source and one addition record on the parent, not
-// one record per child. `.silent` suppresses even those (replaceChild queues
-// its own combined record).
+// one record per child. `.silent_parent` suppresses only the parent record
+// (replaceChild queues its own combined record); the source record is queued
+// regardless — the spec's insert algorithm notes it "intentionally does not
+// pay attention to suppressObservers".
 pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*Node, notify_mode: MoveChildrenNotify) !void {
     self.domChanged();
     const dest_connected = parent.isConnected();
-    const notify = notify_mode == .records and observers.hasMutationObservers(self);
+    const notify = observers.hasMutationObservers(self);
 
     var moved: std.ArrayList(*Node) = .empty;
     const previous_sibling = if (ref_node) |ref| ref.previousSibling() else parent.lastChild();
@@ -2530,7 +2532,9 @@ pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*N
 
     if (notify and moved.items.len > 0) {
         observers.notifyChildListChange(self, source, &.{}, moved.items, null, null);
-        observers.notifyChildListChange(self, parent, moved.items, &.{}, previous_sibling, ref_node);
+        if (notify_mode == .records) {
+            observers.notifyChildListChange(self, parent, moved.items, &.{}, previous_sibling, ref_node);
+        }
     }
 }
 
