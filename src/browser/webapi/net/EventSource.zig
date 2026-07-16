@@ -116,7 +116,7 @@ pub fn init(url: []const u8, opts_: ?Opts, exec: *const Execution) !*EventSource
         log.debug(.http, "EventSource connecting", .{ .url = resolved });
     }
 
-    if (std.ascii.startsWithIgnoreCase(url, "http://") == false and std.ascii.startsWithIgnoreCase(url, "https://") == false) {
+    if (std.ascii.startsWithIgnoreCase(resolved, "http://") == false and std.ascii.startsWithIgnoreCase(resolved, "https://") == false) {
         try self.scheduleTask(failConnection, 0, "EventSource.fail");
         return self;
     }

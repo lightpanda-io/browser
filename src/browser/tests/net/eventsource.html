@@ -49,6 +49,23 @@
 }
 </script>
 
+<script id=relative_url type=module>
+{
+  const state = await testing.async();
+  const es = new EventSource('/sse/simple');
+  testing.expectEqual('http://127.0.0.1:9582/sse/simple', es.url);
+  es.onerror = () => { throw new Error('unexpected error'); };
+  es.onmessage = (e) => {
+    es.close();
+    state.resolve(e.data);
+  };
+
+  await state.done((data) => {
+    testing.expectEqual('first', data);
+  });
+}
+</script>
+
 <script id=streaming type=module>
 {
   // The server only sends "second" after seeing our /sse/flag request, which
