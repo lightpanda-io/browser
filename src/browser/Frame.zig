@@ -1432,15 +1432,18 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         }
 
         // Record the response's MIME essence so the resulting document
-        // reports it (document.contentType); text/html stays the default.
+        // reports it (document.contentType). text/html keeps the default, so an
+        // HTML response (parsed from the header, or sniffed when there's no
+        // header) never needs an override; inside this branch the essence can
+        // no longer be text/html.
         self._pending_content_type = null;
-        if (transfer.contentType()) |ct| {
-            const end = std.mem.indexOfScalar(u8, ct, ';') orelse ct.len;
-            const essence = std.mem.trim(u8, ct[0..end], " \t");
-            if (essence.len > 0 and !std.ascii.eqlIgnoreCase(essence, "text/html")) {
-                const lower = try self.arena.dupe(u8, essence);
-                _ = std.ascii.lowerString(lower, essence);
-                self._pending_content_type = lower;
+        if (mime.content_type != .text_html) {
+            if (transfer.contentType()) |ct| {
+                const end = std.mem.indexOfScalarPos(u8, ct, 0, ';') orelse ct.len;
+                const essence = std.mem.trim(u8, ct[0..end], " \t");
+                if (essence.len > 0) {
+                    self._pending_content_type = try std.ascii.allocLowerString(self.arena, essence);
+                }
             }
         }
 
