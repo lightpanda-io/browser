@@ -1402,7 +1402,11 @@ pub fn getElementsByClassName(self: *Node, class_name: []const u8, frame: *Frame
         try class_names.append(arena, try frame.dupeString(name));
     }
 
-    return collections.NodeLive(.class_name).init(self, class_names.items, frame);
+    const quirks = if (self.ownerDocumentIncludingSelf(frame)) |doc| doc.isQuirksMode() else false;
+    return collections.NodeLive(.class_name).init(self, .{
+        .names = class_names.items,
+        .case_insensitive = quirks,
+    }, frame);
 }
 
 /// Shared implementation of replaceChildren for Element, Document, and DocumentFragment.

@@ -162,6 +162,24 @@ pub fn setLocation(self: *Document, url: [:0]const u8) !void {
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
 }
 
+// Approximation of quirks mode: an HTML document without a doctype is in quirks mode.
+pub fn isQuirksMode(self: *const Document) bool {
+    if (self._type != .html) {
+        return false;
+    }
+    var it = self._proto.childrenIterator();
+    while (it.next()) |child| {
+        if (child._type == .document_type) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn getCompatMode(self: *const Document) []const u8 {
+    return if (self.isQuirksMode()) "BackCompat" else "CSS1Compat";
+}
+
 pub fn getCharset(self: *const Document) []const u8 {
     if (self._charset) |charset| {
         return charset;
@@ -490,8 +508,8 @@ pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []
 }
 
 const Range = @import("Range.zig");
-pub fn createRange(_: *const Document, frame: *Frame) !*Range {
-    return Range.init(frame);
+pub fn createRange(self: *Document, frame: *Frame) !*Range {
+    return Range.initIn(self.asNode(), frame);
 }
 
 pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@import("Event.zig") {
@@ -1428,6 +1446,7 @@ pub const JsApi = struct {
         return frame._factory.node(Document{
             ._proto = undefined,
             ._type = .generic,
+            ._url = "about:blank",
             ._charset = "UTF-8",
         });
     }
@@ -1517,8 +1536,7 @@ pub const JsApi = struct {
     pub const characterSet = bridge.accessor(getCharacterSet, null, .{});
     pub const charset = bridge.accessor(getCharacterSet, null, .{});
     pub const inputEncoding = bridge.accessor(getCharacterSet, null, .{});
-    pub const compatMode = bridge.property("CSS1Compat", .{ .template = false });
-
+    pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
     fn getCharacterSet(self: *const Document) []const u8 {
         return self.getCharset();
     }

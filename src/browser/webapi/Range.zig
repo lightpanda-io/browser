@@ -34,9 +34,19 @@ const Range = @This();
 _proto: *AbstractRange,
 
 pub fn init(frame: *Frame) !*Range {
+    return initIn(frame.document.asNode(), frame);
+}
+
+// Both boundary points start at (container, 0); document.createRange()
+// passes the document it was called on, which is not necessarily the
+// frame's main document.
+pub fn initIn(container: *Node, frame: *Frame) !*Range {
     const arena = try frame.getArena(.medium, "Range");
     errdefer frame.releaseArena(arena);
-    return frame._factory.abstractRange(arena, Range{ ._proto = undefined }, frame);
+    const range = try frame._factory.abstractRange(arena, Range{ ._proto = undefined }, frame);
+    range._proto._start_container = container;
+    range._proto._end_container = container;
+    return range;
 }
 
 pub fn asAbstractRange(self: *Range) *AbstractRange {
@@ -128,7 +138,8 @@ pub fn selectNodeContents(self: *Range, node: *Node) !void {
 }
 
 pub fn collapse(self: *Range, to_start: ?bool) void {
-    if (to_start orelse true) {
+    // Per spec, toStart defaults to false: collapse to the end point.
+    if (to_start orelse false) {
         self._proto._end_container = self._proto._start_container;
         self._proto._end_offset = self._proto._start_offset;
     } else {
@@ -388,76 +399,90 @@ pub fn deleteContents(self: *Range, frame: *Frame) !void {
     }
     frame.domChanged();
 
-    // Simple case: same container
-    if (self._proto._start_container == self._proto._end_container) {
-        if (self._proto._start_container.is(Node.CData)) |cdata| {
-            // Delete part of text node
-            const old_value = cdata.getData();
-            const text_data = old_value.str();
-            cdata._data = try String.concat(
-                frame.arena,
-                &.{
-                    text_data[0..byteOffset(text_data, self._proto._start_offset)],
-                    text_data[byteOffset(text_data, self._proto._end_offset)..],
-                },
-            );
-            Frame.observers.notifyCharacterDataChange(frame, self._proto._start_container, old_value);
-        } else {
-            // Delete child nodes in range.
-            // Capture count before the loop: removeChild triggers live range
-            // updates that decrement _end_offset on each removal.
-            const count = self._proto._end_offset - self._proto._start_offset;
-            var i: u32 = 0;
-            while (i < count) : (i += 1) {
-                if (self._proto._start_container.getChildAt(self._proto._start_offset)) |child| {
-                    _ = try self._proto._start_container.removeChild(child, frame);
-                }
-            }
-        }
-        self.collapse(true);
-        return;
-    }
+    const start_node = self._proto._start_container;
+    const start_offset = self._proto._start_offset;
+    const end_node = self._proto._end_container;
+    const end_offset = self._proto._end_offset;
 
-    // Complex case: different containers
-    // Handle start container - if it's a text node, truncate it
-    if (self._proto._start_container.is(Node.CData)) |cdata| {
-        const text_data = cdata._data.str();
-        const byte_start = byteOffset(text_data, self._proto._start_offset);
-        if (byte_start < text_data.len) {
-            // Keep only the part before start_offset
-            const new_text = text_data[0..byte_start];
-            try self._proto._start_container.setData(new_text, frame);
+    // Same CharacterData container: replace the data in place.
+    if (start_node == end_node) {
+        if (start_node.is(Node.CData)) |cdata| {
+            try cdata.replaceData(start_offset, end_offset - start_offset, "", frame);
+            try self.setStart(start_node, start_offset);
+            try self.setEnd(start_node, start_offset);
+            return;
         }
     }
 
-    // Handle end container - if it's a text node, truncate it
-    if (self._proto._end_container.is(Node.CData)) |cdata| {
-        const text_data = cdata._data.str();
-        const byte_end = byteOffset(text_data, self._proto._end_offset);
-        if (byte_end < text_data.len) {
-            // Keep only the part from end_offset onwards
-            const new_text = text_data[byte_end..];
-            try self._proto._end_container.setData(new_text, frame);
-        } else if (byte_end == text_data.len) {
-            // If we're at the end, set to empty (will be removed if needed)
-            try self._proto._end_container.setData("", frame);
+    // Contained nodes whose parent isn't also contained, in tree order.
+    var to_remove: std.ArrayList(*Node) = .empty;
+    try self.collectContained(self._proto.getCommonAncestorContainer(), &to_remove, frame.call_arena);
+
+    // Where the collapsed range ends up: the start point if the start node
+    // is an inclusive ancestor of the end node; otherwise just after the
+    // highest partially-contained ancestor of the start node.
+    var new_node = start_node;
+    var new_offset = start_offset;
+    if (start_node != end_node and !start_node.contains(end_node)) {
+        var reference = start_node;
+        while (reference.parentNode()) |parent| {
+            if (parent == end_node or parent.contains(end_node)) break;
+            reference = parent;
+        }
+        new_node = reference.parentNode().?;
+        new_offset = (new_node.getChildIndex(reference) orelse 0) + 1;
+    }
+
+    if (start_node.is(Node.CData)) |cdata| {
+        const length: u32 = @intCast(cdata.getLength());
+        try cdata.replaceData(start_offset, length - start_offset, "", frame);
+    }
+
+    for (to_remove.items) |node| {
+        if (node.parentNode()) |parent| {
+            _ = try parent.removeChild(node, frame);
         }
     }
 
-    // Remove nodes between start and end containers
-    // For now, handle the common case where they're siblings
-    if (self._proto._start_container.parentNode() == self._proto._end_container.parentNode()) {
-        var current = self._proto._start_container.nextSibling();
-        while (current != null and current != self._proto._end_container) {
-            const next = current.?.nextSibling();
-            if (current.?.parentNode()) |parent| {
-                _ = try parent.removeChild(current.?, frame);
-            }
-            current = next;
-        }
+    if (end_node.is(Node.CData)) |cdata| {
+        try cdata.replaceData(0, end_offset, "", frame);
     }
 
-    self.collapse(true);
+    try self.setStart(new_node, new_offset);
+    try self.setEnd(new_node, new_offset);
+}
+
+// A node is contained in the range when its whole extent lies between the
+// range's boundary points. Appends the top-most contained nodes (those whose
+// parent isn't contained) under `node`, without descending into them.
+fn collectContained(self: *const Range, node: *Node, list: *std.ArrayList(*Node), arena: std.mem.Allocator) !void {
+    var it = node.childrenIterator();
+    while (it.next()) |c| {
+        if (self.nodeContained(c)) {
+            try list.append(arena, c);
+        } else if (c.contains(self._proto._start_container) or c.contains(self._proto._end_container)) {
+            // A non-contained child either straddles a boundary point or lies
+            // entirely outside the range; only the former can have contained
+            // descendants, so don't descend into the rest.
+            try self.collectContained(c, list, arena);
+        }
+    }
+}
+
+fn nodeContained(self: *const Range, node: *Node) bool {
+    const after_start = AbstractRange.compareBoundaryPoints(
+        node,
+        0,
+        self._proto._start_container,
+        self._proto._start_offset,
+    ) == .after;
+    if (!after_start) return false;
+    return AbstractRange.compareBoundaryPoints(
+        node,
+        node.getLength(),
+        self._proto._end_container,
+        self._proto._end_offset,
+    ) == .before;
 }
 
 pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
