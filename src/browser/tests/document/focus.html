@@ -319,3 +319,38 @@
   testing.expectEqual(0, blurCount);
 }
 </script>
+
+<script id="focus_display_none_noop">
+{
+  // Per HTML spec §6.4.4: an element inside a display:none container
+  // is "not being rendered" and therefore not focusable.
+  const input1 = $('#input1');
+  input1.focus();
+  testing.expectEqual(input1, document.activeElement);
+
+  // Create a hidden container with a button
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'none';
+  const btn = document.createElement('button');
+  btn.textContent = 'Hidden';
+  wrapper.appendChild(btn);
+  document.body.appendChild(wrapper);
+
+  let focusCount = 0;
+  btn.addEventListener('focus', () => focusCount++);
+
+  // focus() on the hidden button must be a no-op
+  btn.focus();
+  testing.expectEqual(input1, document.activeElement);
+  testing.expectEqual(0, focusCount);
+
+  // Make it visible — now focus should work
+  wrapper.style.display = '';
+  btn.focus();
+  testing.expectEqual(btn, document.activeElement);
+  testing.expectEqual(1, focusCount);
+
+  // Cleanup
+  wrapper.remove();
+}
+</script>
