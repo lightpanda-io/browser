@@ -27,6 +27,8 @@ const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
 
+const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
+
 const v8 = js.v8;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -116,6 +118,10 @@ popups: std.ArrayList(*Frame) = .empty,
 // ideal from a memory point of view).
 closed_frames: std.ArrayList(*Frame) = .empty,
 
+// SharedWorkerGlobalScopes created by this Page's frames (also registered in
+// session.shared_workers so other pages can connect).
+shared_workers: std.ArrayList(*SharedWorkerGlobalScope) = .empty,
+
 // In-flight navigation for a root page. When not null, this page will "replace"
 // the referenced page once the response header arrives. This is necessary
 // because, during navigation, both the "old" and "new" pages remain addressable
@@ -165,6 +171,11 @@ pub fn deinit(self: *Page) void {
     self.closed_frames = .empty;
 
     self.frame.deinit();
+
+    for (self.shared_workers.items) |scope| {
+        scope.deinit();
+    }
+    self.shared_workers = .empty;
 
     const session = self.session;
     lp.metrics.js_heap_size_bytes.observe(session.browser.env.isolate.getHeapStatistics().total_physical_size);
