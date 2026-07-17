@@ -204,6 +204,16 @@ pub fn pushEntry(
         self._entries.shrinkRetainingCapacity(retained_index);
     }
 
+    // Per spec, dispose fires last: after the entry list is updated and
+    // currententrychange has been dispatched. These entries are already out
+    // of _entries, so fire even if a later step fails, and don't let one
+    // entry's failure skip the others.
+    defer for (disposed) |d| {
+        d.fireDispose(frame) catch |err| {
+            log.warn(.event, "NavigationHistoryEntry.dispose", .{ .err = err });
+        };
+    };
+
     const index = self._entries.items.len;
 
     const id = self._next_entry_id;
@@ -236,10 +246,6 @@ pub fn pushEntry(
         }
     }
 
-    // Per spec, dispose fires last: after the entry list is updated and
-    // currententrychange has been dispatched.
-    for (disposed) |d| try d.fireDispose(frame);
-
     return entry;
 }
 
@@ -271,6 +277,12 @@ pub fn replaceEntry(
     const old_entry = self._entries.items[self._index];
     self._entries.items[self._index] = entry;
 
+    // Per spec, dispose fires last, after currententrychange. old_entry is
+    // already out of _entries, so fire even if the dispatch below fails.
+    defer old_entry.fireDispose(frame) catch |err| {
+        log.warn(.event, "NavigationHistoryEntry.dispose", .{ .err = err });
+    };
+
     if (should_dispatch) {
         if (self._on_currententrychange) |cec| {
             const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
@@ -281,9 +293,6 @@ pub fn replaceEntry(
             try self.dispatch(cec, event, frame);
         }
     }
-
-    // Per spec, dispose fires last, after currententrychange.
-    try old_entry.fireDispose(frame);
 
     return entry;
 }
