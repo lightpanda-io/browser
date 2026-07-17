@@ -1,0 +1,32 @@
+name: plumber
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  plumber:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      # Lets the run publish the score for the README badge via OIDC,
+      # no secret involved.
+      id-token: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: getplumber/plumber@7970e5df1e7d217de41b2880832b63a6f2152b97 # v0.4.8
+        with:
+          # Code scanning upload needs security-events write, which PRs
+          # from forks do not get. The report stays available as a
+          # workflow artifact there.
+          upload-sarif: ${{ github.event.pull_request.head.repo.fork != true }}
+          # Feeds the score badge in the README. The badge service only
+          # keeps the default branch score (verified from the OIDC
+          # token), and a failed push never fails the run.
+          score-push: true
