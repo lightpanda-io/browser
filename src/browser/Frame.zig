@@ -2563,16 +2563,17 @@ pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*N
     // Nodes moved into a not-yet-started script run the script's
     // children-changed steps first (whatwg/html#10188), then each inserted
     // node's own ready work runs, in tree order, with everything in place.
+    // Ready work only happens on becoming connected, so a detached
+    // destination has none.
     if (parent.isConnected()) {
         if (parent.is(Element.Html.Script)) |script| {
             if (!script._executed) {
                 try self.nodeIsReady(false, parent);
             }
         }
-    }
-
-    for (moved.items) |child| {
-        try self.nodeIsReadySubtree(child);
+        for (moved.items) |child| {
+            try self.nodeIsReadySubtree(child);
+        }
     }
 }
 
@@ -2681,17 +2682,17 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     // Inserting into a not-yet-started script runs the script's
     // children-changed steps first, then the inserted nodes' own ready work
     // (whatwg/html#10188: the outer script executes before an inner one).
+    // Ready work only happens on becoming connected, so a detached parent
+    // has none.
     if (opts.run_ready and parent_is_connected) {
         if (parent.is(Element.Html.Script)) |script| {
             if (!script._executed) {
                 try self.nodeIsReady(false, parent);
             }
         }
-    }
 
-    // nodeIsReady resolves the node's owning frame itself (only for the few node
-    // types that have ready work), so pass the incumbent `self`.
-    if (opts.run_ready) {
+        // nodeIsReady resolves the node's owning frame itself (only for the few node
+        // types that have ready work), so pass the incumbent `self`.
         try self.nodeIsReadySubtree(child);
     }
 
@@ -2931,9 +2932,16 @@ fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
     if (node._type != .element or node.firstChild() == null) {
         return self.nodeIsReady(false, node);
     }
+
+    // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
+    // connectivity.
+    var elements: std.ArrayList(*Node) = .empty;
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
     while (tw.next()) |el| {
-        try self.nodeIsReady(false, el.asNode());
+        try elements.append(self.call_arena, el.asNode());
+    }
+    for (elements.items) |el| {
+        try self.nodeIsReady(false, el);
     }
 }
 

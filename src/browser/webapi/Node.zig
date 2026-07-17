@@ -1429,8 +1429,6 @@ pub fn getElementsByClassName(self: *Node, class_name: []const u8, frame: *Frame
     }, frame);
 }
 
-/// Shared implementation of replaceChildren for Element, Document, and DocumentFragment.
-/// Validates all nodes, removes existing children, then appends new children.
 // ParentNode.append/prepend with several nodes convert them into a fragment
 // first, so the insertion happens as one operation: an earlier script must
 // observe its later siblings inserted (and can remove them before they run).
@@ -1440,29 +1438,40 @@ pub fn appendNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void 
         _ = try self.appendChild(child, frame);
         return;
     }
-    const fragment = (try DocumentFragment.init(frame)).asNode();
+    const fragment = try DocumentFragment.init(frame);
+    const fragment_node = fragment.asNode();
+    // The fragment is internal — JS never sees it, and no mutation record
+    // targets it — so it can be reclaimed once its children have moved out.
+    // If conversion or insertion failed, nodes left inside stay parented to
+    // it (per spec), so it must live on.
+    defer if (fragment_node.firstChild() == null) frame._factory.destroy(fragment);
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(frame);
-        _ = try fragment.appendChild(child, frame);
+        _ = try fragment_node.appendChild(child, frame);
     }
-    _ = try self.appendChild(fragment, frame);
+    _ = try self.appendChild(fragment_node, frame);
 }
 
 pub fn prependNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
-    const reference = self.firstChild();
     if (nodes.len == 1) {
         const child = try nodes[0].toNode(frame);
-        _ = try self.insertBefore(child, reference, frame);
+        _ = try self.insertBefore(child, self.firstChild(), frame);
         return;
     }
-    const fragment = (try DocumentFragment.init(frame)).asNode();
+    const fragment = try DocumentFragment.init(frame);
+    const fragment_node = fragment.asNode();
+    defer if (fragment_node.firstChild() == null) frame._factory.destroy(fragment);
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(frame);
-        _ = try fragment.appendChild(child, frame);
+        _ = try fragment_node.appendChild(child, frame);
     }
-    _ = try self.insertBefore(fragment, reference, frame);
+    // The reference child is evaluated after converting nodes into the
+    // fragment: one of the arguments may be the current first child.
+    _ = try self.insertBefore(fragment_node, self.firstChild(), frame);
 }
 
+/// Shared implementation of replaceChildren for Element, Document, and DocumentFragment.
+/// Validates all nodes, removes existing children, then appends new children.
 pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
     // First pass: validate all nodes and collect them
     // We need to collect because DocumentFragments contribute their children, not themselves
