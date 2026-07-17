@@ -56,7 +56,12 @@ fn asEventTarget(self: *Navigation) *EventTarget {
 
 pub fn onRemoveFrame(self: *Navigation) void {
     self._proto = undefined;
+    if (self._on_currententrychange) |cb| cb.release();
+    self._on_currententrychange = null;
+
     for (self._entries.items) |entry| {
+        if (entry._on_dispose) |cb| cb.release();
+        entry._on_dispose = null;
         entry._proto = undefined;
     }
 }
