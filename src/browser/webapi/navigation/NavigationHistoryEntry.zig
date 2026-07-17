@@ -82,10 +82,9 @@ pub fn getState(self: *const NavigationHistoryEntry, frame: *Frame) !StateReturn
 
 pub fn fireDispose(self: *NavigationHistoryEntry, frame: *Frame) !void {
     if (!frame.hasDirectListeners(self.asEventTarget(), "dispose", self._on_dispose)) return;
-    if (self._on_dispose == null) return;
 
     const event = try Event.initTrusted(comptime .wrap("dispose"), .{}, frame._page);
-    try frame.dispatch(self.asEventTarget(), event, self._on_dispose.?, .{ .context = "NavigationHistoryEntry" });
+    try frame.dispatch(self.asEventTarget(), event, self._on_dispose, .{ .context = "NavigationHistoryEntry" });
 }
 
 fn getOnDispose(self: *const NavigationHistoryEntry) ?js.Function.Global {
