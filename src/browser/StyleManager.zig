@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
@@ -59,8 +60,22 @@ class_rules: std.StringHashMapUnmanaged(RuleList) = .empty,
 tag_rules: std.AutoHashMapUnmanaged(Tag, RuleList) = .empty,
 other_rules: RuleList = .empty, // universal, attribute, pseudo-class endings
 
-// Document order counter for tie-breaking equal specificity
-next_doc_order: u32 = 0,
+/// The thing to remember about layers is that we can't determine priority's
+/// layer_rank until everything is parsed. So we need to build up meta data when
+/// rebuilding and do one final pass to apply the resulting layering rank.
+
+// Layer registry rebuilt with the rules. Append-only.
+layers: std.ArrayList(Layer) = .empty,
+// layer full name -> layers index
+layer_ids: std.StringHashMapUnmanaged(u16) = .empty,
+// rule -> layers index, e.g. for rule at index N, rule_layers[N] is its layer
+rule_layers: std.ArrayList(u16) = .empty,
+
+next_anon_layer: u32 = 0,
+
+// Document order counter for tie-breaking equal specificity. Starts at 1, 0
+// is used as a sentinel is isElementHidden()
+next_doc_order: u32 = 1,
 
 // When true, rules need to be rebuilt
 dirty: bool = false,
@@ -76,24 +91,24 @@ pub fn deinit(self: *StyleManager) void {
     self.frame.releaseArena(self.arena);
 }
 
+const IS_DEBUG = builtin.mode == .Debug;
+
 /// Hard cap on `@media` / `@layer` nesting depth. CSS allows arbitrarily-deep
 /// at-rule nesting; without a cap a hostile inline stylesheet could blow the
 /// Zig stack via the mutually-recursive `applyMediaAtRule` / `applyLayerAtRule`
-/// / `applyInnerRules` frames. 32 is well past anything seen in the wild.
+/// `applyInnerRules` frames. 32 is well past anything seen in the wild.
 const MAX_AT_RULE_NESTING: u8 = 32;
 
-fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
+fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet) !void {
     if (sheet._css_rules) |css_rules| {
         for (css_rules._rules.items) |rule| {
             switch (rule._type) {
-                .style => |sr| try self.addRule(sr),
+                .style => |sr| try self.addRule(build_arena, sr),
                 // Re-parse the stored source so an `@media` rule inserted via
                 // `insertRule` / `replaceSync` participates in the cascade
                 // when its query matches the viewport.
-                .media => try self.applyMediaAtRule(rule._text, 0),
-                // `@layer` blocks flatten into the cascade (see
-                // applyLayerAtRule for the deliberate scope).
-                .layer => try self.applyLayerAtRule(rule._text, 0),
+                .media => try self.applyMediaAtRule(build_arena, rule._text, 0, NO_LAYER),
+                .layer => try self.applyLayerAtRule(build_arena, rule._text, 0, NO_LAYER),
                 else => {},
             }
         }
@@ -106,7 +121,7 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
         var it = CssParser.parseStylesheet(text);
         while (it.next()) |parsed_rule| {
             switch (parsed_rule) {
-                .style => |s| try self.addRawRule(s.selector, s.block),
+                .style => |s| try self.addRawRule(build_arena, s.selector, s.block, NO_LAYER),
                 .at_rule => |a| {
                     // Only `@media` and `@layer` participate in the cascade
                     // here. Other at-rules (`@keyframes`, `@supports`,
@@ -114,9 +129,9 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
                     // relevant to the visibility filter and stay skipped as
                     // before.
                     if (std.ascii.eqlIgnoreCase(a.keyword, "media")) {
-                        try self.applyMediaAtRule(a.text, 0);
+                        try self.applyMediaAtRule(build_arena, a.text, 0, NO_LAYER);
                     } else if (std.ascii.eqlIgnoreCase(a.keyword, "layer")) {
-                        try self.applyLayerAtRule(a.text, 0);
+                        try self.applyLayerAtRule(build_arena, a.text, 0, NO_LAYER);
                     }
                 },
             }
@@ -129,46 +144,89 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
 /// lived at the top level. Non-matching queries silently drop the inner
 /// rules. Inline-only by design: external `<link rel="stylesheet">` is out
 /// of scope for the headless engine.
-fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) Allocator.Error!void {
-    if (depth >= MAX_AT_RULE_NESTING) return;
+fn applyMediaAtRule(self: *StyleManager, build_arena: Allocator, text: []const u8, depth: u8, layer: u16) Allocator.Error!void {
+    if (depth >= MAX_AT_RULE_NESTING) {
+        return;
+    }
 
     const block = atRuleBlock(text, "@media") orelse return;
     const query = std.mem.trim(u8, block.prelude, &std.ascii.whitespace);
 
-    if (!MediaQuery.matches(query, self.frame._page.getViewport())) return;
+    if (MediaQuery.matches(query, self.frame._page.getViewport()) == false) {
+        return;
+    }
 
-    try self.applyInnerRules(block.body, depth + 1);
+    try self.applyInnerRules(build_arena, block.body, depth + 1, layer);
 }
 
-/// Apply an `@layer` block rule by parsing its inner block into the cascade
-/// as if its rules lived at the top level, recursing into nested `@media` /
-/// `@layer`. Cascade-layer priority ordering (css-cascade-5 §6.4) is
-/// deliberately not implemented: layers are flattened and ties keep breaking
-/// on specificity + document order. Handles named blocks (including dotted
-/// sub-layer names like `@layer theme.dark`) and anonymous blocks; the
-/// statement form (`@layer a, b;`) declares ordering only and carries no
-/// block (`atRuleBlock` returns null), so it applies nothing.
-fn applyLayerAtRule(self: *StyleManager, text: []const u8, depth: u8) Allocator.Error!void {
-    if (depth >= MAX_AT_RULE_NESTING) return;
+/// Apply an `@layer` rule (css-cascade-5). Layers have two forms:
+/// 1 - Block form which may or may not have a name. We register the layer and
+//      parse the inner block. This can recurse.
+/// 2 - Statement form only registes the name for ordering.
+///
+/// The layer parameter is the enclosing layer, or NO_LAYER at the top level.
+/// Priority is not assigned here, we need all the layers parsed to do that
+/// (since a layer statement can alter the ordering). So we'll do one final pass
+// in finalizerLayerRanks
+fn applyLayerAtRule(self: *StyleManager, build_arena: Allocator, text: []const u8, depth: u8, layer: u16) Allocator.Error!void {
+    if (depth >= MAX_AT_RULE_NESTING) {
+        return;
+    }
+    if (std.ascii.startsWithIgnoreCase(text, "@layer") == false) {
+        return;
+    }
 
-    // The layer-name prelude is intentionally ignored — layers are flattened.
-    const block = atRuleBlock(text, "@layer") orelse return;
-    try self.applyInnerRules(block.body, depth + 1);
+    const block = atRuleBlock(text, "@layer") orelse {
+        // Statement form: `@layer <name>, <name>;`. One invalid name
+        // invalidates the whole statement. Validate everything before
+        // registering anything.
+        var names = text["@layer".len..];
+        if (std.mem.indexOfScalar(u8, names, ';')) |semi| {
+            names = names[0..semi];
+        }
+
+        var check = std.mem.splitScalar(u8, names, ',');
+        while (check.next()) |raw| {
+            if (isValidLayerName(std.mem.trim(u8, raw, &std.ascii.whitespace)) == false) {
+                return;
+            }
+        }
+
+        var it = std.mem.splitScalar(u8, names, ',');
+        while (it.next()) |raw| {
+            _ = try self.registerLayerPath(build_arena, layer, std.mem.trim(u8, raw, &std.ascii.whitespace));
+        }
+        return;
+    };
+
+    const prelude = std.mem.trim(u8, block.prelude, &std.ascii.whitespace);
+    if (prelude.len != 0 and isValidLayerName(prelude) == false) {
+        // An invalid layer name invalidates the whole rule.
+        return;
+    }
+
+    const id = if (prelude.len == 0)
+        try self.internAnonymousLayer(build_arena, layer)
+    else
+        try self.registerLayerPath(build_arena, layer, prelude);
+
+    try self.applyInnerRules(build_arena, block.body, depth + 1, id);
 }
 
 /// Parse a conditional at-rule's inner block, adding style rules to the
-/// cascade and recursing into nested `@media` / `@layer`. `depth` is the
-/// nesting depth of the *nested* at-rules (callers pass their own depth + 1).
-fn applyInnerRules(self: *StyleManager, inner: []const u8, depth: u8) Allocator.Error!void {
+/// cascade and recursing into nested `@media` / `@layer`. `layer` is the
+/// enclosing cascade layer (NO_LAYER when unlayered); `depth` is the nesting
+/// depth of the *nested* at-rules (callers pass their own depth + 1).
+fn applyInnerRules(self: *StyleManager, build_arena: Allocator, inner: []const u8, depth: u8, layer: u16) Allocator.Error!void {
     var it = CssParser.parseStylesheet(inner);
     while (it.next()) |nested_rule| {
         switch (nested_rule) {
-            .style => |s| try self.addRawRule(s.selector, s.block),
+            .style => |s| try self.addRawRule(build_arena, s.selector, s.block, layer),
             .at_rule => |nested| {
                 if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
-                    try self.applyMediaAtRule(nested.text, depth);
+                    try self.applyMediaAtRule(build_arena, nested.text, depth, layer);
                 } else if (std.ascii.eqlIgnoreCase(nested.keyword, "layer")) {
-                    try self.applyLayerAtRule(nested.text, depth);
+                    try self.applyLayerAtRule(build_arena, nested.text, depth, layer);
                 }
             },
         }
@@ -188,9 +246,13 @@ fn applyInnerRules(self: *StyleManager, inner: []const u8, depth: u8) Allocator.
 /// the wrong place; the block's own trivia is handled by the CssParser re-parse
 /// in `applyInnerRules`, so only this outer boundary needs the special-case scan.
 fn atRuleBlock(text: []const u8, keyword: []const u8) ?struct { prelude: []const u8, body: []const u8 } {
-    if (!std.ascii.startsWithIgnoreCase(text, keyword)) return null;
+    if (std.ascii.startsWithIgnoreCase(text, keyword) == false) {
+        return null;
+    }
+
     const rest = text[keyword.len..];
     const open = indexOfOpenBraceSkippingComments(rest) orelse return null;
+
     // Search only past the opening brace — the matching `}` lives there, and
     // any returned position is naturally `> open` (since `rest[open] == '{'`).
     const close = open + (std.mem.lastIndexOfScalar(u8, rest[open..], '}') orelse return null);
@@ -213,7 +275,185 @@ fn indexOfOpenBraceSkippingComments(s: []const u8) ?usize {
     return null;
 }
 
-fn addRawRule(self: *StyleManager, selector_text: []const u8, block_text: []const u8) !void {
+/// Register a (possibly dotted) layer name declared inside `parent`,
+/// creating any missing ancestors, and return the layer's id. The name must
+/// already have passed isValidLayerName — per css-cascade-5 an invalid name
+/// invalidates the containing rule, which callers handle before registering.
+fn registerLayerPath(self: *StyleManager, build_arena: Allocator, parent: u16, dotted: []const u8) Allocator.Error!u16 {
+    var current = parent;
+    var it = std.mem.splitScalar(u8, dotted, '.');
+    while (it.next()) |component| {
+        // should have been verified by the caller, via isValidLayerName
+        if (comptime IS_DEBUG) {
+            std.debug.assert(isValidLayerComponent(component));
+        }
+
+        // Components past the depth cap collapse into their ancestor;
+        // MAX_AT_RULE_NESTING also bounds finalizeLayerRanks' path buffers.
+        if (current != NO_LAYER and self.layers.items[current].depth >= MAX_AT_RULE_NESTING) {
+            break;
+        }
+        current = try self.internLayer(build_arena, current, component);
+    }
+    return current;
+}
+
+/// Each anonymous `@layer { … }` block is its own distinct layer
+fn internAnonymousLayer(self: *StyleManager, build_arena: Allocator, parent: u16) Allocator.Error!u16 {
+    const id = self.next_anon_layer;
+    // \x00{d} isn't a valid layer name, so this can't conflict
+    const name = try std.fmt.allocPrint(build_arena, "\x00{d}", .{id});
+    self.next_anon_layer = id + 1;
+    return self.internLayer(build_arena, parent, name);
+}
+
+fn internLayer(self: *StyleManager, build_arena: Allocator, parent: u16, name: []const u8) Allocator.Error!u16 {
+    const path = if (parent == NO_LAYER)
+        try build_arena.dupe(u8, name)
+    else
+        try std.fmt.allocPrint(build_arena, "{s}.{s}", .{ self.layers.items[parent].path, name });
+
+    const gop = try self.layer_ids.getOrPut(build_arena, path);
+    if (gop.found_existing) {
+        return gop.value_ptr.*;
+    }
+
+    if (self.layers.items.len >= MAX_LAYERS) {
+        _ = self.layer_ids.remove(path);
+        return parent;
+    }
+
+    const id: u16 = @intCast(self.layers.items.len);
+    gop.value_ptr.* = id;
+    const depth = if (parent == NO_LAYER) 1 else self.layers.items[parent].depth + 1;
+    try self.layers.append(build_arena, .{ .path = path, .parent = parent, .depth = depth });
+    return id;
+}
+
+fn isValidLayerName(dotted: []const u8) bool {
+    var it = std.mem.splitScalar(u8, dotted, '.');
+    while (it.next()) |component| {
+        if (isValidLayerComponent(component) == false) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn isValidLayerComponent(component: []const u8) bool {
+    if (component.len == 0) {
+        return false;
+    }
+    if (std.ascii.isDigit(component[0])) {
+        return false;
+    }
+    for (component) |c| {
+        switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
+            else => if (c < 0x80) return false,
+        }
+    }
+    return true;
+}
+
+/// Compute every layer's rank and apply it to every VisibilityRule we have.
+/// We can only do this now that we've parsed every parsed every sheet since
+/// @layer statement can change the ordering/
+fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Error!void {
+    const layers = self.layers.items;
+
+    if (layers.len == 0) {
+        // No layers. Every VisibilityRule already has the correct layerless
+        // priority, and with no layers, there's nothing to adjust.
+        return;
+    }
+
+    {
+        // If we have three layers:
+        //   @layer a.x { ... }
+        //   @layer b   { ... }
+        //   @layer a.y { ... }
+        // If we prioritize them by the order they are defined, we'd get:
+        //    a.x => 1  (lowest priority),  b => 2  and  a.y => 3 (highest priority)
+        //
+        // But it should really be:
+        //     a.x => 1, a.y => 2, b => 3
+        //
+        // because a.y "inherits" the lower priority of the "a" from "a.x" having
+        // been declared first.
+        //
+        // So we need to create something:
+        //  a.x => [0, 1],  b => [2], a.y => [0, 3]
+        //
+        // And now when we sort them, we'll get the correct order because[2] > [0, 3]
+
+        const paths = try build_arena.alloc([]const u16, layers.len);
+        for (layers, 0..) |layer, i| {
+            const path = try build_arena.alloc(u16, layer.depth);
+            var id: u16 = @intCast(i);
+            var d = layer.depth;
+            while (d > 0) {
+                d -= 1;
+                path[d] = id;
+                id = layers[id].parent;
+            }
+            paths[i] = path;
+        }
+
+        const order = try build_arena.alloc(u16, layers.len);
+        for (order, 0..) |*slot, i| {
+            slot.* = @intCast(i);
+        }
+
+        std.mem.sort(u16, order, paths, struct {
+            fn lessThan(ctx: []const []const u16, a: u16, b: u16) bool {
+                const pa = ctx[a];
+                const pb = ctx[b];
+                const common = @min(pa.len, pb.len);
+                for (pa[0..common], pb[0..common]) |ca, cb| {
+                    if (ca != cb) {
+                        return ca < cb;
+                    }
+                }
+                return pa.len > pb.len;
+            }
+        }.lessThan);
+
+        for (order, 0..) |id, rank| {
+            layers[id].rank = @intCast(rank);
+        }
+    }
+
+    self.stampRuleList(&self.other_rules);
+
+    var id_it = self.id_rules.valueIterator();
+    while (id_it.next()) |rules| {
+        self.stampRuleList(rules);
+    }
+
+    var class_it = self.class_rules.valueIterator();
+    while (class_it.next()) |rules| {
+        self.stampRuleList(rules);
+    }
+
+    var tag_it = self.tag_rules.valueIterator();
+    while (tag_it.next()) |rules| {
+        self.stampRuleList(rules);
+    }
+}
+
+fn stampRuleList(self: *StyleManager, rules: *RuleList) void {
+    const layers = self.layers.items;
+    const rule_layers = self.rule_layers.items;
+    for (rules.items(.priority)) |*priority| {
+        const doc_order: u32 = @as(u22, @truncate(priority.*));
+        const layer = rule_layers[doc_order - 1];
+        const rank = if (layer == NO_LAYER) UNLAYERED_RANK else layers[layer].rank;
+        priority.* |= @as(u64, rank) << RANK_SHIFT;
+    }
+}
+
+fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []const u8, block_text: []const u8, layer: u16) !void {
     if (selector_text.len == 0) return;
 
     var props = VisibilityProperties{};
@@ -241,9 +481,10 @@ fn addRawRule(self: *StyleManager, selector_text: []const u8, block_text: []cons
         const rule = VisibilityRule{
             .props = props,
             .selector = selector,
-            .priority = (@as(u64, computeSpecificity(selector)) << 32) | @as(u64, self.next_doc_order),
+            .priority = (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER),
         };
         self.next_doc_order += 1;
+        try self.rule_layers.append(build_arena, layer);
 
         switch (bucket_key) {
             .id => |id| {
@@ -283,6 +524,18 @@ fn rebuildIfDirty(self: *StyleManager) !void {
         return;
     }
 
+    // There are some allocations that only need to live for the duration of
+    // this rebuild. Having two arena (build_arena and self.arena) isn't ideal
+    // as it's easy to use the wrong one.
+    const build_arena = try self.frame.getArena(.medium, "StyleManager.rebuild");
+    defer {
+        self.layers = .empty;
+        self.layer_ids = .empty;
+        self.next_anon_layer = 0;
+        self.rule_layers = .empty;
+        self.frame.releaseArena(build_arena);
+    }
+
     self.dirty = false;
     errdefer self.dirty = true;
     const id_rules_count = self.id_rules.count();
@@ -292,7 +545,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.frame._session.arena_pool.resetRetain(self.arena);
 
-    self.next_doc_order = 0;
+    self.next_doc_order = 1;
 
     self.id_rules = .empty;
     try self.id_rules.ensureTotalCapacity(self.arena, id_rules_count);
@@ -308,11 +561,13 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
-        self.parseSheet(sheet) catch |err| {
+        self.parseSheet(build_arena, sheet) catch |err| {
             log.err(.browser, "StyleManager parseSheet", .{ .err = err });
             return err;
         };
     }
+
+    try self.finalizeLayerRanks(build_arena);
 }
 
 // Check if an element is hidden based on options.
@@ -500,7 +755,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
             const selectors = rules.items(.selector);
 
             for (priorities, props_list, selectors) |p, props, selector| {
-                // Fast skip using packed u64 priority
+                // Fast skip using packed priority
                 if (p <= ctx.display_priority.* and p <= ctx.visibility_priority.* and p <= ctx.opacity_priority.*) {
                     continue;
                 }
@@ -674,7 +929,7 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
 // Extracts visibility-relevant rules from a CSS rule.
 // Creates one VisibilityRule per selector (not per selector list) so each has correct specificity.
 // Buckets rules by their rightmost selector part for fast lookup.
-fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !void {
+fn addRule(self: *StyleManager, build_arena: Allocator, style_rule: *CSSStyleRule) !void {
     const selector_text = style_rule._selector_text;
     if (selector_text.len == 0) {
         return;
@@ -708,9 +963,10 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !void {
         const rule = VisibilityRule{
             .props = props,
             .selector = selector,
-            .priority = (@as(u64, computeSpecificity(selector)) << 32) | @as(u64, self.next_doc_order),
+            .priority = (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER),
         };
         self.next_doc_order += 1;
+        try self.rule_layers.append(build_arena, NO_LAYER);
 
         // Add to appropriate bucket
         switch (bucket_key) {
@@ -884,9 +1140,44 @@ const VisibilityRule = struct {
     selector: Selector.Selector, // Single selector, not a list
     props: VisibilityProperties,
 
-    // Packed priority: (specificity << 32) | doc_order
+    // Packed priority: layer_rank:12 | specificity:30 | doc_order:22.
+    // The rank bits are 0 until finalizeLayerRanks stamps them (the rank
+    // isn't known until all sheets are parsed); the rule's layer lives in
+    // the build-only rule_layers side array, indexed by doc_order - 1.
     priority: u64,
 };
+
+const Layer = struct {
+    // dotted path from the root
+    path: []const u8,
+
+    // Number of path components
+    depth: u16,
+
+    // Index of the parent layer in `layers` (NO_LAYER for top level)
+    parent: u16,
+
+    /// Position in the final cascade order, lowest priority first.
+    rank: u32 = 0,
+};
+
+/// This sentinel has two meanings. AS a rule's layer, it's the highest priority
+/// (rules outside of a layer are highest priority). As a Layer.parent, it means
+// no paren (top-level layer)
+const NO_LAYER: u16 = std.math.maxInt(u16);
+
+const UNLAYERED_RANK: u32 = std.math.maxInt(u12);
+
+/// Protect against hostile input. Must be < UNLAYERED_RANK so that it fits in
+// its 12 bits of VisibleRule.priority
+const MAX_LAYERS: usize = 1024;
+
+// VisibilityRule.priority field offsets (layer_rank:12 | spec:30 | doc:22).
+const SPEC_SHIFT: u6 = 22;
+const RANK_SHIFT: u6 = 52;
+
+// - 1 since INLINE_PRIORITY is _always_ higher
+const MAX_DOC_ORDER: u32 = std.math.maxInt(u22) - 1;
 
 const CheckVisibilityOptions = struct {
     check_display: bool = true,
@@ -895,7 +1186,9 @@ const CheckVisibilityOptions = struct {
     ua_display_none: bool = true,
 };
 
-// Inline styles always win over stylesheets - use max u64 as sentinel
+// Inline styles always win over stylesheets - use max u64 as sentinel.
+// Strictly above any packed rule priority: doc_order saturates one below
+// its field max, so a real rule can never pack to all-ones.
 const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
 fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*CSSStyleProperty {
@@ -1071,4 +1364,20 @@ test "StyleManager: document order tie-breaking" {
 
     // Equal specificity and doc_order: no win
     try testing.expect(!beats(1, 5, 1, 5));
+}
+
+test "StyleManager: packed priority bounds" {
+    // The three fields fill the u64 exactly, without overlap.
+    try testing.expectEqual(64, @as(u32, RANK_SHIFT) + 12);
+    try testing.expectEqual(RANK_SHIFT, @as(u32, SPEC_SHIFT) + 30);
+
+    // The maximum packable rule priority (unlayered rank, fully-clamped
+    // specificity, saturated doc_order) stays below INLINE_PRIORITY.
+    const max_packed = (@as(u64, UNLAYERED_RANK) << RANK_SHIFT) |
+        (@as(u64, std.math.maxInt(u30)) << SPEC_SHIFT) |
+        MAX_DOC_ORDER;
+    try testing.expect(max_packed < INLINE_PRIORITY);
+
+    // Real layer ranks fit the 12 rank bits below the unlayered sentinel.
+    try testing.expect(MAX_LAYERS < UNLAYERED_RANK);
 }
