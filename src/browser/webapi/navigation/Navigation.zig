@@ -485,6 +485,7 @@ fn getOnCurrentEntryChange(self: *Navigation) ?js.Function.Global {
 }
 
 pub fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
+    if (self._on_currententrychange) |old| old.release();
     if (listener) |listen| {
         self._on_currententrychange = try listen.persistWithThis(self);
     } else {
