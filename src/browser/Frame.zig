@@ -894,6 +894,21 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     };
 
     const session = target._session;
+
+    // Re-navigating to the exact current URL is only a reload when the URL
+    // has no fragment. With a fragment it's a fragment navigation per the
+    // HTML "navigate" steps (url equals the document's URL excluding
+    // fragments and url's fragment is non-null): no reload, and since the
+    // fragment didn't change, no hashchange and no new history entry either.
+    if (!opts.force and
+        opts.kind != .reload and
+        std.mem.eql(u8, target.url, resolved_url) and
+        std.mem.indexOfScalar(u8, resolved_url, '#') != null)
+    {
+        session.releaseArena(arena);
+        return;
+    }
+
     // Short-circuit only true fragment-only navigations (same path/query, different
     // fragment). Identical URLs fall through and trigger a real reload.
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
