@@ -39,17 +39,19 @@ runs:
         sudo apt-get install -y wget xz-utils ca-certificates clang make git
 
     # Zig version used from the `minimum_zig_version` field in build.zig.zon
-    - uses: mlugg/setup-zig@v2
+    - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
 
     # Rust Toolchain for html5ever
-    - uses: dtolnay/rust-toolchain@stable
-    - uses: Swatinem/rust-cache@v2
+    - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+      with:
+        toolchain: stable
+    - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       with:
         workspaces: src/html5ever
 
     - name: Cache v8
       id: cache-v8
-      uses: actions/cache@v5
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       env:
         cache-name: cache-v8
       with:

@@ -46,7 +46,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
 
@@ -72,7 +72,7 @@ jobs:
           aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/agent-${RELEASE}/lightpanda-agent-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
-        uses: ncipollo/release-action@v1
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -80,7 +80,7 @@ jobs:
           makeLatest: true
 
       - name: Share binary with packaging jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           path: lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -106,7 +106,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
 
@@ -132,7 +132,7 @@ jobs:
           aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/agent-${RELEASE}/lightpanda-agent-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
-        uses: ncipollo/release-action@v1
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -149,20 +149,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: stable
 
       - name: Download linux x86_64 binary (to read the version)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: lightpanda-x86_64-linux
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -194,7 +194,7 @@ jobs:
     steps:
       - name: Generate token for browser-docker
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
           private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
@@ -215,7 +215,7 @@ jobs:
     steps:
       - name: Generate token for homebrew-browser
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
           private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
