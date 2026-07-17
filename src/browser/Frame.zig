@@ -901,6 +901,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     // fragments and url's fragment is non-null): no reload, and since the
     // fragment didn't change, no hashchange and no new history entry either.
     if (!opts.force and
+        opts.kind != .reload and
         std.mem.eql(u8, target.url, resolved_url) and
         std.mem.indexOfScalar(u8, resolved_url, '#') != null)
     {

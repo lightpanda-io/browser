@@ -432,11 +432,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     }
 }
 
-// Per the HTML "event handler processing algorithm", an event handler (on*
-// property or attribute) returning false cancels the event — unlike
-// addEventListener listeners, whose return value is ignored. The inverted
-// special case for onerror only applies to the global's onerror, which is
-// invoked via Window.reportError, not through this node dispatch path.
 fn processHandlerReturnValue(event: *Event, handler_return: ?js.Value) void {
     const ret = handler_return orelse return;
     if (ret.isFalse() and !event._type_string.eql(comptime .wrap("error"))) {
