@@ -309,12 +309,7 @@ pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
     return out[0..len];
 }
 
-pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
-    if (maybe_base) |base| {
-        return U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len);
-    }
-    return U.url_can_parse(url.ptr, url.len);
-}
+pub const canParse = @import("../URL.zig").canParse;
 
 pub fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {
     var uuid_buf: [36]u8 = undefined;

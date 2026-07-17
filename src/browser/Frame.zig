@@ -1751,6 +1751,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         src = "about:blank";
     }
 
+    if (URL.isCompleteHTTPUrl(src) and !URL.canParse(src, null)) {
+        // per spec, if we can't parse the URL, we should load about:blank
+        src = "about:blank";
+    }
+
     if (iframe._window != null) {
         // This frame is being re-navigated. We need to do this through a
         // scheduleNavigation phase. We can't navigate immediately here, for
