@@ -784,15 +784,6 @@ fn printPaged(allocator: Allocator, text: []const u8) void {
     child.stderr_behavior = .Inherit;
     child.spawn() catch return printPlain(text);
 
-    // The pager can exit before we finish writing (e.g. `q` in less, or
-    // `sh -c` failing to find $PAGER); without this the resulting SIGPIPE
-    // would kill us. The process exits right after, so no need to restore.
-    std.posix.sigaction(std.posix.SIG.PIPE, &.{
-        .handler = .{ .handler = std.posix.SIG.IGN },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    }, null);
-
     if (child.stdin) |stdin| {
         var writer = stdin.writer(&.{});
         // A write error here is the pager exiting early (user quit, or the
