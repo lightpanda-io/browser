@@ -39,10 +39,18 @@ const Mode = enum {
     all_elements,
     child_elements,
     child_tag,
+    cells,
     selected_options,
     links,
     anchors,
     form,
+};
+
+pub const ClassNameFilter = struct {
+    names: [][]const u8,
+    // getElementsByClassName matches class names ASCII case-insensitively
+    // when the document is in quirks mode.
+    case_insensitive: bool = false,
 };
 
 pub const TagNameNsFilter = struct {
@@ -54,11 +62,12 @@ const Filters = union(Mode) {
     tag: Element.Tag,
     tag_name: String,
     tag_name_ns: TagNameNsFilter,
-    class_name: [][]const u8,
+    class_name: ClassNameFilter,
     name: []const u8,
     all_elements,
     child_elements,
     child_tag: Element.Tag,
+    cells,
     selected_options,
     links,
     anchors,
@@ -91,7 +100,7 @@ pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
         .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form => TreeWalker.FullExcludeSelf,
-        .child_elements, .child_tag, .selected_options => TreeWalker.Children,
+        .child_elements, .child_tag, .cells, .selected_options => TreeWalker.Children,
     };
     return struct {
         _tw: TW,
@@ -194,6 +203,11 @@ pub fn NodeLive(comptime mode: Mode) type {
             // (like length or getAtIndex)
             var tw = self._tw.clone();
             while (self.nextTw(&tw)) |element| {
+                // Per spec, only HTML-namespace elements are exposed via
+                // their name attribute (ids expose any element).
+                if (element._namespace != .html) {
+                    continue;
+                }
                 const element_name = element.getAttributeSafe(comptime .wrap("name")) orelse continue;
                 if (std.mem.eql(u8, element_name, name)) {
                     return element;
@@ -254,14 +268,14 @@ pub fn NodeLive(comptime mode: Mode) type {
                     return self._filter.local_name.eqlSlice(el.getLocalName());
                 },
                 .class_name => {
-                    if (self._filter.len == 0) {
+                    if (self._filter.names.len == 0) {
                         return false;
                     }
 
                     const el = node.is(Element) orelse return false;
                     const class_attr = el.getAttributeSafe(comptime .wrap("class")) orelse return false;
-                    for (self._filter) |class_name| {
-                        if (!Selector.classAttributeContains(class_attr, class_name)) {
+                    for (self._filter.names) |class_name| {
+                        if (!Selector.classAttributeContainsCase(class_attr, class_name, self._filter.case_insensitive)) {
                             return false;
                         }
                     }
@@ -269,6 +283,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                 },
                 .name => {
                     const el = node.is(Element) orelse return false;
+                    // getElementsByName only considers HTML elements.
+                    if (el._namespace != .html) return false;
                     const name_attr = el.getAttributeSafe(comptime .wrap("name")) orelse return false;
                     return std.mem.eql(u8, name_attr, self._filter);
                 },
@@ -277,6 +293,11 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .child_tag => {
                     const el = node.is(Element) orelse return false;
                     return el.getTag() == self._filter;
+                },
+                .cells => {
+                    // HTMLTableRowElement.cells: td and th children.
+                    const el = node.is(Element) orelse return false;
+                    return el.is(Element.Html.TableCell) != null;
                 },
                 .selected_options => {
                     const el = node.is(Element) orelse return false;
@@ -368,6 +389,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .all_elements => HTMLCollection{ ._data = .{ .all_elements = self } },
                 .child_elements => HTMLCollection{ ._data = .{ .child_elements = self } },
                 .child_tag => HTMLCollection{ ._data = .{ .child_tag = self } },
+                .cells => HTMLCollection{ ._data = .{ .cells = self } },
                 .selected_options => HTMLCollection{ ._data = .{ .selected_options = self } },
                 .links => HTMLCollection{ ._data = .{ .links = self } },
                 .anchors => HTMLCollection{ ._data = .{ .anchors = self } },

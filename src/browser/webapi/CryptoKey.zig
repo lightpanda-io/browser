@@ -16,16 +16,22 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+const lp = @import("lightpanda");
 const crypto = @import("../../sys/libcrypto.zig");
 
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 
 /// Represents a cryptographic key obtained from one of the SubtleCrypto methods
 /// generateKey(), deriveKey(), importKey(), or unwrapKey().
 const CryptoKey = @This();
 
+_rc: lp.RC(u8) = .{},
+_arena: Allocator = undefined,
 /// Algorithm being used.
 _type: Type,
 /// Whether this is a secret (symmetric), public, or private key. Surfaced as
@@ -37,8 +43,8 @@ _extractable: bool,
 _usages: u8,
 /// Raw bytes of key.
 _key: []const u8,
-/// Metadata needed to reconstruct the JS `.algorithm` dictionary. The strings
-/// are expected to outlive the key (arena-allocated alongside it).
+/// Metadata needed to reconstruct the JS `.algorithm` dictionary. `hash` is
+/// duped into the key's arena by init; `name`/`named_curve` are static.
 _algorithm: Algorithm,
 /// Different algorithms may use different data structures;
 /// this union can be used for such situations. Active field is understood
@@ -93,6 +99,39 @@ pub const Usages = struct {
     pub const unwrapKey  = 0x080;
     // zig fmt: on
 };
+
+/// Copies `key` into an owned pooled arena, duping the caller-provided
+/// slices (`_key`, `_algorithm.hash`). `_algorithm.name` and `_named_curve`
+/// are expected to be static strings. Takes ownership of `_vary.pkey`.
+pub fn init(exec: *const Execution, key: CryptoKey) !*CryptoKey {
+    const arena = try exec.getArena(.tiny, "CryptoKey");
+    errdefer exec.releaseArena(arena);
+
+    const self = try arena.create(CryptoKey);
+    self.* = key;
+    self._arena = arena;
+    self._key = try arena.dupe(u8, key._key);
+    if (key._algorithm.hash) |hash| {
+        self._algorithm.hash = try arena.dupe(u8, hash);
+    }
+    return self;
+}
+
+pub fn deinit(self: *CryptoKey, page: *Page) void {
+    switch (self._vary) {
+        .pkey => |pkey| crypto.EVP_PKEY_free(pkey),
+        .none, .digest => {},
+    }
+    page.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *CryptoKey, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *CryptoKey) void {
+    self._rc.acquire();
+}
 
 pub fn canEncrypt(self: *const CryptoKey) bool {
     return self._usages & Usages.encrypt != 0;

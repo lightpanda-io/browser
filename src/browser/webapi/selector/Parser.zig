@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const Node = @import("../Node.zig");
 const Attribute = @import("../element/Attribute.zig");
@@ -81,7 +82,11 @@ pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selecto
     var remaining = preprocessed;
     while (true) {
         const trimmed = std.mem.trimLeft(u8, remaining, &std.ascii.whitespace);
-        if (trimmed.len == 0) break;
+        if (trimmed.len == 0) {
+            // Either an empty selector or a dangling comma ("div,"): both are
+            // parse errors per the selector-list grammar.
+            return error.InvalidSelector;
+        }
 
         var comma_pos: usize = trimmed.len;
         var depth: usize = 0;
@@ -137,10 +142,12 @@ pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selecto
 
         const selector_input = std.mem.trimRight(u8, trimmed[0..comma_pos], &std.ascii.whitespace);
 
-        if (selector_input.len > 0) {
-            const selector = try parse(arena, selector_input);
-            try selectors.append(arena, selector);
+        if (selector_input.len == 0) {
+            // An empty segment between commas (",div") is a parse error.
+            return error.InvalidSelector;
         }
+        const selector = try parse(arena, selector_input);
+        try selectors.append(arena, selector);
 
         if (comma_pos >= trimmed.len) break;
         remaining = trimmed[comma_pos + 1 ..];
@@ -153,7 +160,7 @@ pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selecto
     return selectors.items;
 }
 
-pub fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
+fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     var parser = Parser{ .input = input };
     var segments: std.ArrayList(Segment) = .empty;
     var current_compound: std.ArrayList(Part) = .empty;
@@ -946,16 +953,40 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     self.input = self.input[1..];
     _ = self.skipSpaces();
 
+    // Optional namespace component: `*|name` (any namespace) or `|name`
+    // (no namespace). Attributes are stored by qualified name and almost
+    // never namespaced, so both forms match by name.
+    if (self.peek() == '*' and self.input.len > 1 and self.input[1] == '|') {
+        self.input = self.input[2..];
+    } else if (self.peek() == '|' and self.input.len > 1 and self.input[1] != '=') {
+        self.input = self.input[1..];
+    }
+
+    // Kept as-written in original_name for the case-sensitive match on
+    // foreign elements; like the rest of the AST, it borrows the input.
     const attr_name = try self.attributeName(arena);
 
     // Normalize the name to lowercase for fast matching (consistent with Attribute.normalizeNameForLookup)
-    const name = try Attribute.normalizeNameForLookupAlloc(arena, .wrap(attr_name));
+    const name = if (Attribute.needsLowerCasing(attr_name))
+        try Attribute.normalizeNameForLookupAlloc(arena, .wrap(attr_name))
+    else
+        lp.String.wrap(attr_name);
+
     var case_insensitive = false;
     _ = self.skipSpaces();
 
-    if (self.peek() == ']') {
-        self.input = self.input[1..];
-        return .{ .name = name, .matcher = .presence, .case_insensitive = case_insensitive };
+    // Unexpected EOF closes all open constructs per CSS Syntax, so a
+    // dangling `[foo` is a valid presence selector.
+    if (self.peek() == ']' or self.peek() == 0) {
+        if (self.peek() == ']') {
+            self.input = self.input[1..];
+        }
+        return .{
+            .name = name,
+            .matcher = .presence,
+            .original_name = .wrap(attr_name),
+            .case_insensitive = case_insensitive,
+        };
     }
 
     const matcher_type = try self.attributeMatcher();
@@ -976,10 +1007,12 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         _ = self.skipSpaces();
     }
 
-    if (self.peek() != ']') {
+    // As above, EOF stands in for the closing bracket ([align="center").
+    if (self.peek() == ']') {
+        self.input = self.input[1..];
+    } else if (self.peek() != 0) {
         return error.InvalidAttributeSelector;
     }
-    self.input = self.input[1..];
 
     const matcher: Selector.AttributeMatcher = switch (matcher_type) {
         .exact => .{ .exact = value },
@@ -991,7 +1024,12 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         .presence => unreachable,
     };
 
-    return .{ .name = name, .matcher = matcher, .case_insensitive = case_insensitive };
+    return .{
+        .name = name,
+        .matcher = matcher,
+        .original_name = .wrap(attr_name),
+        .case_insensitive = case_insensitive,
+    };
 }
 
 fn attributeName(self: *Parser, arena: Allocator) ![]const u8 {

@@ -203,6 +203,7 @@ const Commands = cli.Builder(.{
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
             // Don't widen this without growing the reader buffer in the HTTP path.
             .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
+            .{ .name = "disable_metrics", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -235,12 +236,15 @@ const Commands = cli.Builder(.{
             },
             .{ .name = "terminate_ms", .type = ?u32 },
             .{ .name = "json", .type = bool },
+            .{ .name = "metrics", .type = bool },
         },
         .shared_options = CommonOptions,
     },
     .{
         .name = "mcp",
         .options = .{
+            .{ .name = "port", .type = ?u16 },
+            .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "cdp_port", .type = ?u16 },
         },
         .shared_options = CommonOptions,
@@ -595,6 +599,20 @@ pub fn cdpMaxMessageSize(self: *const Config) u32 {
     };
 }
 
+pub fn metricsEndpointEnabled(self: *const Config) bool {
+    return switch (self.mode) {
+        .serve => |opts| !opts.disable_metrics,
+        else => unreachable,
+    };
+}
+
+pub fn dumpMetricsOnExit(self: *const Config) bool {
+    return switch (self.mode) {
+        .fetch => |opts| opts.metrics,
+        else => false,
+    };
+}
+
 pub fn cdpMaxHTTPMessageSize(self: *const Config) u14 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_http_message_size,
@@ -707,7 +725,7 @@ pub const HttpHeaders = struct {
     }
 };
 
-pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) void {
+pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: RunMode, success: bool) !void {
     const exec_name = self.exec_name;
     const Help = @import("help.zon");
     const is_debug = builtin.mode == .Debug;
@@ -715,34 +733,84 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
     const pretty_or_logfmt = if (comptime is_debug) "pretty" else "logfmt";
     const comptimePrint = std.fmt.comptimePrint;
 
-    switch (help_for) {
+    const text = switch (help_for) {
         // Requested help for everything.
-        .help => {
+        .help => text: {
             const template = comptimePrint(
                 \\{s}
                 \\
             , .{Help.general});
-            std.debug.print(template, .{exec_name});
+            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
         },
-        inline .fetch, .serve, .mcp, .agent, .run => |tag| {
+        inline .fetch, .serve, .mcp, .agent, .run => |tag| text: {
             const template = comptimePrint(
                 \\{s}
                 \\
                 \\{s}
                 \\
             , .{ @field(Help, @tagName(tag)), Help.common_options });
-            std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
+            break :text try std.fmt.allocPrint(allocator, template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
-        .version => {
+        .version => text: {
             const template = Help.version ++ "\n";
-            std.debug.print(template, .{exec_name});
+            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
         },
-    }
+    };
+    defer allocator.free(text);
 
     if (success) {
+        printPaged(allocator, text);
         return std.process.cleanExit();
     }
+    var stderr = std.fs.File.stderr().writer(&.{});
+    stderr.interface.writeAll(text) catch {};
     std.process.exit(1);
+}
+
+fn printPlain(text: []const u8) void {
+    var stdout = std.fs.File.stdout().writer(&.{});
+    stdout.interface.writeAll(text) catch {};
+}
+
+/// Pages explicitly requested help through $PAGER (fallback: less) when
+/// stdout is an interactive terminal; prints plainly otherwise.
+fn printPaged(allocator: Allocator, text: []const u8) void {
+    if (!std.posix.isatty(std.posix.STDOUT_FILENO)) {
+        return printPlain(text);
+    }
+    const term = std.posix.getenv("TERM") orelse "";
+    if (term.len == 0 or std.mem.eql(u8, term, "dumb")) {
+        return printPlain(text);
+    }
+
+    const pager = std.posix.getenv("PAGER") orelse "";
+    const argv: []const []const u8 = if (pager.len > 0)
+        &.{ "/bin/sh", "-c", pager }
+    else
+        &.{ "less", "-FIRX" };
+
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    child.spawn() catch return printPlain(text);
+
+    if (child.stdin) |stdin| {
+        var writer = stdin.writer(&.{});
+        // A write error here is the pager exiting early (user quit, or the
+        // command failed) — wait() below decides which.
+        writer.interface.writeAll(text) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+
+    const term_result = child.wait() catch return printPlain(text);
+    const clean_exit = term_result == .Exited and term_result.Exited == 0;
+    // Quitting the pager early is still exit 0; a non-zero exit means the
+    // pager failed (e.g. $PAGER not found) and the help was never shown.
+    if (!clean_exit) {
+        printPlain(text);
+    }
 }
 
 pub fn parseArgs(allocator: Allocator) !Config {

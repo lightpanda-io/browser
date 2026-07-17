@@ -50,6 +50,13 @@ _needs_retargeting: bool = false,
 _is_trusted: bool = false,
 _in_passive_listener: bool = false,
 _listeners_did_throw: bool = false, // IndexedDB needs to abort on callback throw
+// Per spec, events created via document.createEvent are not initialized
+// until one of the init*Event methods runs; dispatching one throws an
+// InvalidStateError. Events created any other way start initialized.
+_initialized: bool = true,
+// Time origin of the event's relevant global, captured at creation when
+// known; 0 means "use the accessing realm's origin" (see getTimeStamp).
+_time_origin: u64 = 0,
 
 // There's a period of time between creating an event and handing it off to v8
 // where things can fail. If it does fail, we need to deinit the event. The timing
@@ -77,6 +84,11 @@ pub const Type = union(enum) {
     page_transition_event: *@import("event/PageTransitionEvent.zig"),
     pop_state_event: *@import("event/PopStateEvent.zig"),
     hash_change_event: *@import("event/HashChangeEvent.zig"),
+    before_unload_event: *@import("event/BeforeUnloadEvent.zig"),
+    storage_event: *@import("event/StorageEvent.zig"),
+    device_motion_event: *@import("event/DeviceMotionEvent.zig"),
+    gamepad_event: *@import("event/GamepadEvent.zig"),
+    device_orientation_event: *@import("event/DeviceOrientationEvent.zig"),
     ui_event: *@import("event/UIEvent.zig"),
     promise_rejection_event: *@import("event/PromiseRejectionEvent.zig"),
     submit_event: *@import("event/SubmitEvent.zig"),
@@ -109,9 +121,9 @@ pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
 fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, comptime trusted: bool) !*Event {
     const opts = opts_ orelse Options{};
 
-    // Round to 2ms for privacy (browsers do this)
-    const raw_timestamp = @import("../../datetime.zig").milliTimestamp(.monotonic);
-    const time_stamp = (raw_timestamp / 2) * 2;
+    // Same (already coarsened) clock as the performance time origin, so the
+    // timeStamp getter can report it relative to that origin.
+    const time_stamp = @import("Performance.zig").highResTimestamp();
 
     const event = try arena.create(Event);
     event.* = .{
@@ -137,6 +149,7 @@ pub fn initEvent(
         return;
     }
 
+    self._initialized = true;
     self._type_string = try String.init(self._arena, event_string, .{});
     self._bubbles = bubbles orelse false;
     self._cancelable = cancelable orelse false;
@@ -161,6 +174,19 @@ pub fn as(self: *Event, comptime T: type) *T {
     return self.is(T).?;
 }
 
+// Storage of the subtype's relatedTarget, for event types that have one.
+// Used by dispatch for retargeting and shadow-tree resets.
+pub fn relatedTargetPtr(self: *Event) ?*?*EventTarget {
+    switch (self._type) {
+        .ui_event => |ui| switch (ui._type) {
+            .mouse_event => |me| return &me._related_target,
+            .focus_event => |fe| return &fe._related_target,
+            else => return null,
+        },
+        else => return null,
+    }
+}
+
 pub fn is(self: *Event, comptime T: type) ?*T {
     switch (self._type) {
         .generic => return if (T == Event) self else null,
@@ -172,6 +198,11 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .page_transition_event => |e| return if (T == @import("event/PageTransitionEvent.zig")) e else null,
         .pop_state_event => |e| return if (T == @import("event/PopStateEvent.zig")) e else null,
         .hash_change_event => |e| return if (T == @import("event/HashChangeEvent.zig")) e else null,
+        .before_unload_event => |e| return if (T == @import("event/BeforeUnloadEvent.zig")) e else null,
+        .storage_event => |e| return if (T == @import("event/StorageEvent.zig")) e else null,
+        .device_motion_event => |e| return if (T == @import("event/DeviceMotionEvent.zig")) e else null,
+        .gamepad_event => |e| return if (T == @import("event/GamepadEvent.zig")) e else null,
+        .device_orientation_event => |e| return if (T == @import("event/DeviceOrientationEvent.zig")) e else null,
         .promise_rejection_event => |e| return if (T == @import("event/PromiseRejectionEvent.zig")) e else null,
         .submit_event => |e| return if (T == @import("event/SubmitEvent.zig")) e else null,
         .form_data_event => |e| return if (T == @import("event/FormDataEvent.zig")) e else null,
@@ -257,8 +288,12 @@ pub fn getEventPhase(self: *const Event) u8 {
     return @intFromEnum(self._event_phase);
 }
 
-pub fn getTimeStamp(self: *const Event) u64 {
-    return self._time_stamp;
+pub fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
+    const origin = if (self._time_origin != 0) self._time_origin else exec.performance()._time_origin;
+    if (self._time_stamp <= origin) {
+        return 0.0;
+    }
+    return @as(f64, @floatFromInt(self._time_stamp - origin)) / 1000.0;
 }
 
 pub fn setTrusted(self: *Event) void {
@@ -470,7 +505,14 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(Event.init, .{});
+    pub const constructor = bridge.constructor(struct {
+        fn wrap(typ: []const u8, opts_: ?Options, exec: *js.Execution) !*Event {
+            const event = try Event.init(typ, opts_, exec.page);
+            // capture the realm's time
+            event._time_origin = exec.performance()._time_origin;
+            return event;
+        }
+    }.wrap, .{});
     pub const @"type" = bridge.accessor(Event.getType, null, .{});
     pub const bubbles = bridge.accessor(Event.getBubbles, null, .{});
     pub const cancelable = bridge.accessor(Event.getCancelable, null, .{});
@@ -481,7 +523,7 @@ pub const JsApi = struct {
     pub const eventPhase = bridge.accessor(Event.getEventPhase, null, .{});
     pub const defaultPrevented = bridge.accessor(Event.getDefaultPrevented, null, .{});
     pub const timeStamp = bridge.accessor(Event.getTimeStamp, null, .{});
-    pub const isTrusted = bridge.accessor(Event.getIsTrusted, null, .{});
+    pub const isTrusted = bridge.accessor(Event.getIsTrusted, null, .{ .unforgeable = true, .deletable = false });
     pub const preventDefault = bridge.function(Event.preventDefault, .{});
     pub const stopPropagation = bridge.function(Event.stopPropagation, .{});
     pub const stopImmediatePropagation = bridge.function(Event.stopImmediatePropagation, .{});

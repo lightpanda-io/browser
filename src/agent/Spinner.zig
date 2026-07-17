@@ -19,8 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
-const Terminal = @import("Terminal.zig");
-const ansi = Terminal.ansi;
+const ansi = @import("ansi.zig");
 const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
 const Spinner = @This();
@@ -70,6 +69,11 @@ mu: std.Thread.Mutex = .{},
 cv: std.Thread.Condition = .{},
 state: State = .idle,
 frame: u8 = 0,
+/// True while a caller streams assistant text to stdout: the worker stops
+/// rendering and the current frame is cleared, so the stderr spinner does not
+/// interleave with the streamed line. Turn state (timer, tool count) is
+/// preserved for the eventual `stop`.
+paused: bool = false,
 
 tool_calls: u32 = 0,
 turn_started_ns: i128 = 0,
@@ -105,6 +109,7 @@ pub fn start(self: *Spinner) void {
     self.mu.lock();
     defer self.mu.unlock();
     self.state = .thinking;
+    self.paused = false;
     self.frame = 0;
     self.tool_calls = 0;
     self.turn_started_ns = std.time.nanoTimestamp();
@@ -143,6 +148,7 @@ pub fn stop(self: *Spinner) void {
     _ = std.posix.write(std.posix.STDERR_FILENO, summary) catch {};
 
     self.state = .idle;
+    self.paused = false;
     self.last_render_len = 0;
 }
 
@@ -155,7 +161,23 @@ pub fn cancel(self: *Spinner) void {
     if (self.state == .idle) return;
     _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
     self.state = .idle;
+    self.paused = false;
     self.last_render_len = 0;
+}
+
+/// Clear the current frame and stop rendering without ending the turn, so the
+/// caller can stream text to stdout. The next explicit state change
+/// (`setTool`/`stop`/`cancel`/`start`) clears `paused` and resumes the
+/// animation. No-op when idle or already paused.
+pub fn pause(self: *Spinner) void {
+    if (!self.isEnabled()) return;
+    self.mu.lock();
+    defer self.mu.unlock();
+    if (self.state == .idle or self.paused) return;
+    self.paused = true;
+    _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
+    self.last_render_len = 0;
+    self.cv.signal();
 }
 
 /// Switch the indicator to "running tool <name> <args>". Counts toward the
@@ -166,6 +188,8 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     if (!self.isEnabled()) return;
     self.mu.lock();
     defer self.mu.unlock();
+    // A tool call ends any in-progress text stream; resume normal rendering.
+    self.paused = false;
     const manual = self.state == .idle;
     self.tool_calls += 1;
     var tool: ToolState = .{ .set_ns = std.time.nanoTimestamp(), .manual = manual };
@@ -224,7 +248,7 @@ fn workerLoop(self: *Spinner) void {
     self.mu.lock();
     defer self.mu.unlock();
     while (!self.should_exit) {
-        while (!self.should_exit and self.state == .idle) self.cv.wait(&self.mu);
+        while (!self.should_exit and (self.state == .idle or self.paused)) self.cv.wait(&self.mu);
         if (self.should_exit) return;
 
         switch (self.state) {
@@ -266,7 +290,7 @@ fn renderLocked(self: *Spinner) void {
             // (glyph, two spaces, `[`, `]`) around prefix+name+args. `\r` and
             // ANSI escapes are zero-width, so they don't count toward wrap.
             const decoration_cells: usize = 5 + prefix.len + name.len;
-            const cols: usize = Terminal.columns() orelse 80;
+            const cols: usize = columns() orelse 80;
             // Reserve one extra cell so the line is strictly less than `cols`:
             // auto-wrap (DECAWM) terminals advance past a row that exactly fills
             // the width.
@@ -286,6 +310,21 @@ fn renderLocked(self: *Spinner) void {
     @memcpy(self.last_render_buf[0..written.len], written);
     self.last_render_len = written.len;
     _ = std.posix.write(std.posix.STDERR_FILENO, written) catch {};
+}
+
+/// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
+/// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
+/// (some pseudo-ttys leave the field unset). Cheap enough to call per render
+/// frame; picks up resizes without SIGWINCH plumbing.
+fn columns() ?u16 {
+    var ws: std.posix.winsize = undefined;
+    // bitcast via c_uint: on archs where `_IOR` sets the direction bit
+    // (MIPS/PPC/SPARC), `IOCGWINSZ` exceeds i32 range, so a plain @intCast
+    // panics; the bitcast preserves the bit pattern.
+    const req: c_int = @bitCast(@as(c_uint, std.posix.T.IOCGWINSZ));
+    const rc = std.c.ioctl(std.posix.STDERR_FILENO, req, &ws);
+    if (rc != 0 or ws.col == 0) return null;
+    return ws.col;
 }
 
 /// Returns the byte length of `bytes` that fits in `max_cells` cells, rounded

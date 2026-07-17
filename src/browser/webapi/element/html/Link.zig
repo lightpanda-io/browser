@@ -22,6 +22,8 @@ const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const DOMTokenList = @import("../../collections.zig").DOMTokenList;
+
 const HtmlElement = @import("../Html.zig");
 
 const Link = @This();
@@ -187,6 +189,23 @@ pub fn setTarget(self: *Link, value: []const u8, frame: *Frame) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
 }
 
+pub fn getSizes(self: *Link, frame: *Frame) !?*DOMTokenList {
+    const element = self.asElement();
+    if (element._namespace != .html) {
+        return null;
+    }
+    return element.getTokenList(.sizes, frame);
+}
+
+pub fn getRelList(self: *Link, frame: *Frame) !?*DOMTokenList {
+    const element = self.asElement();
+    // relList is only valid for HTML <link> elements, not SVG or MathML
+    if (element._namespace != .html) {
+        return null;
+    }
+    return element.getRelList(frame);
+}
+
 pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     // if we're planning on navigating to another frame, don't trigger load event.
     if (frame.isGoingAway()) {
@@ -211,7 +230,7 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     if (std.mem.eql(u8, rel, "preload")) {
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (std.ascii.eqlIgnoreCase(as, "script")) {
-            if (frame.preloadScriptHint(self._proto, href)) {
+            if (Frame.preload.scriptHint(frame, self._proto, href)) {
                 // load/error fires when the fetch settles
                 return;
             }
@@ -224,7 +243,7 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
         // "as" defaults to script in this case
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (as.len == 0 or std.ascii.eqlIgnoreCase(as, "script")) {
-            if (frame.preloadModuleHint(self._proto, href)) {
+            if (Frame.preload.moduleHint(frame, self._proto, href)) {
                 // load/error fires when the fetch settles
                 return;
             }
@@ -255,16 +274,8 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Link.getType, Link.setType, .{ .ce_reactions = true });
     pub const rev = bridge.accessor(Link.getRev, Link.setRev, .{ .ce_reactions = true });
     pub const target = bridge.accessor(Link.getTarget, Link.setTarget, .{ .ce_reactions = true });
-    pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
-
-    fn _getRelList(self: *Link, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
-        const element = self.asElement();
-        // relList is only valid for HTML <link> elements, not SVG or MathML
-        if (element._namespace != .html) {
-            return null;
-        }
-        return element.getRelList(frame);
-    }
+    pub const relList = bridge.accessor(Link.getRelList, null, .{ .null_as_undefined = true });
+    pub const sizes = bridge.accessor(Link.getSizes, null, .{ .null_as_undefined = true });
 };
 
 // Parser-created <link> elements are void (no closing tag) so they never
@@ -290,10 +301,9 @@ test "WebApi: HTML.Link external stylesheet" {
 }
 
 // Regression: a synchronous external-stylesheet fetch must not strand the
-// completion of an in-flight <script defer> (deferred by the blocking-request
-// window). Otherwise the deferred-script queue never drains and the document
-// is stuck at readyState "loading". See Frame.loadExternalStylesheet's
-// flushFrame call.
+// completion of an in-flight <script defer> (held back by the blocking-
+// request gate during the sync window). Otherwise the deferred-script queue
+// never drains and the document is stuck at readyState "loading".
 test "WebApi: HTML.Link deferred script then external stylesheet" {
     const filter: testing.LogFilter = .init(&.{.http});
     defer filter.deinit();

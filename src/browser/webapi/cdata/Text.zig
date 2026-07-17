@@ -16,8 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Node = @import("../Node.zig");
 const CData = @import("../CData.zig");
 const Slot = @import("../element/html/Slot.zig");
 const slotting = @import("../element/slotting.zig");
@@ -31,8 +34,41 @@ pub fn init(str: ?js.NullableString, frame: *Frame) !*Text {
     return node.as(Text);
 }
 
-pub fn getWholeText(self: *Text) []const u8 {
+// This Text node's own data (getWholeText below spans adjacent Text nodes).
+pub fn ownData(self: *const Text) []const u8 {
     return self._proto._data.str();
+}
+
+// The concatenated data of the contiguous exclusive Text nodes (adjacent
+// Text siblings on both sides of this one), in tree order.
+pub fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
+    const node = self._proto.asNode();
+
+    var first = node;
+    while (first.previousSibling()) |prev| {
+        if (!isExclusiveTextNode(prev)) {
+            break;
+        }
+        first = prev;
+    }
+
+    // Common case: no adjacent text nodes, return our data directly.
+    const has_next_text = if (node.nextSibling()) |next| isExclusiveTextNode(next) else false;
+    if (first == node and !has_next_text) {
+        return self._proto._data.str();
+    }
+
+    var buf: std.ArrayList(u8) = .empty;
+    var current: ?*Node = first;
+    while (current) |cur| : (current = cur.nextSibling()) {
+        const text = cur.is(Text) orelse break;
+        try buf.appendSlice(frame.local_arena, text.ownData());
+    }
+    return buf.items;
+}
+
+fn isExclusiveTextNode(node: *Node) bool {
+    return node.is(Text) != null;
 }
 
 pub fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {

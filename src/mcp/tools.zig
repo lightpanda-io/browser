@@ -36,11 +36,45 @@ const save_schema = browser_tools.minify(
     \\}
 );
 
+const session_new_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "name": { "type": "string", "description": "Optional id for the new session. Omit to get an auto-generated one. Reusing an existing id returns that session (a way to share one browsing context between agents)." }
+    \\  }
+    \\}
+);
+
+const session_id_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "id": { "type": "string", "description": "The session id." }
+    \\  },
+    \\  "required": ["id"]
+    \\}
+);
+
 const extra_tools = [_]McpTool{
     .{
         .name = "save",
         .description = "Save the session as a reusable Lightpanda agent script. You hold the conversation, so synthesize the `script` yourself — `const page = new Page(); await page.goto(url);` then call the builtins you used as tools (extract, click, fill, …) as methods on `page` with the same object arguments. Keep `$LP_*` placeholders; never inline a resolved secret.\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
         .inputSchema = save_schema,
+    },
+    .{
+        .name = "session_new",
+        .description = "Create a new isolated browser session (its own page, cookies and memory) and return its id. Use it to give a separate agent its own browsing context, or to obtain an id to share. Pass that id back as the `Mcp-Session-Id` header to route calls to it.",
+        .inputSchema = session_new_schema,
+    },
+    .{
+        .name = "session_list",
+        .description = "List the active browser sessions with their id and current URL. The `default` session always exists.",
+        .inputSchema = browser_tools.minify("{ \"type\": \"object\", \"properties\": {} }"),
+    },
+    .{
+        .name = "session_close",
+        .description = "Close a browser session, freeing its page and memory. The `default` session cannot be closed.",
+        .inputSchema = session_id_schema,
     },
 };
 
@@ -49,6 +83,9 @@ const all_tools = browser_tool_list ++ extra_tools;
 /// Tools that bypass the browser-tool dispatch and have their own handlers.
 const ExtraTool = enum {
     save,
+    session_new,
+    session_list,
+    session_close,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -68,6 +105,9 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
         return switch (tool) {
             .save => handleSave(server, arena, id, call_params.arguments),
+            .session_new => handleSessionNew(server, arena, id, call_params.arguments),
+            .session_list => handleSessionList(server, arena, id),
+            .session_close => handleSessionClose(server, arena, id, call_params.arguments),
         };
     }
 
@@ -85,7 +125,8 @@ fn dispatchBrowserTool(
         return server.sendError(id, .MethodNotFound, "Tool not found");
     };
 
-    const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
+    const active = server.active_session;
+    const result = browser_tools.call(arena, active.session, &active.node_registry, name, arguments) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -138,6 +179,72 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     try sendToolResultText(server, id, msg, false);
 }
 
+/// The session tools require the HTTP transport's parked-isolate discipline:
+/// a second session means a second V8 isolate, only safe when isolates are
+/// entered around use. Over stdio (one permanently-entered isolate) they are
+/// all unsupported, kept uniform so clients see one consistent rule.
+fn requireMultiSession(server: *Server, id: std.json.Value) !bool {
+    if (server.park_isolates) return true;
+    try sendToolResultText(server, id, "multiple sessions require the HTTP transport (start with --port)", true);
+    return false;
+}
+
+fn handleSessionNew(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    if (!try requireMultiSession(server, id)) return;
+    const Args = struct { name: ?[]const u8 = null };
+    const args = browser_tools.parseArgsOrDefault(Args, arena, arguments) catch {
+        return server.sendError(id, .InvalidParams, "expected { name?: string }");
+    };
+
+    const requested: ?[]const u8 = if (args.name) |n| (if (n.len > 0) n else null) else null;
+    const sid = requested orelse (server.nextSessionId(arena) catch
+        return sendErrorContent(server, id, "out of memory"));
+
+    _ = server.createSession(sid) catch |err|
+        return sendErrorContent(server, id, @errorName(err));
+
+    return sendToolResultFmt(server, arena, id, "session {s}", .{sid});
+}
+
+fn handleSessionList(server: *Server, arena: std.mem.Allocator, id: std.json.Value) !void {
+    if (!try requireMultiSession(server, id)) return;
+    const Entry = struct { id: []const u8, url: ?[]const u8 };
+    var list: std.ArrayList(Entry) = .empty;
+
+    var it = server.sessions.valueIterator();
+    while (it.next()) |entry| {
+        const url: ?[]const u8 = if (entry.*.session.currentFrame()) |frame| frame.url else null;
+        list.append(arena, .{ .id = entry.*.id, .url = url }) catch
+            return sendErrorContent(server, id, "out of memory");
+    }
+
+    const json = std.json.Stringify.valueAlloc(arena, list.items, .{ .emit_null_optional_fields = false }) catch
+        return sendErrorContent(server, id, "out of memory");
+    try sendToolResultText(server, id, json, false);
+}
+
+fn handleSessionClose(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    if (!try requireMultiSession(server, id)) return;
+    const Args = struct { id: []const u8 };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
+        return server.sendError(id, .InvalidParams, "expected { id: string }");
+    };
+
+    if (std.mem.eql(u8, args.id, Server.default_session_id)) {
+        return sendErrorContent(server, id, "the default session cannot be closed");
+    }
+    // Closing the session serving this very call would tear down the isolate
+    // mid-dispatch; require the client to be elsewhere first.
+    if (std.mem.eql(u8, args.id, server.active_session.id)) {
+        return sendErrorContent(server, id, "cannot close the session you are attached to");
+    }
+    if (!server.closeSession(args.id)) {
+        return sendErrorContent(server, id, "no such session");
+    }
+
+    return sendToolResultFmt(server, arena, id, "closed session {s}", .{args.id});
+}
+
 fn writeScript(path: []const u8, content: []const u8) !void {
     const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
@@ -152,6 +259,12 @@ fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_e
 
 fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
     return sendToolResultText(server, id, msg, true);
+}
+
+fn sendToolResultFmt(server: *Server, arena: std.mem.Allocator, id: std.json.Value, comptime fmt: []const u8, args: anytype) !void {
+    const msg = std.fmt.allocPrint(arena, fmt, args) catch
+        return sendErrorContent(server, id, "out of memory");
+    return sendToolResultText(server, id, msg, false);
 }
 
 const router = @import("router.zig");
@@ -861,11 +974,11 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    const frame = server.session.currentFrame().?;
+    const frame = server.active_session.session.currentFrame().?;
 
     {
         const btn = frame.document.getElementById("btn", frame).?.asNode();
-        const btn_id = (try server.node_registry.register(btn)).id;
+        const btn_id = (try server.active_session.node_registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
         const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
         const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
@@ -877,7 +990,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const inp = frame.document.getElementById("inp", frame).?.asNode();
-        const inp_id = (try server.node_registry.register(inp)).id;
+        const inp_id = (try server.active_session.node_registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
         const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
         const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"value\":\"hello\"}}}" });
@@ -889,7 +1002,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const sel = frame.document.getElementById("sel", frame).?.asNode();
-        const sel_id = (try server.node_registry.register(sel)).id;
+        const sel_id = (try server.active_session.node_registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
         const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
         const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"value\":\"opt2\"}}}" });
@@ -901,7 +1014,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
-        const scrollbox_id = (try server.node_registry.register(scrollbox)).id;
+        const scrollbox_id = (try server.active_session.node_registry.register(scrollbox)).id;
         var scroll_id_buf: [12]u8 = undefined;
         const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
         const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
@@ -912,7 +1025,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
-        const el_id = (try server.node_registry.register(el)).id;
+        const el_id = (try server.active_session.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"hover\",\"arguments\":{\"backendNodeId\":", id_str, "}}}" });
@@ -923,7 +1036,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("keyTarget", frame).?.asNode();
-        const el_id = (try server.node_registry.register(el)).id;
+        const el_id = (try server.active_session.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"key\":\"Enter\",\"backendNodeId\":", id_str, "}}}" });
@@ -934,7 +1047,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("sel2", frame).?.asNode();
-        const el_id = (try server.node_registry.register(el)).id;
+        const el_id = (try server.active_session.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"selectOption\",\"arguments\":{\"backendNodeId\":", id_str, ",\"value\":\"b\"}}}" });
@@ -945,7 +1058,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("chk", frame).?.asNode();
-        const el_id = (try server.node_registry.register(el)).id;
+        const el_id = (try server.active_session.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
@@ -956,7 +1069,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("rad", frame).?.asNode();
-        const el_id = (try server.node_registry.register(el)).id;
+        const el_id = (try server.active_session.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
@@ -999,10 +1112,10 @@ test "MCP - click that navigates clears node registry" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_nav.html", &out.writer);
     defer server.deinit();
 
-    const before_frame = server.session.currentFrame().?;
+    const before_frame = server.active_session.session.currentFrame().?;
     const link = before_frame.document.getElementById("navlink", before_frame).?.asNode();
-    const link_id = (try server.node_registry.register(link)).id;
-    try testing.expect(server.node_registry.lookup_by_id.contains(link_id));
+    const link_id = (try server.active_session.node_registry.register(link)).id;
+    try testing.expect(server.active_session.node_registry.lookup_by_id.contains(link_id));
 
     var id_buf: [12]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{link_id}) catch unreachable;
@@ -1013,8 +1126,8 @@ test "MCP - click that navigates clears node registry" {
     });
     try router.handleMessage(server, aa, click_msg);
 
-    try testing.expect(server.session.currentFrame().? != before_frame);
-    try testing.expect(!server.node_registry.lookup_by_id.contains(link_id));
+    try testing.expect(server.active_session.session.currentFrame().? != before_frame);
+    try testing.expect(!server.active_session.node_registry.lookup_by_id.contains(link_id));
 }
 
 test "MCP - Actions by selector: hover, selectOption, setChecked" {
@@ -1026,7 +1139,7 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     defer server.deinit();
 
     // Single-page test: reach straight into the live page.
-    const page = server.session.pages.items[0];
+    const page = server.active_session.session.pages.items[0];
 
     {
         const msg =
@@ -1291,8 +1404,8 @@ test "MCP - getCookies: defaults to current page, url filter, all flag" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.htm", &out.writer);
     defer server.deinit();
 
-    try server.session.cookie_jar.populateFromResponse("http://localhost:9582", "session=abc; Path=/");
-    try server.session.cookie_jar.populateFromResponse("http://other.test/", "tracking=xyz; Path=/");
+    try server.active_session.session.cookie_jar.populateFromResponse("http://localhost:9582", "session=abc; Path=/");
+    try server.active_session.session.cookie_jar.populateFromResponse("http://other.test/", "tracking=xyz; Path=/");
 
     const default_msg =
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getCookies"}}
@@ -1331,7 +1444,7 @@ test "MCP - getCookies without a loaded page refuses instead of dumping the jar"
     var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
     defer server.deinit();
 
-    try server.session.cookie_jar.populateFromResponse("http://example.com/", "session=abc; Path=/");
+    try server.active_session.session.cookie_jar.populateFromResponse("http://example.com/", "session=abc; Path=/");
 
     const msg =
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getCookies"}}
@@ -1358,14 +1471,64 @@ test "MCP - waitForState with bad state surfaces rich error" {
     try testing.expect(std.mem.indexOf(u8, written, "isError\":true") != null);
 }
 
+test "MCP - sessions: new, list, attach isolation, close" {
+    defer testing.reset();
+    const aa = testing.arena_allocator;
+    var out: std.io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+    // Session tools require the HTTP transport's parked-isolate discipline.
+    server.enableIsolateParking();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_new","arguments":{"name":"a"}}}
+    );
+    try testing.expect(std.mem.indexOf(u8, out.written(), "session a") != null);
+    try testing.expect(server.sessions.contains("a"));
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list"}}
+    );
+    // The listing is JSON nested in the tool-result text, so its quotes are
+    // escaped (\"default\").
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\\\"default\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\\\"a\\\"") != null);
+
+    // Routing a request to "a" (as the Mcp-Session-Id header does) and loading
+    // a page there leaves the default untouched, proving the two are isolated.
+    _ = try server.useSession("a");
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"goto","arguments":{"url":"about:blank"}}}
+    );
+    try testing.expect(server.sessions.get("a").?.session.currentFrame() != null);
+    try testing.expect(server.defaultSession().session.currentFrame() == null);
+
+    // Route back to the default before closing "a" (the active session can't be closed).
+    _ = try server.useSession(null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"default"}}}
+    );
+    try testing.expect(std.mem.indexOf(u8, out.written(), "cannot be closed") != null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"a"}}}
+    );
+    try testing.expect(std.mem.indexOf(u8, out.written(), "closed session a") != null);
+    try testing.expect(!server.sessions.contains("a"));
+}
+
 fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     var server = try Server.init(testing.allocator, testing.test_app, writer);
     errdefer server.deinit();
 
-    const page = try server.session.createPage();
+    const page = try server.active_session.session.createPage();
     try page.navigate(url, .{});
 
-    var runner = server.session.runner(.{});
+    var runner = server.active_session.session.runner(.{});
     try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
     return server;
 }

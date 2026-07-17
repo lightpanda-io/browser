@@ -17,15 +17,21 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+
 const dom = @import("dom.zig");
+
+const log = lp.log;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         disable,
         getFullAXTree,
+        getPartialAXTree,
         queryAXTree,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
@@ -33,6 +39,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
         .getFullAXTree => return getFullAXTree(cmd),
+        .getPartialAXTree => return getPartialAXTree(cmd),
         .queryAXTree => return queryAXTree(cmd),
     }
 }
@@ -96,6 +103,38 @@ fn queryAXTree(cmd: *CDP.Command) !void {
     }) }, .{});
 }
 
+fn getPartialAXTree(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?u32 = null,
+        backendNodeId: ?u32 = null,
+        objectId: ?[]const u8 = null,
+        // Accepted for Chrome protocol compatibility. The ancestor chain is
+        // not yet emitted; this returns the subtree rooted at the resolved
+        // node, matching the scope of queryAXTree.
+        fetchRelatives: ?bool = null,
+    })) orelse return error.InvalidParams;
+
+    if (params.fetchRelatives orelse true) {
+        // orelse true, because that's what Chrome defaults too, and if people
+        // aren't setting it, then they're expecting true.
+        log.warn(.not_implemented, "getPartialAXTree", .{
+            .cdp_cmd = "Accessibility.getPartialAXTree",
+            .param = "fetchRelatives",
+        });
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = try dom.getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
+
+    // No filter: emit the full accessibility subtree rooted at the resolved
+    // node, the same shape getFullAXTree produces for the document root.
+    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{}) }, .{});
+}
+
 const testing = @import("../testing.zig");
 
 test "cdp.accessibility: queryAXTree requires nodeId, backendNodeId or objectId" {
@@ -123,6 +162,35 @@ test "cdp.accessibility: queryAXTree with unknown nodeId returns error" {
         .id = 1,
         .method = "Accessibility.queryAXTree",
         .params = .{ .nodeId = 99999 },
+    });
+    try ctx.expectSentError(-31998, "NodeNotFound", .{ .id = 1 });
+}
+
+test "cdp.accessibility: getPartialAXTree requires nodeId, backendNodeId or objectId" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
+
+    // Params present but no node identifier — dom.getNode returns MissingParams.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Accessibility.getPartialAXTree",
+        .params = .{ .fetchRelatives = false },
+    });
+    try ctx.expectSentError(-31998, "MissingParams", .{ .id = 1 });
+}
+
+test "cdp.accessibility: getPartialAXTree with unknown nodeId returns error" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Accessibility.getPartialAXTree",
+        .params = .{ .nodeId = 99999, .fetchRelatives = false },
     });
     try ctx.expectSentError(-31998, "NodeNotFound", .{ .id = 1 });
 }

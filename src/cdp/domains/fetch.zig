@@ -204,13 +204,7 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
         .requestId = &id.toInterceptId(transfer.id),
         .frameId = &id.toFrameId(transfer.req.frame_id),
         .request = network.RequestWriter.init(transfer),
-        .resourceType = switch (transfer.req.resource_type) {
-            .script => "Script",
-            .xhr => "XHR",
-            .document => "Document",
-            .fetch => "Fetch",
-            .stylesheet => "Stylesheet",
-        },
+        .resourceType = transfer.req.resource_type.string(),
         .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
 
@@ -290,7 +284,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         request.body = body;
     }
 
-    try client.interception_layer.continueRequest(transfer);
+    try client.continueIntercepted(transfer);
     return cmd.sendResult(null, .{});
 }
 
@@ -396,7 +390,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
         body = buf;
     }
 
-    try client.interception_layer.fulfillRequest(transfer, params.responseCode, params.responseHeaders orelse &.{}, body);
+    try client.fulfillIntercepted(transfer, params.responseCode, params.responseHeaders orelse &.{}, body);
     return cmd.sendResult(null, .{});
 }
 
@@ -417,7 +411,7 @@ fn failRequest(cmd: *CDP.Command) !void {
         return cmd.sendResult(null, .{});
     };
 
-    defer client.interception_layer.abortRequest(transfer);
+    defer transfer.abortParked(error.Abort);
 
     log.info(.cdp, "request intercept", .{
         .state = "fail",
@@ -448,13 +442,7 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
         .requestId = &id.toInterceptId(transfer.id),
         .frameId = &id.toFrameId(request.frame_id),
         .request = network.RequestWriter.init(transfer),
-        .resourceType = switch (request.resource_type) {
-            .script => "Script",
-            .xhr => "XHR",
-            .document => "Document",
-            .fetch => "Fetch",
-            .stylesheet => "Stylesheet",
-        },
+        .resourceType = request.resource_type.string(),
         .authChallenge = .{
             .origin = "", // TODO get origin, could be the proxy address for example.
             .source = if (challenge.source) |s| (if (s == .server) "Server" else "Proxy") else "",

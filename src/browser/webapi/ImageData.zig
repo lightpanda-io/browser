@@ -27,6 +27,8 @@ const Execution = js.Execution;
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/ImageData/ImageData
 const ImageData = @This();
+
+_rc: lp.RC(u8) = .{},
 _width: u32,
 _height: u32,
 _data: js.ArrayBufferRef(.uint8_clamped).Global,
@@ -74,15 +76,33 @@ pub fn init(
     }
 
     var size, var overflown = @mulWithOverflow(width, height);
-    if (overflown == 1) return error.IndexSizeError;
+    if (overflown == 1) {
+        return error.IndexSizeError;
+    }
+
     size, overflown = @mulWithOverflow(size, 4);
-    if (overflown == 1) return error.IndexSizeError;
+    if (overflown == 1) {
+        return error.IndexSizeError;
+    }
 
     return exec._factory.create(ImageData{
         ._width = width,
         ._height = height,
         ._data = try exec.js.local.?.createTypedArray(.uint8_clamped, size).persist(),
     });
+}
+
+pub fn deinit(self: *ImageData, page: *Page) void {
+    self._data.release();
+    page.factory.destroy(self);
+}
+
+pub fn releaseRef(self: *ImageData, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *ImageData) void {
+    self._rc.acquire();
 }
 
 pub fn structuredSerialize(self: *const ImageData, writer: *js.StructuredWriter) !void {

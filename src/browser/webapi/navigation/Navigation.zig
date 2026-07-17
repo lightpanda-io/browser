@@ -56,10 +56,21 @@ fn asEventTarget(self: *Navigation) *EventTarget {
 
 pub fn onRemoveFrame(self: *Navigation) void {
     self._proto = undefined;
+    if (self._on_currententrychange) |cb| cb.release();
+    self._on_currententrychange = null;
+
+    for (self._entries.items) |entry| {
+        if (entry._on_dispose) |cb| cb.release();
+        entry._on_dispose = null;
+        entry._proto = undefined;
+    }
 }
 
 pub fn onNewFrame(self: *Navigation, frame: *Frame) !void {
     self._proto = try frame._factory.standaloneEventTarget(self);
+    for (self._entries.items) |entry| {
+        entry._proto = try frame._factory.standaloneEventTarget(entry);
+    }
 }
 
 pub fn getActivation(self: *const Navigation) ?NavigationActivation {
@@ -183,9 +194,25 @@ pub fn pushEntry(
     const url = try arena.dupeZ(u8, _url);
 
     // truncates our history here.
-    if (self._entries.items.len > self._index + 1) {
-        self._entries.shrinkRetainingCapacity(self._index + 1);
+    const retained_index = self._index + 1;
+    var disposed: []*NavigationHistoryEntry = &.{};
+    if (self._entries.items.len > retained_index) {
+        disposed = try frame.call_arena.dupe(
+            *NavigationHistoryEntry,
+            self._entries.items[retained_index..],
+        );
+        self._entries.shrinkRetainingCapacity(retained_index);
     }
+
+    // Per spec, dispose fires last: after the entry list is updated and
+    // currententrychange has been dispatched. These entries are already out
+    // of _entries, so fire even if a later step fails, and don't let one
+    // entry's failure skip the others.
+    defer for (disposed) |d| {
+        d.fireDispose(frame) catch |err| {
+            log.warn(.event, "NavigationHistoryEntry.dispose", .{ .err = err });
+        };
+    };
 
     const index = self._entries.items.len;
 
@@ -196,6 +223,7 @@ pub fn pushEntry(
 
     const entry = try arena.create(NavigationHistoryEntry);
     entry.* = NavigationHistoryEntry{
+        ._proto = try frame._factory.standaloneEventTarget(entry),
         ._id = id_str,
         ._key = id_str,
         ._url = url,
@@ -207,17 +235,15 @@ pub fn pushEntry(
     try self._entries.append(arena, entry);
     self._index = index;
 
-    if (previous == null or should_dispatch == false) {
-        return entry;
-    }
-
-    if (self._on_currententrychange) |cec| {
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous.?, .navigationType = @tagName(.push) },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
+    if (previous != null and should_dispatch) {
+        if (self._on_currententrychange) |cec| {
+            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
+                .wrap("currententrychange"),
+                .{ .from = previous.?, .navigationType = @tagName(.push) },
+                frame,
+            )).asEvent();
+            try self.dispatch(cec, event, frame);
+        }
     }
 
     return entry;
@@ -241,25 +267,31 @@ pub fn replaceEntry(
 
     const entry = try arena.create(NavigationHistoryEntry);
     entry.* = NavigationHistoryEntry{
+        ._proto = try frame._factory.standaloneEventTarget(entry),
         ._id = id_str,
         ._key = previous._key,
         ._url = url,
         ._state = state,
     };
 
+    const old_entry = self._entries.items[self._index];
     self._entries.items[self._index] = entry;
 
-    if (should_dispatch == false) {
-        return entry;
-    }
+    // Per spec, dispose fires last, after currententrychange. old_entry is
+    // already out of _entries, so fire even if the dispatch below fails.
+    defer old_entry.fireDispose(frame) catch |err| {
+        log.warn(.event, "NavigationHistoryEntry.dispose", .{ .err = err });
+    };
 
-    if (self._on_currententrychange) |cec| {
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = @tagName(.replace) },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
+    if (should_dispatch) {
+        if (self._on_currententrychange) |cec| {
+            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
+                .wrap("currententrychange"),
+                .{ .from = previous, .navigationType = @tagName(.replace) },
+                frame,
+            )).asEvent();
+            try self.dispatch(cec, event, frame);
+        }
     }
 
     return entry;
@@ -464,6 +496,7 @@ fn getOnCurrentEntryChange(self: *Navigation) ?js.Function.Global {
 }
 
 pub fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
+    if (self._on_currententrychange) |old| old.release();
     if (listener) |listen| {
         self._on_currententrychange = try listen.persistWithThis(self);
     } else {

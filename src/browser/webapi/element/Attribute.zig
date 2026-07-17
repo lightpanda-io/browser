@@ -529,15 +529,7 @@ fn normalizeNameForLookup(name: String, frame: *Frame) !String {
     return .wrap(normalized);
 }
 
-pub fn normalizeNameForLookupAlloc(allocator: Allocator, name: String) !String {
-    if (!needsLowerCasing(name.str())) {
-        return name.dupe(allocator);
-    }
-    const normalized = try std.ascii.allocLowerString(allocator, name.str());
-    return .wrap(normalized);
-}
-
-fn needsLowerCasing(name: []const u8) bool {
+pub fn needsLowerCasing(name: []const u8) bool {
     var remaining = name;
     if (comptime std.simd.suggestVectorLength(u8)) |vector_len| {
         while (remaining.len > vector_len) {
@@ -555,6 +547,11 @@ fn needsLowerCasing(name: []const u8) bool {
         }
     }
     return false;
+}
+
+pub fn normalizeNameForLookupAlloc(allocator: Allocator, name: String) !String {
+    const normalized = try std.ascii.allocLowerString(allocator, name.str());
+    return .wrap(normalized);
 }
 
 pub const NamedNodeMap = struct {
@@ -620,8 +617,26 @@ pub const NamedNodeMap = struct {
         };
 
         pub const length = bridge.accessor(NamedNodeMap.length, null, .{});
-        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, null, .{ .null_as_undefined = true });
-        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, null, null, .{ .null_as_undefined = true });
+        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, getIndexes, .{ .null_as_undefined = true });
+        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, getNames, null, .{ .null_as_undefined = true });
+
+        fn getIndexes(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+            const len = self.length();
+            var arr = frame.js.local.?.newArray(len);
+            for (0..len) |i| {
+                _ = try arr.set(@intCast(i), i, .{});
+            }
+            return arr;
+        }
+
+        fn getNames(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+            const names = try self.list().getNames(frame.local_arena);
+            var arr = frame.js.local.?.newArray(@intCast(names.len));
+            for (names, 0..) |name, i| {
+                _ = try arr.set(@intCast(i), name, .{});
+            }
+            return arr;
+        }
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });

@@ -177,6 +177,38 @@ pub fn build(b: *Build) !void {
     }
 
     {
+        // skills generator
+        const exe = b.addExecutable(.{
+            .name = "lightpanda-skills",
+            .use_llvm = true,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main_skills.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "lightpanda", .module = lightpanda_module },
+                },
+            }),
+        });
+
+        const exe_check = b.addLibrary(.{
+            .name = "skills_check",
+            .root_module = exe.root_module,
+        });
+        check.dependOn(&exe_check.step);
+
+        const run_cmd = b.addRunArtifact(exe);
+        const out_dir = run_cmd.addOutputDirectoryArg("skills");
+        const install = b.addInstallDirectory(.{
+            .source_dir = out_dir,
+            .install_dir = .prefix,
+            .install_subdir = "skills",
+        });
+        const skills_step = b.step("skills", "Generate LLM skill docs (zig-out/skills/<name>/SKILL.md)");
+        skills_step.dependOn(&install.step);
+    }
+
+    {
         // test
         const tests = b.addTest(.{
             .root_module = lightpanda_module,

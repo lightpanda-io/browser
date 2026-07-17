@@ -900,3 +900,56 @@
     window.removeEventListener('win_throw', c);
   }
 </script>
+
+<div id=return_false_parent><span id=return_false_child></span></div>
+<script id=inlineHandlerReturnFalseCancels>
+  // Per the HTML event handler processing algorithm, an event handler (on*
+  // property/attribute) returning false cancels the event; the return value
+  // of addEventListener listeners is ignored.
+  {
+    const parent = $('#return_false_parent');
+    const child = $('#return_false_child');
+
+    // At-target inline handler.
+    child.onclick = () => false;
+    const ev1 = new MouseEvent('click', {bubbles: true, cancelable: true});
+    testing.expectEqual(false, child.dispatchEvent(ev1));
+    testing.expectEqual(true, ev1.defaultPrevented);
+    child.onclick = null;
+
+    // Inline handler on an ancestor (bubble phase).
+    parent.onclick = () => false;
+    const ev2 = new MouseEvent('click', {bubbles: true, cancelable: true});
+    testing.expectEqual(false, child.dispatchEvent(ev2));
+    testing.expectEqual(true, ev2.defaultPrevented);
+    parent.onclick = null;
+
+    // Only false cancels; other falsy values don't.
+    child.onclick = () => undefined;
+    const ev3 = new MouseEvent('click', {bubbles: true, cancelable: true});
+    testing.expectEqual(true, child.dispatchEvent(ev3));
+    testing.expectEqual(false, ev3.defaultPrevented);
+    child.onclick = null;
+
+    // addEventListener listeners returning false don't cancel.
+    const listener = () => false;
+    child.addEventListener('click', listener);
+    const ev4 = new MouseEvent('click', {bubbles: true, cancelable: true});
+    testing.expectEqual(true, child.dispatchEvent(ev4));
+    testing.expectEqual(false, ev4.defaultPrevented);
+    child.removeEventListener('click', listener);
+  }
+</script>
+
+<script id=beforeUnloadEventReturnValue>
+  {
+    const event = document.createEvent('BeforeUnloadEvent');
+    testing.expectEqual('', event.returnValue);
+
+    event.returnValue = 'first';
+    testing.expectEqual('first', event.returnValue);
+
+    event.returnValue = 'replacement';
+    testing.expectEqual('replacement', event.returnValue);
+  }
+</script>

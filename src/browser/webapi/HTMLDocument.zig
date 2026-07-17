@@ -44,14 +44,17 @@ pub fn asEventTarget(self: *HTMLDocument) *@import("EventTarget.zig") {
 }
 
 // HTML-specific accessors
-pub fn getHead(self: *HTMLDocument) ?*Element.Html.Head {
+// The head is the first html-namespace child of the document element whose
+// local name is head, whatever its Zig element type (e.g. a createElementNS
+// "blah:head" is an HTMLUnknownElement but still qualifies).
+pub fn getHead(self: *HTMLDocument) ?*Element {
     const doc_el = self._proto.getDocumentElement() orelse return null;
-    var child = doc_el.asNode().firstChild();
-    while (child) |node| {
-        if (node.is(Element.Html.Head)) |head| {
-            return head;
+    var it = doc_el.asNode().childrenIterator();
+    while (it.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        if (el._namespace == .html and std.mem.eql(u8, el.getLocalName(), "head")) {
+            return el;
         }
-        child = node.nextSibling();
     }
     return null;
 }
@@ -188,8 +191,8 @@ pub fn getEmbeds(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag)
     return collections.NodeLive(.tag).init(self.asNode(), .embed, frame);
 }
 
-pub fn getApplets(_: *const HTMLDocument) collections.HTMLCollection {
-    return .{ ._data = .empty };
+pub fn getApplets(_: *const HTMLDocument, frame: *Frame) !*collections.HTMLCollection {
+    return frame._factory.create(collections.HTMLCollection{ ._data = .empty });
 }
 
 pub fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {

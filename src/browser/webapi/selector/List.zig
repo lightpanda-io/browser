@@ -445,7 +445,11 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, frame: *Frame) bool 
 }
 
 fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
-    const value = el.getAttributeSafe(attr.name) orelse {
+    // Attribute names match ASCII case-insensitively on HTML elements (both
+    // sides lowercased) and case-sensitively on foreign elements, whose
+    // attributes are stored as written.
+    const name = if (el._namespace == .html) attr.name else attr.original_name;
+    const value = el.getAttributeSafe(name) orelse {
         return false;
     };
 
@@ -612,13 +616,15 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .focus_visible => return false,
 
-        // Link states
-        .link => return false,
-        .visited => return false,
-        .any_link => {
-            if (el.getTag() != .anchor) return false;
+        // Link states. In a headless browser no link is ever visited, so
+        // :link matches every hyperlink (a or area with an href attribute)
+        // and :visited matches nothing.
+        .link, .any_link => {
+            const tag = el.getTag();
+            if (tag != .anchor and tag != .area) return false;
             return el.getAttributeSafe(comptime .wrap("href")) != null;
         },
+        .visited => return false,
         .target => {
             const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
             const doc = node.ownerDocument(frame) orelse return false;
@@ -638,7 +644,19 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return node == scope;
         },
         .empty => {
-            return node.firstChild() == null;
+            // Only element and content (non-empty text/cdata) children affect
+            // emptiness; comments and processing instructions are ignored.
+            var it = node.childrenIterator();
+            while (it.next()) |child| {
+                switch (child._type) {
+                    .cdata => |cdata| switch (cdata._type) {
+                        .comment, .processing_instruction => {},
+                        else => if (cdata.getLength() > 0) return false,
+                    },
+                    else => return false,
+                }
+            }
+            return true;
         },
         .first_child => return isFirstChild(el),
         .last_child => return isLastChild(el),
@@ -660,7 +678,39 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
 
         // Functional
-        .lang => return false,
+        .lang => |expected| {
+            if (expected.len == 0) return false;
+            // The element's language is the nearest ancestor-or-self lang
+            // attribute. Elements in a document with no declared language
+            // fall back to the UA default (en); detached subtrees have no
+            // language at all.
+            const lang = blk: {
+                var current: ?*Node = node;
+                while (current) |cur| : (current = cur.parentNode()) {
+                    switch (cur._type) {
+                        .element => |ancestor| {
+                            if (ancestor.getAttributeSafe(comptime .wrap("lang"))) |value| {
+                                break :blk value;
+                            }
+                        },
+                        .document => {
+                            break :blk "en";
+                        },
+                        else => {},
+                    }
+                }
+                return false;
+            };
+            if (lang.len < expected.len) {
+                return false;
+            }
+            // Match the exact language or a `-` separated sub-tag prefix
+            // (:lang(en) matches lang="en-AU"), ASCII case-insensitively.
+            if (!std.ascii.eqlIgnoreCase(lang[0..expected.len], expected)) {
+                return false;
+            }
+            return lang.len == expected.len or lang[expected.len] == '-';
+        },
         .not => |selectors| {
             for (selectors) |selector| {
                 if (matches(node, selector, scope, frame)) {

@@ -20,10 +20,13 @@ const std = @import("std");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
-const Window = @import("../../Window.zig");
-const Document = @import("../../Document.zig");
+
 const Node = @import("../../Node.zig");
+const Window = @import("../../Window.zig");
 const Element = @import("../../Element.zig");
+const Document = @import("../../Document.zig");
+const DOMTokenList = @import("../../collections.zig").DOMTokenList;
+
 const HtmlElement = @import("../Html.zig");
 
 const IFrame = @This();
@@ -80,6 +83,14 @@ pub fn setName(self: *IFrame, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
+pub fn getSandbox(self: *IFrame, frame: *Frame) !?*DOMTokenList {
+    const element = self.asElement();
+    if (element._namespace != .html) {
+        return null;
+    }
+    return element.getTokenList(.sandbox, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IFrame);
 
@@ -93,6 +104,7 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{ .ce_reactions = true });
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
     pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
+    pub const sandbox = bridge.accessor(IFrame.getSandbox, null, .{ .null_as_undefined = true });
 };
 
 pub const Build = struct {

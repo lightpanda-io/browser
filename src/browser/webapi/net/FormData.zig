@@ -199,15 +199,15 @@ fn deleteByName(self: *FormData, name: String, exec: *Execution) void {
 }
 
 pub fn keys(self: *FormData, exec: *const js.Execution) !*KeyIterator {
-    return KeyIterator.init(.{ .fd = self, .list = self }, exec);
+    return KeyIterator.init(.{ .fd = self }, exec);
 }
 
 pub fn values(self: *FormData, exec: *const js.Execution) !*ValueIterator {
-    return ValueIterator.init(.{ .fd = self, .list = self }, exec);
+    return ValueIterator.init(.{ .fd = self }, exec);
 }
 
 pub fn entries(self: *FormData, exec: *const js.Execution) !*EntryIterator {
-    return EntryIterator.init(.{ .fd = self, .list = self }, exec);
+    return EntryIterator.init(.{ .fd = self }, exec);
 }
 
 pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {
@@ -350,10 +350,15 @@ pub const Iterator = struct {
     index: u32 = 0,
     fd: *FormData,
 
-    // See KeyValueList.Iterator.list — required by the GenericIterator wrapper.
-    list: *anyopaque,
-
     pub const Entry = struct { []const u8, []const u8 };
+
+    pub fn acquireRef(self: *Iterator) void {
+        self.fd.acquireRef();
+    }
+
+    pub fn releaseRef(self: *Iterator, page: *Page) void {
+        self.fd.releaseRef(page);
+    }
 
     pub fn next(self: *Iterator, _: *const Execution) ?Iterator.Entry {
         const index = self.index;

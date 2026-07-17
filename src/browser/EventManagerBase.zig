@@ -223,7 +223,7 @@ pub const DispatchDirectOptions = struct {
 
 /// Direct dispatch for non-DOM targets. No propagation - just calls the property
 /// handler and registered listeners. Caller is responsible for event ref counting.
-/// Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
+/// Handler can be: null, ?js.Function.Global or js.Function
 pub fn dispatchDirect(
     self: *EventManagerBase,
     arena: Allocator,
@@ -287,11 +287,12 @@ pub fn dispatchDirect(
     // Call the property handler (e.g., onmessage) if present
     if (getFunction(handler, &ls.local)) |func| {
         event._current_target = target;
-        _ = func.callWithThis(void, target, .{event}) catch |err| {
+        var caught: js.TryCatch.Caught = undefined;
+        _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
             if (err == error.JsException) {
                 event._listeners_did_throw = true;
             } else {
-                log.warn(.event, opts.context, .{ .err = err });
+                log.warn(.event, opts.context, .{ .err = err, .caught = caught });
             }
         };
     }
@@ -359,7 +360,6 @@ fn getFunction(handler: anytype, local: *const js.Local) ?js.Function {
     }
     return switch (T) {
         js.Function => handler,
-        js.Function.Temp => local.toLocal(handler),
         js.Function.Global => local.toLocal(handler),
         else => @compileError("handler must be null or \\??js.Function(\\.(Temp|Global))?"),
     };
@@ -435,12 +435,19 @@ pub const Listener = struct {
         comptime context: []const u8,
     ) error{OutOfMemory}!void {
         switch (self.function) {
-            .value => |value| local.toLocal(value).callWithThis(void, event._current_target.?, .{event}) catch |err| {
-                if (err == error.JsException) {
-                    event._listeners_did_throw = true;
-                } else {
-                    log.warn(.event, context, .{ .err = err });
-                }
+            .value => |value| {
+                var try_catch: js.TryCatch = undefined;
+                try_catch.init(local);
+                defer try_catch.deinit();
+                local.toLocal(value).callWithThisRethrow(void, event._current_target.?, .{event}) catch |err| switch (err) {
+                    // The rethrow variant surfaces a thrown JS exception as
+                    // TryCatchRethrow so our enclosing TryCatch holds it.
+                    error.JsException, error.TryCatchRethrow => {
+                        event._listeners_did_throw = true;
+                        reportException(&try_catch, local);
+                    },
+                    else => log.warn(.event, context, .{ .err = err }),
+                };
             },
             .string => |string| {
                 const str = try arena.dupeZ(u8, string.str());
@@ -454,29 +461,62 @@ pub const Listener = struct {
             },
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
-                const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
-                    // Getting "handleEvent" threw (e.g. a throwing getter).
+
+                var try_catch: js.TryCatch = undefined;
+                try_catch.init(local);
+                defer try_catch.deinit();
+
+                // Get(handleEvent) can run a getter: a thrown exception is
+                // reported like an exception from the listener itself.
+                const handle_event_value = obj.get("handleEvent") catch |err| {
                     if (err == error.JsException) {
                         event._listeners_did_throw = true;
+                        reportException(&try_catch, local);
                     } else {
                         log.warn(.event, context, .{ .err = err });
                     }
-                    break :blk null;
+                    return;
                 };
-                if (handle_event) |handleEvent| {
-                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
-                        if (err == error.JsException) {
-                            event._listeners_did_throw = true;
-                        } else {
-                            log.warn(.event, context, .{ .err = err });
-                        }
-                    };
-                } else {
-                    // The listener was an object without the handleEvent function
-                    // This is throwing a TypeError
+
+                if (!handle_event_value.isFunction()) {
+                    // Per the callback interface invocation steps, a
+                    // non-callable handleEvent is a reported TypeError.
                     event._listeners_did_throw = true;
+                    reportExceptionValue(local, .{
+                        .local = local,
+                        .handle = local.isolate.createTypeError("handleEvent is not a function"),
+                    });
+                    return;
                 }
+
+                const handle_event = js.Function{
+                    .local = local,
+                    .handle = @ptrCast(handle_event_value.handle),
+                };
+                handle_event.callWithThisRethrow(void, obj, .{event}) catch |err| switch (err) {
+                    error.JsException, error.TryCatchRethrow => {
+                        event._listeners_did_throw = true;
+                        reportException(&try_catch, local);
+                    },
+                    else => log.warn(.event, context, .{ .err = err }),
+                };
             },
+        }
+    }
+
+    // Reports a listener exception to the relevant global (firing
+    // window.onerror / an "error" event) without stopping the dispatch.
+    fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
+        const exc = try_catch.exceptionValue() orelse return;
+        reportExceptionValue(local, exc);
+    }
+
+    fn reportExceptionValue(local: *const js.Local, exc: js.Value) void {
+        switch (local.ctx.global) {
+            .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
+                log.warn(.event, "listener report error", .{ .err = err });
+            },
+            .worker => {},
         }
     }
 };

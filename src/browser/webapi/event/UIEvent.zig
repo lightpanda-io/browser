@@ -41,6 +41,7 @@ pub const Type = union(enum) {
     text_event: *@import("TextEvent.zig"),
     input_event: *@import("InputEvent.zig"),
     composition_event: *@import("CompositionEvent.zig"),
+    touch_event: *@import("TouchEvent.zig"),
 };
 
 pub const UIEventOptions = struct {
@@ -66,7 +67,7 @@ pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*UIEvent {
             ._type = .generic,
             ._proto = undefined,
             ._detail = opts.detail,
-            ._view = opts.view orelse frame.window,
+            ._view = opts.view,
         },
     );
 
@@ -90,6 +91,7 @@ pub fn is(self: *UIEvent, comptime T: type) ?*T {
         .text_event => |e| return if (T == @import("TextEvent.zig")) e else null,
         .input_event => |e| return if (T == @import("InputEvent.zig")) e else null,
         .composition_event => |e| return if (T == @import("CompositionEvent.zig")) e else null,
+        .touch_event => |e| return if (T == @import("TouchEvent.zig")) e else null,
     }
     return null;
 }
@@ -109,15 +111,26 @@ pub fn getDetail(self: *UIEvent) u32 {
 
 // sourceCapabilities not implemented
 
-pub fn getView(self: *UIEvent, frame: *Frame) *Window {
-    return self._view orelse frame.window;
+pub fn getView(self: *UIEvent, frame: *Frame) ?*Window {
+    if (self._view) |view| {
+        return view;
+    }
+    // Trusted (browser-generated) UI events implicitly target the window;
+    // synthetic events default to a null view per the UIEventInit dictionary.
+    if (self._proto._is_trusted) {
+        return frame.window;
+    }
+    return null;
 }
 
 // Legacy: see https://w3c.github.io/uievents/#dom-uievent-which
 pub fn getWhich(self: *const UIEvent) u32 {
     return switch (self._type) {
-        .mouse_event => |me| @as(u32, @intCast(me.getButton())) + 1,
-        .keyboard_event => 0,
+        .mouse_event => |me| blk: {
+            const button = me.getButton();
+            break :blk if (button < 0) 0 else @as(u32, @intCast(button)) + 1;
+        },
+        .keyboard_event => |ke| ke.getKeyCode(),
         else => 0,
     };
 }
@@ -135,6 +148,7 @@ pub fn initUIEvent(
         return;
     }
 
+    event._initialized = true;
     event._type_string = try String.init(event._arena, typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;

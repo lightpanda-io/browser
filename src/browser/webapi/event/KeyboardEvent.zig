@@ -37,9 +37,14 @@ _ctrl_key: bool,
 _shift_key: bool,
 _alt_key: bool,
 _meta_key: bool,
-_location: Location,
+// Per spec an unsigned long; the Location enum only names the
+// DOM_KEY_LOCATION_* constants, any value is allowed.
+_location: u32,
 _repeat: bool,
 _is_composing: bool,
+// Legacy KeyboardEventInit values, reported as-is by synthetic events.
+_char_code_init: u32 = 0,
+_key_code_init: u32 = 0,
 
 // https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_key_values
 pub const Key = union(enum) {
@@ -272,13 +277,15 @@ pub const Location = enum(i32) {
 pub const KeyboardEventOptions = struct {
     key: []const u8 = "",
     code: ?[]const u8 = null,
-    location: i32 = 0,
+    location: u32 = 0,
     repeat: bool = false,
     isComposing: bool = false,
     ctrlKey: bool = false,
     shiftKey: bool = false,
     altKey: bool = false,
     metaKey: bool = false,
+    charCode: u32 = 0,
+    keyCode: u32 = 0,
 };
 
 const Options = Event.inheritOptions(
@@ -308,7 +315,7 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
         KeyboardEvent{
             ._proto = undefined,
             ._key = try Key.fromString(arena, opts.key),
-            ._location = std.meta.intToEnum(Location, opts.location) catch return error.TypeError,
+            ._location = opts.location,
             ._code = if (opts.code) |c| try arena.dupe(u8, c) else "",
             ._repeat = opts.repeat,
             ._is_composing = opts.isComposing,
@@ -316,16 +323,22 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
             ._shift_key = opts.shiftKey,
             ._alt_key = opts.altKey,
             ._meta_key = opts.metaKey,
+            ._char_code_init = opts.charCode,
+            ._key_code_init = opts.keyCode,
         },
     );
 
     Event.populatePrototypes(event, opts, trusted);
 
-    // https://w3c.github.io/uievents/#event-type-keyup
-    const rootevt = event._proto._proto;
-    rootevt._bubbles = true;
-    rootevt._cancelable = true;
-    rootevt._composed = true;
+    if (trusted) {
+        // Browser-generated key events bubble, are cancelable and composed:
+        // https://w3c.github.io/uievents/#event-type-keyup
+        // Synthetic ones follow the EventInit dictionary defaults.
+        const rootevt = event._proto._proto;
+        rootevt._bubbles = true;
+        rootevt._cancelable = true;
+        rootevt._composed = true;
+    }
 
     return event;
 }
@@ -354,8 +367,8 @@ pub fn getCode(self: *const KeyboardEvent) []const u8 {
     return self._code;
 }
 
-pub fn getLocation(self: *const KeyboardEvent) i32 {
-    return @intFromEnum(self._location);
+pub fn getLocation(self: *const KeyboardEvent) u32 {
+    return self._location;
 }
 
 pub fn getMetaKey(self: *const KeyboardEvent) bool {
@@ -380,7 +393,8 @@ pub fn getShiftKey(self: *const KeyboardEvent) bool {
 // gate on `_is_trusted` to match.
 pub fn getCharCode(self: *const KeyboardEvent) u32 {
     const event = self._proto._proto;
-    if (event._is_trusted == false) return 0;
+    // Synthetic events report the (legacy) KeyboardEventInit value.
+    if (event._is_trusted == false) return self._char_code_init;
     if (event._type_string.eql(comptime .wrap("keypress")) == false) return 0;
     return self._key.charCode();
 }
@@ -389,7 +403,8 @@ pub fn getCharCode(self: *const KeyboardEvent) u32 {
 //
 // As with `charCode`, Chrome returns 0 for synthetic events.
 pub fn getKeyCode(self: *const KeyboardEvent) u32 {
-    if (self._proto._proto._is_trusted == false) return 0;
+    // Synthetic events report the (legacy) KeyboardEventInit value.
+    if (self._proto._proto._is_trusted == false) return self._key_code_init;
     return self._key.keyCode();
 }
 
@@ -413,12 +428,13 @@ pub fn initKeyboardEvent(
     }
 
     const arena = event._arena;
+    event._initialized = true;
     event._type_string = try String.init(arena, typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;
     ui._view = view;
     self._key = try Key.fromString(arena, key orelse "");
-    self._location = std.meta.intToEnum(Location, location orelse 0) catch return error.TypeError;
+    self._location = location orelse 0;
     self._ctrl_key = ctrl_key orelse false;
     self._alt_key = alt_key orelse false;
     self._shift_key = shift_key orelse false;

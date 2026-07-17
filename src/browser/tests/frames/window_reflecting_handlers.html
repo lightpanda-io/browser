@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+The window-reflecting body element event handlers (onblur, onerror, onfocus,
+onload, onresize, onscroll) alias the Window of the body's node document. A
+same-origin script reaching into another frame (parent setting a handler on
+an iframe's body) must target the iframe's window, not the window of the
+realm running the assignment.
+-->
+<iframe id="wrh" src="support/window_reflecting.html"></iframe>
+
+<script id="cross_realm_property_handlers">
+  testing.onload(() => {
+    const idf = document.getElementById('wrh');
+    const ibody = idf.contentDocument.body;
+    const iwin = idf.contentWindow;
+
+    const cb = () => {};
+    ibody.onblur = cb;
+    testing.expectEqual(cb, ibody.onblur);
+    testing.expectEqual(cb, iwin.onblur);
+    // the parent's window (the caller's realm) must be untouched
+    testing.expectTrue(window.onblur == null);
+    testing.expectTrue(document.body.onblur == null);
+
+    ibody.onblur = null;
+    testing.expectTrue(iwin.onblur == null);
+  });
+</script>
+
+<script id="cross_realm_attribute_handlers">
+  testing.onload(() => {
+    const idf = document.getElementById('wrh');
+    const ibody = idf.contentDocument.body;
+    const iwin = idf.contentWindow;
+
+    // Parse-time: the onresize attribute in the iframe's markup was compiled
+    // onto the iframe's window while the parent frame was the active one.
+    testing.expectEqual('function', typeof iwin.onresize);
+    testing.expectTrue(window.onresize == null);
+
+    // Runtime: setting the content attribute from the parent realm.
+    ibody.setAttribute('onscroll', 'window.__parent_set = true');
+    testing.expectEqual('function', typeof iwin.onscroll);
+    testing.expectTrue(window.onscroll == null);
+
+    ibody.removeAttribute('onscroll');
+    testing.expectTrue(iwin.onscroll == null);
+  });
+</script>

@@ -22,9 +22,10 @@
   let c4 = document.createElement('div');
   c4.id = 'c4';
 
+  // Per spec, a child with the wrong parent is a NotFoundError.
   testing.withError((err) => {
-    testing.expectEqual(3, err.code);
-    testing.expectEqual("HierarchyRequestError", err.name);
+    testing.expectEqual(8, err.code);
+    testing.expectEqual("NotFoundError", err.name);
   }, () => d1.replaceChild(c4, c3));
 
   testing.expectEqual(c2, d1.replaceChild(c4, c2));

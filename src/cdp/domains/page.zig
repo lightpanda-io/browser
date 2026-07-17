@@ -149,8 +149,8 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
 
         const http_client = frame._session.browser.http_client;
         const http_active = http_client.http_active;
-        const http_next_tick = http_client.next_tick_count;
-        const total_network_activity = http_active + http_next_tick + http_client.interception_layer.intercepted;
+        const http_buffered = http_client.dispatch_count;
+        const total_network_activity = http_active + http_buffered + http_client.intercepted;
         if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
             try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
         }
@@ -753,6 +753,22 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // chromedp client expects to receive the events is this order.
     // see https://github.com/chromedp/chromedp/issues/1558
     try cdp.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
+}
+
+pub fn frameNavigatedWithinDocument(bc: anytype, event: *const Notification.FrameNavigatedWithinDocument) !void {
+    const session_id = bc.session_id orelse return;
+    const frame_id = &id.toFrameId(event.frame_id);
+
+    // Same-document navigation (pushState / replaceState / fragment). The
+    // document and its execution context are unchanged, so — unlike
+    // frameNavigated — we deliberately do NOT send Runtime.executionContextsCleared
+    // or DOM.documentUpdated; doing so would invalidate the client's live
+    // execution context ids and break Puppeteer's frame.evaluate().
+    try bc.cdp.sendEvent("Page.navigatedWithinDocument", .{
+        .frameId = frame_id,
+        .url = event.url,
+        .navigationType = @tagName(event.navigation_type),
+    }, .{ .session_id = session_id });
 }
 
 pub fn frameDOMContentLoaded(bc: anytype, event: *const Notification.FrameDOMContentLoaded) !void {
@@ -1692,4 +1708,30 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         });
         try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 42 });
     }
+}
+
+test "cdp.frame: history.pushState emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("history.pushState({}, '', '/next')", null);
+    }
+
+    // Same-document navigation must surface as Page.navigatedWithinDocument
+    // (not a full Page.frameNavigated), carrying the new URL and the
+    // history-API navigation type. The main frame is assigned the internal
+    // id FID-0000000001.
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/next",
+    }, .{});
 }

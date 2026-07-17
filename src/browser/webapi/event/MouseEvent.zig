@@ -52,7 +52,9 @@ _type: Type,
 _proto: *UIEvent,
 
 _alt_key: bool,
-_button: MouseButton,
+// Per spec a short; the MouseButton enum only names the standard buttons,
+// any value is allowed.
+_button: i16,
 _buttons: u16,
 _client_x: f64,
 _client_y: f64,
@@ -113,7 +115,7 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
             ._shift_key = opts.shiftKey,
             ._alt_key = opts.altKey,
             ._meta_key = opts.metaKey,
-            ._button = std.meta.intToEnum(MouseButton, opts.button) catch return error.TypeError,
+            ._button = @truncate(opts.button),
             ._buttons = opts.buttons,
             ._related_target = opts.relatedTarget,
         },
@@ -145,8 +147,8 @@ pub fn getAltKey(self: *const MouseEvent) bool {
     return self._alt_key;
 }
 
-pub fn getButton(self: *const MouseEvent) u8 {
-    return @intFromEnum(self._button);
+pub fn getButton(self: *const MouseEvent) i16 {
+    return self._button;
 }
 
 pub fn getButtons(self: *const MouseEvent) u16 {
@@ -237,6 +239,7 @@ pub fn initMouseEvent(
         return;
     }
 
+    event._initialized = true;
     event._type_string = try String.init(event._arena, typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;
@@ -250,7 +253,7 @@ pub fn initMouseEvent(
     self._alt_key = alt_key orelse false;
     self._shift_key = shift_key orelse false;
     self._meta_key = meta_key orelse false;
-    self._button = std.meta.intToEnum(MouseButton, button orelse 0) catch return error.TypeError;
+    self._button = button orelse 0;
     self._related_target = related_target;
 }
 

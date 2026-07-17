@@ -17,9 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const js = @import("../js/js.zig");
 
+const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+
 const PopStateEvent = @import("event/PopStateEvent.zig");
 
 const History = @This();
@@ -50,33 +51,47 @@ pub fn setScrollRestoration(self: *History, str: []const u8) void {
 }
 
 pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
-    const arena = frame._session.arena;
+    const session = frame._session;
+    const arena = session.arena;
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena, frame.url, u, .{})
     else
         try arena.dupeZ(u8, frame.url);
 
     const json = state.toJson(arena) catch return error.DataClone;
-    _ = try frame._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
+    _ = try session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
+
+    session.notification.dispatch(.frame_navigated_within_document, &.{
+        .url = url,
+        .frame_id = frame._frame_id,
+        .navigation_type = .historyApi,
+    });
 }
 
 pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
-    const arena = frame._session.arena;
+    const session = frame._session;
+    const arena = session.arena;
     const url = if (_url) |u|
         try @import("../URL.zig").resolve(arena, frame.url, u, .{})
     else
         try arena.dupeZ(u8, frame.url);
 
     const json = state.toJson(arena) catch return error.DataClone;
-    _ = try frame._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
+    _ = try session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
+
+    session.notification.dispatch(.frame_navigated_within_document, &.{
+        .url = url,
+        .frame_id = frame._frame_id,
+        .navigation_type = .historyApi,
+    });
 }
 
 fn goInner(delta: i32, frame: *Frame) !void {

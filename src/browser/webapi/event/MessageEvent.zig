@@ -35,18 +35,25 @@ const MessageEvent = @This();
 _proto: *Event,
 _data: ?Data = null,
 _origin: []const u8 = "",
-_source: ?*Window = null,
+_last_event_id: []const u8 = "",
+_source: ?Source = null,
 _ports: []const *MessagePort = &.{},
+
+pub const Source = union(enum) {
+    window: *Window,
+    port: *MessagePort,
+};
 
 const MessageEventOptions = struct {
     data: ?Data = null,
     origin: ?[]const u8 = null,
-    source: ?*Window = null,
+    lastEventId: ?[]const u8 = null,
+    source: ?Source = null,
     ports: []const *MessagePort = &.{},
 };
 
 pub const Data = union(enum) {
-    value: js.Value.Temp,
+    value: js.Value.Global,
     string: []const u8,
     arraybuffer: js.ArrayBuffer,
     blob: *@import("../Blob.zig"),
@@ -77,6 +84,7 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
             ._proto = undefined,
             ._data = opts.data,
             ._origin = if (opts.origin) |str| try arena.dupe(u8, str) else "",
+            ._last_event_id = if (opts.lastEventId) |str| try arena.dupe(u8, str) else "",
             ._source = opts.source,
             ._ports = if (opts.ports.len == 0) &.{} else try arena.dupe(*MessagePort, opts.ports),
         },
@@ -117,18 +125,28 @@ pub fn getOrigin(self: *const MessageEvent) []const u8 {
     return self._origin;
 }
 
-pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?Window.Access {
-    switch (exec.js.global) {
-        .frame => |frame| {
-            const source = self._source orelse return null;
-            return Window.Access.init(frame.window, source);
-        },
-        .worker => {
-            // source for worker should always be null
-            if (comptime IS_DEBUG) {
-                std.debug.assert(self._source == null);
-            }
-            return null;
+pub fn getLastEventId(self: *const MessageEvent) []const u8 {
+    return self._last_event_id;
+}
+
+const SourceAccess = union(enum) {
+    window: Window.Access,
+    port: *MessagePort,
+};
+
+pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
+    const source = self._source orelse return null;
+    switch (source) {
+        .port => |port| return .{ .port = port },
+        .window => |window| switch (exec.js.global) {
+            .frame => |frame| return .{ .window = Window.Access.init(frame.window, window) },
+            .worker => {
+                // a window source should never reach a worker context
+                if (comptime IS_DEBUG) {
+                    std.debug.assert(false);
+                }
+                return null;
+            },
         },
     }
 }
@@ -149,6 +167,7 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(MessageEvent.init, .{});
     pub const data = bridge.accessor(MessageEvent.getData, null, .{});
     pub const origin = bridge.accessor(MessageEvent.getOrigin, null, .{});
+    pub const lastEventId = bridge.accessor(MessageEvent.getLastEventId, null, .{});
     pub const source = bridge.accessor(MessageEvent.getSource, null, .{});
     pub const ports = bridge.accessor(MessageEvent.getPorts, null, .{});
 };

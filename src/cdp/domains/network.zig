@@ -27,9 +27,9 @@ const URL = @import("../../browser/URL.zig");
 const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
-const Headers = @import("../../browser/HttpClient.zig").Headers;
-const Transfer = @import("../../browser/HttpClient.zig").Transfer;
-const Response = @import("../../browser/HttpClient.zig").Response;
+
+const Headers = @import("../../network/HttpClient.zig").Headers;
+const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
 const CdpStorage = @import("storage.zig");
 
@@ -91,7 +91,7 @@ fn setCacheDisabled(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const client = &bc.cdp.browser.http_client;
-    client.cache_layer.disabled = params.cacheDisabled;
+    client.disableCache(params.cacheDisabled);
     return cmd.sendResult(null, .{});
 }
 
@@ -362,7 +362,7 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
         .frameId = &id.toFrameId(req.frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
-        .response = ResponseWriter.init(arena, msg.response),
+        .response = ResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
 }
@@ -433,7 +433,7 @@ pub const RequestWriter = struct {
             var it = request.headers.iterator();
             while (it.next()) |hdr| {
                 try jws.objectField(hdr.name);
-                try jws.write(hdr.value);
+                try writeHeaderValue(jws, hdr.value);
             }
             if (try request.getCookieString(transfer.arena)) |cookies| {
                 try jws.objectField("Cookie");
@@ -447,12 +447,12 @@ pub const RequestWriter = struct {
 
 const ResponseWriter = struct {
     arena: Allocator,
-    response: *const Response,
+    transfer: *Transfer,
 
-    fn init(arena: Allocator, response: *const Response) ResponseWriter {
+    fn init(arena: Allocator, transfer: *Transfer) ResponseWriter {
         return .{
             .arena = arena,
-            .response = response,
+            .transfer = transfer,
         };
     }
 
@@ -461,15 +461,15 @@ const ResponseWriter = struct {
     }
 
     fn _jsonStringify(self: *const ResponseWriter, jws: anytype) !void {
-        const response = self.response;
+        const transfer = self.transfer;
 
         try jws.beginObject();
         {
             try jws.objectField("url");
-            try jws.write(response.url());
+            try jws.write(transfer.req.url);
         }
 
-        if (response.status()) |status| {
+        if (transfer.responseStatus()) |status| {
             try jws.objectField("status");
             try jws.write(status);
 
@@ -479,7 +479,7 @@ const ResponseWriter = struct {
 
         {
             const mime: Mime = blk: {
-                if (response.contentType()) |ct| {
+                if (transfer.contentType()) |ct| {
                     break :blk try Mime.parse(ct);
                 }
                 break :blk .unknown;
@@ -493,7 +493,7 @@ const ResponseWriter = struct {
 
         {
             try jws.objectField("fromDiskCache");
-            try jws.write(response.inner == .cached);
+            try jws.write(transfer._from_cache);
         }
 
         {
@@ -521,7 +521,7 @@ const ResponseWriter = struct {
             // common to get these from a server (e.g. for Cache-Control), but
             // Chrome joins these. So we have to too.
             const arena = self.arena;
-            var it = response.headerIterator();
+            var it = transfer.responseHeaderIterator();
             var map: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
             while (it.next()) |hdr| {
                 const gop = try map.getOrPut(arena, hdr.name);
@@ -534,11 +534,44 @@ const ResponseWriter = struct {
             }
 
             try jws.objectField("headers");
-            try jws.write(std.json.ArrayHashMap([]const u8){ .map = map });
+            try jws.beginObject();
+            var map_it = map.iterator();
+            while (map_it.next()) |entry| {
+                try jws.objectField(entry.key_ptr.*);
+                try writeHeaderValue(jws, entry.value_ptr.*);
+            }
+            try jws.endObject();
         }
         try jws.endObject();
     }
 };
+
+// HTTP header values are octets; per historical practice non-UTF-8 bytes are
+// interpreted as Latin-1 (ISO-8859-1), which is what Chrome does for DevTools.
+// Transcode so we emit a JSON string — std.json would otherwise serialize
+// invalid UTF-8 as a JSON array of numbers.
+fn writeHeaderValue(jws: anytype, value: []const u8) !void {
+    if (std.unicode.utf8ValidateSlice(value)) {
+        return jws.write(value);
+    }
+    // Latin-1 -> UTF-8: each byte is a codepoint U+0000..U+00FF (max 2 bytes)
+    try jws.beginWriteRaw();
+    try jws.writer.writeByte('"');
+    var start: usize = 0;
+    for (value, 0..) |b, i| {
+        if (b < 0x80) {
+            continue;
+        }
+        try std.json.Stringify.encodeJsonStringChars(value[start..i], jws.options, jws.writer);
+        var buf: [2]u8 = undefined;
+        const n = std.unicode.utf8Encode(b, &buf) catch unreachable;
+        try jws.writer.writeAll(buf[0..n]);
+        start = i + 1;
+    }
+    try std.json.Stringify.encodeJsonStringChars(value[start..], jws.options, jws.writer);
+    try jws.writer.writeByte('"');
+    jws.endWriteRaw();
+}
 
 fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedResponseKey {
     const key = std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
@@ -674,6 +707,42 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
 
     try testing.expectEqual(bc.extra_headers.items.len, 1);
     try testing.expectEqual("x-keep: ok", std.mem.span(bc.extra_headers.items[0]));
+}
+
+test "cdp.network writeHeaderValue" {
+    const expectHeaderJson = struct {
+        fn expect(expected: []const u8, value: []const u8) !void {
+            var buf: [256]u8 = undefined;
+            var writer = std.Io.Writer.fixed(&buf);
+            var jws: std.json.Stringify = .{ .writer = &writer };
+            try writeHeaderValue(&jws, value);
+            try std.testing.expectEqualStrings(expected, writer.buffered());
+        }
+    }.expect;
+
+    // valid UTF-8 is written as-is
+    try expectHeaderJson(
+        "\"mié, 15 jul 2026 13:19:10 GMT\"",
+        "mié, 15 jul 2026 13:19:10 GMT",
+    );
+
+    // Latin-1 bytes are transcoded to UTF-8 instead of a byte array
+    try expectHeaderJson(
+        "\"mié, 15 jul 2026 13:19:10 GMT\"",
+        "mi\xE9, 15 jul 2026 13:19:10 GMT",
+    );
+
+    // JSON escaping still applies around transcoded bytes
+    try expectHeaderJson(
+        "\"a\\\"é\\nb\"",
+        "a\"\xE9\nb",
+    );
+
+    // pure ASCII untouched
+    try expectHeaderJson(
+        "\"max-age=180, s-maxage=180, public\"",
+        "max-age=180, s-maxage=180, public",
+    );
 }
 
 test "cdp.Network: cookies" {
@@ -866,7 +935,7 @@ test "cdp.Network: canClearBrowserCache" {
     try ctx.expectSentResult(.{ .result = false }, .{ .id = 1 });
 }
 
-test "cdp.Network: setCacheDisabled disables cache" {
+test "cdp.Network: setCacheDisabled" {
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
@@ -877,30 +946,4 @@ test "cdp.Network: setCacheDisabled disables cache" {
         .params = .{ .cacheDisabled = true },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
-
-    const client = ctx.cdp().browser.http_client;
-    try testing.expectEqual(true, client.cache_layer.disabled);
-}
-
-test "cdp.Network: setCacheDisabled re-enables cache" {
-    var ctx = try testing.context();
-    defer ctx.deinit();
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
-
-    try ctx.processMessage(.{
-        .id = 1,
-        .method = "Network.setCacheDisabled",
-        .params = .{ .cacheDisabled = true },
-    });
-    try ctx.expectSentResult(null, .{ .id = 1 });
-
-    try ctx.processMessage(.{
-        .id = 2,
-        .method = "Network.setCacheDisabled",
-        .params = .{ .cacheDisabled = false },
-    });
-    try ctx.expectSentResult(null, .{ .id = 2 });
-
-    const client = ctx.cdp().browser.http_client;
-    try testing.expectEqual(false, client.cache_layer.disabled);
 }

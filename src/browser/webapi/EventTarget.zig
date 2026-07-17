@@ -23,6 +23,7 @@ const Page = @import("../Page.zig");
 const EventManager = @import("../EventManager.zig");
 
 const Event = @import("Event.zig");
+const AbortSignal = @import("AbortSignal.zig");
 
 const RegisterOptions = EventManager.RegisterOptions;
 
@@ -36,6 +37,7 @@ pub const Type = union(enum) {
     node: *@import("Node.zig"),
     window: *@import("Window.zig"),
     worker: *@import("Worker.zig"),
+    shared_worker: *@import("SharedWorker.zig"),
     worker_global_scope: *@import("WorkerGlobalScope.zig"),
     xhr: *@import("net/XMLHttpRequestEventTarget.zig"),
     abort_signal: *@import("AbortSignal.zig"),
@@ -44,12 +46,14 @@ pub const Type = union(enum) {
     broadcast_channel: *@import("BroadcastChannel.zig"),
     text_track_cue: *@import("media/TextTrackCue.zig"),
     navigation: *@import("navigation/Navigation.zig"),
+    navigation_history_entry: *@import("navigation/NavigationHistoryEntry.zig"),
     screen: *@import("Screen.zig"),
     screen_orientation: *@import("Screen.zig").Orientation,
     visual_viewport: *@import("VisualViewport.zig"),
     file_reader: *@import("FileReader.zig"),
     font_face_set: *@import("css/FontFaceSet.zig"),
     websocket: *@import("net/WebSocket.zig"),
+    event_source: *@import("net/EventSource.zig"),
     cookie_store: *@import("storage/CookieStore.zig"),
     idb_request: *@import("storage/idb/IDBRequest.zig"),
     idb_database: *@import("storage/idb/IDBDatabase.zig"),
@@ -67,6 +71,10 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     if (event._event_phase != .none) {
         return error.InvalidStateError;
     }
+
+    if (!event._initialized) {
+        return error.InvalidStateError;
+    }
     event._is_trusted = false;
 
     switch (exec.js.global) {
@@ -82,27 +90,83 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
 
 const AddEventListenerOptions = union(enum) {
     capture: bool,
-    options: RegisterOptions,
+    options: Options,
+
+    // The signal is kept as a raw js.Value so that an explicit null (or any
+    // non-AbortSignal value) can be told apart from an absent or undefined
+    // member, and rejected with a TypeError per the dictionary conversion.
+    // passive is optional so that an absent (or undefined) member falls back
+    // to the type- and target-dependent default passive value.
+    const Options = struct {
+        once: bool = false,
+        capture: bool = false,
+        passive: ?bool = null,
+        signal: ?js.Value = null,
+    };
 };
+
+// The DOM spec's "default passive value": listeners for the scroll-blocking
+// event types are passive by default on the window, the document, and the
+// html and body elements.
+fn defaultPassiveValue(self: *EventTarget, typ: []const u8) bool {
+    const scroll_blocking_event_types = std.StaticStringMap(void).initComptime(.{
+        .{ "touchstart", {} },
+        .{ "touchmove", {} },
+        .{ "wheel", {} },
+        .{ "mousewheel", {} },
+    });
+    if (scroll_blocking_event_types.has(typ) == false) {
+        return false;
+    }
+
+    switch (self._type) {
+        .window => return true,
+        .node => |n| {
+            const Element = @import("Element.zig");
+            if (n._type == .document) {
+                return true;
+            }
+            const element = n.is(Element) orelse return false;
+            return switch (element.getTag()) {
+                .html, .body => true,
+                else => false,
+            };
+        },
+        else => return false,
+    }
+}
 
 pub const EventListenerCallback = union(enum) {
     function: js.Function,
     object: js.Object,
 };
-pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, exec: *js.Execution) !void {
-    const callback = callback_ orelse return;
+pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: js.Nullable(EventListenerCallback), opts_: ?AddEventListenerOptions, exec: *js.Execution) !void {
+    // Convert the options before the null-callback early return: per spec,
+    // the dictionary conversion throws even when the callback is null.
+    const options = blk: {
+        const o = opts_ orelse break :blk RegisterOptions{ .passive = self.defaultPassiveValue(typ) };
+        break :blk switch (o) {
+            .options => |opts| RegisterOptions{
+                .once = opts.once,
+                .capture = opts.capture,
+                .passive = opts.passive orelse self.defaultPassiveValue(typ),
+                .signal = signal: {
+                    const signal = opts.signal orelse break :signal null;
+                    if (signal.isUndefined()) {
+                        break :signal null;
+                    }
+                    break :signal try signal.toZig(*AbortSignal);
+                },
+            },
+            .capture => |capture| RegisterOptions{ .capture = capture, .passive = self.defaultPassiveValue(typ) },
+        };
+    };
+
+    const callback = callback_.value orelse return;
 
     const em_callback: EventManager.Callback = switch (callback) {
         .object => |obj| .{ .object = obj },
         .function => |func| .{ .function = func },
-    };
-
-    const options = blk: {
-        const o = opts_ orelse break :blk RegisterOptions{};
-        break :blk switch (o) {
-            .options => |opts| opts,
-            .capture => |capture| RegisterOptions{ .capture = capture },
-        };
     };
 
     switch (exec.js.global) {
@@ -118,8 +182,8 @@ const RemoveEventListenerOptions = union(enum) {
         capture: bool = false,
     };
 };
-pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?RemoveEventListenerOptions, exec: *js.Execution) !void {
-    const callback = callback_ orelse return;
+pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: js.Nullable(EventListenerCallback), opts_: ?RemoveEventListenerOptions, exec: *js.Execution) !void {
+    const callback = callback_.value orelse return;
 
     // For object callbacks, check if handleEvent exists
     if (callback == .object) {
@@ -152,6 +216,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .generic => writer.writeAll("<EventTarget>"),
         .window => writer.writeAll("<Window>"),
         .worker => writer.writeAll("<Worker>"),
+        .shared_worker => writer.writeAll("<SharedWorker>"),
         .worker_global_scope => writer.writeAll("<WorkerGlobalScope>"),
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
         .abort_signal => writer.writeAll("<AbortSignal>"),
@@ -166,11 +231,13 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .file_reader => writer.writeAll("<FileReader>"),
         .font_face_set => writer.writeAll("<FontFaceSet>"),
         .websocket => writer.writeAll("<WebSocket>"),
+        .event_source => writer.writeAll("<EventSource>"),
         .cookie_store => writer.writeAll("<CookieStore>"),
         .idb_request => writer.writeAll("<IDBRequest>"),
         .idb_database => writer.writeAll("<IDBDatabase>"),
         .idb_transaction => writer.writeAll("<IDBTransaction>"),
         .notification => writer.writeAll("<Notification>"),
+        .navigation_history_entry => writer.writeAll("<NavigationHistoryEntry>"),
     };
 }
 
@@ -180,6 +247,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .generic => return "[object EventTarget]",
         .window => return "[object Window]",
         .worker => return "[object Worker]",
+        .shared_worker => return "[object SharedWorker]",
         .worker_global_scope => return "[object WorkerGlobalScope]",
         .xhr => return "[object XMLHttpRequestEventTarget]",
         .abort_signal => return "[object AbortSignal]",
@@ -194,11 +262,13 @@ pub fn toString(self: *EventTarget) []const u8 {
         .file_reader => return "[object FileReader]",
         .font_face_set => return "[object FontFaceSet]",
         .websocket => return "[object WebSocket]",
+        .event_source => return "[object EventSource]",
         .cookie_store => return "[object CookieStore]",
         .idb_request => return "[object IDBRequest]",
         .idb_database => return "[object IDBDatabase]",
         .idb_transaction => return "[object IDBTransaction]",
         .notification => return "[object Notification]",
+        .navigation_history_entry => return "[object NavigationHistoryEntry]",
     };
 }
 

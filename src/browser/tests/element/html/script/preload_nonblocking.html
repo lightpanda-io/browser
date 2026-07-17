@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<!--
+  Non-blocking consumers of <link rel=preload as=script>: async, defer, and
+  dynamically-inserted scripts adopt the preloaded Script (takePreload in
+  addFromElement) instead of fetching the URL a second time.
+
+  Each /serve-count/ URL is served by the test server with a body of
+  `window.__serve_count_<name> = N;` where N counts serves of that URL — so the
+  body the consumer executes records whether the preload was reused (1) or a
+  duplicate fetch happened (2). The responses are Cache-Control: no-store, so
+  the HTTP cache can't mask a duplicate fetch.
+-->
+
+<!--
+  Adopted by a defer script. The parser doesn't pump HTTP between the link and
+  the script tag, so the entry is still in flight at adoption: this exercises
+  loading-adoption, where the transfer completes after the Script has been
+  rewritten into a .frame defer script (PreloadedScript.doneCallback delegates
+  to Script.doneCallback).
+-->
+<link rel="preload" as="script" href="/serve-count/defer.js" onload="window.link_defer_load = true">
+<script defer src="/serve-count/defer.js"></script>
+
+<!-- Same, adopted by an async script. -->
+<link rel="preload" as="script" href="/serve-count/async.js" onload="window.link_async_load = true">
+<script async src="/serve-count/async.js"></script>
+
+<!--
+  Adopted by a dynamically-inserted script (defaults to async). The blocking
+  empty.js fetch below pumps the HTTP client, so by insertion time the preload
+  may be done (done-adoption: queued straight onto ready_scripts) or still in
+  flight (loading-adoption) — both must produce the same result.
+-->
+<link rel="preload" as="script" href="/serve-count/dynamic.js" onload="window.link_dynamic_load = true">
+<script src="empty.js"></script>
+<script>
+  const s = document.createElement('script');
+  s.src = '/serve-count/dynamic.js';
+  document.head.appendChild(s);
+</script>
+
+<script id="checks">
+  testing.onload(() => {
+    // Every consumer executed the first (and only) serve of its URL.
+    testing.expectEqual(1, window.__serve_count_defer);
+    testing.expectEqual(1, window.__serve_count_async);
+    testing.expectEqual(1, window.__serve_count_dynamic);
+    // Adoption must not lose the hint links' load events (hint_element rides
+    // on the Script, outside extra).
+    testing.expectEqual(true, window.link_defer_load);
+    testing.expectEqual(true, window.link_async_load);
+    testing.expectEqual(true, window.link_dynamic_load);
+  });
+</script>

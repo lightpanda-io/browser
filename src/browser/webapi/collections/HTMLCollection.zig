@@ -16,7 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
@@ -31,6 +35,7 @@ const Mode = enum {
     all_elements,
     child_elements,
     child_tag,
+    cells,
     selected_options,
     links,
     anchors,
@@ -48,12 +53,26 @@ _data: union(Mode) {
     all_elements: NodeLive(.all_elements),
     child_elements: NodeLive(.child_elements),
     child_tag: NodeLive(.child_tag),
+    cells: NodeLive(.cells),
     selected_options: NodeLive(.selected_options),
     links: NodeLive(.links),
     anchors: NodeLive(.anchors),
     form: NodeLive(.form),
     empty: void,
 },
+_rc: lp.RC(u32) = .{},
+
+pub fn deinit(self: *HTMLCollection, page: *Page) void {
+    page.factory.destroy(self);
+}
+
+pub fn releaseRef(self: *HTMLCollection, page: *Page) void {
+    self._rc.release(self, page);
+}
+
+pub fn acquireRef(self: *HTMLCollection) void {
+    self._rc.acquire();
+}
 
 pub fn length(self: *HTMLCollection, frame: *const Frame) u32 {
     return switch (self._data) {
@@ -91,6 +110,7 @@ pub fn iterator(self: *HTMLCollection, exec: *const Execution) !*Iterator {
             .all_elements => |*impl| .{ .all_elements = impl._tw.clone() },
             .child_elements => |*impl| .{ .child_elements = impl._tw.clone() },
             .child_tag => |*impl| .{ .child_tag = impl._tw.clone() },
+            .cells => |*impl| .{ .cells = impl._tw.clone() },
             .selected_options => |*impl| .{ .selected_options = impl._tw.clone() },
             .links => |*impl| .{ .links = impl._tw.clone() },
             .anchors => |*impl| .{ .anchors = impl._tw.clone() },
@@ -111,12 +131,21 @@ pub const Iterator = GenericIterator(struct {
         all_elements: TreeWalker.FullExcludeSelf,
         child_elements: TreeWalker.Children,
         child_tag: TreeWalker.Children,
+        cells: TreeWalker.Children,
         selected_options: TreeWalker.Children,
         links: TreeWalker.FullExcludeSelf,
         anchors: TreeWalker.FullExcludeSelf,
         form: TreeWalker.FullExcludeSelf,
         empty: void,
     },
+
+    pub fn acquireRef(self: *@This()) void {
+        self.list.acquireRef();
+    }
+
+    pub fn releaseRef(self: *@This(), page: *Page) void {
+        self.list.releaseRef(page);
+    }
 
     pub fn next(self: *@This(), _: *const Execution) ?*Element {
         return switch (self.list._data) {
@@ -127,6 +156,7 @@ pub const Iterator = GenericIterator(struct {
             .all_elements => |*impl| impl.nextTw(&self.tw.all_elements),
             .child_elements => |*impl| impl.nextTw(&self.tw.child_elements),
             .child_tag => |*impl| impl.nextTw(&self.tw.child_tag),
+            .cells => |*impl| impl.nextTw(&self.tw.cells),
             .selected_options => |*impl| impl.nextTw(&self.tw.selected_options),
             .links => |*impl| impl.nextTw(&self.tw.links),
             .anchors => |*impl| impl.nextTw(&self.tw.anchors),
@@ -146,8 +176,8 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(HTMLCollection.length, null, .{});
-    pub const @"[int]" = bridge.indexed(HTMLCollection.getAtIndex, null, .{ .null_as_undefined = true });
-    pub const @"[str]" = bridge.namedIndexed(struct {
+    pub const @"[int]" = bridge.indexedFull(HTMLCollection.getAtIndex, setAtIndex, deleteAtIndex, queryAtIndex, defineAtIndex, getIndexes, .{ .null_as_undefined = true });
+    pub const @"[str]" = bridge.namedIndexedFull(struct {
         pub fn wrap(self: *HTMLCollection, name: []const u8, frame: *Frame) !?*Element {
             if (name.len == 0) {
                 return error.NotHandled;
@@ -155,7 +185,135 @@ pub const JsApi = struct {
 
             return self.getByName(name, frame) orelse error.NotHandled;
         }
-    }.wrap, null, null, null, null, .{ .null_as_undefined = true });
+    }.wrap, null, deleteByName, getNames, queryByName, defineByName, describeByName, .{ .null_as_undefined = true });
+
+    // Named properties are [LegacyUnenumerableNamedProperties]: the query
+    // reports them non-enumerable, so for-in skips them while
+    // Object.getOwnPropertyNames still lists them via the enumerator.
+    fn queryByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !u32 {
+        if (name.len > 0 and self.getByName(name, frame) != null) {
+            return js.v8.DontEnum;
+        }
+        return error.NotHandled;
+    }
+
+    // HTMLCollection has no indexed setter: per Web IDL, assigning to or
+    // defining any array index property fails (TypeError in strict mode).
+    fn setAtIndex(_: *HTMLCollection, _: u32, _: js.Value) bool {
+        return false;
+    }
+
+    fn defineAtIndex(_: *HTMLCollection, _: u32) bool {
+        return false;
+    }
+
+    // Supported indexed properties are enumerable, configurable, read-only.
+    fn queryAtIndex(self: *HTMLCollection, idx: u32, frame: *Frame) !u32 {
+        if (idx < self.length(frame)) {
+            return js.v8.ReadOnly;
+        }
+        return error.NotHandled;
+    }
+
+    // Redefining a supported named property fails; unsupported names follow
+    // the ordinary path, so expandos remain allowed. Note there is no named
+    // setter and no named query: a direct assignment falls through to the
+    // ordinary [[Set]] which ends up in defineByName, while an assignment
+    // through a derived object (the collection as prototype) must ignore the
+    // named property entirely and create an expando on the receiver.
+    fn defineByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !bool {
+        if (name.len > 0 and self.getByName(name, frame) != null) {
+            return false;
+        }
+        return error.NotHandled;
+    }
+
+    // Named properties are [LegacyUnenumerableNamedProperties]: not
+    // enumerable, configurable, read-only.
+    fn describeByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !Descriptor {
+        if (name.len > 0) {
+            if (self.getByName(name, frame)) |element| {
+                return .{
+                    .value = element,
+                    .writable = false,
+                    .enumerable = false,
+                    .configurable = true,
+                };
+            }
+        }
+        return error.NotHandled;
+    }
+
+    const Descriptor = struct {
+        value: *Element,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    };
+
+    fn getIndexes(self: *HTMLCollection, frame: *Frame) !js.Array {
+        const len = self.length(frame);
+        var arr = frame.js.local.?.newArray(len);
+        for (0..len) |i| {
+            _ = try arr.set(@intCast(i), i, .{});
+        }
+        return arr;
+    }
+
+    // The supported property names: for each element represented by the
+    // collection, in tree order, its id and (for HTML elements) its name
+    // attribute, skipping empty values and duplicates.
+    fn getNames(self: *HTMLCollection, frame: *Frame) !js.Array {
+        var names: std.ArrayList([]const u8) = .{};
+        const arena = frame.local_arena;
+
+        const len = self.length(frame);
+        for (0..len) |i| {
+            const element = self.getAtIndex(i, frame) orelse break;
+            if (element.getAttributeSafe(comptime .wrap("id"))) |id| {
+                if (id.len > 0 and !contains(names.items, id)) {
+                    try names.append(arena, id);
+                }
+            }
+            if (element._namespace == .html) {
+                if (element.getAttributeSafe(comptime .wrap("name"))) |name| {
+                    if (name.len > 0 and !contains(names.items, name)) {
+                        try names.append(arena, name);
+                    }
+                }
+            }
+        }
+
+        var arr = frame.js.local.?.newArray(@intCast(names.items.len));
+        for (names.items, 0..) |name, i| {
+            _ = try arr.set(@intCast(i), name, .{});
+        }
+        return arr;
+    }
+
+    fn contains(names: []const []const u8, name: []const u8) bool {
+        for (names) |n| {
+            if (std.mem.eql(u8, n, name)) return true;
+        }
+        return false;
+    }
+
+    // Supported indexed and named properties can't be deleted (delete returns
+    // false, which throws a TypeError in strict mode); unsupported ones follow
+    // the ordinary [[Delete]] path.
+    fn deleteAtIndex(self: *HTMLCollection, idx: u32, frame: *Frame) !bool {
+        if (idx < self.length(frame)) {
+            return false;
+        }
+        return error.NotHandled;
+    }
+
+    fn deleteByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !bool {
+        if (self.getByName(name, frame) != null) {
+            return false;
+        }
+        return error.NotHandled;
+    }
 
     pub const item = bridge.function(_item, .{});
     fn _item(self: *HTMLCollection, index: i32, frame: *Frame) ?*Element {
