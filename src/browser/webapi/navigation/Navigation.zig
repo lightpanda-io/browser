@@ -189,11 +189,14 @@ pub fn pushEntry(
     const url = try arena.dupeZ(u8, _url);
 
     // truncates our history here.
-    if (self._entries.items.len > self._index + 1) {
-        for (self._entries.items[self._index + 1 ..]) |disposed| {
-            try disposed.fireDispose(frame);
-        }
-        self._entries.shrinkRetainingCapacity(self._index + 1);
+    const retained_index = self._index + 1;
+    if (self._entries.items.len > retained_index) {
+        const disposed = try frame.call_arena.dupe(
+            *NavigationHistoryEntry,
+            self._entries.items[retained_index..],
+        );
+        self._entries.shrinkRetainingCapacity(retained_index);
+        for (disposed) |d| try d.fireDispose(frame);
     }
 
     const index = self._entries.items.len;
