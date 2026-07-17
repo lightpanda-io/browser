@@ -8,6 +8,7 @@
     \\  fetch       fetches the specified URL
     \\  help        displays this message
     \\  mcp         starts an MCP (Model Context Protocol) server (stdio or HTTP)
+    \\  run         runs a saved script (no LLM), then exits
     \\  serve       starts a WebSocket CDP server
     \\  version     displays the version of {0s}
     \\
@@ -163,14 +164,15 @@
     \\  {0s} agent --provider huggingface         (HF serverless router, HF_TOKEN)
     \\  {0s} agent --provider ollama --model qwen3.5:latest
     \\  {0s} agent --no-llm                       (basic slash-command-only REPL)
-    \\  {0s} agent script.js                      (run a saved script, then exit)
+    \\  {0s} run script.js                        (replay a saved script; see `run`)
     \\  {0s} agent --task "..." --save out.js      (synthesize a replayable script)
     \\
     \\Arguments:
     \\[SCRIPT]
     \\          Optional path to a .js script. Runs the script (no LLM calls) and
-    \\          exits. With no script and no --task, the REPL starts; from there
-    \\          /load runs a script and /save exports the session to a file.
+    \\          exits; `{0s} run SCRIPT` is the preferred spelling. With no script
+    \\          and no --task, the REPL starts; from there /load runs a script and
+    \\          /save exports the session to a file.
     \\          Caution: .js files can contain evaluate(...) calls that run
     \\          arbitrary JavaScript in the page. Only run scripts you trust, the
     \\          same way you would a shell script.
@@ -229,7 +231,7 @@
     \\  --save <PATH>
     \\          Synthesize a replayable .js script from the --task run and write
     \\          it to PATH, instead of printing the answer. Replay it later with
-    \\          `agent PATH` (no LLM calls). Overwrites PATH if it exists.
+    \\          `run PATH` (no LLM calls). Overwrites PATH if it exists.
     \\          Requires --task.
     \\  --system-prompt <STRING>
     \\          Override the default system prompt.
@@ -256,6 +258,25 @@
     \\GOOGLE_API_KEY/GEMINI_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or
     \\MISTRAL_API_KEY. The local servers (Ollama, llama.cpp) do not require an
     \\API key.
+    ,
+    .run =
+    \\run command
+    \\Runs a saved script, then exits. No LLM calls, no API key needed.
+    \\
+    \\Usage:
+    \\  {0s} run <SCRIPT> [COMMON_OPTIONS]
+    \\
+    \\Examples:
+    \\  {0s} run script.js                        (replay a saved script)
+    \\
+    \\Arguments:
+    \\<SCRIPT>
+    \\          Path to a .js script to run, then exit. Produce one with
+    \\          `{0s} agent --task "..." --save script.js`, or `/save` from the
+    \\          agent REPL.
+    \\          Caution: .js files can contain evaluate(...) calls that run
+    \\          arbitrary JavaScript in the page. Only run scripts you trust, the
+    \\          same way you would a shell script.
     ,
     .version =
     \\usage:  {0s} version [OPTIONS]
