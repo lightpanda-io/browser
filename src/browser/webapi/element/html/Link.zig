@@ -230,7 +230,7 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     if (std.mem.eql(u8, rel, "preload")) {
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (std.ascii.eqlIgnoreCase(as, "script")) {
-            if (frame.preloadScriptHint(self._proto, href)) {
+            if (Frame.preload.scriptHint(frame, self._proto, href)) {
                 // load/error fires when the fetch settles
                 return;
             }
@@ -243,7 +243,7 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
         // "as" defaults to script in this case
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (as.len == 0 or std.ascii.eqlIgnoreCase(as, "script")) {
-            if (frame.preloadModuleHint(self._proto, href)) {
+            if (Frame.preload.moduleHint(frame, self._proto, href)) {
                 // load/error fires when the fetch settles
                 return;
             }

@@ -55,6 +55,7 @@ _worker_scope: *DedicatedWorkerGlobalScope,
 _url: [:0]const u8,
 _type: WorkerType = .classic,
 _script_loaded: bool = false,
+_script_arena: ?Allocator = null,
 _script_buffer: std.ArrayList(u8) = .empty,
 _http_transfer: ?*Transfer = null,
 
@@ -70,7 +71,7 @@ const WorkerOptions = struct {
 pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     const session = frame._session;
 
-    const arena = try session.getArena(.large, "Worker");
+    const arena = try session.getArena(.small, "Worker");
     errdefer session.releaseArena(arena);
 
     const resolved_url = try URL.resolve(arena, frame.base(), url, .{ .encoding = frame.charset });
@@ -100,6 +101,9 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         log.debug(.browser, "worker disabled", .{ .url = resolved_url });
         return self;
     }
+
+    self._script_arena = try session.getArena(.large, "Worker.script");
+    errdefer self.releaseScriptArena();
 
     const transfer = frame.newRequest(.{
         .ctx = self,
@@ -144,6 +148,7 @@ pub fn deinit(self: *Worker) void {
         res.abort(error.Abort);
         self._http_transfer = null;
     }
+    self.releaseScriptArena();
     self._worker_scope.deinit();
     self._frame._session.releaseArena(self._arena);
 }
@@ -165,7 +170,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     if (transfer.getContentLength()) |cl| {
-        try self._script_buffer.ensureTotalCapacity(self._arena, cl);
+        try self._script_buffer.ensureTotalCapacity(self._script_arena.?, cl);
     }
 
     return .proceed;
@@ -173,12 +178,13 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
 fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
     const self: *Worker = @ptrCast(@alignCast(transfer.req.ctx));
-    try self._script_buffer.appendSlice(self._arena, data);
+    try self._script_buffer.appendSlice(self._script_arena.?, data);
 }
 
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Worker = @ptrCast(@alignCast(ctx));
     self._http_transfer = null;
+    defer self.releaseScriptArena();
 
     const url = self._url;
     const script = self._script_buffer.items;
@@ -235,7 +241,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
                 return;
             }
 
-            const caught = try_catch.caughtOrError(self._arena, err);
+            const caught = try_catch.caughtOrError(self._script_arena.?, err);
             log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
@@ -245,7 +251,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
                 return;
             }
 
-            const caught = try_catch.caughtOrError(self._arena, err);
+            const caught = try_catch.caughtOrError(self._script_arena.?, err);
             log.err(.browser, "worker module error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
@@ -258,11 +264,13 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *Worker = @ptrCast(@alignCast(ctx));
     self._http_transfer = null;
+    self.releaseScriptArena();
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Worker = @ptrCast(@alignCast(ctx));
     self._http_transfer = null;
+    self.releaseScriptArena();
 
     log.err(.browser, "worker fetch error", .{
         .url = self._url,
@@ -277,6 +285,13 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._worker_scope.drainPendingMessages();
 
     self.fireErrorEvent(@errorName(err), null);
+}
+
+fn releaseScriptArena(self: *Worker) void {
+    const arena = self._script_arena orelse return;
+    self._script_arena = null;
+    self._script_buffer = .empty;
+    self._frame._session.releaseArena(arena);
 }
 
 // Fire an error event on the Worker object (parent context)

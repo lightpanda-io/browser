@@ -68,3 +68,24 @@
   location.hash = "";
   testing.expectEqual("", location.hash);
 </script>
+
+<script id=location_hash_no_change>
+  // Per the Location hash setter, assigning a value that doesn't change the
+  // fragment must not navigate at all: re-assigning "" on a fragment-less URL
+  // must not schedule a same-URL reload, and re-assigning the current
+  // fragment must be a no-op too.
+  const stable_href = location.href;
+  location.hash = "";
+  location.hash = "";
+  testing.expectEqual(stable_href, location.href);
+
+  location.hash = "#same";
+  const with_fragment = location.href;
+  location.hash = "#same";
+  location.hash = "same";
+  testing.expectEqual(with_fragment, location.href);
+  testing.expectEqual("#same", location.hash);
+
+  location.hash = "";
+  testing.expectEqual(stable_href, location.href);
+</script>

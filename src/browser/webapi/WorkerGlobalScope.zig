@@ -46,6 +46,8 @@ const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
 const idb = @import("storage/idb/idb.zig");
 const CookieStore = @import("storage/CookieStore.zig");
+const MessagePort = @import("MessagePort.zig");
+const SharedWorkerGlobalScope = @import("SharedWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
 const builtin = @import("builtin");
@@ -98,6 +100,9 @@ _script_manager: ScriptManagerBase,
 // channels in this worker's origin
 _broadcast_channels: std.DoublyLinkedList = .{},
 
+// List of MessagePorts living in this worker's context.
+_message_ports: std.DoublyLinkedList = .{},
+
 // These fields represent the "Window"-like component of the WGS
 _proto: *EventTarget,
 _console: Console = .init,
@@ -115,6 +120,7 @@ _location: WorkerLocation,
 _timers: Timers = .{},
 
 pub const Type = union(enum) {
+    shared: *SharedWorkerGlobalScope,
     dedicated: *DedicatedWorkerGlobalScope,
 };
 
@@ -189,6 +195,14 @@ pub fn deinit(self: *WorkerGlobalScope) void {
     const browser = session.browser;
 
     browser.http_client.abortOwner(&self._http_owner);
+
+    // Close this worker's MessagePorts before the context dies: this severs
+    // entanglement with page-side ports (which may outlive us) and releases
+    // any still-queued messages.
+    while (self._message_ports.first) |node| {
+        const port: *MessagePort = @alignCast(@fieldParentPtr("_node", node));
+        port.close(); // removes from self._message_ports
+    }
 
     self._identity.deinit();
     self._script_manager.deinit();

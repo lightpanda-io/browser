@@ -101,21 +101,32 @@ pub fn setSearch(_: *const Location, search: []const u8, frame: *Frame) !void {
 }
 
 pub fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
-    const normalized_hash = blk: {
-        if (hash.len == 0) {
-            const old_url = frame.url;
+    const old_url = frame.url;
+    const base_end = std.mem.indexOfScalar(u8, old_url, '#') orelse old_url.len;
+    // Includes the leading '#'; empty when the URL has no fragment.
+    const old_fragment = old_url[base_end..];
 
-            break :blk if (std.mem.indexOfScalar(u8, old_url, '#')) |index|
-                old_url[0..index]
-            else
-                old_url;
-        } else if (hash[0] == '#')
-            break :blk hash
-        else
-            break :blk try std.fmt.allocPrint(frame.call_arena, "#{s}", .{hash});
+    const normalized_hash: []const u8 = blk: {
+        if (hash.len == 0) {
+            break :blk "";
+        } else if (hash[0] == '#') {
+            break :blk hash;
+        }
+        // Scratch only: scheduleNavigation dupes the URL into its own arena
+        // synchronously, so the local arena suffices.
+        break :blk try std.fmt.allocPrint(frame.local_arena, "#{s}", .{hash});
     };
 
-    return frame.scheduleNavigation(normalized_hash, .{
+    // Per the Location hash setter, when the fragment doesn't change no
+    // navigation happens at all — in particular `location.hash = ""` on a
+    // fragment-less URL must not turn into a same-URL reload.
+    if (std.mem.eql(u8, old_fragment, normalized_hash)) {
+        return;
+    }
+
+    const target_url = if (normalized_hash.len == 0) old_url[0..base_end] else normalized_hash;
+
+    return frame.scheduleNavigation(target_url, .{
         .reason = .script,
         .kind = .{ .replace = null },
     }, .{ .script = frame });

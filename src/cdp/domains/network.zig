@@ -433,7 +433,7 @@ pub const RequestWriter = struct {
             var it = request.headers.iterator();
             while (it.next()) |hdr| {
                 try jws.objectField(hdr.name);
-                try jws.write(hdr.value);
+                try writeHeaderValue(jws, hdr.value);
             }
             if (try request.getCookieString(transfer.arena)) |cookies| {
                 try jws.objectField("Cookie");
@@ -534,11 +534,44 @@ const ResponseWriter = struct {
             }
 
             try jws.objectField("headers");
-            try jws.write(std.json.ArrayHashMap([]const u8){ .map = map });
+            try jws.beginObject();
+            var map_it = map.iterator();
+            while (map_it.next()) |entry| {
+                try jws.objectField(entry.key_ptr.*);
+                try writeHeaderValue(jws, entry.value_ptr.*);
+            }
+            try jws.endObject();
         }
         try jws.endObject();
     }
 };
+
+// HTTP header values are octets; per historical practice non-UTF-8 bytes are
+// interpreted as Latin-1 (ISO-8859-1), which is what Chrome does for DevTools.
+// Transcode so we emit a JSON string — std.json would otherwise serialize
+// invalid UTF-8 as a JSON array of numbers.
+fn writeHeaderValue(jws: anytype, value: []const u8) !void {
+    if (std.unicode.utf8ValidateSlice(value)) {
+        return jws.write(value);
+    }
+    // Latin-1 -> UTF-8: each byte is a codepoint U+0000..U+00FF (max 2 bytes)
+    try jws.beginWriteRaw();
+    try jws.writer.writeByte('"');
+    var start: usize = 0;
+    for (value, 0..) |b, i| {
+        if (b < 0x80) {
+            continue;
+        }
+        try std.json.Stringify.encodeJsonStringChars(value[start..i], jws.options, jws.writer);
+        var buf: [2]u8 = undefined;
+        const n = std.unicode.utf8Encode(b, &buf) catch unreachable;
+        try jws.writer.writeAll(buf[0..n]);
+        start = i + 1;
+    }
+    try std.json.Stringify.encodeJsonStringChars(value[start..], jws.options, jws.writer);
+    try jws.writer.writeByte('"');
+    jws.endWriteRaw();
+}
 
 fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedResponseKey {
     const key = std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
@@ -674,6 +707,42 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
 
     try testing.expectEqual(bc.extra_headers.items.len, 1);
     try testing.expectEqual("x-keep: ok", std.mem.span(bc.extra_headers.items[0]));
+}
+
+test "cdp.network writeHeaderValue" {
+    const expectHeaderJson = struct {
+        fn expect(expected: []const u8, value: []const u8) !void {
+            var buf: [256]u8 = undefined;
+            var writer = std.Io.Writer.fixed(&buf);
+            var jws: std.json.Stringify = .{ .writer = &writer };
+            try writeHeaderValue(&jws, value);
+            try std.testing.expectEqualStrings(expected, writer.buffered());
+        }
+    }.expect;
+
+    // valid UTF-8 is written as-is
+    try expectHeaderJson(
+        "\"mié, 15 jul 2026 13:19:10 GMT\"",
+        "mié, 15 jul 2026 13:19:10 GMT",
+    );
+
+    // Latin-1 bytes are transcoded to UTF-8 instead of a byte array
+    try expectHeaderJson(
+        "\"mié, 15 jul 2026 13:19:10 GMT\"",
+        "mi\xE9, 15 jul 2026 13:19:10 GMT",
+    );
+
+    // JSON escaping still applies around transcoded bytes
+    try expectHeaderJson(
+        "\"a\\\"é\\nb\"",
+        "a\"\xE9\nb",
+    );
+
+    // pure ASCII untouched
+    try expectHeaderJson(
+        "\"max-age=180, s-maxage=180, public\"",
+        "max-age=180, s-maxage=180, public",
+    );
 }
 
 test "cdp.Network: cookies" {

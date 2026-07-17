@@ -15,6 +15,8 @@
   <div class="nested">nested2</div>
 </div>
 
+<div class="baaa">overlap1</div>
+
 <script>
   const foos = document.getElementsByClassName('foo');
 </script>
@@ -95,4 +97,11 @@
   testing.expectEqual(2, nested.length);
   testing.expectEqual('nested1', nested[0].textContent);
   testing.expectEqual('nested2', nested[1].textContent);
+</script>
+
+<script id=overlappingSubstring>
+  // "baaa" is a single class token; "aa" is a substring of it but not its own
+  // token, so it must not match.
+  const overlap = document.getElementsByClassName('aa');
+  testing.expectEqual(0, overlap.length);
 </script>

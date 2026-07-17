@@ -33,6 +33,7 @@ const Browser = @import("Browser.zig");
 pub const Runner = @import("Runner.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Frame.QueuedNavigation;
+const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
 const log = lp.log;
 const ArenaPool = App.ArenaPool;
@@ -67,6 +68,11 @@ arena_pool: *ArenaPool,
 // All live top-level Pages. During a root navigation this transiently holds
 // both the live page and its in-flight replacement.
 pages: std.ArrayList(*Page) = .{},
+
+// Live SharedWorkerGlobalScopes, keyed by "url\x00name", so every
+// `new SharedWorker(url, name)` in the session connects to the same instance.
+// Owned by the Page that creates it.
+shared_workers: std.StringHashMapUnmanaged(*SharedWorkerGlobalScope) = .empty,
 
 _page_destruction_queue: std.ArrayList(*Page) = .{},
 

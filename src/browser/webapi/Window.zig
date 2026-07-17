@@ -1093,7 +1093,7 @@ const PostMessageCallback = struct {
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = .{ .value = self.message },
             .origin = self.origin,
-            .source = self.source,
+            .source = .{ .window = self.source },
             .ports = self.ports,
             .bubbles = false,
             .cancelable = false,

@@ -216,7 +216,12 @@ pub fn resolveSpecifier(self: *ScriptManagerBase, arena: Allocator, base: [:0]co
 }
 
 const PreloadOpts = struct {
-    // set when the preload comes from a <link rel=modulepreload> hint
+    // true when the preload is a hint (modulepreload link or prescan) and can
+    // be taken by anyone.
+    hint: bool = false,
+
+    // the <link rel=modulepreload> element to fire load/error on, when the
+    // hint came from one.
     hint_element: ?*Element.Html = null,
 };
 pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []const u8, opts: PreloadOpts) !void {
@@ -248,7 +253,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .hint_element = opts.hint_element,
     };
 
-    gop.value_ptr.* = .{ .state = .{ .loading = script }, .hint = opts.hint_element != null };
+    gop.value_ptr.* = .{ .state = .{ .loading = script }, .hint = opts.hint };
 
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
@@ -294,15 +299,43 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     };
 }
 
-// <link rel=modulepreload href=...> — start fetching a module before import
-// resolution discovers it. Returns false when no fetch was started (the
-// module is already fetched/fetching): no event will fire on the link.
-pub fn preloadModuleHint(self: *ScriptManagerBase, element: *Element.Html, url: [:0]const u8, referrer: []const u8) !bool {
+// <link rel=modulepreload href=...> (element set) or the prescan finding a
+// <script type=module src=...> (element null) — start fetching a module
+// before import resolution discovers it. Returns false when no fetch was
+// started (the module is already fetched/fetching): no event will fire on
+// the link.
+pub fn preloadModuleHint(self: *ScriptManagerBase, element: ?*Element.Html, url: [:0]const u8, referrer: []const u8) !bool {
     if (self.imported_modules.contains(url)) {
         return false;
     }
-    try self.preloadImport(url, referrer, .{ .hint_element = element });
+    try self.preloadImport(url, referrer, .{ .hint = true, .hint_element = element });
     return true;
+}
+
+// A <script type=module src=...> whose URL was hinted (modulepreload link or
+// prescan)
+pub fn takeModuleHint(self: *ScriptManagerBase, url: [:0]const u8) ?*Script {
+    const entry = self.imported_modules.getEntry(url) orelse return null;
+    if (entry.value_ptr.hint == false) {
+        // The script was preloaded, but not because of a hint. It came from v8
+        // telling us to preload the module. We cannot take it here because we know
+        // v8 is going to come back and wait for it.
+        return null;
+    }
+
+    const script = switch (entry.value_ptr.state) {
+        .loading => |script| blk: {
+            self.async_scripts.remove(&script.node);
+            break :blk script;
+        },
+        .done => |script| script,
+        // The hint's fetch failed; give the script its own attempt.
+        // I'm not sure if this is the right behavior. Why would a preload fail
+        // but the "real" load work? But it's definetly safer.
+        .err => return null,
+    };
+    self.imported_modules.removeByPtr(entry.key_ptr);
+    return script;
 }
 
 pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource {
@@ -872,8 +905,13 @@ pub const Script = struct {
         const local = &ls.local;
 
         // Per spec, trigger any microtasks BEFORE execution in case the parser
-        // (e.g. via event callbacks) queued anything.
-        local.runMicrotasks();
+        // (e.g. via event callbacks) queued anything. Only at a microtask
+        // checkpoint though (empty JS stack): a script executing because a
+        // running script inserted it must not drain the queue mid-task -
+        // e.g. its own insertion record must survive for takeRecords().
+        if (frame.js.call_depth == 0) {
+            local.runMicrotasks();
+        }
 
         // Handle importmap special case here: the content is a JSON containing imports.
         // Multiple <script type="importmap"> elements merge with first-wins semantics.

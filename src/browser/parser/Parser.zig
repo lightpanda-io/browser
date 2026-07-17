@@ -171,6 +171,16 @@ const Error = struct {
     };
 };
 
+pub const PrescanResource = h5e.PrescanResource;
+pub const PrescanCallback = h5e.PrescanCallback;
+
+// Preload scanner: a tokenizer-only pass over a buffered document, reporting
+// fetchable script resources (and the first <base href>) through `callback`.
+// Builds no tree; purely a hint source.
+pub fn prescan(html: []const u8, charset: []const u8, ctx: *anyopaque, callback: PrescanCallback) void {
+    h5e.html5ever_prescan(html.ptr, html.len, charset.ptr, charset.len, ctx, callback);
+}
+
 pub fn parse(self: *Parser, html: []const u8) void {
     h5e.html5ever_parse_document(
         html.ptr,

@@ -315,3 +315,23 @@ pub extern "c" fn encoding_max_encode_buffer_length(
     handle: *anyopaque,
     input_len: usize,
 ) usize;
+
+// Preload scanner (see prescan.rs). Kinds must stay in sync with the
+// KIND_* constants there.
+pub const PrescanResource = enum(u32) {
+    script = 0,
+    module = 1,
+    base = 2,
+    _,
+};
+
+pub const PrescanCallback = *const fn (ctx: *anyopaque, kind: PrescanResource, url: [*c]const u8, url_len: usize) callconv(.c) void;
+
+pub extern "c" fn html5ever_prescan(
+    html: [*c]const u8,
+    len: usize,
+    charset: [*c]const u8,
+    charset_len: usize,
+    ctx: *anyopaque,
+    callback: PrescanCallback,
+) void;

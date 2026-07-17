@@ -53,6 +53,7 @@ const VisualViewport = @import("webapi/VisualViewport.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const DOMNodeIterator = @import("webapi/DOMNodeIterator.zig");
 const Worker = @import("webapi/Worker.zig");
+const MessagePort = @import("webapi/MessagePort.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
@@ -70,6 +71,7 @@ const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
+pub const preload = @import("frame/preload.zig");
 pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
 pub const node_factory = @import("frame/node_factory.zig");
@@ -197,6 +199,9 @@ _live_node_iterators: std.DoublyLinkedList = .{},
 // List of open BroadcastChannels, used to route postMessage between same-named
 // channels in this frame's origin
 _broadcast_channels: std.DoublyLinkedList = .{},
+
+// List of MessagePorts living in this frame's context.
+_message_ports: std.DoublyLinkedList = .{},
 
 // MutationObserver / IntersectionObserver bookkeeping. See frame/observers.zig.
 _mutation: observers.Mutation = .{},
@@ -475,6 +480,11 @@ pub fn deinit(self: *Frame) void {
 
     if (self._queued_navigation) |qn| {
         page.releaseArena(qn.arena);
+    }
+
+    while (self._message_ports.first) |node| {
+        const port: *MessagePort = @alignCast(@fieldParentPtr("_node", node));
+        port.close(); // removes from self._message_ports
     }
 
     {
@@ -884,6 +894,21 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     };
 
     const session = target._session;
+
+    // Re-navigating to the exact current URL is only a reload when the URL
+    // has no fragment. With a fragment it's a fragment navigation per the
+    // HTML "navigate" steps (url equals the document's URL excluding
+    // fragments and url's fragment is non-null): no reload, and since the
+    // fragment didn't change, no hashchange and no new history entry either.
+    if (!opts.force and
+        opts.kind != .reload and
+        std.mem.eql(u8, target.url, resolved_url) and
+        std.mem.indexOfScalar(u8, resolved_url, '#') != null)
+    {
+        session.releaseArena(arena);
+        return;
+    }
+
     // Short-circuit only true fragment-only navigations (same path/query, different
     // fragment). Identical URLs fall through and trigger a real reload.
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
@@ -1549,6 +1574,8 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
 
                 const raw_html = html.buffer.items;
 
+                preload.prescan(self, raw_html);
+
                 if (std.mem.eql(u8, self.charset, "UTF-8")) {
                     parser.parse(raw_html);
                 } else {
@@ -2087,40 +2114,6 @@ pub fn queueHashChange(self: *Frame, old_url: []const u8, new_url: []const u8) !
 // splitting by route anyway).
 const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
 
-// start prefetching <link rel="preload" as="script" href=...>`
-pub fn preloadScriptHint(self: *Frame, element: *Element.Html, href: []const u8) bool {
-    if (self.isGoingAway() or self._parse_mode == .fragment) {
-        return false;
-    }
-
-    const arena = self.getArena(.small, "Frame.preloadScriptHint") catch return false;
-    defer self.releaseArena(arena);
-
-    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch return false;
-    if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
-        // data:/blob: are synthesized locally — no round-trip to hide.
-        return false;
-    }
-    return self._script_manager.preloadScript(element, resolved) catch false;
-}
-
-// start prefetching <link rel="modulepreload" href=...>
-pub fn preloadModuleHint(self: *Frame, element: *Element.Html, href: []const u8) bool {
-    if (self.isGoingAway() or self._parse_mode == .fragment) {
-        return false;
-    }
-
-    // The url becomes the imported_modules key, which must outlive the fetch
-    // so it lives on the frame arena
-    const resolved = URL.resolve(self.arena, self.base(), href, .{ .encoding = self.charset }) catch return false;
-    if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
-        // data:/blob: are synthesized locally — no round-trip to hide.
-        return false;
-    }
-
-    return self._script_manager.base.preloadModuleHint(element, resolved, self.url) catch false;
-}
-
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.
 // href is passed in as an optimization since the [currently] only callsite has
 // it, so why look it up again?
@@ -2538,9 +2531,7 @@ pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*N
 
     var it = source.childrenIterator();
     while (it.next()) |child| {
-        if (notify) {
-            try moved.append(self.call_arena, child);
-        }
+        try moved.append(self.call_arena, child);
         const child_was_connected = child.isConnected();
         self.removeNode(source, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
         if (ref_node) |ref| {
@@ -2548,10 +2539,10 @@ pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*N
                 parent,
                 child,
                 .{ .before = ref },
-                .{ .child_already_connected = child_was_connected, .notify_observers = false },
+                .{ .child_already_connected = child_was_connected, .notify_observers = false, .run_ready = false },
             );
         } else {
-            try self.appendNode(parent, child, .{ .child_already_connected = child_was_connected, .notify_observers = false });
+            try self.appendNode(parent, child, .{ .child_already_connected = child_was_connected, .notify_observers = false, .run_ready = false });
         }
     }
 
@@ -2559,6 +2550,22 @@ pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*N
         observers.notifyChildListChange(self, source, &.{}, moved.items, null, null);
         if (notify_mode == .records) {
             observers.notifyChildListChange(self, parent, moved.items, &.{}, previous_sibling, ref_node);
+        }
+    }
+
+    // Nodes moved into a not-yet-started script run the script's
+    // children-changed steps first (whatwg/html#10188), then each inserted
+    // node's own ready work runs, in tree order, with everything in place.
+    // Ready work only happens on becoming connected, so a detached
+    // destination has none.
+    if (parent.isConnected()) {
+        if (parent.is(Element.Html.Script)) |script| {
+            if (!script._executed) {
+                try self.nodeIsReady(false, parent);
+            }
+        }
+        for (moved.items) |child| {
+            try self.nodeIsReadySubtree(child);
         }
     }
 }
@@ -2573,6 +2580,10 @@ const InsertNodeOpts = struct {
     adopting_to_new_document: bool = false,
     // Set to false when the caller queues its own combined mutation record
     notify_observers: bool = true,
+    // Set to false for multi-node insertions (fragments): the caller runs
+    // the ready work itself once every node is in place, so an earlier
+    // script observes its later siblings already inserted.
+    run_ready: bool = true,
 };
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
@@ -2655,21 +2666,27 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
 
     const parent_is_connected = parent.isConnected();
 
-    // nodeIsReady resolves the node's owning frame itself (only for the few node
-    // types that have ready work), so pass the incumbent `self`.
-    try self.nodeIsReady(false, child);
+    // Mutation records queue synchronously at insertion, before any script
+    // runs: an inserted script can observe its own record via takeRecords.
+    if (opts.notify_observers) {
+        self.notifyChildInserted(parent, child);
+    }
 
-    // Check if text was added to a script that hasn't started yet.
-    if (child._type == .cdata and parent_is_connected) {
+    // Inserting into a not-yet-started script runs the script's
+    // children-changed steps first, then the inserted nodes' own ready work
+    // (whatwg/html#10188: the outer script executes before an inner one).
+    // Ready work only happens on becoming connected, so a detached parent
+    // has none.
+    if (opts.run_ready and parent_is_connected) {
         if (parent.is(Element.Html.Script)) |script| {
             if (!script._executed) {
                 try self.nodeIsReady(false, parent);
             }
         }
-    }
 
-    if (opts.notify_observers) {
-        self.notifyChildInserted(parent, child);
+        // nodeIsReady resolves the node's owning frame itself (only for the few node
+        // types that have ready work), so pass the incumbent `self`.
+        try self.nodeIsReadySubtree(child);
     }
 
     if (opts.child_already_connected and !opts.adopting_to_new_document) {
@@ -2901,6 +2918,26 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: F
     }
 }
 
+// Runs the "ready" work for an inserted node and, when it's an element with
+// children, for its descendants in tree order: appending a subtree
+// containing scripts must execute them all, after the whole insertion.
+fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
+    if (node._type != .element or node.firstChild() == null) {
+        return self.nodeIsReady(false, node);
+    }
+
+    // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
+    // connectivity.
+    var elements: std.ArrayList(*Node) = .empty;
+    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
+    while (tw.next()) |el| {
+        try elements.append(self.call_arena, el.asNode());
+    }
+    for (elements.items) |el| {
+        try self.nodeIsReady(false, el);
+    }
+}
+
 fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     if ((comptime from_parser) and self._parse_mode == .fragment) {
         if (self._fragment_scripts_runnable == false) {
@@ -2922,6 +2959,16 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     // walk, so we only do it once we've matched a node type that has ready work
     // (the common text/element insertion does nothing here). The parser inserts
     // into its own document, so from_parser always uses `self`.
+    // Scripts, iframes, links and styles activate on becoming connected;
+    // appending them to a detached parent does nothing (they run/load later
+    // if the subtree gets inserted into the document).
+    if (comptime from_parser == false) {
+        switch (node._type) {
+            .element => if (!node.isConnected()) return,
+            else => {},
+        }
+    }
+
     if (node.is(Element.Html.Script)) |script| {
         if ((comptime from_parser == false) and script._src.len == 0) {
             // Script was added via JavaScript without a src attribute.

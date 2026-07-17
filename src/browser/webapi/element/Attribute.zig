@@ -529,15 +529,7 @@ fn normalizeNameForLookup(name: String, frame: *Frame) !String {
     return .wrap(normalized);
 }
 
-pub fn normalizeNameForLookupAlloc(allocator: Allocator, name: String) !String {
-    if (!needsLowerCasing(name.str())) {
-        return name.dupe(allocator);
-    }
-    const normalized = try std.ascii.allocLowerString(allocator, name.str());
-    return .wrap(normalized);
-}
-
-fn needsLowerCasing(name: []const u8) bool {
+pub fn needsLowerCasing(name: []const u8) bool {
     var remaining = name;
     if (comptime std.simd.suggestVectorLength(u8)) |vector_len| {
         while (remaining.len > vector_len) {
@@ -555,6 +547,11 @@ fn needsLowerCasing(name: []const u8) bool {
         }
     }
     return false;
+}
+
+pub fn normalizeNameForLookupAlloc(allocator: Allocator, name: String) !String {
+    const normalized = try std.ascii.allocLowerString(allocator, name.str());
+    return .wrap(normalized);
 }
 
 pub const NamedNodeMap = struct {

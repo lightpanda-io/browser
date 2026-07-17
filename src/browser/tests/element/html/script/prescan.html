@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<!--
+  No <link> hints anywhere here: the preload scanner (Frame.prescanScripts)
+  runs over the raw buffered HTML before parsing and starts every script
+  download up front. Each consumer below must then reuse that fetch rather
+  than issue its own.
+
+  /serve-count/ bodies record how many times the URL was served (see
+  testing.zig); the body a consumer executes carries 1 when the prescan's
+  fetch was reused, 2 when a duplicate fetch happened.
+-->
+
+<!-- Blocking: waitForPreload consumes the prescan's in-flight fetch. -->
+<script src="/serve-count/prescan_blocking.js"></script>
+
+<!-- Defer: takePreload adopts the prescan's Script. -->
+<script defer src="/serve-count/prescan_defer.js"></script>
+
+<!--
+  Module: the prescan parks module hints in imported_modules; the script
+  element's own fetch adopts it via takeModuleHint.
+-->
+<script type="module" src="/serve-count/prescan_module.js"></script>
+
+<script id="order">
+  // The blocking script above executed in document order, before us.
+  testing.expectEqual(1, window.__serve_count_prescan_blocking);
+</script>
+
+<script id="checks">
+  testing.onload(() => {
+    testing.expectEqual(1, window.__serve_count_prescan_blocking);
+    testing.expectEqual(1, window.__serve_count_prescan_defer);
+    testing.expectEqual(1, window.__serve_count_prescan_module);
+  });
+</script>

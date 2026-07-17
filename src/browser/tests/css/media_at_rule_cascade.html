@@ -256,7 +256,7 @@
 <script id=cascade_deep_nesting_capped>
 {
   // 50 levels of `@media screen { ... }` around a `display:none` rule. The
-  // depth guard (MAX_MEDIA_NESTING in StyleManager.zig) must short-circuit
+  // depth guard (MAX_AT_RULE_NESTING in StyleManager.zig) must short-circuit
   // before the Zig stack is exhausted — and the inner rule sits beyond the
   // cap, so the element stays visible.
   let css = '';

@@ -351,9 +351,11 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
             var caught: js.TryCatch.Caught = undefined;
-            ls.toLocal(inline_handler).tryCallWithThis(void, target_et, .{event}, &caught) catch |err| {
+            const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, target_et, .{event}, &caught) catch |err| ret: {
                 log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
+                break :ret null;
             };
+            processHandlerReturnValue(event, handler_return);
 
             if (event._stop_propagation) {
                 return;
@@ -405,9 +407,11 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
                 }
 
                 var caught: js.TryCatch.Caught = undefined;
-                ls.toLocal(inline_handler).tryCallWithThis(void, current_target, .{event}, &caught) catch |err| {
+                const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, current_target, .{event}, &caught) catch |err| ret: {
                     log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
+                    break :ret null;
                 };
+                processHandlerReturnValue(event, handler_return);
 
                 if (event._needs_retargeting) {
                     event._target = original_target;
@@ -428,6 +432,15 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     }
 }
 
+fn processHandlerReturnValue(event: *Event, handler_return: ?js.Value) void {
+    const ret = handler_return orelse return;
+    if (ret.isFalse() and !event._type_string.eql(comptime .wrap("error"))) {
+        event.preventDefault();
+    }
+}
+
+// Per spec ("invocation target in shadow tree"), window.event is left
+// undefined while invoking listeners whose target lives in a shadow tree.
 fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
     return if (rootIsShadowRoot(target)) null else event;
 }

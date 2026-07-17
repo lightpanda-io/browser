@@ -34,3 +34,52 @@
   testing.expectEqual(0, window.scrollX);
   testing.expectEqual(0, window.scrollY);
 </script>
+
+<script id=element_scroll_events_coalesce_and_preserve_reentrancy type=module>
+  const state = await testing.async();
+  const element = document.createElement('div');
+  let scrolls = 0;
+  let scrollends = 0;
+
+  element.addEventListener('scroll', () => {
+    scrolls++;
+    if (scrolls === 1) {
+      element.scrollTop = 101;
+    }
+  });
+  element.addEventListener('scrollend', () => {
+    scrollends++;
+    if (scrollends === 1) {
+      element.scrollTop = 102;
+    }
+  });
+
+  for (let i = 1; i <= 100; i++) {
+    element.scrollTop = i;
+  }
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(3, scrolls);
+    testing.expectEqual(2, scrollends);
+  });
+</script>
+
+<script id=element_scrollBy_noop_does_not_fire_events type=module>
+  const state = await testing.async();
+  const element = document.createElement('div');
+  let scrolls = 0;
+  let scrollends = 0;
+
+  element.addEventListener('scroll', () => scrolls++);
+  element.addEventListener('scrollend', () => scrollends++);
+  element.scrollBy(-1, -1);
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, scrolls);
+    testing.expectEqual(0, scrollends);
+  });
+</script>

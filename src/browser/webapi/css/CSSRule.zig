@@ -23,6 +23,7 @@ pub const Type = union(enum) {
     font_feature_values: void,
     viewport: void,
     region_style: void,
+    layer: void,
     unknown: void,
 };
 
@@ -63,10 +64,12 @@ pub fn initAtRule(rule_type: Type, text: []const u8, frame: *Frame) !*CSSRule {
 }
 
 pub fn getType(self: *const CSSRule) u16 {
-    if (self._type == .unknown) {
-        return 0;
-    }
-    return @as(u16, @intFromEnum(std.meta.activeTag(self._type))) + 1;
+    return switch (self._type) {
+        // `@layer` rules postdate the legacy numeric type constants, so
+        // their `type` is 0 (CSSOM §6.4.1) — same as unknown at-rules.
+        .layer, .unknown => 0,
+        else => @as(u16, @intFromEnum(std.meta.activeTag(self._type))) + 1,
+    };
 }
 
 pub fn getCssText(self: *const CSSRule, _: *Frame) []const u8 {

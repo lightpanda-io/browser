@@ -115,6 +115,14 @@ pub fn getBroadcastChannels(self: *const Execution) *std.DoublyLinkedList {
     };
 }
 
+// The owning global's (Frame or WGS) list of live MessagePorts, walked at
+// that global's teardown to sever cross-context entanglement.
+pub fn messagePorts(self: *const Execution) *std.DoublyLinkedList {
+    return switch (self.js.global) {
+        inline else => |g| &g._message_ports,
+    };
+}
+
 // The global's serialized origin (e.g. "https://example.com"), or null for an
 // opaque origin.
 pub fn origin(self: *const Execution) ?[]const u8 {
