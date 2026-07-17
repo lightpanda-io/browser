@@ -323,6 +323,69 @@ pub fn parseDisposition(value: []const u8) !Disposition {
     }
 }
 
+pub const ContentTypeIterator = struct {
+    /// Header value.
+    rest: []const u8,
+    /// Always the first.
+    essence: []const u8,
+
+    /// Initializes a `ContentTypeIterator`.
+    pub fn init(content_type: []const u8) ContentTypeIterator {
+        // Skip whitespace.
+        const trimmed = std.mem.trimStart(u8, content_type, &.{ ' ', '\t' });
+        // Find semicolon delimiter; or just use the end position.
+        const end = std.mem.indexOfScalar(u8, trimmed, ';') orelse trimmed.len;
+        const essence = std.mem.trimEnd(u8, trimmed[0..end], &.{ ' ', '\t' });
+
+        // Rest of the parameters.
+        const rest = trimmed[end..];
+        return .{ .rest = rest, .essence = essence };
+    }
+
+    pub const Parameter = struct {
+        key: []const u8,
+        /// `value` can be an empty string ("").
+        value: []const u8,
+    };
+
+    /// Returns the next parameter or null if there aren't any parameters.
+    pub fn next(self: *ContentTypeIterator) ?Parameter {
+        while (self.rest.len > 0) {
+            // `rest` always sits at the `;` that introduced this parameter.
+            var param = self.rest[1..];
+            const end = std.mem.indexOfScalar(u8, param, ';') orelse param.len;
+            self.rest = param[end..];
+            param = std.mem.trim(u8, param[0..end], " \t");
+
+            // Parameters without `=` are malformed; skip them.
+            const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
+            const key = std.mem.trimEnd(u8, param[0..eq], " \t");
+            if (key.len == 0) {
+                continue;
+            }
+
+            var value = std.mem.trimStart(u8, param[eq + 1 ..], " \t");
+            if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') {
+                value = value[1 .. value.len - 1];
+            }
+            return .{ .key = key, .value = value };
+        }
+
+        return null;
+    }
+
+    /// Returns boundary string; consuming other parameters along the way.
+    /// Boundary can be an empty string.
+    pub fn findBoundary(self: *ContentTypeIterator) []const u8 {
+        while (self.next()) |p| {
+            if (std.ascii.eqlIgnoreCase(p.key, "boundary")) {
+                return p.value;
+            }
+        }
+        return "";
+    }
+};
+
 const testing = @import("testing.zig");
 test "simd: parse HTTP header" {
     const bytes = "Content-Disposition: attachment; filename*=UTF-8''file%20name.jpg\r\nrest";
