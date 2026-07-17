@@ -71,8 +71,8 @@ pub fn getReturnValue(self: *const BeforeUnloadEvent) []const u8 {
     return self._return_value;
 }
 
-pub fn setReturnValue(self: *BeforeUnloadEvent, value: []const u8, frame: *Frame) !void {
-    self._return_value = try frame.dupeString(value);
+pub fn setReturnValue(self: *BeforeUnloadEvent, value: []const u8) !void {
+    self._return_value = try self._proto._arena.dupe(u8, value);
 }
 
 pub const JsApi = struct {

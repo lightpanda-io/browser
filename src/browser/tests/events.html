@@ -940,3 +940,16 @@
     child.removeEventListener('click', listener);
   }
 </script>
+
+<script id=beforeUnloadEventReturnValue>
+  {
+    const event = document.createEvent('BeforeUnloadEvent');
+    testing.expectEqual('', event.returnValue);
+
+    event.returnValue = 'first';
+    testing.expectEqual('first', event.returnValue);
+
+    event.returnValue = 'replacement';
+    testing.expectEqual('replacement', event.returnValue);
+  }
+</script>
