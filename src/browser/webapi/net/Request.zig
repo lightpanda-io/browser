@@ -298,19 +298,46 @@ pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
     return local.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
 }
 
+const FormData = @import("FormData.zig");
+const simd = @import("../../../simd.zig");
+
 pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
 
+    // Should we consider body is consumed at this point?
+    const body = self._body orelse return error.InvalidFormData;
+
     const headers = try self.getHeaders(exec);
-    const content_type = try headers.get("content-type", exec) orelse "";
-    const form_data = body_init.parseFormData(self._body orelse "", content_type, exec) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
-    };
-    return local.resolvePromise(form_data);
+    const content_type = try headers.get("content-type", exec) orelse return error.InvalidFormData;
+    var it = simd.ContentTypeIterator.init(content_type);
+    const essence = it.essence;
+
+    // [RFC7578]
+    // Parse bytes, using the value of the `boundary` parameter from mimeType,
+    // per the rules set forth in Returning Values from Forms: multipart/form-data.
+    if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
+        const boundary = it.findBoundary();
+        if (boundary.len == 0) return error.InvalidFormData;
+
+        const form_data = FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+        };
+        return local.resolvePromise(form_data);
+    }
+
+    if (std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded")) {
+        const form_data = FormData.initFromUrlEncoded(body, exec) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+        };
+        return local.resolvePromise(form_data);
+    }
+
+    return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
 }
 
 pub fn clone(self: *const Request, exec: *const Execution) !*Request {
