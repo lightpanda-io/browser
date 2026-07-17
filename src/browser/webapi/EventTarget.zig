@@ -46,6 +46,7 @@ pub const Type = union(enum) {
     broadcast_channel: *@import("BroadcastChannel.zig"),
     text_track_cue: *@import("media/TextTrackCue.zig"),
     navigation: *@import("navigation/Navigation.zig"),
+    navigation_history_entry: *@import("navigation/NavigationHistoryEntry.zig"),
     screen: *@import("Screen.zig"),
     screen_orientation: *@import("Screen.zig").Orientation,
     visual_viewport: *@import("VisualViewport.zig"),
@@ -236,6 +237,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .idb_database => writer.writeAll("<IDBDatabase>"),
         .idb_transaction => writer.writeAll("<IDBTransaction>"),
         .notification => writer.writeAll("<Notification>"),
+        .navigation_history_entry => writer.writeAll("<NavigationHistoryEntry>"),
     };
 }
 
@@ -266,6 +268,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .idb_database => return "[object IDBDatabase]",
         .idb_transaction => return "[object IDBTransaction]",
         .notification => return "[object Notification]",
+        .navigation_history_entry => return "[object NavigationHistoryEntry]",
     };
 }
 
