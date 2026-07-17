@@ -163,7 +163,6 @@ pub const FrameNavigated = struct {
 // sending DOM.documentUpdated.
 pub const FrameNavigatedWithinDocument = struct {
     frame_id: u32,
-    timestamp: u64,
     url: [:0]const u8,
     navigation_type: NavigationType = .other,
 

@@ -33,7 +33,6 @@ const Parser = @import("parser/Parser.zig");
 const h5e = @import("parser/html5ever.zig");
 
 const CustomElementReactions = @import("CustomElementReactions.zig");
-const Notification = @import("../Notification.zig");
 
 const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
@@ -598,22 +597,6 @@ pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     // Starting here, at least protocols are equals.
     // Compare hosts (domain:port) strictly
     return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
-}
-
-// Notify observers of a same-document navigation (History pushState /
-// replaceState, fragment change, or history traversal). Unlike navigate(),
-// the document and its execution context are unchanged — only the URL moves.
-pub fn notifyNavigatedWithinDocument(
-    self: *Frame,
-    url: [:0]const u8,
-    navigation_type: Notification.FrameNavigatedWithinDocument.NavigationType,
-) void {
-    self._session.notification.dispatch(.frame_navigated_within_document, &.{
-        .frame_id = self._frame_id,
-        .url = url,
-        .timestamp = timestamp(.monotonic),
-        .navigation_type = navigation_type,
-    });
 }
 
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {

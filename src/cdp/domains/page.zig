@@ -1732,5 +1732,6 @@ test "cdp.frame: history.pushState emits Page.navigatedWithinDocument" {
     try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
         .frameId = "FID-0000000001",
         .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/next",
     }, .{});
 }
