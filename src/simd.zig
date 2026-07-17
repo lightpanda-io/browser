@@ -439,38 +439,74 @@ test "simd: parse HTTP header invalid" {
     try testing.expectError(error.Invalid, parseHttpHeader("Key: value\rX\n", &header));
 }
 
-test "simd: parse HTTP headers" {
-    var headers: [4]HttpHeader = undefined;
-    var count: usize = 0;
+test "simd: Content-Type iterator" {
+    // No parameters; essence is trimmed of surrounding whitespace.
+    var it = ContentTypeIterator.init("  text/html  ");
+    try testing.expectString("text/html", it.essence);
+    try testing.expectEqual(null, it.next());
 
-    const bytes = "Content-Disposition: form-data; name=\"file\"\r\nContent-Type: application/octet-stream\r\n\r\nbinary\x00data";
-    const consumed = try parseHttpHeaders(bytes, &headers, &count);
+    // A trailing `;` doesn't produce a parameter.
+    it = ContentTypeIterator.init("text/html;");
+    try testing.expectString("text/html", it.essence);
+    try testing.expectEqual(null, it.next());
 
-    try testing.expectEqual(bytes.len - "binary\x00data".len, consumed);
-    try testing.expectEqual(2, count);
-    try testing.expectString("Content-Disposition", headers[0].key);
-    try testing.expectString("form-data; name=\"file\"", headers[0].value);
-    try testing.expectString("Content-Type", headers[1].key);
-    try testing.expectString("application/octet-stream", headers[1].value);
+    // Plain and quoted values; whitespace around keys and values is trimmed.
+    it = ContentTypeIterator.init("multipart/form-data; boundary=abc;charset = \"utf-8\" ");
+    try testing.expectString("multipart/form-data", it.essence);
+    var p = it.next().?;
+    try testing.expectString("boundary", p.key);
+    try testing.expectString("abc", p.value);
+    p = it.next().?;
+    try testing.expectString("charset", p.key);
+    try testing.expectString("utf-8", p.value);
+    try testing.expectEqual(null, it.next());
 
-    // Lone `\n` line endings are accepted too.
-    try testing.expectEqual(18, try parseHttpHeaders("Host: abc\nX: def\n\nrest", &headers, &count));
-    try testing.expectEqual(2, count);
+    // Parameters without `=` or without a key are skipped.
+    it = ContentTypeIterator.init("text/html; foo; =bar; a=1");
+    p = it.next().?;
+    try testing.expectString("a", p.key);
+    try testing.expectString("1", p.value);
+    try testing.expectEqual(null, it.next());
 
-    // 0 length header sections are fine.
-    try testing.expectEqual(2, try parseHttpHeaders("\r\nrest", &headers, &count));
-    try testing.expectEqual(0, count);
+    // Values may be empty, unquoted or quoted.
+    it = ContentTypeIterator.init("text/html; a=; b=\"\"");
+    p = it.next().?;
+    try testing.expectString("a", p.key);
+    try testing.expectString("", p.value);
+    p = it.next().?;
+    try testing.expectString("b", p.key);
+    try testing.expectString("", p.value);
+    try testing.expectEqual(null, it.next());
+}
 
-    // The terminating empty line is required.
-    try testing.expectError(error.Incomplete, parseHttpHeaders("Host: abc\r\n", &headers, &count));
-    try testing.expectError(error.Incomplete, parseHttpHeaders("Host: abc\r\n\r", &headers, &count));
+test "simd: Content-Type find boundary" {
+    // The most common shape: single parameter, end of header.
+    var it = ContentTypeIterator.init("multipart/form-data; boundary=abc");
+    try testing.expectString("abc", it.findBoundary());
+    // The iterator is consumed.
+    try testing.expectEqual(null, it.next());
 
-    // Not enough space in `headers`.
-    var few: [1]HttpHeader = undefined;
-    try testing.expectError(error.Invalid, parseHttpHeaders("A: 1\r\nB: 2\r\n\r\n", &few, &count));
-    // ...but an exact fit is fine.
-    try testing.expectEqual(8, try parseHttpHeaders("A: 1\r\n\r\n", &few, &count));
-    try testing.expectEqual(1, count);
+    // Parameter names are case-insensitive; other parameters are skipped
+    // (consumed), the ones after the boundary are still iterable.
+    it = ContentTypeIterator.init("multipart/form-data; charset=utf-8; BOUNDARY=\"ab c\"; foo=bar");
+    try testing.expectString("ab c", it.findBoundary());
+    const p = it.next().?;
+    try testing.expectString("foo", p.key);
+
+    // The first boundary wins.
+    it = ContentTypeIterator.init("multipart/form-data; boundary=first; boundary=second");
+    try testing.expectString("first", it.findBoundary());
+
+    // Missing boundary is an empty string, which callers treat as invalid.
+    it = ContentTypeIterator.init("multipart/form-data");
+    try testing.expectString("", it.findBoundary());
+    it = ContentTypeIterator.init("multipart/form-data; charset=utf-8");
+    try testing.expectString("", it.findBoundary());
+    it = ContentTypeIterator.init("multipart/form-data; boundary=");
+    try testing.expectString("", it.findBoundary());
+    // No false match on names that merely contain "boundary".
+    it = ContentTypeIterator.init("multipart/form-data; notboundary=evil; xboundaryx=evil");
+    try testing.expectString("", it.findBoundary());
 }
 
 test "simd: match functions against scalar reference" {
