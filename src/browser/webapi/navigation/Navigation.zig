@@ -195,13 +195,13 @@ pub fn pushEntry(
 
     // truncates our history here.
     const retained_index = self._index + 1;
+    var disposed: []*NavigationHistoryEntry = &.{};
     if (self._entries.items.len > retained_index) {
-        const disposed = try frame.call_arena.dupe(
+        disposed = try frame.call_arena.dupe(
             *NavigationHistoryEntry,
             self._entries.items[retained_index..],
         );
         self._entries.shrinkRetainingCapacity(retained_index);
-        for (disposed) |d| try d.fireDispose(frame);
     }
 
     const index = self._entries.items.len;
@@ -225,18 +225,20 @@ pub fn pushEntry(
     try self._entries.append(arena, entry);
     self._index = index;
 
-    if (previous == null or should_dispatch == false) {
-        return entry;
+    if (previous != null and should_dispatch) {
+        if (self._on_currententrychange) |cec| {
+            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
+                .wrap("currententrychange"),
+                .{ .from = previous.?, .navigationType = @tagName(.push) },
+                frame,
+            )).asEvent();
+            try self.dispatch(cec, event, frame);
+        }
     }
 
-    if (self._on_currententrychange) |cec| {
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous.?, .navigationType = @tagName(.push) },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
-    }
+    // Per spec, dispose fires last: after the entry list is updated and
+    // currententrychange has been dispatched.
+    for (disposed) |d| try d.fireDispose(frame);
 
     return entry;
 }
@@ -268,20 +270,20 @@ pub fn replaceEntry(
 
     const old_entry = self._entries.items[self._index];
     self._entries.items[self._index] = entry;
+
+    if (should_dispatch) {
+        if (self._on_currententrychange) |cec| {
+            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
+                .wrap("currententrychange"),
+                .{ .from = previous, .navigationType = @tagName(.replace) },
+                frame,
+            )).asEvent();
+            try self.dispatch(cec, event, frame);
+        }
+    }
+
+    // Per spec, dispose fires last, after currententrychange.
     try old_entry.fireDispose(frame);
-
-    if (should_dispatch == false) {
-        return entry;
-    }
-
-    if (self._on_currententrychange) |cec| {
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = @tagName(.replace) },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
-    }
 
     return entry;
 }
