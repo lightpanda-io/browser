@@ -92,9 +92,10 @@ fn getOnDispose(self: *const NavigationHistoryEntry) ?js.Function.Global {
     return self._on_dispose;
 }
 
-pub fn setOnDispose(self: *NavigationHistoryEntry, listener: ?js.Function) !void {
-    if (listener) |listen| {
-        self._on_dispose = try listen.persistWithThis(self);
+pub fn setOnDispose(self: *NavigationHistoryEntry, cb_: ?js.Function) !void {
+    if (self._on_dispose) |od| od.release();
+    if (cb_) |cb| {
+        self._on_dispose = try cb.persistWithThis(self);
     } else {
         self._on_dispose = null;
     }
