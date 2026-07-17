@@ -278,64 +278,6 @@ pub fn parseHttpHeader(bytes: []const u8, header: *HttpHeader) ParseHttpHeaderEr
     return bytes.len - cursor.len;
 }
 
-/// Parses HTTP headers out of given buffer until the terminating empty line
-/// (exclusive `\n` or `\r\n`), which is required; if the buffer ends before
-/// it, `error.Incomplete` is returned. Returns how many bytes are consumed,
-/// including the terminating line ending; `count` receives how many headers
-/// are parsed. If the provided `headers` length is not sufficient,
-/// `error.Invalid` is returned.
-pub fn parseHttpHeaders(bytes: []const u8, headers: []HttpHeader, count: *usize) ParseHttpHeaderError!usize {
-    var cursor = bytes;
-
-    var i: usize = 0;
-    while (true) {
-        // The terminating empty line is required; the caller can read more
-        // data and try to parse again.
-        if (cursor.len == 0) {
-            return error.Incomplete;
-        }
-
-        // Check if headers part has finished.
-        switch (cursor[0]) {
-            '\n' => {
-                // End of headers.
-                cursor = cursor[1..];
-                break;
-            },
-            '\r' => {
-                // We need a `\n` character too.
-                if (cursor.len < 2) {
-                    return error.Incomplete;
-                }
-                if (cursor[1] != '\n') {
-                    return error.Invalid;
-                }
-
-                // End of headers.
-                cursor = cursor[2..];
-                break;
-            },
-            else => {},
-        }
-
-        // Not enough space in `headers`.
-        // NOTE: Currently interpreted as `error.Invalid`, this might change in the future.
-        if (i == headers.len) {
-            return error.Invalid;
-        }
-
-        const consumed = try parseHttpHeader(cursor, &headers[i]);
-        cursor = cursor[consumed..];
-        i += 1;
-    }
-
-    // Set the count of parsed headers.
-    count.* = i;
-
-    // Return the total consumed length to caller.
-    return bytes.len - cursor.len;
-}
-
 pub const Disposition = struct {
     name: ?[]const u8 = null,
     filename: ?[]const u8 = null,
