@@ -3483,7 +3483,7 @@ test "WebApi: Frames" {
 }
 
 test "WebApi: Frame Blob" {
-    const filter: testing.LogFilter = .init(&.{.frame, .browser, .js});
+    const filter: testing.LogFilter = .init(&.{ .frame, .browser, .js });
     defer filter.deinit();
     try testing.htmlRunner("frames/blob", .{});
 }
