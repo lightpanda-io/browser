@@ -226,7 +226,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
-        .robots = .{ .allocator = allocator, .network = network },
+        .robots = .{ .allocator = allocator, .network = network, .single_flight = .{ .allocator = allocator } },
         .url_blocklist = url_blocklist,
         .arena_pool = &network.app.arena_pool,
     };
@@ -431,7 +431,7 @@ pub fn abort(self: *Client) void {
         std.debug.assert(self.ws_dispatch_queue.first == null);
         // - self.robots.pending : each robots fetch's shutdown_callback
         //   drops its entry; parked waiters unlink in their own deinit.
-        std.debug.assert(self.robots.pending.count() == 0);
+        std.debug.assert(self.robots.single_flight.count() == 0);
     }
 }
 
@@ -3204,7 +3204,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.cache = null;
     client.serve_mode = false;
     client.obey_robots = false;
-    client.robots = .{ .allocator = testing.allocator, .network = undefined };
+    client.robots = .{ .allocator = testing.allocator, .network = undefined, .single_flight = .{ .allocator = testing.allocator }};
     client.url_blocklist = null;
 }
 
@@ -3336,6 +3336,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
     defer client.transfers.deinit(testing.allocator);
     defer client.robots.deinit();
 
+    const pending = &client.robots.single_flight.pending;
     const robots_url = "http://example.com/robots.txt";
 
     var waiting: std.ArrayList(*Transfer) = .empty;
@@ -3364,18 +3365,18 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
         try waiting.append(testing.allocator, transfer);
         transfer.park(.robots);
     }
-    try client.robots.pending.putNoClobber(testing.allocator, robots_url, waiting);
+    try pending.putNoClobber(testing.allocator, robots_url, waiting);
 
-    const t1 = client.robots.pending.get(robots_url).?.items[0];
-    const t2 = client.robots.pending.get(robots_url).?.items[1];
+    const t1 = pending.get(robots_url).?.items[0];
+    const t2 = pending.get(robots_url).?.items[1];
 
     t1.abort(error.Abort);
-    try testing.expectEqual(1, client.robots.pending.get(robots_url).?.items.len);
-    try testing.expect(client.robots.pending.get(robots_url).?.items[0] == t2);
+    try testing.expectEqual(1, pending.get(robots_url).?.items.len);
+    try testing.expect(pending.get(robots_url).?.items[0] == t2);
     try testing.expectEqual(1, client.transfers.count());
 
     t2.abort(error.Abort);
-    try testing.expectEqual(0, client.robots.pending.get(robots_url).?.items.len);
+    try testing.expectEqual(0, pending.get(robots_url).?.items.len);
     try testing.expectEqual(0, client.transfers.count());
 }
 
