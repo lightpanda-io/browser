@@ -484,6 +484,43 @@
   }
 </script>
 
+<script id="worker_fetch_page_blob_url" type=module>
+  // A blob URL created on the page must be fetchable from inside the worker:
+  // blob URLs are resolvable from any same-origin context, not just the
+  // creating frame.
+  {
+    const state = await testing.async();
+    const blobUrl = URL.createObjectURL(new Blob(['blob-payload'], { type: 'text/plain' }));
+    const worker = new Worker('./fetch-url-worker.js');
+    worker.onmessage = (event) => state.resolve(event.data);
+    worker.postMessage(blobUrl);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker blob fetch failed: ' + data.err);
+      testing.expectEqual('blob-payload', data.text);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
+
+<script id="worker_importscripts_blob_url" type=module>
+  // importScripts fetches synchronously (syncRequest); the blob URL minted
+  // on the page must resolve through the worker's owner.
+  {
+    const state = await testing.async();
+    const blobUrl = URL.createObjectURL(new Blob(["self.importedValue = 'from-blob-import';"], { type: 'text/javascript' }));
+    const worker = new Worker('./import-blob-worker.js');
+    worker.onmessage = (event) => state.resolve(event.data);
+    worker.postMessage(blobUrl);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'importScripts(blob) failed: ' + data.err);
+      testing.expectEqual('from-blob-import', data.value);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
+
 <script id="worker_from_blob_url_revoked_before_delivery" type=module>
   // Revoking right after construction must not invalidate the queued
   // script response: it's delivered on a later tick, after the blob's

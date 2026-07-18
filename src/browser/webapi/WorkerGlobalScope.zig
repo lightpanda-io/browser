@@ -33,7 +33,6 @@ const HttpClient = @import("../../network/HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 
-const Blob = @import("Blob.zig");
 const Event = @import("Event.zig");
 const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
@@ -69,7 +68,7 @@ _page: *Page,
 _session: *Session,
 _factory: *Factory,
 _identity: JS.Identity = .{},
-_http_owner: HttpClient.Owner = .{},
+_http_owner: HttpClient.Owner,
 
 arena: Allocator,
 call_arena: Allocator,
@@ -81,9 +80,6 @@ buf: [1024]u8 = undefined, // same size as frame.buf
 // Document charset (matches Page.charset). Workers default to UTF-8.
 charset: []const u8 = "UTF-8",
 js: *JS.Context,
-
-// Blob URL registry for URL.createObjectURL/revokeObjectURL.
-_blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 
 // HTTP attribution
 _frame_id: u32,
@@ -163,9 +159,10 @@ pub fn init(
         ._script_manager = undefined,
         ._location = .{ ._url = url },
         ._performance = .init(),
+        ._http_owner = undefined,
     });
 
-    self._http_owner.blob_urls = &self._blob_urls;
+    self._http_owner = .init(&frame._page.blob_urls, &self.origin);
 
     self._script_manager = ScriptManagerBase.init(
         arena,
@@ -207,10 +204,7 @@ pub fn deinit(self: *WorkerGlobalScope) void {
     self._identity.deinit();
     self._script_manager.deinit();
 
-    var it = self._blob_urls.valueIterator();
-    while (it.next()) |blob| {
-        blob.*.releaseRef(page);
-    }
+    page.revokeBlobUrlsFor(self._frame_id);
     browser.env.destroyContext(self.js);
     session.releaseArena(self.call_arena);
     session.releaseArena(self.local_arena);
@@ -412,7 +406,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .resource_type = .script,
         .notification = session.notification,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
-    }) catch |err| {
+    }, &self._http_owner) catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
     };
