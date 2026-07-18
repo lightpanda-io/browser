@@ -252,19 +252,15 @@ fn attachToTarget(cmd: *CDP.Command) !void {
 }
 
 fn attachToBrowserTarget(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-
     const cdp = cmd.cdp;
-    // This session targets the browser, not the page. It must not touch
-    // bc.session_id: a non-null bc.session_id means "attached to the page
-    // target", and a browser-only attachment would break that invariant
-    // (e.g. the createTarget assert).
+    // Browser-target sessions are independent from page-target sessions and
+    // can be created before a browser context exists.
     const session_id = cdp.browser_session_id orelse cdp.browser_session_id_gen.next();
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
         .targetInfo = TargetInfo{
-            .targetId = bc.id, // We use the browser context is as browser's target id.
+            .targetId = "browser",
             .title = "",
             .url = "",
             .type = "browser",
@@ -667,21 +663,17 @@ test "cdp.target: attachToBrowserTarget then createTarget" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    try ctx.processMessage(.{ .id = 1, .method = "Target.createBrowserContext" });
+    try ctx.processMessage(.{ .id = 1, .method = "Target.attachToBrowserTarget" });
+    try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = "BSID-1", .targetInfo = .{ .targetId = "browser", .title = "", .url = "", .attached = true, .type = "browser", .canAccessOpener = false } }, .{});
+    try ctx.expectSentResult(.{ .sessionId = "BSID-1" }, .{ .id = 1 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createBrowserContext" });
     const bc = &ctx.cdp().browser_context.?;
-    try ctx.expectSentResult(.{ .browserContextId = bc.id }, .{ .id = 1 });
+    try ctx.expectSentResult(.{ .browserContextId = bc.id }, .{ .id = 2 });
+    try testing.expectEqual(null, bc.session_id);
 
     {
-        try ctx.processMessage(.{ .id = 2, .method = "Target.attachToBrowserTarget" });
-        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = "BSID-1", .targetInfo = .{ .targetId = bc.id, .title = "", .url = "", .attached = true, .type = "browser", .canAccessOpener = false } }, .{});
-        try ctx.expectSentResult(.{ .sessionId = "BSID-1" }, .{ .id = 2 });
-
-        // the browser session must not occupy the page session slot
-        try testing.expectEqual(null, bc.session_id);
-    }
-
-    {
-        // this used to fail the "not null session_id" assertion
         try ctx.processMessage(.{ .id = 3, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 3 });
     }
