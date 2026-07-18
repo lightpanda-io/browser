@@ -37,6 +37,7 @@ const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
 pub const BlockPattern = UrlBlocklist.Pattern;
+const CorsGate = @import("CorsGate.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -189,6 +190,7 @@ obey_robots: bool,
 
 robots: RobotsGate,
 url_blocklist: ?UrlBlocklist,
+cors: CorsGate,
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
@@ -227,6 +229,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
         .robots = .{ .allocator = allocator, .network = network, .single_flight = .{ .allocator = allocator } },
+        .cors = .{ .allocator = allocator, .network = network, .single_flight = .{ .allocator = allocator } },
         .url_blocklist = url_blocklist,
         .arena_pool = &network.app.arena_pool,
     };
@@ -258,6 +261,7 @@ pub fn deinit(self: *Client) void {
 
     self.clearUrlBlocklist();
     self.robots.deinit();
+    self.cors.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
     self.inbox.deinit(self.arena_pool);
@@ -432,6 +436,7 @@ pub fn abort(self: *Client) void {
         // - self.robots.pending : each robots fetch's shutdown_callback
         //   drops its entry; parked waiters unlink in their own deinit.
         std.debug.assert(self.robots.single_flight.count() == 0);
+        std.debug.assert(self.cors.single_flight.count() == 0);
     }
 }
 
@@ -840,6 +845,8 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 try wba.signRequest(transfer.arena, &transfer.req.headers, authority);
             }
 
+            try addOriginHeader(transfer);
+
             if (self.serve_mode) {
                 transfer._notify_cdp = true;
                 transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
@@ -872,15 +879,23 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 // response came from the cache, we're done
                 return;
             }
-            if (self.obey_robots and !transfer.req.internal) {
-                switch (try self.robots.check(transfer)) {
-                    .allowed => {
-                        lp.metrics.robots_access.incr(.allow);
-                    },
-                    .blocked => {
-                        lp.metrics.robots_access.incr(.deny);
-                        return transfer.failAsync(error.RobotsBlocked);
-                    },
+            if (!transfer.req.internal) {
+                if (self.obey_robots) {
+                    switch (try self.robots.check(transfer)) {
+                        .allowed => {
+                            lp.metrics.robots_access.incr(.allow);
+                        },
+                        .blocked => {
+                            lp.metrics.robots_access.incr(.deny);
+                            return transfer.failAsync(error.RobotsBlocked);
+                        },
+                        .pending => return,
+                    }
+                }
+
+                switch (try self.cors.check(transfer)) {
+                    .allowed => {},
+                    .blocked => return transfer.failAsync(error.CorsBlocked),
                     .pending => return,
                 }
             }
@@ -888,6 +903,26 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
         },
         .network => try self.processTransfer(transfer),
     }
+}
+
+fn addOriginHeader(transfer: *Transfer) !void {
+    const req = &transfer.req;
+    const is_cross_origin = !URL.isSameOrigin(req.cookie_origin, req.url);
+    const is_unsafe_method = switch (req.method) {
+        .GET, .HEAD => false,
+        else => true,
+    };
+    if (!is_cross_origin and !is_unsafe_method) {
+        return;
+    }
+    const origin = try std.fmt.allocPrintSentinel(transfer.arena, "Origin: {s}", .{req.cookie_origin}, 0);
+    try req.headers.add(origin);
+}
+
+// CorsGate resumption. The robots gate is the last step before the
+// network, so an allowed transfer goes straight there.
+pub fn resumeAfterCors(self: *Client, transfer: *Transfer) !void {
+    return self.pipeline(transfer, .network);
 }
 
 // RobotsGate resumption. The robots gate is the last step before the
@@ -1996,6 +2031,9 @@ pub const Transfer = struct {
 
         // RobotsGate holds the transfer pending a robots.txt fetch.
         robots,
+
+        // CorsGate holds the transfer pending a CORS Preflight.
+        cors,
     };
 
     pub const HeaderResult = enum {
@@ -2031,7 +2069,7 @@ pub const Transfer = struct {
             return;
         }
         switch (self.state.parked) {
-            .robots => {},
+            .robots, .cors => {},
             .intercept_request, .intercept_auth => {
                 lp.assert(self.client.intercepted > 0, "Transfer.leaveIntercept", .{ .value = self.client.intercepted });
                 self.client.intercepted -= 1;
