@@ -576,16 +576,16 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
         return error.ClientDisconnected;
     }
 
-    self.dispatchCompleted(mode);
+    const dispatched = self.dispatchCompleted(mode);
 
     try self.startPending();
 
     const running = try self.handles.perform();
 
     const processed = try self.processMessages();
-    if (processed == false and self.dispatch_queue.first == null and self.ws_dispatch_queue.first == null) {
-        // No messages were processed and nothing is waiting for dispatch
-        // We need to wait for I/O.
+    if (dispatched == false and processed == false and self.dispatch_queue.first == null and self.ws_dispatch_queue.first == null) {
+        // Nothing was dispatched, no messages were processed and nothing is
+        // waiting for dispatch. We need to wait for I/O.
         if (running > 0 or self.cdp_link_active) {
             {
                 self.heartbeat.enterWait();
@@ -598,15 +598,15 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
             _ = try self.processMessages();
         }
     } else {
-        // If we DO have processed messages, we don't wan to wait / poll. We
-        // want to proceses completions and return to the caller ASAP so that it
-        // can check progress, e.g. maybe the message we processed cause "load"
-        // to fire, and that's what it was waiting for.
+        // If we DID dispatch or process messages, we don't wan to wait / poll.
+        // We want to proceses completions and return to the caller ASAP so that
+        // it can check progress, e.g. maybe the message we processed cause
+        // "load" to fire, and that's what it was waiting for.
     }
 
     try self.startPending();
 
-    self.dispatchCompleted(mode);
+    _ = self.dispatchCompleted(mode);
 
     // dispatch CDP commands
     try self.drainInbox(mode);
@@ -622,7 +622,7 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
 // from the `dispatch_queue` to the `gated_queue`. That way, every call to
 // `dispatchCompleted` doesn't keep checking the same gated transfers over and
 // over.
-fn dispatchCompleted(self: *Client, mode: DrainMode) void {
+fn dispatchCompleted(self: *Client, mode: DrainMode) bool {
     if (mode == .all) {
         if (comptime IS_DEBUG) {
             // .all never inside a syncRequest, so nothing can be gating requests.
@@ -649,6 +649,8 @@ fn dispatchCompleted(self: *Client, mode: DrainMode) void {
         }
     }
 
+    var dispatched = false;
+
     // pop is safest as it allows anything to manipulate the queue as necessary
     // (e.g. a frame could be aborted)s
     while (self.dispatch_queue.popFirst()) |n| {
@@ -661,6 +663,7 @@ fn dispatchCompleted(self: *Client, mode: DrainMode) void {
         self.dispatch_count -= 1;
         transfer._dispatch_queued = false;
         transfer.deliver();
+        dispatched = true;
     }
 
     if (mode == .all) {
@@ -669,8 +672,11 @@ fn dispatchCompleted(self: *Client, mode: DrainMode) void {
             self.ws_dispatch_count -= 1;
             ws._dispatch_queued = false;
             ws.deliverEvents();
+            dispatched = true;
         }
     }
+
+    return dispatched;
 }
 
 // wsEnqueue and wsDequeue are the only places ws_dispatch_queue is mutated.
@@ -3154,7 +3160,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
     try testing.expectEqual(false, ctx.done_called);
     try testing.expectEqual(1, client.dispatch_count);
 
-    client.dispatchCompleted(.all);
+    _ = client.dispatchCompleted(.all);
 
     try testing.expect(ctx.done_called);
     // The transfer was freed exactly once: counter back to 0, dropped from the
@@ -3392,7 +3398,7 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
     client.intercepted += 1;
 
     try client.fulfillIntercepted(transfer, 302, &.{}, "body");
-    client.dispatchCompleted(.all);
+    _ = client.dispatchCompleted(.all);
 
     // Delivered (done_callback ran) and freed exactly once.
     try testing.expect(ctx.done_called);
@@ -3469,7 +3475,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
     try testing.expectEqual(0, client.intercepted);
     try testing.expectEqual(1, client.dispatch_count);
 
-    client.dispatchCompleted(.all);
+    _ = client.dispatchCompleted(.all);
 
     try testing.expect(ctx.err_called);
     try testing.expectEqual(0, client.dispatch_count);
