@@ -26,6 +26,7 @@ const Robots = @import("Robots.zig");
 const SingleFlight = @import("SingleFlight.zig");
 const Transfer = @import("HttpClient.zig").Transfer;
 const ArenaPool = @import("../ArenaPool.zig");
+const URL = @import("../browser/URL.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -86,7 +87,7 @@ pub fn needsPreflight(transfer: *Transfer) bool {
 
     switch (req.method) {
         .GET, .HEAD => {},
-        .POST => if (content_type) |ct| if (isSafelistedContentType(ct)) return true,
+        .POST => if (content_type) |ct| if (!isSafelistedContentType(ct)) return true,
         else => return true,
     }
 
@@ -104,6 +105,8 @@ fn keyFor(arena: Allocator, transfer: *Transfer) ![]const u8 {
 }
 
 pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
+    if (transfer.req.resource_type == .document) return .allowed;
+    if (URL.isSameOrigin(transfer.req.url, transfer.req.cookie_origin)) return .allowed;
     if (!needsPreflight(transfer)) return .allowed;
 
     const client = transfer.client;
@@ -130,12 +133,19 @@ fn fetchThenResume(self: *CorsGate, arena: Allocator, key: []const u8, transfer:
         .initial => {
             errdefer self.single_flight.abort(key);
 
+            const req_headers = try requestedHeaderNames(arena, transfer);
             const cors_ctx = try arena.create(CorsContext);
             cors_ctx.* = .{
                 .gate = self,
                 .arena = arena,
                 .arena_pool = client.arena_pool,
                 .key = key,
+
+                .req_origin = try arena.dupe(u8, transfer.req.cookie_origin),
+                .req_method = transfer.req.method,
+                .req_headers = req_headers,
+                // TODO: add credentials mode to request.
+                .req_credentials = .omit,
             };
 
             log.debug(.browser, "sending cors preflight", .{ .url = transfer.req.url });
@@ -168,6 +178,16 @@ fn fetchThenResume(self: *CorsGate, arena: Allocator, key: []const u8, transfer:
     }
 }
 
+fn requestedHeaderNames(arena: Allocator, transfer: *Transfer) ![]const []const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    var it = transfer.req.headers.iterator();
+    while (it.next()) |hdr| {
+        if (isSafelistedHeader(hdr.name)) continue;
+        try names.append(arena, try arena.dupe(u8, hdr.name));
+    }
+    return names.items;
+}
+
 fn preflightHeaders(arena: Allocator, headers: *http.Headers, transfer: *Transfer) !void {
     try headers.add(try std.fmt.allocPrintSentinel(
         arena,
@@ -187,6 +207,7 @@ fn preflightHeaders(arena: Allocator, headers: *http.Headers, transfer: *Transfe
         try names.appendSlice(arena, hdr.name);
         first = false;
     }
+
     if (names.items.len > 0) {
         try headers.add(try std.fmt.allocPrintSentinel(
             arena,
@@ -204,6 +225,106 @@ fn preflightHeaders(arena: Allocator, headers: *http.Headers, transfer: *Transfe
     ));
 }
 
+pub const CorsEntry = struct {
+    const Origin = union(enum) { wildcard, value: []const u8 };
+    const Credentials = enum { omit, include, @"same-origin" };
+
+    origin: ?Origin = null,
+    credentials: Credentials = .omit,
+    methods: []http.Method = &.{},
+    headers: [][]const u8 = &.{},
+    expose_headers: [][]const u8 = &.{},
+
+    pub fn parse(arena: Allocator, transfer: *Transfer) !CorsEntry {
+        var entry: CorsEntry = .{};
+
+        var methods: std.ArrayList(http.Method) = .empty;
+        var headers: std.ArrayList([]const u8) = .empty;
+        var expose_headers: std.ArrayList([]const u8) = .empty;
+
+        var iter = transfer.responseHeaderIterator();
+        while (iter.next()) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
+                entry.origin = if (std.mem.eql(u8, hdr.value, "*"))
+                    .wildcard
+                else
+                    .{ .value = try arena.dupe(u8, hdr.value) };
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials")) {
+                if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, hdr.value, &std.ascii.whitespace), "true")) {
+                    entry.credentials = .include;
+                }
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-methods")) {
+                var it = std.mem.splitScalar(u8, hdr.value, ',');
+                while (it.next()) |raw| {
+                    const tok = std.mem.trim(u8, raw, &std.ascii.whitespace);
+                    if (tok.len == 0) continue;
+                    if (std.mem.eql(u8, tok, "*")) continue; // handled separately as wildcard
+                    if (std.meta.stringToEnum(http.Method, tok)) |m| {
+                        try methods.append(arena, m);
+                    }
+                }
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-headers")) {
+                var it = std.mem.splitScalar(u8, hdr.value, ',');
+                while (it.next()) |raw| {
+                    const tok = std.mem.trim(u8, raw, &std.ascii.whitespace);
+                    if (tok.len == 0) continue;
+                    try headers.append(arena, try arena.dupe(u8, tok));
+                }
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-expose-headers")) {
+                var it = std.mem.splitScalar(u8, hdr.value, ',');
+                while (it.next()) |raw| {
+                    const tok = std.mem.trim(u8, raw, &std.ascii.whitespace);
+                    if (tok.len == 0) continue;
+                    try expose_headers.append(arena, try arena.dupe(u8, tok));
+                }
+            }
+        }
+
+        entry.methods = methods.items;
+        entry.headers = headers.items;
+        entry.expose_headers = expose_headers.items;
+        return entry;
+    }
+
+    fn hasMethod(self: CorsEntry, method: http.Method) bool {
+        for (self.methods) |m| if (m == method) return true;
+        return false;
+    }
+
+    fn allowsHeader(self: CorsEntry, name: []const u8) bool {
+        for (self.headers) |h| {
+            if (std.mem.eql(u8, h, "*") or
+                std.ascii.eqlIgnoreCase(h, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn satisfies(
+        self: CorsEntry,
+        req_origin: []const u8,
+        req_method: http.Method,
+        req_headers: []const []const u8,
+        req_credentials: Credentials,
+    ) bool {
+        const origin = self.origin orelse return false;
+        switch (origin) {
+            .wildcard => if (req_credentials == .include) return false,
+            .value => |v| if (!std.ascii.eqlIgnoreCase(v, req_origin)) return false,
+        }
+
+        if (req_credentials == .include and self.credentials != .include) return false;
+
+        const is_simple_method = req_method == .GET or req_method == .HEAD or req_method == .POST;
+        if (!is_simple_method and !self.hasMethod(req_method)) return false;
+
+        for (req_headers) |h| {
+            if (!self.allowsHeader(h)) return false;
+        }
+
+        return true;
+    }
+};
+
 const CorsContext = struct {
     gate: *CorsGate,
     arena: Allocator,
@@ -211,21 +332,39 @@ const CorsContext = struct {
     key: []const u8,
     status: u16 = 0,
 
+    req_origin: []const u8,
+    req_method: http.Method,
+    req_headers: []const []const u8,
+    req_credentials: CorsEntry.Credentials,
+
+    entry: ?CorsEntry = null,
+
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
         const self: *CorsContext = @ptrCast(@alignCast(transfer.req.ctx));
         if (transfer.res.header) |hdr| {
             log.debug(.browser, "cors preflight status", .{ .status = hdr.status, .key = self.key });
             self.status = hdr.status;
         }
-        // No body needed — everything relevant is in the response headers.
+
+        self.entry = try CorsEntry.parse(self.arena, transfer);
         return .proceed;
     }
 
     fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
         const self: *CorsContext = @ptrCast(@alignCast(ctx_ptr));
-        // TODO: validate Access-Control-Allow-Origin / -Methods / -Headers
-        // against the original request rather than just checking status.
-        const allowed = self.status >= 200 and self.status < 300;
+
+        const entry = self.entry orelse {
+            log.warn(.http, "cors preflight rejected", .{ .key = self.key, .status = self.status });
+            self.resolve(false);
+            return;
+        };
+
+        const allowed = self.status >= 200 and self.status < 300 and
+            entry.satisfies(self.req_origin, self.req_method, self.req_headers, self.req_credentials);
+
+        if (!allowed) {
+            log.warn(.http, "cors preflight rejected", .{ .key = self.key, .status = self.status });
+        }
         self.resolve(allowed);
     }
 
@@ -254,9 +393,6 @@ const CorsContext = struct {
     }
 };
 
-// The preflight resolved: hand every waiter back to the pipeline. Unlike
-// robots, a failed/errored preflight fails CLOSED — CORS is a security
-// boundary, not a courtesy.
 fn flushPending(self: *CorsGate, key: []const u8, allowed: bool) void {
     var queued = self.single_flight.take(key) orelse return;
     defer queued.deinit(self.allocator);
