@@ -625,6 +625,10 @@ pub fn unescape(arena: Allocator, input: []const u8) ![]const u8 {
     return result.items;
 }
 
+pub fn stripFragment(url: []const u8) []const u8 {
+    return url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
+}
+
 const AuthorityInfo = struct {
     host_start: usize,
     host_end: usize,
@@ -1691,4 +1695,14 @@ test "URL: resolveNavigation defaults a schemeless host to http (curl-like)" {
         const result = try resolveNavigation(testing.arena_allocator, case.url, .{});
         try testing.expectString(case.expected, result);
     }
+}
+
+test "URL: stripFragment" {
+    try testing.expectEqual("https://www.example.com/", stripFragment("https://www.example.com/"));
+    try testing.expectEqual("https://www.example.com/about", stripFragment("https://www.example.com/about"));
+    try testing.expectEqual("https://www.example.com/?id=3", stripFragment("https://www.example.com/?id=3"));
+
+    try testing.expectEqual("https://www.example.com/", stripFragment("https://www.example.com/#pandapower"));
+    try testing.expectEqual("https://www.example.com/about", stripFragment("https://www.example.com/about#pandapower"));
+    try testing.expectEqual("https://www.example.com/?id=3", stripFragment("https://www.example.com/?id=3#pandapower"));
 }

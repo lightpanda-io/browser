@@ -344,17 +344,13 @@ fn resolveQueryUrl(exec: *const Execution, _override: ?[]const u8) ![:0]const u8
     switch (exec.js.global) {
         .frame => {
             // URL that differs from document only by #hash is the same document URL
-            if (!std.mem.eql(u8, stripFragment(resolved), stripFragment(current))) {
+            if (!std.mem.eql(u8, URL.stripFragment(resolved), URL.stripFragment(current))) {
                 return error.InvalidUrl;
             }
         },
         .worker => {},
     }
     return resolved;
-}
-
-fn stripFragment(url: []const u8) []const u8 {
-    return url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
 }
 
 fn matchCookies(
