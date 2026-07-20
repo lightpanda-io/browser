@@ -411,7 +411,9 @@ fn matchCookies(
             },
             .partitioned = false,
         });
-        if (first_only) break;
+        if (first_only) {
+            break;
+        }
     }
 
     return items.items;
@@ -434,6 +436,12 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         // convert to absolute time, so the rest of the code is shared for
         // maxAge and expires.
         init.expires = (@as(f64, @floatFromInt(std.time.timestamp())) + max_age) * 1000.0;
+    }
+
+    if (init.expires) |ms| {
+        // 400 day expiry limit, per spec.
+        const cap_ms = (@as(f64, @floatFromInt(std.time.timestamp())) + 400 * std.time.s_per_day) * 1000.0;
+        init.expires = @min(ms, cap_ms);
     }
 
     // delete() may legitimately target a nameless cookie — its value is always empty.
@@ -507,8 +515,9 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
                 return error.InvalidPrefixedCookie;
             }
         }
-        const effective_path = if (init.path.len > 0) init.path else "/";
-        if (!std.mem.eql(u8, effective_path, "/")) {
+
+        const resolved_path = try Cookie.parsePath(exec.local_arena, url, init.path);
+        if (std.mem.eql(u8, resolved_path, "/") == false) {
             return error.InvalidPrefixedCookie;
         }
     } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
@@ -586,18 +595,21 @@ pub const JsApi = struct {
 // CookieListItem is an plain JavaScript object, not an interface. The bridge
 // automatically translate a Zig struct -> JS Object This should _not_ have a
 // JsApi.
+//
+// NOTE: Per spec, name and value are the only valid fields. All other fields
+// are experimental. Chrome exposes them all, so we do too.
 pub const CookieListItem = struct {
     name: String,
     // Optional because a deletion change-event reports the removed cookie with
     // `value` omitted (serialized as undefined via the `deleted` accessor's
     // null_as_undefined). For get/getAll and `changed` items it is always set.
-    value: ?String,
-    domain: ?String,
-    path: String,
-    expires: ?f64,
-    secure: bool,
-    sameSite: []const u8,
-    partitioned: bool,
+    value: ?String = null,
+    domain: ?String = null,
+    path: String = String.wrap("/"),
+    expires: ?f64 = null,
+    secure: bool = false,
+    sameSite: []const u8 = "strict",
+    partitioned: bool = false,
 };
 
 const testing = @import("../../../testing.zig");

@@ -21,6 +21,7 @@
   await state.done(() => {
     testing.expectEqual('user', item.name);
     testing.expectEqual('lp', item.value);
+    // We follow Chrome and expose the full attribute set, not just name/value.
     testing.expectEqual('/', item.path);
     testing.expectEqual('strict', item.sameSite);
     testing.expectEqual(null, item.expires);
@@ -162,6 +163,18 @@
   testing.expectEqual('change', ev.type);
   testing.expectEqual(0, ev.changed.length);
   testing.expectEqual(0, ev.deleted.length);
+
+  // The changed/deleted lists must be copied off the transient call arena;
+  // reading them after construction must stay valid.
+  const ev2 = new CookieChangeEvent('change', {
+    changed: [{ name: 'c1', value: 'v1' }, { name: 'c2', value: 'v2' }],
+    deleted: [{ name: 'd1', value: 'w1' }],
+  });
+  testing.expectEqual(2, ev2.changed.length);
+  testing.expectEqual('c1', ev2.changed[0].name);
+  testing.expectEqual('v2', ev2.changed[1].value);
+  testing.expectEqual(1, ev2.deleted.length);
+  testing.expectEqual('d1', ev2.deleted[0].name);
 </script>
 
 <script id=change-event-from-cookieStore-set type=module>
