@@ -24,7 +24,6 @@ const builtin = @import("builtin");
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
 
-const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 
 const log = lp.log;
@@ -202,8 +201,6 @@ const CommonOptions = .{
     .{ .name = "block_urls", .type = ?[]const u8 },
     .{ .name = "cookie", .type = ?[]const u8 },
     .{ .name = "cookie_jar", .type = ?[]const u8 },
-    .{ .name = "storage_engine", .type = ?Storage.EngineType },
-    .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
@@ -739,20 +736,6 @@ pub fn dumpMetricsOnExit(self: *const Config) bool {
 pub fn cdpMaxHTTPMessageSize(self: *const Config) u14 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_http_message_size,
-        else => unreachable,
-    };
-}
-
-pub fn storageEngine(self: *const Config) ?Storage.EngineType {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_engine,
-        else => unreachable,
-    };
-}
-
-pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_sqlite_path,
         else => unreachable,
     };
 }
