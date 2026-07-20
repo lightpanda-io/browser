@@ -62,6 +62,13 @@ pub fn resolveNavigation(allocator: Allocator, url: []const u8, options: Resolve
     };
 }
 
+pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
+    if (maybe_base) |base| {
+        return U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len);
+    }
+    return U.url_can_parse(url.ptr, url.len);
+}
+
 const EncodeSet = enum { path, query, query_legacy, userinfo, fragment, component };
 
 pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
