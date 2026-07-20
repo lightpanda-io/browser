@@ -763,6 +763,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .loader_id = self._loader_id,
         .method = opts.method,
         .body = opts.body,
+        // don't cache top-level pages, most cases won't revisit this, and, if they
+        // do, they probably don't want the cached version.
+        .skip_cache = self.parent == null,
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = opts.initiator_url orelse self.url,
         .resource_type = .document,

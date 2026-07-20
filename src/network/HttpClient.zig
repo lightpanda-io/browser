@@ -824,7 +824,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     const cache = self.cache orelse return false;
 
     const req = &transfer.req;
-    if (req.method != .GET or req.streaming) {
+    if (req.method != .GET or req.streaming or req.skip_cache) {
         return false;
     }
 
@@ -1542,6 +1542,7 @@ pub const Request = struct {
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
     timeout_ms: u32 = 0,
+    skip_cache: bool = false,
 
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
