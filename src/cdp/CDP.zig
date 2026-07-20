@@ -1508,5 +1508,5 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .resource_type = .fetch,
         .notification = undefined,
         .shutdown_callback = @import("../network/HttpClient.zig").noopShutdown,
-    }));
+    }, undefined));
 }

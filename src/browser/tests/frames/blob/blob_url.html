@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+<body></body>
+
+<!--
+  Blob URLs are scoped to an origin, not to the frame that created them: any
+  same-origin context (iframe, popup, worker) must be able to resolve them.
+  Messages are tagged — the test scripts run concurrently and all listen on
+  the same window.
+-->
+
+<script id=iframe_fetches_parent_blob type=module>
+  {
+    const state = await testing.async();
+    window.addEventListener('message', function handler(e) {
+      if (!e.data || e.data.t !== 'iframe_fetch') return;
+      window.removeEventListener('message', handler);
+      state.resolve(e.data.v);
+    });
+
+    const blobUrl = URL.createObjectURL(new Blob(['parent-payload'], { type: 'text/plain' }));
+
+    const iframe = document.createElement('iframe');
+    document.documentElement.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    doc.write('<!DOCTYPE html><html><body><script>' +
+      "fetch('" + blobUrl + "').then((r) => r.text()).then(" +
+      "  (v) => parent.postMessage({ t: 'iframe_fetch', v }, '*')," +
+      "  (err) => parent.postMessage({ t: 'iframe_fetch', v: 'error: ' + err }, '*'));" +
+      '<\/script></body></html>');
+    doc.close();
+
+    await state.done((data) => {
+      testing.expectEqual('parent-payload', data);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
+
+<script id=parent_fetches_iframe_blob type=module>
+  {
+    const state = await testing.async();
+
+    const iframe = document.createElement('iframe');
+    document.documentElement.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    doc.write('<!DOCTYPE html><html><body><script>' +
+      "window.blobUrl = URL.createObjectURL(new Blob(['iframe-payload'], { type: 'text/plain' }));" +
+      '<\/script></body></html>');
+    doc.close();
+
+    const blobUrl = iframe.contentWindow.blobUrl;
+    const result = await fetch(blobUrl).then(
+      (r) => r.text(),
+      (err) => 'error: ' + err,
+    );
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('iframe-payload', result);
+    });
+  }
+</script>
+
+<script id=iframe_blocking_script_from_blob type=module>
+  {
+    // A parser-inserted <script src> is fetched synchronously (syncRequest);
+    // the parent-minted blob URL must resolve through the iframe's owner.
+    const blobUrl = URL.createObjectURL(new Blob(["window.blobScriptRan = 'yes';"], { type: 'text/javascript' }));
+
+    const iframe = document.createElement('iframe');
+    document.documentElement.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    doc.write('<!DOCTYPE html><html><body><script src="' + blobUrl + '"><\/script></body></html>');
+    doc.close();
+
+    testing.expectEqual('yes', iframe.contentWindow.blobScriptRan);
+    URL.revokeObjectURL(blobUrl);
+  }
+</script>
+
+<script id=cross_origin_iframe_cannot_fetch_blob type=module>
+  {
+    // A data: document has an opaque origin; even knowing the URL, its fetch
+    // of a parent-minted blob URL must be rejected.
+    const state = await testing.async();
+    window.addEventListener('message', function handler(e) {
+      if (!e.data || e.data.t !== 'xorigin_blob') return;
+      window.removeEventListener('message', handler);
+      state.resolve(e.data.v);
+    });
+
+    const blobUrl = URL.createObjectURL(new Blob(['secret'], { type: 'text/plain' }));
+
+    const iframe = document.createElement('iframe');
+    iframe.src = "data:text/html,<script>" +
+      "fetch('" + blobUrl + "').then((r) => r.text()).then(" +
+      "  (v) => parent.postMessage({ t: 'xorigin_blob', v: 'got: ' + v }, '*')," +
+      "  () => parent.postMessage({ t: 'xorigin_blob', v: 'rejected' }, '*'));" +
+      "<\/script>";
+    document.documentElement.appendChild(iframe);
+
+    await state.done((data) => {
+      testing.expectEqual('rejected', data);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
+
+<script id=cross_origin_iframe_cannot_navigate_to_blob type=module>
+  {
+    // If the navigation were allowed, the blob document would load and post
+    // 'navigated'. When refused, nothing observable happens in the iframe
+    // (the queued re-navigation already tore its document down), so give the
+    // navigation a beat and assert no message arrived.
+    const state = await testing.async();
+    let result = 'blocked';
+    window.addEventListener('message', function handler(e) {
+      if (!e.data || e.data.t !== 'xorigin_blob_nav') return;
+      window.removeEventListener('message', handler);
+      result = e.data.v;
+    });
+
+    const html = "<script>parent.postMessage({ t: 'xorigin_blob_nav', v: 'navigated' }, '*')<\/script>";
+    const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+
+    const iframe = document.createElement('iframe');
+    iframe.src = "data:text/html,<script>location.href = '" + blobUrl + "';<\/script>";
+    document.documentElement.appendChild(iframe);
+
+    setTimeout(() => state.resolve(), 75);
+    await state.done(() => {
+      testing.expectEqual('blocked', result);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
+
+<script id=popup_navigates_to_blob type=module>
+  {
+    const state = await testing.async();
+    window.addEventListener('message', function handler(e) {
+      if (!e.data || e.data.t !== 'popup_nav') return;
+      window.removeEventListener('message', handler);
+      state.resolve(e.data.v);
+    });
+
+    const html = "<body><p id=marker>loaded</p><script>" +
+      "opener.postMessage({ t: 'popup_nav', v: document.getElementById('marker').textContent }, '*');" +
+      "<\/script></body>";
+    const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    const w = window.open(blobUrl);
+
+    await state.done((data) => {
+      testing.expectEqual('loaded', data);
+      w.close();
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>

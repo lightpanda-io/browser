@@ -1023,7 +1023,7 @@ const SyncContext = struct {
     }
 };
 
-pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncResponse {
+pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Owner) !SyncResponse {
     if (self.inbox.terminated) {
         // request() takes ownership of req.headers on every path; we return
         // before calling it, so free the curl_slist here to avoid leaking it.
@@ -1042,7 +1042,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     r.done_callback = SyncContext.doneCallback;
     r.error_callback = SyncContext.errorCallback;
     r.shutdown_callback = SyncContext.shutdownCallback;
-    const transfer = try self.newRequest(r, null);
+    const transfer = try self.newRequest(r, owner);
 
     const frame_id = req.frame_id;
     self.blocking_requests.putNoClobber(self.allocator, frame_id, transfer.id) catch |err| {
@@ -1735,10 +1735,21 @@ pub const Owner = struct {
     transfers: std.DoublyLinkedList = .{},
     websockets: std.DoublyLinkedList = .{},
 
-    // The owning Frame's / WorkerGlobalScope's blob: registry,
-    blob_urls: ?*const std.StringHashMapUnmanaged(*Blob) = null,
+    // The Page-level blob: URL store, shared by every context on the page.
+    blob_urls: *const Blob.UrlMap,
+
+    // The owning Frame's / WorkerGlobalScope's origin slot. Pointer because
+    // it can change during navigation.
+    origin: *const ?[]const u8,
 
     const Blob = @import("../browser/webapi/Blob.zig");
+
+    pub fn init(blob_urls: *const Blob.UrlMap, origin: *const ?[]const u8) Owner {
+        return .{
+            .blob_urls = blob_urls,
+            .origin = origin,
+        };
+    }
 
     pub fn addTransfer(self: *Owner, t: *Transfer) void {
         self.transfers.append(&t.owner_node);
@@ -2916,10 +2927,11 @@ const Synthetic = struct {
             content_type = parsed.content_type;
             body = parsed.body;
         } else {
-            // blob: — resolved against the owning frame's registry.
             const owner = transfer.owner orelse return error.BlobNotFound;
-            const blob_urls = owner.blob_urls orelse return error.BlobNotFound;
-            const blob = blob_urls.get(url) orelse return error.BlobNotFound;
+            if (!Owner.Blob.urlBelongsToOrigin(url, owner.origin.*)) {
+                return error.BlobNotFound;
+            }
+            const blob = (owner.blob_urls.get(url) orelse return error.BlobNotFound).blob;
             // blob can be removed by the time we run, dupe it.
             content_type = try arena.dupe(u8, blob._mime);
             body = try arena.dupe(u8, blob._slice);
@@ -3108,7 +3120,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner: Owner = .{};
+    var owner: Owner = .init(undefined, undefined);
 
     const Ctx = struct {
         client: *Client,
@@ -3423,7 +3435,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner: Owner = .{};
+    var owner: Owner = .init(undefined, undefined);
 
     const Ctx = struct {
         client: *Client,
@@ -3499,7 +3511,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner: Owner = .{};
+    var owner: Owner = .init(undefined, undefined);
 
     const Ctx = struct {
         client: *Client,
