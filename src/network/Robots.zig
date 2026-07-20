@@ -272,7 +272,10 @@ fn parseRulesWithUserAgent(
     var wildcard_content_signals: std.ArrayList(ContentSignal) = .empty;
     defer wildcard_content_signals.deinit(allocator);
 
+    var saw_our_agent = false;
     var state: State = .{ .entry = .not_in_entry, .has_rules = false };
+
+    const product_token = productToken(user_agent);
 
     // https://en.wikipedia.org/wiki/Byte_order_mark
     const UTF8_BOM: []const u8 = &.{ 0xEF, 0xBB, 0xBF };
@@ -316,18 +319,18 @@ fn parseRulesWithUserAgent(
 
                 switch (state.entry) {
                     .in_other_entry => {
-                        if (std.ascii.eqlIgnoreCase(user_agent, value)) {
+                        if (std.ascii.eqlIgnoreCase(product_token, productToken(value))) {
                             state.entry = .in_our_entry;
                         }
                     },
                     .in_our_entry => {},
                     .in_wildcard_entry => {
-                        if (std.ascii.eqlIgnoreCase(user_agent, value)) {
+                        if (std.ascii.eqlIgnoreCase(product_token, productToken(value))) {
                             state.entry = .in_our_entry;
                         }
                     },
                     .not_in_entry => {
-                        if (std.ascii.eqlIgnoreCase(user_agent, value)) {
+                        if (std.ascii.eqlIgnoreCase(product_token, productToken(value))) {
                             state.entry = .in_our_entry;
                         } else if (std.mem.eql(u8, "*", value)) {
                             state.entry = .in_wildcard_entry;
@@ -335,6 +338,10 @@ fn parseRulesWithUserAgent(
                             state.entry = .in_other_entry;
                         }
                     },
+                }
+
+                if (state.entry == .in_our_entry) {
+                    saw_our_agent = true;
                 }
             },
             .allow => {
@@ -398,9 +405,9 @@ fn parseRulesWithUserAgent(
         }
     }
 
-    // If we have rules for our specific User-Agent, we will use those rules.
-    // If we don't have any rules, we fallback to using the wildcard ("*") rules.
-    const out_rules = if (rules.items.len > 0) blk: {
+    // If any group named our specific User-Agent, it wins, even if it's empty.
+    // Wildcard fallback only applies if there's no match.
+    const out_rules = if (saw_our_agent) blk: {
         freeRulesInList(allocator, wildcard_rules.items);
         break :blk try rules.toOwnedSlice(allocator);
     } else blk: {
@@ -563,10 +570,15 @@ pub fn isAllowed(self: *const Robots, path: []const u8) bool {
     return true;
 }
 
-fn testMatch(pattern: []const u8, path: []const u8) bool {
-    comptime if (!builtin.is_test) unreachable;
-
-    return matchPattern(CompiledPattern.compile(pattern), path);
+/// RFC 9309-ish product token. So if our UA is Lightpanda/1.0, we'll match
+/// "Lightpanda". Also allos digits, since those are also common used
+fn productToken(user_agent: []const u8) []const u8 {
+    for (user_agent, 0..) |c, i| {
+        if (std.ascii.isAlphanumeric(c) == false and c != '-' and c != '_') {
+            return user_agent[0..i];
+        }
+    }
+    return user_agent;
 }
 
 test "Robots: simple robots.txt" {
@@ -1166,6 +1178,33 @@ test "Robots: content-signal absent yields empty list" {
     try std.testing.expect(robots.isAllowed("/admin/") == false);
 }
 
+test "Robots: empty directive" {
+    const allocator = std.testing.allocator;
+
+    var robots = try Robots.fromBytes(allocator, "LightPanda",
+        \\User-agent: LightPanda
+        \\Disallow:
+        \\
+        \\User-agent: *
+        \\Disallow: /
+    );
+    defer robots.deinit(allocator);
+    try std.testing.expectEqual(true, robots.isAllowed("/"));
+    try std.testing.expectEqual(true, robots.isAllowed("/admin/"));
+}
+
+test "Robots: user-agent prefix" {
+    const allocator = std.testing.allocator;
+
+    var robots = try Robots.fromBytes(allocator, "LightPanda/1.0",
+        \\User-agent: LightPanda
+        \\Disallow: /
+    );
+    defer robots.deinit(allocator);
+    try std.testing.expectEqual(false, robots.isAllowed("/"));
+    try std.testing.expectEqual(false, robots.isAllowed("/admin/"));
+}
+
 test "Robots: content-signal prefers specific user-agent over wildcard" {
     const allocator = std.testing.allocator;
 
@@ -1209,4 +1248,10 @@ test "Robots: RobotStore.getContentSignals round-trips" {
 
     // Unknown host has no stored robots.
     try std.testing.expectEqual(null, store.getContentSignals("https://other.com/robots.txt"));
+}
+
+fn testMatch(pattern: []const u8, path: []const u8) bool {
+    comptime if (!builtin.is_test) unreachable;
+
+    return matchPattern(CompiledPattern.compile(pattern), path);
 }
