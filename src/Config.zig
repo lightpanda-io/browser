@@ -199,6 +199,7 @@ const CommonOptions = .{
     .{ .name = "user_agent", .type = ?[]const u8 },
     .{ .name = "block_private_networks", .type = bool },
     .{ .name = "block_cidrs", .type = ?[]const u8 },
+    .{ .name = "block_urls", .type = ?[]const u8 },
     .{ .name = "cookie", .type = ?[]const u8 },
     .{ .name = "cookie_jar", .type = ?[]const u8 },
     .{ .name = "storage_engine", .type = ?Storage.EngineType },
@@ -689,6 +690,14 @@ pub fn blockCidrs(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn blockedUrlPatterns(self: *const Config) ?std.mem.SplitIterator(u8, .scalar) {
+    const patterns = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.block_urls,
+        else => unreachable,
+    } orelse return null;
+    return std.mem.splitScalar(u8, patterns, ',');
+}
+
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
@@ -969,6 +978,18 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
     var config = try Config.init(allocator, exec_name, command);
     config.command = invoked;
     return config;
+}
+
+test "Config: blockedUrlPatterns splits comma-separated patterns" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .block_urls = "*doubleclick*,*://*/*.png",
+    } });
+    defer config.deinit(std.testing.allocator);
+
+    var patterns = config.blockedUrlPatterns().?;
+    try std.testing.expectEqualStrings("*doubleclick*", patterns.next().?);
+    try std.testing.expectEqualStrings("*://*/*.png", patterns.next().?);
+    try std.testing.expectEqual(null, patterns.next());
 }
 
 pub fn validateUserAgent(ua: []const u8) !void {
