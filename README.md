@@ -14,7 +14,6 @@ Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
 [![Twitter Follow](https://img.shields.io/twitter/follow/lightpanda_io)](https://twitter.com/lightpanda_io)
 [![GitHub stars](https://img.shields.io/github/stars/lightpanda-io/browser)](https://github.com/lightpanda-io/browser)
 [![Discord](https://img.shields.io/discord/1391984864894521354?style=flat-square&label=discord)](https://discord.gg/K63XeymfB5)
-[![Plumber Score](https://score.getplumber.io/github.com/lightpanda-io/browser.svg)](https://score.getplumber.io/github.com/lightpanda-io/browser)
 
 </div>
 <div align="center">
