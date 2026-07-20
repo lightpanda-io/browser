@@ -28,6 +28,7 @@ const CachedMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;
 
 const Http = @import("../http.zig");
+const Blob = @import("../../storage/sqlite/Sqlite.zig").Blob;
 const Pool = @import("../../storage/sqlite/Pool.zig");
 const Conn = @import("../../storage/sqlite/Sqlite.zig").Conn;
 const Migration = @import("../../storage/sqlite/Sqlite.zig").Migration;
@@ -62,9 +63,8 @@ const cache_migrations: []const Migration = &.{
     \\ create table header (
     \\      url               text not null,
     \\      name              text not null,
-    \\      value             text not null,
+    \\      value             blob not null,
     \\      vary              integer not null,
-    \\      primary key (url, name),
     \\      foreign key (url) references metadata(url) on delete cascade
     \\ ) strict
     },
@@ -149,7 +149,7 @@ fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedM
 
     while (try header_rows.next()) |row| {
         const name = try arena.dupe(u8, row.get([]const u8, 0));
-        const value = try arena.dupe(u8, row.get([]const u8, 1));
+        const value = try arena.dupe(u8, row.get(Blob, 1).data);
         const vary = row.get(bool, 2);
 
         if (std.ascii.eqlIgnoreCase(name, "content-type")) {
@@ -188,7 +188,7 @@ fn loadBody(conn: Conn, arena: std.mem.Allocator, url: []const u8) ![]const u8 {
     ) orelse @panic("valid metadata must have a body");
     defer body_entry.deinit();
 
-    return try arena.dupe(u8, body_entry.get([]const u8, 0));
+    return try arena.dupe(u8, body_entry.get(Blob, 0).data);
 }
 
 fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
@@ -209,7 +209,7 @@ fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
 
     try conn.exec(
         "insert into body (url, data) values ($1, $2)",
-        .{ meta.url, body },
+        .{ meta.url, Blob{ .data = body } },
     );
 
     var lower_name: [256]u8 = undefined;
@@ -218,7 +218,7 @@ fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
-            .{ meta.url, name, h.value },
+            .{ meta.url, name, Blob{ .data = h.value } },
         );
     }
     for (meta.vary_headers) |h| {
@@ -226,7 +226,7 @@ fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, true)",
-            .{ meta.url, name, h.value },
+            .{ meta.url, name, Blob{ .data = h.value } },
         );
     }
 }
@@ -255,7 +255,7 @@ fn updateMetadata(conn: Conn, meta: CachedMetadata) !void {
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
-            .{ meta.url, name, h.value },
+            .{ meta.url, name, Blob{ .data = h.value } },
         );
     }
 }
