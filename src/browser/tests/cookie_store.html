@@ -21,6 +21,7 @@
   await state.done(() => {
     testing.expectEqual('user', item.name);
     testing.expectEqual('lp', item.value);
+    // We follow Chrome and expose the full attribute set, not just name/value.
     testing.expectEqual('/', item.path);
     testing.expectEqual('strict', item.sameSite);
     testing.expectEqual(null, item.expires);
@@ -73,6 +74,71 @@
   });
 </script>
 
+<script id=change-event-binds-listeners-at-mutation type=module>
+  const state = await testing.async();
+  // A change enqueued while nobody is subscribed must not be delivered to a
+  // listener that registers afterwards but before the task drains.
+  await cookieStore.set('pre-listener', 'v');
+
+  const events = [];
+  const handler = (e) => events.push(...e.changed.map(c => c.name));
+  cookieStore.addEventListener('change', handler);
+
+  await cookieStore.set('post-listener', 'v');
+  await new Promise(r => setTimeout(r, 0));
+
+  cookieStore.removeEventListener('change', handler);
+  await cookieStore.delete('pre-listener');
+  await cookieStore.delete('post-listener');
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, events.includes('pre-listener'));
+    testing.expectEqual(true, events.includes('post-listener'));
+  });
+</script>
+
+<script id=set-max-age type=module>
+  const state = await testing.async();
+  const events = [];
+  const handler = (e) => events.push(e);
+  cookieStore.addEventListener('change', handler);
+
+  // A positive maxAge stores the cookie.
+  await cookieStore.set({ name: 'ma-pos', value: 'v', maxAge: 60 });
+  const posItem = await cookieStore.get('ma-pos');
+
+  // maxAge <= 0 expires immediately: nothing is stored and no change event
+  // fires for it.
+  await cookieStore.set({ name: 'ma-zero', value: 'v', maxAge: 0 });
+  await cookieStore.set({ name: 'ma-neg', value: 'v', maxAge: -60 });
+  await new Promise(r => setTimeout(r, 0));
+  const zeroItem = await cookieStore.get('ma-zero');
+  const negItem = await cookieStore.get('ma-neg');
+
+  // maxAge and expires are mutually exclusive.
+  let bothRejected = false;
+  try {
+    await cookieStore.set({ name: 'ma-both', value: 'v', maxAge: 60, expires: Date.now() + 60000 });
+  } catch (err) {
+    bothRejected = true;
+  }
+
+  cookieStore.removeEventListener('change', handler);
+  await cookieStore.delete('ma-pos');
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('v', posItem.value);
+    testing.expectEqual(null, zeroItem);
+    testing.expectEqual(null, negItem);
+    testing.expectEqual(true, bothRejected);
+
+    // Only the stored (positive) cookie should have produced an event.
+    const names = events.flatMap(e => e.changed.map(c => c.name));
+    testing.expectEqual(1, names.length);
+    testing.expectEqual('ma-pos', names[0]);
+  });
+</script>
+
 <script id=delete-options type=module>
   const state = await testing.async();
   await cookieStore.set('tmp', 'x');
@@ -97,6 +163,18 @@
   testing.expectEqual('change', ev.type);
   testing.expectEqual(0, ev.changed.length);
   testing.expectEqual(0, ev.deleted.length);
+
+  // The changed/deleted lists must be copied off the transient call arena;
+  // reading them after construction must stay valid.
+  const ev2 = new CookieChangeEvent('change', {
+    changed: [{ name: 'c1', value: 'v1' }, { name: 'c2', value: 'v2' }],
+    deleted: [{ name: 'd1', value: 'w1' }],
+  });
+  testing.expectEqual(2, ev2.changed.length);
+  testing.expectEqual('c1', ev2.changed[0].name);
+  testing.expectEqual('v2', ev2.changed[1].value);
+  testing.expectEqual(1, ev2.deleted.length);
+  testing.expectEqual('d1', ev2.deleted[0].name);
 </script>
 
 <script id=change-event-from-cookieStore-set type=module>

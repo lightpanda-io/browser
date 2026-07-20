@@ -23,6 +23,7 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 
+const Cookie = @import("storage/Cookie.zig");
 const Element = @import("Element.zig");
 const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -74,6 +75,51 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
     dispatchPointer(element, "pointerup", 0, 0, frame);
     dispatchMouse(element, "mouseup", 0, 0, frame);
     dispatchMouse(element, "click", 0, 0, frame);
+}
+
+const WebDriverCookie = struct {
+    name: []const u8,
+    value: []const u8,
+    path: []const u8,
+    domain: []const u8,
+    secure: bool,
+    httpOnly: bool,
+    sameSite: []const u8,
+    expiry: ?f64,
+};
+
+// Unlike the script-facing CookieStore, WebDriver can see HttpOnly cookies.
+pub fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriverCookie {
+    const jar = &frame._session.cookie_jar;
+    const target = Cookie.PreparedUri.init(frame.url);
+    if (target.host.len == 0) {
+        return null;
+    }
+
+    jar.removeExpired(null);
+    for (jar.cookies.items) |*cookie| {
+        if (cookie.appliesTo(&target, true, true, true) == false) {
+            continue;
+        }
+        if (std.mem.eql(u8, cookie.name, name) == false) {
+            continue;
+        }
+        return .{
+            .name = cookie.name,
+            .value = cookie.value,
+            .path = cookie.path,
+            .domain = if (cookie.domain.len > 0 and cookie.domain[0] == '.') cookie.domain[1..] else cookie.domain,
+            .secure = cookie.secure,
+            .httpOnly = cookie.http_only,
+            .sameSite = switch (cookie.same_site) {
+                .strict => "Strict",
+                .lax => "Lax",
+                .none => "None",
+            },
+            .expiry = cookie.expires,
+        };
+    }
+    return null;
 }
 
 // Implements testdriver's `action_sequence` (the WebDriver "Perform Actions"
@@ -469,6 +515,7 @@ pub const JsApi = struct {
     };
     pub const deleteAllCookies = bridge.function(WebDriver.deleteAllCookies, .{});
     pub const getComputedLabel = bridge.function(WebDriver.getComputedLabel, .{});
+    pub const getNamedCookie = bridge.function(WebDriver.getNamedCookie, .{});
     pub const actionSequence = bridge.function(WebDriver.actionSequence, .{});
     pub const click = bridge.function(WebDriver.click, .{});
 };

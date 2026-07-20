@@ -68,7 +68,9 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
     // same-site treated as first-party against the document URL).
     const doc_url = exec.url.*;
     const target = Cookie.PreparedUri.init(doc_url);
-    if (target.host.len == 0) return;
+    if (target.host.len == 0) {
+        return;
+    }
 
     const probe = Cookie{
         .arena = undefined,
@@ -81,7 +83,16 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
         .http_only = data.http_only,
         .same_site = data.same_site,
     };
-    if (!probe.appliesTo(&target, true, true, false)) return;
+    if (!probe.appliesTo(&target, true, true, false)) {
+        return;
+    }
+
+    // Rechecked in ChangeCallback.run, but between now and then, a listener
+    // could be added which should NOT get this event (because it wasn't addded
+    // at this point).
+    if (!exec.hasDirectListeners(self.asEventTarget(), "change", self._on_change)) {
+        return;
+    }
 
     // Per spec, `change` is dispatched as a queued task — never synchronously
     // from the mutation site. We snapshot the notification fields onto a
@@ -205,6 +216,7 @@ const CookieInit = struct {
     name: []const u8,
     value: []const u8,
     expires: ?f64 = null,
+    maxAge: ?f64 = null,
     domain: ?[]const u8 = null,
     path: []const u8 = "/",
     sameSite: SameSite = .strict,
@@ -236,13 +248,18 @@ const SameSite = enum {
     pub const js_enum_from_string = true;
 };
 
-pub fn get(_: *CookieStore, input: GetInput, exec: *const Execution) !js.Promise {
+pub fn get(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
 
-    const name: ?[]const u8, const url: ?[]const u8 = switch (input) {
+    const name: ?[]const u8, const url: ?[]const u8 = if (input) |inp| switch (inp) {
         .name => |n| .{ n, null },
         .options => |o| .{ o.name, o.url },
-    };
+    } else .{ null, null };
+
+    if (name == null and url == null) {
+        // Unlike getAll(), get() requires a name or url
+        return local.rejectPromise(.{ .type_error = "get requires a name or url" });
+    }
 
     const items = matchCookies(exec, name, url, true) catch |err| {
         return local.rejectPromise(.{ .type_error = @errorName(err) });
@@ -319,12 +336,17 @@ fn resolveQueryUrl(exec: *const Execution, _override: ?[]const u8) ![:0]const u8
     const current = exec.url.*;
     const override = _override orelse return current;
 
-    const resolved = try URL.resolve(exec.call_arena, exec.base(), override, .{});
-    if (!exec.isSameOrigin(resolved)) return error.SecurityError;
+    const resolved = try URL.resolve(exec.local_arena, exec.base(), override, .{});
+    if (!exec.isSameOrigin(resolved)) {
+        return error.SecurityError;
+    }
 
     switch (exec.js.global) {
         .frame => {
-            if (!std.mem.eql(u8, resolved, current)) return error.InvalidUrl;
+            // URL that differs from document only by #hash is the same document URL
+            if (!std.mem.eql(u8, URL.stripFragment(resolved), URL.stripFragment(current))) {
+                return error.InvalidUrl;
+            }
         },
         .worker => {},
     }
@@ -345,20 +367,30 @@ fn matchCookies(
         .path = URL.getPathname(url_resolved),
         .secure = URL.isSecure(url_resolved),
     };
-    if (target.host.len == 0) return error.SecurityError;
+    if (target.host.len == 0) {
+        return error.SecurityError;
+    }
 
     session.cookie_jar.removeExpired(null);
+
+    // Cookie names are normalized. Apply the same normalization to the input
+    // we're matching
+    const normalized_name: ?[]const u8 = if (name) |n| std.mem.trim(u8, n, " \t") else null;
 
     var items: std.ArrayList(CookieListItem) = .empty;
     for (session.cookie_jar.cookies.items) |*cookie| {
         // CookieStore exposes only cookies that script would see for the
         // current document. HttpOnly cookies stay hidden.
-        if (!cookie.appliesTo(&target, true, true, false)) continue;
-        if (name) |n| {
-            if (!std.mem.eql(u8, cookie.name, n)) continue;
+        if (cookie.appliesTo(&target, true, true, false) == false) {
+            continue;
+        }
+        if (normalized_name) |n| {
+            if (std.mem.eql(u8, cookie.name, n) == false) {
+                continue;
+            }
         }
 
-        try items.append(exec.call_arena, .{
+        try items.append(exec.local_arena, .{
             .name = String.wrap(cookie.name),
             .value = String.wrap(cookie.value),
             .domain = if (cookie.domain.len > 0 and cookie.domain[0] == '.')
@@ -375,7 +407,9 @@ fn matchCookies(
             },
             .partitioned = false,
         });
-        if (first_only) break;
+        if (first_only) {
+            break;
+        }
     }
 
     return items.items;
@@ -389,6 +423,22 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
 
     init.name = std.mem.trim(u8, init.name, " \t");
     init.value = std.mem.trim(u8, init.value, " \t");
+
+    if (init.maxAge) |max_age| {
+        if (init.expires != null) {
+            // maxAge and expires are mutually exclusive
+            return error.InvalidArgument;
+        }
+        // convert to absolute time, so the rest of the code is shared for
+        // maxAge and expires.
+        init.expires = (@as(f64, @floatFromInt(std.time.timestamp())) + max_age) * 1000.0;
+    }
+
+    if (init.expires) |ms| {
+        // 400 day expiry limit, per spec.
+        const cap_ms = (@as(f64, @floatFromInt(std.time.timestamp())) + 400 * std.time.s_per_day) * 1000.0;
+        init.expires = @min(ms, cap_ms);
+    }
 
     // delete() may legitimately target a nameless cookie — its value is always empty.
     if (!is_delete and init.name.len == 0) {
@@ -461,8 +511,9 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
                 return error.InvalidPrefixedCookie;
             }
         }
-        const effective_path = if (init.path.len > 0) init.path else "/";
-        if (!std.mem.eql(u8, effective_path, "/")) {
+
+        const resolved_path = try Cookie.parsePath(exec.local_arena, url, init.path);
+        if (std.mem.eql(u8, resolved_path, "/") == false) {
             return error.InvalidPrefixedCookie;
         }
     } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
@@ -540,18 +591,21 @@ pub const JsApi = struct {
 // CookieListItem is an plain JavaScript object, not an interface. The bridge
 // automatically translate a Zig struct -> JS Object This should _not_ have a
 // JsApi.
+//
+// NOTE: Per spec, name and value are the only valid fields. All other fields
+// are experimental. Chrome exposes them all, so we do too.
 pub const CookieListItem = struct {
     name: String,
     // Optional because a deletion change-event reports the removed cookie with
     // `value` omitted (serialized as undefined via the `deleted` accessor's
     // null_as_undefined). For get/getAll and `changed` items it is always set.
-    value: ?String,
-    domain: ?String,
-    path: String,
-    expires: ?f64,
-    secure: bool,
-    sameSite: []const u8,
-    partitioned: bool,
+    value: ?String = null,
+    domain: ?String = null,
+    path: String = String.wrap("/"),
+    expires: ?f64 = null,
+    secure: bool = false,
+    sameSite: []const u8 = "strict",
+    partitioned: bool = false,
 };
 
 const testing = @import("../../../testing.zig");
