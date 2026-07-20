@@ -250,8 +250,13 @@ pub const RequestDone = struct {
 };
 
 pub const RequestFail = struct {
+    pub const BlockedReason = enum {
+        inspector,
+    };
+
     transfer: *Transfer,
     err: anyerror,
+    blocked_reason: ?BlockedReason = null,
 };
 
 pub const RequestServedFromCache = struct {

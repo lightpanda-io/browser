@@ -301,6 +301,10 @@
     \\          Prefix with '-' to allow (exempt from blocking).
     \\          e.g. --block-cidrs 10.0.0.0/8,-10.0.0.42/32
     \\          Can be combined with --block-private-networks.
+    \\  --block-urls <LIST>
+    \\          URL patterns to block, comma-separated. Patterns are matched
+    \\          case-insensitively against the full URL and '*' is a wildcard.
+    \\          e.g. --block-urls "*doubleclick*,*://*/*.png"
     \\  --block-private-networks
     \\          Block HTTP requests to private/internal IP addresses after DNS
     \\          resolution.
