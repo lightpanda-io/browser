@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id="target" style="width: 100px; height: 60px;">Target Element</div>
+<div id="hidden" style="width: 50px; display: none;">Hidden</div>
+
+<script id="initial">
+  {
+    const target = document.getElementById('target');
+    let count = 0;
+    let entries = null;
+
+    const observer = new ResizeObserver((observerEntries, obs) => {
+        count += 1;
+        entries = observerEntries;
+    });
+    observer.observe(target);
+
+    testing.onload(() => {
+        // observe() delivers a single initial entry
+        testing.expectEqual(1, count);
+        testing.expectEqual(1, entries.length);
+
+        const entry = entries[0];
+        testing.expectEqual(target, entry.target);
+        testing.expectEqual('object', typeof entry.contentRect);
+        testing.expectEqual(100, entry.contentRect.width);
+        testing.expectEqual(60, entry.contentRect.height);
+
+        // content-box / border-box / device-pixel are the same for us
+        testing.expectEqual(1, entry.contentBoxSize.length);
+        testing.expectEqual(100, entry.contentBoxSize[0].inlineSize);
+        testing.expectEqual(60, entry.contentBoxSize[0].blockSize);
+        testing.expectEqual(100, entry.borderBoxSize[0].inlineSize);
+        testing.expectEqual(100, entry.devicePixelContentBoxSize[0].inlineSize);
+
+        observer.disconnect();
+    });
+  }
+</script>
+
+<script id="no_initial_for_zero_size">
+  {
+    // A display:none element has no box, so observe() delivers nothing.
+    const hidden = document.getElementById('hidden');
+    let hiddenCount = 0;
+    const hiddenObserver = new ResizeObserver(() => { hiddenCount += 1; });
+    hiddenObserver.observe(hidden);
+
+    testing.onload(() => {
+        testing.expectEqual(0, hiddenCount);
+        hiddenObserver.disconnect();
+    });
+  }
+</script>

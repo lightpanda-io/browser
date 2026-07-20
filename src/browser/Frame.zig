@@ -200,7 +200,8 @@ _broadcast_channels: std.DoublyLinkedList = .{},
 // List of MessagePorts living in this frame's context.
 _message_ports: std.DoublyLinkedList = .{},
 
-// MutationObserver / IntersectionObserver bookkeeping. See frame/observers.zig.
+// See frame/observers.zig.
+_resize: observers.Resize = .{},
 _mutation: observers.Mutation = .{},
 _intersection: observers.Intersection = .{},
 
@@ -1944,14 +1945,10 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 pub fn domChanged(self: *Frame) void {
     self._page.dom_version += 1;
 
-    if (self._intersection.check_scheduled) {
-        return;
-    }
-
-    self._intersection.check_scheduled = true;
-    self.js.queueIntersectionChecks() catch |err| {
-        log.err(.frame, "frame.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
-    };
+    // A DOM change is our "rendering opportunity": re-evaluate the layout
+    // observers. Both are no-ops unless something they track actually changed.
+    observers.scheduleIntersectionChecks(self);
+    observers.scheduleResizeDelivery(self);
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
