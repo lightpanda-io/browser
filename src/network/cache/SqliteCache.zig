@@ -46,27 +46,27 @@ const cache_migrations: []const Migration = &.{
     \\      stored_at         integer not null,
     \\      age_at_store      integer not null,
     \\      max_age           integer not null,
-    \\      must_revalidate   bool not null,
+    \\      must_revalidate   integer not null,
     \\      etag              text,
     \\      last_modified     text
-    \\ )
+    \\ ) strict
     },
     .{ .sql =
     \\ create table body (
     \\      url               text not null primary key,
     \\      data              blob not null,
     \\      foreign key (url) references metadata(url) on delete cascade
-    \\ )
+    \\ ) strict
     },
     .{ .sql =
     \\ create table header (
     \\      url               text not null,
     \\      name              text not null,
     \\      value             text not null,
-    \\      vary              bool not null,
+    \\      vary              integer not null,
     \\      primary key (url, name),
     \\      foreign key (url) references metadata(url) on delete cascade
-    \\ )
+    \\ ) strict
     },
     .{ .sql = "create index header_url on header(url)" },
 };
