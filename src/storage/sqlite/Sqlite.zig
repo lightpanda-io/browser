@@ -27,6 +27,8 @@ const Allocator = std.mem.Allocator;
 
 const Sqlite = @This();
 
+pub const Blob = struct { data: []const u8 };
+
 pub const Migration = union(enum) {
     sql: [:0]const u8,
     func: struct {
@@ -238,6 +240,14 @@ const Statement = struct {
                 const data = c.sqlite3_column_text(stmt, @intCast(index));
                 return @as([*c]const u8, @ptrCast(data))[0..@intCast(len) :0];
             },
+            Blob => {
+                const len = c.sqlite3_column_bytes(stmt, @intCast(index));
+                if (len == 0) {
+                    return Blob{ .data = &.{} };
+                }
+                const data = c.sqlite3_column_blob(stmt, @intCast(index));
+                return Blob{ .data = @as([*c]const u8, @ptrCast(data))[0..@intCast(len)] };
+            },
             else => @compileError("unsupported column type: " ++ @typeName(T)),
         };
     }
@@ -284,6 +294,13 @@ const Statement = struct {
                     rc = c.sqlite3_bind_int64(stmt, bind_index, @intCast(1));
                 } else {
                     rc = c.sqlite3_bind_int64(stmt, bind_index, @intCast(0));
+                }
+            },
+            .@"struct" => {
+                if (T == Blob) {
+                    rc = c.sqlite3_bind_blob(stmt, bind_index, value.data.ptr, @intCast(value.data.len), c.SQLITE_STATIC);
+                } else {
+                    bindError(T);
                 }
             },
             .pointer => |ptr| {
