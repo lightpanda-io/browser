@@ -980,6 +980,12 @@ pub const Script = struct {
             .cacheable = cacheable,
         });
 
+        if (try_catch.exceptionValue()) |exc| {
+            frame.window.reportError(exc, frame) catch |err| {
+                log.warn(.js, "eval script report error", .{ .url = url, .err = err });
+            };
+        }
+
         self.executeCallback(comptime .wrap("error"));
     }
 
