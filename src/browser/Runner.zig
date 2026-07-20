@@ -171,7 +171,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 if (elapsed >= timeout_ms) {
                     return .timeout;
                 }
-                try self.http_client.tick(@min(timeout_ms - elapsed, 200));
+                _ = try self.http_client.tick(@min(timeout_ms - elapsed, 200));
                 break :done_blk 0;
             },
         };
@@ -225,9 +225,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const total_http_activity = activity.http;
     const total_network_activity = activity.total();
 
-    const ms_to_next_macrotask = browser.msToNextMacrotask();
     const network_idle = activity.idle();
-    const is_done = ms_to_next_macrotask == null and network_idle;
+    const is_done = browser.hasMacrotasks() == false and network_idle;
 
     // _we_ have nothing to run, but v8 is working on background tasks. We'll
     // wait for them. Don't do this for CDP, since new CDP messages can always
@@ -296,13 +295,19 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 
     if ((comptime is_cdp) or want_http_tick) {
-        var ms_to_wait = @min(timeout_ms, ms_to_next_macrotask orelse 200);
+        var ms_to_wait = @min(timeout_ms, browser.msToNextTask() orelse 200);
         if (browser.hasBackgroundTasks()) {
             // background work will queue more to do soon — don't block long
             // for a client message; loop back and run macrotasks instead.
             ms_to_wait = @min(ms_to_wait, 10);
         }
-        try http_client.tick(@intCast(ms_to_wait));
+        const waited = try http_client.tick(@intCast(ms_to_wait));
+
+        // If the HttpClient didn't wait/poll then it has nothing to do, and we
+        // should tell our callerto wait until the next task is ready.
+        if ((comptime is_cdp) == false and waited == false) {
+            return .{ .ok = @intCast(ms_to_wait) };
+        }
         return .{ .ok = 0 };
     }
 
@@ -310,7 +315,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     // But, if we have web socket connections, we still want to make progress on
     // them, so we tick with no delay.
     if (activity.ws_conns > 0 or activity.ws_events > 0) {
-        try http_client.tick(0);
+        _ = try http_client.tick(0);
     }
 
     return .done;
