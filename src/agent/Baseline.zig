@@ -39,18 +39,14 @@ pub const FieldStat = struct {
 pub const Fields = std.StringArrayHashMapUnmanaged(FieldStat);
 
 arena: std.heap.ArenaAllocator,
-/// Reused per `noteExtractResult` for the transient parse tree; keeps pages
-/// warm on the every-tool-call path instead of an init/deinit pair each time.
-scratch: std.heap.ArenaAllocator,
 fields: Fields = .empty,
 
 pub fn init(allocator: std.mem.Allocator) Baseline {
-    return .{ .arena = .init(allocator), .scratch = .init(allocator) };
+    return .{ .arena = .init(allocator) };
 }
 
 pub fn deinit(self: *Baseline) void {
     self.arena.deinit();
-    self.scratch.deinit();
 }
 
 pub fn reset(self: *Baseline) void {
@@ -61,8 +57,9 @@ pub fn reset(self: *Baseline) void {
 /// Tally one successful extract result (the tool's JSON output). Malformed
 /// output records nothing — this is best-effort telemetry.
 pub fn noteExtractResult(self: *Baseline, result_text: []const u8) error{OutOfMemory}!void {
-    _ = self.scratch.reset(.retain_capacity);
-    const scratch = self.scratch.allocator();
+    var scratch_state: std.heap.ArenaAllocator = .init(self.arena.child_allocator);
+    defer scratch_state.deinit();
+    const scratch = scratch_state.allocator();
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, scratch, result_text, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return,
@@ -123,6 +120,7 @@ fn fieldsToLine(arena: std.mem.Allocator, fields: *const Fields) error{OutOfMemo
 /// baseline line, or null) appended — synthesis may have copied a stale
 /// baseline from the previous script verbatim.
 pub fn withBaseline(arena: std.mem.Allocator, script: []const u8, line: ?[]const u8) ![]const u8 {
+    if (line == null and std.mem.indexOf(u8, script, marker) == null) return script;
     var aw: std.Io.Writer.Allocating = .init(arena);
     var lines = std.mem.splitScalar(u8, script, '\n');
     var pending_newline = false;

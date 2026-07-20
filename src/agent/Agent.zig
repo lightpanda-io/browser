@@ -496,8 +496,14 @@ fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
 /// The side effects of `drainCancellation` without surfacing the error, for
 /// void callers (e.g. `/save` synthesis) that just need to clean up.
 fn resetAfterCancel(self: *Agent, baseline: usize) void {
-    self.endStreamedText();
+    self.clearCancelState();
     self.conversation.rollback(baseline);
+}
+
+/// Cancel cleanup that touches no conversation state, for turns whose message
+/// cleanup is owned elsewhere (meta-turns roll back via their own defer).
+fn clearCancelState(self: *Agent) void {
+    self.endStreamedText();
     self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
     self.http_interrupt.reset();
@@ -1219,7 +1225,6 @@ fn soloTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: [
 
 fn sendMetaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, messages: *std.ArrayList(zenai.provider.Message), message_arena: std.mem.Allocator, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
     const provider_client = self.ai_client.?;
-    const baseline = self.conversation.messages.items.len;
     self.http_interrupt.reset();
     self.terminal.spinner.start();
     var result = provider_client.runTools(
@@ -1239,7 +1244,7 @@ fn sendMetaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, messa
     ) catch |err| {
         self.terminal.spinner.cancel();
         if (self.cancel_requested.load(.acquire)) {
-            self.resetAfterCancel(baseline);
+            self.clearCancelState();
             return null;
         }
         log.err(.app, "AI meta-turn error", .{ .label = label, .err = err });
@@ -1249,7 +1254,7 @@ fn sendMetaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, messa
     defer result.deinit();
     self.total_usage.add(result.usage);
     if (result.cancelled) {
-        self.resetAfterCancel(baseline);
+        self.clearCancelState();
         return null;
     }
 
@@ -1711,9 +1716,10 @@ fn dupeExtractStats(arena: std.mem.Allocator, stats: []const ScriptRuntime.Extra
 /// result (hundreds of all-null rows) would otherwise bloat the LLM turn.
 const detail_max_bytes: usize = 2048;
 
+/// `capOutput` at `detail_max_bytes`, always duped — `RunFacts` details must
+/// outlive the runtime whose arena the text came from.
 fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
-    if (text.len <= detail_max_bytes) return text;
-    return std.mem.concat(arena, u8, &.{ string.truncateUtf8(text, detail_max_bytes), "…[truncated]" });
+    return arena.dupe(u8, capOutput(arena, text, detail_max_bytes));
 }
 
 /// A finding worth a verdict, not yet confirmed: the return value was
@@ -1825,13 +1831,23 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
 
     const tmp_path = std.fmt.allocPrint(arena, "{s}.heal.js", .{path}) catch return self.healOom();
 
-    // The recorder is /save's stream: heal must neither synthesize from the
-    // REPL's prior recordings nor leak its diagnose actions into a later /save.
+    // Every exit leaves no stray revision behind; a failed rename is the one
+    // deliberate keep (its error message points at tmp_path).
+    var keep_revision = false;
+    defer if (!keep_revision) self.removeTempScript(tmp_path);
+
+    // The recorder and baseline are /save's stream: heal must neither
+    // synthesize from the REPL's prior recordings nor leak its diagnose
+    // actions into a later /save.
     var prior: Recorder = .init(self.allocator);
+    var prior_baseline: Baseline = .init(self.allocator);
     std.mem.swap(Recorder, &self.save_buffer, &prior);
+    std.mem.swap(Baseline, &self.baseline, &prior_baseline);
     defer {
         std.mem.swap(Recorder, &self.save_buffer, &prior);
+        std.mem.swap(Baseline, &self.baseline, &prior_baseline);
         prior.deinit();
+        prior_baseline.deinit();
     }
 
     var attempt: usize = 1;
@@ -1851,17 +1867,13 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
         // Validate in a fresh session so failure-state cookies and pages can't
         // mask a still-broken script.
         self.startSession() catch |err| {
-            self.removeTempScript(tmp_path);
             self.terminal.printError("heal failed: could not start a fresh session: {s}", .{@errorName(err)});
             return false;
         };
 
         switch (self.runScriptOutcome(arena, tmp_path)) {
             .ok => |facts| {
-                if (cureFailure(arena, first, facts) catch {
-                    self.removeTempScript(tmp_path);
-                    return self.healOom();
-                }) |failure| {
+                if (cureFailure(arena, first, facts) catch return self.healOom()) |failure| {
                     self.terminal.printWarning("{s}", .{failure});
                     source = revised;
                     error_detail = failure;
@@ -1872,6 +1884,7 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
                     if (refreshedBaselineScript(arena, revised, facts.extract_stats)) |updated| {
                         save.writeContentFile(tmp_path, updated, .replace) catch {};
                     }
+                    keep_revision = true;
                     std.fs.cwd().rename(tmp_path, path) catch |err| {
                         self.terminal.printError("healed script validated but replacing {s} failed: {s} (revision left at {s})", .{ path, @errorName(err), tmp_path });
                         return false;
@@ -1880,17 +1893,13 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
                     return true;
                 }
             },
-            .fatal => {
-                self.removeTempScript(tmp_path);
-                return false;
-            },
+            .fatal => return false,
             .script_error => |script_error| {
                 source = revised;
                 error_detail = script_error.detail;
             },
         }
     }
-    self.removeTempScript(tmp_path);
     self.terminal.printError("heal gave up after {d} attempts; {s} is unchanged", .{ max_heal_attempts, path });
     return false;
 }
@@ -2017,8 +2026,10 @@ fn refreshedBaselineScript(arena: std.mem.Allocator, revised: []const u8, stats:
 }
 
 fn removeTempScript(self: *Agent, tmp_path: []const u8) void {
-    std.fs.cwd().deleteFile(tmp_path) catch |err| {
-        self.terminal.printWarning("could not remove temp script {s}: {s}", .{ tmp_path, @errorName(err) });
+    std.fs.cwd().deleteFile(tmp_path) catch |err| switch (err) {
+        // Covers exits before the first write.
+        error.FileNotFound => {},
+        else => self.terminal.printWarning("could not remove temp script {s}: {s}", .{ tmp_path, @errorName(err) }),
     };
 }
 
@@ -2047,9 +2058,9 @@ fn recordSlashToolCall(
         .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
     };
 
-    // capToolOutput returns its input unchanged under the cap; dupe so content
+    // capOutput returns its input unchanged under the cap; dupe so content
     // doesn't alias the caller's per-iteration arena.
-    const capped = capToolOutput(ma, result.text);
+    const capped = capOutput(ma, result.text, tool_output_max_bytes);
     const content = if (capped.ptr == result.text.ptr) try ma.dupe(u8, capped) else capped;
 
     const tool_results = try ma.alloc(zenai.provider.ToolResult, 1);
@@ -2324,9 +2335,11 @@ fn buildUserMessageParts(
 // the next request body) without bound.
 const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
-fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
-    if (output.len <= tool_output_max_bytes) return output;
-    const prefix = string.truncateUtf8(output, tool_output_max_bytes);
+/// Returns `output` unchanged when under `max_bytes`; a truncated-and-marked
+/// copy in `allocator` otherwise (the bare prefix on OOM — never an error).
+fn capOutput(allocator: std.mem.Allocator, output: []const u8, max_bytes: usize) []const u8 {
+    if (output.len <= max_bytes) return output;
+    const prefix = string.truncateUtf8(output, max_bytes);
     var suffix_buf: [64]u8 = undefined;
     const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
@@ -2349,7 +2362,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     defer self.terminal.spinner.setThinking();
 
     const outcome: zenai.provider.Client.ToolHandler.Result = if (self.callTool(allocator, tool_name, arguments)) |result|
-        .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error }
+        .{ .content = capOutput(allocator, result.text, tool_output_max_bytes), .is_error = result.is_error }
     else |err|
         .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
 
@@ -2565,16 +2578,16 @@ test "savePrompt: save instructions followed by the rendered script skill" {
     try std.testing.expect(std.mem.endsWith(u8, revision, lp.skill.text()));
 }
 
-test "capToolOutput: passes through when under cap" {
+test "capOutput: passes through when under cap" {
     const ta = std.testing.allocator;
-    const out = capToolOutput(ta, "short");
+    const out = capOutput(ta, "short", tool_output_max_bytes);
     try std.testing.expectEqualStrings("short", out);
 }
 
 // Boundary correctness lives in string.zig's `truncateUtf8` tests; here we only
 // assert the agent-specific policy: an over-cap body keeps valid UTF-8 and gains
 // the truncation marker.
-test "capToolOutput: appends a marker when truncating" {
+test "capOutput: appends a marker when truncating" {
     const ta = std.testing.allocator;
 
     // 3-byte Hangul codepoint (U+D55C '한' = 0xED 0x95 0x9C) straddling the cap.
@@ -2587,7 +2600,7 @@ test "capToolOutput: appends a marker when truncating" {
     buf[cap + 1] = 0x9C;
     @memset(buf[cap + 2 ..], 'b');
 
-    const out = capToolOutput(ta, buf);
+    const out = capOutput(ta, buf, tool_output_max_bytes);
     defer if (out.ptr != buf.ptr) ta.free(out);
 
     try std.testing.expect(std.unicode.utf8ValidateSlice(out));
