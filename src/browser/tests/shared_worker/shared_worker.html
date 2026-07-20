@@ -105,6 +105,29 @@
   }
 </script>
 
+<script id="shared_worker_from_blob_url" type=module>
+  // A blob: SharedWorker must resolve its initial script even though the
+  // fetch goes through the worker's own HTTP owner, not the creating
+  // frame's — blob URLs are resolvable from any same-origin context.
+  {
+    const state = await testing.async();
+    const blob = new Blob([
+      "onconnect = (e) => { const port = e.ports[0]; port.onmessage = (m) => port.postMessage({ echo: m.data, from: 'blob-shared-worker' }); };",
+    ], { type: 'text/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    const worker = new SharedWorker(blobUrl);
+
+    worker.port.onmessage = (event) => state.resolve(event.data);
+    worker.port.postMessage('hi');
+
+    await state.done((response) => {
+      testing.expectEqual('hi', response.echo);
+      testing.expectEqual('blob-shared-worker', response.from);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
+
 <script id="shared_worker_structured_clone" type=module>
   // Messages cross a context boundary: the receiver gets an independent
   // structured clone, and unserializable values throw a DataCloneError.

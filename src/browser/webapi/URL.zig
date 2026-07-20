@@ -309,42 +309,23 @@ pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
     return out[0..len];
 }
 
-pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
-    if (maybe_base) |base| {
-        return U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len);
-    }
-    return U.url_can_parse(url.ptr, url.len);
-}
+pub const canParse = @import("../URL.zig").canParse;
 
 pub fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {
-    var uuid_buf: [36]u8 = undefined;
-    @import("../../id.zig").uuidv4(&uuid_buf);
-
     switch (exec.js.global) {
-        inline else => |g| {
-            const blob_url = try std.fmt.allocPrint(
-                g.arena,
-                "blob:{s}/{s}",
-                .{ g.origin orelse "null", uuid_buf },
-            );
-            try g._blob_urls.put(g.arena, blob_url, blob);
-            blob.acquireRef();
-            return blob_url;
-        },
+        inline else => |g| return g._page.createBlobUrl(blob, g.origin, g._frame_id),
     }
 }
 
 pub fn revokeObjectURL(url: []const u8, exec: *const Execution) void {
-    // Per spec: silently ignore non-blob URLs
-    if (!std.mem.startsWith(u8, url, "blob:")) {
-        return;
-    }
-
     switch (exec.js.global) {
         inline else => |g| {
-            if (g._blob_urls.fetchRemove(url)) |entry| {
-                entry.value.releaseRef(g._page);
+            if (!Blob.urlBelongsToOrigin(url, g.origin)) {
+                // different origin cannot revoke an object URL. Failure should
+                // be silent
+                return;
             }
+            g._page.revokeBlobUrl(url);
         },
     }
 }

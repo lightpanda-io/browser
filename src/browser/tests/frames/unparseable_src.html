@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="unparseable_src" type=module>
+  // An absolute-but-unparseable src (the bare "https://" bot-detection
+  // scripts probe with) loads about:blank instead of failing the frame.
+  {
+    const state = await testing.async();
+    const ifr = document.createElement('iframe');
+    ifr.src = 'https://';
+    document.documentElement.appendChild(ifr);
+    testing.expectEqual('about:blank', ifr.contentWindow.location.href);
+
+    // re-navigating an existing frame takes the scheduled path
+    ifr.onload = () => state.resolve();
+    ifr.src = 'https://';
+    await state.done(() => {
+      testing.expectEqual('about:blank', ifr.contentWindow.location.href);
+    });
+  }
+</script>

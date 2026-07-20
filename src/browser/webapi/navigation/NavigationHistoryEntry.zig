@@ -19,18 +19,25 @@
 const std = @import("std");
 const URL = @import("../URL.zig");
 const NavigationState = @import("root.zig").NavigationState;
+const Event = @import("../Event.zig");
+const EventTarget = @import("../EventTarget.zig");
 const Frame = @import("../../Frame.zig");
 const js = @import("../../js/js.zig");
 
 const NavigationHistoryEntry = @This();
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationHistoryEntry
-// no proto for now
-// _proto: ?*EventTarget,
+_proto: *EventTarget,
 _id: []const u8,
 _key: []const u8,
 _url: ?[:0]const u8,
 _state: NavigationState,
+
+_on_dispose: ?js.Function.Global = null,
+
+fn asEventTarget(self: *NavigationHistoryEntry) *EventTarget {
+    return self._proto;
+}
 
 pub fn id(self: *const NavigationHistoryEntry) []const u8 {
     return self._id;
@@ -73,6 +80,26 @@ pub fn getState(self: *const NavigationHistoryEntry, frame: *Frame) !StateReturn
     return .undefined;
 }
 
+pub fn fireDispose(self: *NavigationHistoryEntry, frame: *Frame) !void {
+    if (!frame.hasDirectListeners(self.asEventTarget(), "dispose", self._on_dispose)) return;
+
+    const event = try Event.initTrusted(comptime .wrap("dispose"), .{}, frame._page);
+    try frame.dispatch(self.asEventTarget(), event, self._on_dispose, .{ .context = "NavigationHistoryEntry" });
+}
+
+fn getOnDispose(self: *const NavigationHistoryEntry) ?js.Function.Global {
+    return self._on_dispose;
+}
+
+pub fn setOnDispose(self: *NavigationHistoryEntry, cb_: ?js.Function) !void {
+    if (self._on_dispose) |od| od.release();
+    if (cb_) |cb| {
+        self._on_dispose = try cb.persistWithThis(self);
+    } else {
+        self._on_dispose = null;
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(NavigationHistoryEntry);
 
@@ -88,4 +115,9 @@ pub const JsApi = struct {
     pub const sameDocument = bridge.accessor(NavigationHistoryEntry.sameDocument, null, .{});
     pub const url = bridge.accessor(NavigationHistoryEntry.url, null, .{});
     pub const getState = bridge.function(NavigationHistoryEntry.getState, .{});
+    pub const ondispose = bridge.accessor(
+        NavigationHistoryEntry.getOnDispose,
+        NavigationHistoryEntry.setOnDispose,
+        .{},
+    );
 };

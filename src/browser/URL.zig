@@ -62,6 +62,13 @@ pub fn resolveNavigation(allocator: Allocator, url: []const u8, options: Resolve
     };
 }
 
+pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
+    if (maybe_base) |base| {
+        return U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len);
+    }
+    return U.url_can_parse(url.ptr, url.len);
+}
+
 const EncodeSet = enum { path, query, query_legacy, userinfo, fragment, component };
 
 pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
@@ -623,6 +630,10 @@ pub fn unescape(arena: Allocator, input: []const u8) ![]const u8 {
     }
 
     return result.items;
+}
+
+pub fn stripFragment(url: []const u8) []const u8 {
+    return url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
 }
 
 const AuthorityInfo = struct {
@@ -1691,4 +1702,14 @@ test "URL: resolveNavigation defaults a schemeless host to http (curl-like)" {
         const result = try resolveNavigation(testing.arena_allocator, case.url, .{});
         try testing.expectString(case.expected, result);
     }
+}
+
+test "URL: stripFragment" {
+    try testing.expectEqual("https://www.example.com/", stripFragment("https://www.example.com/"));
+    try testing.expectEqual("https://www.example.com/about", stripFragment("https://www.example.com/about"));
+    try testing.expectEqual("https://www.example.com/?id=3", stripFragment("https://www.example.com/?id=3"));
+
+    try testing.expectEqual("https://www.example.com/", stripFragment("https://www.example.com/#pandapower"));
+    try testing.expectEqual("https://www.example.com/about", stripFragment("https://www.example.com/about#pandapower"));
+    try testing.expectEqual("https://www.example.com/?id=3", stripFragment("https://www.example.com/?id=3#pandapower"));
 }

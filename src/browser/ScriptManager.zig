@@ -365,7 +365,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     .resource_type = .script,
                     .notification = frame._session.notification,
                     .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
-                });
+                }, &frame._http_owner);
 
                 script.source = .{ .remote = response.body };
                 script.status = response.status;

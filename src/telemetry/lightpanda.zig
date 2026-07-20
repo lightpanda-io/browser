@@ -82,6 +82,7 @@ pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode
             .fetch => "F",
             .serve => "S",
             .agent => if (interactive == false) "AR" else "A",
+            .run => "R",
             .mcp => "M",
             .version => "V",
             .help => "H",

@@ -169,9 +169,6 @@ _manual_slot_assignments: Node.AssignedSlotLookup = .empty,
 /// ```
 _event_target_attr_listeners: GlobalEventHandlersLookup = .empty,
 
-// Blob URL registry for URL.createObjectURL/revokeObjectURL
-_blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
-
 // FileLists owned by `<input type=file>` elements. Each holds refs on its
 // File objects (reference counted via their Blob proto); released at teardown.
 _file_lists: std.ArrayList(*FileList) = .{},
@@ -188,7 +185,7 @@ _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 _style_manager: StyleManager,
 _script_manager: ScriptManager,
 
-_http_owner: HttpClient.Owner = .{},
+_http_owner: HttpClient.Owner,
 
 // List of active live ranges (for mutation updates per DOM spec)
 _live_ranges: std.DoublyLinkedList = .{},
@@ -378,9 +375,10 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._script_manager = undefined,
         ._ce_reactions = .{ .allocator = arena },
         ._event_manager = EventManager.init(arena, self),
+        ._http_owner = undefined,
     };
     self._queued_events = &self._queued_events_1;
-    self._http_owner.blob_urls = &self._blob_urls;
+    self._http_owner = .init(&page.blob_urls, &self.origin);
 
     var screen: *Screen = undefined;
     var visual_viewport: *VisualViewport = undefined;
@@ -489,12 +487,7 @@ pub fn deinit(self: *Frame) void {
 
     {
         // Release all objects we're referencing
-        {
-            var it = self._blob_urls.valueIterator();
-            while (it.next()) |blob| {
-                blob.*.releaseRef(page);
-            }
-        }
+        page.revokeBlobUrlsFor(self._frame_id);
 
         for (self._file_lists.items) |file_list| {
             for (file_list._files) |file| {
@@ -639,6 +632,13 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     const is_blob = !is_about_blank and std.mem.startsWith(u8, request_url, "blob:");
 
     if (is_about_blank or is_blob) {
+        if (is_blob) {
+            if (!Blob.urlBelongsToOrigin(request_url, opts.initiator_origin)) {
+                log.warn(.js, "invalid blob", .{ .url = request_url });
+                return error.BlobNotFound;
+            }
+        }
+
         self.url = if (is_about_blank) "about:blank" else try self.arena.dupeZ(u8, request_url);
 
         // even though about:blank navigations may share the same _data_, we
@@ -675,14 +675,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
         // Content injection
         if (is_blob) {
-            // For navigation, walk up the parent chain to find blob URLs
-            // (e.g., parent creates blob URL and sets iframe.src to it)
             const blob = blk: {
-                var current: ?*Frame = self.parent;
-                while (current) |frame| {
-                    if (frame._blob_urls.get(request_url)) |b| break :blk b;
-                    current = frame.parent;
-                }
+                if (self._page.blob_urls.get(request_url)) |entry| break :blk entry.blob;
                 log.warn(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
@@ -763,6 +757,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .loader_id = self._loader_id,
         .method = opts.method,
         .body = opts.body,
+        // don't cache top-level pages, most cases won't revisit this, and, if they
+        // do, they probably don't want the cached version.
+        .skip_cache = self.parent == null,
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = opts.initiator_url orelse self.url,
         .resource_type = .document,
@@ -958,6 +955,11 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         }
         if (nav_opts.initiator_url == null) {
             nav_opts.initiator_url = dup;
+        }
+    }
+    if (nav_opts.initiator_origin == null) {
+        if (originator.origin) |o| {
+            nav_opts.initiator_origin = try arena.dupe(u8, o);
         }
     }
 
@@ -1751,6 +1753,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         src = "about:blank";
     }
 
+    if (URL.isCompleteHTTPUrl(src) and !URL.canParse(src, null)) {
+        // per spec, if we can't parse the URL, we should load about:blank
+        src = "about:blank";
+    }
+
     if (iframe._window != null) {
         // This frame is being re-navigated. We need to do this through a
         // scheduleNavigation phase. We can't navigate immediately here, for
@@ -1819,6 +1826,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .reason = .initialFrameNavigation,
         .referer = parent_url,
         .initiator_url = parent_url,
+        .initiator_origin = self.origin,
     }) catch |err| {
         // extra defensive..maybe navigate added a new frame, and the index it
         // was added at was removed. Or maybe this frame was removed somehow
@@ -1918,7 +1926,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     // not impossible that navigate adds popups, so remove by index
     errdefer _ = page.popups.swapRemove(popup_index);
 
-    popup.navigate(resolved_url, .{ .reason = .script }) catch |err| {
+    popup.navigate(resolved_url, .{ .reason = .script, .initiator_origin = self.origin }) catch |err| {
         log.warn(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
         return err;
     };
@@ -2181,7 +2189,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .resource_type = .stylesheet,
         .notification = session.notification,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
-    }) catch |err| {
+    }, &self._http_owner) catch |err| {
         log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
@@ -3156,6 +3164,7 @@ pub const NavigateOpts = struct {
     // because a Referrer-Policy can suppress the Referer header without
     // affecting SameSite (which always considers the real initiator).
     initiator_url: ?[:0]const u8 = null,
+    initiator_origin: ?[]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
 };
@@ -3479,6 +3488,12 @@ test "WebApi: Frame" {
 
 test "WebApi: Frames" {
     try testing.htmlRunner("frames", .{});
+}
+
+test "WebApi: Frame Blob" {
+    const filter: testing.LogFilter = .init(&.{ .frame, .browser, .js });
+    defer filter.deinit();
+    try testing.htmlRunner("frames/blob", .{});
 }
 
 test "WebApi: Integration" {

@@ -51,6 +51,24 @@ pub const Type = union(enum) {
     file: *@import("File.zig"),
 };
 
+// Stored in Page.blob_urls.
+pub const UrlEntry = struct {
+    blob: *Blob,
+    creator: u32, // frame_id of creator
+};
+pub const UrlMap = std.StringHashMapUnmanaged(UrlEntry);
+
+// A blob URL is encoded as: blob:{origin}/{uuid}. So, given an origin, we can
+// check if it should be able to access a given bolb URL.
+pub fn urlBelongsToOrigin(url: []const u8, origin_: ?[]const u8) bool {
+    const origin = origin_ orelse "null";
+    if (!std.mem.startsWith(u8, url, "blob:")) {
+        return false;
+    }
+    const rest = url["blob:".len..];
+    return rest.len > origin.len and rest[origin.len] == '/' and std.mem.startsWith(u8, rest, origin);
+}
+
 const InitOptions = struct {
     /// MIME type.
     type: []const u8 = "",

@@ -27,6 +27,7 @@ const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
 
+const Blob = @import("webapi/Blob.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
 const v8 = js.v8;
@@ -73,6 +74,9 @@ frame_arena: Allocator,
 // Origin map for same-origin context sharing. Entries live for the Page's
 // lifetime.
 origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
+
+// Blob URL store for URL.createObjectURL.
+blob_urls: Blob.UrlMap = .empty,
 
 // Identity tracking for the main world. All main-world contexts in this Page
 // share this, ensuring object identity works across same-origin frames.
@@ -177,6 +181,19 @@ pub fn deinit(self: *Page) void {
     }
     self.shared_workers = .empty;
 
+    {
+        if (comptime IS_DEBUG) {
+            std.debug.assert(self.blob_urls.count() == 0);
+        }
+
+        // Defensive cleanup
+        var it = self.blob_urls.valueIterator();
+        while (it.next()) |entry| {
+            entry.blob.releaseRef(self);
+        }
+        self.blob_urls = .empty;
+    }
+
     const session = self.session;
     lp.metrics.js_heap_size_bytes.observe(session.browser.env.isolate.getHeapStatistics().total_physical_size);
     defer session.browser.env.memoryPressureNotification(.moderate);
@@ -243,6 +260,35 @@ pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {
     gop.key_ptr.* = origin.key;
     gop.value_ptr.* = origin;
     return origin;
+}
+
+pub fn createBlobUrl(self: *Page, blob: *Blob, origin: ?[]const u8, creator_frame_id: u32) ![]const u8 {
+    var uuid: [36]u8 = undefined;
+    @import("../id.zig").uuidv4(&uuid);
+
+    const url = try std.fmt.allocPrint(self.frame_arena, "blob:{s}/{s}", .{ origin orelse "null", uuid });
+    try self.blob_urls.put(self.frame_arena, url, .{ .blob = blob, .creator = creator_frame_id });
+    blob.acquireRef();
+    return url;
+}
+
+pub fn revokeBlobUrl(self: *Page, url: []const u8) void {
+    if (self.blob_urls.fetchRemove(url)) |entry| {
+        entry.value.blob.releaseRef(self);
+    }
+}
+
+pub fn revokeBlobUrlsFor(self: *Page, creator: u32) void {
+    var it = self.blob_urls.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.creator != creator) {
+            continue;
+        }
+        entry.value_ptr.blob.releaseRef(self);
+        self.blob_urls.removeByPtr(entry.key_ptr);
+        // Removal invalidates the iterator; restart. Entry counts are tiny.
+        it = self.blob_urls.iterator();
+    }
 }
 
 pub fn releaseOrigin(self: *Page, origin: *js.Origin) void {

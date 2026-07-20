@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -26,6 +27,7 @@ const CookieStore = @import("../storage/CookieStore.zig");
 
 const String = lp.String;
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieChangeEvent
 const CookieChangeEvent = @This();
@@ -53,8 +55,8 @@ pub fn init(typ: []const u8, _opts: ?Options, exec: *const Execution) !*CookieCh
         type_string,
         CookieChangeEvent{
             ._proto = undefined,
-            ._changed = opts.changed orelse &.{},
-            ._deleted = opts.deleted orelse &.{},
+            ._changed = try cloneListItems(arena, opts.changed),
+            ._deleted = try cloneListItems(arena, opts.deleted),
         },
     );
 
@@ -107,6 +109,25 @@ pub fn initSingle(
 
     Event.populatePrototypes(event, Options{}, true);
     return event;
+}
+
+// Passed in from V8, everything is call_arena allocated, need to dupe it into our arena.
+fn cloneListItems(arena: Allocator, items_: ?[]CookieStore.CookieListItem) ![]CookieStore.CookieListItem {
+    const items = items_ orelse return &.{};
+    const out = try arena.alloc(CookieStore.CookieListItem, items.len);
+    for (items, out) |src, *dst| {
+        dst.* = .{
+            .name = try String.init(arena, src.name.str(), .{}),
+            .value = if (src.value) |v| try String.init(arena, v.str(), .{}) else null,
+            .domain = if (src.domain) |d| try String.init(arena, d.str(), .{}) else null,
+            .path = try String.init(arena, src.path.str(), .{}),
+            .expires = src.expires,
+            .secure = src.secure,
+            .sameSite = try arena.dupe(u8, src.sameSite),
+            .partitioned = src.partitioned,
+        };
+    }
+    return out;
 }
 
 pub fn asEvent(self: *CookieChangeEvent) *Event {

@@ -268,6 +268,13 @@ const Commands = cli.Builder(.{
         },
         .shared_options = CommonOptions,
     },
+    .{
+        // Normalized to `.agent` in `parseArgs`; intentionally no LLM options.
+        .name = "run",
+        .positional = .{ .name = "script_file", .type = ?[:0]const u8 },
+        .options = .{},
+        .shared_options = CommonOptions,
+    },
     .{ .name = "version", .options = .{
         .{ .name = "check", .type = bool },
     } },
@@ -278,6 +285,9 @@ pub const Mode = Commands.Union;
 pub const Agent = @FieldType(Mode, "agent");
 
 mode: Mode,
+// The command as typed. Mirrors `mode`, except `run` normalizes to `.agent`
+// for execution while this keeps `.run` for telemetry.
+command: RunMode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
 
@@ -292,6 +302,7 @@ fn modeNeedsHttp(mode: Mode) bool {
 pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
     var config = Config{
         .mode = mode,
+        .command = std.meta.activeTag(mode),
         .exec_name = exec_name,
         .http_headers = undefined,
     };
@@ -715,7 +726,7 @@ pub const HttpHeaders = struct {
     }
 };
 
-pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) void {
+pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: RunMode, success: bool) !void {
     const exec_name = self.exec_name;
     const Help = @import("help.zon");
     const is_debug = builtin.mode == .Debug;
@@ -723,42 +734,109 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
     const pretty_or_logfmt = if (comptime is_debug) "pretty" else "logfmt";
     const comptimePrint = std.fmt.comptimePrint;
 
-    switch (help_for) {
+    const text = switch (help_for) {
         // Requested help for everything.
-        .help => {
+        .help => text: {
             const template = comptimePrint(
                 \\{s}
                 \\
             , .{Help.general});
-            std.debug.print(template, .{exec_name});
+            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
         },
-        inline .fetch, .serve, .mcp, .agent => |tag| {
+        inline .fetch, .serve, .mcp, .agent, .run => |tag| text: {
             const template = comptimePrint(
                 \\{s}
                 \\
                 \\{s}
                 \\
             , .{ @field(Help, @tagName(tag)), Help.common_options });
-            std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
+            break :text try std.fmt.allocPrint(allocator, template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
-        .version => {
+        .version => text: {
             const template = Help.version ++ "\n";
-            std.debug.print(template, .{exec_name});
+            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
         },
-    }
+    };
+    defer allocator.free(text);
 
     if (success) {
+        printPaged(allocator, text);
         return std.process.cleanExit();
     }
+    var stderr = std.fs.File.stderr().writer(&.{});
+    stderr.interface.writeAll(text) catch {};
     std.process.exit(1);
 }
 
+fn printPlain(text: []const u8) void {
+    var stdout = std.fs.File.stdout().writer(&.{});
+    stdout.interface.writeAll(text) catch {};
+}
+
+/// Pages explicitly requested help through $PAGER (fallback: less) when
+/// stdout is an interactive terminal; prints plainly otherwise.
+fn printPaged(allocator: Allocator, text: []const u8) void {
+    if (!std.posix.isatty(std.posix.STDOUT_FILENO)) {
+        return printPlain(text);
+    }
+    const term = std.posix.getenv("TERM") orelse "";
+    if (term.len == 0 or std.mem.eql(u8, term, "dumb")) {
+        return printPlain(text);
+    }
+
+    const pager = std.posix.getenv("PAGER") orelse "";
+    const argv: []const []const u8 = if (pager.len > 0)
+        &.{ "/bin/sh", "-c", pager }
+    else
+        &.{ "less", "-FIRX" };
+
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    child.spawn() catch return printPlain(text);
+
+    if (child.stdin) |stdin| {
+        var writer = stdin.writer(&.{});
+        // A write error here is the pager exiting early (user quit, or the
+        // command failed) — wait() below decides which.
+        writer.interface.writeAll(text) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+
+    const term_result = child.wait() catch return printPlain(text);
+    const clean_exit = term_result == .Exited and term_result.Exited == 0;
+    // Quitting the pager early is still exit 0; a non-zero exit means the
+    // pager failed (e.g. $PAGER not found) and the help was never shown.
+    if (!clean_exit) {
+        printPlain(text);
+    }
+}
+
 pub fn parseArgs(allocator: Allocator) !Config {
-    const exec_name, const command = try Commands.parse(allocator);
+    const exec_name, var command = try Commands.parse(allocator);
     if (command == .serve and command.serve.timeout != null) {
         log.warn(.app, "--timeout is deprecated", .{});
     }
-    return .init(allocator, exec_name, command);
+    const invoked = std.meta.activeTag(command);
+    // Rewrite `run` to `.agent` so nothing downstream needs a `.run` case.
+    if (command == .run) {
+        const run = command.run;
+        if (run.script_file == null) {
+            log.fatal(.app, "missing script file", .{ .hint = "usage: lightpanda run <script.js>" });
+            return error.MissingArgument;
+        }
+        // run's fields are a strict subset of Agent's (compile error otherwise).
+        var agent_opts: Agent = .{};
+        inline for (@typeInfo(@TypeOf(run)).@"struct".fields) |f| {
+            @field(agent_opts, f.name) = @field(run, f.name);
+        }
+        command = .{ .agent = agent_opts };
+    }
+    var config = try Config.init(allocator, exec_name, command);
+    config.command = invoked;
+    return config;
 }
 
 pub fn validateUserAgent(ua: []const u8) !void {

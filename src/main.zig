@@ -70,7 +70,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     defer args.deinit(main_arena);
 
     switch (args.mode) {
-        .help => |tag| return args.printUsageAndExit(tag, true),
+        .help => |tag| return args.printUsageAndExit(main_arena, tag, true),
         .version => |opts| {
             if (opts.check) {
                 try lp.checkVersion(allocator, &args);
@@ -121,7 +121,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
             const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
-                return args.printUsageAndExit(.serve, false);
+                return args.printUsageAndExit(main_arena, .serve, false);
             };
 
             var server = lp.Server.init(app, address) catch |err| {
