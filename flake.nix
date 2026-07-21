@@ -4,12 +4,17 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
 
-    zigPkgs.url = "github:mitchellh/zig-overlay";
-    zigPkgs.inputs.nixpkgs.follows = "nixpkgs";
+    zigPkgs = {
+      url = "github:silversquirl/zig-flake";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
-    zlsPkg.url = "github:zigtools/zls/0.15.0";
-    zlsPkg.inputs.zig-overlay.follows = "zigPkgs";
-    zlsPkg.inputs.nixpkgs.follows = "nixpkgs";
+    zlsPkg = {
+      url = "github:zigtools/zls/0.16.0";
+      inputs.zig-flake.follows = "zigPkgs";
+      inputs.nixpkgs.follows = "nixpkgs";
+
+    };
 
     fenix = {
       url = "github:nix-community/fenix";
@@ -33,7 +38,7 @@
       let
         overlays = [
           (final: prev: {
-            zigpkgs = zigPkgs.packages.${prev.system};
+            zig = zigPkgs.packages.${prev.system}."zig_0_16_0";
             zls = zlsPkg.packages.${prev.system}.default;
           })
         ];
@@ -57,7 +62,7 @@
           targetPkgs =
             pkgs: with pkgs; [
               # Build Tools
-              zigpkgs."0.15.2"
+              zig
               zls
               rustToolchain
               python3
