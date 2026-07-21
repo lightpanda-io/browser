@@ -44,6 +44,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         scrollNode,
         waitForSelector,
         handleJavaScriptDialog,
+        configureCDP,
         configureLoading,
         version,
     }, cmd.input.action) orelse return error.UnknownMethod;
@@ -61,6 +62,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .scrollNode => return scrollNode(cmd),
         .waitForSelector => return waitForSelector(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
+        .configureCDP => return configureCDP(cmd),
         .configureLoading => return configureLoading(cmd),
         .version => return version(cmd),
     }
@@ -70,6 +72,17 @@ fn version(cmd: *CDP.Command) !void {
     return cmd.sendResult(.{
         .version = lp.build_config.version,
     }, .{});
+}
+
+fn configureCDP(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        disableSetCacheDisabled: ?bool = null,
+    })) orelse return error.InvalidParams;
+
+    if (params.disableSetCacheDisabled) |value| {
+        cmd.cdp.disable_set_cache_disabled = value;
+    }
+    return cmd.sendResult(null, .{});
 }
 
 fn configureLoading(cmd: *CDP.Command) !void {
@@ -405,6 +418,34 @@ test "cdp.lp: version" {
 
     const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expectEqualSlices(u8, lp.build_config.version, result.get("version").?.string);
+}
+
+test "cdp.lp: configureCDP toggles setCacheDisabled handling" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try testing.expectEqual(false, ctx.cdp().disable_set_cache_disabled);
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.attachToBrowserTarget" });
+    try ctx.expectSentResult(.{ .sessionId = "BSID-1" }, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.configureCDP",
+        .sessionId = "BSID-1",
+        .params = .{ .disableSetCacheDisabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2, .session_id = "BSID-1" });
+    try testing.expectEqual(true, ctx.cdp().disable_set_cache_disabled);
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "LP.configureCDP",
+        .sessionId = "BSID-1",
+        .params = .{ .disableSetCacheDisabled = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3, .session_id = "BSID-1" });
+    try testing.expectEqual(false, ctx.cdp().disable_set_cache_disabled);
 }
 
 test "cdp.lp: getMarkdown" {

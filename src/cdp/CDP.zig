@@ -82,6 +82,7 @@ browser_context_id_gen: BrowserContextIdGen = .{},
 browser_session_id: ?[]const u8 = null,
 
 browser_context: ?BrowserContext,
+disable_set_cache_disabled: bool = false,
 
 // Re-used arena for processing a message. We're assuming that we're getting
 // 1 message at a time.

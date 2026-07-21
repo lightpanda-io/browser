@@ -28,6 +28,7 @@ const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
 
+const Cache = @import("../../network/cache/Cache.zig");
 const Headers = @import("../../network/HttpClient.zig").Headers;
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
@@ -91,7 +92,9 @@ fn setCacheDisabled(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const client = &bc.cdp.browser.http_client;
-    client.disableCache(params.cacheDisabled);
+    if (!bc.cdp.disable_set_cache_disabled) {
+        client.disableCache(params.cacheDisabled);
+    }
     return cmd.sendResult(null, .{});
 }
 
@@ -940,10 +943,41 @@ test "cdp.Network: setCacheDisabled" {
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
 
+    var cache: Cache = undefined;
+    const client = &ctx.cdp().browser.http_client;
+    client.cache = &cache;
+
     try ctx.processMessage(.{
         .id = 1,
         .method = "Network.setCacheDisabled",
         .params = .{ .cacheDisabled = true },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expect(client.cache == null);
+}
+
+test "cdp.Network: configured CDP ignores setCacheDisabled" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
+
+    var cache: Cache = undefined;
+    const client = &ctx.cdp().browser.http_client;
+    client.cache = &cache;
+    defer client.cache = null;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.configureCDP",
+        .params = .{ .disableSetCacheDisabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.setCacheDisabled",
+        .params = .{ .cacheDisabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expect(client.cache == &cache);
 }
