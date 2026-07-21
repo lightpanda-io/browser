@@ -121,7 +121,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     // alive for seconds while running heavy JS accumulates wrappers and
     // external-ref'd Zig allocations V8 has no reason to drop. `.moderate`
     // speeds up incremental GC without stalling the tick.
-    const gc_hint_period_ns: u64 = std.time.ns_per_s;
+    const gc_hint_period_ns: u64 = std.time.ns_per_s * 5;
     var gc_hint_timer = std.time.Timer.start() catch unreachable;
 
     while (true) {
