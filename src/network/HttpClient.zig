@@ -942,15 +942,6 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         return true;
     }
 
-    if (cached.metadata.hasValidators() == false) {
-        // Expired and no validators
-        lp.metrics.http_cache.incr(.miss);
-        cached.data.deinit();
-        cache.evict(req.url);
-        transfer._cache_intent = .store;
-        return false;
-    }
-
     // expired but with validators
     log.debug(.cache, "revalidate with etag", .{
         .url = req.url,
