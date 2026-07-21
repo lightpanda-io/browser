@@ -578,6 +578,17 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     if (self._reporting_error) {
         return;
     }
+
+    const target = self.asEventTarget();
+    if (!frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
+        if (comptime builtin.is_test == false) {
+            log.warn(.js, "window.reportError", .{
+                .message = err.toStringSlice() catch "Unknown error",
+            });
+        }
+        return;
+    }
+
     self._reporting_error = true;
     defer self._reporting_error = false;
 
@@ -616,7 +627,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
     // We still dispatch so that addEventListener('error', ...) listeners fire.
-    try frame._event_manager.dispatchDirect(self.asEventTarget(), event, null, .{
+    try frame._event_manager.dispatchDirect(target, event, null, .{
         .context = "window.reportError",
     });
 

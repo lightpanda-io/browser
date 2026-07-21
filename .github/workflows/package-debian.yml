@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Install packaging deps
         run: |
@@ -38,7 +38,7 @@ jobs:
           apt-get install -y --no-install-recommends dpkg-dev
 
       - name: Download linux binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           path: .
@@ -70,7 +70,7 @@ jobs:
           dpkg-deb --build --root-owner-group "$ROOT"
 
       - name: Upload Debian package to release
-        uses: ncipollo/release-action@v1
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: true
           artifacts: lightpanda_${{ env.PKGVER }}_${{ env.DEB_ARCH }}.deb

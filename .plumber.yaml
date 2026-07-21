@@ -1,0 +1,598 @@
+# Plumber configuration for this repository.
+# Checks the GitHub Actions workflows for supply chain issues:
+# unpinned actions, archived dependencies, known CVEs, dangerous
+# triggers, secrets handling and more.
+#
+# Started from `plumber config generate` and scoped to this repo,
+# see the inline notes on the few controls that are off.
+# Reference: https://github.com/getplumber/plumber
+
+version: "2.0"
+
+github:
+  controls:
+    # ===========================================
+    # Actions must be pinned by commit SHA
+    # ===========================================
+    # Flags workflow steps whose `uses:` reference is not a 40-character
+    # commit SHA. Tag/branch refs (v4, main) are mutable: if the action's
+    # maintainer is compromised or retags a release, the caller workflow
+    # silently runs new code with its secrets. This is the vector behind
+    # the March 2025 tj-actions/changed-files compromise (CVE-2025-30066).
+    #
+    # The default trustedOwners list exempts first-party (`actions/*`,
+    # `github/*`) actions so the initial signal on a fresh repo stays
+    # focused on the third-party surface. Pair with Dependabot
+    # (`version-update-strategy: sha-and-version`) to keep pins fresh.
+    actionsMustBePinnedByCommitSha:
+      enabled: true
+      # Action-owner prefixes exempt from the pin-by-SHA requirement.
+      # Only list owners already inside the workflow's trust boundary.
+      trustedOwners:
+        - actions
+        - github
+
+    # ===========================================
+    # Actions must come from authorized sources
+    # ===========================================
+    # Restrict which `uses:` action sources are allowed. Every third-
+    # party action runs with the caller workflow's token and secrets, so
+    # limiting actions to vetted owners shrinks the supply-chain surface.
+    githubActionMustComeFromAuthorizedSources:
+      enabled: true
+      # Trust the first-party GitHub-owned actions (actions/*, github/*)
+      # that any workflow already executes implicitly. Defaults to true.
+      trustGithubOfficialActions: true
+      # Trust actions whose owner is the same org/user as the scanned
+      # repository — an org's own actions are inside its trust boundary.
+      # Defaults to true.
+      trustSameOrgActions: true
+      # When > 0, also trust any action whose upstream repository has at
+      # least this many GitHub stars. Catches rename/re-creation squats
+      # where a once-trusted name is re-registered with no history.
+      # Requires GitHub API access; 0 disables the star check.
+      minimumStars: 0
+      # Allowlist of trusted action sources. Each entry is either an
+      # exact `owner/repo` or an `owner/*` wildcard for a whole org.
+      trustedGithubActions:
+        - ncipollo/release-action
+        - slackapi/slack-github-action
+        - contributor-assistant/github-action
+        - mlugg/setup-zig
+        - docker/login-action
+        - Swatinem/rust-cache
+        - dtolnay/rust-toolchain
+        - getplumber/plumber
+
+    # ===========================================
+    # Container images must not use forbidden tags
+    # ===========================================
+    # Same control as GitLab; values are GitHub-side. Pinning by digest
+    # protects against tag-retag supply-chain attacks. The forbidden tag
+    # list catches the common cases of mutable references.
+    # Off for now: ghcr.io/lightpanda-io/perf-fmt deliberately tracks
+    # :latest and package-debian builds in debian:stable-slim. Worth
+    # revisiting if those move to versioned tags or digests.
+    containerImageMustNotUseForbiddenTags:
+      enabled: false
+      tags:
+        - latest
+        - dev
+        - development
+        - staging
+        - main
+        - master
+      # When true, ALL images must be pinned by digest (e.g.,
+      # alpine@sha256:...). Takes precedence over the forbidden tags
+      # list — any image not using an immutable digest reference is
+      # flagged.
+      containerImagesMustBePinnedByDigest: true
+
+    # ===========================================
+    # Pipeline must not use Docker-in-Docker
+    # ===========================================
+    # Workflows on GitHub-hosted runners that spin up `docker:dind`
+    # services have the same privilege-escalation risk as on GitLab.
+    # detectInsecureDaemon also flags plaintext DOCKER_HOST and empty
+    # DOCKER_TLS_CERTDIR values.
+    pipelineMustNotUseDockerInDocker:
+      enabled: true
+      detectInsecureDaemon: true
+
+    # ===========================================
+    # Pipeline must not execute unverified scripts
+    # ===========================================
+    # Same control as GitLab (ISSUE-411). Scans every workflow `run:` step
+    # for pipe-to-shell, download-then-exec, redirect-then-exec, and Megalodon-
+    # style base64 obfuscation. Maps to OWASP CICD-SEC-3 / CICD-SEC-8.
+    pipelineMustNotExecuteUnverifiedScripts:
+      enabled: true
+      trustedUrls: []
+      # - https://internal-artifacts.example.com/*
+
+    # ===========================================
+    # Reusable workflows must not inherit secrets
+    # ===========================================
+    # Detects `jobs.<name>.secrets: inherit` calls. Inherit forwards
+    # every secret visible to the caller — repo, organisation,
+    # environment — to the reusable workflow regardless of what it
+    # actually needs. Use an explicit secrets map instead.
+    reusableWorkflowsMustNotInheritSecrets:
+      enabled: true
+
+    # ===========================================
+    # Workflow must not export the entire secrets context
+    # ===========================================
+    # Flags a job that serialises the whole `secrets` context with
+    # toJson(secrets) / toJSON(secrets) into a run script, an env
+    # binding, or an action `with:` input. The JSON blob carries every
+    # repository, organisation and environment secret the job can see;
+    # GitHub log redaction masks known secret values, not a JSON string
+    # derived from them, so a single echo leaks the lot. Reference each
+    # secret by name instead.
+    workflowMustNotExportEntireSecretsContext:
+      enabled: true
+
+    # ===========================================
+    # Security jobs must not be weakened
+    # ===========================================
+    # Jobs matching the security-scanner naming patterns must not be
+    # neutralised via `continue-on-error: true` (mapped to the same
+    # IR field as GitLab's allow_failure: true) or manual-dispatch-only
+    # triggers. The pattern set covers the GitHub-native scanners
+    # users actually run — `codeql`, `dependency-review`, `trufflehog`,
+    # `gitleaks`, `osv-scanner`, plus generic fallbacks like
+    # `*scan*`, `*audit*`, `*security*` so SAST jobs named with
+    # project-specific prefixes still match.
+    securityJobsMustNotBeWeakened:
+      enabled: true
+      # How patterns are matched
+      # ────────────────────────
+      # Each pattern is a glob (`*` matches any substring) compared
+      # against the job name plumber builds for every job in your
+      # workflows. That name is:
+      #
+      #     <workflow filename, .yml/.yaml stripped>/<job id in YAML>
+      #
+      # Examples:
+      #   .github/workflows/codeql-analysis.yml + jobs.analyze
+      #       -> codeql-analysis/analyze
+      #   .github/workflows/ci.yml             + jobs.lint
+      #       -> ci/lint
+      #   .github/workflows/workflow.yml       + jobs.my-sast
+      #       -> workflow/my-sast
+      #
+      # The namespace exists so two workflow files defining a job
+      # with the same id do not collide. Patterns can target whichever
+      # part of that name is stable for your repo:
+      #   "*<token>*"           token anywhere in the name (resilient)
+      #   "<workflow>/*"        every job in one workflow file
+      #   "*/<jobid>"           specific job id, any workflow
+      #   "<workflow>/<jobid>"  exact match, no wildcard
+      #
+      # The defaults below ship wildcard-wrapped because plumber does
+      # not know your repo's workflow-file convention. If your jobs
+      # follow a known layout you can drop the wildcards for tighter
+      # matching.
+      securityJobPatterns:
+        - "*codeql*"
+        - "*dependency-review*"
+        - "*trufflehog*"
+        - "*gitleaks*"
+        - "*osv-scanner*"
+        - "*-sast"
+        - "*-sast-*"
+        - "*-scan"
+        - "*scan*"
+        - "*-security"
+        - "*-security-*"
+        - "*-audit"
+        - "*-audit-*"
+        # Real-world slash-form examples (commented; uncomment / adapt
+        # to your repo for a tighter match than the wildcards above).
+        # Format reminder: <workflow-filename-without-extension>/<job-id>.
+        #
+        # - codeql-analysis/analyze              # GitHub's default CodeQL template
+        # - dependency-review/dependency-review  # GitHub's default Dependency Review template
+        # - security/gitleaks                    # gitleaks job in security.yml
+        # - security/trufflehog                  # trufflehog job in security.yml
+        # - security/*                           # every job in security.yml
+        # - "*/sast"                             # any job named "sast", any workflow
+        # - ci/semgrep-sast                      # exact match, no wildcard
+      allowFailureMustBeFalse:
+        enabled: true
+      rulesMustNotBeRedefined:
+        enabled: true
+      whenMustNotBeManual:
+        enabled: true
+
+    # ===========================================
+    # Workflow must not inject user input in scripts
+    # ===========================================
+    # Catches the canonical script-injection class: `${{ github.event.* }}`
+    # / `${{ github.head_ref }}` / `${{ github.actor }}` interpolated
+    # directly into a `run:` shell. Attacker-controlled values like PR
+    # title or branch name can break out of the intended string and
+    # execute arbitrary commands with the job's secrets. Bind through
+    # `env:` first, then reference the env var from the shell.
+    workflowMustNotInjectUserInputInScripts:
+      enabled: true
+
+    # ===========================================
+    # Workflow must not write untrusted content to $GITHUB_ENV / $GITHUB_PATH
+    # ===========================================
+    # Flags a `run:` step that writes an attacker-controlled expression
+    # (${{ github.event.* }} / ${{ github.head_ref }}) into $GITHUB_ENV or
+    # $GITHUB_PATH. Both files are sticky: every later step inherits the
+    # variable or PATH entry, so an injected NODE_OPTIONS (or a front-loaded
+    # PATH directory) hijacks later steps. Critical under pull_request_target /
+    # workflow_run. Bind the value through `env:` and reference the shell
+    # variable on the redirect line.
+    workflowMustNotWriteUntrustedContentToGitHubEnv:
+      enabled: true
+
+    # ===========================================
+    # Workflow must not use dangerous triggers
+    # ===========================================
+    # Flags `pull_request_target` and `workflow_run` triggers, which
+    # run with the base repository's secrets while being influenceable
+    # by an unprivileged caller. Combined with any user-content
+    # checkout this becomes a direct exfiltration path (CVE-2025-30066).
+    # Use the standard `pull_request` trigger unless secrets are
+    # required.
+    workflowMustNotUseDangerousTriggers:
+      enabled: true
+
+    # ===========================================
+    # pull_request_target must not check out PR head
+    # ===========================================
+    # Flags a workflow triggered by `pull_request_target` that checks
+    # out the pull-request head (github.event.pull_request.head.sha or
+    # github.head_ref). Base-repo secrets and fork-controlled code then
+    # run together, which is the tj-actions / CVE-2025-30066 vector.
+    # Keep fork code under a plain `pull_request` trigger instead.
+    pullRequestTargetMustNotCheckoutHead:
+      enabled: true
+
+    # ===========================================
+    # Workflows must declare permissions
+    # ===========================================
+    # Workflows without an explicit `permissions:` block fall back to
+    # the repo-wide GITHUB_TOKEN default — often `contents: write` or
+    # `read-all`. Declaring `permissions: { contents: read }` at the
+    # workflow level enforces least-privilege regardless of the repo
+    # default.
+    # Off for now: adding permissions blocks touches every workflow and
+    # deserves its own careful pass, a wrong value silently breaks
+    # releases and the CLA bot. Enable after that cleanup.
+    workflowsMustDeclarePermissions:
+      enabled: false
+
+    # ===========================================
+    # Branch must be protected (project governance)
+    # ===========================================
+    # The first project-governance control on the GitHub path. Every
+    # other shipping rule is pipeline-governance (workflow content);
+    # this one inspects repository settings via the GitHub branch-
+    # protection API. Requires a token with `repo` scope (classic
+    # PAT) or "Administration: read" (fine-grained PAT) — content-
+    # only read access is NOT enough. Without scope the collector
+    # returns an empty branch list and the rule emits no findings,
+    # same degraded contract as missing API auth elsewhere.
+    # Off in CI: reading branch protection settings needs an admin-read
+    # token, the default GITHUB_TOKEN cannot see them.
+    branchMustBeProtected:
+      enabled: false
+      defaultMustBeProtected: true
+      namePatterns:
+        - main
+        - master
+        - release/*
+        - production
+        - dev
+      allowForcePush: false
+      codeOwnerApprovalRequired: true
+
+    # ============================================================================
+    # Workflows must include required actions
+    # ============================================================================
+    # Asserts that every workflow file under .github/workflows/
+    # collectively references a set of required actions or reusable
+    # workflows. The GitHub counterpart of
+    # pipelineMustIncludeComponent / pipelineMustIncludeTemplate on
+    # the GitLab side.
+    #
+    # GitHub has two ways to "include" something external; the
+    # control treats both the same so you do not have to declare
+    # which is which:
+    #
+    #   Step-level action:
+    #     steps:
+    #       - uses: myorg/sast-scan@v2
+    #
+    #   Job-level reusable workflow call:
+    #     jobs:
+    #       security:
+    #         uses: myorg/policy/.github/workflows/scan.yml@v2
+    #
+    # Each required entry is an `owner/repo[/path]` string. Matching
+    # is ref-agnostic so bumping a pinned SHA does not invalidate
+    # the policy. A slash-guard prevents accidental prefix
+    # collisions: `myorg/sast-scan` matches
+    # `myorg/sast-scan@<anything>` and
+    # `myorg/sast-scan/sub@<anything>`, but NOT
+    # `myorg/sast-scan-fork@<anything>`.
+    #
+    # Two ways to define requirements (use one, not both):
+    #
+    # Option 1, Expression syntax ('required'):
+    #   A natural boolean expression using AND, OR, and parentheses.
+    #   AND binds tighter than OR, so "a AND b OR c" means
+    #   "(a AND b) OR c".
+    #
+    #   required: myorg/sast-scan AND myorg/dependency-review
+    #   required: (myorg/sast-scan AND myorg/secret-scan) OR myorg/full-security-suite
+    #
+    # Option 2, Array syntax ('requiredGroups'):
+    #   A list of groups using "OR of ANDs" logic:
+    #     - Each inner array = items that must ALL be present (AND)
+    #     - Outer array = only ONE group needs to be satisfied (OR)
+    #
+    #   requiredGroups:
+    #     - ["myorg/sast-scan", "myorg/dependency-review"]
+    #     - ["myorg/full-security-suite"]
+    #
+    # Disabled by default; opt in once your organization has settled
+    # on the action set every repo is expected to wire up.
+    workflowMustIncludeRequiredActions:
+      enabled: false
+      # required: myorg/sast-scan AND myorg/policy/.github/workflows/scan.yml
+      requiredGroups: []
+
+    # ===========================================
+    # Workflow must not grant write-all permissions
+    # ===========================================
+    # Flags workflows and jobs whose effective `permissions:` block is the
+    # literal `write-all` shortcut. write-all gives GITHUB_TOKEN every
+    # scope (contents, packages, deployments, id-token, …) at the same
+    # time, so any compromise in the workflow — a malicious dependency,
+    # a script-injection bug, a third-party action turning evil — gets
+    # to do anything the repo allows: push to main, publish releases,
+    # mint OIDC tokens for cloud accounts, mark deployments succeeded.
+    #
+    # Workflow-level `permissions: write-all` is propagated to every
+    # job by the GitHub Actions runner; the rule reads the per-job
+    # effective permissions, so a workflow-level grant is caught the
+    # same way as a job-level one.
+    #
+    # Scope: static `permissions:` in committed workflow YAML only.
+    # Flags the literal string shortcut `write-all` on a job's effective
+    # permissions (workflow-level `write-all` is propagated to every job).
+    #
+    # Does not flag: `permissions: { contents: write, … }` maps, `read-all`,
+    # or missing `permissions:` (see `workflowsMustDeclarePermissions` /
+    # ISSUE-801). Does not evaluate `${{ }}` expressions or permissions
+    # inside callee reusable-workflow files Plumber did not fetch.
+    #
+    # Pair with `workflowsMustDeclarePermissions` for the full story.
+    workflowMustNotGrantPermissionsWriteAll:
+      enabled: true
+
+    # ===========================================
+    # Actions must not use ambiguous tag/branch refs
+    # ===========================================
+    # Flags `uses: owner/repo@ref` references whose symbolic name resolves
+    # upstream as BOTH a tag and a branch (e.g. a tag `v1` kept alongside a
+    # long-lived `v1` branch). GitHub Actions resolves tags first, so the
+    # workflow runs the tagged commit today — but a tag deletion, rename, or
+    # a workflow typo silently switches which revision executes, and the
+    # reviewer cannot tell from the YAML alone. Pin to a 40-char commit SHA
+    # to remove the ambiguity.
+    #
+    # Scope: committed `.github/workflows/*.{yml,yaml}` only; step-level
+    # `uses: owner/repo@ref`. Requires GitHub API auth: the collector probes
+    # both the tag and branch namespaces, and without auth the rule abstains.
+    #
+    # Fail-safe: the finding fires only on a positive tag+branch double-hit;
+    # any probe failure leaves the ref unflagged (no false positive).
+    externalRefsMustNotCollide:
+      enabled: true
+
+    # ===========================================
+    # Actions must not reference archived repositories
+    # ===========================================
+    # Flags `uses: owner/repo@ref` references whose upstream repository
+    # is archived on GitHub. Archived repos no longer receive
+    # maintenance: open vulnerabilities stay open, dependency bumps
+    # stop, runtime compatibility regressions accumulate. Pinning by
+    # SHA does not save the caller — the last maintainer (or someone
+    # who later acquires the namespace) can still push new code under
+    # the original repository name.
+    #
+    # Scope: committed `.github/workflows/*.{yml,yaml}` only; step-level
+    # `uses: owner/repo@ref` (not reusable-workflow `jobs.*.uses`, not
+    # local `./.github/actions/*`). Requires GitHub API auth; without it
+    # the rule abstains (no finding).
+    #
+    # How it works: `GET /repos/{owner}/{repo}` → `archived` flag, one
+    # cached lookup per `owner/repo` (all refs share the same result).
+    #
+    # Does not see: callee reusable-workflow files, deleted/private repos
+    # (lookup may fail silently → abstain).
+    # Off for now: cla.yml depends on contributor-assistant/github-action,
+    # archived upstream in March 2026. It is pinned to a commit in the
+    # meantime. Enable once the CLA flow moves to a maintained action.
+    actionsMustNotBeArchived:
+      enabled: false
+
+    # ===========================================
+    # Actions must pin commits that exist upstream
+    # ===========================================
+    # Flags `uses: owner/repo@<sha>` references pinned to a 40-character
+    # commit SHA that the upstream repository confirms does not exist:
+    # either a typo (the runner silently falls back to the default
+    # branch) or a commit that was removed or never pushed upstream.
+    #
+    # Scope note: this does NOT detect a fork-network "impostor commit"
+    # (one pushed to a fork of the upstream repo). GitHub serves those
+    # with HTTP 200 from the parent, so they read as present; the control
+    # flags only SHAs the API reports as absent.
+    #
+    # Fires ONLY when the GitHub API confirms the commit is absent from a
+    # repository Plumber can read. A SHA it could not verify
+    # (private/missing repo, rate limit, network error) stays silent, so
+    # a valid pin is never flagged. Non-SHA refs (tags, branches) are out
+    # of scope here; mutable-ref concerns are
+    # actionsMustBePinnedByCommitSha's job.
+    #
+    # Scope: committed `.github/workflows/*.{yml,yaml}` only; step-level
+    # `uses: owner/repo@<sha>`. Job-level reusable-workflow refs are not
+    # yet covered: the collector does not enrich them with API metadata
+    # for ANY metadata control (also affects archived / known-CVE /
+    # ref-confusion); extending all four together is tracked upstream.
+    # Requires GitHub API auth (`gh` / GH_TOKEN); without it the rule
+    # abstains (no finding).
+    actionRefsMustExistUpstream:
+      enabled: true
+
+    # ===========================================
+    # Actions must not carry known CVEs
+    # ===========================================
+    # Cross-references every `uses: owner/repo@ref` against the GitHub
+    # Advisory Database under the `actions` ecosystem. A positive hit
+    # means at least one published advisory targets the action's
+    # repository. This is the rule that catches the published-CVE
+    # supply-chain class — tj-actions/changed-files (CVE-2025-30066),
+    # reviewdog/action-setup (March 2025), unpatched versions of
+    # `actions/artifact`.
+    #
+    # Scope: committed `.github/workflows/*.{yml,yaml}` only; step-level
+    # `uses: owner/repo@ref` (not reusable-workflow `jobs.*.uses`, not
+    # `./.github/actions/*`, not `docker://`). Requires GitHub API auth
+    # (`gh` / GH_TOKEN); without it the rule abstains (no finding).
+    #
+    # How it works: one Advisory Database query per `owner/repo`
+    # (`ecosystem=actions`), cached. When the pinned ref resolves to a
+    # semver tag, Plumber filters advisories by `vulnerable_version_range`.
+    # A ref that cannot be resolved to a release version — a commit SHA
+    # with no matching release tag, or a mutable non-numeric tag such as
+    # `rc` / `main` / `latest` — abstains and surfaces a "could not verify"
+    # warning rather than matching every advisory for that repo. Upgrade
+    # past the fixed-in version and re-pin the SHA to clear the finding.
+    #
+    # Does not see: org/repo Variables, runtime `$GITHUB_ENV` writes, or
+    # actions nested inside composite actions you do not call directly.
+    actionsMustNotCarryKnownCVEs:
+      enabled: true
+
+    # ===========================================
+    # Release workflows must not restore an untrusted cache
+    # ===========================================
+    # Flags a release/publish job that restores a build cache whose key
+    # is not scoped to the release ref. GitHub Actions caches are shared
+    # across branches with a permissive fallback, so a PR run on any
+    # feature branch can populate the same key a release job later
+    # restores, injecting compromised artefacts into the published
+    # output (the May 2026 TanStack vector). Weave github.ref_name /
+    # github.sha into the cache key, or disable caching on publish paths.
+    #
+    # The action / script inventories below are configurable: the built-in
+    # cache semantics (which setup-* actions cache by default vs on opt-in)
+    # stay in code, but WHICH actions publish, WHICH extra actions restore a
+    # cache, and WHICH shell commands mean "publish" are org-specific. Extend
+    # them for your own tooling instead of waiting for a plumber release.
+    releaseWorkflowsMustNotRestoreUntrustedCache:
+      enabled: true
+      # Actions that publish/release artifacts (a job running one restores
+      # into a published build). Add your org's own publish actions.
+      publishActions:
+        - pypa/gh-action-pypi-publish
+        - JS-DevTools/npm-publish
+        - gradle/publish-plugin
+        - softprops/action-gh-release
+        - ncipollo/release-action
+        - goreleaser/goreleaser-action
+        - crazy-max/ghaction-docker-buildx
+        - changesets/action
+      # Full inventory of cache-restoring actions AND their per-action
+      # semantics (the rego hardcodes none of this). mode:
+      #   always  — restores whenever present (actions/cache, rust-cache)
+      #   default — restores unless disableInput holds disableValue
+      #   opt-in  — restores only when enableInput names a package manager
+      #             (enableContains further requires that substring in the
+      #             value, e.g. build-push-action only caches via GHA when
+      #             cache-from mentions type=gha)
+      # Add your org's own cache actions with the matching mode.
+      cacheActions:
+        - {action: actions/cache, mode: always}
+        - {action: actions/cache/restore, mode: always}
+        - {action: Swatinem/rust-cache, mode: always}
+        - {action: actions/setup-go, mode: default, disableInput: cache, disableValue: false}
+        - {action: gradle/actions/setup-gradle, mode: default, disableInput: cache-disabled, disableValue: true}
+        - {action: actions/setup-node, mode: opt-in, enableInput: cache}
+        - {action: actions/setup-python, mode: opt-in, enableInput: cache}
+        - {action: actions/setup-java, mode: opt-in, enableInput: cache}
+        - {action: pnpm/action-setup, mode: opt-in, enableInput: cache}
+        - {action: docker/build-push-action, mode: opt-in, enableInput: cache-from, enableContains: type=gha}
+      # Shell commands (regex) that mark a job as release intent even under a
+      # plain push/tag trigger with no publish action.
+      publishScriptPatterns:
+        - '(?i)(npm|pnpm|yarn|bun)\s+publish'
+        - '(?i)cargo\s+publish'
+        - '(?i)twine\s+upload'
+        - '(?i)poetry\s+publish'
+        - '(?i)gh\s+release\s+create'
+        - '(?i)goreleaser\s+release'
+        - '(?i)semantic-release'
+        - '(?i)gradlew?\b[^\n]*\bpublish'
+        - '(?i)\bmvnw?\b[^\n]*\bdeploy\b'
+        - '(?i)dotnet\s+nuget\s+push'
+        - '(?i)gem\s+push'
+        - '(?i)docker\s+push'
+      # Verification-only forms that veto a publish-script match on the same
+      # run block — they never publish anything.
+      publishScriptExcludePatterns:
+        - '(?i)--dry-run'
+        - '(?i)publishToMavenLocal'
+      # Jobs to exempt from this control (glob on `<workflow-file>/<job-id>`).
+      # The escape hatch for release jobs you have reviewed and accepted —
+      # e.g. a lint job that caches but ships nothing.
+      allowedJobs: []
+        # - '*/lint'
+        # - 'release-docs/*'
+
+    # ===========================================
+    # Pipeline must not enable debug trace
+    # ===========================================
+    # GitHub-side parallel of the GitLab `pipelineMustNotEnableDebugTrace`
+    # control. Flags workflows or jobs that set the GitHub Actions
+    # debug-trace toggles to a truthy value (`true`, `1`, `yes`).
+    #
+    # When `ACTIONS_STEP_DEBUG=true` or `ACTIONS_RUNNER_DEBUG=true`,
+    # the runner prints every environment variable (including masked
+    # secrets) and every internal action SDK call into the job log.
+    # The masking layer is bypassed for the dump itself, so any
+    # secret consumed by the workflow lands in plaintext in the run
+    # log and is then visible to anyone with `actions: read` on the
+    # repository, plus indefinitely on log artefacts.
+    #
+    # Scope: static `env:` in committed `.github/workflows/*.{yml,yaml}`.
+    # The collector merges workflow-, job-, and step-level `env:` into
+    # each job (step > job > workflow precedence on name collisions).
+    #
+    # Truthy values: `true`, `1`, `yes` (case-insensitive, trimmed).
+    # Variable names: case-insensitive match against `forbiddenVariables`.
+    #
+    # Also flags: `${{ }}` values on forbidden names in static `env:`
+    # (cannot verify off statically), and `run:` lines that write a
+    # forbidden name to `$GITHUB_ENV`. All ISSUE-203 findings are critical.
+    #
+    # Does not see: org/repo/environment Variables with no YAML reference,
+    # env inside callee reusable workflows Plumber did not fetch, or GitHub
+    # UI "Re-run with debug logging" (not in YAML).
+    pipelineMustNotEnableDebugTrace:
+      enabled: true
+      forbiddenVariables:
+        - ACTIONS_STEP_DEBUG
+        - ACTIONS_RUNNER_DEBUG
+
