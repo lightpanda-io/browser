@@ -503,25 +503,11 @@ pub fn runIdleTasks(self: *const Env) void {
 
 // V8 doesn't immediately free memory associated with
 // a Context, it's managed by the garbage collector. We use the
-// `lowMemoryNotification` call on the isolate to encourage v8 to free
-// any contexts which have been freed.
-// This GC is very aggressive. Use memoryPressureNotification for less
-// aggressive GC passes.
-pub fn lowMemoryNotification(self: *Env) void {
-    var handle_scope: js.HandleScope = undefined;
-    handle_scope.init(self.isolate);
-    defer handle_scope.deinit();
-    self.isolate.lowMemoryNotification();
-}
-
-// V8 doesn't immediately free memory associated with
-// a Context, it's managed by the garbage collector. We use the
 // `memoryPressureNotification` call on the isolate to encourage v8 to free
 // any contexts which have been freed.
 // The level indicates the aggressivity of the GC required:
 // moderate speeds up incremental GC
 // critical runs one full GC
-// For a more aggressive GC, use lowMemoryNotification.
 pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel) void {
     var handle_scope: js.HandleScope = undefined;
     handle_scope.init(self.isolate);
