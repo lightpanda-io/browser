@@ -25,6 +25,7 @@ const base = @import("../testing.zig");
 const json = std.json;
 const posix = std.posix;
 
+pub const io = base.io;
 pub const allocator = base.allocator;
 pub const expectJson = base.expectJson;
 pub const expect = std.testing.expect;
@@ -47,8 +48,8 @@ const TestContext = struct {
 
     pub fn deinit(self: *TestContext) void {
         if (self.cdp_initialized) self.cdp_.deinit();
-        posix.close(self.socket);
-        posix.close(self.cdp_socket);
+        _ = std.c.close(self.socket);
+        _ = std.c.close(self.cdp_socket);
         base.reset();
     }
 
@@ -208,7 +209,7 @@ const TestContext = struct {
                     _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
                 }
             }
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            io.sleep(.fromMilliseconds(5), .awake) catch {};
             try self.read();
         }
         self.dumpReceived();
@@ -227,7 +228,7 @@ const TestContext = struct {
             if (index < self.received.items.len) {
                 return self.received.items[index];
             }
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            io.sleep(.fromMilliseconds(5), .awake) catch {};
             try self.read();
         }
         return null;
@@ -298,8 +299,8 @@ pub fn context() !TestContext {
     }
 
     errdefer {
-        posix.close(pair[0]);
-        posix.close(pair[1]);
+        _ = std.c.close(pair[0]);
+        _ = std.c.close(pair[1]);
     }
 
     const timeout = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 5_000 });

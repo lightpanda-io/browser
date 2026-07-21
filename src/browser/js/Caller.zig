@@ -643,24 +643,13 @@ fn serializeFunctionArgs(local: *const Local, info: FunctionCallbackInfo) ![]con
 // @call a function
 fn ParameterTypes(comptime F: type) type {
     const params = @typeInfo(F).@"fn".params;
-    var fields: [params.len]std.builtin.Type.StructField = undefined;
+    var types: [params.len]type = undefined;
 
     inline for (params, 0..) |param, i| {
-        fields[i] = .{
-            .name = tupleFieldName(i),
-            .type = param.type.?,
-            .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf(param.type.?),
-        };
+        types[i] = param.type.?;
     }
 
-    return @Type(.{ .@"struct" = .{
-        .layout = .auto,
-        .decls = &.{},
-        .fields = &fields,
-        .is_tuple = true,
-    } });
+    return @Tuple(&types);
 }
 
 fn tupleFieldName(comptime i: usize) [:0]const u8 {

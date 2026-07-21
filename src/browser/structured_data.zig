@@ -663,7 +663,7 @@ test "structured_data: charset and http-equiv" {
 }
 
 test "structured_data: parseLinkHeader - single link with quoted rel" {
-    var it: LinkHeaderIterator = .{ .value = 
+    var it: LinkHeaderIterator = .{ .value =
         \\<https://api.example.com/openapi.json>; rel="service-desc"
     };
     const entry = it.next().?;
@@ -673,7 +673,7 @@ test "structured_data: parseLinkHeader - single link with quoted rel" {
 }
 
 test "structured_data: parseLinkHeader - multiple links and unquoted rel" {
-    var it: LinkHeaderIterator = .{ .value = 
+    var it: LinkHeaderIterator = .{ .value =
         \\<https://docs.example.com/>; rel=service-doc, </style.css>; rel="stylesheet"; type="text/css"
     };
     const first = it.next().?;
@@ -691,7 +691,7 @@ test "structured_data: parseLinkHeader - multiple links and unquoted rel" {
 test "structured_data: parseLinkHeader - escaped quote in param does not split link" {
     // A backslash-escaped quote inside an earlier param must not terminate the
     // quoted-string, so the comma inside it is not treated as a separator.
-    var it: LinkHeaderIterator = .{ .value = 
+    var it: LinkHeaderIterator = .{ .value =
         \\<https://a/>; title="x\",y"; rel="service-doc"
     };
     const entry = it.next().?;
@@ -705,10 +705,10 @@ test "structured_data: link headers from response" {
     defer testing.test_session.closeAllPages();
 
     // Stand in for what frameHeaderDoneCallback records from the navigation.
-    try frame._http_headers.append(frame.arena, .{ .name = "Link", .value = 
+    try frame._http_headers.append(frame.arena, .{ .name = "Link", .value =
         \\<https://docs.example.com/>; rel="service-doc"
     });
-    try frame._http_headers.append(frame.arena, .{ .name = "link", .value = 
+    try frame._http_headers.append(frame.arena, .{ .name = "link", .value =
         \\<https://api.example.com/spec>; rel="service-desc", </css/site.css>; rel="stylesheet"
     });
 

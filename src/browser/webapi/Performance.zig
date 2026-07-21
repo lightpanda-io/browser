@@ -35,21 +35,20 @@ pub fn registerTypes() []const type {
 const Performance = @This();
 
 _time_origin: u64,
-_entries: std.ArrayList(*Entry) = .{},
+_entries: std.ArrayList(*Entry) = .empty,
 _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
 
 // PerformanceObserver infrastructure. Lives here (rather than on the owning
 // Frame/WorkerGlobalScope) so that both contexts get observers for free.
-_observers: std.ArrayList(*PerformanceObserver) = .{},
+_observers: std.ArrayList(*PerformanceObserver) = .empty,
 _delivery_scheduled: bool = false,
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
 pub fn highResTimestamp() u64 {
-    const ts = datetime.timespec();
-    const micros = @as(u64, @intCast(ts.sec)) * 1_000_000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000)));
+    const micros = datetime.microTimestamp(.monotonic);
     // Round to nearest 5 microseconds (like Firefox default)
     const rounded = @divTrunc(micros + 2, 5) * 5;
     return rounded;

@@ -42,8 +42,8 @@ const MutationObserver = @This();
 _rc: lp.RC = .{},
 _arena: Allocator,
 _callback: js.Function.Global,
-_observing: std.ArrayList(Observing) = .{},
-_pending_records: std.ArrayList(*MutationRecord) = .{},
+_observing: std.ArrayList(Observing) = .empty,
+_pending_records: std.ArrayList(*MutationRecord) = .empty,
 
 /// Intrusively linked to next element (see Frame.zig).
 node: std.DoublyLinkedList.Node = .{},

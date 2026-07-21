@@ -208,7 +208,7 @@ fn expectTokens(expected: []const u8, src: []const u8) !void {
     defer sink.buf.deinit(testing.allocator);
     _ = tokenize(src, .normal, &sink);
     try testing.expect(!sink.overlapped);
-    try testing.expectEqualStrings(expected, std.mem.trimRight(u8, sink.buf.items, " "));
+    try testing.expectEqualStrings(expected, std.mem.trimEnd(u8, sink.buf.items, " "));
 }
 
 test "js_highlight: keywords, globals, numbers" {
@@ -254,7 +254,7 @@ test "js_highlight: block comment spans lines" {
     var sink2: TestSink = .{ .text = "still */ const" };
     defer sink2.buf.deinit(testing.allocator);
     try testing.expectEqual(State.normal, tokenize("still */ const", .block_comment, &sink2));
-    try testing.expectEqualStrings("comment:still */ keyword:const", std.mem.trimRight(u8, sink2.buf.items, " "));
+    try testing.expectEqualStrings("comment:still */ keyword:const", std.mem.trimEnd(u8, sink2.buf.items, " "));
 }
 
 test "js_highlight: template literal spans lines" {
@@ -265,5 +265,5 @@ test "js_highlight: template literal spans lines" {
     var sink2: TestSink = .{ .text = "</div>` + x" };
     defer sink2.buf.deinit(testing.allocator);
     try testing.expectEqual(State.normal, tokenize("</div>` + x", .template, &sink2));
-    try testing.expectEqualStrings("string:</div>`", std.mem.trimRight(u8, sink2.buf.items, " "));
+    try testing.expectEqualStrings("string:</div>`", std.mem.trimEnd(u8, sink2.buf.items, " "));
 }

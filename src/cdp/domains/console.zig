@@ -62,7 +62,7 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     const session_id = bc.session_id orelse return;
 
     // format values
-    var aw: std.io.Writer.Allocating = .init(arena);
+    var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
     for (event.values, 0..) |v, i| {
         if (i != 0) try w.writeByte(' ');

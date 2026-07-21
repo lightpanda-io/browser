@@ -1499,7 +1499,7 @@ test "AXnode: stripWhitespaces" {
         .{ .value = "\"foo\"", .expected = "\\\"foo\\\"" },
     };
 
-    var buffer = std.io.Writer.Allocating.init(allocator);
+    var buffer = std.Io.Writer.Allocating.init(allocator);
     defer buffer.deinit();
 
     for (test_cases) |test_case| {

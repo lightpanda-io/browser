@@ -21,8 +21,6 @@ const builtin = @import("builtin");
 
 const IS_TEST = builtin.is_test;
 
-const Thread = std.Thread;
-
 const is_debug = builtin.mode == .Debug;
 
 pub const Scope = enum {
@@ -86,9 +84,6 @@ pub var opts = Opts{};
 /// this so log output can be routed through `Spinner.emitAbove` instead
 /// of trampling the spinner line on stderr.
 pub var sink: ?*const fn (bytes: []const u8) void = null;
-
-// synchronizes access to last_log
-var last_log_lock: Thread.Mutex = .{};
 
 pub fn enabled(scope: Scope, level: Level) bool {
     if (@intFromEnum(level) < @intFromEnum(opts.level)) {
@@ -167,18 +162,11 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
         return;
     }
 
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-
     var buf: [4096]u8 = undefined;
-    var stderr = std.fs.File.stderr();
-    // writerStreaming, not writer: the default positional mode starts each
-    // fresh Writer at offset 0, so when stderr is redirected to a regular file
-    // every log line overwrites the previous one. Streaming writes at the fd
-    // offset, which is what append-style logging needs.
-    var writer = stderr.writerStreaming(&buf);
+    const stderr = std.debug.lockStderr(&buf);
+    defer std.debug.unlockStderr();
 
-    logTo(scope, level, msg, data, &writer.interface) catch |log_err| {
+    logTo(scope, level, msg, data, &stderr.file_writer.interface) catch |log_err| {
         std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
     };
 }
@@ -322,7 +310,25 @@ const Value = union(enum) {
         writeFn: *const fn (ptr: *const anyopaque, writer: *std.Io.Writer) anyerror!void,
     };
 
-    fn init(vp: anytype) Value {
+    // The inline shim keeps a comptime-known `vp` comptime-known
+    inline fn init(vp: anytype) Value {
+        switch (@typeInfo(@typeInfo(@TypeOf(vp)).pointer.child)) {
+            .comptime_int => {
+                const value = vp.*;
+                if (value >= 0 and value <= std.math.maxInt(u64)) {
+                    return .{ .uint = value };
+                }
+                if (value < 0 and value >= std.math.minInt(i64)) {
+                    return .{ .int = value };
+                }
+                return .{ .string = std.fmt.comptimePrint("{d}", .{value}) };
+            },
+            .comptime_float => return .{ .float64 = vp.* },
+            else => return initRuntime(vp),
+        }
+    }
+
+    fn initRuntime(vp: anytype) Value {
         const T = @TypeOf(vp.*);
 
         if (comptime std.meta.hasMethod(T, "logFmt")) {
@@ -346,19 +352,9 @@ const Value = union(enum) {
         switch (@typeInfo(T)) {
             .optional => {
                 if (vp.*) |_| {
-                    return init(&vp.*.?);
+                    return initRuntime(&vp.*.?);
                 }
                 return .null;
-            },
-            .comptime_int => {
-                const value = vp.*;
-                if (value >= 0 and value <= std.math.maxInt(u64)) {
-                    return .{ .uint = value };
-                }
-                if (value < 0 and value >= std.math.minInt(i64)) {
-                    return .{ .int = value };
-                }
-                return .{ .string = std.fmt.comptimePrint("{d}", .{value}) };
             },
             .int => |int_info| {
                 if (comptime int_info.bits <= 64) {
@@ -366,7 +362,6 @@ const Value = union(enum) {
                 }
                 return formatterValue(vp, "d");
             },
-            .comptime_float => return .{ .float64 = vp.* },
             .float => |float_info| switch (comptime float_info.bits) {
                 32 => return .{ .float32 = vp.* },
                 64 => return .{ .float64 = vp.* },
@@ -497,18 +492,16 @@ pub const LogFormatWriter = struct {
     }
 };
 
-var first_log: u64 = 0;
+var first_log: std.atomic.Value(u64) = .init(0);
 fn elapsed() struct { time: f64, unit: []const u8 } {
     const now = timestamp(.monotonic);
 
-    last_log_lock.lock();
-    defer last_log_lock.unlock();
-
-    if (first_log == 0) {
-        first_log = now;
+    var first = first_log.load(.monotonic);
+    if (first == 0) {
+        first = first_log.cmpxchgStrong(0, now, .monotonic, .monotonic) orelse now;
     }
 
-    const e = now - first_log;
+    const e = now - first;
     if (e < 10_000) {
         return .{ .time = @floatFromInt(e), .unit = "ms" };
     }

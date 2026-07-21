@@ -15,7 +15,7 @@ pub fn isDisabled() bool {
         return true;
     }
 
-    return std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
+    return std.c.getenv("LIGHTPANDA_DISABLE_TELEMETRY") != null;
 }
 
 pub const Telemetry = TelemetryT(@import("lightpanda.zig"));
@@ -75,13 +75,13 @@ fn getOrCreateId(app_dir_path_: ?[]const u8) ?[36]u8 {
     };
 
     var buf: [37]u8 = undefined;
-    var dir = std.fs.openDirAbsolute(app_dir_path, .{}) catch |err| {
+    var dir = std.Io.Dir.openDirAbsolute(lp.io, app_dir_path, .{}) catch |err| {
         log.warn(.telemetry, "data directory open error", .{ .path = app_dir_path, .err = err });
         return null;
     };
-    defer dir.close();
+    defer dir.close(lp.io);
 
-    const data = dir.readFile(IID_FILE, &buf) catch |err| switch (err) {
+    const data = dir.readFile(lp.io, IID_FILE, &buf) catch |err| switch (err) {
         error.FileNotFound => &.{},
         else => {
             log.warn(.telemetry, "ID read error", .{ .path = app_dir_path, .err = err });
@@ -96,7 +96,7 @@ fn getOrCreateId(app_dir_path_: ?[]const u8) ?[36]u8 {
     }
 
     uuidv4(&id);
-    dir.writeFile(.{ .sub_path = IID_FILE, .data = &id }) catch |err| {
+    dir.writeFile(lp.io, .{ .sub_path = IID_FILE, .data = &id }) catch |err| {
         log.warn(.telemetry, "ID write error", .{ .path = app_dir_path, .err = err });
         return null;
     };
@@ -182,15 +182,15 @@ test "telemetry: always disabled in debug builds" {
 }
 
 test "telemetry: getOrCreateId" {
-    defer std.fs.cwd().deleteFile("/tmp/" ++ IID_FILE) catch {};
+    defer std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
 
-    std.fs.cwd().deleteFile("/tmp/" ++ IID_FILE) catch {};
+    std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
 
     const id1 = getOrCreateId("/tmp/").?;
     const id2 = getOrCreateId("/tmp/").?;
     try testing.expectEqual(&id1, &id2);
 
-    std.fs.cwd().deleteFile("/tmp/" ++ IID_FILE) catch {};
+    std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
     const id3 = getOrCreateId("/tmp/").?;
     try testing.expectEqual(false, std.mem.eql(u8, &id1, &id3));
 
@@ -221,7 +221,7 @@ const MockProvider = struct {
 
     fn init(self: *MockProvider, app: *App, _: ?[36]u8, _: Config.RunMode, _: bool) !void {
         self.* = .{
-            .events = .{},
+            .events = .empty,
             .allocator = app.allocator,
         };
     }

@@ -17,6 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
+const sys_net = @import("sys/net.zig");
 const posix = std.posix;
 
 const TestWSServer = @This();
@@ -35,27 +38,28 @@ pub fn stop(self: *TestWSServer) void {
     self.shutdown.store(true, .release);
     if (self.listener) |socket| {
         switch (@import("builtin").target.os.tag) {
-            .linux => std.posix.shutdown(socket, .recv) catch {},
-            else => std.posix.close(socket),
+            .linux => sys_net.shutdown(socket, .recv) catch {},
+            else => _ = std.c.close(socket),
         }
     }
 }
 
-pub fn run(self: *TestWSServer, wg: *std.Thread.WaitGroup) void {
+pub fn run(self: *TestWSServer, wg: *lp.WaitGroup) void {
     self.runImpl(wg) catch |err| {
         std.debug.print("WebSocket echo server error: {}\n", .{err});
     };
 }
 
-fn runImpl(self: *TestWSServer, wg: *std.Thread.WaitGroup) !void {
-    const socket = try posix.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
-    errdefer posix.close(socket);
+fn runImpl(self: *TestWSServer, wg: *lp.WaitGroup) !void {
+    const socket = try sys_net.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
+    errdefer _ = std.c.close(socket);
 
-    const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9584);
+    const addr: sys_net.IpAddress = .{ .ip4 = .loopback(9584) };
 
     try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-    try posix.bind(socket, &addr.any, addr.getOsSockLen());
-    try posix.listen(socket, 8);
+    const sa = sys_net.sockaddrFromAddress(&addr);
+    try sys_net.bind(socket, sa.ptr(), sa.len);
+    try sys_net.listen(socket, 8);
 
     self.listener = socket;
     self.shutdown.store(false, .release);
@@ -65,7 +69,7 @@ fn runImpl(self: *TestWSServer, wg: *std.Thread.WaitGroup) !void {
         var client_addr: posix.sockaddr = undefined;
         var addr_len: posix.socklen_t = @sizeOf(posix.sockaddr);
 
-        const client = posix.accept(socket, &client_addr, &addr_len, 0) catch |err| {
+        const client = sys_net.accept(socket, &client_addr, &addr_len, 0) catch |err| {
             if (self.shutdown.load(.acquire)) return;
             std.debug.print("[WS Server] Accept error: {}\n", .{err});
             continue;
@@ -73,7 +77,7 @@ fn runImpl(self: *TestWSServer, wg: *std.Thread.WaitGroup) !void {
 
         const thread = std.Thread.spawn(.{}, handleClient, .{client}) catch |err| {
             std.debug.print("[WS Server] Thread spawn error: {}\n", .{err});
-            posix.close(client);
+            _ = std.c.close(client);
             continue;
         };
         thread.detach();
@@ -81,7 +85,7 @@ fn runImpl(self: *TestWSServer, wg: *std.Thread.WaitGroup) !void {
 }
 
 fn handleClient(client: posix.socket_t) void {
-    defer posix.close(client);
+    defer _ = std.c.close(client);
 
     var buf: [4096]u8 = undefined;
     const n = posix.read(client, &buf) catch return;
@@ -141,7 +145,7 @@ fn handleClient(client: posix.socket_t) void {
         "Upgrade: websocket\r\n" ++
         "Connection: Upgrade\r\n" ++
         "Sec-WebSocket-Accept: {s}\r\n\r\n", .{accept_key}) catch return;
-    _ = posix.write(client, resp) catch return;
+    _ = sys_net.write(client, resp) catch return;
 
     // Message loop with larger buffer for big messages
     var msg_buf: [128 * 1024]u8 = undefined;
@@ -344,12 +348,12 @@ fn sendFrame(client: posix.socket_t, opcode: u8, prefix: []const u8, payload: []
         header_len = 10;
     }
 
-    _ = try posix.write(client, header[0..header_len]);
+    _ = try sys_net.write(client, header[0..header_len]);
     if (prefix.len > 0) {
-        _ = try posix.write(client, prefix);
+        _ = try sys_net.write(client, prefix);
     }
     if (payload.len > 0) {
-        _ = try posix.write(client, payload);
+        _ = try sys_net.write(client, payload);
     }
 }
 
@@ -380,7 +384,7 @@ fn sendLargeMessage(client: posix.socket_t, size: usize) !void {
         header_len = 10;
     }
 
-    _ = try posix.write(client, header[0..header_len]);
+    _ = try sys_net.write(client, header[0..header_len]);
 
     // Send payload in chunks - pattern of 'A'-'Z' repeating
     var sent: usize = 0;
@@ -390,7 +394,7 @@ fn sendLargeMessage(client: posix.socket_t, size: usize) !void {
         for (chunk[0..to_send], 0..) |*b, i| {
             b.* = @intCast('A' + ((sent + i) % 26));
         }
-        _ = try posix.write(client, chunk[0..to_send]);
+        _ = try sys_net.write(client, chunk[0..to_send]);
         sent += to_send;
     }
 }
@@ -408,5 +412,5 @@ fn sendCloseFrame(client: posix.socket_t, code: u16, reason: []const u8) !void {
         @memcpy(frame[4..][0..reason_len], reason[0..reason_len]);
     }
 
-    _ = try posix.write(client, frame[0 .. 4 + reason_len]);
+    _ = try sys_net.write(client, frame[0 .. 4 + reason_len]);
 }

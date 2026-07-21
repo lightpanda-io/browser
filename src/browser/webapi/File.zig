@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -53,7 +54,7 @@ pub fn init(
     file.* = .{
         ._proto = blob,
         ._name = try blob._arena.dupe(u8, name),
-        ._last_modified = opts.lastModified orelse std.time.milliTimestamp(),
+        ._last_modified = opts.lastModified orelse std.Io.Clock.now(.real, lp.io).toMilliseconds(),
     };
     blob._type = .{ .file = file };
 

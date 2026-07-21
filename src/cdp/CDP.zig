@@ -1121,7 +1121,7 @@ pub const BrowserContext = struct {
         // + 10 for the max websocket header
         const message_len = msg.len + session_id.len + 1 + field.len + 10;
 
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayList(u8) = .empty;
         buf.ensureTotalCapacity(allocator, message_len) catch |err| {
             log.err(.cdp, "inspector buffer", .{ .err = err });
             return;

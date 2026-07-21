@@ -47,7 +47,7 @@ pub const Mutation = struct {
 // IntersectionObserver bookkeeping for a frame.
 pub const Intersection = struct {
     // List of active IntersectionObservers
-    observers: std.ArrayList(*IntersectionObserver) = .{},
+    observers: std.ArrayList(*IntersectionObserver) = .empty,
     check_scheduled: bool = false,
     delivery_scheduled: bool = false,
 };

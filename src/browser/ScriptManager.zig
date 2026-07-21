@@ -124,7 +124,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         .node = .{},
         .manager = &self.base,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .preload,
         .hint_element = element,
     };
@@ -326,7 +326,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .node = .{},
         .arena = arena,
         .manager = &self.base,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .complete = false,
         .url = remote_url,
         .extra = frame_extra,
@@ -584,7 +584,7 @@ test "ScriptManager: PreloadedScript.shutdownCallback drops a .loading preload" 
         .node = .{},
         .manager = &sm.base,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .preload,
         .hint_element = null,
     };

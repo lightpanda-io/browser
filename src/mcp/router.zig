@@ -13,7 +13,7 @@ const log = lp.log;
 /// automatically. When `input` is the file behind `reader`, the server must
 /// also expose `idle`: the router then pumps the browser session between
 /// requests instead of blocking on the read.
-pub fn processRequests(server: anytype, reader: *std.io.Reader, input: ?std.fs.File) !void {
+pub fn processRequests(server: anytype, reader: *std.Io.Reader, input: ?std.Io.File) !void {
     var arena: std.heap.ArenaAllocator = .init(server.allocator);
     defer arena.deinit();
 
@@ -48,7 +48,7 @@ pub fn processRequests(server: anytype, reader: *std.io.Reader, input: ?std.fs.F
 /// Returns once `reader` holds a delimiter or the fd is readable —
 /// `takeDelimiter` may still block on a partial line, but MCP clients write
 /// whole lines. A full buffer also returns so StreamTooLong surfaces.
-fn idleUntilInput(server: anytype, reader: *std.io.Reader, file: std.fs.File) void {
+fn idleUntilInput(server: anytype, reader: *std.Io.Reader, file: std.Io.File) void {
     while (std.mem.indexOfScalar(u8, reader.buffered(), '\n') == null and
         reader.bufferedLen() < reader.buffer.len)
     {
@@ -127,7 +127,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
     const allocator = testing.allocator;
     const app = testing.test_app;
 
-    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out_alloc: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     defer out_alloc.deinit();
 
     var server = try Server.init(allocator, app, &out_alloc.writer);

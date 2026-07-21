@@ -74,7 +74,7 @@ const Filters = union(Mode) {
     form: struct { form: *Form, form_id: ?[]const u8 },
 
     fn TypeOf(comptime mode: Mode) type {
-        @setEvalBranchQuota(2000);
+        @setEvalBranchQuota(10_000);
         return std.meta.fieldInfo(Filters, mode).type;
     }
 };

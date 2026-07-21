@@ -839,7 +839,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
 
     const cached = cache.get(arena, .{
         .url = req.url,
-        .timestamp = std.time.timestamp(),
+        .timestamp = std.Io.Clock.now(.real, lp.io).toSeconds(),
         .request_headers = req_headers.items,
     }) orelse {
         lp.metrics.http_cache.incr(.miss);
@@ -896,7 +896,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
     cache.renew(transfer.arena, .{
         .url = transfer._cache_key,
-        .timestamp = std.time.timestamp(),
+        .timestamp = std.Io.Clock.now(.real, lp.io).toSeconds(),
         .headers = transfer.res.headers,
     }) catch |err| {
         log.warn(.cache, "renew failed", .{ .err = err });
@@ -934,7 +934,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     const vary = findHeader(headers, "vary");
     const maybe_cm = Cache.tryCache(
         arena,
-        std.time.timestamp(),
+        std.Io.Clock.now(.real, lp.io).toSeconds(),
         transfer._cache_key,
         rh.status,
         rh.contentType(),
@@ -1816,7 +1816,7 @@ pub const Transfer = struct {
     _node: std.DoublyLinkedList.Node = .{},
 
     // Buffered response ordered events awaiting dispatch.
-    _events: std.ArrayList(Event) = .{},
+    _events: std.ArrayList(Event) = .empty,
 
     // controls if _queue_node is in client.dispatch_queue (false) or
     // client.gated_queue (true)
@@ -2263,9 +2263,9 @@ pub const Transfer = struct {
         const body: []const u8 = switch (cached.data) {
             .buffer => |b| b,
             .file => |f| blk: {
-                defer f.file.close();
+                defer f.file.close(lp.io);
                 const buf = try arena.alloc(u8, f.len);
-                const n = try f.file.preadAll(buf, f.offset);
+                const n = try f.file.readPositionalAll(lp.io, buf, f.offset);
                 break :blk buf[0..n];
             },
         };
@@ -2859,7 +2859,7 @@ const Response = struct {
 
     // Response body. Filled by dataCallback, consumed in processMessages.
     // See Stream.spare to see how this works in streaming mode
-    buffer: std.ArrayList(u8) = .{},
+    buffer: std.ArrayList(u8) = .empty,
 
     // Error captured in dataCallback to be reported in processMessages.
     callback_error: ?anyerror = null,
@@ -2877,7 +2877,7 @@ const Response = struct {
 
         // Along with the main Response.buffer, acts as a double buffer allowing
         // us to accumulate new data while in a delivery callback.
-        spare: std.ArrayList(u8) = .{},
+        spare: std.ArrayList(u8) = .empty,
     };
 };
 
@@ -3258,7 +3258,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
     // An empty pool makes processTransfer queue the re-issued request
     // instead of putting it on the wire — the queue IS the capture.
     net.available = .{};
-    net.conn_mutex = .{};
+    net.conn_mutex = .init;
 
     var client: Client = undefined;
     initTestClient(&client, &pool);

@@ -51,7 +51,7 @@ _arena: Allocator,
 // Refcounted so the GC weak-finalizer (or page teardown) releases the pooled
 // arena exactly once; mirrors Blob's lifecycle.
 _rc: lp.RC = .{},
-_items: std.ArrayList(*DataTransferItem) = .{},
+_items: std.ArrayList(*DataTransferItem) = .empty,
 _item_list: *DataTransferItemList,
 // FileList lives on the factory slab and is frame-tracked, so each File ref it
 // holds is released at frame teardown (same path as `<input type=file>`).
@@ -198,7 +198,7 @@ pub fn clearItems(self: *DataTransfer, frame: *Frame) !void {
 
 // Rebuild the FileList slice from the current file-kind items, in order.
 fn rebuildFiles(self: *DataTransfer, frame: *Frame) !void {
-    var files: std.ArrayList(*File) = .{};
+    var files: std.ArrayList(*File) = .empty;
     for (self._items.items) |it| {
         if (it._kind == .file) {
             try files.append(frame.arena, it._payload.file);
@@ -218,7 +218,7 @@ pub fn getItems(self: *DataTransfer) *DataTransferItemList {
 }
 
 pub fn getTypes(self: *DataTransfer, frame: *Frame) ![][]const u8 {
-    var out: std.ArrayList([]const u8) = .{};
+    var out: std.ArrayList([]const u8) = .empty;
     var has_files = false;
     for (self._items.items) |it| {
         switch (it._kind) {
