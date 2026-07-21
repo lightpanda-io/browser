@@ -218,23 +218,16 @@ pub const RenewResponse = struct {
 
 pub const CachedData = union(enum) {
     buffer: []const u8,
-    file: struct {
-        file: std.Io.File,
-        offset: usize,
-        len: usize,
-    },
 
     pub fn deinit(self: CachedData) void {
         switch (self) {
             .buffer => {},
-            .file => |*f| f.file.close(lp.io),
         }
     }
 
     pub fn format(self: CachedData, writer: *std.Io.Writer) !void {
         switch (self) {
             .buffer => |buf| try writer.print("buffer({d} bytes)", .{buf.len}),
-            .file => |f| try writer.print("file(offset={d}, len={d} bytes)", .{ f.offset, f.len }),
         }
     }
 };

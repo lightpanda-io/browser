@@ -2359,16 +2359,8 @@ pub const Transfer = struct {
     // Serve a cache entry as this transfer's response. Takes ownership of
     // `cached` (file-backed bodies are read into the arena and closed).
     fn bufferCached(self: *Transfer, cached: Cache.CachedResponse) !void {
-        const arena = self.arena;
-
         const body: []const u8 = switch (cached.data) {
             .buffer => |b| b,
-            .file => |f| blk: {
-                defer f.file.close(lp.io);
-                const buf = try arena.alloc(u8, f.len);
-                const n = try f.file.readPositionalAll(lp.io, buf, f.offset);
-                break :blk buf[0..n];
-            },
         };
 
         self.setResponseHead(cached.metadata.status, cached.metadata.content_type);
