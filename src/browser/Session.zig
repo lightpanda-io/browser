@@ -190,7 +190,7 @@ pub fn deinit(self: *Session) void {
 
     self.cookie_jar.deinit();
 
-    self.browser.env.memoryPressureNotification(.critical);
+    self.browser.env.memoryPressureNotification(.moderate);
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.idb.deinit();
