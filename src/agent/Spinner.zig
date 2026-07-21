@@ -65,8 +65,8 @@ const State = union(enum) {
 /// under-lock write in `ensureWorkerLocked`.
 enabled: std.atomic.Value(bool),
 
-mu: std.Thread.Mutex = .{},
-cv: std.Thread.Condition = .{},
+mu: std.Io.Mutex = .init,
+cv: std.Io.Condition = .init,
 state: State = .idle,
 frame: u8 = 0,
 /// True while a caller streams assistant text to stdout: the worker stops
@@ -94,10 +94,10 @@ pub inline fn isEnabled(self: *const Spinner) bool {
 
 pub fn deinit(self: *Spinner) void {
     if (self.thread) |t| {
-        self.mu.lock();
+        self.mu.lockUncancelable(lp.io);
         self.should_exit = true;
-        self.cv.signal();
-        self.mu.unlock();
+        self.cv.signal(lp.io);
+        self.mu.unlock(lp.io);
         t.join();
         self.thread = null;
     }
@@ -106,15 +106,15 @@ pub fn deinit(self: *Spinner) void {
 /// Spawns the worker thread on first call.
 pub fn start(self: *Spinner) void {
     if (!self.isEnabled()) return;
-    self.mu.lock();
-    defer self.mu.unlock();
+    self.mu.lockUncancelable(lp.io);
+    defer self.mu.unlock(lp.io);
     self.state = .thinking;
     self.paused = false;
     self.frame = 0;
     self.tool_calls = 0;
-    self.turn_started_ns = std.time.nanoTimestamp();
+    self.turn_started_ns = std.Io.Clock.now(.real, lp.io).toNanoseconds();
     self.ensureWorkerLocked();
-    self.cv.signal();
+    self.cv.signal(lp.io);
 }
 
 fn ensureWorkerLocked(self: *Spinner) void {
@@ -133,10 +133,10 @@ fn ensureWorkerLocked(self: *Spinner) void {
 /// reset state. Called from a `defer` in agent code so it always runs.
 pub fn stop(self: *Spinner) void {
     if (!self.isEnabled()) return;
-    self.mu.lock();
-    defer self.mu.unlock();
+    self.mu.lockUncancelable(lp.io);
+    defer self.mu.unlock(lp.io);
     if (self.state == .idle) return;
-    const elapsed_ns = std.time.nanoTimestamp() - self.turn_started_ns;
+    const elapsed_ns = std.Io.Clock.now(.real, lp.io).toNanoseconds() - self.turn_started_ns;
     const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, std.time.ns_per_s);
 
     var buf: [frame_buf_bytes]u8 = undefined;
@@ -145,7 +145,7 @@ pub fn stop(self: *Spinner) void {
         "\r" ++ clear_eol ++ ansi.dim ++ "[agent: worked for {d:.1}s · {d} tool call{s}]" ++ ansi.reset ++ "\n",
         .{ elapsed_s, self.tool_calls, if (self.tool_calls == 1) "" else "s" },
     ) catch return;
-    _ = std.posix.write(std.posix.STDERR_FILENO, summary) catch {};
+    _ = std.c.write(std.posix.STDERR_FILENO, (summary).ptr, (summary).len);
 
     self.state = .idle;
     self.paused = false;
@@ -156,10 +156,10 @@ pub fn stop(self: *Spinner) void {
 /// outcome — tool results, error messages, or summaries.
 pub fn cancel(self: *Spinner) void {
     if (!self.isEnabled()) return;
-    self.mu.lock();
-    defer self.mu.unlock();
+    self.mu.lockUncancelable(lp.io);
+    defer self.mu.unlock(lp.io);
     if (self.state == .idle) return;
-    _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
+    _ = std.c.write(std.posix.STDERR_FILENO, ("\r" ++ clear_eol).ptr, ("\r" ++ clear_eol).len);
     self.state = .idle;
     self.paused = false;
     self.last_render_len = 0;
@@ -171,13 +171,13 @@ pub fn cancel(self: *Spinner) void {
 /// animation. No-op when idle or already paused.
 pub fn pause(self: *Spinner) void {
     if (!self.isEnabled()) return;
-    self.mu.lock();
-    defer self.mu.unlock();
+    self.mu.lockUncancelable(lp.io);
+    defer self.mu.unlock(lp.io);
     if (self.state == .idle or self.paused) return;
     self.paused = true;
-    _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
+    _ = std.c.write(std.posix.STDERR_FILENO, ("\r" ++ clear_eol).ptr, ("\r" ++ clear_eol).len);
     self.last_render_len = 0;
-    self.cv.signal();
+    self.cv.signal(lp.io);
 }
 
 /// Switch the indicator to "running tool <name> <args>". Counts toward the
@@ -186,13 +186,13 @@ pub fn pause(self: *Spinner) void {
 /// prefix — that path is user-typed REPL commands, not LLM tool calls.
 pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     if (!self.isEnabled()) return;
-    self.mu.lock();
-    defer self.mu.unlock();
+    self.mu.lockUncancelable(lp.io);
+    defer self.mu.unlock(lp.io);
     // A tool call ends any in-progress text stream; resume normal rendering.
     self.paused = false;
     const manual = self.state == .idle;
     self.tool_calls += 1;
-    var tool: ToolState = .{ .set_ns = std.time.nanoTimestamp(), .manual = manual };
+    var tool: ToolState = .{ .set_ns = std.Io.Clock.now(.real, lp.io).toNanoseconds(), .manual = manual };
     const name_prefix = truncateUtf8(name, tool.name_buf.len);
     tool.name_len = name_prefix.len;
     @memcpy(tool.name_buf[0..name_prefix.len], name_prefix);
@@ -209,7 +209,7 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     // braille animation.
     if (manual) self.ensureWorkerLocked();
     self.renderLocked();
-    self.cv.signal();
+    self.cv.signal(lp.io);
 }
 
 /// Request a transition back to the cycling "thinking" state. The worker
@@ -217,27 +217,27 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
 /// long enough, the flip is deferred until it has.
 pub fn setThinking(self: *Spinner) void {
     if (!self.isEnabled()) return;
-    self.mu.lock();
-    defer self.mu.unlock();
+    self.mu.lockUncancelable(lp.io);
+    defer self.mu.unlock(lp.io);
     switch (self.state) {
         .idle => return,
         .thinking => {},
         .tool => self.state.tool.dwell_pending = true,
     }
-    self.cv.signal();
+    self.cv.signal(lp.io);
 }
 
 /// Print `text` (assumed to include its own newline) above the indicator,
 /// then leave the indicator to repaint itself on the next tick.
 pub fn emitAbove(self: *Spinner, text: []const u8) bool {
     if (!self.isEnabled()) return false;
-    self.mu.lock();
-    defer self.mu.unlock();
+    self.mu.lockUncancelable(lp.io);
+    defer self.mu.unlock(lp.io);
     if (self.state == .idle) return false;
-    _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
-    _ = std.posix.write(std.posix.STDERR_FILENO, text) catch {};
+    _ = std.c.write(std.posix.STDERR_FILENO, ("\r" ++ clear_eol).ptr, ("\r" ++ clear_eol).len);
+    _ = std.c.write(std.posix.STDERR_FILENO, (text).ptr, (text).len);
     if (text.len == 0 or text[text.len - 1] != '\n') {
-        _ = std.posix.write(std.posix.STDERR_FILENO, "\n") catch {};
+        _ = std.c.write(std.posix.STDERR_FILENO, ("\n").ptr, ("\n").len);
     }
     self.last_render_len = 0;
     self.renderLocked();
@@ -245,10 +245,10 @@ pub fn emitAbove(self: *Spinner, text: []const u8) bool {
 }
 
 fn workerLoop(self: *Spinner) void {
-    self.mu.lock();
-    defer self.mu.unlock();
+    self.mu.lockUncancelable(lp.io);
+    defer self.mu.unlock(lp.io);
     while (!self.should_exit) {
-        while (!self.should_exit and (self.state == .idle or self.paused)) self.cv.wait(&self.mu);
+        while (!self.should_exit and (self.state == .idle or self.paused)) self.cv.waitUncancelable(lp.io, &self.mu);
         if (self.should_exit) return;
 
         switch (self.state) {
@@ -256,7 +256,7 @@ fn workerLoop(self: *Spinner) void {
                 if (self.state.tool.dwell_pending) {
                     // Signed compare: a backward clock jump (NTP slew, suspend/resume)
                     // can make the delta negative; `@intCast` to u64 would panic.
-                    const delta: i128 = std.time.nanoTimestamp() - self.state.tool.set_ns;
+                    const delta: i128 = std.Io.Clock.now(.real, lp.io).toNanoseconds() - self.state.tool.set_ns;
                     if (delta >= @as(i128, min_tool_display_ns)) {
                         self.state = .thinking;
                     }
@@ -268,7 +268,7 @@ fn workerLoop(self: *Spinner) void {
         self.renderLocked();
 
         self.frame = (self.frame + 1) % @as(u8, @intCast(braille.len));
-        self.cv.timedWait(&self.mu, interval_ns) catch {};
+        lp.timedWait(&self.cv, &self.mu, interval_ns) catch {};
     }
 }
 
@@ -309,7 +309,7 @@ fn renderLocked(self: *Spinner) void {
     if (written.len == self.last_render_len and std.mem.eql(u8, written, self.last_render_buf[0..self.last_render_len])) return;
     @memcpy(self.last_render_buf[0..written.len], written);
     self.last_render_len = written.len;
-    _ = std.posix.write(std.posix.STDERR_FILENO, written) catch {};
+    _ = std.c.write(std.posix.STDERR_FILENO, (written).ptr, (written).len);
 }
 
 /// Current terminal width in columns, queried via TIOCGWINSZ on stderr.

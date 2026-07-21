@@ -148,8 +148,8 @@ fn parseIpv4(str: []const u8) ?Ipv4Addr {
 fn parseIpv6(str: []const u8) ?Ipv6Addr {
     // Strip zone ID
     const clean = if (std.mem.indexOfScalar(u8, str, '%')) |idx| str[0..idx] else str;
-    const parsed = std.net.Address.parseIp6(clean, 0) catch return null;
-    return parsed.in6.sa.addr;
+    const parsed = std.Io.net.IpAddress.parseIp6(clean, 0) catch return null;
+    return parsed.ip6.bytes;
 }
 
 // ── CIDR matching ────────────────────────────────────────────────────────────

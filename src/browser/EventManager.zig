@@ -55,7 +55,7 @@ ignore_list: std.ArrayList(*Listener),
 pub fn init(arena: Allocator, frame: *Frame) EventManager {
     return .{
         .frame = frame,
-        .ignore_list = .{},
+        .ignore_list = .empty,
         .has_dom_load_listener = false,
         .base = EventManagerBase.init(arena),
     };

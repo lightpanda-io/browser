@@ -214,7 +214,7 @@ const Context = struct {
                     var text = cd.getData().str();
                     if (self.state.pre_node) |pre| {
                         if (node.parentNode() == pre and node.nextSibling() == null) {
-                            text = std.mem.trimRight(u8, text, " \t\r\n");
+                            text = std.mem.trimEnd(u8, text, " \t\r\n");
                         }
                     }
                     try self.renderText(text);

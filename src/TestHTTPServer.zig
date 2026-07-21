@@ -17,12 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
+const sys_net = @import("sys/net.zig");
 const URL = @import("browser/URL.zig");
 
 const TestHTTPServer = @This();
 
 shutdown: std.atomic.Value(bool),
-listener: ?std.net.Server,
+listener: ?std.Io.net.Server,
 handler: Handler,
 
 const Handler = *const fn (req: *std.http.Server.Request) anyerror!void;
@@ -43,23 +46,23 @@ pub fn stop(self: *TestHTTPServer) void {
     self.shutdown.store(true, .release);
     if (self.listener) |*listener| {
         switch (@import("builtin").target.os.tag) {
-            .linux => std.posix.shutdown(listener.stream.handle, .recv) catch {},
-            else => std.posix.close(listener.stream.handle),
+            .linux => sys_net.shutdown(listener.socket.handle, .recv) catch {},
+            else => _ = std.c.close(listener.socket.handle),
         }
     }
 }
 
-pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
-    const address = try std.net.Address.parseIp("127.0.0.1", 9582);
+pub fn run(self: *TestHTTPServer, wg: *lp.WaitGroup) !void {
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9582);
 
-    self.listener = try address.listen(.{ .reuse_address = true });
+    self.listener = try address.listen(lp.io, .{ .reuse_address = true });
     var listener = &self.listener.?;
     self.shutdown.store(false, .release);
 
     wg.finish();
 
     while (true) {
-        const conn = listener.accept() catch |err| {
+        const conn = listener.accept(lp.io) catch |err| {
             if (self.shutdown.load(.acquire) or err == error.SocketNotListening) {
                 return;
             }
@@ -70,14 +73,14 @@ pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
     }
 }
 
-fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !void {
-    defer conn.stream.close();
+fn handleConnection(self: *TestHTTPServer, conn: std.Io.net.Stream) !void {
+    defer conn.close(lp.io);
 
     var req_buf: [2048]u8 = undefined;
-    var conn_reader = conn.stream.reader(&req_buf);
-    var conn_writer = conn.stream.writer(&req_buf);
+    var conn_reader = conn.reader(lp.io, &req_buf);
+    var conn_writer = conn.writer(lp.io, &req_buf);
 
-    var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+    var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
 
     while (true) {
         var req = http_server.receiveHead() catch |err| switch (err) {
@@ -108,13 +111,13 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
     if (std.mem.indexOfScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
         unescaped_file_path = unescaped_file_path[0..pos];
     }
-    var file = std.fs.cwd().openFile(unescaped_file_path, .{}) catch |err| switch (err) {
+    const file = std.Io.Dir.cwd().openFile(lp.io, unescaped_file_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return req.respond("server error", .{ .status = .not_found }),
         else => return err,
     };
-    defer file.close();
+    defer file.close(lp.io);
 
-    const stat = try file.stat();
+    const stat = try file.stat(lp.io);
     var send_buffer: [4096]u8 = undefined;
 
     var res = try req.respondStreaming(&send_buffer, .{
@@ -127,7 +130,7 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
     });
 
     var read_buffer: [4096]u8 = undefined;
-    var reader = file.reader(&read_buffer);
+    var reader = file.reader(lp.io, &read_buffer);
     _ = try res.writer.sendFileAll(&reader, .unlimited);
     try res.writer.flush();
     try res.end();

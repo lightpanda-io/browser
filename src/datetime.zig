@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
-const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 
@@ -292,7 +291,7 @@ pub const DateTime = struct {
 
     pub fn now() DateTime {
         return .{
-            .micros = std.time.microTimestamp(),
+            .micros = @intCast(microTimestamp(.clock)),
         };
     }
 
@@ -523,45 +522,30 @@ pub const DateTime = struct {
     }
 };
 
-// true if we should use clock_gettime()
-const is_posix = switch (builtin.os.tag) {
-    .windows, .uefi, .wasi => false,
-    else => true,
-};
-
 pub const TimestampMode = enum {
     clock,
     monotonic,
-};
-pub fn timestamp(comptime mode: TimestampMode) u64 {
-    if (comptime is_posix == false or mode == .clock) {
-        return @intCast(std.time.timestamp());
+
+    // .boot intends to keep counting across system suspend, matching the
+    // old CLOCK_BOOTTIME / UPTIME_RAW choice.
+    fn ioClock(comptime mode: TimestampMode) std.Io.Clock {
+        return switch (mode) {
+            .clock => .real,
+            .monotonic => .boot,
+        };
     }
-    const ts = timespec();
-    return @intCast(ts.sec);
+};
+
+pub fn timestamp(comptime mode: TimestampMode) u64 {
+    return @intCast(mode.ioClock().now(lp.io).toSeconds());
 }
 
 pub fn milliTimestamp(comptime mode: TimestampMode) u64 {
-    if (comptime is_posix == false or mode == .clock) {
-        return @intCast(std.time.milliTimestamp());
-    }
-    const ts = timespec();
-    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000_000)));
+    return @intCast(mode.ioClock().now(lp.io).toMilliseconds());
 }
 
-pub fn timespec() posix.timespec {
-    if (comptime is_posix == false) {
-        @compileError("`timespec` should not be called when `is_posix` is false");
-    }
-
-    const clock_id = switch (@import("builtin").os.tag) {
-        .freebsd, .dragonfly => posix.CLOCK.MONOTONIC_FAST,
-        .macos, .ios, .tvos, .watchos, .visionos => posix.CLOCK.UPTIME_RAW, // continues counting while suspended
-        .linux => posix.CLOCK.BOOTTIME, // continues counting while suspended
-        else => posix.CLOCK.MONOTONIC,
-    };
-    // unreac
-    return posix.clock_gettime(clock_id) catch unreachable;
+pub fn microTimestamp(comptime mode: TimestampMode) u64 {
+    return @intCast(mode.ioClock().now(lp.io).toMicroseconds());
 }
 
 fn writeDate(into: []u8, date: Date) u8 {
@@ -1255,7 +1239,7 @@ test "DateTime: initUTC" {
 
 test "DateTime: now" {
     const dt = DateTime.now();
-    try testing.expectDelta(std.time.microTimestamp(), dt.micros, 1000);
+    try testing.expectDelta(@as(i64, @intCast(microTimestamp(.clock))), dt.micros, 1000);
 }
 
 test "DateTime: date" {

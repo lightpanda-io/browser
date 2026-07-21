@@ -517,17 +517,17 @@ test "isRecorded: args shape and locator semantics" {
 
     // selector + backendNodeId: still recorded (a usable selector is present).
     {
-        var obj: std.json.ObjectMap = .init(aa);
-        try obj.put("selector", .{ .string = "#submit" });
-        try obj.put("backendNodeId", .{ .integer = 42 });
+        var obj: std.json.ObjectMap = .empty;
+        try obj.put(aa, "selector", .{ .string = "#submit" });
+        try obj.put(aa, "backendNodeId", .{ .integer = 42 });
         const cmd = Command.fromToolCall(.click, .{ .object = obj });
         try testing.expect(cmd.isRecorded());
     }
 
     // backendNodeId only: skipped — no replayable identifier.
     {
-        var obj: std.json.ObjectMap = .init(aa);
-        try obj.put("backendNodeId", .{ .integer = 42 });
+        var obj: std.json.ObjectMap = .empty;
+        try obj.put(aa, "backendNodeId", .{ .integer = 42 });
         const cmd = Command.fromToolCall(.click, .{ .object = obj });
         try testing.expect(!cmd.isRecorded());
     }

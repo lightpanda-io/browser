@@ -114,13 +114,12 @@ fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
     if (@import("builtin").is_test) {
         return allocator.dupe(u8, "/tmp") catch unreachable;
     }
-    const app_dir_path = std.fs.getAppDataDir(allocator, "lightpanda") catch |err| {
+    const app_dir_path = getAppDataDir(allocator, "lightpanda") catch |err| {
         log.warn(.app, "get data dir", .{ .err = err });
         return null;
     };
 
-    std.fs.cwd().makePath(app_dir_path) catch |err| switch (err) {
-        error.PathAlreadyExists => return app_dir_path,
+    std.Io.Dir.cwd().createDirPath(lp.io, app_dir_path) catch |err| switch (err) {
         else => {
             allocator.free(app_dir_path);
             log.warn(.app, "create data dir", .{ .err = err, .path = app_dir_path });
@@ -128,4 +127,23 @@ fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
         },
     };
     return app_dir_path;
+}
+
+fn getAppDataDir(allocator: Allocator, appname: []const u8) ![]const u8 {
+    switch (@import("builtin").os.tag) {
+        .macos, .ios => {
+            const home = std.c.getenv("HOME") orelse return error.AppDataDirUnavailable;
+            return std.fs.path.join(allocator, &.{ std.mem.span(home), "Library", "Application Support", appname });
+        },
+        else => {
+            if (std.c.getenv("XDG_DATA_HOME")) |xdg| {
+                const x = std.mem.span(xdg);
+                if (x.len > 0) {
+                    return std.fs.path.join(allocator, &.{ x, appname });
+                }
+            }
+            const home = std.c.getenv("HOME") orelse return error.AppDataDirUnavailable;
+            return std.fs.path.join(allocator, &.{ std.mem.span(home), ".local", "share", appname });
+        },
+    }
 }

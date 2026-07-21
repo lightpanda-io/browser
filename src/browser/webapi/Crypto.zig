@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const SubtleCrypto = @import("SubtleCrypto.zig");
@@ -34,7 +35,7 @@ pub fn getRandomValues(_: *const Crypto, js_obj: js.Object) !js.Object {
     if (buf.len > 65_536) {
         return error.QuotaExceeded;
     }
-    std.crypto.random.bytes(buf);
+    lp.io.random(buf);
     return js_obj;
 }
 

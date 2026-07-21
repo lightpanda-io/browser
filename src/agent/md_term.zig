@@ -210,7 +210,7 @@ fn visibleWidth(s: []const u8) usize {
 }
 
 fn isFenceDelimiter(line: []const u8) bool {
-    return std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), "```");
+    return std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), "```");
 }
 
 /// Shared by the fence rules and the `---` horizontal rule so they line up.
@@ -223,7 +223,7 @@ fn renderFenceRule(w: *std.Io.Writer, opening: bool, delimiter: []const u8) !voi
     try w.writeAll(if (opening) "╭" else "╰");
     var fill: usize = rule_width - 1;
     if (opening) {
-        const info = std.mem.trim(u8, std.mem.trimLeft(u8, delimiter, " \t`"), " \t");
+        const info = std.mem.trim(u8, std.mem.trimStart(u8, delimiter, " \t`"), " \t");
         const lang = info[0 .. std.mem.indexOfAny(u8, info, " \t") orelse info.len];
         if (lang.len > 0 and lang.len + 4 <= fill) {
             try w.writeAll("─ ");
@@ -237,7 +237,7 @@ fn renderFenceRule(w: *std.Io.Writer, opening: bool, delimiter: []const u8) !voi
 }
 
 fn isTableRow(line: []const u8) bool {
-    const trimmed = std.mem.trimLeft(u8, line, " \t");
+    const trimmed = std.mem.trimStart(u8, line, " \t");
     return trimmed.len >= 1 and trimmed[0] == '|';
 }
 
@@ -446,14 +446,14 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !vo
         return;
     }
 
-    const indent_len = line.len - std.mem.trimLeft(u8, line, " \t").len;
+    const indent_len = line.len - std.mem.trimStart(u8, line, " \t").len;
     const indent = line[0..indent_len];
     const trimmed = line[indent_len..];
 
     if (trimmed.len >= 1 and trimmed[0] == '>') {
         try styled(w, "│", ansi.dim);
         try w.writeByte(' ');
-        try renderInline(w, std.mem.trimLeft(u8, trimmed[1..], " "));
+        try renderInline(w, std.mem.trimStart(u8, trimmed[1..], " "));
         return;
     }
 
@@ -466,7 +466,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !vo
     var hashes: usize = 0;
     while (hashes < trimmed.len and trimmed[hashes] == '#') hashes += 1;
     if (hashes >= 1 and hashes <= 6 and hashes < trimmed.len and trimmed[hashes] == ' ') {
-        try span(w, std.mem.trimLeft(u8, trimmed[hashes..], " "), ansi.bold, null);
+        try span(w, std.mem.trimStart(u8, trimmed[hashes..], " "), ansi.bold, null);
         return;
     }
 
@@ -474,7 +474,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !vo
         try w.writeAll(indent);
         try styled(w, "•", ansi.dim);
         try w.writeByte(' ');
-        try renderInline(w, std.mem.trimLeft(u8, trimmed[2..], " "));
+        try renderInline(w, std.mem.trimStart(u8, trimmed[2..], " "));
         return;
     }
 
@@ -485,7 +485,7 @@ fn renderLine(w: *std.Io.Writer, line: []const u8, js: ?*js_highlight.State) !vo
     {
         try w.writeAll(indent);
         try w.writeAll(trimmed[0 .. digits + 2]);
-        try renderInline(w, std.mem.trimLeft(u8, trimmed[digits + 2 ..], " "));
+        try renderInline(w, std.mem.trimStart(u8, trimmed[digits + 2 ..], " "));
         return;
     }
 

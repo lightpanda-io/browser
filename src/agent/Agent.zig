@@ -83,7 +83,7 @@ const default_system_prompt = browser_tools.driver_guidance ++
 // System prompt of the `/save` command: the save instructions plus the
 // script skill (`lp.skill`), whose primitives reference is rendered from
 // the tool schemas at first use — hence lazy rather than comptime.
-var save_prompts_once = std.once(initSavePrompts);
+var save_prompts_once = lp.once(initSavePrompts);
 var save_system_prompt: []const u8 = undefined;
 var save_revision_system_prompt: []const u8 = undefined;
 
@@ -153,7 +153,7 @@ node_registry: CDPNode.Registry,
 terminal: Terminal,
 save_buffer: Recorder,
 save_path: ?[]u8,
-script_runtime_mutex: std.Thread.Mutex = .{},
+script_runtime_mutex: std.Io.Mutex = .init,
 active_script_runtime: ?*ScriptRuntime = null,
 conversation: Conversation,
 model: []u8,
@@ -405,7 +405,7 @@ fn startSession(self: *Agent) !void {
 
 // Compile-time constant; projected once per process to avoid rebuilding per call.
 var global_tools_storage: [browser_tools.tool_defs.len]ProviderTool = undefined;
-var global_tools_once = std.once(initGlobalTools);
+var global_tools_once = lp.once(initGlobalTools);
 
 fn initGlobalTools() void {
     for (Schema.all(), 0..) |s, i| {
@@ -426,8 +426,8 @@ pub fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
     self.http_interrupt.fire();
     {
-        self.script_runtime_mutex.lock();
-        defer self.script_runtime_mutex.unlock();
+        self.script_runtime_mutex.lockUncancelable(lp.io);
+        defer self.script_runtime_mutex.unlock(lp.io);
         if (self.active_script_runtime) |runtime| {
             runtime.terminate();
         }
@@ -637,7 +637,7 @@ fn runRepl(self: *Agent) void {
             };
             // Surface console output: slash commands (and thus /consoleLogs)
             // are unreachable in JS mode, so a console must echo logs itself.
-            const logs = std.mem.trimRight(u8, self.session.drainConsoleMessages(), "\n");
+            const logs = std.mem.trimEnd(u8, self.session.drainConsoleMessages(), "\n");
             if (logs.len > 0) self.printData(logs);
             if (result.is_error) {
                 self.terminal.printError("{s}", .{result.text});
@@ -961,7 +961,8 @@ fn disableProvider(self: *Agent) void {
 /// requests bill the token owner's personal account instead of the org.
 fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
     if (provider != .huggingface) return null;
-    return std.posix.getenv("HF_BILL_TO");
+    const v = std.c.getenv("HF_BILL_TO") orelse return null;
+    return std.mem.span(v);
 }
 
 /// `owned_key` transfers ownership of an allocated `credentials.key` (Vertex
@@ -1285,8 +1286,8 @@ fn navigationGoto(arena: std.mem.Allocator, tool: BrowserTool, args: ?std.json.V
     if (a != .object) return null;
     const url = a.object.get("url") orelse return null;
     if (url != .string or url.string.len == 0) return null;
-    var obj: std.json.ObjectMap = .init(arena);
-    obj.put("url", url) catch return null;
+    var obj: std.json.ObjectMap = .empty;
+    obj.put(arena, "url", url) catch return null;
     return Command.fromToolCall(.goto, .{ .object = obj });
 }
 
@@ -1444,7 +1445,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
 
-    const content = std.fs.cwd().readFileAlloc(script_arena.allocator(), path, 10 * 1024 * 1024) catch |err| {
+    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, script_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
         self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
         return false;
     };
@@ -1454,13 +1455,13 @@ fn runScript(self: *Agent, path: []const u8) bool {
         return false;
     };
     defer runtime.deinit();
-    self.script_runtime_mutex.lock();
+    self.script_runtime_mutex.lockUncancelable(lp.io);
     self.active_script_runtime = runtime;
-    self.script_runtime_mutex.unlock();
+    self.script_runtime_mutex.unlock(lp.io);
     defer {
-        self.script_runtime_mutex.lock();
+        self.script_runtime_mutex.lockUncancelable(lp.io);
         self.active_script_runtime = null;
-        self.script_runtime_mutex.unlock();
+        self.script_runtime_mutex.unlock(lp.io);
         runtime.cancelTerminate();
         self.browser.env.cancelTerminate();
         self.cancel_requested.store(false, .release);
@@ -1752,17 +1753,18 @@ fn buildUserMessageParts(
         };
 
         if (std.mem.startsWith(u8, mime, "text/")) {
-            const bytes = std.fs.cwd().readFileAlloc(ma, path, 512 * 1024) catch |err| {
+            const bytes = std.Io.Dir.cwd().readFileAlloc(lp.io, path, ma, .limited(512 * 1024)) catch |err| {
                 log.err(.app, "read attachment failed", .{ .path = path, .err = err });
                 self.terminal.printError("could not read attachment: {s}", .{path});
                 return error.AttachmentReadFailed;
             };
-            try text_prefix.writer(ma).print(
+            try text_prefix.print(
+                ma,
                 "[Attached file: {s}]\n{s}\n[End of attachment]\n\n",
                 .{ path, bytes },
             );
         } else {
-            const raw = std.fs.cwd().readFileAlloc(ma, path, 20 * 1024 * 1024) catch |err| {
+            const raw = std.Io.Dir.cwd().readFileAlloc(lp.io, path, ma, .limited(20 * 1024 * 1024)) catch |err| {
                 log.err(.app, "read attachment failed", .{ .path = path, .err = err });
                 self.terminal.printError("could not read attachment: {s}", .{path});
                 return error.AttachmentReadFailed;
@@ -1850,7 +1852,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         return err;
     };
 
-    var stdout_file = std.fs.File.stdout().writer(&.{});
+    var stdout_file = std.Io.File.stdout().writerStreaming(lp.io, &.{});
     const w = &stdout_file.interface;
     for (ids) |id| try w.print("{s}\n", .{id});
     try w.flush();

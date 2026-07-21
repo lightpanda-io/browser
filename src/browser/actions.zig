@@ -268,26 +268,26 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !void {
 }
 
 // Floored to 1 so timeout_ms=0 still gets one check instead of failing outright.
-fn remainingMs(timeout_ms: u32, timer: *std.time.Timer) u32 {
-    const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+fn remainingMs(timeout_ms: u32, timer: std.Io.Timestamp) u32 {
+    const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
     return @max(1, timeout_ms -| elapsed);
 }
 
 pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, frame_id: u32, session: *Session) !*DOMNode {
-    var timer = try std.time.Timer.start();
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
     var runner = session.runner(.{});
     try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .load });
 
-    const el = try runner.waitForSelector(frame_id, selector, remainingMs(timeout_ms, &timer));
+    const el = try runner.waitForSelector(frame_id, selector, remainingMs(timeout_ms, timer));
     return el.asNode();
 }
 
 pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, frame_id: u32, session: *Session) !void {
-    var timer = try std.time.Timer.start();
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
     var runner = session.runner(.{});
     try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .load });
 
-    return runner.waitForScript(frame_id, script, remainingMs(timeout_ms, &timer));
+    return runner.waitForScript(frame_id, script, remainingMs(timeout_ms, timer));
 }
 
 pub fn waitForState(state: lp.Config.WaitUntil, timeout_ms: u32, frame_id: u32, session: *Session) !void {

@@ -26,6 +26,7 @@
 // the middle in O(1) given a node pointer.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const CDP = @import("cdp/CDP.zig");
 
@@ -36,7 +37,7 @@ const DoublyLinkedList = std.DoublyLinkedList;
 
 const Inbox = @This();
 
-mutex: std.Thread.Mutex = .{},
+mutex: std.Io.Mutex = .init,
 queue: DoublyLinkedList = .{},
 
 // One-way latch, set by the worker's drainInbox the first time it
@@ -47,8 +48,8 @@ queue: DoublyLinkedList = .{},
 terminated: bool = false,
 
 pub fn deinit(self: *Inbox, arena_pool: *ArenaPool) void {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
     while (self.queue.popFirst()) |node| {
         const msg: *Message = @fieldParentPtr("node", node);
         msg.deinit(arena_pool);
@@ -61,14 +62,14 @@ pub fn push(self: *Inbox, arena: Allocator, payload: Message.Payload) void {
     };
 
     msg.* = .{ .payload = payload, .arena = arena };
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
     self.queue.append(&msg.node);
 }
 
 pub fn pop(self: *Inbox) ?*Message {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
     const node = self.queue.popFirst() orelse return null;
     return @fieldParentPtr("node", node);
 }
@@ -78,8 +79,8 @@ pub fn pop(self: *Inbox) ?*Message {
 // safely dispatch mid-parse) so it can abort the blocking fetch instead
 // of stalling for the full per-request timeout.
 pub fn contains(self: *Inbox, predicate: *const fn (*Message) bool) bool {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
     var it = self.queue.first;
     while (it) |node| : (it = node.next) {
         const msg: *Message = @fieldParentPtr("node", node);
@@ -94,8 +95,8 @@ pub fn contains(self: *Inbox, predicate: *const fn (*Message) bool) bool {
 // safe subset of messages during sync-wait paths (the allowlist),
 // while leaving unsafe ones to be drained at the next safe point.
 pub fn popIf(self: *Inbox, predicate: *const fn (*Message) bool) ?*Message {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
     var it = self.queue.first;
     while (it) |node| : (it = node.next) {
         const msg: *Message = @fieldParentPtr("node", node);

@@ -57,7 +57,7 @@ pub fn write(writer: *std.Io.Writer) std.Io.Writer.Error!void {
 }
 
 var text_buffer: std.Io.Writer.Allocating = undefined;
-var text_once = std.once(initText);
+var text_once = lp.once(initText);
 
 /// Panics on failure — the inputs are comptime tool defs, so any render
 /// error is a build-time bug.

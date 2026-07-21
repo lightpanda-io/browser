@@ -167,7 +167,7 @@ pub fn setName(self: *Select, name: []const u8, frame: *Frame) !void {
 pub fn getSize(self: *const Select) u32 {
     const s = self.asConstElement().getAttributeSafe(comptime .wrap("size")) orelse return 0;
 
-    const trimmed = std.mem.trimLeft(u8, s, &std.ascii.whitespace);
+    const trimmed = std.mem.trimStart(u8, s, &std.ascii.whitespace);
 
     var end: usize = 0;
     for (trimmed) |b| {

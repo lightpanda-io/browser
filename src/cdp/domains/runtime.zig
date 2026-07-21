@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("../../browser/js/js.zig");
@@ -103,12 +104,13 @@ fn logInspector(cmd: *CDP.Command, action: anytype) !void {
     const id = cmd.input.id orelse return error.RequiredId;
     const name = try std.fmt.allocPrint(cmd.arena, "id_{d}.js", .{id});
 
-    var dir = try std.fs.cwd().makeOpenPath(".zig-cache/tmp", .{});
-    defer dir.close();
+    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
+    var dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
+    defer dir.close(lp.io);
 
-    const f = try dir.createFile(name, .{});
-    defer f.close();
-    try f.writeAll(script);
+    const f = try dir.createFile(lp.io, name, .{});
+    defer f.close(lp.io);
+    try f.writeStreamingAll(lp.io, script);
 }
 
 const RemoteObject = struct {

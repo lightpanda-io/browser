@@ -235,7 +235,7 @@ const help_arg_prefix = "/help ";
 
 fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
     if (!std.ascii.startsWithIgnoreCase(input, help_arg_prefix)) return null;
-    const arg = std.mem.trimLeft(u8, input[help_arg_prefix.len..], " ");
+    const arg = std.mem.trimStart(u8, input[help_arg_prefix.len..], " ");
     if (std.mem.indexOfScalar(u8, arg, ' ') != null) return null;
     return arg;
 }
@@ -363,8 +363,8 @@ fn addMetaValueCompletions(
 /// (`dir/ba` → entries of `dir/` prefix-matching `ba`). Returned names
 /// borrow the iterator; use before the next `next()`.
 const PathMatchIterator = struct {
-    dir: std.fs.Dir,
-    it: std.fs.Dir.Iterator,
+    dir: std.Io.Dir,
+    it: std.Io.Dir.Iterator,
     /// `body` up to and including its last `/`; kept verbatim in candidates.
     dir_part: []const u8,
     base: []const u8,
@@ -375,7 +375,7 @@ const PathMatchIterator = struct {
         const slash = std.mem.lastIndexOfScalar(u8, body, '/');
         const dir_part = if (slash) |i| body[0 .. i + 1] else "";
         const open_path = if (dir_part.len == 0) "." else dir_part;
-        const dir = std.fs.cwd().openDir(open_path, .{ .iterate = true }) catch return null;
+        const dir = std.Io.Dir.cwd().openDir(lp.io, open_path, .{ .iterate = true }) catch return null;
         return .{
             .dir = dir,
             .it = dir.iterate(),
@@ -385,11 +385,11 @@ const PathMatchIterator = struct {
     }
 
     fn deinit(self: *PathMatchIterator) void {
-        self.dir.close();
+        self.dir.close(lp.io);
     }
 
     fn next(self: *PathMatchIterator) ?Match {
-        while (self.it.next() catch return null) |entry| {
+        while (self.it.next(lp.io) catch return null) |entry| {
             if (!std.ascii.startsWithIgnoreCase(entry.name, self.base)) continue;
             return .{ .name = entry.name, .is_dir = entry.kind == .directory };
         }

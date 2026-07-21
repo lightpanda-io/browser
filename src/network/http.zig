@@ -20,8 +20,10 @@ const std = @import("std");
 const posix = std.posix;
 
 const Config = @import("../Config.zig");
+const sys_net = @import("../sys/net.zig");
 const libcurl = @import("../sys/libcurl.zig");
 const crypto = @import("../sys/libcrypto.zig");
+
 const IpFilter = @import("IpFilter.zig");
 
 const log = @import("lightpanda").log;
@@ -332,7 +334,7 @@ fn opensocketCallback(
 
     if (filter.isBlockedSockaddr(address)) {
         if (address.family == posix.AF.INET or address.family == posix.AF.INET6) {
-            const ip = std.net.Address.initPosix(@ptrCast(&address.addr));
+            const ip = sys_net.addressFromSockaddr(@ptrCast(@alignCast(&address.addr)));
             log.warn(.http, "blocked by IP filter", .{ .ip = ip });
         } else {
             log.warn(.http, "blocked by IP filter", .{ .family = address.family });
@@ -340,7 +342,7 @@ fn opensocketCallback(
         return libcurl.CURL_SOCKET_BAD;
     }
 
-    const fd = posix.socket(
+    const fd = sys_net.socket(
         @intCast(address.family),
         @intCast(address.socktype),
         @intCast(address.protocol),
@@ -930,7 +932,7 @@ test "opensocketCallback: public IPv4 opens a real socket" {
     var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
 
     const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
-    defer posix.close(fd);
+    defer _ = std.c.close(fd);
 
     // A real fd is always >= 0
     try testing.expect(fd >= 0);
@@ -947,7 +949,7 @@ test "opensocketCallback: block_private=false allows private IP" {
     const filter = IpFilter.init(false, null);
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
     const fd = opensocketCallback(@ptrCast(@constCast(&filter)), @intFromEnum(libcurl.CurlSockType.ipcxn), &sa);
-    defer posix.close(fd);
+    defer _ = std.c.close(fd);
 
     try testing.expect(fd >= 0);
 }

@@ -210,7 +210,7 @@ pub const RenewResponse = struct {
 pub const CachedData = union(enum) {
     buffer: []const u8,
     file: struct {
-        file: std.fs.File,
+        file: std.Io.File,
         offset: usize,
         len: usize,
     },
@@ -218,7 +218,7 @@ pub const CachedData = union(enum) {
     pub fn deinit(self: CachedData) void {
         switch (self) {
             .buffer => {},
-            .file => |*f| f.file.close(),
+            .file => |*f| f.file.close(lp.io),
         }
     }
 

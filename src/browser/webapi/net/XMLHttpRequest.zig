@@ -341,7 +341,7 @@ pub fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8) ?[]const
         if (entry[name.len] != ':') {
             continue;
         }
-        return std.mem.trimLeft(u8, entry[name.len + 1 ..], " ");
+        return std.mem.trimStart(u8, entry[name.len + 1 ..], " ");
     }
     return null;
 }

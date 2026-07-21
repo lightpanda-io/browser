@@ -64,8 +64,8 @@ small: Bucket,
 medium: Bucket,
 large: Bucket,
 allocator: Allocator,
-mutex: std.Thread.Mutex = .{},
-entry_pool: std.heap.MemoryPool(Entry),
+mutex: std.Io.Mutex = .init,
+entry_pool: std.heap.memory_pool.ExtraManaged(Entry, .{}),
 
 _leak_track: if (IS_DEBUG) std.StringHashMapUnmanaged(isize) else void = if (IS_DEBUG) .empty else {},
 
@@ -132,8 +132,8 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Al
         .large => &self.large,
     };
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
 
     if (bucket.free_list) |entry| {
         bucket.free_list = entry.next;
@@ -177,8 +177,8 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
     const bucket = entry.bucket;
 
     if (IS_DEBUG) {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         if (self._leak_track.getPtr(entry.debug)) |count| {
             count.* -= 1;
             if (count.* < 0) {
@@ -193,8 +193,8 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
 
     _ = arena.reset(.{ .retain_with_limit = bucket.retain_bytes });
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
 
     if ((comptime SAFETY) or bucket.free_list_len >= bucket.free_list_max) {
         // In Debug, we never pool. It can mask UAF bugs.
