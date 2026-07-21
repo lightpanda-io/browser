@@ -192,8 +192,10 @@ fn loadBody(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?[]const u8 
 }
 
 fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
+    try conn.exec("delete from metadata where url = $1", .{meta.url});
+
     try conn.exec(
-        \\ insert or replace into metadata
+        \\ insert into metadata
         \\     (url, status, stored_at, age_at_store, max_age, must_revalidate, etag, last_modified)
         \\ values ($1, $2, $3, $4, $5, $6, $7, $8)
     , .{
