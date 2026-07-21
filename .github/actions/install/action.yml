@@ -41,6 +41,14 @@ runs:
     # Zig version used from the `minimum_zig_version` field in build.zig.zon
     - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
 
+    # Zig 0.16 writes fetched .zip archives to <global cache>/tmp but no longer
+    # creates that directory, so zip dependencies (sqlite amalgamation) fail
+    # with "failed to create temporary zip file: FileNotFound" on the fresh
+    # cache dir setup-zig points ZIG_GLOBAL_CACHE_DIR at.
+    - name: Zig 0.16 zip-fetch workaround
+      shell: bash
+      run: mkdir -p "${ZIG_GLOBAL_CACHE_DIR:-$HOME/.cache/zig}/tmp"
+
     # Rust Toolchain for html5ever
     - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
       with:
