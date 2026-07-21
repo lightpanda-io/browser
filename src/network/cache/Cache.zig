@@ -72,7 +72,7 @@ pub fn clear(self: *Cache) !void {
 /// for freshness arithmetic and storage.
 const max_delta_seconds: u64 = 2147483648;
 
-fn parseDeltaSeconds(value: []const u8) ?u64 {
+pub fn parseDeltaSeconds(value: []const u8) ?u64 {
     const seconds = std.fmt.parseInt(u64, value, 10) catch |err| switch (err) {
         error.Overflow => return max_delta_seconds,
         error.InvalidCharacter => return null,
