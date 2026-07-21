@@ -65,7 +65,7 @@ pub const Migrations = struct {
             return start;
         }
 
-        try conn.begin();
+        try conn.begin(.immediate);
         errdefer conn.rollback() catch {};
 
         for (migrations[start..], start..) |migration, i| {
@@ -168,8 +168,13 @@ pub const Conn = struct {
         return .{ .stmt = stmt.?, .conn = self.conn };
     }
 
-    pub fn begin(self: Conn) !void {
-        try self.exec("begin", .{});
+    pub const BeginKind = enum { deferred, immediate, exclusive };
+    pub fn begin(self: Conn, kind: BeginKind) !void {
+        switch (kind) {
+            .deferred => try self.exec("begin deferred", .{}),
+            .immediate => try self.exec("begin immediate", .{}),
+            .exclusive => try self.exec("begin exclusive", .{}),
+        }
     }
 
     pub fn commit(self: Conn) !void {

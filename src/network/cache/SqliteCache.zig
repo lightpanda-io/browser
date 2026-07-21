@@ -126,7 +126,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    try conn.begin();
+    try conn.begin(.immediate);
     defer conn.rollback() catch {};
 
     var entry = try conn.row(
@@ -252,7 +252,7 @@ pub fn put(self: *SqliteCache, meta: CachedMetadata, body: []const u8) !void {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    try conn.begin();
+    try conn.begin(.immediate);
     defer conn.rollback() catch {};
 
     try conn.exec("delete from metadata where url = $1", .{meta.url});
@@ -327,7 +327,7 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    try conn.begin();
+    try conn.begin(.immediate);
     defer conn.rollback() catch {};
 
     const exists = try conn.row("select 1 from metadata where url = $1", .{req.url});
