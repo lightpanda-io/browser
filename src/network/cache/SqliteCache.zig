@@ -127,7 +127,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
     defer self.pool.release(conn);
 
     try conn.begin();
-    defer conn.rollback() catch {};
+    errdefer conn.rollback() catch {};
 
     var entry = try conn.row(
         \\ select status, stored_at, age_at_store,
@@ -144,6 +144,23 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
     const age_at_store = entry.get(i64, 2);
     const max_age: u64 = @intCast(entry.get(i64, 3));
     const must_revalidate = entry.get(bool, 4);
+    const raw_etag = entry.get(?[]const u8, 5);
+    const raw_last_modified = entry.get(?[]const u8, 6);
+
+    const expired = must_revalidate or blk: {
+        const age = (req.timestamp - stored_at) + age_at_store;
+        break :blk age >= @as(i64, @intCast(max_age));
+    };
+    const has_validators = raw_etag != null or raw_last_modified != null;
+
+    // If it is expired without validators,
+    // we are going to have to make a network request for this resource.
+    if (expired and !has_validators) {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "expired with no validators" });
+        try conn.exec("delete from metadata where url = $1", .{req.url});
+        try conn.commit();
+        return null;
+    }
 
     var vary_headers: std.ArrayList(Http.Header) = .empty;
     {
@@ -179,9 +196,6 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         }
     }
 
-    const etag = if (entry.get(?[]const u8, 5)) |opt| try arena.dupe(u8, opt) else null;
-    const last_modified = if (entry.get(?[]const u8, 6)) |opt| try arena.dupe(u8, opt) else null;
-
     var header_rows = try conn.rows(
         "select name, value from header where url = $1 and vary = false",
         .{req.url},
@@ -210,22 +224,9 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         },
         .headers = headers.items,
         .vary_headers = vary_headers.items,
-        .etag = etag,
-        .last_modified = last_modified,
+        .etag = if (raw_etag) |v| try arena.dupe(u8, v) else null,
+        .last_modified = if (raw_last_modified) |v| try arena.dupe(u8, v) else null,
     };
-
-    const expired = metadata.isStale(req.timestamp);
-
-    // If expired with no validators, this entry is going to get evicted anyways so we can
-    // skip the body fetch + dupe.
-    if (expired and !metadata.hasValidators()) {
-        log.debug(.cache, "hit", .{ .url = req.url, .expired = true, .body = "skipped" });
-        return .{
-            .metadata = metadata,
-            .data = .{ .buffer = "" },
-            .expired = true,
-        };
-    }
 
     var body_entry = try conn.row(
         "select data from body where url = $1",
@@ -238,6 +239,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
     const body = try arena.dupe(u8, body_entry.get(Blob, 0).data);
 
     log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
+    try conn.commit();
 
     return .{
         .metadata = metadata,
