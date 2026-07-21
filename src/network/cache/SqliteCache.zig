@@ -181,11 +181,11 @@ fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedM
     };
 }
 
-fn loadBody(conn: Conn, arena: std.mem.Allocator, url: []const u8) ![]const u8 {
+fn loadBody(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?[]const u8 {
     const body_entry = try conn.row(
         "select data from body where url = $1",
         .{url},
-    ) orelse @panic("valid metadata must have a body");
+    ) orelse return null;
     defer body_entry.deinit();
 
     return try arena.dupe(u8, body_entry.get(Blob, 0).data);
@@ -290,7 +290,10 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         }
     }
 
-    const body = try loadBody(conn, arena, req.url);
+    const body = try loadBody(conn, arena, req.url) orelse {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing body " });
+        return null;
+    };
     const expired = metadata.isStale(req.timestamp);
     log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
 
