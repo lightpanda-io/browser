@@ -47,10 +47,10 @@ pub const ResolvedProvider = struct {
 /// placeholder, so the only honest availability signal is the server answering
 /// `/v1/models` with a loaded model. Null means no server responded.
 pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Credentials {
-    const key = zenai.provider.envApiKey(tag) orelse return null;
+    const key = zenai.provider.envApiKey(lp.environ(), tag) orelse return null;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), tag, key, base_url) catch return null;
+    const ids = zenai.provider.listChatModelIds(allocator, lp.io, arena.allocator(), tag, key, base_url, lp.environ()) catch return null;
     if (ids.len == 0) return null;
     return .{ .provider = tag, .key = key };
 }
@@ -97,9 +97,9 @@ pub fn gcloudAccessToken(allocator: std.mem.Allocator) ![:0]const u8 {
 /// env-detected). Skips the Ollama probe so it isn't run twice at startup; the
 /// interactive picker only fires on detected keys, which this still catches.
 pub fn hasDetectableKey(opts: Config.Agent, remembered: ?Remembered) bool {
-    if (opts.provider) |p| return zenai.provider.envApiKey(p) != null or (p == .vertex and vertexProjectMode());
+    if (opts.provider) |p| return zenai.provider.envApiKey(lp.environ(), p) != null or (p == .vertex and vertexProjectMode());
     if (remembered) |r| if (r.provider) |p| {
-        if (zenai.provider.envApiKey(p) != null) return true;
+        if (zenai.provider.envApiKey(lp.environ(), p) != null) return true;
         if (p == .vertex and vertexProjectMode()) return true;
     };
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
@@ -114,7 +114,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
             const token = try gcloudAccessToken(allocator);
             return .{ .credentials = .{ .provider = p, .key = token }, .source = .flag, .key_owned = true };
         }
-        const key = zenai.provider.envApiKey(p) orelse {
+        const key = zenai.provider.envApiKey(lp.environ(), p) orelse {
             if (p == .vertex) {
                 std.debug.print(
                     "Vertex needs VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud) — or pass --no-llm for the basic REPL.\n",
@@ -137,7 +137,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
             if (gcloudAccessToken(allocator)) |token| {
                 return .{ .credentials = .{ .provider = p, .key = token }, .source = .remembered, .key_owned = true };
             } else |_| {}
-        } else if (zenai.provider.envApiKey(p)) |key| {
+        } else if (zenai.provider.envApiKey(lp.environ(), p)) |key| {
             return .{ .credentials = .{ .provider = p, .key = key }, .source = .remembered };
         }
     };
@@ -234,8 +234,8 @@ pub fn saveRemembered(remembered: Remembered) !void {
 /// Vertex project mode joins with a placeholder key — no subprocess during a
 /// scan; the gcloud token is fetched on selection (`finishResolved`).
 pub fn availableProviders(buf: []Credentials) []Credentials {
-    const found = zenai.provider.detectKeys(buf, zenai.provider.default_candidates);
-    if (zenai.provider.useVertex() and vertexProjectMode() and found.len < buf.len) {
+    const found = zenai.provider.detectKeys(lp.environ(), buf, zenai.provider.default_candidates);
+    if (zenai.provider.useVertex(lp.environ()) and vertexProjectMode() and found.len < buf.len) {
         buf[found.len] = .{ .provider = .vertex, .key = "" };
         return buf[0 .. found.len + 1];
     }
@@ -302,7 +302,7 @@ pub fn reconcileModel(
 ) !ReconciledModel {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, base_url) catch &.{};
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, lp.io, arena.allocator(), llm.provider, llm.key, base_url, lp.environ()) catch &.{};
     if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
 
     if (!explicit) {

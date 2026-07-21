@@ -982,7 +982,7 @@ fn tavilySearch(
     api_key: []const u8,
     query: []const u8,
 ) ![]const u8 {
-    var client: tavily.Client = .init(arena, api_key, .{});
+    var client: tavily.Client = .init(arena, lp.io, api_key, .{});
     defer client.deinit();
 
     var response = client.search(query, .{ .max_results = 10 }) catch |err| {
