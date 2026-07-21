@@ -198,16 +198,6 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         try headers.append(arena, .{ .name = name, .value = value });
     }
 
-    var body_entry = try conn.row(
-        "select data from body where url = $1",
-        .{req.url},
-    ) orelse {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing body " });
-        return null;
-    };
-    defer body_entry.deinit();
-    const body = try arena.dupe(u8, body_entry.get(Blob, 0).data);
-
     const metadata = CachedMetadata{
         .url = try arena.dupeZ(u8, req.url),
         .content_type = content_type,
@@ -225,6 +215,28 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
     };
 
     const expired = metadata.isStale(req.timestamp);
+
+    // If expired with no validators, this entry is going to get evicted anyways so we can
+    // skip the body fetch + dupe.
+    if (expired and !metadata.hasValidators()) {
+        log.debug(.cache, "hit", .{ .url = req.url, .expired = true, .body = "skipped" });
+        return .{
+            .metadata = metadata,
+            .data = .{ .buffer = "" },
+            .expired = true,
+        };
+    }
+
+    var body_entry = try conn.row(
+        "select data from body where url = $1",
+        .{req.url},
+    ) orelse {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing body " });
+        return null;
+    };
+    defer body_entry.deinit();
+    const body = try arena.dupe(u8, body_entry.get(Blob, 0).data);
+
     log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
 
     return .{
