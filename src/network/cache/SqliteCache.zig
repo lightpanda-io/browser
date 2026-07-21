@@ -462,6 +462,7 @@ test "SqliteCache: get expiration" {
         .stored_at = now,
         .age_at_store = 900,
         .cache_control = .{ .max_age = max_age },
+        .etag = "ABC",
         .headers = &.{},
         .vary_headers = &.{},
     };
@@ -489,6 +490,52 @@ test "SqliteCache: get expiration" {
         },
     ) orelse return error.CacheMiss;
     try testing.expectEqual(true, stale.expired);
+}
+
+test "SqliteCache: get expiration (without validators)" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = 5000;
+    const max_age = 1000;
+
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 900,
+        .cache_control = .{ .max_age = max_age },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    try cache.put(meta, "hello world");
+
+    // age = 50 + 900 = 950 < 1000: fresh
+    const fresh = try cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 50,
+            .request_headers = &.{},
+        },
+    ) orelse return error.CacheMiss;
+    try testing.expectEqual(false, fresh.expired);
+
+    // age = 200 + 900 = 1100 >= 1000: stale
+    const stale = try cache.get(
+        arena.allocator(),
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 200,
+            .request_headers = &.{},
+        },
+    );
+    try testing.expectEqual(null, stale);
 }
 
 test "SqliteCache: put override" {
@@ -797,6 +844,7 @@ test "SqliteCache: renew refreshes expiry" {
         .stored_at = now,
         .age_at_store = 0,
         .cache_control = .{ .max_age = 1000 },
+        .etag = "ABC",
         .headers = &.{},
         .vary_headers = &.{},
     }, "hello world");
