@@ -68,12 +68,18 @@ pub var metrics = @import("Metrics.zig"){};
 var io_threaded: std.Io.Threaded = .init_single_threaded;
 pub const io: std.Io = io_threaded.io();
 
-/// The single-threaded Io instance carries an empty environ, so spawned
-/// children that should inherit the process environment must pass this map
-/// (argv[0] PATH resolution always uses the parent environment regardless).
+/// The single-threaded Io instance carries an empty environ; consumers that
+/// need the real process environment (env-var lookups, spawned children) use
+/// this instead.
+pub fn environ() std.process.Environ {
+    return .{ .block = .{ .slice = std.mem.span(std.c.environ) } };
+}
+
+/// Environ.Map view of `environ` for spawned children that should inherit the
+/// process environment (argv[0] PATH resolution always uses the parent
+/// environment regardless).
 pub fn environMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
-    const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.span(std.c.environ) } };
-    return environ.createMap(allocator);
+    return environ().createMap(allocator);
 }
 
 /// Io.Condition has no timed wait (@ZIG16: delete when std grows one).
