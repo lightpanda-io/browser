@@ -98,7 +98,7 @@ pub fn socket(domain: u32, socket_type: u32, protocol: u32) !socket_t {
     // SOCK.NONBLOCK/CLOEXEC are Zig-invented shim values); strip them and
     // apply via fcntl instead. Linux/FreeBSD accept them natively.
     const flag_bits = posix.SOCK.NONBLOCK | posix.SOCK.CLOEXEC;
-    const extra = if (comptime builtin.os.tag.isDarwin()) socket_type & flag_bits else 0;
+    const extra: u32 = if (comptime builtin.os.tag.isDarwin()) socket_type & flag_bits else 0;
     const rc = c.socket(domain, socket_type & ~extra, protocol);
     if (rc < 0) {
         return errnoError(c.errno(rc));
