@@ -26,6 +26,8 @@ const CacheRequest = Cache.CacheRequest;
 const RenewResponse = Cache.RenewResponse;
 const CachedMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;
+const CacheControl = Cache.CacheControl;
+const parseDeltaSeconds = Cache.parseDeltaSeconds;
 
 const Http = @import("../http.zig");
 const Blob = @import("../../storage/sqlite/Sqlite.zig").Blob;
@@ -120,13 +122,21 @@ pub fn deinit(self: *SqliteCache) void {
     self.pool.deinit(self.allocator);
 }
 
-fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedMetadata {
+pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
+    const conn = try self.pool.acquire();
+    defer self.pool.release(conn);
+
+    try conn.begin();
+    defer conn.rollback() catch {};
+
     var entry = try conn.row(
         \\ select status, stored_at, age_at_store,
-        \\      max_age, must_revalidate, etag, last_modified
-        \\ from metadata
-        \\ where url = $1
-    , .{url}) orelse return null;
+        \\     max_age, must_revalidate, etag, last_modified
+        \\ from metadata where url = $1
+    , .{req.url}) orelse {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
+        return null;
+    };
     defer entry.deinit();
 
     const status: u16 = @intCast(entry.get(i64, 0));
@@ -134,38 +144,72 @@ fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedM
     const age_at_store = entry.get(i64, 2);
     const max_age: u64 = @intCast(entry.get(i64, 3));
     const must_revalidate = entry.get(bool, 4);
+
+    var vary_headers: std.ArrayList(Http.Header) = .empty;
+    {
+        var vary_rows = try conn.rows(
+            "select name, value from header where url = $1 and vary = true",
+            .{req.url},
+        );
+        defer vary_rows.deinit();
+
+        while (try vary_rows.next()) |row| {
+            const name = row.get([]const u8, 0);
+            const value = row.get(Blob, 1).data;
+
+            const incoming = for (req.request_headers) |rh| {
+                if (std.ascii.eqlIgnoreCase(rh.name, name)) break rh.value;
+            } else "";
+
+            if (!std.ascii.eqlIgnoreCase(value, incoming)) {
+                log.debug(.cache, "miss", .{
+                    .url = req.url,
+                    .reason = "vary mismatch",
+                    .header = name,
+                    .expected = value,
+                    .got = incoming,
+                });
+                return null;
+            }
+
+            try vary_headers.append(arena, .{
+                .name = try arena.dupe(u8, name),
+                .value = try arena.dupe(u8, value),
+            });
+        }
+    }
+
     const etag = if (entry.get(?[]const u8, 5)) |opt| try arena.dupe(u8, opt) else null;
     const last_modified = if (entry.get(?[]const u8, 6)) |opt| try arena.dupe(u8, opt) else null;
 
     var header_rows = try conn.rows(
-        "select name, value, vary from header where url = $1",
-        .{url},
+        "select name, value from header where url = $1 and vary = false",
+        .{req.url},
     );
     defer header_rows.deinit();
 
     var headers: std.ArrayList(Http.Header) = .empty;
-    var vary_headers: std.ArrayList(Http.Header) = .empty;
     var content_type: []const u8 = "application/octet-stream";
 
     while (try header_rows.next()) |row| {
         const name = try arena.dupe(u8, row.get([]const u8, 0));
         const value = try arena.dupe(u8, row.get(Blob, 1).data);
-        const vary = row.get(bool, 2);
-
-        if (std.ascii.eqlIgnoreCase(name, "content-type")) {
-            content_type = value;
-        }
-
-        const h = Http.Header{ .name = name, .value = value };
-        if (vary) {
-            try vary_headers.append(arena, h);
-        } else {
-            try headers.append(arena, h);
-        }
+        if (std.ascii.eqlIgnoreCase(name, "content-type")) content_type = value;
+        try headers.append(arena, .{ .name = name, .value = value });
     }
 
-    return CachedMetadata{
-        .url = try arena.dupeZ(u8, url),
+    var body_entry = try conn.row(
+        "select data from body where url = $1",
+        .{req.url},
+    ) orelse {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing body " });
+        return null;
+    };
+    defer body_entry.deinit();
+    const body = try arena.dupe(u8, body_entry.get(Blob, 0).data);
+
+    const metadata = CachedMetadata{
+        .url = try arena.dupeZ(u8, req.url),
         .content_type = content_type,
         .status = status,
         .stored_at = stored_at,
@@ -179,19 +223,24 @@ fn loadMetadata(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?CachedM
         .etag = etag,
         .last_modified = last_modified,
     };
+
+    const expired = metadata.isStale(req.timestamp);
+    log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
+
+    return .{
+        .metadata = metadata,
+        .data = .{ .buffer = body },
+        .expired = expired,
+    };
 }
 
-fn loadBody(conn: Conn, arena: std.mem.Allocator, url: []const u8) !?[]const u8 {
-    const body_entry = try conn.row(
-        "select data from body where url = $1",
-        .{url},
-    ) orelse return null;
-    defer body_entry.deinit();
+pub fn put(self: *SqliteCache, meta: CachedMetadata, body: []const u8) !void {
+    const conn = try self.pool.acquire();
+    defer self.pool.release(conn);
 
-    return try arena.dupe(u8, body_entry.get(Blob, 0).data);
-}
+    try conn.begin();
+    errdefer conn.rollback() catch {};
 
-fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
     try conn.exec("delete from metadata where url = $1", .{meta.url});
 
     try conn.exec(
@@ -231,89 +280,7 @@ fn insertMetadata(conn: Conn, meta: CachedMetadata, body: []const u8) !void {
             .{ meta.url, name, Blob{ .data = h.value } },
         );
     }
-}
 
-fn updateMetadata(conn: Conn, meta: CachedMetadata) !void {
-    try conn.exec(
-        \\ update metadata
-        \\ set status = $1, stored_at = $2, age_at_store = $3, max_age = $4, must_revalidate = $5, etag = $6, last_modified = $7
-        \\ where url = $8
-    , .{
-        @as(i64, @intCast(meta.status)),
-        meta.stored_at,
-        @as(i64, @intCast(meta.age_at_store)),
-        @as(i64, @intCast(meta.cache_control.max_age)),
-        meta.cache_control.must_revalidate,
-        meta.etag,
-        meta.last_modified,
-        meta.url,
-    });
-
-    try conn.exec("delete from header where url = $1 and vary = false", .{meta.url});
-
-    var lower_name: [256]u8 = undefined;
-    for (meta.headers) |h| {
-        if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
-        const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
-        try conn.exec(
-            "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
-            .{ meta.url, name, Blob{ .data = h.value } },
-        );
-    }
-}
-
-pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
-    const conn = try self.pool.acquire();
-    defer self.pool.release(conn);
-
-    try conn.begin();
-    defer conn.rollback() catch {};
-
-    const metadata = try loadMetadata(conn, arena, req.url) orelse {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
-        return null;
-    };
-
-    // Vary matching.
-    for (metadata.vary_headers) |vary_hdr| {
-        const incoming = for (req.request_headers) |h| {
-            if (std.ascii.eqlIgnoreCase(h.name, vary_hdr.name)) break h.value;
-        } else "";
-
-        if (!std.ascii.eqlIgnoreCase(vary_hdr.value, incoming)) {
-            log.debug(.cache, "miss", .{
-                .url = req.url,
-                .reason = "vary mismatch",
-                .header = vary_hdr.name,
-                .expected = vary_hdr.value,
-                .got = incoming,
-            });
-            return null;
-        }
-    }
-
-    const body = try loadBody(conn, arena, req.url) orelse {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing body " });
-        return null;
-    };
-    const expired = metadata.isStale(req.timestamp);
-    log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
-
-    return .{
-        .metadata = metadata,
-        .data = .{ .buffer = body },
-        .expired = expired,
-    };
-}
-
-pub fn put(self: *SqliteCache, meta: CachedMetadata, body: []const u8) !void {
-    const conn = try self.pool.acquire();
-    defer self.pool.release(conn);
-
-    try conn.begin();
-    errdefer conn.rollback() catch {};
-
-    try insertMetadata(conn, meta, body);
     try conn.commit();
 
     log.debug(.cache, "put", .{ .url = meta.url, .body_len = body.len });
@@ -342,21 +309,67 @@ pub fn evict(self: *SqliteCache, url: []const u8) void {
     log.debug(.cache, "evict", .{ .url = url });
 }
 
-pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !void {
+pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
     try conn.begin();
     errdefer conn.rollback() catch {};
 
-    var metadata = try loadMetadata(conn, arena, req.url) orelse {
+    const exists = try conn.row("select 1 from metadata where url = $1", .{req.url});
+    if (exists) |*row| {
+        row.deinit();
+    } else {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
         return error.CacheEntryNotFound;
-    };
+    }
 
-    metadata.renew(req);
+    var age_at_store: u64 = 0;
+    var etag: ?[]const u8 = null;
+    var last_modified: ?[]const u8 = null;
+    var cache_control: ?CacheControl = null;
 
-    try updateMetadata(conn, metadata);
+    for (req.headers) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "Age")) {
+            age_at_store = parseDeltaSeconds(h.value) orelse 0;
+        } else if (std.ascii.eqlIgnoreCase(h.name, "Cache-Control")) {
+            cache_control = CacheControl.parse(h.value) orelse continue;
+        } else if (std.ascii.eqlIgnoreCase(h.name, "ETag")) {
+            etag = h.value;
+        } else if (std.ascii.eqlIgnoreCase(h.name, "Last-Modified")) {
+            last_modified = h.value;
+        }
+    }
+
+    try conn.exec(
+        \\ update metadata
+        \\ set stored_at = $1,
+        \\     age_at_store = $2,
+        \\     max_age = coalesce($3, max_age),
+        \\     must_revalidate = coalesce($4, must_revalidate),
+        \\     etag = coalesce($5, etag),
+        \\     last_modified = coalesce($6, last_modified)
+        \\ where url = $7
+    , .{
+        req.timestamp,
+        age_at_store,
+        if (cache_control) |cc| cc.max_age else null,
+        if (cache_control) |cc| cc.must_revalidate else null,
+        etag,
+        last_modified,
+        req.url,
+    });
+
+    var lower_name: [256]u8 = undefined;
+    for (req.headers) |h| {
+        if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
+        const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
+        try conn.exec(
+            "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
+            .{ req.url, name, Blob{ .data = h.value } },
+        );
+    }
+
     try conn.commit();
 
     log.debug(.cache, "renewed", .{
