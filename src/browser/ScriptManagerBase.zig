@@ -354,6 +354,7 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
         };
         switch (entry.value_ptr.state) {
             .loading => {
+                if (client.hasPendingTeardown()) return error.SyncWaitInterrupted;
                 _ = try client.tickSync(200);
                 continue;
             },
@@ -1103,4 +1104,39 @@ test "ScriptManagerBase: shutdownCallback fails a .loading module" {
 
     try testing.expect(sm.imported_modules.getPtr(url).?.state == .err);
     try testing.expectError(error.Failed, sm.waitForImport(url));
+}
+
+test "ScriptManagerBase: waitForImport stops when teardown is pending" {
+    defer testing.reset();
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const sm = &frame._script_manager.base;
+    const client = sm.client;
+    const url: [:0]const u8 = "http://127.0.0.1:9582/pending-module.js";
+
+    const arena = try sm.acquireArena(.large, "test.pending_teardown");
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = url,
+        .node = .{},
+        .manager = sm,
+        .complete = false,
+        .source = .{ .remote = .{} },
+        .extra = .import,
+        .hint_element = null,
+    };
+    try sm.imported_modules.put(sm.allocator, url, .{ .state = .{ .loading = script } });
+    sm.async_scripts.append(&script.node);
+
+    const message_arena = try client.arena_pool.acquire(.tiny, "test teardown message");
+    client.inbox.push(message_arena, .{ .cdp = .{
+        .raw = try message_arena.dupe(u8, "{}"),
+        .input = .{ .method = "Target.disposeBrowserContext" },
+    } });
+    defer client.inbox.pop().?.deinit(client.arena_pool);
+
+    try testing.expectError(error.SyncWaitInterrupted, sm.waitForImport(url));
 }

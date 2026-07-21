@@ -571,6 +571,10 @@ pub fn tickSync(self: *Client, timeout_ms: u32) !void {
     return self._tick(timeout_ms, .sync_wait);
 }
 
+pub fn hasPendingTeardown(self: *Client) bool {
+    return self.inbox.contains(isSyncWaitInterrupt);
+}
+
 pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     if (self.inbox.terminated) {
         return error.ClientDisconnected;
@@ -1030,6 +1034,13 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Ow
         req.deinit();
         return error.ClientDisconnected;
     }
+    // A parser can start another blocking script/style fetch while unwinding
+    // the previous interrupted fetch. Don't pay one sync-poll interval per
+    // resource when teardown is already queued.
+    if (self.hasPendingTeardown()) {
+        req.deinit();
+        return error.SyncWaitInterrupted;
+    }
 
     var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
     errdefer sync_ctx.body.deinit(allocator);
@@ -1063,7 +1074,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Ow
             }
             return err;
         };
-        if (sync_ctx.completion == .in_progress and self.inbox.contains(isSyncWaitInterrupt)) {
+        if (sync_ctx.completion == .in_progress and self.hasPendingTeardown()) {
             // A teardown/close command is queued but sync_wait can't dispatch
             // it mid-parse (it would free the Page/Frame this stack holds).
             // Abort the blocking fetch so the parser unwinds to the next safe
