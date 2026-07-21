@@ -28,6 +28,7 @@ const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 
 const log = lp.log;
+const crypto = @import("sys/libcrypto.zig");
 const Allocator = std.mem.Allocator;
 
 // TCP keepalive parameters applied to accepted CDP connections.
@@ -73,13 +74,14 @@ fn logFilterScopesValidator(allocator: Allocator, args: *std.process.Args.Iterat
     }
 }
 
-fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator) !?log.Level {
+fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator, target: *?log.Level) !void {
     const str = args.next() orelse return error.MissingArgument;
     if (std.mem.eql(u8, str, "error")) {
-        return .err;
+        target.* = .err;
+        return;
     }
 
-    return std.meta.stringToEnum(log.Level, str) orelse {
+    target.* = std.meta.stringToEnum(log.Level, str) orelse {
         log.fatal(.app, "invalid option choice", .{ .arg = "--log-level", .value = str });
         return error.InvalidArgument;
     };
@@ -98,18 +100,93 @@ pub fn isHashedDirectory(dir: []const u8) bool {
     return false;
 }
 
+const Cert = struct {
+    /// On successful CLI argument parsing phase, ownership of this transferred
+    /// to `Network`. Consider it as invalid.
+    store: ?*crypto.X509_STORE = null,
+    // Number of certificate sources loaded into `store`.
+    count: usize = 0,
+
+    /// Returns the store, creating it on first use. The store is shared by
+    /// every `--ca-cert`/`--ca-path` occurrence.
+    fn getOrCreate(self: *Cert) !*crypto.X509_STORE {
+        if (self.store) |store| {
+            return store;
+        }
+        const store = crypto.X509_STORE_new() orelse
+            return error.FailedToCreateCertStore;
+        self.store = store;
+        return store;
+    }
+
+    fn deinit(self: *Cert) void {
+        if (self.store) |store| {
+            crypto.X509_STORE_free(store);
+        }
+        self.* = .{};
+    }
+};
+
+fn caCertValidator(
+    _: Allocator,
+    args: *std.process.ArgIterator,
+    cert: *Cert,
+) !void {
+    const file_name = args.next() orelse return error.MissingArgument;
+    const store = try cert.getOrCreate();
+    errdefer cert.deinit();
+
+    if (crypto.X509_STORE_load_locations(store, file_name, null) != 1) {
+        log.fatal(.app, "Invalid CA cert", .{ .arg = "--ca-cert", .value = file_name });
+        return error.InvalidArgument;
+    }
+    cert.count += 1;
+}
+
 fn caPathValidator(
     allocator: Allocator,
     args: *std.process.ArgIterator,
-    list: *std.ArrayList([:0]const u8),
+    cert: *Cert,
 ) !void {
-    const dir = args.next() orelse return error.MissingArgument;
-    if (!isHashedDirectory(dir)) {
-        log.fatal(.app, "invalid CA path", .{ .arg = "--ca-path", .value = dir });
+    const dir_path = args.next() orelse return error.MissingArgument;
+
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
+        log.fatal(.app, "Invalid CA path", .{ .arg = "--ca-path", .value = dir_path });
         return error.InvalidArgument;
+    };
+    defer dir.close();
+
+    const store = try cert.getOrCreate();
+    errdefer cert.deinit();
+
+    // Eagerly load every certificate in the directory rather than
+    // registering a lazy hashed lookup: the directory doesn't need to be
+    // c_rehash'ed, bad entries surface at startup and `count` reflects
+    // what was actually loaded.
+    const count_before = cert.count;
+    var it = dir.iterate();
+    while (it.next() catch {
+        log.fatal(.app, "Invalid CA path", .{ .arg = "--ca-path", .value = dir_path });
+        return error.InvalidArgument;
+    }) |entry| {
+        if (entry.kind != .file and entry.kind != .sym_link) continue;
+
+        const path = try std.fs.path.joinZ(allocator, &.{ dir_path, entry.name });
+        defer allocator.free(path);
+
+        if (crypto.X509_STORE_load_locations(store, path, null) != 1) {
+            log.warn(.app, "Skipping invalid CA cert", .{ .arg = "--ca-path", .value = path });
+            continue;
+        }
+        cert.count += 1;
     }
 
-    return list.append(allocator, try allocator.dupeZ(u8, dir));
+    // An empty directory (or one with no readable certificates) is
+    // indistinguishable from a typo; treat it as an error.
+    if (cert.count == count_before) {
+        log.fatal(.app, "No certificates loaded", .{ .arg = "--ca-path", .value = dir_path });
+        return error.InvalidArgument;
+    }
 }
 
 /// Common CLI args.
@@ -145,26 +222,46 @@ const CommonOptions = .{
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },
-    .{ .name = "ca_cert", .type = [:0]const u8, .multiple = true },
-    .{ .name = "ca_path", .type = [:0]const u8, .multiple = true, .validator = caPathValidator },
+    .{
+        .name = "ca_cert",
+        .field_name = "cert",
+        .type = .{
+            .cli = [:0]const u8,
+            .memory = Cert,
+        },
+        .default = Cert{},
+        .validator = caCertValidator,
+    },
+    .{
+        .name = "ca_path",
+        .field_name = "cert",
+        .type = .{
+            .cli = []const u8,
+            .memory = Cert,
+        },
+        .default = Cert{},
+        .validator = caPathValidator,
+    },
 };
 
-fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator) !?DumpFormat {
+fn dumpValidator(_: Allocator, args: *std.process.ArgIterator, target: *?DumpFormat) !void {
     // Peek next argument.
     var peek_args = args.*;
     if (peek_args.next()) |next_arg| {
         const mode = std.meta.stringToEnum(DumpFormat, next_arg) orelse {
-            return .html;
+            target.* = .html;
+            return;
         };
 
         // Skip the argument we peek if successful.
         _ = args.next();
-        return mode;
+        target.* = mode;
+        return;
     }
 
     // Means we couldn't get something like `--dump html` but we do have
     // `--dump`; which should fall to `html` by default.
-    return .html;
+    target.* = .html;
 }
 
 pub const AiProvider = std.meta.Tag(zenai.provider.Client);
@@ -189,13 +286,13 @@ pub const AgentVerbosity = enum {
     }
 };
 
-fn waitScriptFileValidator(allocator: Allocator, args: *std.process.Args.Iterator) !?[:0]const u8 {
+fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator, target: *?[:0]const u8) !void {
     const path = args.next() orelse {
         log.fatal(.app, "missing argument value", .{ .arg = "--wait-script-file" });
         return error.InvalidArgument;
     };
 
-    return std.Io.Dir.cwd().readFileAllocOptions(lp.io, path, allocator, .limited(1024 * 1024), .of(u8), 0) catch |err| {
+    target.* = std.fs.cwd().readFileAllocOptions(allocator, path, 1024 * 1024, null, .of(u8), 0) catch |err| {
         log.fatal(.app, "failed to read file", .{ .arg = "--wait-script-file", .path = path, .err = err });
         return error.InvalidArgument;
     };
