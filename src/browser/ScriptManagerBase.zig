@@ -1123,7 +1123,7 @@ test "ScriptManagerBase: waitForImport stops when teardown is pending" {
         .node = .{},
         .manager = sm,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .import,
         .hint_element = null,
     };

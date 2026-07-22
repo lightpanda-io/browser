@@ -615,7 +615,7 @@ test "ScriptManager: waitForPreload stops when teardown is pending" {
         .node = .{},
         .manager = &sm.base,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .preload,
         .hint_element = null,
     };
