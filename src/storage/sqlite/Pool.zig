@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const Sqlite = @import("Sqlite.zig");
 
 const Thread = std.Thread;
@@ -25,8 +26,8 @@ const Allocator = std.mem.Allocator;
 const Pool = @This();
 
 available: usize,
-mutex: Thread.Mutex,
-cond: Thread.Condition,
+mutex: std.Io.Mutex,
+cond: std.Io.Condition,
 conns: []Sqlite.Conn,
 
 pub fn init(allocator: Allocator, path: [:0]const u8) !Pool {
@@ -51,8 +52,8 @@ pub fn init(allocator: Allocator, path: [:0]const u8) !Pool {
     }
 
     return .{
-        .cond = .{},
-        .mutex = .{},
+        .cond = .init,
+        .mutex = .init,
         .conns = conns,
         .available = count,
     };
@@ -68,17 +69,19 @@ pub fn deinit(self: *Pool, allocator: Allocator) void {
 pub fn acquire(self: *Pool) !Sqlite.Conn {
     const conns = self.conns;
 
-    self.mutex.lock();
+    self.mutex.lockUncancelable(lp.io);
     while (true) {
         const available = self.available;
         if (available == 0) {
-            try self.cond.timedWait(&self.mutex, 5 * std.time.ns_per_s);
+            // @ZIG16 Io.Condition has no timedWait; restore the 5s
+            // starvation bail-out when one lands.
+            self.cond.waitUncancelable(lp.io, &self.mutex);
             continue;
         }
         const index = available - 1;
         const conn = conns[index];
         self.available = index;
-        self.mutex.unlock();
+        self.mutex.unlock(lp.io);
         return conn;
     }
 }
@@ -86,12 +89,12 @@ pub fn acquire(self: *Pool) !Sqlite.Conn {
 pub fn release(self: *Pool, conn: Sqlite.Conn) void {
     var conns = self.conns;
 
-    self.mutex.lock();
+    self.mutex.lockUncancelable(lp.io);
     const available = self.available;
     conns[available] = conn;
     self.available = available + 1;
-    self.mutex.unlock();
-    self.cond.signal();
+    self.mutex.unlock(lp.io);
+    self.cond.signal(lp.io);
 }
 
 const testing = @import("../../testing.zig");
@@ -99,12 +102,12 @@ test "Sqlite: Pool" {
     // :memory: _has_ to run with a single connection in the pool, which isn't
     // that useful for testing. So we create a temp file.
 
-    std.fs.cwd().deleteFile("/tmp/lightpanda_test.sqlite") catch {};
+    std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/lightpanda_test.sqlite") catch {};
     var pool = try Pool.init(testing.allocator, "/tmp/lightpanda_test.sqlite");
 
     defer {
         pool.deinit(testing.allocator);
-        std.fs.cwd().deleteFile("/tmp/lightpanda_test.sqlite") catch {};
+        std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/lightpanda_test.sqlite") catch {};
     }
 
     {
@@ -160,6 +163,6 @@ fn testPool(p: *Pool) !void {
         };
         conn.exec("commit", .{}) catch unreachable;
         p.release(conn);
-        std.Thread.sleep(2 * std.time.ns_per_ms);
+        lp.io.sleep(.fromMilliseconds(2), .awake) catch {};
     }
 }

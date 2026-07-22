@@ -115,7 +115,7 @@ fn appendScrubbed(self: *Recorder) !void {
 fn writeCommentLines(w: *std.Io.Writer, comment: []const u8) !void {
     var it = std.mem.splitScalar(u8, comment, '\n');
     while (it.next()) |line| {
-        const trimmed = std.mem.trimRight(u8, line, "\r");
+        const trimmed = std.mem.trimEnd(u8, line, "\r");
         try w.writeAll("// ");
         try w.writeAll(trimmed);
         try w.writeByte('\n');

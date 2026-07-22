@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 
+pub const io = std.testing.io;
 pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expect = std.testing.expect;
@@ -204,7 +205,7 @@ pub const Random = struct {
     pub fn random() std.Random {
         if (instance == null) {
             var seed: u64 = undefined;
-            std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+            io.random(std.mem.asBytes(&seed));
             instance = std.Random.DefaultPrng.init(seed);
             // instance = std.Random.DefaultPrng.init(0);
         }
@@ -370,7 +371,7 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
     defer test_session.load_external_stylesheets = false;
 
     const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
-    const stat = std.fs.cwd().statFile(root) catch |err| {
+    const stat = std.Io.Dir.cwd().statFile(io, root, .{}) catch |err| {
         std.debug.print("Failed to stat file: '{s}'", .{root});
         return err;
     };
@@ -384,15 +385,15 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
             try runWebApiTest(root, opts.timeout_ms);
         },
         .directory => {
-            var dir = try std.fs.cwd().openDir(root, .{
+            var dir = try std.Io.Dir.cwd().openDir(io, root, .{
                 .iterate = true,
-                .no_follow = true,
+                .follow_symlinks = false,
                 .access_sub_paths = false,
             });
-            defer dir.close();
+            defer dir.close(io);
 
             var it = dir.iterateAssumeFirstIteration();
-            while (try it.next()) |entry| {
+            while (try it.next(io)) |entry| {
                 if (entry.kind != .file) {
                     continue;
                 }
@@ -446,7 +447,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
     try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
 
     var wait_ms: u32 = timeout_ms;
-    var timer = try std.time.Timer.start();
+    var timer: std.Io.Timestamp = .now(lp.io, .boot);
     while (true) {
         var try_catch: js.TryCatch = undefined;
         try_catch.init(&ls.local);
@@ -465,13 +466,15 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
             .ok => |next_ms| @min(next_ms, 20),
         };
 
-        const ms_elapsed = timer.lap() / 1_000_000;
+        const lap: std.Io.Timestamp = .now(lp.io, .boot);
+        const ms_elapsed: u64 = @intCast(timer.durationTo(lap).toMilliseconds());
+        timer = lap;
         if (ms_elapsed >= wait_ms) {
             ls.local.eval("testing.printTimeoutState()", "testing.printTimeoutState()") catch {};
             return error.TestTimedOut;
         }
         wait_ms -= @intCast(ms_elapsed);
-        std.Thread.sleep(std.time.ns_per_ms * sleep_ms);
+        lp.io.sleep(.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};
     }
 }
 
@@ -540,7 +543,7 @@ test "tests:beforeAll" {
 
     test_session = try test_browser.newSession(test_notification);
 
-    var wg: std.Thread.WaitGroup = .{};
+    var wg: lp.WaitGroup = .{};
     wg.startMany(3);
 
     test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
@@ -593,8 +596,8 @@ test "tests:afterAll" {
     test_config.deinit(@import("root").tracking_allocator);
 }
 
-fn serveCDP(wg: *std.Thread.WaitGroup) !void {
-    const address = try std.net.Address.parseIp("127.0.0.1", 9583);
+fn serveCDP(wg: *lp.WaitGroup) !void {
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9583);
 
     test_cdp_server = Server.init(test_app, address) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
@@ -814,14 +817,14 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // still streaming.
         var waited: usize = 0;
         while (!sse_flag.load(.acquire) and waited < 5000) : (waited += 10) {
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
         }
         if (sse_flag.load(.acquire)) {
             // split mid-line to exercise buffering across chunks
             try res.writer.writeAll("data: sec");
             try res.writer.flush();
             try res.flush();
-            std.Thread.sleep(20 * std.time.ns_per_ms);
+            lp.io.sleep(.fromMilliseconds(20), .awake) catch {};
             try res.writer.writeAll("ond\n\n");
             try res.writer.flush();
             try res.flush();
@@ -995,7 +998,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             var end = digits_start;
             while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
             const delay_ms = std.fmt.parseInt(u64, path[digits_start..end], 10) catch 0;
-            std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+            lp.io.sleep(.fromMilliseconds(@intCast(delay_ms)), .awake) catch {};
         }
         // strip off leading / so that it's relative to CWD
         return TestHTTPServer.sendFile(req, path[1..]);

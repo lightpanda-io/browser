@@ -108,7 +108,7 @@ pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime 
         }
 
         if (shouldPercentEncode(c, encode_set)) {
-            try buf.writer(allocator).print("%{X:0>2}", .{c});
+            try buf.print(allocator, "%{X:0>2}", .{c});
         } else {
             try buf.append(allocator, c);
         }

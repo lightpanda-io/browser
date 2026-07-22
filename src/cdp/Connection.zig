@@ -24,8 +24,10 @@ const CDP = @import("CDP.zig");
 
 const App = @import("../App.zig");
 const Inbox = @import("../Inbox.zig");
-const WS = @import("../network/WS.zig");
 const ArenaPool = @import("../ArenaPool.zig");
+
+const WS = @import("../network/WS.zig");
+const sys_net = @import("../sys/net.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -54,7 +56,7 @@ pub fn init(
     json_version_response: []const u8,
     inbox: *Inbox,
 ) !void {
-    const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
+    const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
     const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
     if (builtin.is_test == false) {
         lp.assert(socket_flags & nonblocking == nonblocking, "Connection.init blocking", .{});
@@ -89,13 +91,13 @@ pub fn send(self: *Connection, data: []const u8) !void {
     defer if (changed_to_blocking) {
         // We had to change our socket to blocking mode to get our write out
         // We need to change it back to non-blocking.
-        _ = posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags) catch |err| {
+        _ = sys_net.fcntl(self.socket, posix.F.SETFL, self.socket_flags) catch |err| {
             log.err(.app, "ws restore nonblocking", .{ .err = err });
         };
     };
 
     LOOP: while (pos < data.len) {
-        const written = posix.write(self.socket, data[pos..]) catch |err| switch (err) {
+        const written = sys_net.write(self.socket, data[pos..]) catch |err| switch (err) {
             error.WouldBlock => {
                 // self.socket is nonblocking, because we don't want to block
                 // reads. But our life is a lot easier if we block writes,
@@ -107,7 +109,7 @@ pub fn send(self: *Connection, data: []const u8) !void {
                 // this should virtually never happen.
                 lp.assert(changed_to_blocking == false, "Connection.double block", .{});
                 changed_to_blocking = true;
-                _ = try posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
+                _ = try sys_net.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
                 continue :LOOP;
             },
             else => return err,
@@ -520,15 +522,15 @@ pub fn sendHttpError(self: *Connection, comptime status: u16, comptime body: []c
     self.send(response) catch {};
 }
 
-pub fn getAddress(self: *Connection) !std.net.Address {
-    var address: std.net.Address = undefined;
-    var socklen: posix.socklen_t = @sizeOf(std.net.Address);
-    try posix.getpeername(self.socket, &address.any, &socklen);
-    return address;
+pub fn getAddress(self: *Connection) !sys_net.IpAddress {
+    var storage: posix.sockaddr.storage = undefined;
+    var socklen: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+    try posix.getpeername(self.socket, @ptrCast(&storage), &socklen);
+    return sys_net.addressFromSockaddr(@ptrCast(&storage));
 }
 
 pub fn shutdown(self: *Connection) void {
-    posix.shutdown(self.socket, .recv) catch {};
+    sys_net.shutdown(self.socket, .recv) catch {};
 }
 
 fn fillWebsocketHeader(buf: std.ArrayList(u8)) []const u8 {

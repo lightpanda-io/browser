@@ -258,7 +258,7 @@ pub const SlabAllocator = struct {
         utilization_ratio: f64,
         slabs: []const Slab.Stats,
 
-        pub fn print(self: *const Stats, stream: *std.io.Writer) !void {
+        pub fn print(self: *const Stats, stream: *std.Io.Writer) !void {
             try stream.print("\n", .{});
             try stream.print("\n=== Slab Allocator Statistics ===\n", .{});
             try stream.print("Overall Memory:\n", .{});

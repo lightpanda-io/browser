@@ -24,9 +24,9 @@ const App = @import("App.zig");
 const Config = @import("Config.zig");
 
 const CDP = @import("cdp/CDP.zig");
+const sys_net = @import("sys/net.zig");
 
 const log = lp.log;
-const net = std.net;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
@@ -38,11 +38,11 @@ json_version_response: []const u8,
 
 active_threads: std.atomic.Value(u32) = .init(0),
 
-cdps: std.ArrayList(*CDP) = .{},
-cdp_mutex: std.Thread.Mutex = .{},
-cdp_pool: std.heap.MemoryPool(CDP),
+cdps: std.ArrayList(*CDP) = .empty,
+cdp_mutex: std.Io.Mutex = .init,
+cdp_pool: std.heap.memory_pool.ExtraManaged(CDP, .{}),
 
-pub fn init(app: *App, address: net.Address) !*Server {
+pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     const self = try app.allocator.create(Server);
     errdefer app.allocator.destroy(self);
 
@@ -64,8 +64,8 @@ pub fn init(app: *App, address: net.Address) !*Server {
 }
 
 pub fn shutdown(self: *Server) void {
-    self.cdp_mutex.lock();
-    defer self.cdp_mutex.unlock();
+    self.cdp_mutex.lockUncancelable(lp.io);
+    defer self.cdp_mutex.unlock(lp.io);
 
     self.app.network.unbind();
 
@@ -84,7 +84,7 @@ pub fn deinit(self: *Server) void {
     self.shutdown();
 
     while (self.active_threads.load(.monotonic) > 0) {
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
     }
 
     self.cdps.deinit(self.app.allocator);
@@ -97,13 +97,13 @@ fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
     const self: *Server = @ptrCast(@alignCast(ctx));
 
     configureSocket(socket) catch {
-        posix.close(socket);
+        _ = std.c.close(socket);
         return;
     };
 
     self.spawnWorker(socket) catch |err| {
         log.err(.app, "CDP spawn", .{ .err = err });
-        posix.close(socket);
+        _ = std.c.close(socket);
     };
 }
 
@@ -132,6 +132,13 @@ fn configureSocket(socket: posix.socket_t) !void {
         log.warn(.app, "TCP_KEEPCNT", .{ .err = err });
         return err;
     };
+
+    if (builtin.os.tag == .linux) {
+        posix.setsockopt(socket, posix.IPPROTO.TCP, std.os.linux.TCP.USER_TIMEOUT, &std.mem.toBytes(Config.CDP_TCP_USER_TIMEOUT_MS)) catch |err| {
+            log.warn(.app, "TCP_USER_TIMEOUT", .{ .err = err });
+            return err;
+        };
+    }
 }
 
 fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
@@ -167,16 +174,16 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
 
 fn handleConnection(self: *Server, socket: posix.socket_t) void {
     defer _ = self.active_threads.fetchSub(1, .monotonic);
-    defer posix.close(socket);
+    defer _ = std.c.close(socket);
 
     const cdp = blk: {
-        self.cdp_mutex.lock();
-        defer self.cdp_mutex.unlock();
+        self.cdp_mutex.lockUncancelable(lp.io);
+        defer self.cdp_mutex.unlock(lp.io);
         break :blk self.cdp_pool.create() catch @panic("OOM");
     };
     defer {
-        self.cdp_mutex.lock();
-        defer self.cdp_mutex.unlock();
+        self.cdp_mutex.lockUncancelable(lp.io);
+        defer self.cdp_mutex.unlock(lp.io);
         self.cdp_pool.destroy(cdp);
     }
 
@@ -193,15 +200,15 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
 
     {
         // track the connection
-        self.cdp_mutex.lock();
-        defer self.cdp_mutex.unlock();
+        self.cdp_mutex.lockUncancelable(lp.io);
+        defer self.cdp_mutex.unlock(lp.io);
         self.cdps.append(self.app.allocator, cdp) catch {};
     }
 
     defer {
         // untrack the connection
-        self.cdp_mutex.lock();
-        defer self.cdp_mutex.unlock();
+        self.cdp_mutex.lockUncancelable(lp.io);
+        defer self.cdp_mutex.unlock(lp.io);
         for (self.cdps.items, 0..) |c, i| {
             if (c == cdp) {
                 _ = self.cdps.swapRemove(i);
@@ -229,8 +236,8 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         // Transition from .handshake state to .live
         // Lock needed even though the main thread hasn't seen this yet because
         // shutdown could access this from the sighandler thread.
-        self.cdp_mutex.lock();
-        defer self.cdp_mutex.unlock();
+        self.cdp_mutex.lockUncancelable(lp.io);
+        defer self.cdp_mutex.unlock(lp.io);
         cdp.conn.state = .live;
     }
 
@@ -565,7 +572,6 @@ test "server: get /metrics" {
     defer c.deinit();
 
     const res = try c.httpRequest("GET /metrics HTTP/1.1\r\n\r\n");
-    std.debug.print("1\n", .{});
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
     try testing.expect(std.mem.indexOf(u8, res, "Content-Type: text/plain; version=0.0.4") != null);
     try testing.expect(std.mem.indexOf(u8, res, "build_info{version=") != null);
@@ -594,7 +600,7 @@ fn assertWebSocketError(close_code: u16, input: []const u8) !void {
     defer c.deinit();
 
     try c.handshake();
-    try c.stream.writeAll(input);
+    try sys_net.writeAll(c.socket, input);
 
     const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
     defer if (msg.cleanup_fragment) {
@@ -611,7 +617,7 @@ fn assertWebSocketMessage(expected: []const u8, input: []const u8) !void {
     defer c.deinit();
 
     try c.handshake();
-    try c.stream.writeAll(input);
+    try sys_net.writeAll(c.socket, input);
 
     const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
     defer if (msg.cleanup_fragment) {
@@ -623,7 +629,7 @@ fn assertWebSocketMessage(expected: []const u8, input: []const u8) !void {
 }
 
 const MockCDP = struct {
-    messages: std.ArrayList([]const u8) = .{},
+    messages: std.ArrayList([]const u8) = .empty,
 
     allocator: Allocator = testing.allocator,
 
@@ -648,17 +654,17 @@ const MockCDP = struct {
 };
 
 fn createTestClient() !TestClient {
-    const address = std.net.Address.initIp4([_]u8{ 127, 0, 0, 1 }, 9583);
-    const stream = try std.net.tcpConnectToAddress(address);
+    const address: sys_net.IpAddress = .{ .ip4 = .loopback(9583) };
+    const socket = try sys_net.connect(&address);
 
     const timeout = std.mem.toBytes(posix.timeval{
         .sec = 10,
         .usec = 0,
     });
-    try posix.setsockopt(stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
-    try posix.setsockopt(stream.handle, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+    try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
+    try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
     return .{
-        .stream = stream,
+        .socket = socket,
         .reader = .{
             .max_message_size = 1024,
             .allocator = testing.allocator,
@@ -668,24 +674,24 @@ fn createTestClient() !TestClient {
 }
 
 const TestClient = struct {
-    stream: std.net.Stream,
+    socket: posix.socket_t,
     buf: [8192]u8 = undefined,
     reader: WS.Reader(false),
 
     const WS = @import("network/WS.zig");
 
     fn deinit(self: *TestClient) void {
-        self.stream.close();
+        _ = std.c.close(self.socket);
         self.reader.deinit();
     }
 
     fn httpRequest(self: *TestClient, req: []const u8) ![]const u8 {
-        try self.stream.writeAll(req);
+        try sys_net.writeAll(self.socket, req);
 
         var pos: usize = 0;
         var total_length: ?usize = null;
         while (true) {
-            const n = try self.stream.read(self.buf[pos..]);
+            const n = try posix.read(self.socket, self.buf[pos..]);
             if (n == 0) {
                 return if (pos == self.buf.len) error.MessageTooLarge else error.NoMoreData;
             }
@@ -742,7 +748,7 @@ const TestClient = struct {
 
     fn readWebsocketMessage(self: *TestClient) !?WS.Message {
         while (true) {
-            const n = try self.stream.read(self.reader.readBuf());
+            const n = try posix.read(self.socket, self.reader.readBuf());
             if (n == 0) {
                 return error.Closed;
             }

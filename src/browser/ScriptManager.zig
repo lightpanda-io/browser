@@ -124,7 +124,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         .node = .{},
         .manager = &self.base,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .preload,
         .hint_element = element,
     };
@@ -326,7 +326,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .node = .{},
         .arena = arena,
         .manager = &self.base,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .complete = false,
         .url = remote_url,
         .extra = frame_extra,
@@ -584,7 +584,7 @@ test "ScriptManager: PreloadedScript.shutdownCallback drops a .loading preload" 
         .node = .{},
         .manager = &sm.base,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .preload,
         .hint_element = null,
     };
@@ -595,4 +595,39 @@ test "ScriptManager: PreloadedScript.shutdownCallback drops a .loading preload" 
     PreloadedScript.shutdownCallback(script);
 
     try testing.expect(sm.preloaded_scripts.getPtr(url) == null);
+}
+
+test "ScriptManager: waitForPreload stops when teardown is pending" {
+    defer testing.reset();
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const sm = &frame._script_manager;
+    const client = sm.base.client;
+    const url: [:0]const u8 = "http://127.0.0.1:9582/pending-preload.js";
+
+    const arena = try frame.getArena(.large, "test.pending_teardown");
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = url,
+        .node = .{},
+        .manager = &sm.base,
+        .complete = false,
+        .source = .{ .remote = .empty },
+        .extra = .preload,
+        .hint_element = null,
+    };
+    try sm.preloaded_scripts.put(sm.base.allocator, url, .{ .state = .{ .loading = script } });
+    defer sm.takePreload(url).?.deinit();
+
+    const message_arena = try client.arena_pool.acquire(.tiny, "test teardown message");
+    client.inbox.push(message_arena, .{ .cdp = .{
+        .raw = try message_arena.dupe(u8, "{}"),
+        .input = .{ .method = "Target.closeTarget" },
+    } });
+    defer client.inbox.pop().?.deinit(client.arena_pool);
+
+    try testing.expect(sm.waitForPreload(url) == null);
 }

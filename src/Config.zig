@@ -17,10 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
-const log = lp.log;
-const builtin = @import("builtin");
 const zenai = @import("zenai");
+const lp = @import("lightpanda");
+const builtin = @import("builtin");
 
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
@@ -28,6 +27,7 @@ const dump = @import("browser/dump.zig");
 const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 // TCP keepalive parameters applied to accepted CDP connections.
@@ -35,10 +35,11 @@ const Allocator = std.mem.Allocator;
 pub const CDP_KEEPALIVE_IDLE_S: c_int = 4;
 pub const CDP_KEEPALIVE_INTVL_S: c_int = 2;
 pub const CDP_KEEPALIVE_CNT: c_int = 3;
+pub const CDP_TCP_USER_TIMEOUT_MS: c_int = 10_000;
 
 const Config = @This();
 
-fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator, list: *std.ArrayList(log.FilterRule)) !void {
+fn logFilterScopesValidator(allocator: Allocator, args: *std.process.Args.Iterator, list: *std.ArrayList(log.FilterRule)) !void {
     const str = args.next() orelse return error.InvalidOption;
 
     var it = std.mem.splitScalar(u8, str, ',');
@@ -72,7 +73,7 @@ fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator
     }
 }
 
-fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator) !?log.Level {
+fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator) !?log.Level {
     const str = args.next() orelse return error.MissingArgument;
     if (std.mem.eql(u8, str, "error")) {
         return .err;
@@ -119,7 +120,7 @@ const CommonOptions = .{
     .{ .name = "watchdog_ms", .type = ?u32 },
 };
 
-fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
+fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator) !?DumpFormat {
     // Peek next argument.
     var peek_args = args.*;
     if (peek_args.next()) |next_arg| {
@@ -159,13 +160,13 @@ pub const AgentVerbosity = enum {
     }
 };
 
-fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator) !?[:0]const u8 {
+fn waitScriptFileValidator(allocator: Allocator, args: *std.process.Args.Iterator) !?[:0]const u8 {
     const path = args.next() orelse {
         log.fatal(.app, "missing argument value", .{ .arg = "--wait-script-file" });
         return error.InvalidArgument;
     };
 
-    return std.fs.cwd().readFileAllocOptions(allocator, path, 1024 * 1024, null, .of(u8), 0) catch |err| {
+    return std.Io.Dir.cwd().readFileAllocOptions(lp.io, path, allocator, .limited(1024 * 1024), .of(u8), 0) catch |err| {
         log.fatal(.app, "failed to read file", .{ .arg = "--wait-script-file", .path = path, .err = err });
         return error.InvalidArgument;
     };
@@ -173,7 +174,7 @@ fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator)
 
 fn injectScriptFileValidator(
     allocator: Allocator,
-    args: *std.process.ArgIterator,
+    args: *std.process.Args.Iterator,
     list: *std.ArrayList([]const u8),
 ) !void {
     const path = args.next() orelse {
@@ -181,7 +182,7 @@ fn injectScriptFileValidator(
         return error.InvalidArgument;
     };
 
-    const bytes = std.fs.cwd().readFileAllocOptions(allocator, path, std.math.maxInt(usize), null, .of(u8), null) catch |err| {
+    const bytes = std.Io.Dir.cwd().readFileAllocOptions(lp.io, path, allocator, .unlimited, .of(u8), null) catch |err| {
         log.fatal(.app, "failed to read file", .{ .arg = "--inject-script-file", .path = path, .err = err });
         return error.InvalidArgument;
     };
@@ -476,9 +477,9 @@ pub fn agentVerbosity(opts: Agent) AgentVerbosity {
 /// path (every gate check resolves through it). Cache once — the fd
 /// doesn't change after process start.
 var stderr_tty_cached: bool = undefined;
-var stderr_tty_once = std.once(initStderrTty);
+var stderr_tty_once = lp.once(initStderrTty);
 fn initStderrTty() void {
-    stderr_tty_cached = std.posix.isatty(std.posix.STDERR_FILENO);
+    stderr_tty_cached = std.Io.File.stderr().isTty(lp.io) catch false;
 }
 fn stderrIsTty() bool {
     stderr_tty_once.call();
@@ -760,52 +761,57 @@ pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: Ru
 
     if (success) {
         printPaged(allocator, text);
-        return std.process.cleanExit();
+        return std.process.cleanExit(lp.io);
     }
-    var stderr = std.fs.File.stderr().writer(&.{});
+    var stderr = std.Io.File.stderr().writerStreaming(lp.io, &.{});
     stderr.interface.writeAll(text) catch {};
     std.process.exit(1);
 }
 
 fn printPlain(text: []const u8) void {
-    var stdout = std.fs.File.stdout().writer(&.{});
+    var stdout = std.Io.File.stdout().writerStreaming(lp.io, &.{});
     stdout.interface.writeAll(text) catch {};
 }
 
 /// Pages explicitly requested help through $PAGER (fallback: less) when
 /// stdout is an interactive terminal; prints plainly otherwise.
 fn printPaged(allocator: Allocator, text: []const u8) void {
-    if (!std.posix.isatty(std.posix.STDOUT_FILENO)) {
+    const is_tty = std.Io.File.stdout().isTty(lp.io) catch false;
+    if (!is_tty) {
         return printPlain(text);
     }
-    const term = std.posix.getenv("TERM") orelse "";
+    const term = if (std.c.getenv("TERM")) |t| std.mem.span(t) else "";
     if (term.len == 0 or std.mem.eql(u8, term, "dumb")) {
         return printPlain(text);
     }
 
-    const pager = std.posix.getenv("PAGER") orelse "";
+    const pager = if (std.c.getenv("PAGER")) |p| std.mem.span(p) else "";
     const argv: []const []const u8 = if (pager.len > 0)
         &.{ "/bin/sh", "-c", pager }
     else
         &.{ "less", "-FIRX" };
 
-    var child = std.process.Child.init(argv, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-    child.spawn() catch return printPlain(text);
+    // Pass the real environment so the pager sees TERM/LESS.
+    var environ_map = lp.environMap(allocator) catch return printPlain(text);
+    defer environ_map.deinit();
+
+    var child = std.process.spawn(lp.io, .{
+        .argv = argv,
+        .environ_map = &environ_map,
+        .stdin = .pipe,
+    }) catch return printPlain(text);
 
     if (child.stdin) |stdin| {
-        var writer = stdin.writer(&.{});
+        var writer = stdin.writerStreaming(lp.io, &.{});
         // A write error here is the pager exiting early (user quit, or the
         // command failed) — wait() below decides which.
         writer.interface.writeAll(text) catch {};
-        stdin.close();
+        stdin.close(lp.io);
         child.stdin = null;
     }
 
-    const term_result = child.wait() catch return printPlain(text);
-    const clean_exit = term_result == .Exited and term_result.Exited == 0;
+    const term_result = child.wait(lp.io) catch return printPlain(text);
+    const clean_exit = term_result == .exited and term_result.exited == 0;
     // Quitting the pager early is still exit 0; a non-zero exit means the
     // pager failed (e.g. $PAGER not found) and the help was never shown.
     if (!clean_exit) {
@@ -813,8 +819,8 @@ fn printPaged(allocator: Allocator, text: []const u8) void {
     }
 }
 
-pub fn parseArgs(allocator: Allocator) !Config {
-    const exec_name, var command = try Commands.parse(allocator);
+pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
+    const exec_name, var command = try Commands.parse(allocator, proc_args);
     if (command == .serve and command.serve.timeout != null) {
         log.warn(.app, "--timeout is deprecated", .{});
     }

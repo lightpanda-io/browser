@@ -218,7 +218,7 @@ pub const RenderOpts = struct {
 // Replace successives whitespaces with one whitespace.
 // Trims left and right according to the options.
 // Returns true if the string ends with a trimmed whitespace.
-pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !bool {
+pub fn render(self: *const CData, writer: *std.Io.Writer, opts: RenderOpts) !bool {
     var start: usize = 0;
     var prev_w: ?bool = null;
     var is_w: bool = undefined;
@@ -290,7 +290,7 @@ pub fn _setData(self: *CData, value: js.Value, frame: *Frame) !void {
     try self.replaceData(0, length, new_value, frame);
 }
 
-pub fn format(self: *const CData, writer: *std.io.Writer) !void {
+pub fn format(self: *const CData, writer: *std.Io.Writer) !void {
     return switch (self._type) {
         .text => writer.print("<text>{f}</text>", .{self._data}),
         .comment => writer.print("<!-- {f} -->", .{self._data}),
@@ -512,7 +512,7 @@ test "WebApi: CData.render" {
         .{ .value = "  foo bar  ", .expected = " foo bar ", .opts = .{ .trim_left = false, .trim_right = false } },
     };
 
-    var buffer = std.io.Writer.Allocating.init(allocator);
+    var buffer = std.Io.Writer.Allocating.init(allocator);
     defer buffer.deinit();
     for (test_cases) |test_case| {
         buffer.clearRetainingCapacity();

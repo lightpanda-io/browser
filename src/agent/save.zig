@@ -70,7 +70,9 @@ pub fn ensureJsExtension(arena: std.mem.Allocator, name: []const u8) ![]const u8
 
 pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
     for (0..100) |_| {
-        const n = std.crypto.random.int(u64);
+        var n_bytes: [8]u8 = undefined;
+        lp.io.random(&n_bytes);
+        const n = std.mem.readInt(u64, &n_bytes, .little);
         const path = try std.fmt.allocPrint(arena, "session-{x}.js", .{n});
         if (!(try fileExists(path))) return path;
     }
@@ -80,7 +82,7 @@ pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
 /// Read a previously saved script back for revision. Returns null when there
 /// is nothing to feed the model: the file does not exist or is blank.
 pub fn readScript(arena: std.mem.Allocator, path: []const u8) !?[]const u8 {
-    const content = std.fs.cwd().readFileAlloc(arena, path, 1024 * 1024) catch |err| switch (err) {
+    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -89,7 +91,7 @@ pub fn readScript(arena: std.mem.Allocator, path: []const u8) !?[]const u8 {
 }
 
 pub fn fileExists(path: []const u8) !bool {
-    std.fs.cwd().access(path, .{}) catch |err| switch (err) {
+    std.Io.Dir.cwd().access(lp.io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
@@ -97,15 +99,19 @@ pub fn fileExists(path: []const u8) !bool {
 }
 
 pub fn writeContentFile(path: []const u8, content: []const u8, mode: Mode) !void {
-    const file = try std.fs.cwd().createFile(path, .{ .truncate = mode != .append });
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = mode != .append });
+    defer file.close(lp.io);
+    var offset: u64 = 0;
     if (mode == .append) {
-        try file.seekFromEnd(0);
-        const pos = try file.getPos();
-        if (pos > 0 and content.len > 0) try file.writeAll("\n");
+        offset = try file.length(lp.io);
+        if (offset > 0 and content.len > 0) {
+            try file.writePositionalAll(lp.io, "\n", offset);
+            offset += 1;
+        }
     }
-    try file.writeAll(content);
-    if (content.len > 0 and content[content.len - 1] != '\n') try file.writeAll("\n");
+    try file.writePositionalAll(lp.io, content, offset);
+    offset += content.len;
+    if (content.len > 0 and content[content.len - 1] != '\n') try file.writePositionalAll(lp.io, "\n", offset);
 }
 
 /// Strip a surrounding ```` ```lang … ``` ```` markdown fence if the model

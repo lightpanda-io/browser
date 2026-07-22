@@ -44,7 +44,7 @@ pub fn parse(arena: Allocator, url: []const u8) !Parsed {
         if (meta.len < "base64".len) break :blk false;
         const tail = meta[meta.len - "base64".len ..];
         if (!std.ascii.eqlIgnoreCase(tail, "base64")) break :blk false;
-        const head = std.mem.trimRight(u8, meta[0 .. meta.len - "base64".len], " ");
+        const head = std.mem.trimEnd(u8, meta[0 .. meta.len - "base64".len], " ");
         if (head.len == 0 or head[head.len - 1] != ';') break :blk false;
         meta = head[0 .. head.len - 1];
         break :blk true;

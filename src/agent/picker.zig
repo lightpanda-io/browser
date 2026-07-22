@@ -21,10 +21,13 @@
 //! before — or without — the isocline REPL.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const ansi = @import("ansi.zig");
 
 pub fn interactiveTty() bool {
-    return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
+    const stdin_tty = std.Io.File.stdin().isTty(lp.io) catch false;
+    const stderr_tty = std.Io.File.stderr().isTty(lp.io) catch false;
+    return stdin_tty and stderr_tty;
 }
 
 /// Numbered TTY picker. `default` (if set) marks that row "(default)" and
@@ -45,7 +48,7 @@ pub fn promptNumberedChoice(header: []const u8, items: []const [:0]const u8, def
 /// Line-oriented fallback. Errors with NoChoice after 3 invalid attempts.
 fn promptNumberedChoiceLine(header: []const u8, items: []const [:0]const u8, default: ?usize) !usize {
     var stdin_buf: [128]u8 = undefined;
-    var stdin = std.fs.File.stdin().reader(&stdin_buf);
+    var stdin = std.Io.File.stdin().readerStreaming(lp.io, &stdin_buf);
 
     var attempt: u8 = 0;
     while (attempt < 3) : (attempt += 1) {
@@ -122,12 +125,12 @@ const RawTerminal = struct {
         // cursor keys arrive as CSI-u the byte reader can't parse; push the
         // legacy encoding to force plain arrows. restore() pops back to
         // whatever the REPL had pushed.
-        _ = std.posix.write(std.posix.STDOUT_FILENO, ansi.kitty_legacy) catch {};
+        _ = std.c.write(std.posix.STDOUT_FILENO, ansi.kitty_legacy.ptr, ansi.kitty_legacy.len);
         return .{ .original = original };
     }
 
     fn restore(self: *const RawTerminal) void {
-        _ = std.posix.write(std.posix.STDOUT_FILENO, ansi.kitty_pop) catch {};
+        _ = std.c.write(std.posix.STDOUT_FILENO, ansi.kitty_pop.ptr, ansi.kitty_pop.len);
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
     }
 };
@@ -160,9 +163,9 @@ fn promptInteractiveChoice(header: []const u8, items: []const [:0]const u8, defa
 /// visually mid-frame (same approach as Spinner's renderLocked). A frame
 /// that outgrows the buffer is emitted truncated.
 fn emitFrame(bytes: []const u8) void {
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-    _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
+    const stderr = std.debug.lockStderr(&.{});
+    defer std.debug.unlockStderr();
+    stderr.file_writer.interface.writeAll(bytes) catch {};
 }
 
 const frame_buf_len = 4096;

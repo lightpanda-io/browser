@@ -65,7 +65,7 @@ permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 viewport_override: ?Viewport = null,
 
 // used by sessions to allocate pages.
-page_pool: std.heap.MemoryPool(Page),
+page_pool: std.heap.memory_pool.ExtraManaged(Page, .{}),
 
 // Registered with App.watchdog for the lifetime of the env. The watchdog
 // checker thread reads it until Browser.deinit unregisters.
@@ -77,7 +77,7 @@ watchdog_entry: Watchdog.Entry,
 // time up until the Isolate is torn down, so these must outlive every Session.
 // Freed in deinit *after* env.deinit() tears down the Isolate — the point past
 // which no finalizer can fire.
-fc_identity_pool: std.heap.MemoryPool(js.FinalizerCallback.Identity),
+fc_identity_pool: std.heap.memory_pool.ExtraManaged(js.FinalizerCallback.Identity, .{}),
 
 // Monotonic frame-ID generator scoped to this Browser (one per CDP
 // connection). Lives here, not on Session, because CDP target IDs
@@ -116,7 +116,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .http_client = undefined,
-        .page_pool = std.heap.MemoryPool(Page).init(allocator),
+        .page_pool = .init(allocator),
         .fc_identity_pool = .init(allocator),
         .selector_cache = .init(allocator),
         .watchdog_entry = undefined,

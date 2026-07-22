@@ -336,7 +336,7 @@ pub fn stringToPersistedFunction(
     self: *Context,
     function_body: []const u8,
     comptime parameter_names: []const []const u8,
-    extensions: []const v8.Object,
+    extensions: []const *const v8.Object,
 ) !js.Function.Global {
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);

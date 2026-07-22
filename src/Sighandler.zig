@@ -36,7 +36,7 @@ sigset: std.posix.sigset_t = undefined,
 handle_thread: ?std.Thread = null,
 
 attempt: u32 = 0,
-mutex: std.Thread.Mutex = .{},
+mutex: std.Io.Mutex = .init,
 listeners: std.ArrayList(Listener) = .empty,
 /// Set by long-running interactive modes (e.g. the agent REPL) to opt out
 /// of the second-tap hard-exit. Ctrl-C then behaves like Python's REPL:
@@ -101,8 +101,8 @@ pub fn on(self: *SigHandler, func: anytype, args: std.meta.ArgsTuple(@TypeOf(fun
     const bytes: []const u8 = @ptrCast((&args)[0..1]);
     @memcpy(buffer, bytes);
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
 
     try self.listeners.append(self.arena, .{
         .args = buffer,
@@ -129,11 +129,11 @@ fn sighandle(self: *SigHandler) noreturn {
             std.process.exit(1);
         }
 
-        switch (sig) {
-            std.posix.SIG.INT, std.posix.SIG.TERM => {
-                self.mutex.lock();
+        switch (@as(std.posix.SIG, @enumFromInt(sig))) {
+            .INT, .TERM => {
+                self.mutex.lockUncancelable(lp.io);
                 if (self.attempt > 1 and !self.no_hard_exit) {
-                    self.mutex.unlock();
+                    self.mutex.unlock(lp.io);
                     std.process.exit(1);
                 }
                 // While `no_hard_exit` is set, cap the counter so a later
@@ -145,15 +145,15 @@ fn sighandle(self: *SigHandler) noreturn {
                 for (self.listeners.items) |*item| {
                     item.start(item.args.ptr);
                 }
-                self.mutex.unlock();
+                self.mutex.unlock(lp.io);
                 continue;
             },
-            std.posix.SIG.ALRM => {
+            .ALRM => {
                 // Deadline tripped (e.g. --terminate-ms). Run the same listeners,
                 // but don't bump `attempt` — a subsequent ctrl-c should still get
                 // the normal first-attempt graceful path before hard-exiting.
-                self.mutex.lock();
-                defer self.mutex.unlock();
+                self.mutex.lockUncancelable(lp.io);
+                defer self.mutex.unlock(lp.io);
                 log.info(.app, "Deadline reached ", .{});
                 for (self.listeners.items) |*item| {
                     item.start(item.args.ptr);

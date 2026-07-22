@@ -19,6 +19,7 @@
 const std = @import("std");
 
 pub const log = @import("log.zig");
+pub const datetime = @import("datetime.zig");
 pub const App = @import("App.zig");
 pub const Network = @import("network/Network.zig");
 pub const Server = @import("Server.zig");
@@ -61,11 +62,122 @@ pub const Updater = @import("Updater.zig");
 
 pub var metrics = @import("Metrics.zig"){};
 
+/// Process-wide Io instance for blocking syscalls (fs, net, time, futex).
+/// Single-threaded-init only disables Io.async/Io.concurrent task spawning;
+/// blocking operations work from any thread.
+var io_threaded: std.Io.Threaded = .init_single_threaded;
+pub const io: std.Io = io_threaded.io();
+
+/// The single-threaded Io instance carries an empty environ; consumers that
+/// need the real process environment (env-var lookups, spawned children) use
+/// this instead.
+pub fn environ() std.process.Environ {
+    return .{ .block = .{ .slice = std.mem.span(std.c.environ) } };
+}
+
+/// Environ.Map view of `environ` for spawned children that should inherit the
+/// process environment (argv[0] PATH resolution always uses the parent
+/// environment regardless).
+pub fn environMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    return environ().createMap(allocator);
+}
+
+/// Io.Condition has no timed wait (@ZIG16: delete when std grows one).
+/// Mirrors std's Condition.waitInner with a deadline-bounded futex wait.
+/// Not a cancelation point. Returns error.Timeout when no signal arrives.
+pub fn timedWait(cond: *std.Io.Condition, mutex: *std.Io.Mutex, timeout_ns: u64) error{Timeout}!void {
+    const deadline: std.Io.Clock.Timestamp = .fromNow(io, .{
+        .raw = .fromNanoseconds(@intCast(timeout_ns)),
+        .clock = .awake,
+    });
+
+    var epoch = cond.epoch.load(.acquire);
+    _ = cond.state.fetchAdd(.{ .waiters = 1, .signals = 0 }, .monotonic);
+
+    mutex.unlock(io);
+    defer mutex.lockUncancelable(io);
+
+    while (true) {
+        io.futexWaitTimeout(u32, &cond.epoch.raw, epoch, .{ .deadline = deadline }) catch {};
+        epoch = cond.epoch.load(.acquire);
+
+        // Consume a pending signal even after a timeout-shaped wake, so a
+        // signal never gets stuck in the state with no waiter (same race
+        // std's waitInner defends against).
+        var prev_state = cond.state.load(.monotonic);
+        while (prev_state.signals > 0) {
+            prev_state = cond.state.cmpxchgWeak(prev_state, .{
+                .waiters = prev_state.waiters - 1,
+                .signals = prev_state.signals - 1,
+            }, .acquire, .monotonic) orelse return;
+        }
+
+        if (deadline.compare(.lte, .now(io, .awake))) {
+            _ = cond.state.fetchSub(.{ .waiters = 1, .signals = 0 }, .monotonic);
+            return error.Timeout;
+        }
+    }
+}
+
+/// Drop-in for the removed std.Thread.WaitGroup (start/finish/wait subset).
+pub const WaitGroup = struct {
+    state: std.atomic.Value(u32) = .init(0),
+
+    pub fn start(self: *WaitGroup) void {
+        _ = self.state.fetchAdd(1, .monotonic);
+    }
+
+    pub fn startMany(self: *WaitGroup, n: u32) void {
+        _ = self.state.fetchAdd(n, .monotonic);
+    }
+
+    pub fn finish(self: *WaitGroup) void {
+        if (self.state.fetchSub(1, .acq_rel) == 1) {
+            io.futexWake(u32, &self.state.raw, std.math.maxInt(u32));
+        }
+    }
+
+    pub fn wait(self: *WaitGroup) void {
+        while (true) {
+            const n = self.state.load(.acquire);
+            if (n == 0) {
+                return;
+            }
+            io.futexWaitUncancelable(u32, &self.state.raw, n);
+        }
+    }
+};
+
+/// Drop-in for the removed std.once: `f` runs exactly once; concurrent
+/// callers block until the first call completes.
+pub fn once(comptime f: fn () void) Once(f) {
+    return .{};
+}
+
+pub fn Once(comptime f: fn () void) type {
+    return struct {
+        done: bool = false,
+        mutex: std.Io.Mutex = .init,
+
+        pub fn call(self: *@This()) void {
+            if (@atomicLoad(bool, &self.done, .acquire)) {
+                return;
+            }
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            if (!self.done) {
+                f();
+                @atomicStore(bool, &self.done, true, .release);
+            }
+        }
+    };
+}
+
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
     wait_script: ?[:0]const u8 = null,
-    inject_script: std.ArrayList([]const u8) = .{},
+    inject_script: std.ArrayList([]const u8) = .empty,
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
@@ -120,7 +232,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
 
     var runner = session.runner(.{});
 
-    var timer = try std.time.Timer.start();
+    var timer: std.Io.Timestamp = .now(io, .boot);
 
     if (opts.wait_until) |wu| {
         try runner.waitForAll(opts.wait_ms, .{ .until = wu });
@@ -132,7 +244,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
     }
 
     if (opts.wait_selector) |selector| {
-        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const elapsed: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) {
             return error.Timeout;
@@ -145,7 +257,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
     }
 
     if (opts.wait_script) |wait_script| {
-        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const elapsed: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) {
             return error.Timeout;
@@ -232,9 +344,9 @@ pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
     var client = try Updater.init(allocator, config);
     defer client.deinit();
 
-    var stdout = std.fs.File.stdout();
+    const stdout = std.Io.File.stdout();
     var buf: [4096]u8 = undefined;
-    var writer = stdout.writer(&buf);
+    var writer = stdout.writer(io, &buf);
     const w = &writer.interface;
     try client.inform(w);
 }
