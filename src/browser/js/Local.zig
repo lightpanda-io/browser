@@ -623,7 +623,8 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
             return try self.jsValueToZig(o.child, js_val);
         },
         .float => |f| switch (f.bits) {
-            0...32 => return js_val.toF32(),
+            0...16 => return js_val.toF16(),
+            17...32 => return js_val.toF32(),
             33...64 => return js_val.toF64(),
             else => {},
         },
