@@ -178,6 +178,10 @@
   testing.expectError('NoModificationAllowedError', () => { aspect.animVal.meetOrSlice = 2; });
 
   const empty = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  testing.expectEqual('100%', empty.width.baseVal.valueAsString);
+  testing.expectEqual('100%', empty.height.baseVal.valueAsString);
+  empty.setAttribute('width', 'invalid');
+  testing.expectEqual('100%', empty.width.baseVal.valueAsString);
   testing.expectEqual(SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMID, empty.preserveAspectRatio.baseVal.align);
   testing.expectEqual(SVGPreserveAspectRatio.SVG_MEETORSLICE_MEET, empty.preserveAspectRatio.baseVal.meetOrSlice);
   testing.expectEqual(null, empty.getAttribute('preserveAspectRatio'));

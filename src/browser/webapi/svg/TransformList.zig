@@ -6,6 +6,7 @@
 // (at your option) any later version.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
@@ -17,6 +18,7 @@ const Transform = @import("Transform.zig");
 const TransformList = @This();
 
 _frame: *Frame,
+_attr_name: lp.String,
 _read_only: bool,
 _element: *Element,
 _synced: bool = false,
@@ -25,9 +27,14 @@ _items: std.ArrayList(*Transform) = .empty,
 _retired: std.ArrayList(*Transform) = .empty,
 
 pub fn create(element: *Element, read_only: bool, frame: *Frame) !*TransformList {
+    return createForAttribute(element, comptime .wrap("transform"), read_only, frame);
+}
+
+pub fn createForAttribute(element: *Element, attr_name: lp.String, read_only: bool, frame: *Frame) !*TransformList {
     return frame._factory.create(TransformList{
         ._frame = frame,
         ._element = element,
+        ._attr_name = attr_name,
         ._read_only = read_only,
     });
 }
@@ -202,7 +209,7 @@ fn mutateTransform(context: *anyopaque, transform: *Transform, state: Transform.
 fn sync(self: *TransformList, frame: *Frame) !void {
     self.releaseRetired(frame._page);
 
-    const raw = self._element.getAttributeSafe(comptime .wrap("transform")) orelse "";
+    const raw = self._element.getAttributeSafe(self._attr_name) orelse "";
     if (self._synced and std.mem.eql(u8, self._snapshot.items, raw)) return;
 
     self._synced = false;
@@ -285,7 +292,7 @@ fn setAttributeWithOverride(self: *TransformList, index: usize, state: Transform
 
 fn commitAttribute(self: *TransformList, serialized: []const u8, frame: *Frame) !void {
     self._synced = false;
-    try self._element.setAttributeSafe(comptime .wrap("transform"), .wrap(serialized), frame);
+    try self._element.setAttributeSafe(self._attr_name, .wrap(serialized), frame);
     self._snapshot.clearRetainingCapacity();
     try self._snapshot.appendSlice(frame.arena, serialized);
     self._synced = true;

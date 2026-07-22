@@ -64,6 +64,7 @@ const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 
 const PointList = @import("webapi/svg/PointList.zig");
 const StringList = @import("webapi/svg/StringList.zig");
+const AnimatedEnumeration = @import("webapi/svg/AnimatedEnumeration.zig");
 const AnimatedLength = @import("webapi/svg/AnimatedLength.zig");
 const AnimatedNumber = @import("webapi/svg/AnimatedNumber.zig");
 const AnimatedString = @import("webapi/svg/AnimatedString.zig");
@@ -150,6 +151,7 @@ _element_shadow_roots: Element.ShadowRootLookup = .empty,
 _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
+_svg_animated_enumerations: AnimatedEnumeration.Lookup = .empty,
 _svg_animated_lengths: AnimatedLength.Lookup = .empty,
 _svg_animated_numbers: AnimatedNumber.Lookup = .empty,
 _svg_animated_preserve_aspect_ratios: AnimatedPreserveAspectRatio.Lookup = .empty,
