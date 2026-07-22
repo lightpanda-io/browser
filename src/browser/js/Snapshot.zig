@@ -66,14 +66,6 @@ data_start: usize,
 // The snapshot data (v8.StartupData is a ptr to the data and len).
 startup_data: v8.StartupData,
 
-// V8 doesn't know how to serialize external references, and pretty much any hook
-// into Zig is an external reference (e.g. every accessor and function callback).
-// When we create the snapshot, we give it an array with the address of every
-// external reference. When we load the snapshot, we need to give it the same
-// array with the exact same number of entries in the same order (but, of course
-// cross-process, the value (address) might be different).
-external_references: [countExternalReferences()]isize,
-
 // Track whether this snapshot owns its data (was created in-process)
 // If false, the data points into embedded_snapshot_blob and will not be freed
 owns_data: bool = false,
@@ -105,7 +97,6 @@ fn loadEmbedded() !Snapshot {
         .owns_data = false,
         .data_start = data_start,
         .startup_data = startup_data,
-        .external_references = collectExternalReferences(),
     };
 }
 
@@ -137,8 +128,6 @@ fn isValid(self: Snapshot) bool {
 }
 
 pub fn create() !Snapshot {
-    var external_references = collectExternalReferences();
-
     var params: v8.CreateParams = undefined;
     v8.v8__Isolate__CreateParams__CONSTRUCT(&params);
     params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator();
@@ -228,7 +217,6 @@ pub fn create() !Snapshot {
         .owns_data = true,
         .data_start = data_start,
         .startup_data = blob,
-        .external_references = external_references,
     };
 }
 
@@ -486,32 +474,46 @@ fn countExternalReferences() comptime_int {
     return count + 1; // +1 for null terminator
 }
 
-fn collectExternalReferences() [countExternalReferences()]isize {
+// V8 doesn't know how to serialize external references, and pretty much any hook
+// into Zig is an external reference (e.g. every accessor and function callback).
+// When we create the snapshot, we give it an array with the address of every
+// external reference. When we load the snapshot, we need to give it the same
+// array with the exact same number of entries in the same order (but, of course
+// cross-process, the value (address) might be different).
+//
+// Built at comptime so the pointers live in .data.rel.ro (filled in by the
+// loader) rather than being materialized by a few hundred KB of runtime code.
+// Layout-compatible with the null-terminated `const intptr_t*` v8 expects.
+pub const external_references = collectExternalReferences();
+
+fn collectExternalReferences() [countExternalReferences()]?*const anyopaque {
+    @setEvalBranchQuota(1_000_000);
+
     var idx: usize = 0;
-    var references = std.mem.zeroes([countExternalReferences()]isize);
+    var references: [countExternalReferences()]?*const anyopaque = @splat(null);
 
-    references[idx] = @bitCast(@intFromPtr(&illegalConstructorCallback));
+    references[idx] = @ptrCast(&illegalConstructorCallback);
     idx += 1;
 
-    references[idx] = @bitCast(@intFromPtr(HtmlElement.JsApi.upgrade_constructor.func));
+    references[idx] = @ptrCast(HtmlElement.JsApi.upgrade_constructor.func);
     idx += 1;
 
-    references[idx] = @bitCast(@intFromPtr(&bridge.Function.noopFunction));
+    references[idx] = @ptrCast(&bridge.Function.noopFunction);
     idx += 1;
 
-    references[idx] = @bitCast(@intFromPtr(&bridge.unknownWindowPropertyCallback));
+    references[idx] = @ptrCast(&bridge.unknownWindowPropertyCallback);
     idx += 1;
 
     const wpt_extensions_enabled = lp.build_config.wpt_extensions;
 
     inline for (JsApis) |JsApi| {
         if (@hasDecl(JsApi, "constructor")) {
-            references[idx] = @bitCast(@intFromPtr(JsApi.constructor.func));
+            references[idx] = @ptrCast(JsApi.constructor.func);
             idx += 1;
         }
 
         if (@hasDecl(JsApi, "callable")) {
-            references[idx] = @bitCast(@intFromPtr(JsApi.callable.func));
+            references[idx] = @ptrCast(JsApi.callable.func);
             idx += 1;
         }
 
@@ -524,69 +526,69 @@ fn collectExternalReferences() [countExternalReferences()]isize {
                     continue;
                 }
 
-                references[idx] = @bitCast(@intFromPtr(value.getter));
+                references[idx] = @ptrCast(value.getter);
                 idx += 1;
                 if (value.setter) |setter| {
-                    references[idx] = @bitCast(@intFromPtr(setter));
+                    references[idx] = @ptrCast(setter);
                     idx += 1;
                 }
             } else if (T == bridge.Function) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
                     continue;
                 }
-                references[idx] = @bitCast(@intFromPtr(value.func));
+                references[idx] = @ptrCast(value.func);
                 idx += 1;
             } else if (T == bridge.Iterator) {
-                references[idx] = @bitCast(@intFromPtr(value.func));
+                references[idx] = @ptrCast(value.func);
                 idx += 1;
             } else if (T == bridge.Indexed) {
-                references[idx] = @bitCast(@intFromPtr(value.getter));
+                references[idx] = @ptrCast(value.getter);
                 idx += 1;
                 if (value.enumerator) |enumerator| {
-                    references[idx] = @bitCast(@intFromPtr(enumerator));
+                    references[idx] = @ptrCast(enumerator);
                     idx += 1;
                 }
                 if (value.setter) |setter| {
-                    references[idx] = @bitCast(@intFromPtr(setter));
+                    references[idx] = @ptrCast(setter);
                     idx += 1;
                 }
                 if (value.deleter) |deleter| {
-                    references[idx] = @bitCast(@intFromPtr(deleter));
+                    references[idx] = @ptrCast(deleter);
                     idx += 1;
                 }
                 if (value.query) |query| {
-                    references[idx] = @bitCast(@intFromPtr(query));
+                    references[idx] = @ptrCast(query);
                     idx += 1;
                 }
                 if (value.definer) |definer| {
-                    references[idx] = @bitCast(@intFromPtr(definer));
+                    references[idx] = @ptrCast(definer);
                     idx += 1;
                 }
             } else if (T == bridge.NamedIndexed) {
-                references[idx] = @bitCast(@intFromPtr(value.getter));
+                references[idx] = @ptrCast(value.getter);
                 idx += 1;
                 if (value.setter) |setter| {
-                    references[idx] = @bitCast(@intFromPtr(setter));
+                    references[idx] = @ptrCast(setter);
                     idx += 1;
                 }
                 if (value.deleter) |deleter| {
-                    references[idx] = @bitCast(@intFromPtr(deleter));
+                    references[idx] = @ptrCast(deleter);
                     idx += 1;
                 }
                 if (value.query) |query| {
-                    references[idx] = @bitCast(@intFromPtr(query));
+                    references[idx] = @ptrCast(query);
                     idx += 1;
                 }
                 if (value.definer) |definer| {
-                    references[idx] = @bitCast(@intFromPtr(definer));
+                    references[idx] = @ptrCast(definer);
                     idx += 1;
                 }
                 if (value.descriptor) |descriptor| {
-                    references[idx] = @bitCast(@intFromPtr(descriptor));
+                    references[idx] = @ptrCast(descriptor);
                     idx += 1;
                 }
                 if (value.enumerator) |enumerator| {
-                    references[idx] = @bitCast(@intFromPtr(enumerator));
+                    references[idx] = @ptrCast(enumerator);
                     idx += 1;
                 }
             }
@@ -596,7 +598,7 @@ fn collectExternalReferences() [countExternalReferences()]isize {
     if (comptime IS_DEBUG) {
         inline for (JsApis) |JsApi| {
             if (!hasNamedIndexedGetter(JsApi)) {
-                references[idx] = @bitCast(@intFromPtr(bridge.unknownObjectPropertyCallback(JsApi)));
+                references[idx] = @ptrCast(bridge.unknownObjectPropertyCallback(JsApi));
                 idx += 1;
             }
         }

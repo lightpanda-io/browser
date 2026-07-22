@@ -25,6 +25,7 @@ const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
+const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
 
 const App = @import("../../App.zig");
@@ -131,7 +132,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator().?;
     errdefer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
 
-    params.external_references = &snapshot.external_references;
+    params.external_references = @ptrCast(&Snapshot.external_references);
 
     if (app.config.v8MaxHeapMb()) |mb| {
         v8.v8__ResourceConstraints__ConfigureDefaultsFromHeapSize(
