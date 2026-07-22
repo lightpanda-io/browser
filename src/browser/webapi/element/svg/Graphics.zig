@@ -17,9 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const SvgElement = @import("../Svg.zig");
+const AnimatedTransformList = @import("../../svg/AnimatedTransformList.zig");
+const StringList = @import("../../svg/StringList.zig");
 
 pub const Svg = @import("Svg.zig");
 pub const G = @import("G.zig");
@@ -32,6 +35,9 @@ pub const Geometry = @import("Geometry.zig");
 const Graphics = @This();
 _proto: *SvgElement,
 _type: Type,
+_transform: ?*AnimatedTransformList = null,
+_required_extensions: ?*StringList = null,
+_system_language: ?*StringList = null,
 
 pub const Type = union(enum) {
     svg: *Svg,
@@ -72,4 +78,39 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const transform = bridge.accessor(Graphics.getTransform, null, .{});
+    pub const requiredExtensions = bridge.accessor(Graphics.getRequiredExtensions, null, .{});
+    pub const systemLanguage = bridge.accessor(Graphics.getSystemLanguage, null, .{});
 };
+
+pub fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
+    if (self._transform == null) {
+        self._transform = try AnimatedTransformList.create(self.asElement(), frame);
+    }
+    return self._transform.?;
+}
+
+pub fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {
+    if (self._required_extensions == null) {
+        self._required_extensions = try StringList.create(
+            self.asElement(),
+            .wrap("requiredExtensions"),
+            .whitespace,
+            frame,
+        );
+    }
+    return self._required_extensions.?;
+}
+
+pub fn getSystemLanguage(self: *Graphics, frame: *Frame) !*StringList {
+    if (self._system_language == null) {
+        self._system_language = try StringList.create(
+            self.asElement(),
+            .wrap("systemLanguage"),
+            .comma,
+            frame,
+        );
+    }
+    return self._system_language.?;
+}
