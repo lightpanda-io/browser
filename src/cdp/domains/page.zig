@@ -77,6 +77,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 
 const CDPFrame = struct {
     id: []const u8,
+    parentId: ?[]const u8 = null,
     loaderId: []const u8,
     url: []const u8,
     domainAndRegistry: []const u8 = "",
@@ -89,6 +90,44 @@ const CDPFrame = struct {
     crossOriginIsolatedContextType: []const u8 = "NotIsolated",
     gatedAPIFeatures: [][]const u8 = &[0][]const u8{},
 };
+
+const CDPFrameTree = struct {
+    frame: CDPFrame,
+    childFrames: ?[]CDPFrameTree = null,
+};
+
+fn serializeFrame(arena: Allocator, bc: *const CDP.BrowserContext, frame: *const Frame) !CDPFrame {
+    const frame_id = id.toFrameId(frame._frame_id);
+    const loader_id = id.toLoaderId(frame._loader_id);
+    const parent_id = if (frame.parent) |parent| blk: {
+        const value = id.toFrameId(parent._frame_id);
+        break :blk try arena.dupe(u8, &value);
+    } else null;
+
+    return .{
+        .id = try arena.dupe(u8, &frame_id),
+        .parentId = parent_id,
+        .loaderId = try arena.dupe(u8, &loader_id),
+        .url = frame.url,
+        .securityOrigin = frame.origin orelse bc.security_origin,
+        .secureContextType = bc.secure_context_type,
+    };
+}
+
+fn serializeFrameTree(arena: Allocator, bc: *const CDP.BrowserContext, frame: *const Frame) !CDPFrameTree {
+    const child_frames = frame.child_frames.items;
+    const children = if (child_frames.len == 0) null else try arena.alloc(CDPFrameTree, child_frames.len);
+    if (children) |items| {
+        for (child_frames, items) |child, *serialized| {
+            serialized.* = try serializeFrameTree(arena, bc, child);
+        }
+    }
+
+    return .{
+        .frame = try serializeFrame(arena, bc, frame),
+        .childFrames = children,
+    };
+}
 
 fn getFrameTree(cmd: *CDP.Command) !void {
     // Stagehand parses the response and error if we don't return a
@@ -105,18 +144,11 @@ fn getFrameTree(cmd: *CDP.Command) !void {
         },
     };
     const bc = cmd.browser_context orelse return cmd.sendResult(startup, .{});
-    const target_id = bc.target_id orelse return cmd.sendResult(startup, .{});
+    _ = bc.target_id orelse return cmd.sendResult(startup, .{});
+    const frame = bc.mainFrame() orelse return cmd.sendResult(startup, .{});
 
     return cmd.sendResult(.{
-        .frameTree = .{
-            .frame = CDPFrame{
-                .id = &target_id,
-                .securityOrigin = bc.security_origin,
-                .loaderId = "LID-0000000001",
-                .url = bc.getURL() orelse "about:blank",
-                .secureContextType = bc.secure_context_type,
-            },
-        },
+        .frameTree = try serializeFrameTree(cmd.arena, bc, frame),
     }, .{});
 }
 
@@ -681,13 +713,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
-        .frame = CDPFrame{
-            .id = frame_id,
-            .url = event.url,
-            .loaderId = loader_id,
-            .securityOrigin = bc.security_origin,
-            .secureContextType = bc.secure_context_type,
-        },
+        .frame = try serializeFrame(arena, bc, frame),
     }, .{ .session_id = session_id });
 
     {
@@ -1027,16 +1053,18 @@ test "cdp.frame: getFrameTree" {
     }
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
     {
         try ctx.processMessage(.{ .id = 11, .method = "Page.getFrameTree" });
         try ctx.expectSentResult(.{
             .frameTree = .{
                 .frame = .{
-                    .id = "FID-000000000X",
+                    .id = &root_id,
                     .loaderId = "LID-0000000001",
                     .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
                     .domainAndRegistry = "",
-                    .securityOrigin = bc.security_origin,
+                    .securityOrigin = root.origin orelse bc.security_origin,
                     .mimeType = "text/html",
                     .adFrameStatus = .{
                         .adFrameType = "none",
@@ -1055,11 +1083,11 @@ test "cdp.frame: getFrameTree" {
         try ctx.expectSentResult(.{
             .frameTree = .{
                 .frame = .{
-                    .id = "FID-000000000X",
+                    .id = &root_id,
                     .loaderId = "LID-0000000001",
                     .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
                     .domainAndRegistry = "",
-                    .securityOrigin = bc.security_origin,
+                    .securityOrigin = root.origin orelse bc.security_origin,
                     .mimeType = "text/html",
                     .adFrameStatus = .{
                         .adFrameType = "none",
@@ -1071,6 +1099,44 @@ test "cdp.frame: getFrameTree" {
             },
         }, .{ .id = 12 });
     }
+}
+
+test "cdp.frame: child frame metadata" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FRAME", .url = "cdp/empty_iframe.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    try testing.expectEqual(1, root.child_frames.items.len);
+    const child = root.child_frames.items[0];
+
+    const root_id = id.toFrameId(root._frame_id);
+    const child_id = id.toFrameId(child._frame_id);
+    const child_loader_id = id.toLoaderId(child._loader_id);
+
+    try ctx.expectSentEvent("Page.frameNavigated", .{
+        .frame = .{
+            .id = &child_id,
+            .parentId = &root_id,
+            .loaderId = &child_loader_id,
+            .url = "about:blank",
+        },
+    }, .{ .session_id = "SID-X" });
+
+    try ctx.processMessage(.{ .id = 13, .method = "Page.getFrameTree" });
+    try ctx.expectSentResult(.{
+        .frameTree = .{
+            .frame = .{ .id = &root_id },
+            .childFrames = &.{.{
+                .frame = .{
+                    .id = &child_id,
+                    .parentId = &root_id,
+                    .loaderId = &child_loader_id,
+                    .url = "about:blank",
+                },
+            }},
+        },
+    }, .{ .id = 13 });
 }
 
 test "cdp.frame: frameAttached" {
