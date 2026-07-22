@@ -139,15 +139,8 @@ pub const BinaryType = enum {
 
 pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*WebSocket {
     {
-        if (url.len < 6) {
-            return error.SyntaxError;
-        }
-        const normalized_start = std.ascii.lowerString(exec.buf, url[0..6]);
-        if (!std.mem.startsWith(u8, normalized_start, "ws://") and !std.mem.startsWith(u8, normalized_start, "wss://")) {
-            return error.SyntaxError;
-        }
-        // Fragments are not allowed in WebSocket URLs
         if (std.mem.indexOfScalar(u8, url, '#') != null) {
+            // Fragments are not allowed in WebSocket URLs.
             return error.SyntaxError;
         }
         for (protocols) |protocol| {
@@ -160,9 +153,78 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
     const arena = try exec.getArena(.medium, "WebSocket");
     errdefer exec.releaseArena(arena);
 
-    const resolved_url = try URL.resolve(arena, exec.base(), url, .{ .encoding = exec.charset.* });
+    const resolved_url = blk: {
+        // Always UTF-8, never the document's charse
+        const resolved = URL.resolve(arena, exec.base(), url, .{ .encoding = "UTF-8" }) catch |err| switch (err) {
+            error.TypeError => return error.SyntaxError,
+            else => return err,
+        };
+
+        const scheme = URL.getProtocol(resolved);
+        if (std.mem.eql(u8, scheme, "ws:") or std.mem.eql(u8, scheme, "wss:")) {
+            // normal case
+            break :blk resolved;
+        }
+
+        // yup, this is what we're supposed to do.
+        if (std.mem.eql(u8, scheme, "http:")) {
+            break :blk try std.fmt.allocPrintSentinel(arena, "ws{s}", .{resolved["http".len..]}, 0);
+        }
+        if (std.mem.eql(u8, scheme, "https:")) {
+            break :blk try std.fmt.allocPrintSentinel(arena, "wss{s}", .{resolved["https".len..]}, 0);
+        }
+
+        return error.SyntaxError;
+    };
 
     const http_client = &exec.session.browser.http_client;
+
+    const self = try exec._factory.eventTargetWithAllocator(arena, WebSocket{
+        ._exec = exec,
+        ._conn = null,
+        ._arena = arena,
+        ._proto = undefined,
+        ._url = resolved_url,
+        ._req_headers = .{ .headers = null },
+        ._http_client = http_client,
+    });
+
+    // This ensures that if we fail to connect, we have at least 1 event slot
+    // to register the close+error
+    try self._events.ensureTotalCapacity(arena, 1);
+
+    exec.httpOwner().addWS(self);
+
+    // Unlike an XHR object where we only selectively reference the instance
+    // while the request is actually inflight, WS connection is "inflight" from
+    // the moment it's created. deactivate() releases this reference.
+    self.acquireRef();
+
+    if (comptime IS_DEBUG) {
+        log.info(.websocket, "connecting", .{ .url = url });
+    }
+
+    // "Establish a WebSocket connection" only ever fails the connection, it
+    // never throws: the object is returned in CONNECTING and the failure
+    // surfaces as an error event followed by close. That covers a blocked
+    // port as much as it covers running out of connections.
+    self.connect(protocols) catch |err| {
+        self.transportClosed(err);
+    };
+
+    return self;
+}
+
+fn connect(self: *WebSocket, protocols: [][]const u8) !void {
+    const exec = self._exec;
+    const arena = self._arena;
+    const resolved_url = self._url;
+    const http_client = self._http_client;
+
+    if (isBlockedPort(resolved_url)) {
+        return error.BlockedPort;
+    }
+
     const conn = http_client.network.newConnection() orelse {
         return error.NoFreeConnection;
     };
@@ -211,29 +273,20 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
 
     try conn.setHeaders(&headers);
 
-    const self = try exec._factory.eventTargetWithAllocator(arena, WebSocket{
-        ._exec = exec,
-        ._conn = conn,
-        ._arena = arena,
-        ._proto = undefined,
-        ._url = resolved_url,
-        ._req_headers = headers,
-        ._http_client = http_client,
-    });
     conn.transport = .{ .websocket = self };
     try http_client.trackConn(conn);
-    exec.httpOwner().addWS(self);
 
-    if (comptime IS_DEBUG) {
-        log.info(.websocket, "connecting", .{ .url = url });
+    self._conn = conn;
+    self._req_headers = headers;
+}
+
+fn isBlockedPort(url: [:0]const u8) bool {
+    const port = URL.getPort(url);
+    if (port.len == 0) {
+        // the default port for ws/wss is never blocked
+        return false;
     }
-
-    // Unlike an XHR object where we only selectively reference the instance
-    // while the request is actually inflight, WS connection is "inflight" from
-    // the moment it's created. deactivate() releases this reference.
-    self.acquireRef();
-
-    return self;
+    return http.isBadPort(std.fmt.parseInt(u16, port, 10) catch return false);
 }
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
@@ -509,6 +562,7 @@ const BinaryData = union(enum) {
     uint32: []u32,
     int64: []i64,
     uint64: []u64,
+    float16: []f16,
     float32: []f32,
     float64: []f64,
 
@@ -516,7 +570,7 @@ const BinaryData = union(enum) {
         return switch (self) {
             .int8 => |b| @as([*]u8, @ptrCast(b.ptr))[0..b.len],
             .uint8 => |b| b,
-            inline .int16, .uint16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
+            inline .int16, .uint16, .float16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
             inline .int32, .uint32, .float32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
             inline .int64, .uint64, .float64 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 8],
         };

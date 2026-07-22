@@ -234,6 +234,10 @@ pub fn typeOf(self: Value) js.String {
     return js.String{ .local = self.local, .handle = str_handle };
 }
 
+pub fn toF16(self: Value) !f16 {
+    return @floatCast(try self.toF64());
+}
+
 pub fn toF32(self: Value) !f32 {
     return @floatCast(try self.toF64());
 }

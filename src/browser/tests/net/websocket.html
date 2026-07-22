@@ -562,6 +562,60 @@
 }
 </script>
 
+<script id=url_scheme_normalization>
+{
+  // http(s) is an accepted spelling of ws(s), and the url is resolved against
+  // the document base before its scheme is looked at — so a relative url is
+  // as valid as an absolute one.
+  const dir = new URL('.', location);
+  const cases = [
+    ['http://127.0.0.1:9584/chat', 'ws://127.0.0.1:9584/chat'],
+    ['https://127.0.0.1:9584/chat', 'wss://127.0.0.1:9584/chat'],
+    ['ws://127.0.0.1:9584/chat', 'ws://127.0.0.1:9584/chat'],
+    ['chat', 'ws://' + dir.host + dir.pathname + 'chat'],
+    ['?x=1', 'ws://' + dir.host + location.pathname + '?x=1'],
+  ];
+  for (const [input, expected] of cases) {
+    const ws = new WebSocket(input);
+    testing.expectEqual(expected, ws.url);
+    ws.close();
+  }
+
+  // the document's charset never applies: a websocket url percent-encodes
+  // as UTF-8 no matter what the page is in
+  const euro = new WebSocket('ws://127.0.0.1:9584/?€');
+  testing.expectEqual('ws://127.0.0.1:9584/?%E2%82%AC', euro.url);
+  euro.close();
+
+  // every other scheme is a SyntaxError, as is a url the parser rejects
+  for (const input of ['ftp://127.0.0.1:9584/', 'about:blank', 'mailto:a@b.org', 'ws://foo bar.com/']) {
+    testing.expectError('SyntaxError', () => new WebSocket(input));
+  }
+}
+</script>
+
+<script id=blocked_port type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  // 22 (ssh) is a bad port; the constructor still returns an object in
+  // CONNECTING and the connection is failed asynchronously.
+  let ws = new WebSocket('ws://127.0.0.1:22/');
+  received.push(ws.readyState);
+  ws.addEventListener('open', () => { received.push('open'); });
+  ws.addEventListener('error', () => { received.push('error'); });
+  ws.addEventListener('close', (e) => {
+    received.push(['close', e.code, e.wasClean]);
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([0, 'error', ['close', 1006, false]], received);
+  });
+}
+</script>
+
 <script id=close_while_connecting type=module>
 {
   const state = await testing.async();
