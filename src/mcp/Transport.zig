@@ -20,15 +20,16 @@
 //! (`mcp/Server.zig`).
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const protocol = @import("protocol.zig");
 
 const Self = @This();
 
-writer: *std.io.Writer,
-mutex: std.Thread.Mutex = .{},
-aw: std.io.Writer.Allocating,
+writer: *std.Io.Writer,
+mutex: std.Io.Mutex = .init,
+aw: std.Io.Writer.Allocating,
 
-pub fn init(allocator: std.mem.Allocator, writer: *std.io.Writer) Self {
+pub fn init(allocator: std.mem.Allocator, writer: *std.Io.Writer) Self {
     return .{ .writer = writer, .aw = .init(allocator) };
 }
 
@@ -39,13 +40,13 @@ pub fn deinit(self: *Self) void {
 /// Point subsequent responses at a different sink. The HTTP transport uses
 /// this to capture each request's response into its own buffer; safe because
 /// the browser worker retargets and writes on a single thread.
-pub fn retarget(self: *Self, writer: *std.io.Writer) void {
+pub fn retarget(self: *Self, writer: *std.Io.Writer) void {
     self.writer = writer;
 }
 
 pub fn sendResponse(self: *Self, response: anytype) !void {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
 
     self.aw.clearRetainingCapacity();
     try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &self.aw.writer);

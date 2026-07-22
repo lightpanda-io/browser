@@ -28,16 +28,10 @@ const SigHandler = @import("Sighandler.zig");
 pub const panic = lp.crash_handler.panic;
 
 pub const std_options: std.Options = .{
-    // std.crypto.random's default backend mmaps a thread-local 528-byte state
-    // page on first use and never unmaps it — there is no thread-exit hook.
-    // With one detached thread per CDP connection (Server.handleConnection),
-    // that leaks one resident page per connection (uuidv4 in
-    // Page.getOrCreateOrigin touches it), ~4KB/conn of unbounded RSS growth.
-    // Route every std.crypto.random call to the getrandom syscall instead.
-    .crypto_always_getrandom = true,
+    .signal_stack_size = null,
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
     // - in Release mode we use the c allocator
@@ -45,7 +39,7 @@ pub fn main() !void {
     const gpa = if (builtin.mode == .Debug) gpa_instance.allocator() else std.heap.c_allocator;
 
     defer if (builtin.mode == .Debug) {
-        if (gpa_instance.detectLeaks()) std.posix.exit(1);
+        if (gpa_instance.detectLeaks() != 0) std.process.exit(1);
     };
 
     // arena for main-specific allocations
@@ -53,20 +47,20 @@ pub fn main() !void {
     const main_arena = main_arena_instance.allocator();
     defer main_arena_instance.deinit();
 
-    run(gpa, main_arena) catch |err| {
-        if (err == error.UserCancelled) std.posix.exit(130);
+    run(gpa, main_arena, init.minimal.args) catch |err| {
+        if (err == error.UserCancelled) std.process.exit(130);
         // error.AgentFailed: the agent thread reported the failure in-context.
         // lp.Agent.UserError: a user-facing message was already printed.
-        if (err == error.AgentFailed or lp.Agent.isUserError(err)) std.posix.exit(1);
+        if (err == error.AgentFailed or lp.Agent.isUserError(err)) std.process.exit(1);
         log.fatal(.app, "exit", .{ .err = err });
-        std.posix.exit(1);
+        std.process.exit(1);
     };
 }
 
-fn run(allocator: Allocator, main_arena: Allocator) !void {
+fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args) !void {
     lp.core_dump.disableIfRequested();
 
-    const args = try Config.parseArgs(main_arena);
+    const args = try Config.parseArgs(main_arena, proc_args);
     defer args.deinit(main_arena);
 
     switch (args.mode) {
@@ -75,14 +69,14 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             if (opts.check) {
                 try lp.checkVersion(allocator, &args);
             } else {
-                var stdout = std.fs.File.stdout().writer(&.{});
+                var stdout = std.Io.File.stdout().writerStreaming(lp.io, &.{});
                 try stdout.interface.print("{s}\n", .{lp.build_config.version});
             }
-            return std.process.cleanExit();
+            return std.process.cleanExit(lp.io);
         },
         .agent => |opts| if (opts.list_models) {
             try lp.Agent.listModels(allocator, opts);
-            return std.process.cleanExit();
+            return std.process.cleanExit(lp.io);
         },
         else => {},
     }
@@ -111,15 +105,14 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     app.telemetry.record(.{ .run = {} });
 
     defer if (app.config.dumpMetricsOnExit()) {
-        var stdout = std.fs.File.stdout();
-        var writer = stdout.writer(&.{});
+        var writer = std.Io.File.stdout().writerStreaming(lp.io, &.{});
         lp.metrics.write(&writer.interface);
     };
 
     switch (args.mode) {
         .serve => |opts| {
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
-            const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
+            const address = std.Io.net.IpAddress.parse(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
                 return args.printUsageAndExit(main_arena, .serve, false);
             };
@@ -188,8 +181,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 .json = opts.json,
             };
 
-            var stdout = std.fs.File.stdout();
-            var writer = stdout.writer(&.{});
+            var writer = std.Io.File.stdout().writerStreaming(lp.io, &.{});
             if (opts.dump != null or opts.json) {
                 fetch_opts.writer = &writer.interface;
             }
@@ -220,7 +212,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                     log.fatal(.mcp, "port conflicts with cdp-port", .{ .hint = "both need the single network listener" });
                     return;
                 }
-                const address = std.net.Address.parseIp(opts.host, port) catch |err| {
+                const address = std.Io.net.IpAddress.parse(opts.host, port) catch |err| {
                     log.fatal(.mcp, "invalid address", .{ .err = err, .host = opts.host, .port = port });
                     return;
                 };
@@ -236,7 +228,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             var cdp_server: ?*lp.Server = null;
             if (opts.cdp_port) |port| {
-                const address = std.net.Address.parseIp("127.0.0.1", port) catch |err| {
+                const address = std.Io.net.IpAddress.parse("127.0.0.1", port) catch |err| {
                     log.fatal(.mcp, "invalid cdp address", .{ .err = err, .port = port });
                     return;
                 };
@@ -326,26 +318,26 @@ fn agentThread(
 }
 
 const FetchTerminator = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     browser: ?*lp.Browser = null,
 
     fn storeBrowser(self: *FetchTerminator, browser: *lp.Browser) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         self.browser = browser;
     }
 
     fn releaseBrowser(self: *FetchTerminator) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         const b = self.browser orelse return;
         b.env.cancelTerminate();
         self.browser = null;
     }
 
     fn terminate(self: *FetchTerminator) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         const b = self.browser orelse return;
         b.env.terminate();
         self.browser = null;
@@ -376,7 +368,7 @@ fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetc
 fn mcpThread(allocator: std.mem.Allocator, app: *App) void {
     defer app.network.stop();
 
-    var stdout = std.fs.File.stdout().writer(&.{});
+    var stdout = std.Io.File.stdout().writerStreaming(lp.io, &.{});
     var mcp_server: *lp.mcp.Server = lp.mcp.Server.init(allocator, app, &stdout.interface) catch |err| {
         log.fatal(.mcp, "mcp init error", .{ .err = err });
         return;
@@ -384,8 +376,8 @@ fn mcpThread(allocator: std.mem.Allocator, app: *App) void {
     defer mcp_server.deinit();
 
     var stdin_buf: [64 * 1024]u8 = undefined;
-    var stdin = std.fs.File.stdin().reader(&stdin_buf);
-    lp.mcp.router.processRequests(mcp_server, &stdin.interface, std.fs.File.stdin()) catch |err| {
+    var stdin = std.Io.File.stdin().readerStreaming(lp.io, &stdin_buf);
+    lp.mcp.router.processRequests(mcp_server, &stdin.interface, std.Io.File.stdin()) catch |err| {
         log.fatal(.mcp, "mcp error", .{ .err = err });
     };
 }

@@ -98,10 +98,10 @@ pub const GlobalSlot = struct {
 pub const GlobalTracker = struct {
     allocator: Allocator,
     list: std.ArrayList(*GlobalSlot) = .empty,
-    pool: std.heap.MemoryPool(GlobalSlot),
+    pool: std.heap.memory_pool.ExtraManaged(GlobalSlot, .{}),
 
     pub fn init(allocator: Allocator) GlobalTracker {
-        return .{ .allocator = allocator, .pool = std.heap.MemoryPool(GlobalSlot).init(allocator) };
+        return .{ .allocator = allocator, .pool = .init(allocator) };
     }
 
     pub fn deinit(self: *GlobalTracker) void {

@@ -953,7 +953,8 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
     // Tavily path: only when TAVILY_API_KEY is set in the process env. On any
     // failure (network, non-2xx, parse) fall through to the DuckDuckGo scrape
     // so a single Tavily outage doesn't kill a whole benchmark run.
-    if (std.posix.getenv("TAVILY_API_KEY")) |api_key| {
+    if (std.c.getenv("TAVILY_API_KEY")) |api_key_z| {
+        const api_key = std.mem.span(api_key_z);
         if (tavilySearch(arena, api_key, args.query)) |markdown_| {
             return markdown_;
         } else |err| {
@@ -981,7 +982,7 @@ fn tavilySearch(
     api_key: []const u8,
     query: []const u8,
 ) ![]const u8 {
-    var client: tavily.Client = .init(arena, api_key, .{});
+    var client: tavily.Client = .init(arena, lp.io, api_key, .{});
     defer client.deinit();
 
     var response = client.search(query, .{ .max_results = 10 }) catch |err| {
@@ -1268,9 +1269,9 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
         promise.markAsHandled();
 
         var runner = page._session.runner(.{});
-        var timer = std.time.Timer.start() catch unreachable;
+        const timer: std.Io.Timestamp = .now(lp.io, .boot);
         while (promise.state() == .pending) {
-            const elapsed_ms: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+            const elapsed_ms: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
             if (elapsed_ms >= eval_promise_timeout_ms) {
                 return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
             }
@@ -1751,7 +1752,8 @@ fn lookupLpEnv(name: []const u8) ?[:0]const u8 {
     }
     @memcpy(name_buf[0..name.len], name);
     name_buf[name.len] = 0;
-    return std.posix.getenv(name_buf[0..name.len :0]);
+    const value = std.c.getenv(name_buf[0..name.len :0]) orelse return null;
+    return std.mem.span(value);
 }
 
 fn execConsoleLogs(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
@@ -1979,12 +1981,12 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
         if (!std.mem.eql(u8, field.name, entry.key_ptr.*)) break;
     } else return v;
 
-    var new_obj: std.json.ObjectMap = .init(arena);
-    try new_obj.ensureTotalCapacity(v.object.count());
+    var new_obj: std.json.ObjectMap = .empty;
+    try new_obj.ensureTotalCapacity(arena, v.object.count());
     it = v.object.iterator();
     while (it.next()) |entry| {
         const canonical = if (schema.findField(entry.key_ptr.*)) |f| f.name else entry.key_ptr.*;
-        const gop = try new_obj.getOrPut(canonical);
+        const gop = try new_obj.getOrPut(arena, canonical);
         if (gop.found_existing) return error.DuplicateField;
         gop.value_ptr.* = entry.value_ptr.*;
     }
@@ -2009,8 +2011,8 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
         if (needsSub(is_fill, entry.key_ptr.*, entry.value_ptr.*)) break;
     } else return v;
 
-    var new_obj: std.json.ObjectMap = .init(arena);
-    try new_obj.ensureTotalCapacity(v.object.count());
+    var new_obj: std.json.ObjectMap = .empty;
+    try new_obj.ensureTotalCapacity(arena, v.object.count());
     it = v.object.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
@@ -2019,7 +2021,7 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
             .{ .string = try substituteEnvVars(arena, val.string) }
         else
             val;
-        try new_obj.put(key, new_val);
+        try new_obj.put(arena, key, new_val);
     }
     return .{ .object = new_obj };
 }
@@ -2027,7 +2029,7 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
 pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
     // No `$LP_` prefix → no substitution possible, skip the rebuild entirely.
     // Pages routinely contain `$5.99`-style content where `$` is incidental.
-    // Lowercase `$lp_…` falls through here too — `std.posix.getenv` is
+    // Lowercase `$lp_…` falls through here too — `getenv` is
     // case-sensitive on Linux, so it would never resolve anyway.
     const first_lp = std.mem.indexOf(u8, input, "$LP_") orelse return input;
 
@@ -2152,8 +2154,8 @@ test "execGetEnv reads LP_* values" {
     _ = setenv(@constCast(var_name), @constCast(var_value), 1);
     defer _ = unsetenv(@constCast(var_name));
 
-    var obj: std.json.ObjectMap = .init(aa);
-    try obj.put("name", .{ .string = var_name });
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(aa, "name", .{ .string = var_name });
     const arguments: std.json.Value = .{ .object = obj };
 
     const r = try execGetEnv(aa, arguments);
@@ -2170,8 +2172,8 @@ test "execGetEnv hides non-LP_ values even when set" {
     _ = setenv(@constCast(var_name), @constCast(var_value), 1);
     defer _ = unsetenv(@constCast(var_name));
 
-    var obj: std.json.ObjectMap = .init(aa);
-    try obj.put("name", .{ .string = var_name });
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(aa, "name", .{ .string = var_name });
     const arguments: std.json.Value = .{ .object = obj };
 
     const r = try execGetEnv(aa, arguments);

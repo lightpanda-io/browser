@@ -513,7 +513,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
 fn attributeContainsWord(value: []const u8, word: []const u8) bool {
     var remaining = value;
     while (remaining.len > 0) {
-        const trimmed = std.mem.trimLeft(u8, remaining, &std.ascii.whitespace);
+        const trimmed = std.mem.trimStart(u8, remaining, &std.ascii.whitespace);
         if (trimmed.len == 0) return false;
 
         const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;

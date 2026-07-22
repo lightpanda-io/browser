@@ -369,7 +369,7 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const download_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(download_path);
 
     const bc = try ctx.loadBrowserContext(.{
@@ -403,7 +403,7 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
         .receivedBytes = 30,
     }, .{});
 
-    const written = try tmp.dir.readFileAlloc(testing.allocator, "report.csv", 1024);
+    const written = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
     defer testing.allocator.free(written);
     try testing.expectEqualSlices(u8, "col1,col2\nhello,world\n42,1337\n", written);
 }

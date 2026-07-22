@@ -248,7 +248,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .node = .{},
         .manager = self,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .import,
         .hint_element = opts.hint_element,
     };
@@ -440,7 +440,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         .node = .{},
         .manager = self,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .{ .import_async = .{
             .callback = cb,
             .data = cb_data,
@@ -1059,7 +1059,7 @@ pub const ImportedModule = struct {
     // adopt a hint entry outright (see getAsyncImport).
     hint: bool = false,
     state: State,
-    buffer: std.ArrayList(u8) = .{},
+    buffer: std.ArrayList(u8) = .empty,
 
     pub const State = union(enum) {
         err,
@@ -1090,7 +1090,7 @@ test "ScriptManagerBase: shutdownCallback fails a .loading module" {
         .node = .{},
         .manager = sm,
         .complete = false,
-        .source = .{ .remote = .{} },
+        .source = .{ .remote = .empty },
         .extra = .import,
         .hint_element = null,
     };

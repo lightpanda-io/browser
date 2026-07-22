@@ -42,7 +42,7 @@ pub fn disableIfRequested() void {
 
 fn shouldDisable() bool {
     if (builtin.os.tag == .windows) return false;
-    return std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_CORE_DUMP");
+    return std.c.getenv("LIGHTPANDA_DISABLE_CORE_DUMP") != null;
 }
 
 // Zeroes only the soft limit; that is what the kernel consults when deciding

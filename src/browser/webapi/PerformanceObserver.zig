@@ -59,7 +59,7 @@ pub fn init(callback: js.Function.Global, exec: *const Execution) !*PerformanceO
         ._callback = callback,
         ._duration_threshold = DefaultDurationThreshold,
         ._interests = 0,
-        ._entries = .{},
+        ._entries = .empty,
         ._performance = exec.performance(),
         ._js = exec.js,
         ._arena = exec.arena,

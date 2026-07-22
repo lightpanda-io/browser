@@ -53,7 +53,7 @@ park_isolates: bool = false,
 active_session: *Session = undefined,
 transport: Transport,
 
-pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
+pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
@@ -256,8 +256,8 @@ test "MCP.Server - Integration: synchronous smoke test" {
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
     ;
 
-    var in_reader: std.io.Reader = .fixed(input);
-    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var in_reader: std.Io.Reader = .fixed(input);
+    var out_alloc: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     defer out_alloc.deinit();
 
     var server = try Self.init(allocator, app, &out_alloc.writer);

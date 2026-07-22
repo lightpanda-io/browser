@@ -250,7 +250,7 @@ fn findAttrValue(attrs: []const u8, name: []const u8) ?[]const u8 {
 fn extractCharsetFromContentType(content: []const u8) ?[]const u8 {
     var it = std.mem.splitScalar(u8, content, ';');
     while (it.next()) |part| {
-        const trimmed = std.mem.trimLeft(u8, part, &.{ ' ', '\t' });
+        const trimmed = std.mem.trimStart(u8, part, &.{ ' ', '\t' });
         if (trimmed.len > 8 and std.ascii.eqlIgnoreCase(trimmed[0..8], "charset=")) {
             const val = std.mem.trim(u8, trimmed[8..], &.{ ' ', '\t', '"', '\'' });
             if (val.len > 0 and val.len <= 40) return val;
@@ -261,7 +261,7 @@ fn extractCharsetFromContentType(content: []const u8) ?[]const u8 {
 
 pub fn sniff(body: []const u8) ?Mime {
     // 0x0C is form feed
-    const content = std.mem.trimLeft(u8, body, &.{ ' ', '\t', '\n', '\r', 0x0C });
+    const content = std.mem.trimStart(u8, body, &.{ ' ', '\t', '\n', '\r', 0x0C });
     if (content.len == 0) {
         return null;
     }
@@ -449,7 +449,7 @@ pub fn serialize(arena: Allocator, input: []const u8) ![]const u8 {
 
     var rest = trimmed[slash + 1 ..];
     const subtype_end = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
-    const subtype = std.mem.trimRight(u8, rest[0..subtype_end], &HTTP_WHITESPACE);
+    const subtype = std.mem.trimEnd(u8, rest[0..subtype_end], &HTTP_WHITESPACE);
     if (isHttpToken(subtype) == false) {
         return "";
     }
@@ -520,7 +520,7 @@ pub fn serialize(arena: Allocator, input: []const u8) ![]const u8 {
         } else {
             const value_start = i;
             while (i < rest.len and rest[i] != ';') i += 1;
-            value = std.mem.trimRight(u8, rest[value_start..i], &HTTP_WHITESPACE);
+            value = std.mem.trimEnd(u8, rest[value_start..i], &HTTP_WHITESPACE);
             if (value.len == 0) continue; // empty unquoted value is dropped
         }
 
@@ -703,7 +703,7 @@ fn firstCharsetValue(rest: []const u8, out: []u8) ?[]const u8 {
                 i += 1;
             }
 
-            const v = std.mem.trimRight(u8, rest[value_start..i], &HTTP_WHITESPACE);
+            const v = std.mem.trimEnd(u8, rest[value_start..i], &HTTP_WHITESPACE);
             if (v.len == 0) {
                 // empty unquoted value is dropped
                 continue;
@@ -726,7 +726,7 @@ fn firstCharsetValue(rest: []const u8, out: []u8) ?[]const u8 {
 }
 
 fn trimRight(s: []const u8) []const u8 {
-    return std.mem.trimRight(u8, s, &std.ascii.whitespace);
+    return std.mem.trimEnd(u8, s, &std.ascii.whitespace);
 }
 
 const testing = @import("../testing.zig");

@@ -32,29 +32,29 @@ const skills = [_]Skill{
     .{ .name = lp.skill.name, .write = lp.skill.write },
 };
 
-pub fn main() !void {
-    const allocator = std.heap.c_allocator;
-
+pub fn main(init: std.process.Init) !void {
     // usage: skills <outdir>
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = std.process.Args.Iterator.init(init.minimal.args);
     _ = args.next(); // executable name
     const out_path = args.next() orelse {
         std.debug.print("usage: lightpanda-skills <outdir>\n", .{});
         return error.MissingArgument;
     };
 
-    var out_dir = try std.fs.cwd().makeOpenPath(out_path, .{});
-    defer out_dir.close();
+    try std.Io.Dir.cwd().createDirPath(lp.io, out_path);
+    var out_dir = try std.Io.Dir.cwd().openDir(lp.io, out_path, .{});
+    defer out_dir.close(lp.io);
 
     for (skills) |s| {
-        var skill_dir = try out_dir.makeOpenPath(s.name, .{});
-        defer skill_dir.close();
+        try out_dir.createDirPath(lp.io, s.name);
+        var skill_dir = try out_dir.openDir(lp.io, s.name, .{});
+        defer skill_dir.close(lp.io);
 
-        const file = try skill_dir.createFile("SKILL.md", .{});
-        defer file.close();
+        const file = try skill_dir.createFile(lp.io, "SKILL.md", .{});
+        defer file.close(lp.io);
 
         var buffer: [4096]u8 = undefined;
-        var writer = file.writer(&buffer);
+        var writer = file.writer(lp.io, &buffer);
         try s.write(&writer.interface);
         try writer.end();
     }

@@ -55,8 +55,8 @@ const EventKeyContext = struct {
 pub const EventManagerBase = @This();
 
 arena: Allocator,
-listener_pool: std.heap.MemoryPool(Listener),
-list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
+listener_pool: std.heap.memory_pool.ExtraManaged(Listener, .{}),
+list_pool: std.heap.memory_pool.ExtraManaged(std.DoublyLinkedList, .{}),
 lookup: std.HashMapUnmanaged(
     EventKey,
     *std.DoublyLinkedList,
@@ -73,7 +73,7 @@ pub fn init(arena: Allocator) EventManagerBase {
         .list_pool = .init(arena),
         .listener_pool = .init(arena),
         .dispatch_depth = 0,
-        .deferred_removals = .{},
+        .deferred_removals = .empty,
     };
 }
 

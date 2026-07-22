@@ -125,15 +125,15 @@ pub const RobotStore = struct {
 
     allocator: std.mem.Allocator,
     map: RobotsMap,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
 
     pub fn init(allocator: std.mem.Allocator) RobotStore {
         return .{ .allocator = allocator, .map = .empty };
     }
 
     pub fn deinit(self: *RobotStore) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
 
         var iter = self.map.iterator();
 
@@ -150,8 +150,8 @@ pub const RobotStore = struct {
     }
 
     pub fn get(self: *RobotStore, url: []const u8) ?RobotsEntry {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
 
         return self.map.get(url);
     }
@@ -161,8 +161,8 @@ pub const RobotStore = struct {
     }
 
     pub fn put(self: *RobotStore, url: []const u8, robots: Robots) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
 
         const duped = try self.allocator.dupe(u8, url);
         try self.map.put(self.allocator, duped, .{ .present = robots });
@@ -170,8 +170,8 @@ pub const RobotStore = struct {
 
     // The returned slice is owned by the store
     pub fn getContentSignals(self: *RobotStore, url: []const u8) ?[]const ContentSignal {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
 
         const entry = self.map.get(url) orelse return null;
         return switch (entry) {
@@ -181,8 +181,8 @@ pub const RobotStore = struct {
     }
 
     pub fn putAbsent(self: *RobotStore, url: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
 
         const duped = try self.allocator.dupe(u8, url);
         try self.map.put(self.allocator, duped, .absent);
@@ -295,7 +295,7 @@ fn parseRulesWithUserAgent(
 
         // Remove end of line comment.
         const true_line = if (std.mem.indexOfScalar(u8, trimmed, '#')) |pos|
-            std.mem.trimRight(u8, trimmed[0..pos], &std.ascii.whitespace)
+            std.mem.trimEnd(u8, trimmed[0..pos], &std.ascii.whitespace)
         else
             trimmed;
 

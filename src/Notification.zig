@@ -68,7 +68,7 @@ event_listeners: EventListeners,
 listeners: std.AutoHashMapUnmanaged(usize, std.ArrayList(*Listener)),
 
 allocator: Allocator,
-mem_pool: std.heap.MemoryPool(Listener),
+mem_pool: std.heap.memory_pool.ExtraManaged(Listener, .{}),
 
 const EventListeners = struct {
     frame_remove: List = .{},
@@ -368,7 +368,7 @@ pub fn init(allocator: Allocator) !*Notification {
         .listeners = .{},
         .event_listeners = .{},
         .allocator = allocator,
-        .mem_pool = std.heap.MemoryPool(Listener).init(allocator),
+        .mem_pool = .init(allocator),
     };
 
     return notification;
@@ -404,7 +404,7 @@ pub fn register(self: *Notification, comptime event: EventType, receiver: anytyp
     const allocator = self.allocator;
     const gop = try self.listeners.getOrPut(allocator, @intFromPtr(receiver));
     if (gop.found_existing == false) {
-        gop.value_ptr.* = .{};
+        gop.value_ptr.* = .empty;
     }
     try gop.value_ptr.append(allocator, listener);
 

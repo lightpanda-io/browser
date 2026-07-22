@@ -64,8 +64,8 @@ _aborted: bool = false,
 _is_dependent: bool = false,
 _reason: Reason = .undefined,
 _on_abort: ?js.Function.Global = null,
-_dependents: std.ArrayList(Dependend) = .{},
-_source_signals: std.ArrayList(*AbortSignal) = .{},
+_dependents: std.ArrayList(Dependend) = .empty,
+_source_signals: std.ArrayList(*AbortSignal) = .empty,
 
 pub fn init(exec: *const Execution) !*AbortSignal {
     return exec._factory.eventTarget(AbortSignal{
@@ -103,7 +103,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     // Per spec: mark all direct dependents aborted (with this signal's reason)
     // BEFORE firing any abort events. The graph is flattened at any() creation,
     // so we never need to recurse here.
-    var to_dispatch: std.ArrayList(Dependend) = .{};
+    var to_dispatch: std.ArrayList(Dependend) = .empty;
     for (self._dependents.items) |dep| {
         if (try dep.markAborted(self._reason, exec)) {
             try to_dispatch.append(exec.call_arena, dep);

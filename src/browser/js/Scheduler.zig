@@ -36,6 +36,7 @@ const Queue = std.PriorityQueue(Task, void, struct {
 const Scheduler = @This();
 
 _sequence: u64,
+allocator: std.mem.Allocator,
 // Some things (e.g. IndexedDB) can have operations that are only valid for a
 // specific task boundary. So every time we start a task, we increment the
 // scheduler's generation. Code can snapshot this version and then compare it
@@ -47,9 +48,10 @@ high_priority: Queue,
 pub fn init(allocator: std.mem.Allocator) Scheduler {
     return .{
         ._sequence = 0,
+        .allocator = allocator,
         .generation = 0,
-        .low_priority = Queue.init(allocator, {}),
-        .high_priority = Queue.init(allocator, {}),
+        .low_priority = Queue.initContext({}),
+        .high_priority = Queue.initContext({}),
     };
 }
 
@@ -77,7 +79,7 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
     var queue = if (opts.low_priority) &self.low_priority else &self.high_priority;
     const seq = self._sequence + 1;
     self._sequence = seq;
-    return queue.add(.{
+    return queue.push(self.allocator, .{
         .ctx = ctx,
         .callback = cb,
         .sequence = seq,
@@ -117,7 +119,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
         if (task_.run_at > now) {
             return;
         }
-        var task = queue.remove();
+        var task = queue.pop().?;
         if (comptime IS_DEBUG) {
             log.debug(.scheduler, "scheduler.runTask", .{ .name = task.name });
         }
@@ -135,7 +137,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
                 std.debug.assert(ms != 0);
             }
             task.run_at = now + ms;
-            try self.low_priority.add(task);
+            try self.low_priority.push(self.allocator, task);
         }
 
         now = milliTimestamp(.monotonic);
