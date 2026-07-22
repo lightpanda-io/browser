@@ -248,6 +248,7 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
     const exec_cargo = b.addSystemCommand(&.{
         "cargo",           "build",
         "--profile",       if (is_debug) "dev" else "release",
+        "--features",      if (is_debug) "memstats" else "",
         "--manifest-path", "src/html5ever/Cargo.toml",
     });
 
