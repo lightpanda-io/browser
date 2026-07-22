@@ -1915,7 +1915,7 @@ const verdict_system_prompt =
     \\empty output means the script is broken (stale selectors after a site
     \\change) or legitimate (the page genuinely has no such data right now).
     \\A `
-++ std.mem.trimRight(u8, Baseline.marker, " ") ++
+++ std.mem.trimEnd(u8, Baseline.marker, " ") ++
     \\` comment, when present, records how often each output
     \\field carried data when the script was saved — weigh it as evidence.
     \\Respond with JSON only:
