@@ -562,7 +562,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
     return transfer;
 }
 
-pub fn tick(self: *Client, timeout_ms: u32) !void {
+pub fn tick(self: *Client, timeout_ms: u32) !bool {
     self.processGraveyard();
     return self._tick(timeout_ms, .all);
 }
@@ -571,18 +571,22 @@ pub fn tickSync(self: *Client, timeout_ms: u32) !void {
     if (self.hasPendingTeardown()) {
         return error.SyncWaitInterrupted;
     }
-    return self._tick(timeout_ms, .sync_wait);
+    _ = try self._tick(timeout_ms, .sync_wait);
 }
 
 fn hasPendingTeardown(self: *Client) bool {
     return self.inbox.contains(isSyncWaitInterrupt);
 }
 
-pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
+// Returns false iff the tick was a no-op. When false is returned, immediately
+// calling this again will almost [instantly] return false again, potentially
+// causing a spin.
+pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
     if (self.inbox.terminated) {
         return error.ClientDisconnected;
     }
 
+    var waited = true;
     const dispatched = self.dispatchCompleted(mode);
 
     try self.startPending();
@@ -603,6 +607,11 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
             // poll only waits, so we do the perform -> process dance again
             _ = try self.handles.perform();
             _ = try self.processMessages();
+        } else {
+            // There's nothing inflight. Polling will always wait until
+            // timeout_ms. Rather than do that, let's signal our caller (by
+            // returning false) and letting it decide what to do.
+            waited = false;
         }
     } else {
         // If we DID dispatch or process messages, we don't wan to wait / poll.
@@ -617,6 +626,19 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
 
     // dispatch CDP commands
     try self.drainInbox(mode);
+
+    if (comptime IS_DEBUG) {
+        if (waited == false) {
+            // we're about to tell our caller not to call us again without it
+            // doing some work (e.g. running tasks). Let's assert that we were
+            // right in doing that, else we'll likely introduce latency.
+            std.debug.assert(self.pending_queue.first == null);
+            std.debug.assert(self.dispatch_queue.first == null);
+            std.debug.assert(self.ws_dispatch_queue.first == null);
+        }
+    }
+
+    return waited;
 }
 
 // Deliver completed response. This is the ONLY place user callbacks run,
