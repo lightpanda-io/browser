@@ -378,17 +378,26 @@ pub fn unregisterCdp(self: *Network, link: *CdpLink) void {
     }
 }
 
+const DropCdpOpts = struct {
+    // on_disconnect is fired iff `notify` is true. false when the worker already
+    // knows the link is dead.
+    notify: bool,
+
+    // Set when we know the peer is dead. Can help unblock a blocked worker's send()
+    shutdown_socket: bool = false,
+};
+
 // Drop a link from the poll set. Caller must hold cdp_mutex.
-//   - on_disconnect is fired iff `notify` is true. Set notify=false
-//     when the consumer already knows the link is dead (e.g. close
-//     frame just went through on_bytes; the .close message in the
-//     inbox is enough to wake the worker).
-//   - The worker is woken via curl_multi_wakeup either way.
-fn dropCdp(self: *Network, link: *CdpLink, err: ?anyerror, notify: bool) void {
+fn dropCdp(self: *Network, link: *CdpLink, err: ?anyerror, opts: DropCdpOpts) void {
     self.cdp_links.remove(&link.node);
     link.state = .removed;
     self.cdp_dirty = true;
-    if (notify) {
+
+    if (opts.shutdown_socket) {
+        posix.shutdown(link.socket, .both) catch {};
+    }
+
+    if (opts.notify) {
         link.cdp.terminateFromNetwork();
 
         // notify=true means the worker hasn't been told yet — push the
@@ -458,7 +467,7 @@ fn processCdpEvents(self: *Network) void {
         const next = node.next;
         const link: *CdpLink = @fieldParentPtr("node", node);
         if (link.state == .unregistering) {
-            self.dropCdp(link, null, false);
+            self.dropCdp(link, null, .{ .notify = false });
             any_removed = true;
         }
         it = next;
@@ -478,7 +487,7 @@ fn processCdpEvents(self: *Network) void {
 
         const fatal_events: i16 = comptime @intCast(posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL);
         if (pfd.revents & fatal_events != 0) {
-            self.dropCdp(link, null, true);
+            self.dropCdp(link, null, .{ .notify = true, .shutdown_socket = true });
             any_removed = true;
             continue;
         }
@@ -492,7 +501,7 @@ fn processCdpEvents(self: *Network) void {
             error.WouldBlock => continue,
             else => {
                 lp.log.warn(.cdp, "CDP read", .{ .err = err });
-                self.dropCdp(link, err, true);
+                self.dropCdp(link, err, .{ .notify = true, .shutdown_socket = true });
                 any_removed = true;
                 continue;
             },
@@ -500,7 +509,7 @@ fn processCdpEvents(self: *Network) void {
 
         if (n == 0) {
             // peer EOF
-            self.dropCdp(link, null, true);
+            self.dropCdp(link, null, .{ .notify = true, .shutdown_socket = true });
             any_removed = true;
             continue;
         }
@@ -513,7 +522,7 @@ fn processCdpEvents(self: *Network) void {
             // on_disconnect surfaces a .disconnect into the inbox.
             // dropCdp wakes the worker.
             lp.log.info(.cdp, "CDP onData", .{ .err = err });
-            self.dropCdp(link, err, true);
+            self.dropCdp(link, err, .{ .notify = true });
             any_removed = true;
             continue;
         };
@@ -528,7 +537,7 @@ fn processCdpEvents(self: *Network) void {
             // Close frame: the handler already pushed .close. Worker's
             // drainInbox will call on_disconnect itself after replying,
             // so we drop without re-notifying.
-            self.dropCdp(link, null, false);
+            self.dropCdp(link, null, .{ .notify = false });
             any_removed = true;
         }
     }
@@ -555,7 +564,7 @@ fn shutdownCdpLinks(self: *Network) void {
         it = node.next;
         const link: *CdpLink = @fieldParentPtr("node", node);
         if (link.state == .live) {
-            self.dropCdp(link, null, true);
+            self.dropCdp(link, null, .{ .notify = true });
         }
     }
 

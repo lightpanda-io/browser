@@ -35,6 +35,7 @@ const Allocator = std.mem.Allocator;
 pub const CDP_KEEPALIVE_IDLE_S: c_int = 4;
 pub const CDP_KEEPALIVE_INTVL_S: c_int = 2;
 pub const CDP_KEEPALIVE_CNT: c_int = 3;
+pub const CDP_TCP_USER_TIMEOUT_MS: c_int = 10_000;
 
 const Config = @This();
 
