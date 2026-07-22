@@ -40,8 +40,10 @@ pub const Key = struct {
 
 // Identity map for AnimatedString, help by the frame
 pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedString {
-    const gop = try frame._svg_animated_strings.getOrPut(frame.arena, .{ .element = element, .kind = kind });
+    const key: Key = .{ .element = element, .kind = kind };
+    const gop = try frame._svg_animated_strings.getOrPut(frame.arena, key);
     if (!gop.found_existing) {
+        errdefer _ = frame._svg_animated_strings.remove(key);
         gop.value_ptr.* = try frame._factory.create(AnimatedString{
             ._element = element,
             ._kind = kind,

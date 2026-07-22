@@ -42,6 +42,8 @@ const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
+const AnimatedLength = @import("webapi/svg/AnimatedLength.zig");
+const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRatio.zig");
 const AnimatedString = @import("webapi/svg/AnimatedString.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
@@ -142,6 +144,8 @@ _element_shadow_roots: Element.ShadowRootLookup = .empty,
 _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
+_svg_animated_lengths: AnimatedLength.Lookup = .empty,
+_svg_animated_preserve_aspect_ratios: AnimatedPreserveAspectRatio.Lookup = .empty,
 _svg_animated_strings: AnimatedString.Lookup = .empty,
 
 // Same as above, but for Nodes (slot assigments apply to both Element AND
