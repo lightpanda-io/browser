@@ -1816,7 +1816,8 @@ fn buildHealDiagnoseMessage(arena: std.mem.Allocator, path: []const u8, source: 
 /// Heal synthesis instruction; rides on the regular save revision system prompt.
 const heal_revision_prompt =
     \\Fix the script so it replays successfully against the current site: the
-    \\error and this session's working tool calls identify the repair. Keep
+    \\error names what broke, and the diagnosis tool calls above that
+    \\succeeded against the live page show the repair. Keep
     \\every step, selector, and output shape that still works unchanged.
     \\Preserve the script's `//` intent comments; where you change a block,
     \\update its comment so it still describes what the revised code does, and
@@ -1918,11 +1919,15 @@ const verdict_system_prompt =
 ++ std.mem.trimEnd(u8, Baseline.marker, " ") ++
     \\` comment, when present, records how often each output
     \\field carried data when the script was saved — weigh it as evidence.
-    \\Respond with JSON only:
-    \\{"broken": true|false, "fields": ["<field>", ...], "reason": "<one sentence>"}
+    \\Respond with your verdict on its own final line:
+    \\
+++ verdict_marker ++
+    \\ {"broken": true|false, "fields": ["<field>", ...], "reason": "<one sentence>"}
     \\`fields` names the output fields you judge broken; use "" for the whole
     \\return value.
 ;
+
+const verdict_marker = "VERDICT:";
 
 const Verdict = struct {
     broken: bool,
@@ -1948,11 +1953,13 @@ fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, susp
 }
 
 fn parseVerdict(arena: std.mem.Allocator, raw: []const u8) ?Verdict {
-    const start = std.mem.indexOfScalar(u8, raw, '{') orelse return null;
-    const end = std.mem.lastIndexOfScalar(u8, raw, '}') orelse return null;
+    const at = std.mem.lastIndexOf(u8, raw, verdict_marker) orelse return null;
+    const rest = raw[at + verdict_marker.len ..];
+    const start = std.mem.indexOfScalar(u8, rest, '{') orelse return null;
+    const end = std.mem.lastIndexOfScalar(u8, rest, '}') orelse return null;
     if (end < start) return null;
     const Wire = struct { broken: bool, fields: []const []const u8 = &.{}, reason: []const u8 = "" };
-    const wire = std.json.parseFromSliceLeaky(Wire, arena, raw[start .. end + 1], .{ .ignore_unknown_fields = true }) catch return null;
+    const wire = std.json.parseFromSliceLeaky(Wire, arena, rest[start .. end + 1], .{ .ignore_unknown_fields = true }) catch return null;
     const fields = arena.alloc(?[]const u8, wire.fields.len) catch return null;
     for (wire.fields, fields) |f, *out| out.* = if (f.len == 0) null else f;
     return .{ .broken = wire.broken, .fields = fields, .reason = wire.reason };
@@ -2552,20 +2559,24 @@ test "suspicionOf: any all-empty field is suspect, none is not" {
     try std.testing.expectEqual(ScriptError.Kind.empty, suspicionOf(aa, empty_facts).?.kind);
 }
 
-test "parseVerdict: tolerant of prose around the JSON" {
+test "parseVerdict: anchored to the marker, tolerant of prose around it" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const v = parseVerdict(aa, "Sure!\n{\"broken\": true, \"fields\": [\"comments\", \"\"], \"reason\": \"selector drift\"}").?;
+    const v = parseVerdict(aa, "The {comments} baseline says data was always present.\nVERDICT: {\"broken\": true, \"fields\": [\"comments\", \"\"], \"reason\": \"selector drift\"}").?;
     try std.testing.expect(v.broken);
     try std.testing.expectEqual(2, v.fields.len);
     try std.testing.expectEqualStrings("comments", v.fields[0].?);
     try std.testing.expectEqual(null, v.fields[1]);
     try std.testing.expectEqualStrings("selector drift", v.reason);
 
-    try std.testing.expectEqual(null, parseVerdict(aa, "no json here"));
-    try std.testing.expectEqual(null, parseVerdict(aa, "{\"fields\": []}"));
+    const fenced = parseVerdict(aa, "As instructed, VERDICT: first.\nVERDICT:\n```json\n{\"broken\": false}\n```").?;
+    try std.testing.expect(!fenced.broken);
+
+    try std.testing.expectEqual(null, parseVerdict(aa, "{\"broken\": true, \"fields\": []}"));
+    try std.testing.expectEqual(null, parseVerdict(aa, "VERDICT: no json here"));
+    try std.testing.expectEqual(null, parseVerdict(aa, "VERDICT: {\"fields\": []}"));
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {
