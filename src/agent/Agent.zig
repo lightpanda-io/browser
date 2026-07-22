@@ -29,7 +29,8 @@ const Command = lp.Command;
 const Schema = lp.Schema;
 const Recorder = lp.Recorder;
 const ScriptRuntime = lp.Runtime;
-const Baseline = @import("Baseline.zig");
+const Baseline = lp.Baseline;
+
 const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
@@ -1559,53 +1560,15 @@ const ScriptOutput = struct {
     }
 };
 
+const RunFacts = lp.heal.RunFacts;
+const ScriptError = lp.heal.ScriptError;
+
 /// `fatal` covers setup failures (unreadable file, runtime init, OOM) that a
 /// retry can't help.
 const ScriptRunOutcome = union(enum) {
     ok: RunFacts,
     fatal,
     script_error: ScriptError,
-};
-
-/// What a completed run returned, as far as heal cares.
-const Returned = union(enum) {
-    /// No `return`, or a value whose display form couldn't be computed.
-    none,
-    /// A value carrying data.
-    data,
-    /// A deep-empty value, carrying its capped display text.
-    empty: []const u8,
-};
-
-/// Facts about a run that completed without throwing — suspicion is judged by
-/// the model, never here. Duped into the caller's arena — the runtime dies
-/// with `runScriptOutcome`.
-const RunFacts = struct {
-    returned: Returned,
-    extract_stats: []const ScriptRuntime.ExtractStat,
-    source: []const u8,
-};
-
-/// Both slices are duped into the caller's arena. `source` is the exact text
-/// that ran, so a heal diagnoses what actually failed instead of re-reading a
-/// possibly-changed file.
-const ScriptError = struct {
-    kind: Kind,
-    /// Formatted error (line, stack) — or, for `empty`, what came back.
-    detail: []const u8,
-    source: []const u8,
-    /// For `dry_extracts`: the field names that were empty on every call
-    /// (null = a whole-array schema). The cure check requires each one to
-    /// come back with data before a heal may replace the file.
-    dry_fields: []const ?[]const u8 = &.{},
-
-    /// `empty` is a run that completed but returned a value with no data in
-    /// it; `dry_extracts` one whose return value had data, but where some
-    /// extract list field came back empty on every call. Both are the usual
-    /// symptom of a stale selector, which matches nothing instead of throwing.
-    /// Only heal treats them as failures; a plain replay still exits 0, since
-    /// an empty answer can be the right answer.
-    const Kind = enum { threw, empty, dry_extracts };
 };
 
 fn runScript(self: *Agent, path: []const u8) bool {
@@ -1666,102 +1629,26 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
     const result = runtime.runSource(content, path);
     self.terminal.endTool();
 
-    const ok = switch (result catch |err| {
+    const run_result = result catch |err| {
         self.terminal.printError("Script failed: {s}", .{@errorName(err)});
         return .fatal;
-    }) {
-        .err => |message| {
-            self.terminal.printError("{s}", .{message});
-            // A Ctrl-C termination is not a script defect — never heal it.
-            if (self.cancel_requested.load(.acquire)) return .fatal;
-            // The message lives in the runtime's call arena and the source in
-            // script_arena; both are freed by the defers above — dupe first.
-            return .{ .script_error = .{
-                .kind = .threw,
-                .detail = arena.dupe(u8, message) catch return .fatal,
-                .source = arena.dupe(u8, content) catch return .fatal,
-            } };
-        },
-        .ok => |ok| ok,
     };
-
-    // A script that printed nothing leaves no trace, so freeze the spinner into
-    // a green bullet (like /goto); one that printed already showed its result.
-    if (!output.emitted) self.terminal.printScriptDone("script", path);
-    const returned: Returned = if (ok.completion) |c|
-        (if (c.empty) .{ .empty = capDetail(arena, c.text) catch return .fatal } else .data)
-    else
-        .none;
-    return .{ .ok = .{
-        .returned = returned,
-        .extract_stats = dupeExtractStats(arena, ok.extract_stats) catch return .fatal,
-        .source = arena.dupe(u8, content) catch return .fatal,
-    } };
-}
-
-fn dupeExtractStats(arena: std.mem.Allocator, stats: []const ScriptRuntime.ExtractStat) error{OutOfMemory}![]const ScriptRuntime.ExtractStat {
-    const out = try arena.alloc(ScriptRuntime.ExtractStat, stats.len);
-    for (stats, out) |stat, *o| {
-        o.* = .{
-            .schema = try arena.dupe(u8, stat.schema),
-            .field = if (stat.field) |f| try arena.dupe(u8, f) else null,
-            .calls = stat.calls,
-            .empty = stat.empty,
-        };
+    if (run_result == .err) {
+        self.terminal.printError("{s}", .{run_result.err});
+        // A Ctrl-C termination is not a script defect — never heal it.
+        if (self.cancel_requested.load(.acquire)) return .fatal;
+    } else {
+        // A script that printed nothing leaves no trace, so freeze the spinner
+        // into a green bullet (like /goto); one that printed already showed its
+        // result.
+        if (!output.emitted) self.terminal.printScriptDone("script", path);
     }
-    return out;
-}
-
-/// Bound a value or schema echoed into a heal message; a degenerate empty-ish
-/// result (hundreds of all-null rows) would otherwise bloat the LLM turn.
-const detail_max_bytes: usize = 2048;
-
-/// `capOutput` at `detail_max_bytes`, always duped — `RunFacts` details must
-/// outlive the runtime whose arena the text came from.
-fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
-    return arena.dupe(u8, capOutput(arena, text, detail_max_bytes));
-}
-
-/// A finding worth a verdict, not yet confirmed: the return value was
-/// deep-empty, or some extract field came back empty on every call — any field,
-/// scalar or list, baseline or not. Whether that is breakage or legitimate
-/// sparseness is the model's judgment, not encoded here.
-fn suspicionOf(arena: std.mem.Allocator, facts: RunFacts) ?ScriptError {
-    switch (facts.returned) {
-        .empty => |text| return .{
-            .kind = .empty,
-            .detail = std.fmt.allocPrint(arena, "its return value carries no data: {s}", .{text}) catch return null,
-            .source = facts.source,
-        },
-        .none, .data => {},
-    }
-    return dryExtractsFinding(arena, facts.source, facts.extract_stats) catch return null;
-}
-
-/// A `dry_extracts` finding with one detail line per extract field that came
-/// back empty on every call, plus the field names for the cure check. Null when
-/// no field was dry.
-fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []const ScriptRuntime.ExtractStat) !?ScriptError {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    var fields: std.ArrayList(?[]const u8) = .empty;
-    for (stats) |stat| {
-        if (stat.empty != stat.calls) continue;
-        if (fields.items.len == 0) {
-            try aw.writer.writeAll("some extracts came back empty on every call:\n");
-        }
-        // `stat.field` already lives in `arena` (facts were duped into it).
-        try fields.append(arena, stat.field);
-        const schema = try capDetail(arena, stat.schema);
-        if (stat.field) |field| {
-            try aw.writer.print("- the \"{s}\" field in extract({s}) came back empty", .{ field, schema });
-        } else {
-            try aw.writer.print("- extract({s}) returned no data", .{schema});
-        }
-        if (stat.calls != 1) try aw.writer.print(" in all {d} calls", .{stat.calls});
-        try aw.writer.writeAll("\n");
-    }
-    if (fields.items.len == 0) return null;
-    return .{ .kind = .dry_extracts, .detail = aw.written(), .source = source, .dry_fields = fields.items };
+    // `content` dies with script_arena; the outcome's source must outlive it.
+    const source = arena.dupe(u8, content) catch return .fatal;
+    return switch (lp.heal.classifyRun(arena, run_result, source) catch return .fatal) {
+        .facts => |facts| .{ .ok = facts },
+        .script_error => |script_error| .{ .script_error = script_error },
+    };
 }
 
 /// One-shot `--heal` run; counterpart of the REPL's `/load` heal offer.
@@ -1775,7 +1662,7 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
     // the ones healing would act on.
     switch (self.runScriptOutcome(arena.allocator(), path)) {
         .fatal => return false,
-        .ok => |facts| if (suspicionOf(arena.allocator(), facts) == null) return true,
+        .ok => |facts| if (lp.heal.suspicionOf(arena.allocator(), facts) == null) return true,
         .script_error => {},
     }
     self.terminal.printInfo("Script run failed or looks broken; retrying once before healing.", .{});
@@ -1790,39 +1677,6 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
 }
 
 const max_heal_attempts = 2;
-
-fn buildHealDiagnoseMessage(arena: std.mem.Allocator, path: []const u8, source: []const u8, error_detail: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(arena,
-        \\Replaying the saved script {s} failed. The browser session is still
-        \\at the failure state.
-        \\
-        \\The script (its comments and structure carry the intent):
-        \\```js
-        \\{s}
-        \\```
-        \\
-        \\The error:
-        \\{s}
-        \\
-        \\Diagnose the failure: inspect the live page (tree, findElement,
-        \\markdown) to see how the site differs from what the script expects,
-        \\then perform the corrected step(s) with tools to prove they work —
-        \\verify selectors against the live page, never guess. If the failing
-        \\step gated the rest of the script (a login, a navigation), carry on
-        \\far enough to show the script's goal is reachable again.
-    , .{ path, source, error_detail });
-}
-
-/// Heal synthesis instruction; rides on the regular save revision system prompt.
-const heal_revision_prompt =
-    \\Fix the script so it replays successfully against the current site: the
-    \\error names what broke, and the diagnosis tool calls above that
-    \\succeeded against the live page show the repair. Keep
-    \\every step, selector, and output shape that still works unchanged.
-    \\Preserve the script's `//` intent comments; where you change a block,
-    \\update its comment so it still describes what the revised code does, and
-    \\add one for any block that lacks it.
-;
 
 /// Only a revision that passed validation in a fresh session replaces `path`;
 /// the original survives a failed heal.
@@ -1855,10 +1709,10 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
     while (attempt <= max_heal_attempts) : (attempt += 1) {
         self.terminal.printInfo("Healing {s} (attempt {d}/{d})", .{ path, attempt, max_heal_attempts });
 
-        const diagnose = buildHealDiagnoseMessage(arena, path, source, error_detail) catch return self.healOom();
+        const diagnose = lp.heal.buildDiagnoseMessage(arena, path, source, error_detail) catch return self.healOom();
         if (!self.runTurn(.{ .prompt = diagnose, .capture_for_save = true, .label = "Heal" })) return false;
 
-        const revised = self.synthesizeScriptText(arena, "heal", path, source, heal_revision_prompt) orelse return false;
+        const revised = self.synthesizeScriptText(arena, "heal", path, source, lp.heal.heal_revision_prompt) orelse return false;
 
         save.writeContentFile(tmp_path, revised, .replace) catch |err| {
             self.terminal.printError("heal failed: could not write {s}: {s}", .{ tmp_path, @errorName(err) });
@@ -1874,7 +1728,7 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
 
         switch (self.runScriptOutcome(arena, tmp_path)) {
             .ok => |facts| {
-                if (cureFailure(arena, first, facts) catch return self.healOom()) |failure| {
+                if (lp.heal.cureFailure(arena, first, facts) catch return self.healOom()) |failure| {
                     self.terminal.printWarning("{s}", .{failure});
                     source = revised;
                     error_detail = failure;
@@ -1882,7 +1736,7 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
                     // Refresh the baseline from the validation run — synthesis
                     // may have copied the stale one from the broken script.
                     // Best-effort: the validated revision is already on disk.
-                    if (refreshedBaselineScript(arena, revised, facts.extract_stats)) |updated| {
+                    if (lp.heal.refreshedBaselineScript(arena, revised, facts.extract_stats)) |updated| {
                         save.writeContentFile(tmp_path, updated, .replace) catch {};
                     }
                     keep_revision = true;
@@ -1970,7 +1824,7 @@ fn parseVerdict(arena: std.mem.Allocator, raw: []const u8) ?Verdict {
 /// verdict call falls back to the raw facts — the heal prompt, defaulting to
 /// no, becomes the judgment of last resort.
 fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts: RunFacts) ?ScriptError {
-    const suspicion = suspicionOf(arena, facts) orelse return null;
+    const suspicion = lp.heal.suspicionOf(arena, facts) orelse return null;
     if (self.ai_client == null) return null;
     if (self.judgeSuspicion(arena, path, suspicion)) |verdict| {
         if (!verdict.broken) {
@@ -2002,34 +1856,6 @@ fn confirmedDryFields(arena: std.mem.Allocator, judged: []const ?[]const u8, act
         }
     }
     return if (kept.items.len == 0) actual else kept.items;
-}
-
-/// Null when the validation run cured the original finding; otherwise the
-/// message fed to the next heal attempt. Running clean is not a cure on its
-/// own — a revision that deletes the failing extract (or the `return`) also
-/// runs clean.
-fn cureFailure(arena: std.mem.Allocator, first: ScriptError, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
-    switch (first.kind) {
-        .threw => return null,
-        .empty => return if (facts.returned == .data)
-            null
-        else
-            "The revised script ran, but still returns no data (or no longer returns anything) — the original returned a value.",
-        .dry_extracts => {
-            for (first.dry_fields) |dry| {
-                const cured = for (facts.extract_stats) |stat| {
-                    if (ScriptRuntime.fieldEql(stat.field, dry) and stat.empty < stat.calls) break true;
-                } else false;
-                if (!cured) return try std.fmt.allocPrint(arena, "The revised script ran, but the \"{s}\" extract still came back empty on every call (or was removed) — keep it and fix its selector.", .{dry orelse "<whole result>"});
-            }
-            return null;
-        },
-    }
-}
-
-fn refreshedBaselineScript(arena: std.mem.Allocator, revised: []const u8, stats: []const ScriptRuntime.ExtractStat) ?[]const u8 {
-    const line = Baseline.serializeStats(arena, stats) catch return null;
-    return Baseline.withBaseline(arena, revised, line) catch null;
 }
 
 fn removeTempScript(self: *Agent, tmp_path: []const u8) void {
@@ -2065,9 +1891,9 @@ fn recordSlashToolCall(
         .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
     };
 
-    // capOutput returns its input unchanged under the cap; dupe so content
+    // capBytes returns its input unchanged under the cap; dupe so content
     // doesn't alias the caller's per-iteration arena.
-    const capped = capOutput(ma, result.text, tool_output_max_bytes);
+    const capped = string.capBytes(ma, result.text, tool_output_max_bytes);
     const content = if (capped.ptr == result.text.ptr) try ma.dupe(u8, capped) else capped;
 
     const tool_results = try ma.alloc(zenai.provider.ToolResult, 1);
@@ -2342,16 +2168,6 @@ fn buildUserMessageParts(
 // the next request body) without bound.
 const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
-/// Returns `output` unchanged when under `max_bytes`; a truncated-and-marked
-/// copy in `allocator` otherwise (the bare prefix on OOM — never an error).
-fn capOutput(allocator: std.mem.Allocator, output: []const u8, max_bytes: usize) []const u8 {
-    if (output.len <= max_bytes) return output;
-    const prefix = string.truncateUtf8(output, max_bytes);
-    var suffix_buf: [64]u8 = undefined;
-    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
-    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
-}
-
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     // Close any assistant text streamed this turn before the tool spinner shows.
@@ -2369,7 +2185,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     defer self.terminal.spinner.setThinking();
 
     const outcome: zenai.provider.Client.ToolHandler.Result = if (self.callTool(allocator, tool_name, arguments)) |result|
-        .{ .content = capOutput(allocator, result.text, tool_output_max_bytes), .is_error = result.is_error }
+        .{ .content = string.capBytes(allocator, result.text, tool_output_max_bytes), .is_error = result.is_error }
     else |err|
         .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
 
@@ -2473,48 +2289,6 @@ test {
     _ = picker;
 }
 
-test "cureFailure: running clean is not a cure" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const dry: ScriptError = .{
-        .kind = .dry_extracts,
-        .detail = "",
-        .source = "",
-        .dry_fields = &.{ @as(?[]const u8, "comments"), null },
-    };
-    const cured_stats: []const ScriptRuntime.ExtractStat = &.{
-        .{ .schema = "{}", .field = "comments", .calls = 5, .empty = 2 },
-        .{ .schema = "[]", .field = null, .calls = 1, .empty = 0 },
-    };
-    try std.testing.expectEqual(null, try cureFailure(aa, dry, testFacts(.data, cured_stats)));
-
-    // Fix-by-deletion: the dry field is simply gone from the revised run.
-    const deleted = (try cureFailure(aa, dry, testFacts(.data, cured_stats[1..]))).?;
-    try std.testing.expect(std.mem.indexOf(u8, deleted, "\"comments\"") != null);
-
-    // Still dry counts as uncured.
-    const still_dry_stats: []const ScriptRuntime.ExtractStat = &.{
-        .{ .schema = "{}", .field = "comments", .calls = 5, .empty = 5 },
-        cured_stats[1],
-    };
-    try std.testing.expect((try cureFailure(aa, dry, testFacts(.data, still_dry_stats))) != null);
-
-    // .empty is cured only by a data-carrying return.
-    const empty: ScriptError = .{ .kind = .empty, .detail = "", .source = "" };
-    try std.testing.expectEqual(null, try cureFailure(aa, empty, testFacts(.data, &.{})));
-    try std.testing.expect((try cureFailure(aa, empty, testFacts(.none, &.{}))) != null);
-
-    // .threw needs nothing beyond running clean.
-    const threw: ScriptError = .{ .kind = .threw, .detail = "", .source = "" };
-    try std.testing.expectEqual(null, try cureFailure(aa, threw, testFacts(.none, &.{})));
-}
-
-fn testFacts(returned: Returned, stats: []const ScriptRuntime.ExtractStat) RunFacts {
-    return .{ .returned = returned, .extract_stats = stats, .source = "" };
-}
-
 test "confirmedDryFields drops hallucinated names, keeps the narrowing" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -2535,28 +2309,6 @@ test "confirmedDryFields drops hallucinated names, keeps the narrowing" {
     try std.testing.expectEqual(3, fallback.len);
 
     try std.testing.expectEqual(actual.ptr, (try confirmedDryFields(aa, &.{}, actual)).ptr);
-}
-
-test "suspicionOf: any all-empty field is suspect, none is not" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const sparse: []const ScriptRuntime.ExtractStat = &.{
-        .{ .schema = "{}", .field = "comments", .calls = 5, .empty = 2 },
-    };
-    try std.testing.expectEqual(null, suspicionOf(aa, testFacts(.data, sparse)));
-
-    // Scalar all-empty is suspect too — judgment belongs to the model now.
-    const dry_scalar: []const ScriptRuntime.ExtractStat = &.{
-        .{ .schema = "{}", .field = "title", .calls = 3, .empty = 3 },
-    };
-    const s = suspicionOf(aa, testFacts(.data, dry_scalar)).?;
-    try std.testing.expectEqual(ScriptError.Kind.dry_extracts, s.kind);
-    try std.testing.expectEqual(1, s.dry_fields.len);
-
-    const empty_facts = testFacts(.{ .empty = "[]" }, &.{});
-    try std.testing.expectEqual(ScriptError.Kind.empty, suspicionOf(aa, empty_facts).?.kind);
 }
 
 test "parseVerdict: anchored to the marker, tolerant of prose around it" {
@@ -2587,33 +2339,4 @@ test "savePrompt: save instructions followed by the rendered script skill" {
     const revision = savePrompt(true);
     try std.testing.expect(std.mem.indexOf(u8, revision, save_revision_note) != null);
     try std.testing.expect(std.mem.endsWith(u8, revision, lp.skill.text()));
-}
-
-test "capOutput: passes through when under cap" {
-    const ta = std.testing.allocator;
-    const out = capOutput(ta, "short", tool_output_max_bytes);
-    try std.testing.expectEqualStrings("short", out);
-}
-
-// Boundary correctness lives in string.zig's `truncateUtf8` tests; here we only
-// assert the agent-specific policy: an over-cap body keeps valid UTF-8 and gains
-// the truncation marker.
-test "capOutput: appends a marker when truncating" {
-    const ta = std.testing.allocator;
-
-    // 3-byte Hangul codepoint (U+D55C '한' = 0xED 0x95 0x9C) straddling the cap.
-    const cap = tool_output_max_bytes;
-    const buf = try ta.alloc(u8, cap + 8);
-    defer ta.free(buf);
-    @memset(buf[0 .. cap - 1], 'a');
-    buf[cap - 1] = 0xED;
-    buf[cap + 0] = 0x95;
-    buf[cap + 1] = 0x9C;
-    @memset(buf[cap + 2 ..], 'b');
-
-    const out = capOutput(ta, buf, tool_output_max_bytes);
-    defer if (out.ptr != buf.ptr) ta.free(out);
-
-    try std.testing.expect(std.unicode.utf8ValidateSlice(out));
-    try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
 }

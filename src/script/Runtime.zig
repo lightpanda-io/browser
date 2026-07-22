@@ -42,6 +42,10 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// clear the live spinner so script output starts on a clean line instead
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
+/// When set, receives each `console.*` line instead of the process
+/// stdout/stderr write — for embedders (MCP) whose stdout is a protocol
+/// stream. The observer still fires first.
+console_sink: ?ConsoleSink = null,
 /// In-flight async `goto`s; emptied before each `runSource` returns.
 pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
@@ -82,7 +86,7 @@ const PendingGoto = struct {
     }
 };
 
-const ConsoleMethod = enum {
+pub const ConsoleMethod = enum {
     debug,
     @"error",
     info,
@@ -105,6 +109,11 @@ const ConsoleData = struct {
 pub const ConsoleObserver = struct {
     context: *anyopaque,
     notify: *const fn (context: *anyopaque) void,
+};
+
+pub const ConsoleSink = struct {
+    context: *anyopaque,
+    write: *const fn (context: *anyopaque, method: ConsoleMethod, line: []const u8) void,
 };
 
 pub const InitError = error{
@@ -843,6 +852,7 @@ fn invokeConsole(self: *Runtime, method: ConsoleMethod, info: *const v8.Function
 
 fn writeConsoleLine(self: *Runtime, method: ConsoleMethod, line: []const u8) void {
     if (self.console_observer) |obs| obs.notify(obs.context);
+    if (self.console_sink) |sink| return sink.write(sink.context, method, line);
     var buf: [4096]u8 = undefined;
     var file = if (method.writesStderr()) std.fs.File.stderr() else std.fs.File.stdout();
     var writer = file.writer(&buf);
@@ -1602,6 +1612,36 @@ test "agent script runtime: console is available in agent context" {
         \\if (typeof console.log !== "function") throw new Error("missing console.log");
         \\console.log("agent console ready");
     );
+}
+
+test "agent script runtime: console sink captures lines instead of the process streams" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const Capture = struct {
+        buf: [256]u8 = undefined,
+        len: usize = 0,
+
+        fn write(context: *anyopaque, method: ConsoleMethod, line: []const u8) void {
+            const capture: *@This() = @ptrCast(@alignCast(context));
+            const out = std.fmt.bufPrint(capture.buf[capture.len..], "{s}:{s}\n", .{ @tagName(method), line }) catch return;
+            capture.len += out.len;
+        }
+    };
+    var capture: Capture = .{};
+    runtime.console_sink = .{ .context = @ptrCast(&capture), .write = Capture.write };
+
+    try runTestScript(runtime,
+        \\console.log("hello", 42);
+        \\console.warn("careful");
+    );
+
+    try testing.expectString("log:hello 42\nwarn:careful\n", capture.buf[0..capture.len]);
 }
 
 test "agent script runtime: tool errors throw and stop execution" {

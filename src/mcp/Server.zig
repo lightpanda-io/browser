@@ -120,6 +120,22 @@ pub fn createSession(self: *Self, id: []const u8) !*Session {
     return entry;
 }
 
+/// Replace `entry`'s browsing session with a fresh one — pages, cookies and
+/// node ids dropped — as heal validation requires. The default session
+/// reloads the on-disk cookie file: that file is the clean baseline identity;
+/// the in-memory failure-state cookies are what the fresh session discards.
+pub fn restartSession(self: *Self, entry: *Session) !void {
+    entry.session = try entry.browser.newSession(entry.notification);
+    try entry.session.enableConsoleCapture();
+    // Node IDs are session-scoped; drop them with the session they point into.
+    entry.node_registry.reset();
+    if (entry.isDefault()) {
+        if (self.app.config.cookieFile()) |cookie_path| {
+            lp.cookies.loadFromFile(entry.session, cookie_path);
+        }
+    }
+}
+
 /// Switch to the multi-isolate discipline: park the default (which `Server.init`
 /// left entered) and require every use to bracket with `enterIsolate`. The HTTP
 /// transport calls this on its worker thread before serving anyone.
@@ -220,7 +236,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
             .tools = .{},
         },
         .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
-        .instructions = lp.tools.driver_guidance,
+        .instructions = lp.tools.driver_guidance ++ tools.script_lifecycle_note,
     });
 }
 

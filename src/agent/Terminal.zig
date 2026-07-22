@@ -269,7 +269,7 @@ pub fn endAssistantStream(self: *Terminal) void {
 
 // Must exceed the downstream LLM-judge's snapshot window for full grounding
 // evidence. Does not cap the agent's own LLM, which gets up to
-// tool_output_max_bytes (1 MiB) via Agent.zig:capOutput. Bypassed in REPL
+// tool_output_max_bytes (1 MiB) via string.zig:capBytes. Bypassed in REPL
 // where the human can scroll.
 const max_result_display_len = 2000;
 
