@@ -59,7 +59,7 @@ _durability: Durability = .default,
 // owned object, one while a drain task is scheduled, one while parked on the
 // engine's connection gate (gate ownership needs no ref of its own: it's only
 // ever held while a drain task exists).
-_rc: lp.RC(u32) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 
 // v8 handles owned by the transaction, swept (reset) in deinit. Slots are

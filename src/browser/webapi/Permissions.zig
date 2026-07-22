@@ -61,7 +61,7 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
 }
 
 const PermissionStatus = struct {
-    _rc: lp.RC(u8) = .{},
+    _rc: lp.RC = .{},
     _arena: Allocator,
     _name: []const u8,
     _state: State,

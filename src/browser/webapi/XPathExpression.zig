@@ -42,7 +42,7 @@ const Allocator = std.mem.Allocator;
 
 const XPathExpression = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _expr: *const xpath.Ast.Expr,
 

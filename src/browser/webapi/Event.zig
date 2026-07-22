@@ -65,7 +65,7 @@ _time_origin: u64 = 0,
 // - 0: no reference, always a transient state going to either 1 or about to be deinit'd
 // - 1: either zig or v8 have a reference
 // - 2: both zig and v8 have a reference
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 
 pub const EventPhase = enum(u8) {
     none = 0,

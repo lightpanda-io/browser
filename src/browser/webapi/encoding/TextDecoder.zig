@@ -28,7 +28,7 @@ const Allocator = std.mem.Allocator;
 
 const TextDecoder = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _fatal: bool,
 _arena: Allocator,
 _ignore_bom: bool,

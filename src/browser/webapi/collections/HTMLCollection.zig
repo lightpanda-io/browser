@@ -60,7 +60,7 @@ _data: union(Mode) {
     form: NodeLive(.form),
     empty: void,
 },
-_rc: lp.RC(u32) = .{},
+_rc: lp.RC = .{},
 
 pub fn deinit(self: *HTMLCollection, page: *Page) void {
     page.factory.destroy(self);

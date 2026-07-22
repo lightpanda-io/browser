@@ -33,7 +33,7 @@ _url: *U.Url = undefined,
 _port: [5]u8 = undefined,
 _search_params: ?*URLSearchParams = null,
 /// We have to track lifetime of URL to free `_url`.
-_rc: lp.RC(u32) = .{},
+_rc: lp.RC = .{},
 
 // convenience
 pub const resolve = @import("../URL.zig").resolve;

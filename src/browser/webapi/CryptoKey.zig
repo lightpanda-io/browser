@@ -30,7 +30,7 @@ const Allocator = std.mem.Allocator;
 /// generateKey(), deriveKey(), importKey(), or unwrapKey().
 const CryptoKey = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator = undefined,
 /// Algorithm being used.
 _type: Type,

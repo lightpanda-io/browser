@@ -39,7 +39,7 @@ pub fn registerTypes() []const type {
 
 const IntersectionObserver = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _callback: js.Function.Global,
 _observing: std.ArrayList(*Element) = .{},
@@ -316,7 +316,7 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
 }
 
 pub const IntersectionObserverEntry = struct {
-    _rc: lp.RC(u8) = .{},
+    _rc: lp.RC = .{},
     _arena: Allocator,
     _time: f64,
     _target: *Element,

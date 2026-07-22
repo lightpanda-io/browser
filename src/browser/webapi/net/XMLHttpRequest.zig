@@ -42,7 +42,7 @@ const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const XMLHttpRequest = @This();
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _exec: *const Execution,
 _proto: *XMLHttpRequestEventTarget,
 _upload: ?*XMLHttpRequestUpload = null,

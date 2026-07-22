@@ -75,7 +75,7 @@ const Value = union(enum) {
     nodes: []const *Node,
 };
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _type: u16,
 _value: Value,

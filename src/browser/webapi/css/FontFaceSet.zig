@@ -32,7 +32,7 @@ const Allocator = std.mem.Allocator;
 
 const FontFaceSet = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _proto: *EventTarget,
 _arena: Allocator,
 

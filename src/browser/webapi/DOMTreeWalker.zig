@@ -28,7 +28,7 @@ pub const FilterOpts = NodeFilter.FilterOpts;
 
 const DOMTreeWalker = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _root: *Node,
 _what_to_show: u32,
 _filter: NodeFilter,

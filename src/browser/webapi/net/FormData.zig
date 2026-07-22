@@ -34,7 +34,7 @@ const Allocator = std.mem.Allocator;
 
 const FormData = @This();
 
-_rc: lp.RC(u8),
+_rc: lp.RC,
 
 _arena: Allocator,
 _entries: std.ArrayList(Entry),

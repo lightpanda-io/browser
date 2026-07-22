@@ -39,7 +39,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 // https://html.spec.whatwg.org/multipage/server-sent-events.html
 const EventSource = @This();
 
-_rc: lp.RC(u16) = .{},
+_rc: lp.RC = .{},
 _exec: *const Execution,
 _proto: *EventTarget,
 _arena: Allocator,
