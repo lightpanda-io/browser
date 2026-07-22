@@ -27,6 +27,10 @@ const Config = lp.Config;
 const SigHandler = @import("Sighandler.zig");
 pub const panic = lp.crash_handler.panic;
 
+pub const std_options: std.Options = .{
+    .signal_stack_size = null,
+};
+
 pub fn main(init: std.process.Init) !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks

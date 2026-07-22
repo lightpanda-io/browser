@@ -12,8 +12,8 @@ crate-type = ["cdylib", "staticlib"]
 html5ever = "0.39.0"
 string_cache = "0.9.0"
 typed-arena = "2.0.2"
-tikv-jemallocator = {version = "0.6.1", features = ["stats"]}
-tikv-jemalloc-ctl = {version = "0.6.1", features = ["stats"]}
+tikv-jemallocator = { version = "0.6.1", features = ["stats"], optional = true }
+tikv-jemalloc-ctl = { version = "0.6.1", features = ["stats"], optional = true }
 xml5ever = "0.39.0"
 encoding_rs = "0.8"
 idna = "1.1.0"
@@ -22,3 +22,6 @@ url = "2.5.8"
 [profile.release]
 lto = true
 codegen-units = 1
+
+[features]
+memstats = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
