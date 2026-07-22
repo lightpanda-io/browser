@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=root width="200" height="100">
+  <rect id=rect x="10" y="20" width="30" height="40" rx="20"></rect>
+  <circle id=circle cx="50" cy="30" r="10"></circle>
+  <ellipse id=ellipse cx="70" cy="40" rx="20" ry="5"></ellipse>
+  <line id=line x1="1" y1="2" x2="4" y2="6"></line>
+  <polygon id=polygon points="0,0 10,0 10,10"></polygon>
+  <polyline id=polyline points="-5,-2 3,7 12,1"></polyline>
+  <path id=cubic d="M0 0 C0 100 100 100 100 0"></path>
+  <path id=arc d="M0 0 A80 20 45 1 1 100 100"></path>
+  <path id=partial d="M10 10 L20 20 30"></path>
+  <path id=moves d="M0 0 10 10 20 0"></path>
+  <g id=transformed transform="translate(10 20)">
+    <rect x="0" y="0" width="10" height="5"></rect>
+    <g transform="scale(2)"><circle cx="10" cy="10" r="2"></circle></g>
+  </g>
+</svg>
+
+<script id=typedShapeProperties>
+{
+  const rect = $('#rect');
+  testing.expectEqual(true, rect.x instanceof SVGAnimatedLength);
+  testing.expectEqual(true, rect.x === rect.x);
+  testing.expectEqual(true, rect.width.baseVal === rect.width.baseVal);
+  testing.expectEqual(false, rect.width.baseVal === rect.width.animVal);
+  testing.expectEqual(30, rect.width.baseVal.value);
+  rect.width.baseVal.value = 35;
+  testing.expectEqual('35', rect.getAttribute('width'));
+  testing.expectEqual(35, rect.width.animVal.value);
+  testing.expectError('NoModificationAllowedError', () => { rect.width.animVal.value = 5; });
+
+  testing.expectEqual(true, $('#circle').r instanceof SVGAnimatedLength);
+  testing.expectEqual(true, $('#ellipse').rx instanceof SVGAnimatedLength);
+  testing.expectEqual(true, $('#line').x2 instanceof SVGAnimatedLength);
+
+  const pathLength = rect.pathLength;
+  testing.expectEqual(true, pathLength instanceof SVGAnimatedNumber);
+  testing.expectEqual(true, pathLength === rect.pathLength);
+  testing.expectEqual(false, pathLength.baseVal === pathLength.animVal);
+  testing.expectEqual(0, pathLength.baseVal.value);
+  pathLength.baseVal.value = 75;
+  testing.expectEqual('75', rect.getAttribute('pathLength'));
+  testing.expectEqual(75, pathLength.animVal.value);
+  testing.expectError('NoModificationAllowedError', () => { pathLength.animVal.value = 4; });
+}
+</script>
+
+<script id=prototypePlacementAndShapeBounds>
+{
+  testing.expectEqual(true, Object.prototype.hasOwnProperty.call(SVGGraphicsElement.prototype, 'getBBox'));
+  testing.expectEqual(false, Object.prototype.hasOwnProperty.call(SVGGeometryElement.prototype, 'getBBox'));
+  testing.expectEqual(false, Object.prototype.hasOwnProperty.call(SVGRectElement.prototype, 'getBBox'));
+
+  let box = $('#rect').getBBox();
+  testing.expectEqual(10, box.x);
+  testing.expectEqual(20, box.y);
+  testing.expectEqual(35, box.width);
+  testing.expectEqual(40, box.height);
+  testing.expectEqual(true, box instanceof DOMRect);
+
+  box = $('#circle').getBBox();
+  testing.expectEqual(40, box.x);
+  testing.expectEqual(20, box.y);
+  testing.expectEqual(20, box.width);
+  testing.expectEqual(20, box.height);
+
+  box = $('#ellipse').getBBox();
+  testing.expectEqual(50, box.x);
+  testing.expectEqual(35, box.y);
+  testing.expectEqual(40, box.width);
+  testing.expectEqual(10, box.height);
+
+  box = $('#line').getBBox();
+  testing.expectEqual(1, box.x);
+  testing.expectEqual(2, box.y);
+  testing.expectEqual(3, box.width);
+  testing.expectEqual(4, box.height);
+
+  box = $('#polyline').getBBox();
+  testing.expectEqual(-5, box.x);
+  testing.expectEqual(-2, box.y);
+  testing.expectEqual(17, box.width);
+  testing.expectEqual(9, box.height);
+
+  box = $('#circle').getBBox({fill: false});
+  testing.expectEqual(0, box.width);
+  testing.expectError('NotSupportedError', () => $('#circle').getBBox({stroke: true}));
+
+  $('#circle').setAttribute('r', '-2');
+  testing.expectEqual(0, $('#circle').getBBox().width);
+  $('#circle').setAttribute('r', '10');
+}
+</script>
+
+<script id=pathParsingAndBounds>
+{
+  let box = $('#cubic').getBBox();
+  testing.expectEqual(0, box.x);
+  testing.expectEqual(0, box.y);
+  testing.expectEqual(100, box.width);
+  testing.expectEqual(75, box.height);
+
+  box = $('#partial').getBBox();
+  testing.expectEqual(10, box.x);
+  testing.expectEqual(10, box.y);
+  testing.expectEqual(10, box.width);
+  testing.expectEqual(10, box.height);
+
+  box = $('#moves').getBBox();
+  testing.expectEqual(0, box.x);
+  testing.expectEqual(0, box.y);
+  testing.expectEqual(20, box.width);
+  testing.expectEqual(10, box.height);
+
+  box = $('#arc').getBBox();
+  testing.expectEqual(true, box.x < 0);
+  testing.expectEqual(true, box.width > 100);
+  testing.expectEqual(true, box.height >= 100);
+}
+</script>
+
+<script id=lengthAndPointAtLength>
+{
+  testing.expectEqual(5, $('#line').getTotalLength());
+  let point = $('#line').getPointAtLength(2.5);
+  testing.expectEqual(true, point instanceof DOMPoint);
+  testing.expectEqual(2.5, point.x);
+  testing.expectEqual(4, point.y);
+  point = $('#line').getPointAtLength(-100);
+  testing.expectEqual(1, point.x);
+  testing.expectEqual(2, point.y);
+  point = $('#line').getPointAtLength(100);
+  testing.expectEqual(4, point.x);
+  testing.expectEqual(6, point.y);
+
+  const cubic = $('#cubic');
+  testing.expectEqual(true, Math.abs(cubic.getTotalLength() - 200) < 0.01);
+  point = cubic.getPointAtLength(cubic.getTotalLength() / 2);
+  testing.expectEqual(true, Math.abs(point.x - 50) < 0.01);
+  testing.expectEqual(true, Math.abs(point.y - 75) < 0.01);
+
+  // pathLength calibrates author distance, not these native geometry methods.
+  cubic.pathLength.baseVal.value = 10;
+  testing.expectEqual(true, Math.abs(cubic.getTotalLength() - 200) < 0.01);
+}
+</script>
+
+<script id=containerTransforms>
+{
+  const box = $('#transformed').getBBox();
+  // The group's own translate is excluded. Its direct rect occupies 0..10,
+  // while the scaled child circle occupies 16..24 on both axes.
+  testing.expectEqual(0, box.x);
+  testing.expectEqual(0, box.y);
+  testing.expectEqual(24, box.width);
+  testing.expectEqual(24, box.height);
+
+  const rootBox = $('#root').getBBox();
+  // From the root, the group's transform is included.
+  testing.expectEqual(true, rootBox.width >= 100);
+  testing.expectEqual(true, rootBox.height >= 100);
+}
+</script>
