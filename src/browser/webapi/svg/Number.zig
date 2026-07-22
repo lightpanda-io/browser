@@ -28,6 +28,7 @@ _value: f32 = 0,
 _element: ?*Element = null,
 _attr_name: lp.String = .empty,
 _read_only: bool = false,
+_allow_percentage: bool = false,
 
 pub fn detached(frame: *Frame) !*Number {
     return frame._factory.create(Number{});
@@ -38,6 +39,15 @@ pub fn reflected(element: *Element, attr_name: lp.String, read_only: bool, frame
         ._element = element,
         ._attr_name = attr_name,
         ._read_only = read_only,
+    });
+}
+
+pub fn reflectedPercentage(element: *Element, attr_name: lp.String, read_only: bool, frame: *Frame) !*Number {
+    return frame._factory.create(Number{
+        ._element = element,
+        ._attr_name = attr_name,
+        ._read_only = read_only,
+        ._allow_percentage = true,
     });
 }
 
@@ -62,7 +72,11 @@ fn syncFromAttribute(self: *Number) void {
         return;
     };
     const trimmed = std.mem.trim(u8, raw, " \t\r\n\x0c");
-    self._value = std.fmt.parseFloat(f32, trimmed) catch 0;
+    if (self._allow_percentage and std.mem.endsWith(u8, trimmed, "%")) {
+        self._value = (std.fmt.parseFloat(f32, trimmed[0 .. trimmed.len - 1]) catch 0) / 100;
+    } else {
+        self._value = std.fmt.parseFloat(f32, trimmed) catch 0;
+    }
     if (!std.math.isFinite(self._value)) self._value = 0;
 }
 

@@ -42,10 +42,12 @@ const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
+const AnimatedEnumeration = @import("webapi/svg/AnimatedEnumeration.zig");
 const AnimatedLength = @import("webapi/svg/AnimatedLength.zig");
 const AnimatedNumber = @import("webapi/svg/AnimatedNumber.zig");
 const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRatio.zig");
 const AnimatedString = @import("webapi/svg/AnimatedString.zig");
+const AnimatedTransformList = @import("webapi/svg/AnimatedTransformList.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
@@ -150,10 +152,12 @@ _element_shadow_roots: Element.ShadowRootLookup = .empty,
 _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
+_svg_animated_enumerations: AnimatedEnumeration.Lookup = .empty,
 _svg_animated_lengths: AnimatedLength.Lookup = .empty,
 _svg_animated_numbers: AnimatedNumber.Lookup = .empty,
 _svg_animated_preserve_aspect_ratios: AnimatedPreserveAspectRatio.Lookup = .empty,
 _svg_animated_strings: AnimatedString.Lookup = .empty,
+_svg_animated_transform_lists: AnimatedTransformList.Lookup = .empty,
 _svg_collection_cleanups: std.ArrayList(SvgCollectionCleanup) = .empty,
 
 // Same as above, but for Nodes (slot assigments apply to both Element AND

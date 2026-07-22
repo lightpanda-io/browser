@@ -31,6 +31,12 @@ pub const View = @import("svg/View.zig");
 pub const Title = @import("svg/Title.zig");
 pub const Desc = @import("svg/Desc.zig");
 pub const Metadata = @import("svg/Metadata.zig");
+pub const GradientElement = @import("svg/GradientElement.zig");
+pub const ClipPath = @import("svg/ClipPath.zig");
+pub const Marker = @import("svg/Marker.zig");
+pub const Mask = @import("svg/Mask.zig");
+pub const Pattern = @import("svg/Pattern.zig");
+pub const Stop = @import("svg/Stop.zig");
 
 const String = lp.String;
 
@@ -45,6 +51,12 @@ pub const Type = union(enum) {
     title: *Title,
     desc: *Desc,
     metadata: *Metadata,
+    gradient: *GradientElement,
+    clip_path: *ClipPath,
+    marker: *Marker,
+    mask: *Mask,
+    pattern: *Pattern,
+    stop: *Stop,
     generic: *Generic,
 };
 
@@ -57,6 +69,7 @@ pub fn is(self: *Svg, comptime T: type) ?*T {
         }
     }
     if (self._type == .graphics) return self._type.graphics.is(T);
+    if (self._type == .gradient) return self._type.gradient.is(T);
     return null;
 }
 
@@ -80,7 +93,7 @@ pub fn getTag(self: *const Svg) Element.Tag {
         },
         .generic => |g| g._tag,
         .title => .title,
-        .view, .desc, .metadata => .unknown,
+        .view, .desc, .metadata, .gradient, .clip_path, .marker, .mask, .pattern, .stop => .unknown,
     };
 }
 

@@ -43,7 +43,6 @@ pub const Geometry = @import("Geometry.zig");
 const Graphics = @This();
 _proto: *SvgElement,
 _type: Type,
-_transform: ?*AnimatedTransformList = null,
 _required_extensions: ?*StringList = null,
 _system_language: ?*StringList = null,
 
@@ -208,10 +207,7 @@ fn transformMatrix(element: *Element) PathData.Matrix {
 }
 
 pub fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
-    if (self._transform == null) {
-        self._transform = try AnimatedTransformList.create(self.asElement(), frame);
-    }
-    return self._transform.?;
+    return AnimatedTransformList.getOrCreate(self.asElement(), .transform, frame);
 }
 
 pub fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {
