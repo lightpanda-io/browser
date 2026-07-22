@@ -354,7 +354,6 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
         };
         switch (entry.value_ptr.state) {
             .loading => {
-                if (client.hasPendingTeardown()) return error.SyncWaitInterrupted;
                 _ = try client.tickSync(200);
                 continue;
             },

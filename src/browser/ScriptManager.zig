@@ -171,7 +171,6 @@ fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
         const entry = self.preloaded_scripts.getPtr(url) orelse return null;
         switch (entry.state) {
             .loading => {
-                if (client.hasPendingTeardown()) return null;
                 _ = client.tickSync(200) catch return null;
                 continue;
             },

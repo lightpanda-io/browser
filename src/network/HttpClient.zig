@@ -568,10 +568,13 @@ pub fn tick(self: *Client, timeout_ms: u32) !void {
 }
 
 pub fn tickSync(self: *Client, timeout_ms: u32) !void {
+    if (self.hasPendingTeardown()) {
+        return error.SyncWaitInterrupted;
+    }
     return self._tick(timeout_ms, .sync_wait);
 }
 
-pub fn hasPendingTeardown(self: *Client) bool {
+fn hasPendingTeardown(self: *Client) bool {
     return self.inbox.contains(isSyncWaitInterrupt);
 }
 
@@ -1035,8 +1038,8 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Ow
         return error.ClientDisconnected;
     }
     // A parser can start another blocking script/style fetch while unwinding
-    // the previous interrupted fetch. Don't pay one sync-poll interval per
-    // resource when teardown is already queued.
+    // a previous interrupted fetch. The first tickSync below would fail
+    // anyway; bail before creating the transfer and notifying CDP.
     if (self.hasPendingTeardown()) {
         req.deinit();
         return error.SyncWaitInterrupted;
@@ -1067,21 +1070,16 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Ow
     while (sync_ctx.completion == .in_progress) {
         self.tickSync(200) catch |err| {
             if (sync_ctx.completion == .in_progress) {
-                // tick failed for a reason unrelated to our transfer (likely OOM or
-                // client disconnect). transfer.req.ctx points at &sync_ctx on this
-                // stack — abort to sever that reference before we return
+                // tick failed for a reason unrelated to our transfer: OOM,
+                // client disconnect, or a queued teardown command (which
+                // sync_wait can't dispatch mid-parse — it would free the
+                // Page/Frame this stack holds). transfer.req.ctx points at
+                // &sync_ctx on this stack — abort to sever that reference
+                // before we return
                 transfer.abort(err);
             }
             return err;
         };
-        if (sync_ctx.completion == .in_progress and self.hasPendingTeardown()) {
-            // A teardown/close command is queued but sync_wait can't dispatch
-            // it mid-parse (it would free the Page/Frame this stack holds).
-            // Abort the blocking fetch so the parser unwinds to the next safe
-            // drain and the command runs there, instead of stalling for the
-            // full per-request timeout per blocking script.
-            transfer.abort(error.SyncWaitInterrupted);
-        }
     }
 
     switch (sync_ctx.completion) {
