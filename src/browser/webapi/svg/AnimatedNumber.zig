@@ -29,9 +29,27 @@ pub fn getOrCreate(element: *Element, frame: *Frame) !*AnimatedNumber {
     return gop.value_ptr.*;
 }
 
+pub fn getOrCreatePercentage(element: *Element, frame: *Frame) !*AnimatedNumber {
+    const gop = try frame._svg_animated_numbers.getOrPut(frame.arena, element);
+    if (!gop.found_existing) {
+        errdefer _ = frame._svg_animated_numbers.remove(element);
+        gop.value_ptr.* = try createPercentage(element, comptime .wrap("offset"), frame);
+    }
+    return gop.value_ptr.*;
+}
+
 pub fn create(element: *Element, attr_name: lp.String, frame: *Frame) !*AnimatedNumber {
     const base_val = try Number.reflected(element, attr_name, false, frame);
     const anim_val = try Number.reflected(element, attr_name, true, frame);
+    return frame._factory.create(AnimatedNumber{
+        ._base_val = base_val,
+        ._anim_val = anim_val,
+    });
+}
+
+pub fn createPercentage(element: *Element, attr_name: lp.String, frame: *Frame) !*AnimatedNumber {
+    const base_val = try Number.reflectedPercentage(element, attr_name, false, frame);
+    const anim_val = try Number.reflectedPercentage(element, attr_name, true, frame);
     return frame._factory.create(AnimatedNumber{
         ._base_val = base_val,
         ._anim_val = anim_val,
