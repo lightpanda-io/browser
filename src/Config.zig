@@ -87,19 +87,6 @@ fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator, target: *?log
     };
 }
 
-pub fn isHashedDirectory(dir: []const u8) bool {
-    var handle = std.fs.cwd().openDir(dir, .{ .iterate = true }) catch return false;
-    defer handle.close();
-
-    var it = handle.iterate();
-    while (it.next() catch return false) |entry| {
-        if (std.mem.endsWith(u8, entry.name, ".0")) {
-            return true;
-        }
-    }
-    return false;
-}
-
 const Cert = struct {
     /// On successful CLI argument parsing phase, ownership of this transferred
     /// to `Network`. Consider it as invalid.
