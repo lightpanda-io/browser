@@ -49,7 +49,7 @@ fn initClassIds() void {
     }
 }
 
-var class_id_once = std.once(initClassIds);
+var class_id_once = lp.once(initClassIds);
 
 // The Env maps to a V8 isolate, which represents a isolated sandbox for
 // executing JavaScript. The Env is where we'll define our V8 <-> Zig bindings,
@@ -98,7 +98,7 @@ microtask_queues_are_running: bool,
 // Serializes V8 calls that race with TerminateExecution (which can fire from
 // the sighandler thread). Without this, a terminate landing between the
 // IsExecutionTerminating check and PerformCheckpoint trips a V8 debug assert.
-terminate_mutex: std.Thread.Mutex = .{},
+terminate_mutex: std.Io.Mutex = .init,
 
 // Set from network thread, saying termination should happen. Read from worker
 // thread making sure terminate hasn't been canceled.
@@ -409,8 +409,8 @@ pub fn destroyContext(self: *Env, context: *Context) void {
 
 pub fn runMicrotasks(self: *Env) void {
     if (self.microtask_queues_are_running == false) {
-        self.terminate_mutex.lock();
-        defer self.terminate_mutex.unlock();
+        self.terminate_mutex.lockUncancelable(lp.io);
+        defer self.terminate_mutex.unlock(lp.io);
 
         const v8_isolate = self.isolate.handle;
 
@@ -503,25 +503,11 @@ pub fn runIdleTasks(self: *const Env) void {
 
 // V8 doesn't immediately free memory associated with
 // a Context, it's managed by the garbage collector. We use the
-// `lowMemoryNotification` call on the isolate to encourage v8 to free
-// any contexts which have been freed.
-// This GC is very aggressive. Use memoryPressureNotification for less
-// aggressive GC passes.
-pub fn lowMemoryNotification(self: *Env) void {
-    var handle_scope: js.HandleScope = undefined;
-    handle_scope.init(self.isolate);
-    defer handle_scope.deinit();
-    self.isolate.lowMemoryNotification();
-}
-
-// V8 doesn't immediately free memory associated with
-// a Context, it's managed by the garbage collector. We use the
 // `memoryPressureNotification` call on the isolate to encourage v8 to free
 // any contexts which have been freed.
 // The level indicates the aggressivity of the GC required:
 // moderate speeds up incremental GC
 // critical runs one full GC
-// For a more aggressive GC, use lowMemoryNotification.
 pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel) void {
     var handle_scope: js.HandleScope = undefined;
     handle_scope.init(self.isolate);
@@ -563,8 +549,8 @@ pub fn terminatePending(self: *const Env) bool {
 }
 
 pub fn terminate(self: *Env) void {
-    self.terminate_mutex.lock();
-    defer self.terminate_mutex.unlock();
+    self.terminate_mutex.lockUncancelable(lp.io);
+    defer self.terminate_mutex.unlock(lp.io);
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
@@ -626,8 +612,8 @@ fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
 /// unconditionally; a no-op if termination wasn't pending. Also clears the
 /// requestTerminate gate so any still-pending interrupt becomes a no-op.
 pub fn cancelTerminate(self: *Env) void {
-    self.terminate_mutex.lock();
-    defer self.terminate_mutex.unlock();
+    self.terminate_mutex.lockUncancelable(lp.io);
+    defer self.terminate_mutex.unlock(lp.io);
     self.terminate_requested.store(false, .release);
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
@@ -637,8 +623,8 @@ pub fn cancelTerminate(self: *Env) void {
 /// aren't tracked in `contexts`. Guarded so a sighandler-thread terminate
 /// can't land mid-checkpoint.
 pub fn performIsolateMicrotasks(self: *Env) void {
-    self.terminate_mutex.lock();
-    defer self.terminate_mutex.unlock();
+    self.terminate_mutex.lockUncancelable(lp.io);
+    defer self.terminate_mutex.unlock(lp.io);
     if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) return;
     v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
 }

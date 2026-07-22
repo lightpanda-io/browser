@@ -33,7 +33,7 @@ const Selection = @This();
 
 pub const SelectionDirection = enum { backward, forward, none };
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _range: ?*Range = null,
 _direction: SelectionDirection = .none,
 

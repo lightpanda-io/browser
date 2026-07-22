@@ -41,10 +41,6 @@ pub fn exit(self: Isolate) void {
     v8.v8__Isolate__Exit(self.handle);
 }
 
-pub fn lowMemoryNotification(self: Isolate) void {
-    v8.v8__Isolate__LowMemoryNotification(self.handle);
-}
-
 pub const MemoryPressureLevel = enum(u32) {
     none = v8.kNone,
     moderate = v8.kModerate,

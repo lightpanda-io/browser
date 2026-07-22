@@ -27,7 +27,7 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
 
     return struct {
         _inner: Inner,
-        _rc: lp.RC(u8) = .{},
+        _rc: lp.RC = .{},
 
         const Self = @This();
 

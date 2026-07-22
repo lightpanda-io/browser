@@ -30,7 +30,7 @@ const DOMMatrixReadOnly = @This();
 pub const _prototype_root = true;
 
 _type: Type,
-_rc: lp.RC(u8),
+_rc: lp.RC,
 _arena: Allocator,
 
 // Stored column-major, matching the spec's mAB naming where A is the column

@@ -32,7 +32,7 @@ const AbstractRange = @This();
 
 pub const _prototype_root = true;
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _type: Type,
 _arena: Allocator,
 _end_offset: u32,

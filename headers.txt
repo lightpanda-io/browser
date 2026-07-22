@@ -1,0 +1,5 @@
+HTTP/1.1 200 OK
+content-length: 6006
+content-type: application/json
+mcp-session-id: s1
+

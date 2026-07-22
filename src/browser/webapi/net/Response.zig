@@ -44,7 +44,7 @@ pub const Type = enum {
     opaqueredirect,
 };
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _status: u16,
 _arena: Allocator,
 _headers: *Headers,

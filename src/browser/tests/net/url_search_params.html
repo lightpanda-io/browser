@@ -19,6 +19,17 @@
   }
 </script>
 
+<script id=rcStress>
+  // regression for when RC was generic, held a u8 and would overflow
+  const stress = new URLSearchParams('a=1&b=2');
+  const iters = [];
+  for (let i = 0; i < 300; i++) {
+    iters.push(stress.keys());
+  }
+  // as long as this test doesn't cause a crash, we're ok
+  testing.expectTrue(true);
+</script>
+
 <script id=urlSearchParams>
   const inputs = [
     [["over", "9000!!"], ["abc", "123"], ["key1", ""], ["key2", ""]],

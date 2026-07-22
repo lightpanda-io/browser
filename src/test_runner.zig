@@ -19,6 +19,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const BORDER = "=" ** 80;
@@ -30,7 +31,7 @@ pub var tracking_allocator: Allocator = undefined;
 
 var RUNNER: *Runner = undefined;
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var mem: [8192]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&mem);
 
@@ -43,11 +44,16 @@ pub fn main() !void {
 
     const allocator = fba.allocator();
 
-    const env = Env.init(allocator);
+    std.testing.io_instance = .init(init.gpa, .{
+        .argv0 = .init(init.minimal.args),
+        .environ = init.minimal.environ,
+    });
+    defer std.testing.io_instance.deinit();
 
+    const env = Env.init(init.environ_map);
     var runner = Runner.init(allocator, arena.allocator(), &ta, env);
     RUNNER = &runner;
-    try runner.run();
+    try runner.run(std.testing.io_instance.io());
 }
 
 const Runner = struct {
@@ -69,8 +75,8 @@ const Runner = struct {
         };
     }
 
-    pub fn run(self: *Runner) !void {
-        var slowest = SlowTracker.init(self.allocator, 5);
+    pub fn run(self: *Runner, io: Io) !void {
+        var slowest = SlowTracker.init(io, self.allocator, 5);
         defer slowest.deinit();
 
         var fail_list: std.ArrayList([]const u8) = .empty;
@@ -103,7 +109,7 @@ const Runner = struct {
             }
 
             var status = Status.pass;
-            slowest.startTiming();
+            slowest.startTiming(io);
 
             const is_unnamed_test = isUnnamed(t);
             if (!is_unnamed_test) {
@@ -132,7 +138,7 @@ const Runner = struct {
                 break :blk name;
             };
             defer {
-                self.subtests = .{};
+                self.subtests = .empty;
                 const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self.arena.ptr));
                 _ = arena.reset(.{ .retain_with_limit = 2048 });
             }
@@ -146,7 +152,7 @@ const Runner = struct {
                 continue;
             }
 
-            const ns_taken = slowest.endTiming(friendly_name, is_unnamed_test);
+            const ns_taken = slowest.endTiming(io, friendly_name, is_unnamed_test);
             ns_duration += ns_taken;
 
             if (std.testing.allocator_instance.deinit() == .leak) {
@@ -172,7 +178,7 @@ const Runner = struct {
                     }
                     Printer.status(.fail, BORDER ++ "\n", .{});
                     if (@errorReturnTrace()) |trace| {
-                        std.debug.dumpStackTrace(trace.*);
+                        std.debug.dumpErrorReturnTrace(trace);
                     }
                     if (self.env.fail_first) {
                         break;
@@ -218,8 +224,8 @@ const Runner = struct {
         Printer.fmt("\n", .{});
         // stats
         if (self.env.metrics) {
-            var stdout = std.fs.File.stdout();
-            var writer = stdout.writer(&.{});
+            const stdout = std.Io.File.stdout();
+            var writer = stdout.writerStreaming(io, &.{});
             const stats = self.ta.stats();
             try std.json.Stringify.value(&.{
                 .{ .name = "browser", .bench = .{
@@ -246,7 +252,7 @@ const Runner = struct {
             Printer.fmt("\n", .{});
         }
 
-        std.posix.exit(if (fail == 0) 0 else 1);
+        std.process.exit(if (fail == 0) 0 else 1);
     }
 };
 
@@ -283,19 +289,22 @@ const Status = enum {
 };
 
 const SlowTracker = struct {
-    const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
     max: usize,
     slowest: SlowestQueue,
-    timer: std.time.Timer,
+    start: Io.Timestamp,
+    allocator: Allocator,
 
-    fn init(allocator: Allocator, count: u32) SlowTracker {
-        const timer = std.time.Timer.start() catch @panic("failed to start timer");
-        var slowest = SlowestQueue.init(allocator, {});
-        slowest.ensureTotalCapacity(count) catch @panic("OOM");
+    const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
+
+    fn init(io: Io, allocator: Allocator, count: u32) SlowTracker {
+        const start = Io.Clock.awake.now(io);
+        var slowest = SlowestQueue.initContext({});
+        slowest.ensureTotalCapacity(allocator, count) catch @panic("OOM");
         return .{
             .max = count,
-            .timer = timer,
+            .start = start,
             .slowest = slowest,
+            .allocator = allocator,
         };
     }
 
@@ -304,27 +313,27 @@ const SlowTracker = struct {
         name: []const u8,
     };
 
-    fn deinit(self: SlowTracker) void {
-        self.slowest.deinit();
+    fn deinit(self: *SlowTracker) void {
+        self.slowest.deinit(self.allocator);
     }
 
-    fn startTiming(self: *SlowTracker) void {
-        self.timer.reset();
+    fn startTiming(self: *SlowTracker, io: Io) void {
+        self.start = Io.Clock.awake.now(io);
     }
 
-    fn endTiming(self: *SlowTracker, test_name: []const u8, is_unnamed_test: bool) u64 {
-        var timer = self.timer;
-        const ns = timer.lap();
-        if (is_unnamed_test) {
-            return ns;
-        }
+    fn endTiming(self: *SlowTracker, io: Io, test_name: []const u8, is_unnamed_test: bool) u64 {
+        const timestamp = Io.Clock.awake.now(io);
+        const start = self.start;
+        self.start = timestamp;
+        const ns: u64 = @intCast(start.durationTo(timestamp).toNanoseconds());
+        _ = is_unnamed_test;
 
         var slowest = &self.slowest;
 
         if (slowest.count() < self.max) {
             // Capacity is fixed to the # of slow tests we want to track
             // If we've tracked fewer tests than this capacity, than always add
-            slowest.add(TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
+            slowest.push(self.allocator, TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
             return ns;
         }
 
@@ -339,8 +348,8 @@ const SlowTracker = struct {
         }
 
         // the previous fastest of our slow tests, has been pushed off.
-        _ = slowest.removeMin();
-        slowest.add(TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
+        _ = slowest.popMin();
+        slowest.push(self.allocator, TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
         return ns;
     }
 
@@ -348,7 +357,7 @@ const SlowTracker = struct {
         var slowest = self.slowest;
         const count = slowest.count();
         Printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
-        while (slowest.removeMinOrNull()) |info| {
+        while (slowest.popMin()) |info| {
             const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
             Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
         }
@@ -367,38 +376,25 @@ const Env = struct {
     subfilter: ?[]const u8,
     metrics: bool,
 
-    fn init(allocator: Allocator) Env {
-        const full_filter = readEnv(allocator, "TEST_FILTER");
+    fn init(map: *const std.process.Environ.Map) Env {
+        const full_filter = readEnv(map, "TEST_FILTER");
         const filter, const subfilter = parseFilter(full_filter);
+
         return .{
-            .verbose = readEnvBool(allocator, "TEST_VERBOSE", true),
-            .fail_first = readEnvBool(allocator, "TEST_FAIL_FIRST", false),
             .filter = filter,
             .subfilter = subfilter,
-            .metrics = readEnvBool(allocator, "METRICS", false),
+            .metrics = readEnvBool(map, "METRICS", false),
+            .verbose = readEnvBool(map, "TEST_VERBOSE", true),
+            .fail_first = readEnvBool(map, "TEST_FAIL_FIRST", false),
         };
     }
 
-    fn deinit(self: Env, allocator: Allocator) void {
-        if (self.filter) |f| {
-            allocator.free(f);
-        }
+    fn readEnv(map: *const std.process.Environ.Map, key: []const u8) ?[]const u8 {
+        return map.get(key);
     }
 
-    fn readEnv(allocator: Allocator, key: []const u8) ?[]const u8 {
-        const v = std.process.getEnvVarOwned(allocator, key) catch |err| {
-            if (err == error.EnvironmentVariableNotFound) {
-                return null;
-            }
-            std.log.warn("failed to get env var {s} due to err {}", .{ key, err });
-            return null;
-        };
-        return v;
-    }
-
-    fn readEnvBool(allocator: Allocator, key: []const u8, deflt: bool) bool {
-        const value = readEnv(allocator, key) orelse return deflt;
-        defer allocator.free(value);
+    fn readEnvBool(map: *const std.process.Environ.Map, key: []const u8, deflt: bool) bool {
+        const value = readEnv(map, key) orelse return deflt;
         return std.ascii.eqlIgnoreCase(value, "true");
     }
 
@@ -454,7 +450,7 @@ pub const TrackingAllocator = struct {
     allocated_bytes: usize = 0,
     allocation_count: usize = 0,
     reallocation_count: usize = 0,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
 
     const Stats = struct {
         allocated_bytes: usize,
@@ -492,8 +488,8 @@ pub const TrackingAllocator = struct {
         return_address: usize,
     ) ?[*]u8 {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.testing.io);
+        defer self.mutex.unlock(std.testing.io);
 
         const result = self.parent_allocator.rawAlloc(len, alignment, return_address);
         self.allocation_count += 1;
@@ -509,8 +505,8 @@ pub const TrackingAllocator = struct {
         ra: usize,
     ) bool {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.testing.io);
+        defer self.mutex.unlock(std.testing.io);
 
         const result = self.parent_allocator.rawResize(old_mem, alignment, new_len, ra);
         if (result) self.reallocation_count += 1;
@@ -524,8 +520,8 @@ pub const TrackingAllocator = struct {
         ra: usize,
     ) void {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.testing.io);
+        defer self.mutex.unlock(std.testing.io);
 
         self.parent_allocator.rawFree(old_mem, alignment, ra);
         self.free_count += 1;
@@ -539,8 +535,8 @@ pub const TrackingAllocator = struct {
         ret_addr: usize,
     ) ?[*]u8 {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.testing.io);
+        defer self.mutex.unlock(std.testing.io);
 
         const result = self.parent_allocator.rawRemap(memory, alignment, new_len, ret_addr);
         if (result != null) self.reallocation_count += 1;

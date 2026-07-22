@@ -47,10 +47,10 @@ pub const ResolvedProvider = struct {
 /// placeholder, so the only honest availability signal is the server answering
 /// `/v1/models` with a loaded model. Null means no server responded.
 pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Credentials {
-    const key = zenai.provider.envApiKey(tag) orelse return null;
+    const key = zenai.provider.envApiKey(lp.environ(), tag) orelse return null;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), tag, key, base_url) catch return null;
+    const ids = zenai.provider.listChatModelIds(allocator, lp.io, arena.allocator(), tag, key, base_url, lp.environ()) catch return null;
     if (ids.len == 0) return null;
     return .{ .provider = tag, .key = key };
 }
@@ -58,16 +58,20 @@ pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider,
 /// With GOOGLE_CLOUD_PROJECT set, zenai's client always sends Bearer auth —
 /// an API key can never work, so the credential must be an OAuth token.
 pub fn vertexProjectMode() bool {
-    return std.posix.getenv("GOOGLE_CLOUD_PROJECT") != null;
+    return std.c.getenv("GOOGLE_CLOUD_PROJECT") != null;
 }
 
 /// Caller owns the result. Failure prints gcloud's own stderr so the real
 /// cause (not logged in, missing SDK) reaches the user.
 pub fn gcloudAccessToken(allocator: std.mem.Allocator) ![:0]const u8 {
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    // gcloud needs the real environment (HOME for its config).
+    var environ_map = try lp.environMap(allocator);
+    defer environ_map.deinit();
+
+    const result = std.process.run(allocator, lp.io, .{
         .argv = &.{ "gcloud", "auth", "print-access-token" },
-        .max_output_bytes = 64 * 1024,
+        .environ_map = &environ_map,
+        .stdout_limit = .limited(64 * 1024),
     }) catch |err| {
         if (err == error.FileNotFound) {
             std.debug.print("gcloud not found on PATH; install the Google Cloud SDK, or unset GOOGLE_CLOUD_PROJECT to use Vertex express mode with GOOGLE_API_KEY.\n", .{});
@@ -78,7 +82,7 @@ pub fn gcloudAccessToken(allocator: std.mem.Allocator) ![:0]const u8 {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
     const failed = switch (result.term) {
-        .Exited => |code| code != 0,
+        .exited => |code| code != 0,
         else => true,
     };
     const token = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
@@ -93,9 +97,9 @@ pub fn gcloudAccessToken(allocator: std.mem.Allocator) ![:0]const u8 {
 /// env-detected). Skips the Ollama probe so it isn't run twice at startup; the
 /// interactive picker only fires on detected keys, which this still catches.
 pub fn hasDetectableKey(opts: Config.Agent, remembered: ?Remembered) bool {
-    if (opts.provider) |p| return zenai.provider.envApiKey(p) != null or (p == .vertex and vertexProjectMode());
+    if (opts.provider) |p| return zenai.provider.envApiKey(lp.environ(), p) != null or (p == .vertex and vertexProjectMode());
     if (remembered) |r| if (r.provider) |p| {
-        if (zenai.provider.envApiKey(p) != null) return true;
+        if (zenai.provider.envApiKey(lp.environ(), p) != null) return true;
         if (p == .vertex and vertexProjectMode()) return true;
     };
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
@@ -110,7 +114,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
             const token = try gcloudAccessToken(allocator);
             return .{ .credentials = .{ .provider = p, .key = token }, .source = .flag, .key_owned = true };
         }
-        const key = zenai.provider.envApiKey(p) orelse {
+        const key = zenai.provider.envApiKey(lp.environ(), p) orelse {
             if (p == .vertex) {
                 std.debug.print(
                     "Vertex needs VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud) — or pass --no-llm for the basic REPL.\n",
@@ -133,7 +137,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
             if (gcloudAccessToken(allocator)) |token| {
                 return .{ .credentials = .{ .provider = p, .key = token }, .source = .remembered, .key_owned = true };
             } else |_| {}
-        } else if (zenai.provider.envApiKey(p)) |key| {
+        } else if (zenai.provider.envApiKey(lp.environ(), p)) |key| {
             return .{ .credentials = .{ .provider = p, .key = key }, .source = .remembered };
         }
     };
@@ -197,7 +201,7 @@ pub const Remembered = struct {
 };
 
 pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
-    const data = std.fs.cwd().readFileAllocOptions(allocator, remembered_path, 1024, null, .of(u8), 0) catch return null;
+    const data = std.Io.Dir.cwd().readFileAllocOptions(lp.io, remembered_path, allocator, .limited(1024), .of(u8), 0) catch return null;
     defer allocator.free(data);
     return parseRemembered(allocator, data);
 }
@@ -207,7 +211,7 @@ fn parseRemembered(allocator: std.mem.Allocator, data: [:0]const u8) ?Remembered
     // error note that leaks unless a Diagnostics owns it to free on deinit.
     var diag: std.zon.parse.Diagnostics = .{};
     defer diag.deinit(allocator);
-    const remembered = std.zon.parse.fromSlice(Remembered, allocator, data, &diag, .{}) catch return null;
+    const remembered = std.zon.parse.fromSliceAlloc(Remembered, allocator, data, &diag, .{}) catch return null;
     // An empty model is corrupt only when a provider is set; a null provider
     // (LLM disabled) legitimately has no model to remember.
     if (remembered.provider != null and remembered.model.len == 0) {
@@ -222,7 +226,7 @@ pub fn saveRemembered(remembered: Remembered) !void {
     var buf: [512]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     try std.zon.stringify.serialize(remembered, .{}, &w);
-    try std.fs.cwd().writeFile(.{ .sub_path = remembered_path, .data = w.buffered() });
+    try std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = remembered_path, .data = w.buffered() });
 }
 
 /// Cloud providers with a key set. Ollama is excluded — its availability needs
@@ -230,8 +234,8 @@ pub fn saveRemembered(remembered: Remembered) !void {
 /// Vertex project mode joins with a placeholder key — no subprocess during a
 /// scan; the gcloud token is fetched on selection (`finishResolved`).
 pub fn availableProviders(buf: []Credentials) []Credentials {
-    const found = zenai.provider.detectKeys(buf, zenai.provider.default_candidates);
-    if (zenai.provider.useVertex() and vertexProjectMode() and found.len < buf.len) {
+    const found = zenai.provider.detectKeys(lp.environ(), buf, zenai.provider.default_candidates);
+    if (zenai.provider.useVertex(lp.environ()) and vertexProjectMode() and found.len < buf.len) {
         buf[found.len] = .{ .provider = .vertex, .key = "" };
         return buf[0 .. found.len + 1];
     }
@@ -298,7 +302,7 @@ pub fn reconcileModel(
 ) !ReconciledModel {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, base_url) catch &.{};
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, lp.io, arena.allocator(), llm.provider, llm.key, base_url, lp.environ()) catch &.{};
     if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
 
     if (!explicit) {

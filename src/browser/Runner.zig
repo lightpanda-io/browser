@@ -112,17 +112,18 @@ pub fn waitResult(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !
 // Wait until either a parse-state / load goal is reached or `opts.ms`
 // elapses. Returns as soon as _tick reports .done.
 fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []WaitCondition) !WaitResult {
+    const io = lp.io;
     const browser = self.browser;
 
-    var timer = try std.time.Timer.start();
+    const timer: std.Io.Timestamp = .now(io, .boot);
 
     // Periodic V8 GC hint during long waits. V8 is otherwise only nudged on
     // session/page teardown (Browser.zig, Page.zig), so a page that stays
     // alive for seconds while running heavy JS accumulates wrappers and
     // external-ref'd Zig allocations V8 has no reason to drop. `.moderate`
     // speeds up incremental GC without stalling the tick.
-    const gc_hint_period_ns: u64 = std.time.ns_per_s;
-    var gc_hint_timer = std.time.Timer.start() catch unreachable;
+    const gc_hint_period_ns: u64 = std.time.ns_per_s * 5;
+    var gc_hint_timer: std.Io.Timestamp = .now(io, .boot);
 
     while (true) {
         // The CDP path can have its session closed mid-wait: a command
@@ -141,8 +142,8 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             return error.Cancelled;
         }
 
-        if (gc_hint_timer.read() >= gc_hint_period_ns) {
-            gc_hint_timer.reset();
+        if (gc_hint_timer.untilNow(io, .boot).toNanoseconds() >= gc_hint_period_ns) {
+            gc_hint_timer = .now(io, .boot);
             browser.env.memoryPressureNotification(.moderate);
         }
         session.processDestroyQueues();
@@ -166,7 +167,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 // is_cdp keeps the loop alive past .done so the worker
                 // can observe CDP commands. We have nothing useful to do here
                 // but we can ask the http_client to wait for CDP messages.
-                const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+                const elapsed: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
                 if (elapsed >= timeout_ms) {
                     return .timeout;
                 }
@@ -175,12 +176,12 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             },
         };
 
-        const ms_elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const ms_elapsed: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
         if (ms_elapsed >= timeout_ms) {
             return .timeout;
         }
         if (next_ms > 0) {
-            std.Thread.sleep(std.time.ns_per_ms * next_ms);
+            io.sleep(.fromMilliseconds(@intCast(next_ms)), .awake) catch {};
         }
     }
 }
@@ -320,7 +321,7 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeou
     const arena = try session.getArena(.small, "Runner.waitForSelector");
     defer session.releaseArena(arena);
 
-    var timer = try std.time.Timer.start();
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
     const selector = try Selector.parseLeaky(arena, input);
 
     while (true) {
@@ -337,16 +338,16 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeou
             return el;
         }
 
-        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
         if (elapsed >= timeout_ms) {
             return error.Timeout;
         }
         switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
             // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => std.Thread.sleep(std.time.ns_per_ms * @as(u64, @min(timeout_ms - elapsed, 50))),
+            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
-                    std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
+                    lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
                 }
             },
         }
@@ -355,7 +356,7 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeou
 
 pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms: u32) !void {
     const session = self.session;
-    var timer = try std.time.Timer.start();
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
 
     // Compile the script once and re-use the compiled form. A tick can create a
     // new context (an internal navigation), so we keep an unbound script (one
@@ -414,16 +415,16 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
             return;
         }
 
-        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
         if (elapsed >= timeout_ms) {
             return error.Timeout;
         }
         switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
             // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => std.Thread.sleep(std.time.ns_per_ms * @as(u64, @min(timeout_ms - elapsed, 50))),
+            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
-                    std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
+                    lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
                 }
             },
         }
@@ -497,7 +498,7 @@ test "Runner: networkidle notifies child frames" {
     var attempts: usize = 0;
     while (frame._notified_network_idle != .done and attempts < 50) : (attempts += 1) {
         _ = try runner.tickForFrame(page.frame_id, 20, .{ .until = .networkidle });
-        std.Thread.sleep(25 * std.time.ns_per_ms);
+        lp.io.sleep(.fromMilliseconds(25), .awake) catch {};
     }
 
     try testing.expectEqual(true, frame._notified_network_idle == .done);

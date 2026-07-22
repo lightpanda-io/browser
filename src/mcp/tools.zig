@@ -229,7 +229,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     };
 
     // Absolute path: the cwd is the client-launched server's, not one the user picked.
-    const where = std.fs.cwd().realpathAlloc(arena, args.path) catch args.path;
+    const where = std.Io.Dir.cwd().realPathFileAlloc(lp.io, args.path, arena) catch args.path;
     const lines = std.mem.count(u8, script, "\n") + 1;
     const msg = std.fmt.allocPrint(arena, "saved {d} line(s) to {s}", .{ lines, where }) catch
         return sendErrorContent(server, id, "out of memory");
@@ -349,7 +349,7 @@ fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
     if (!browser_tools.isPathSafe(args.path)) {
         return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
     }
-    const source = args.script orelse std.fs.cwd().readFileAlloc(arena, args.path, max_script_bytes) catch |err| {
+    const source = args.script orelse std.Io.Dir.cwd().readFileAlloc(lp.io, args.path, arena, .limited(max_script_bytes)) catch |err| {
         const msg = std.fmt.allocPrint(arena, "could not read {s}: {s}", .{ args.path, @errorName(err) }) catch "could not read script";
         return sendErrorContent(server, id, msg);
     };
@@ -423,11 +423,12 @@ fn commitHealed(arena: std.mem.Allocator, path: []const u8, script: []const u8, 
         return;
     };
     writeScript(tmp_path, final) catch |err| {
-        std.fs.cwd().deleteFile(tmp_path) catch {};
+        std.Io.Dir.cwd().deleteFile(lp.io, tmp_path) catch {};
         report.failure = std.fmt.allocPrint(arena, "validated, but writing {s} failed: {s}", .{ tmp_path, @errorName(err) }) catch null;
         return;
     };
-    std.fs.cwd().rename(tmp_path, path) catch |err| {
+    const cwd = std.Io.Dir.cwd();
+    cwd.rename(tmp_path, cwd, path, lp.io) catch |err| {
         // Deliberately keep the revision; the message points at it.
         report.failure = std.fmt.allocPrint(arena, "validated, but replacing {s} failed: {s} (revision left at {s})", .{ path, @errorName(err), tmp_path }) catch null;
         return;
@@ -502,10 +503,10 @@ fn handleSessionClose(server: *Server, arena: std.mem.Allocator, id: std.json.Va
 }
 
 fn writeScript(path: []const u8, content: []const u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-    defer file.close();
-    try file.writeAll(content);
-    if (content.len > 0 and content[content.len - 1] != '\n') try file.writeAll("\n");
+    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = true });
+    defer file.close(lp.io);
+    try file.writeStreamingAll(lp.io, content);
+    if (content.len > 0 and content[content.len - 1] != '\n') try file.writeStreamingAll(lp.io, "\n");
 }
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
@@ -528,7 +529,7 @@ const testing = @import("../testing.zig");
 
 test "MCP - evaluate error reporting" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -557,7 +558,7 @@ test "MCP - evaluate error reporting" {
 
 test "MCP - evaluate: top-level return runs in an async wrapper" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -581,7 +582,7 @@ test "MCP - evaluate: top-level return runs in an async wrapper" {
 
 test "MCP - evaluate: top-level await runs in an async wrapper" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -605,7 +606,7 @@ test "MCP - evaluate: top-level await runs in an async wrapper" {
 
 test "MCP - evaluate: let declaration does not leak across calls" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -643,7 +644,7 @@ test "MCP - evaluate: let declaration does not leak across calls" {
 
 test "MCP - evaluate: bare expression still returns its value" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -667,7 +668,7 @@ test "MCP - evaluate: bare expression still returns its value" {
 
 test "MCP - evaluate: object return serializes as JSON" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -691,7 +692,7 @@ test "MCP - evaluate: object return serializes as JSON" {
 
 test "MCP - evaluate: localStorage persists across navigations and is origin-scoped" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
@@ -781,7 +782,7 @@ test "MCP - evaluate: localStorage persists across navigations and is origin-sco
 
 test "MCP - evaluate: save= value is readable via lp.<name> in next evaluate" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -818,7 +819,7 @@ test "MCP - evaluate: save= value is readable via lp.<name> in next evaluate" {
 
 test "MCP - evaluate: save= a bare string round-trips without JSON.stringify" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -855,7 +856,7 @@ test "MCP - evaluate: save= a bare string round-trips without JSON.stringify" {
 
 test "MCP - evaluate: lp.* mutations auto-sync between evaluates" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -892,7 +893,7 @@ test "MCP - evaluate: lp.* mutations auto-sync between evaluates" {
 
 test "MCP - evaluate: lp.* survives navigation" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
@@ -943,7 +944,7 @@ test "MCP - evaluate: lp.* survives navigation" {
 
 test "MCP - evaluate: delete lp.<key> removes from bridge store" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -994,7 +995,7 @@ test "MCP - evaluate: delete lp.<key> removes from bridge store" {
 
 test "MCP - extract: save= exposes the result as lp.<name>" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
@@ -1034,7 +1035,7 @@ test "MCP - extract: save= exposes the result as lp.<name>" {
 
 test "MCP - evaluate: Promise.resolve return value is awaited" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1057,7 +1058,7 @@ test "MCP - evaluate: Promise.resolve return value is awaited" {
 
 test "MCP - evaluate: async IIFE resolves to returned value" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1080,7 +1081,7 @@ test "MCP - evaluate: async IIFE resolves to returned value" {
 
 test "MCP - evaluate: rejected Promise surfaces as is_error" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1102,7 +1103,7 @@ test "MCP - evaluate: rejected Promise surfaces as is_error" {
 
 test "MCP - evaluate: async IIFE without explicit return resolves to empty text" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1125,7 +1126,7 @@ test "MCP - evaluate: async IIFE without explicit return resolves to empty text"
 
 test "MCP - evaluate: lp.* mutations inside async IIFE survive to the next evaluate" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1162,7 +1163,7 @@ test "MCP - evaluate: lp.* mutations inside async IIFE survive to the next evalu
 
 test "MCP - save rejects unsafe path" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1175,13 +1176,13 @@ test "MCP - save rejects unsafe path" {
 
 test "MCP - save writes the script to disk" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const path = "mcp-save-test-script.js";
-    std.fs.cwd().deleteFile(path) catch {};
-    defer std.fs.cwd().deleteFile(path) catch {};
+    std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
 
     const msg =
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"mcp-save-test-script.js","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}
@@ -1189,7 +1190,7 @@ test "MCP - save writes the script to disk" {
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "saved 2 line") != null);
 
-    const written = try std.fs.cwd().readFileAlloc(testing.arena_allocator, path, 4096);
+    const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4096));
     try std.testing.expectEqualStrings("const page = new Page();\nawait page.goto(\"https://example.com\");\n", written);
 }
 
@@ -1198,7 +1199,7 @@ fn testToolText(arena: std.mem.Allocator, response: []const u8) ![]const u8 {
     return root.object.get("result").?.object.get("content").?.array.items[0].object.get("text").?.string;
 }
 
-fn testCall(server: *Server, out: *std.io.Writer.Allocating, name: []const u8, arguments: anytype) ![]const u8 {
+fn testCall(server: *Server, out: *std.Io.Writer.Allocating, name: []const u8, arguments: anytype) ![]const u8 {
     const arena = testing.arena_allocator;
     const args_json = try std.json.Stringify.valueAlloc(arena, arguments, .{});
     const msg = try std.fmt.allocPrint(arena,
@@ -1209,7 +1210,7 @@ fn testCall(server: *Server, out: *std.io.Writer.Allocating, name: []const u8, a
     return testToolText(arena, out.written()[start..]);
 }
 
-fn testCallReport(server: *Server, out: *std.io.Writer.Allocating, name: []const u8, arguments: anytype) !std.json.Value {
+fn testCallReport(server: *Server, out: *std.Io.Writer.Allocating, name: []const u8, arguments: anytype) !std.json.Value {
     const text = try testCall(server, out, name, arguments);
     return std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, text, .{});
 }
@@ -1218,7 +1219,7 @@ const test_fixture_url = "http://localhost:9582/src/browser/tests/mcp_actions.ht
 
 test "MCP - replay rejects unsafe path" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1232,7 +1233,7 @@ test "MCP - replay rejects unsafe path" {
 
 test "MCP - replay: inline clean run reports ok" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1245,7 +1246,7 @@ test "MCP - replay: inline clean run reports ok" {
 
 test "MCP - replay: throwing script reports failed with failure and guidance" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1260,7 +1261,7 @@ test "MCP - replay: throwing script reports failed with failure and guidance" {
 
 test "MCP - replay: empty return reports suspicious" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1273,7 +1274,7 @@ test "MCP - replay: empty return reports suspicious" {
 
 test "MCP - replay: dry extract reports suspicious with dry_fields" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage(test_fixture_url, &out.writer);
     defer server.deinit();
 
@@ -1294,7 +1295,7 @@ test "MCP - replay: dry extract reports suspicious with dry_fields" {
 
 test "MCP - replay: console lines are captured in the report" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1311,12 +1312,12 @@ test "MCP - replay: console lines are captured in the report" {
 
 test "MCP - heal_commit: uncured candidate leaves the file untouched" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const path = "mcp-heal-uncured-test.js";
-    std.fs.cwd().deleteFile(path) catch {};
+    std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
 
     const report = try testCallReport(server, &out, "heal_commit", .{
         .path = path,
@@ -1326,18 +1327,18 @@ test "MCP - heal_commit: uncured candidate leaves the file untouched" {
     try testing.expectEqual(false, report.object.get("cured").?.bool);
     try testing.expectEqual(false, report.object.get("committed").?.bool);
     try testing.expect(std.mem.indexOf(u8, report.object.get("failure").?.string, "no data") != null);
-    try testing.expectError(error.FileNotFound, std.fs.cwd().access(path, .{}));
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, path, .{}));
 }
 
 test "MCP - heal_commit: cure commits atomically and refreshes the baseline" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const path = "mcp-heal-cure-test.js";
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = "return [];\n" });
-    defer std.fs.cwd().deleteFile(path) catch {};
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "return [];\n" });
+    defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
 
     const revised =
         \\const page = new Page();
@@ -1353,22 +1354,22 @@ test "MCP - heal_commit: cure commits atomically and refreshes the baseline" {
     try testing.expectEqual(true, report.object.get("committed").?.bool);
     try testing.expectString("ok", report.object.get("run").?.object.get("status").?.string);
 
-    const written = try std.fs.cwd().readFileAlloc(testing.arena_allocator, path, 4096);
+    const written = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.arena_allocator, .limited(4096));
     try testing.expect(std.mem.startsWith(u8, written, "const page = new Page();"));
     try testing.expect(std.mem.indexOf(u8, written, "// lp:baseline ") != null);
     try testing.expect(std.mem.indexOf(u8, written, "\"btn\":{\"calls\":1,\"nonempty\":1}") != null);
-    try testing.expectError(error.FileNotFound, std.fs.cwd().access(path ++ ".heal.js", .{}));
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, path ++ ".heal.js", .{}));
 }
 
 test "MCP - script lifecycle: save, replay broken, heal_commit, replay clean" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage(test_fixture_url, &out.writer);
     defer server.deinit();
 
     const path = "mcp-lifecycle-test.js";
-    std.fs.cwd().deleteFile(path) catch {};
-    defer std.fs.cwd().deleteFile(path) catch {};
+    std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
 
     const broken =
         \\const page = new Page();
@@ -1403,7 +1404,7 @@ test "MCP - script lifecycle: save, replay broken, heal_commit, replay clean" {
 
 test "MCP - tree rejects stale backendNodeId instead of dumping whole document" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1417,7 +1418,7 @@ test "MCP - tree rejects stale backendNodeId instead of dumping whole document" 
 
 test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
@@ -1434,7 +1435,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     defer testing.reset();
     const aa = testing.arena_allocator;
 
-    var out: std.io.Writer.Allocating = .init(aa);
+    var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
@@ -1572,7 +1573,7 @@ test "MCP - click that navigates clears node registry" {
     defer testing.reset();
     const aa = testing.arena_allocator;
 
-    var out: std.io.Writer.Allocating = .init(aa);
+    var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_nav.html", &out.writer);
     defer server.deinit();
 
@@ -1598,7 +1599,7 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     defer testing.reset();
     const aa = testing.arena_allocator;
 
-    var out: std.io.Writer.Allocating = .init(aa);
+    var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
@@ -1667,7 +1668,7 @@ test "MCP - findElement" {
     defer testing.reset();
     const aa = testing.arena_allocator;
 
-    var out: std.io.Writer.Allocating = .init(aa);
+    var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
@@ -1710,7 +1711,7 @@ test "MCP - findElement" {
 
 test "MCP - waitForSelector: existing element" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage(
         "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html",
         &out.writer,
@@ -1728,7 +1729,7 @@ test "MCP - waitForSelector: existing element" {
 
 test "MCP - waitForSelector: delayed element" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage(
         "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html",
         &out.writer,
@@ -1746,7 +1747,7 @@ test "MCP - waitForSelector: delayed element" {
 
 test "MCP - waitForSelector: timeout" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage(
         "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html",
         &out.writer,
@@ -1767,7 +1768,7 @@ test "MCP - waitForSelector: timeout" {
 
 test "MCP - markdown: full page, selector scope, maxBytes truncation" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
@@ -1796,7 +1797,7 @@ test "MCP - markdown: full page, selector scope, maxBytes truncation" {
 
 test "MCP - html: full document, selector subtree, backendNodeId subtree" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.html", &out.writer);
     defer server.deinit();
 
@@ -1822,7 +1823,7 @@ test "MCP - html: full document, selector subtree, backendNodeId subtree" {
 
 test "MCP - waitForScript: truthy returns, falsy times out" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1843,7 +1844,7 @@ test "MCP - waitForScript: truthy returns, falsy times out" {
 test "MCP - press Enter on form input triggers submit (lowercase alias)" {
     defer testing.reset();
     const aa = testing.arena_allocator;
-    var out: std.io.Writer.Allocating = .init(aa);
+    var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.html", &out.writer);
     defer server.deinit();
 
@@ -1864,7 +1865,7 @@ test "MCP - press Enter on form input triggers submit (lowercase alias)" {
 
 test "MCP - getCookies: defaults to current page, url filter, all flag" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.htm", &out.writer);
     defer server.deinit();
 
@@ -1904,7 +1905,7 @@ test "MCP - getCookies: defaults to current page, url filter, all flag" {
 
 test "MCP - getCookies without a loaded page refuses instead of dumping the jar" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
     defer server.deinit();
 
@@ -1921,7 +1922,7 @@ test "MCP - getCookies without a loaded page refuses instead of dumping the jar"
 
 test "MCP - waitForState with bad state surfaces rich error" {
     defer testing.reset();
-    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
@@ -1938,7 +1939,7 @@ test "MCP - waitForState with bad state surfaces rich error" {
 test "MCP - sessions: new, list, attach isolation, close" {
     defer testing.reset();
     const aa = testing.arena_allocator;
-    var out: std.io.Writer.Allocating = .init(aa);
+    var out: std.Io.Writer.Allocating = .init(aa);
     var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
     defer server.deinit();
     // Session tools require the HTTP transport's parked-isolate discipline.

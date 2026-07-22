@@ -431,12 +431,12 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         }
         // convert to absolute time, so the rest of the code is shared for
         // maxAge and expires.
-        init.expires = (@as(f64, @floatFromInt(std.time.timestamp())) + max_age) * 1000.0;
+        init.expires = (@as(f64, @floatFromInt(std.Io.Clock.now(.real, lp.io).toSeconds())) + max_age) * 1000.0;
     }
 
     if (init.expires) |ms| {
         // 400 day expiry limit, per spec.
-        const cap_ms = (@as(f64, @floatFromInt(std.time.timestamp())) + 400 * std.time.s_per_day) * 1000.0;
+        const cap_ms = (@as(f64, @floatFromInt(std.Io.Clock.now(.real, lp.io).toSeconds())) + 400 * std.time.s_per_day) * 1000.0;
         init.expires = @min(ms, cap_ms);
     }
 
@@ -557,7 +557,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     };
 
     // CookieStore is a script API, so is_http = false.
-    try session.cookie_jar.add(cookie, std.time.timestamp(), false);
+    try session.cookie_jar.add(cookie, std.Io.Clock.now(.real, lp.io).toSeconds(), false);
 }
 
 // Control characters (U+0000–U+001F and U+007F DEL) and `;` cannot appear in

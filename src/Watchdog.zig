@@ -33,8 +33,8 @@ const Watchdog = @This();
 timeout_ms: ?u32,
 shutdown: bool = false,
 thread: ?std.Thread = null,
-mutex: std.Thread.Mutex = .{},
-cond: std.Thread.Condition = .{},
+mutex: std.Io.Mutex = .init,
+cond: std.Io.Condition = .init,
 entries: std.DoublyLinkedList = .{},
 
 // Embedded in Browser; must outlive the register/unregister window.
@@ -53,10 +53,10 @@ pub fn init(timeout_ms: ?u32) Watchdog {
 pub fn deinit(self: *Watchdog) void {
     const thread = self.thread orelse return;
     {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         self.shutdown = true;
-        self.cond.signal();
+        self.cond.signal(lp.io);
     }
     thread.join();
 }
@@ -75,8 +75,8 @@ pub fn register(self: *Watchdog, entry: *Entry) void {
     }
 
     {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         self.entries.append(&entry.node);
     }
     entry.registered = true;
@@ -88,8 +88,8 @@ pub fn unregister(self: *Watchdog, entry: *Entry) void {
     }
 
     {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         self.entries.remove(&entry.node);
     }
     entry.registered = false;
@@ -98,11 +98,11 @@ pub fn unregister(self: *Watchdog, entry: *Entry) void {
 fn run(self: *Watchdog) void {
     const timeout_ms: u64 = self.timeout_ms.?;
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
 
     while (true) {
-        self.cond.timedWait(&self.mutex, CHECK_INTERVAL_NS) catch {};
+        lp.timedWait(&self.cond, &self.mutex, CHECK_INTERVAL_NS) catch {};
         if (self.shutdown) {
             return;
         }

@@ -29,7 +29,7 @@ const Allocator = std.mem.Allocator;
 
 const Notification = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _proto: *EventTarget,
 _title: []const u8,

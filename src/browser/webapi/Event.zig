@@ -65,7 +65,7 @@ _time_origin: u64 = 0,
 // - 0: no reference, always a transient state going to either 1 or about to be deinit'd
 // - 1: either zig or v8 have a reference
 // - 2: both zig and v8 have a reference
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 
 pub const EventPhase = enum(u8) {
     none = 0,
@@ -468,14 +468,15 @@ pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
     const additions_info = @typeInfo(additions);
     all_fields = all_fields ++ additions_info.@"struct".fields;
 
-    return @Type(.{
-        .@"struct" = .{
-            .layout = .auto,
-            .fields = all_fields,
-            .decls = &.{},
-            .is_tuple = false,
-        },
-    });
+    var names: [all_fields.len][:0]const u8 = undefined;
+    var types: [all_fields.len]type = undefined;
+    var attrs: [all_fields.len]std.builtin.Type.StructField.Attributes = undefined;
+    for (all_fields, 0..) |f, i| {
+        names[i] = f.name;
+        types[i] = f.type;
+        attrs[i] = .{ .@"comptime" = f.is_comptime, .@"align" = f.alignment, .default_value_ptr = f.default_value_ptr };
+    }
+    return @Struct(.auto, null, &names, &types, &attrs);
 }
 
 pub fn populatePrototypes(self: anytype, opts: anytype, trusted: bool) void {

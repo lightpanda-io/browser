@@ -67,14 +67,14 @@ arena_pool: *ArenaPool,
 
 // All live top-level Pages. During a root navigation this transiently holds
 // both the live page and its in-flight replacement.
-pages: std.ArrayList(*Page) = .{},
+pages: std.ArrayList(*Page) = .empty,
 
 // Live SharedWorkerGlobalScopes, keyed by "url\x00name", so every
 // `new SharedWorker(url, name)` in the session connects to the same instance.
 // Owned by the Page that creates it.
 shared_workers: std.StringHashMapUnmanaged(*SharedWorkerGlobalScope) = .empty,
 
-_page_destruction_queue: std.ArrayList(*Page) = .{},
+_page_destruction_queue: std.ArrayList(*Page) = .empty,
 
 // Round-robin cursor for fair page iteration (processQueuedNavigation)
 _nav_cursor: usize = 0,

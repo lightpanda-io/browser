@@ -60,7 +60,7 @@ _data: union(Mode) {
     form: NodeLive(.form),
     empty: void,
 },
-_rc: lp.RC(u32) = .{},
+_rc: lp.RC = .{},
 
 pub fn deinit(self: *HTMLCollection, page: *Page) void {
     page.factory.destroy(self);
@@ -264,7 +264,7 @@ pub const JsApi = struct {
     // collection, in tree order, its id and (for HTML elements) its name
     // attribute, skipping empty values and duplicates.
     fn getNames(self: *HTMLCollection, frame: *Frame) !js.Array {
-        var names: std.ArrayList([]const u8) = .{};
+        var names: std.ArrayList([]const u8) = .empty;
         const arena = frame.local_arena;
 
         const len = self.length(frame);

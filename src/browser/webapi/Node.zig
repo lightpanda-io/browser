@@ -1733,7 +1733,7 @@ pub const NodeOrText = union(enum) {
     node: *Node,
     text: []const u8,
 
-    pub fn format(self: *const NodeOrText, writer: *std.io.Writer) !void {
+    pub fn format(self: *const NodeOrText, writer: *std.Io.Writer) !void {
         switch (self.*) {
             .node => |n| try n.format(writer),
             .text => |text| {

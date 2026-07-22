@@ -51,8 +51,8 @@ proxy: u8,
 
 // `mutex` guards the ring buffer (head/tail/dropped), `running`, and the lazy
 // `thread` creation. The sender thread blocks on `cond` while idle.
-mutex: std.Thread.Mutex = .{},
-cond: std.Thread.Condition = .{},
+mutex: std.Io.Mutex = .init,
+cond: std.Io.Condition = .init,
 
 // The sender thread is spawned on the first event, so a process that emits no
 // telemetry pays for none of this
@@ -92,10 +92,10 @@ pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode
 
 pub fn deinit(self: *LightPanda) void {
     if (self.thread) |thread| {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(lp.io);
         self.running = false;
-        self.mutex.unlock();
-        self.cond.signal();
+        self.mutex.unlock(lp.io);
+        self.cond.signal(lp.io);
         // The thread drains anything still queued before returning, so this is
         // also our graceful flush-on-shutdown. Bounded by REQUEST_TIMEOUT_MS.
         thread.join();
@@ -105,8 +105,8 @@ pub fn deinit(self: *LightPanda) void {
 }
 
 pub fn send(self: *LightPanda, raw_event: telemetry.Event) !void {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
 
     if (self.thread == null) {
         // First event: bring the sender thread online. If it can't spawn, drop
@@ -127,7 +127,7 @@ pub fn send(self: *LightPanda, raw_event: telemetry.Event) !void {
         self.dropped +|= 1;
         return;
     };
-    self.cond.signal();
+    self.cond.signal(lp.io);
 }
 
 fn run(self: *LightPanda) void {
@@ -151,24 +151,24 @@ fn run(self: *LightPanda) void {
     var batch: std.ArrayList(telemetry.Event) = .empty;
     defer batch.deinit(self.allocator);
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
     while (true) {
         while (self.pending.items.len == 0) {
             if (self.running == false) {
                 return;
             }
-            self.cond.wait(&self.mutex);
+            self.cond.waitUncancelable(lp.io, &self.mutex);
         }
-        linger: {
-            var timer = std.time.Timer.start() catch break :linger;
+        {
+            const timer: std.Io.Timestamp = .now(lp.io, .boot);
             const linger_ns = LINGER_MS * std.time.ns_per_ms;
             while (self.running and self.pending.items.len < LINGER_BATCH) {
-                const elapsed = timer.read();
+                const elapsed: u64 = @intCast(timer.untilNow(lp.io, .boot).toNanoseconds());
                 if (elapsed >= linger_ns) {
                     break;
                 }
-                self.cond.timedWait(&self.mutex, linger_ns - elapsed) catch break;
+                lp.timedWait(&self.cond, &self.mutex, linger_ns - elapsed) catch break;
             }
         }
 
@@ -177,7 +177,7 @@ fn run(self: *LightPanda) void {
         std.mem.swap(std.ArrayList(telemetry.Event), &self.pending, &batch);
         const dropped = self.dropped;
         self.dropped = 0;
-        self.mutex.unlock();
+        self.mutex.unlock(lp.io);
 
         var sent: usize = 0;
         self.postEvents(&conn, batch.items, dropped, &sent) catch |err| {
@@ -192,7 +192,7 @@ fn run(self: *LightPanda) void {
             batch.clearRetainingCapacity();
         }
 
-        self.mutex.lock();
+        self.mutex.lockUncancelable(lp.io);
         // Re-fold whatever didn't reach the wire back into `dropped`, so the next
         // successful POST still reports it — our only failure signal.
         self.dropped +|= lost;

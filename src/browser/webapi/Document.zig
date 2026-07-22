@@ -196,7 +196,7 @@ pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
                 }
             }
         }
-        break :blk std.time.timestamp();
+        break :blk std.Io.Clock.now(.real, lp.io).toSeconds();
     };
 
     const tm = try dt.localTime(timestamp);
@@ -284,12 +284,12 @@ pub fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
     if (self.isCookieAverse(frame)) {
         return "";
     }
-    var buf: std.ArrayList(u8) = .empty;
-    try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.local_arena), .{
+    var aw: std.Io.Writer.Allocating = .init(frame.local_arena);
+    try frame._session.cookie_jar.forRequest(frame.url, &aw.writer, .{
         .is_http = false,
         .is_navigation = true,
     });
-    return buf.items;
+    return aw.written();
 }
 
 pub fn setCookie(self: *Document, cookie_str: []const u8, frame: *Frame) ![]const u8 {
@@ -307,7 +307,7 @@ pub fn setCookie(self: *Document, cookie_str: []const u8, frame: *Frame) ![]cons
         c.deinit();
         return ""; // HttpOnly cookies cannot be set from JS
     }
-    try frame._session.cookie_jar.add(c, std.time.timestamp(), false);
+    try frame._session.cookie_jar.add(c, std.Io.Clock.now(.real, lp.io).toSeconds(), false);
     return cookie_str;
 }
 
@@ -958,7 +958,7 @@ pub fn getDocType(self: *Document) ?*Node {
 // reasonable for 2 frames to document.write("<html>...</html>") into their own
 // frame.
 fn looksLikeNewDocument(html: []const u8) bool {
-    const trimmed = std.mem.trimLeft(u8, html, &std.ascii.whitespace);
+    const trimmed = std.mem.trimStart(u8, html, &std.ascii.whitespace);
     return std.ascii.startsWithIgnoreCase(trimmed, "<!DOCTYPE") or
         std.ascii.startsWithIgnoreCase(trimmed, "<html");
 }

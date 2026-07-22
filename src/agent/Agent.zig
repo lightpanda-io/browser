@@ -85,7 +85,7 @@ const default_system_prompt = browser_tools.driver_guidance ++
 // System prompt of the `/save` command: the save instructions plus the
 // script skill (`lp.skill`), whose primitives reference is rendered from
 // the tool schemas at first use — hence lazy rather than comptime.
-var save_prompts_once = std.once(initSavePrompts);
+var save_prompts_once = lp.once(initSavePrompts);
 var save_system_prompt: []const u8 = undefined;
 var save_revision_system_prompt: []const u8 = undefined;
 
@@ -156,7 +156,7 @@ terminal: Terminal,
 save_buffer: Recorder,
 baseline: Baseline,
 save_path: ?[]u8,
-script_runtime_mutex: std.Thread.Mutex = .{},
+script_runtime_mutex: std.Io.Mutex = .init,
 active_script_runtime: ?*ScriptRuntime = null,
 conversation: Conversation,
 model: []u8,
@@ -375,7 +375,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.startSession();
 
-    self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider) }) else null;
+    self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, lp.io, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
@@ -430,7 +430,7 @@ fn startSession(self: *Agent) !void {
 
 // Compile-time constant; projected once per process to avoid rebuilding per call.
 var global_tools_storage: [browser_tools.tool_defs.len]ProviderTool = undefined;
-var global_tools_once = std.once(initGlobalTools);
+var global_tools_once = lp.once(initGlobalTools);
 
 fn initGlobalTools() void {
     for (Schema.all(), 0..) |s, i| {
@@ -451,8 +451,8 @@ pub fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
     self.http_interrupt.fire();
     {
-        self.script_runtime_mutex.lock();
-        defer self.script_runtime_mutex.unlock();
+        self.script_runtime_mutex.lockUncancelable(lp.io);
+        defer self.script_runtime_mutex.unlock(lp.io);
         if (self.active_script_runtime) |runtime| {
             runtime.terminate();
         }
@@ -669,7 +669,7 @@ fn runRepl(self: *Agent) void {
             };
             // Surface console output: slash commands (and thus /consoleLogs)
             // are unreachable in JS mode, so a console must echo logs itself.
-            const logs = std.mem.trimRight(u8, self.session.drainConsoleMessages(), "\n");
+            const logs = std.mem.trimEnd(u8, self.session.drainConsoleMessages(), "\n");
             if (logs.len > 0) self.printData(logs);
             if (result.is_error) {
                 self.terminal.printError("{s}", .{result.text});
@@ -1002,7 +1002,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         };
         return;
     }
-    const key = zenai.provider.envApiKey(provider) orelse {
+    const key = zenai.provider.envApiKey(lp.environ(), provider) orelse {
         if (provider == .vertex) {
             self.terminal.printError("vertex needs VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud)", .{});
             return;
@@ -1041,13 +1041,14 @@ fn disableProvider(self: *Agent) void {
 /// requests bill the token owner's personal account instead of the org.
 fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
     if (provider != .huggingface) return null;
-    return std.posix.getenv("HF_BILL_TO");
+    const v = std.c.getenv("HF_BILL_TO") orelse return null;
+    return std.mem.span(v);
 }
 
 /// `owned_key` transfers ownership of an allocated `credentials.key` (Vertex
 /// gcloud token) on success; on error the caller still owns it.
 fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8) !void {
-    const new_client = try zenai.provider.Client.init(self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider) });
+    const new_client = try zenai.provider.Client.init(self.allocator, lp.io, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ() });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
@@ -1394,8 +1395,8 @@ fn navigationGoto(arena: std.mem.Allocator, tool: BrowserTool, args: ?std.json.V
     if (a != .object) return null;
     const url = a.object.get("url") orelse return null;
     if (url != .string or url.string.len == 0) return null;
-    var obj: std.json.ObjectMap = .init(arena);
-    obj.put("url", url) catch return null;
+    var obj: std.json.ObjectMap = .empty;
+    obj.put(arena, "url", url) catch return null;
     return Command.fromToolCall(.goto, .{ .object = obj });
 }
 
@@ -1601,7 +1602,7 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
 
-    const content = std.fs.cwd().readFileAlloc(script_arena.allocator(), path, 10 * 1024 * 1024) catch |err| {
+    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, script_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
         self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
         return .fatal;
     };
@@ -1611,13 +1612,13 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) Sc
         return .fatal;
     };
     defer runtime.deinit();
-    self.script_runtime_mutex.lock();
+    self.script_runtime_mutex.lockUncancelable(lp.io);
     self.active_script_runtime = runtime;
-    self.script_runtime_mutex.unlock();
+    self.script_runtime_mutex.unlock(lp.io);
     defer {
-        self.script_runtime_mutex.lock();
+        self.script_runtime_mutex.lockUncancelable(lp.io);
         self.active_script_runtime = null;
-        self.script_runtime_mutex.unlock();
+        self.script_runtime_mutex.unlock(lp.io);
         runtime.cancelTerminate();
         self.browser.env.cancelTerminate();
         self.cancel_requested.store(false, .release);
@@ -1740,7 +1741,8 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
                         save.writeContentFile(tmp_path, updated, .replace) catch {};
                     }
                     keep_revision = true;
-                    std.fs.cwd().rename(tmp_path, path) catch |err| {
+                    const cwd = std.Io.Dir.cwd();
+                    cwd.rename(tmp_path, cwd, path, lp.io) catch |err| {
                         self.terminal.printError("healed script validated but replacing {s} failed: {s} (revision left at {s})", .{ path, @errorName(err), tmp_path });
                         return false;
                     };
@@ -1859,7 +1861,7 @@ fn confirmedDryFields(arena: std.mem.Allocator, judged: []const ?[]const u8, act
 }
 
 fn removeTempScript(self: *Agent, tmp_path: []const u8) void {
-    std.fs.cwd().deleteFile(tmp_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().deleteFile(lp.io, tmp_path) catch |err| switch (err) {
         // Covers exits before the first write.
         error.FileNotFound => {},
         else => self.terminal.printWarning("could not remove temp script {s}: {s}", .{ tmp_path, @errorName(err) }),
@@ -2132,17 +2134,18 @@ fn buildUserMessageParts(
         };
 
         if (std.mem.startsWith(u8, mime, "text/")) {
-            const bytes = std.fs.cwd().readFileAlloc(ma, path, 512 * 1024) catch |err| {
+            const bytes = std.Io.Dir.cwd().readFileAlloc(lp.io, path, ma, .limited(512 * 1024)) catch |err| {
                 log.err(.app, "read attachment failed", .{ .path = path, .err = err });
                 self.terminal.printError("could not read attachment: {s}", .{path});
                 return error.AttachmentReadFailed;
             };
-            try text_prefix.writer(ma).print(
+            try text_prefix.print(
+                ma,
                 "[Attached file: {s}]\n{s}\n[End of attachment]\n\n",
                 .{ path, bytes },
             );
         } else {
-            const raw = std.fs.cwd().readFileAlloc(ma, path, 20 * 1024 * 1024) catch |err| {
+            const raw = std.Io.Dir.cwd().readFileAlloc(lp.io, path, ma, .limited(20 * 1024 * 1024)) catch |err| {
                 log.err(.app, "read attachment failed", .{ .path = path, .err = err });
                 self.terminal.printError("could not read attachment: {s}", .{path});
                 return error.AttachmentReadFailed;
@@ -2215,14 +2218,14 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, opts.base_url) catch |err| {
+    const ids = zenai.provider.listChatModelIds(allocator, lp.io, arena.allocator(), llm.provider, llm.key, opts.base_url, lp.environ()) catch |err| {
         if (llm.provider == .vertex and !settings.vertexProjectMode()) {
             std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
         }
         return err;
     };
 
-    var stdout_file = std.fs.File.stdout().writer(&.{});
+    var stdout_file = std.Io.File.stdout().writerStreaming(lp.io, &.{});
     const w = &stdout_file.interface;
     for (ids) |id| try w.print("{s}\n", .{id});
     try w.flush();
@@ -2273,10 +2276,12 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
     _ = self.model_completion_arena.reset(.retain_capacity);
     const ids = zenai.provider.listChatModelIds(
         self.allocator,
+        lp.io,
         self.model_completion_arena.allocator(),
         llm.provider,
         llm.key,
         self.model_base_url,
+        lp.environ(),
     ) catch &.{};
     self.model_completions = .{ .provider = llm.provider, .ids = ids };
     return ids;

@@ -43,7 +43,7 @@ pub fn registerTypes() []const type {
 
 pub const DOMStringList = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _items: []const []const u8,
 

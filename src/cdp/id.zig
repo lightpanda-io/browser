@@ -90,10 +90,7 @@ pub fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
         break :blk b;
     };
 
-    const PrefixIntType = @Type(.{ .int = .{
-        .bits = NUMERIC_START * 8,
-        .signedness = .unsigned,
-    } });
+    const PrefixIntType = @Int(.unsigned, NUMERIC_START * 8);
 
     const PREFIX_INT_CODE: PrefixIntType = @bitCast(buffer[0..NUMERIC_START].*);
 

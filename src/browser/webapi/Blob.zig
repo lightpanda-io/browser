@@ -35,7 +35,7 @@ const Blob = @This();
 pub const _prototype_root = true;
 
 _type: Type,
-_rc: lp.RC(u32),
+_rc: lp.RC,
 
 _arena: Allocator,
 

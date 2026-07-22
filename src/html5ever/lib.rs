@@ -21,7 +21,7 @@ mod sink;
 mod types;
 mod url;
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "memstats")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -594,14 +594,14 @@ pub extern "C" fn html5ever_attribute_iterator_count(c_iter: *const c_void) -> u
     return iter.vec.len();
 }
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "memstats")]
 #[repr(C)]
 pub struct Memory {
     pub resident: usize,
     pub allocated: usize,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "memstats")]
 #[no_mangle]
 pub extern "C" fn html5ever_get_memory_usage() -> Memory {
     use tikv_jemalloc_ctl::{epoch, stats};

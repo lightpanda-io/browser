@@ -148,7 +148,7 @@ pub fn compileFunction(
     src: anytype,
     /// We tend to know how many params we'll pass; can remove the comptime if necessary.
     comptime parameter_names: []const []const u8,
-    extensions: []const v8.Object,
+    extensions: []const *const v8.Object,
 ) !js.Function {
     // TODO: Make configurable.
     const script_name = self.isolate.initStringHandle("anonymous");
@@ -175,7 +175,7 @@ pub fn compileFunction(
         parameter_list.len,
         &parameter_list,
         extensions.len,
-        @ptrCast(&extensions),
+        extensions.ptr,
         v8.kNoCompileOptions,
         v8.kNoCacheNoReason,
     ) orelse return error.CompilationError;

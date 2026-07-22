@@ -175,7 +175,7 @@ const ValueWriter = struct {
     values: []js.Value,
     stack: ?[]const u8 = null,
 
-    pub fn format(self: ValueWriter, writer: *std.io.Writer) !void {
+    pub fn format(self: ValueWriter, writer: *std.Io.Writer) !void {
         for (self.valuesToLog(), 1..) |value, i| {
             try writer.print("\n  arg({d}): {f}", .{ i, value });
         }

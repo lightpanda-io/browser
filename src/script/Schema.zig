@@ -126,7 +126,7 @@ pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
 
 /// Rename keys in `obj` to canonical casing. Unknown keys pass through;
 /// keys that collide on the canonical form return `error.DuplicateField`.
-pub fn normalizeKeys(self: Schema, obj: *std.json.ObjectMap) !void {
+pub fn normalizeKeys(self: Schema, arena: std.mem.Allocator, obj: *std.json.ObjectMap) !void {
     const Rename = struct { from: []const u8, to: []const u8 };
     var renames: std.ArrayList(Rename) = .empty;
     var it = obj.iterator();
@@ -137,12 +137,12 @@ pub fn normalizeKeys(self: Schema, obj: *std.json.ObjectMap) !void {
             for (renames.items) |r| {
                 if (std.mem.eql(u8, r.to, field.name)) return error.DuplicateField;
             }
-            try renames.append(obj.allocator, .{ .from = entry.key_ptr.*, .to = field.name });
+            try renames.append(arena, .{ .from = entry.key_ptr.*, .to = field.name });
         }
     }
     for (renames.items) |r| {
         const kv = obj.fetchSwapRemove(r.from) orelse continue;
-        try obj.put(r.to, kv.value);
+        try obj.put(arena, r.to, kv.value);
     }
 }
 
@@ -222,7 +222,7 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
         // Same validation the kv path applies: reject unknown keys and
         // fill default-true required fields when omitted.
         if (parsed != .object) return error.MalformedKv;
-        try self.validateAndFillObject(&parsed.object);
+        try self.validateAndFillObject(arena, &parsed.object);
         return parsed;
     }
 
@@ -264,17 +264,17 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
     return try self.buildValue(arena, list.items, diag);
 }
 
-fn validateAndFillObject(self: Schema, obj: *std.json.ObjectMap) ParseError!void {
+fn validateAndFillObject(self: Schema, arena: std.mem.Allocator, obj: *std.json.ObjectMap) ParseError!void {
     // Stricter than the LLM path: an unknown field is a user typo, not noise to drop.
     var it = obj.iterator();
     while (it.next()) |entry| {
         if (self.findField(entry.key_ptr.*) == null) return error.UnknownField;
     }
-    try self.normalizeKeys(obj);
+    try self.normalizeKeys(arena, obj);
     for (self.required) |req| {
         if (obj.contains(req)) continue;
         if (!self.isFieldDefaultTrue(req)) return error.MissingRequired;
-        try obj.put(req, .{ .bool = true });
+        try obj.put(arena, req, .{ .bool = true });
     }
 }
 
@@ -284,11 +284,11 @@ const KvPair = struct {
 };
 
 fn buildValue(self: Schema, arena: std.mem.Allocator, pairs: []const KvPair, diag: ?*Diag) ParseError!std.json.Value {
-    var obj: std.json.ObjectMap = .init(arena);
-    try obj.ensureTotalCapacity(pairs.len);
+    var obj: std.json.ObjectMap = .empty;
+    try obj.ensureTotalCapacity(arena, pairs.len);
     for (pairs) |p| {
         const v = try self.coerce(arena, p.key, p.value, diag);
-        const gop = try obj.getOrPut(p.key);
+        const gop = try obj.getOrPut(arena, p.key);
         if (gop.found_existing) return error.DuplicateField;
         gop.value_ptr.* = v;
     }
@@ -363,7 +363,7 @@ pub fn all() []const Schema {
 
 var global_storage: [browser_tools.tool_defs.len]Schema = undefined;
 var global_arena: std.heap.ArenaAllocator = undefined;
-var global_once = std.once(initGlobal);
+var global_once = lp.once(initGlobal);
 
 fn initGlobal() void {
     global_arena = .init(std.heap.page_allocator);

@@ -39,14 +39,14 @@ pub fn registerTypes() []const type {
 
 const IntersectionObserver = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _callback: js.Function.Global,
-_observing: std.ArrayList(*Element) = .{},
+_observing: std.ArrayList(*Element) = .empty,
 _root: ?*Element = null,
 _root_margin: []const u8 = "0px",
 _threshold: []const f64 = &.{0.0},
-_pending_entries: std.ArrayList(*IntersectionObserverEntry) = .{},
+_pending_entries: std.ArrayList(*IntersectionObserverEntry) = .empty,
 // tracked targets that aren't reported yet
 _tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
 
@@ -316,7 +316,7 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
 }
 
 pub const IntersectionObserverEntry = struct {
-    _rc: lp.RC(u8) = .{},
+    _rc: lp.RC = .{},
     _arena: Allocator,
     _time: f64,
     _target: *Element,

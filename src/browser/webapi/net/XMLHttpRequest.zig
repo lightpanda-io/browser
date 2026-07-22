@@ -42,7 +42,7 @@ const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const XMLHttpRequest = @This();
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _exec: *const Execution,
 _proto: *XMLHttpRequestEventTarget,
 _upload: ?*XMLHttpRequestUpload = null,
@@ -341,7 +341,7 @@ pub fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8) ?[]const
         if (entry[name.len] != ':') {
             continue;
         }
-        return std.mem.trimLeft(u8, entry[name.len + 1 ..], " ");
+        return std.mem.trimStart(u8, entry[name.len + 1 ..], " ");
     }
     return null;
 }

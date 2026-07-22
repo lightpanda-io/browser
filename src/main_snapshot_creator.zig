@@ -19,16 +19,14 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-pub fn main() !void {
-    const allocator = std.heap.c_allocator;
-
+pub fn main(init: std.process.Init) !void {
     // usage: snapshot_creator [--v8-flags-unsafe "<flags>"] [outfile]
     // A snapshot only deserializes correctly under the flags it was created
     // with, so a runtime using --v8-flags-unsafe needs a snapshot built with
     // the same value.
     var v8_flags: ?[]const u8 = null;
     var out_path: ?[]const u8 = null;
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = std.process.Args.Iterator.init(init.minimal.args);
     _ = args.next(); // executable name
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--v8-flags-unsafe")) {
@@ -48,17 +46,17 @@ pub fn main() !void {
     defer snapshot.deinit();
 
     var is_stdout = true;
-    var file = std.fs.File.stdout();
+    var file = std.Io.File.stdout();
     if (out_path) |n| {
         is_stdout = false;
-        file = try std.fs.cwd().createFile(n, .{});
+        file = try std.Io.Dir.cwd().createFile(lp.io, n, .{});
     }
     defer if (!is_stdout) {
-        file.close();
+        file.close(lp.io);
     };
 
     var buffer: [4096]u8 = undefined;
-    var writer = file.writer(&buffer);
+    var writer = file.writerStreaming(lp.io, &buffer);
     try snapshot.write(&writer.interface);
     try writer.end();
 }

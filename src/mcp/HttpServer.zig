@@ -31,6 +31,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
+const sys_net = @import("../sys/net.zig");
+
 const Server = @import("Server.zig");
 const router = @import("router.zig");
 
@@ -63,7 +65,7 @@ const Job = struct {
     assigned_buf: [128]u8 = undefined,
     assigned_len: usize = 0,
 
-    done: std.Thread.ResetEvent = .{},
+    done: std.Io.Event = .unset,
     next: ?*Job = null,
 
     const Kind = enum { rpc, close };
@@ -80,30 +82,30 @@ const Job = struct {
 };
 
 const Queue = struct {
-    mutex: std.Thread.Mutex = .{},
-    cond: std.Thread.Condition = .{},
+    mutex: std.Io.Mutex = .init,
+    cond: std.Io.Condition = .init,
     head: ?*Job = null,
     tail: ?*Job = null,
     closed: std.atomic.Value(bool) = .init(false),
 
     fn push(self: *Queue, job: *Job) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         job.next = null;
         if (self.tail) |t| t.next = job else self.head = job;
         self.tail = job;
-        self.cond.signal();
+        self.cond.signal(lp.io);
     }
 
     /// Pop the next job, waiting at most `timeout_ms`. Returns null on timeout
     /// (or spurious wakeup) so the worker can pump idle sessions and retry;
     /// check `closed` to tell shutdown from timeout.
     fn pop(self: *Queue, timeout_ms: u64) ?*Job {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         if (self.head == null) {
             if (timeout_ms == 0 or self.closed.load(.acquire)) return null;
-            self.cond.timedWait(&self.mutex, timeout_ms * ns_per_ms) catch {};
+            lp.timedWait(&self.cond, &self.mutex, timeout_ms * ns_per_ms) catch {};
         }
         const job = self.head orelse return null;
         self.head = job.next;
@@ -112,10 +114,10 @@ const Queue = struct {
     }
 
     fn close(self: *Queue) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
         self.closed.store(true, .release);
-        self.cond.signal();
+        self.cond.signal(lp.io);
     }
 };
 
@@ -128,12 +130,12 @@ queue: Queue = .{},
 // on — so a connection is always counted and its socket registered before
 // deinit can observe either.
 active_conns: std.atomic.Value(u32) = .init(0),
-conn_mutex: std.Thread.Mutex = .{},
-conns: std.ArrayList(posix.socket_t) = .{},
+conn_mutex: std.Io.Mutex = .init,
+conns: std.ArrayList(posix.socket_t) = .empty,
 
 // The worker owns `server`; other threads must not touch it.
 worker_thread: std.Thread = undefined,
-worker_ready: std.Thread.ResetEvent = .{},
+worker_ready: std.Io.Event = .unset,
 worker_ok: bool = false,
 
 /// Create the server and start its browser worker thread. Returns once the
@@ -147,7 +149,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*HttpServer {
     };
 
     self.worker_thread = try std.Thread.spawn(.{}, worker, .{self});
-    self.worker_ready.wait();
+    self.worker_ready.waitUncancelable(lp.io);
     if (!self.worker_ok) {
         self.worker_thread.join();
         return error.WorkerInitFailed;
@@ -161,14 +163,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*HttpServer {
 /// be blocked on `job.done`.
 pub fn deinit(self: *HttpServer) void {
     {
-        self.conn_mutex.lock();
-        defer self.conn_mutex.unlock();
+        self.conn_mutex.lockUncancelable(lp.io);
+        defer self.conn_mutex.unlock(lp.io);
         for (self.conns.items) |socket| {
-            posix.shutdown(socket, .both) catch {};
+            sys_net.shutdown(socket, .both) catch {};
         }
     }
     while (self.active_conns.load(.monotonic) > 0) {
-        std.Thread.sleep(10 * ns_per_ms);
+        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
     }
 
     self.queue.close();
@@ -181,7 +183,7 @@ pub fn deinit(self: *HttpServer) void {
 /// Accept MCP-over-HTTP connections until the network loop is stopped
 /// (e.g. by the signal handler). Reuses the shared accept infrastructure;
 /// blocks the calling thread in `Network.run`.
-pub fn run(self: *HttpServer, address: std.net.Address) !void {
+pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
     var bound = address;
     try self.app.network.bind(&bound, self, onAccept);
     log.note(.mcp, "mcp http server running", .{ .address = bound });
@@ -193,20 +195,20 @@ pub fn run(self: *HttpServer, address: std.net.Address) !void {
 fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
     const self: *HttpServer = @ptrCast(@alignCast(ctx));
 
-    const flags = posix.fcntl(socket, posix.F.GETFL, 0) catch {
-        posix.close(socket);
+    const flags = sys_net.fcntl(socket, posix.F.GETFL, 0) catch {
+        _ = std.c.close(socket);
         return;
     };
-    _ = posix.fcntl(socket, posix.F.SETFL, flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true }))) catch {
-        posix.close(socket);
+    _ = sys_net.fcntl(socket, posix.F.SETFL, flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true }))) catch {
+        _ = std.c.close(socket);
         return;
     };
 
     {
-        self.conn_mutex.lock();
-        defer self.conn_mutex.unlock();
+        self.conn_mutex.lockUncancelable(lp.io);
+        defer self.conn_mutex.unlock(lp.io);
         self.conns.append(self.allocator, socket) catch {
-            posix.close(socket);
+            _ = std.c.close(socket);
             return;
         };
     }
@@ -216,15 +218,15 @@ fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
         log.warn(.mcp, "mcp spawn", .{ .err = err });
         _ = self.active_conns.fetchSub(1, .monotonic);
         self.unregister(socket);
-        posix.close(socket);
+        _ = std.c.close(socket);
         return;
     };
     thread.detach();
 }
 
 fn unregister(self: *HttpServer, socket: posix.socket_t) void {
-    self.conn_mutex.lock();
-    defer self.conn_mutex.unlock();
+    self.conn_mutex.lockUncancelable(lp.io);
+    defer self.conn_mutex.unlock(lp.io);
     for (self.conns.items, 0..) |s, i| {
         if (s == socket) {
             _ = self.conns.swapRemove(i);
@@ -239,7 +241,7 @@ fn worker(self: *HttpServer) void {
 
     const server = Server.init(self.allocator, self.app, &placeholder.writer) catch |err| {
         log.err(.mcp, "mcp http server init", .{ .err = err });
-        self.worker_ready.set();
+        self.worker_ready.set(lp.io);
         return;
     };
     defer server.deinit();
@@ -247,7 +249,7 @@ fn worker(self: *HttpServer) void {
     server.enableIsolateParking();
 
     self.worker_ok = true;
-    self.worker_ready.set();
+    self.worker_ready.set(lp.io);
 
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
@@ -264,7 +266,7 @@ fn worker(self: *HttpServer) void {
         };
         _ = arena.reset(.retain_capacity);
         process(server, arena.allocator(), job);
-        job.done.set();
+        job.done.set(lp.io);
         wait_ms = 0;
     }
 }
@@ -318,17 +320,17 @@ fn isInitialize(arena: std.mem.Allocator, body: []const u8) bool {
 
 fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
     defer _ = self.active_conns.fetchSub(1, .monotonic);
-    const stream: std.net.Stream = .{ .handle = socket };
-    defer stream.close();
+    const stream: std.Io.net.Stream = .{ .socket = .{ .handle = socket, .address = .{ .ip4 = .unspecified(0) } } };
+    defer stream.close(lp.io);
     // Runs before close (defers are LIFO): deinit's shutdown sweep must
     // never see an fd that has been closed and possibly reused.
     defer self.unregister(socket);
 
     var recv_buf: [16 * 1024]u8 = undefined;
     var send_buf: [16 * 1024]u8 = undefined;
-    var stream_reader = stream.reader(&recv_buf);
-    var stream_writer = stream.writer(&send_buf);
-    var http_server = std.http.Server.init(stream_reader.interface(), &stream_writer.interface);
+    var stream_reader = stream.reader(lp.io, &recv_buf);
+    var stream_writer = stream.writer(lp.io, &send_buf);
+    var http_server = std.http.Server.init(&stream_reader.interface, &stream_writer.interface);
 
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
@@ -374,7 +376,7 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
         .out = out,
     };
     self.queue.push(&job);
-    job.done.wait();
+    job.done.waitUncancelable(lp.io);
 
     const resp = out.buffered();
     var headers: [2]std.http.Header = undefined;

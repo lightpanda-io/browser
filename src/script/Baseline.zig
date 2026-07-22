@@ -102,16 +102,16 @@ pub fn serializeStats(arena: std.mem.Allocator, stats: []const ScriptRuntime.Ext
 
 fn fieldsToLine(arena: std.mem.Allocator, fields: *const Fields) error{OutOfMemory}!?[]const u8 {
     if (fields.count() == 0) return null;
-    var fields_obj: std.json.ObjectMap = .init(arena);
+    var fields_obj: std.json.ObjectMap = .empty;
     var it = fields.iterator();
     while (it.next()) |entry| {
-        var stat_obj: std.json.ObjectMap = .init(arena);
-        try stat_obj.put("calls", .{ .integer = entry.value_ptr.calls });
-        try stat_obj.put("nonempty", .{ .integer = entry.value_ptr.nonempty });
-        try fields_obj.put(entry.key_ptr.*, .{ .object = stat_obj });
+        var stat_obj: std.json.ObjectMap = .empty;
+        try stat_obj.put(arena, "calls", .{ .integer = entry.value_ptr.calls });
+        try stat_obj.put(arena, "nonempty", .{ .integer = entry.value_ptr.nonempty });
+        try fields_obj.put(arena, entry.key_ptr.*, .{ .object = stat_obj });
     }
-    var root: std.json.ObjectMap = .init(arena);
-    try root.put("fields", .{ .object = fields_obj });
+    var root: std.json.ObjectMap = .empty;
+    try root.put(arena, "fields", .{ .object = fields_obj });
     const json = try std.json.Stringify.valueAlloc(arena, std.json.Value{ .object = root }, .{});
     return try std.mem.concat(arena, u8, &.{ marker, json });
 }

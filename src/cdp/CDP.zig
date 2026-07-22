@@ -82,6 +82,7 @@ browser_context_id_gen: BrowserContextIdGen = .{},
 browser_session_id: ?[]const u8 = null,
 
 browser_context: ?BrowserContext,
+disable_set_cache_disabled: bool = false,
 
 // Re-used arena for processing a message. We're assuming that we're getting
 // 1 message at a time.
@@ -1120,7 +1121,7 @@ pub const BrowserContext = struct {
         // + 10 for the max websocket header
         const message_len = msg.len + session_id.len + 1 + field.len + 10;
 
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayList(u8) = .empty;
         buf.ensureTotalCapacity(allocator, message_len) catch |err| {
             log.err(.cdp, "inspector buffer", .{ .err = err });
             return;

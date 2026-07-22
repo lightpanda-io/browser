@@ -73,13 +73,13 @@ pub fn jsMode(self: *const Terminal) bool {
 
 pub fn init(allocator: std.mem.Allocator, history_paths: ?HistoryPaths, verbosity: Verbosity, is_repl: bool) Terminal {
     if (is_repl) prompt_assist.setupRepl();
-    const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
+    const stderr_is_tty = std.Io.File.stderr().isTty(lp.io) catch false;
     return .{
         .allocator = allocator,
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
         .stderr_is_tty = stderr_is_tty,
-        .stdout_is_tty = std.posix.isatty(std.posix.STDOUT_FILENO),
+        .stdout_is_tty = std.Io.File.stdout().isTty(lp.io) catch false,
         .spinner = .init(is_repl, stderr_is_tty),
         .assist = .{ .history_paths = history_paths },
     };
@@ -150,8 +150,8 @@ pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
     // \r) only while isocline reads: while active, Ctrl-C arrives as a CSI-u
     // escape rather than raw \x03, so the tty driver raises no SIGINT. Leaving
     // it on during thinking/tool runs would make Ctrl-C unable to interrupt them.
-    _ = std.posix.write(std.posix.STDOUT_FILENO, ansi.kitty_disambiguate) catch {};
-    defer _ = std.posix.write(std.posix.STDOUT_FILENO, ansi.kitty_pop) catch {};
+    _ = std.c.write(std.posix.STDOUT_FILENO, (ansi.kitty_disambiguate).ptr, (ansi.kitty_disambiguate).len);
+    defer _ = std.c.write(std.posix.STDOUT_FILENO, (ansi.kitty_pop).ptr, (ansi.kitty_pop).len);
     // Isocline auto-appends the line to its (optionally-persisted) history.
     const line = c.ic_readline(prompt) orelse return null;
     return std.mem.sliceTo(line, 0);
@@ -199,9 +199,9 @@ fn logSink(bytes: []const u8) void {
         if (t.isRepl()) return;
         if (t.spinner.emitAbove(bytes)) return;
     }
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-    _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
+    const stderr = std.debug.lockStderr(&.{});
+    defer std.debug.unlockStderr();
+    stderr.file_writer.interface.writeAll(bytes) catch {};
 }
 
 /// Erase the frame after an empty submit. The bars collapse on submit, leaving
@@ -227,7 +227,7 @@ fn styledOutput(self: *const Terminal) bool {
 /// styled (REPL tty) path.
 fn renderStyled(self: *Terminal, text: []const u8, op: enum { full, delta, end }) void {
     var buf: [1024]u8 = undefined;
-    var fw = std.fs.File.stdout().writerStreaming(&buf);
+    var fw = std.Io.File.stdout().writerStreaming(lp.io, &buf);
     const w = &fw.interface;
     switch (op) {
         .full => {
@@ -246,8 +246,8 @@ fn renderStyled(self: *Terminal, text: []const u8, op: enum { full, delta, end }
 pub fn printAssistant(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
     if (self.styledOutput()) return self.renderStyled(text, .full);
-    _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
-    _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};
+    _ = std.c.write(std.posix.STDOUT_FILENO, (text).ptr, (text).len);
+    _ = std.c.write(std.posix.STDOUT_FILENO, ("\n").ptr, ("\n").len);
 }
 
 /// Write a streamed assistant-text delta (no trailing newline). Rendered
@@ -258,13 +258,13 @@ pub fn printAssistant(self: *Terminal, text: []const u8) void {
 pub fn printAssistantDelta(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
     if (self.styledOutput()) return self.renderStyled(text, .delta);
-    _ = std.posix.write(std.posix.STDOUT_FILENO, text) catch {};
+    _ = std.c.write(std.posix.STDOUT_FILENO, (text).ptr, (text).len);
 }
 
 /// Flush any partial streamed line, terminate it, and reset stream state.
 pub fn endAssistantStream(self: *Terminal) void {
     if (self.styledOutput()) return self.renderStyled("", .end);
-    _ = std.posix.write(std.posix.STDOUT_FILENO, "\n") catch {};
+    _ = std.c.write(std.posix.STDOUT_FILENO, ("\n").ptr, ("\n").len);
 }
 
 // Must exceed the downstream LLM-judge's snapshot window for full grounding
@@ -282,7 +282,7 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
         defer _ = a.reset(.retain_capacity);
         const bytes = formatReplOutcome(a.allocator(), text, is_error) catch return;
         if (self.spinner.emitAbove(bytes)) return;
-        _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
+        _ = std.c.write(std.posix.STDERR_FILENO, (bytes).ptr, (bytes).len);
         return;
     }
     if (!is_error and !self.verbosity.atLeast(.medium)) return;
@@ -304,14 +304,14 @@ pub fn printScriptDone(self: *Terminal, name: []const u8, args: []const u8) void
         ansi.green ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s} {s}]" ++ ansi.reset ++ "\n",
         .{ name, args },
     ) catch return;
-    _ = std.posix.write(std.posix.STDERR_FILENO, line) catch {};
+    _ = std.c.write(std.posix.STDERR_FILENO, (line).ptr, (line).len);
 }
 
 /// Re-indents `text` as two-space JSON, or null when it isn't a JSON object/array.
 /// The `{`/`[` sniff skips the parse for the common plain-text case — `text` may
 /// be up to 1 MiB.
 pub fn reindentJson(arena: std.mem.Allocator, text: []const u8) ?[]const u8 {
-    const trimmed = std.mem.trimLeft(u8, text, " \t\r\n");
+    const trimmed = std.mem.trimStart(u8, text, " \t\r\n");
     if (trimmed.len == 0 or (trimmed[0] != '{' and trimmed[0] != '[')) return null;
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch return null;
     var aw: std.Io.Writer.Allocating = .init(arena);
@@ -350,7 +350,7 @@ fn printSeverity(self: *Terminal, color: []const u8, label: []const u8, comptime
         aw.writer.print("{s}●{s} " ++ fmt ++ "\n", .{ color, ansi.reset } ++ args) catch return;
         const bytes = aw.written();
         if (self.spinner.emitAbove(bytes)) return;
-        _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
+        _ = std.c.write(std.posix.STDERR_FILENO, (bytes).ptr, (bytes).len);
         return;
     }
     std.debug.print("{s}{s}{s}: " ++ fmt ++ "{s}\n", .{ ansi.bold, color, label } ++ args ++ .{ansi.reset});

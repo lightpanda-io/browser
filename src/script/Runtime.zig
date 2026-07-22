@@ -49,7 +49,7 @@ console_sink: ?ConsoleSink = null,
 /// In-flight async `goto`s; emptied before each `runSource` returns.
 pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
-run_timer: std.time.Timer,
+run_timer: std.Io.Timestamp,
 /// Per-run tally of extract field emptiness. call_arena-backed, so it is
 /// re-zeroed alongside the arena reset at the top of `runSource`.
 extract_stats: std.ArrayList(ExtractStat) = .empty,
@@ -349,7 +349,7 @@ pub const Ok = struct {
 pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!RunResult {
     _ = self.call_arena.reset(.retain_capacity);
     self.extract_stats = .empty;
-    self.run_timer = std.time.Timer.start() catch return .{ .err = try self.dupeError("internal: timer unavailable") };
+    self.run_timer = .now(lp.io, .boot);
 
     var hs: lp.js.HandleScope = undefined;
     hs.init(self.env.isolate);
@@ -677,7 +677,7 @@ fn invokeGoto(
         .frame_id = started.frame_id,
         .resolver = undefined,
         .receiver = undefined,
-        .deadline_ms = self.run_timer.read() / std.time.ns_per_ms + started.timeout_ms,
+        .deadline_ms = @as(u64, @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds())) + started.timeout_ms,
     };
     v8.v8__Global__New(self.env.isolate.handle, resolver, &pending.resolver);
     v8.v8__Global__New(self.env.isolate.handle, this, &pending.receiver);
@@ -745,7 +745,7 @@ fn driveAsync(self: *Runtime, context: *const v8.Context, try_catch: *const v8.T
 /// Settle each pending goto that finished or timed out, compacting survivors back
 /// in place. `conditions[i]` lines up with `pending_gotos.items[i]` (same pass).
 fn settleCompleted(self: *Runtime, context: *const v8.Context, conditions: []const lp.Session.Runner.WaitCondition) void {
-    const now_ms = self.run_timer.read() / std.time.ns_per_ms;
+    const now_ms: u64 = @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds());
     var write: usize = 0;
     for (conditions, 0..) |condition, i| {
         const pending = &self.pending_gotos.items[i];
@@ -854,8 +854,8 @@ fn writeConsoleLine(self: *Runtime, method: ConsoleMethod, line: []const u8) voi
     if (self.console_observer) |obs| obs.notify(obs.context);
     if (self.console_sink) |sink| return sink.write(sink.context, method, line);
     var buf: [4096]u8 = undefined;
-    var file = if (method.writesStderr()) std.fs.File.stderr() else std.fs.File.stdout();
-    var writer = file.writer(&buf);
+    const file = if (method.writesStderr()) std.Io.File.stderr() else std.Io.File.stdout();
+    var writer = file.writerStreaming(lp.io, &buf);
     writer.interface.print("{s}\n", .{line}) catch return;
     writer.interface.flush() catch return;
 }
@@ -930,19 +930,19 @@ fn marshalArgs(
     }
     if (positional_count > positional.len) return error.InvalidArguments;
 
-    var obj: std.json.ObjectMap = .init(arena);
+    var obj: std.json.ObjectMap = .empty;
     for (values[0..positional_count], positional[0..positional_count]) |v, field| {
         switch (v) {
             .null => {}, // omit the field — e.g. page/focused-level selector
             .object, .array => return error.InvalidArguments,
-            else => try obj.put(field, v),
+            else => try obj.put(arena, field, v),
         }
     }
     if (options) |opts| {
         var it = opts.iterator();
         while (it.next()) |entry| {
             if (obj.contains(entry.key_ptr.*)) return error.InvalidArguments;
-            try obj.put(entry.key_ptr.*, entry.value_ptr.*);
+            try obj.put(arena, entry.key_ptr.*, entry.value_ptr.*);
         }
     }
     return .{ .object = obj };
@@ -1023,8 +1023,8 @@ fn valueToJson(
 }
 
 fn objectWith(arena: std.mem.Allocator, key: []const u8, value: std.json.Value) error{OutOfMemory}!std.json.Value {
-    var obj: std.json.ObjectMap = .init(arena);
-    try obj.put(key, value);
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(arena, key, value);
     return .{ .object = obj };
 }
 
@@ -1179,7 +1179,7 @@ fn runTestScript(runtime: *Runtime, source: []const u8) !void {
 }
 
 fn terminateRuntimeSoon(runtime: *Runtime) void {
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
     runtime.terminate();
 }
 

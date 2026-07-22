@@ -113,7 +113,7 @@ jobs:
         run: |
           ./wpt serve 2> /dev/null & echo $! > WPT.pid
           sleep 20s
-          ./wptrunner -lpd-path ./lightpanda -json -concurrency 5 -pool 5 --mem-limit 100 > wpt.json
+          ./wptrunner -lpd-path ./lightpanda -json -concurrency 8 -pool 4 --mem-limit 100 > wpt.json
           kill `cat WPT.pid`
 
       - name: write commit

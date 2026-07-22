@@ -234,7 +234,7 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
 
                     // not continuation, and not fin. It has to be the first message
                     // in a fragmented message.
-                    var fragments = Fragments{ .message = .{}, .type = message_type };
+                    var fragments = Fragments{ .message = .empty, .type = message_type };
                     try fragments.message.appendSlice(self.allocator, payload);
                     self.fragments = fragments;
                     continue :LOOP;
@@ -501,7 +501,7 @@ test "reader: reclaims buffer after a run of small messages" {
     defer allocator.free(big_payload);
     @memset(big_payload, 'a');
 
-    var big: std.ArrayList(u8) = .{};
+    var big: std.ArrayList(u8) = .empty;
     defer big.deinit(allocator);
     try writeFrame(&big, allocator, big_payload);
 
@@ -512,7 +512,7 @@ test "reader: reclaims buffer after a run of small messages" {
     // A whole run of small messages delivered in a *single* batch must count
     // as individual messages, not as one compaction — reads don't align with
     // message boundaries over TCP. Stop one short of the threshold.
-    var batch: std.ArrayList(u8) = .{};
+    var batch: std.ArrayList(u8) = .empty;
     defer batch.deinit(allocator);
     for (0..RECLAIM_AFTER - 1) |_| {
         try writeFrame(&batch, allocator, "hello");
@@ -522,7 +522,7 @@ test "reader: reclaims buffer after a run of small messages" {
     try testing.expect(reader.buf.len > RECLAIM_TO);
 
     // One more small message tips the run over the threshold and shrinks.
-    var small: std.ArrayList(u8) = .{};
+    var small: std.ArrayList(u8) = .empty;
     defer small.deinit(allocator);
     try writeFrame(&small, allocator, "hello");
     try feedAndDrain(&reader, small.items);
