@@ -48,6 +48,18 @@ const spread_entries = [_]Entry{
     .{ .keyword = "reflect", .value = 2 },
     .{ .keyword = "repeat", .value = 3 },
 };
+const length_adjust_entries = [_]Entry{
+    .{ .keyword = "spacing", .value = 1 },
+    .{ .keyword = "spacingAndGlyphs", .value = 2 },
+};
+const text_path_method_entries = [_]Entry{
+    .{ .keyword = "align", .value = 1 },
+    .{ .keyword = "stretch", .value = 2 },
+};
+const text_path_spacing_entries = [_]Entry{
+    .{ .keyword = "auto", .value = 1 },
+    .{ .keyword = "exact", .value = 2 },
+};
 
 pub const Kind = enum {
     clip_path_units,
@@ -58,6 +70,9 @@ pub const Kind = enum {
     mask_content_units,
     pattern_units,
     pattern_content_units,
+    length_adjust,
+    text_path_method,
+    text_path_spacing,
 
     fn attributeName(self: Kind) lp.String {
         return switch (self) {
@@ -69,6 +84,9 @@ pub const Kind = enum {
             .mask_content_units => .wrap("maskContentUnits"),
             .pattern_units => .wrap("patternUnits"),
             .pattern_content_units => .wrap("patternContentUnits"),
+            .length_adjust => .wrap("lengthAdjust"),
+            .text_path_method => .wrap("method"),
+            .text_path_spacing => .wrap("spacing"),
         };
     }
 
@@ -76,6 +94,9 @@ pub const Kind = enum {
         return switch (self) {
             .marker_units => &marker_unit_entries,
             .spread_method => &spread_entries,
+            .length_adjust => &length_adjust_entries,
+            .text_path_method => &text_path_method_entries,
+            .text_path_spacing => &text_path_spacing_entries,
             else => &unit_entries,
         };
     }
@@ -86,6 +107,8 @@ pub const Kind = enum {
             .mask_content_units,
             .pattern_content_units,
             .spread_method,
+            .length_adjust,
+            .text_path_method,
             => 1,
             else => 2,
         };

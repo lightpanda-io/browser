@@ -812,6 +812,7 @@ fn PrototypeType(comptime T: type) ?type {
 }
 
 fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
+    @setEvalBranchQuota(10_000);
     var index: usize = 0;
     var flat: [countFlattenedTypes(Types)]type = undefined;
     for (Types) |T| {
@@ -829,6 +830,7 @@ fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
 }
 
 fn countFlattenedTypes(comptime Types: []const type) usize {
+    @setEvalBranchQuota(10_000);
     var c: usize = 0;
     for (Types) |T| {
         c += if (@hasDecl(T, "registerTypes")) T.registerTypes().len else 1;
@@ -1064,6 +1066,11 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/svg/Symbol.zig"),
     @import("../webapi/element/svg/Switch.zig"),
     @import("../webapi/element/svg/ForeignObject.zig"),
+    @import("../webapi/element/svg/TextContent.zig"),
+    @import("../webapi/element/svg/TextPositioning.zig"),
+    @import("../webapi/element/svg/Text.zig"),
+    @import("../webapi/element/svg/TSpan.zig"),
+    @import("../webapi/element/svg/TextPath.zig"),
     @import("../webapi/element/svg/View.zig"),
     @import("../webapi/element/svg/Title.zig"),
     @import("../webapi/element/svg/Desc.zig"),

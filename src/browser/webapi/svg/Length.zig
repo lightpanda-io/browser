@@ -313,6 +313,10 @@ fn resolvedFontSizeAt(element: ?*Element, frame: *Frame, depth: u8) f64 {
     return resolvedFontSizeAt(parent, frame, depth + 1);
 }
 
+pub fn fontSizeForElement(element: *Element, frame: *Frame) f64 {
+    return resolvedFontSize(element, frame);
+}
+
 fn parseFontSize(raw: []const u8, parent: ?*Element, frame: *Frame, depth: u8) ?f64 {
     const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
     if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset")) {
@@ -331,7 +335,8 @@ fn parseFontSize(raw: []const u8, parent: ?*Element, frame: *Frame, depth: u8) ?
         .ex => parent_size / 2.0,
         else => unreachable,
     };
-    return parsed.value * factor;
+    const size = parsed.value * factor;
+    return if (size >= 0 and std.math.isFinite(size)) size else null;
 }
 
 fn absoluteUnitFactor(unit: Unit) ?f64 {
