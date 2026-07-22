@@ -455,12 +455,14 @@ pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNa
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    // is_pending_root means this navigation is in flight against a pending
-    // Page while the OLD page is still alive and addressable. Don't blow
-    // away the node_registry — the OLD page's nodes are still referenced
-    // by client-held objectIds. The reset moves to frameRemove (commit).
+    // Child-frame navigations must not invalidate node IDs owned by other
+    // frames. A pending root keeps its old page addressable until frameRemove;
+    // other root navigations can clear the registry immediately.
     if (!event.is_pending_root) {
-        bc.reset();
+        const root_frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+        if (event.frame_id == root_frame._frame_id) {
+            bc.reset();
+        }
     }
 
     const frame_id = &id.toFrameId(event.frame_id);
@@ -1088,6 +1090,36 @@ test "cdp.frame: frameAttached" {
         .frameId = "FID-0000000002",
         .parentFrameId = "FID-0000000001",
     }, .{ .session_id = "SID-X" });
+}
+
+test "cdp.frame: child navigation preserves node registry" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "hi.html" });
+    const root_frame = bc.mainFrame().?;
+    const node = try bc.node_registry.register(root_frame.window._document.asNode());
+    const node_id = node.id;
+
+    try frameNavigate(bc, &.{
+        .req_id = 1,
+        .frame_id = root_frame._frame_id + 1,
+        .loader_id = 2,
+        .timestamp = 0,
+        .url = "about:blank",
+        .opts = .{},
+    });
+    try testing.expectEqual(node, bc.node_registry.lookup_by_id.get(node_id).?);
+
+    try frameNavigate(bc, &.{
+        .req_id = 2,
+        .frame_id = root_frame._frame_id,
+        .loader_id = 3,
+        .timestamp = 0,
+        .url = "about:blank",
+        .opts = .{},
+    });
+    try testing.expectEqual(null, bc.node_registry.lookup_by_id.get(node_id));
 }
 
 test "cdp.frame: captureScreenshot" {
