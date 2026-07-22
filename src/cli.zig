@@ -324,14 +324,7 @@ pub fn Builder(comptime commands: anytype) type {
                     else
                         .{});
 
-                const T = @Type(.{
-                    .@"struct" = .{
-                        .decls = &.{},
-                        .fields = dedupeStructFields(&all_fields),
-                        .is_tuple = false,
-                        .layout = .auto,
-                    },
-                });
+                const T = StructFromFields(dedupeStructFields(&all_fields));
 
                 union_fields[i] = .{ .name = command.name, .type = T, .alignment = @alignOf(T) };
             }
