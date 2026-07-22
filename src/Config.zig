@@ -94,6 +94,13 @@ const Cert = struct {
     // Number of certificate sources loaded into `store`.
     count: usize = 0,
 
+    fn deinit(self: *Cert) void {
+        if (self.store) |store| {
+            crypto.X509_STORE_free(store);
+        }
+        self.* = .{};
+    }
+
     /// Returns the store, creating it on first use. The store is shared by
     /// every `--ca-cert`/`--ca-path` occurrence.
     fn getOrCreate(self: *Cert) !*crypto.X509_STORE {
@@ -104,13 +111,6 @@ const Cert = struct {
             return error.FailedToCreateCertStore;
         self.store = store;
         return store;
-    }
-
-    fn deinit(self: *Cert) void {
-        if (self.store) |store| {
-            crypto.X509_STORE_free(store);
-        }
-        self.* = .{};
     }
 };
 
@@ -745,6 +745,20 @@ pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_sqlite_path,
         else => unreachable,
+    };
+}
+
+/// Returns the user-supplied certificate store (`--ca-cert`/`--ca-path`),
+/// if any was loaded during argument parsing. The caller takes ownership.
+pub fn customCertStore(self: *const Config) ?*crypto.X509_STORE {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| {
+            const store = opts.cert.store orelse return null;
+            // Validators guarantee a created store loaded something.
+            lp.assert(opts.cert.count > 0, "empty custom cert store", .{});
+            return store;
+        },
+        else => null,
     };
 }
 
