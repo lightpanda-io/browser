@@ -395,7 +395,7 @@ fn dropCdp(self: *Network, link: *CdpLink, err: ?anyerror, opts: DropCdpOpts) vo
     self.cdp_dirty = true;
 
     if (opts.shutdown_socket) {
-        posix.shutdown(link.socket, .both) catch {};
+        sys_net.shutdown(link.socket, .both) catch {};
     }
 
     if (opts.notify) {
