@@ -56,7 +56,7 @@ pub const Intersection = struct {
 // ResizeObserver bookkeeping for a frame.
 pub const Resize = struct {
     // List of active ResizeObservers (i.e. those with >= 1 observation)
-    observers: std.ArrayList(*ResizeObserver) = .{},
+    observers: std.ArrayList(*ResizeObserver) = .empty,
     delivery_scheduled: bool = false,
     delivery_depth: u32 = 0,
 };

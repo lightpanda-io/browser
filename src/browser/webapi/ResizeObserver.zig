@@ -45,10 +45,10 @@ pub fn registerTypes() []const type {
 
 const ResizeObserver = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _callback: js.Function.Global,
-_observations: std.ArrayList(Observation) = .{},
+_observations: std.ArrayList(Observation) = .empty,
 
 const Observation = struct {
     target: *Element,
