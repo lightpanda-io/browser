@@ -205,7 +205,7 @@ pub fn deinit(self: *Context) void {
     }
 
     const env = self.env;
-    defer env.app.arena_pool.release(self.arena);
+    defer self.page.session.releaseArena(self.arena);
 
     // Unlink any IndexedDB gate participants first: the session-scoped engine
     // must never wake a waiter into this scheduler once it's torn down.

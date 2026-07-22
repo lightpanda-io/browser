@@ -30,6 +30,7 @@ js_heap_limits: Counter = .{},
 script_errors: Counter = .{},
 arena_hit: CounterEnum("size", @import("ArenaPool.zig").BucketSize) = .{},
 arena_miss: CounterEnum("size", @import("ArenaPool.zig").BucketSize) = .{},
+browser_native_memory_bytes: Gauge = .{},
 navigate: CounterEnum("type", @import("telemetry/telemetry.zig").Event.Navigate.Context) = .{},
 js_heap_size_bytes: Histogram(&.{
     4 * 1024 * 1024,
@@ -84,6 +85,7 @@ const help = .{
     .script_errors = "Scripts that failed to evaluate, e.g. an uncaught top-level exception",
     .arena_hit = "Arena pool acquisitions served from the free list",
     .arena_miss = "Arena pool acquisitions that had to allocate a new arena",
+    .browser_native_memory_bytes = "Arena backing memory attributed to active browser connections",
     .navigate = "Navigations by initiating frame type",
     .js_heap_size_bytes = "V8 heap physical size, sampled when a page is closed",
     .http_requests = "HTTP requests submitted, by dispatch mode (excludes internal requests like robots.txt)",
@@ -139,11 +141,19 @@ const Gauge = struct {
     value: isize = 0,
 
     pub fn incr(self: *Gauge) void {
-        _ = @atomicRmw(isize, &self.value, .Add, 1, .monotonic);
+        self.incrBy(1);
+    }
+
+    pub fn incrBy(self: *Gauge, value: usize) void {
+        _ = @atomicRmw(isize, &self.value, .Add, @intCast(value), .monotonic);
     }
 
     pub fn decr(self: *Gauge) void {
-        _ = @atomicRmw(isize, &self.value, .Sub, 1, .monotonic);
+        self.decrBy(1);
+    }
+
+    pub fn decrBy(self: *Gauge, value: usize) void {
+        _ = @atomicRmw(isize, &self.value, .Sub, @intCast(value), .monotonic);
     }
 
     fn write(self: *const Gauge, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {

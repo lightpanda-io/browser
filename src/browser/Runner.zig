@@ -205,6 +205,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const session = self.session;
     const browser = self.browser;
     const http_client = self.http_client;
+    defer browser.flushNativeMemory();
 
     // Arms the watchdog (and proves liveness): a stall anywhere in this tick
     // ages this stamp until the watchdog fires.

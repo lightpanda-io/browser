@@ -115,6 +115,7 @@ pub fn deinit(self: *Caller) void {
     ctx.call_depth = call_depth;
     ctx.local = self.prev_local;
     ctx.global.setJs(self.prev_context);
+    if (call_depth == 0) ctx.page.session.browser.flushNativeMemory();
 }
 
 pub const CallOpts = struct {
