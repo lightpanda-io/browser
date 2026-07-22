@@ -35,6 +35,9 @@ pub const A = @import("A.zig");
 pub const Use = @import("Use.zig");
 pub const Image = @import("Image.zig");
 pub const Defs = @import("Defs.zig");
+pub const Symbol = @import("Symbol.zig");
+pub const Switch = @import("Switch.zig");
+pub const ForeignObject = @import("ForeignObject.zig");
 pub const Geometry = @import("Geometry.zig");
 
 const Graphics = @This();
@@ -51,6 +54,9 @@ pub const Type = union(enum) {
     use: *Use,
     image: *Image,
     defs: *Defs,
+    symbol: *Symbol,
+    switch_element: *Switch,
+    foreign_object: *ForeignObject,
     geometry: *Geometry,
 };
 
@@ -109,8 +115,9 @@ pub fn getBBox(self: *Graphics, options_: ?BoundingBoxOptions, frame: *Frame) !*
             defer path.deinit(frame.local_arena);
             bounds = path.bounds(.{});
         },
+        .foreign_object => |foreign_object| bounds = try foreign_object.getBounds(frame),
         .g, .a, .svg => try accumulateChildren(self, .{}, &bounds, frame),
-        .defs, .use, .image => return error.InvalidStateError,
+        .defs, .symbol, .switch_element, .use, .image => return error.InvalidStateError,
     }
     if (bounds.isEmpty()) return DOMRect.create(.{}, frame._factory);
     return DOMRect.create(.{
@@ -122,13 +129,30 @@ pub fn getBBox(self: *Graphics, options_: ?BoundingBoxOptions, frame: *Frame) !*
 }
 
 fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathData.Bounds, frame: *Frame) !void {
-    var child = parent.asNode().firstChild();
-    while (child) |node| : (child = node.nextSibling()) {
+    const Cursor = struct {
+        next: ?*Node,
+        matrix: PathData.Matrix,
+    };
+    var cursors: std.ArrayList(Cursor) = .empty;
+    try cursors.append(frame.local_arena, .{
+        .next = parent.asNode().firstChild(),
+        .matrix = matrix,
+    });
+
+    while (cursors.items.len != 0) {
+        const cursor = &cursors.items[cursors.items.len - 1];
+        const node = cursor.next orelse {
+            _ = cursors.pop();
+            continue;
+        };
+        cursor.next = node.nextSibling();
+        const parent_matrix = cursor.matrix;
+
         const element = node.is(Element) orelse continue;
         if (element._namespace != .svg) continue;
         const svg = element.as(SvgElement);
         const graphics = svg.is(Graphics) orelse continue;
-        const child_matrix = matrix.multiply(transformMatrix(element));
+        const child_matrix = parent_matrix.multiply(transformMatrix(element));
 
         switch (graphics._type) {
             .geometry => |geometry| {
@@ -136,9 +160,28 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
                 defer path.deinit(frame.local_arena);
                 bounds.merge(path.bounds(child_matrix));
             },
-            .g, .a => try accumulateChildren(graphics, child_matrix, bounds, frame),
-            .defs => {},
-            .svg, .use, .image => return error.InvalidStateError,
+            .foreign_object => |foreign_object| {
+                const child_bounds = try foreign_object.getBounds(frame);
+                if (!child_bounds.isEmpty()) {
+                    var foreign_path: PathData.Path = .{};
+                    defer foreign_path.deinit(frame.local_arena);
+                    const top_left = PathData.Point{ .x = child_bounds.min_x, .y = child_bounds.min_y };
+                    const top_right = PathData.Point{ .x = child_bounds.max_x, .y = child_bounds.min_y };
+                    const bottom_right = PathData.Point{ .x = child_bounds.max_x, .y = child_bounds.max_y };
+                    const bottom_left = PathData.Point{ .x = child_bounds.min_x, .y = child_bounds.max_y };
+                    try foreign_path.appendLine(top_left, top_right, frame.local_arena);
+                    try foreign_path.appendLine(top_right, bottom_right, frame.local_arena);
+                    try foreign_path.appendLine(bottom_right, bottom_left, frame.local_arena);
+                    try foreign_path.appendLine(bottom_left, top_left, frame.local_arena);
+                    bounds.merge(foreign_path.bounds(child_matrix));
+                }
+            },
+            .g, .a => try cursors.append(frame.local_arena, .{
+                .next = graphics.asNode().firstChild(),
+                .matrix = child_matrix,
+            }),
+            .defs, .symbol => {},
+            .svg, .switch_element, .use, .image => return error.InvalidStateError,
         }
     }
 }

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=root width="200" height="100">
+  <title id=title>Accessible title</title>
+  <desc id=desc>Long description</desc>
+  <metadata id=metadata><entry>value</entry></metadata>
+  <view id=view></view>
+  <symbol id=symbol><rect width="5" height="5"></rect></symbol>
+  <switch id=switch requiredExtensions="urn:svg"><circle r="2"></circle></switch>
+  <g id=container>
+    <foreignObject id=foreign x="10" y="20" width="30" height="40" transform="translate(5 6)">
+      <div>HTML content</div>
+    </foreignObject>
+  </g>
+</svg>
+
+<script id=structuralIdentities>
+{
+  testing.expectEqual(true, $('#symbol') instanceof SVGSymbolElement);
+  testing.expectEqual(true, $('#symbol') instanceof SVGGraphicsElement);
+  testing.expectEqual(true, $('#switch') instanceof SVGSwitchElement);
+  testing.expectEqual(true, $('#switch') instanceof SVGGraphicsElement);
+  testing.expectEqual(true, $('#foreign') instanceof SVGForeignObjectElement);
+  testing.expectEqual(true, $('#foreign') instanceof SVGGraphicsElement);
+
+  testing.expectEqual(true, $('#view') instanceof SVGViewElement);
+  testing.expectEqual(true, $('#view') instanceof SVGElement);
+  testing.expectEqual(false, $('#view') instanceof SVGGraphicsElement);
+  testing.expectEqual(true, $('#title') instanceof SVGTitleElement);
+  testing.expectEqual(true, $('#desc') instanceof SVGDescElement);
+  testing.expectEqual(true, $('#metadata') instanceof SVGMetadataElement);
+  testing.expectEqual($('#title'), document.querySelector('svg title'));
+  testing.expectEqual('Accessible title', $('#title').textContent);
+  testing.expectEqual('Long description', $('#desc').textContent);
+
+  testing.expectEqual(true, document.createElementNS('http://www.w3.org/2000/svg', 'symbol') instanceof SVGSymbolElement);
+  testing.expectEqual(false, document.createElementNS('http://www.w3.org/2000/svg', 'Symbol') instanceof SVGSymbolElement);
+}
+</script>
+
+<script id=foreignObjectGeometry>
+{
+  const foreign = $('#foreign');
+  testing.expectEqual(true, foreign.x instanceof SVGAnimatedLength);
+  testing.expectEqual(true, foreign.x === foreign.x);
+  testing.expectEqual(10, foreign.x.baseVal.value);
+  testing.expectEqual(40, foreign.height.baseVal.value);
+  foreign.width.baseVal.value = 35;
+  testing.expectEqual('35', foreign.getAttribute('width'));
+  testing.expectEqual(35, foreign.width.animVal.value);
+  testing.expectError('NoModificationAllowedError', () => { foreign.width.animVal.value = 1; });
+
+  let box = foreign.getBBox();
+  testing.expectEqual(10, box.x);
+  testing.expectEqual(20, box.y);
+  testing.expectEqual(35, box.width);
+  testing.expectEqual(40, box.height);
+
+  // The element's own transform is excluded from its box but included in its
+  // parent's box.
+  box = $('#container').getBBox();
+  testing.expectEqual(15, box.x);
+  testing.expectEqual(26, box.y);
+  testing.expectEqual(35, box.width);
+  testing.expectEqual(40, box.height);
+
+  foreign.setAttribute('width', '-1');
+  testing.expectEqual(0, foreign.getBBox().width);
+}
+</script>
+
+<script id=explicitStructuralBoundaries>
+{
+  testing.expectError('InvalidStateError', () => $('#symbol').getBBox());
+  testing.expectError('InvalidStateError', () => $('#switch').getBBox());
+  testing.expectEqual(true, $('#switch').requiredExtensions instanceof SVGStringList);
+  testing.expectEqual('urn:svg', $('#switch').requiredExtensions.getItem(0));
+}
+</script>
+
+<script id=deepGroupBounds>
+{
+  const namespace = 'http://www.w3.org/2000/svg';
+  const outer = document.createElementNS(namespace, 'g');
+  let parent = outer;
+  for (let i = 0; i < 512; i++) {
+    const group = document.createElementNS(namespace, 'g');
+    parent.appendChild(group);
+    parent = group;
+  }
+  const rect = document.createElementNS(namespace, 'rect');
+  rect.setAttribute('x', '3');
+  rect.setAttribute('y', '4');
+  rect.setAttribute('width', '5');
+  rect.setAttribute('height', '6');
+  parent.appendChild(rect);
+  $('#root').appendChild(outer);
+
+  const box = outer.getBBox();
+  testing.expectEqual(3, box.x);
+  testing.expectEqual(4, box.y);
+  testing.expectEqual(5, box.width);
+  testing.expectEqual(6, box.height);
+}
+</script>
