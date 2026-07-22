@@ -194,6 +194,7 @@ pub const Remembered = struct {
     effort: ?Config.Effort = null,
     verbosity: ?Config.AgentVerbosity = null,
     stream: ?bool = null,
+    search_engine: ?lp.tools.SearchEngine = null,
 };
 
 pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
@@ -278,6 +279,13 @@ pub fn resolveStream(remembered: ?Remembered) bool {
     return true;
 }
 
+/// Precedence: remembered `.lp-agent.zon` value > default (auto). No CLI
+/// flag — the REPL `/searchEngine` command sets and persists it.
+pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.SearchEngine {
+    if (remembered) |r| if (r.search_engine) |e| return e;
+    return .auto;
+}
+
 pub const ReconciledModel = union(enum) {
     /// Owned by the allocator passed to reconcileModel.
     use: []u8,
@@ -346,6 +354,18 @@ test "parseRemembered: stream field round-trips" {
     const remembered = parseRemembered(testing.allocator, ".{ .model = \"m\", .stream = false }").?;
     defer std.zon.parse.free(testing.allocator, remembered);
     try testing.expect(remembered.stream == false);
+}
+
+test "parseRemembered: search_engine field round-trips" {
+    const remembered = parseRemembered(testing.allocator, ".{ .model = \"m\", .search_engine = .brave }").?;
+    defer std.zon.parse.free(testing.allocator, remembered);
+    try testing.expect(remembered.search_engine == .brave);
+}
+
+test "resolveSearchEngine: default auto, remembered wins" {
+    try testing.expect(resolveSearchEngine(null) == .auto);
+    try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = null }) == .auto);
+    try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = .duckduckgo }) == .duckduckgo);
 }
 
 test "resolveStream: default on, remembered wins" {

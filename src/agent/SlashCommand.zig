@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! REPL-only meta slash commands (`/help`, `/quit`, `/verbosity`, `/effort`,
-//! `/stream`, `/usage`, `/model`, `/provider`). Not tool slash commands — handled by
+//! `/stream`, `/usage`, `/model`, `/provider`, `/searchEngine`). Not tool slash commands — handled by
 //! `Agent.handleMeta`, never reaching the recorder. Tool slash-command schema
 //! primitives live in `lp.Schema`; import that directly.
 
@@ -46,7 +46,7 @@ pub const MetaCommand = struct {
 
     /// Dispatched by `Agent.handleMeta` via an exhaustive switch, so a new meta
     /// command is a compile error until it's wired up there too.
-    const Tag = enum { help, quit, verbosity, effort, stream, usage, clear, reset, save, load, model, provider };
+    const Tag = enum { help, quit, verbosity, effort, stream, usage, clear, reset, save, load, model, provider, searchEngine };
 };
 
 const tagNames = Config.tagNames;
@@ -65,6 +65,7 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .load, .name = "load", .hint = "<path>", .values = &.{}, .description = "Load and run a script from disk" },
     .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model" },
     .{ .tag = .provider, .name = "provider", .hint = "[name|null]", .values = &.{}, .description = "Change the provider, or 'null' to disable the LLM" },
+    .{ .tag = .searchEngine, .name = "searchEngine", .hint = tagHint(browser_tools.SearchEngine), .values = tagNames(browser_tools.SearchEngine), .description = "Change the web search engine" },
 };
 
 /// Derived from `Command.LlmCommand` — name and description both come from the
