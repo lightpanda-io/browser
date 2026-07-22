@@ -28,7 +28,7 @@ const Frame = @import("../Frame.zig");
 const Location = @This();
 
 _url: *URL,
-_rc: lp.RC(u32) = .{},
+_rc: lp.RC = .{},
 
 pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
     const url = try URL.init(raw_url, null, &frame.js.execution);

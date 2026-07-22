@@ -40,7 +40,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const WebSocket = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _exec: *const Execution,
 _proto: *EventTarget,
 _arena: Allocator,

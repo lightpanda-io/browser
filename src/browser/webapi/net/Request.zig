@@ -36,7 +36,7 @@ const Allocator = std.mem.Allocator;
 
 const Request = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _url: [:0]const u8,
 _method: http.Method,
 _headers: ?*Headers,

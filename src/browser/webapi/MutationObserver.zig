@@ -39,7 +39,7 @@ pub fn registerTypes() []const type {
 
 const MutationObserver = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _callback: js.Function.Global,
 _observing: std.ArrayList(Observing) = .{},
@@ -357,7 +357,7 @@ pub fn deliverRecords(self: *MutationObserver, frame: *Frame) !void {
 }
 
 pub const MutationRecord = struct {
-    _rc: lp.RC(u8) = .{},
+    _rc: lp.RC = .{},
     _type: Type,
     _target: *Node,
     _arena: Allocator,

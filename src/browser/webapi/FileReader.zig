@@ -33,7 +33,7 @@ const Allocator = std.mem.Allocator;
 /// https://developer.mozilla.org/en-US/docs/Web/API/FileReader
 const FileReader = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _exec: *Execution,
 _proto: *EventTarget,
 _arena: Allocator,

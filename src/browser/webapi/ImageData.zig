@@ -28,7 +28,7 @@ const Execution = js.Execution;
 /// https://developer.mozilla.org/en-US/docs/Web/API/ImageData/ImageData
 const ImageData = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _width: u32,
 _height: u32,
 _data: js.ArrayBufferRef(.uint8_clamped).Global,

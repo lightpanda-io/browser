@@ -41,7 +41,7 @@ pub fn registerTypes() []const type {
 
 const URLSearchParams = @This();
 
-_rc: lp.RC(u8) = .{},
+_rc: lp.RC = .{},
 _arena: Allocator,
 _params: KeyValueList,
 

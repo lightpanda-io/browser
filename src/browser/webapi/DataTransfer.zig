@@ -50,7 +50,7 @@ pub fn registerTypes() []const type {
 _arena: Allocator,
 // Refcounted so the GC weak-finalizer (or page teardown) releases the pooled
 // arena exactly once; mirrors Blob's lifecycle.
-_rc: lp.RC(u32) = .{},
+_rc: lp.RC = .{},
 _items: std.ArrayList(*DataTransferItem) = .{},
 _item_list: *DataTransferItemList,
 // FileList lives on the factory slab and is frame-tracked, so each File ref it

@@ -34,7 +34,7 @@ const PlayState = enum {
     finished,
 };
 
-_rc: lp.RC(u32) = .{},
+_rc: lp.RC = .{},
 _frame: *Frame,
 _arena: Allocator,
 

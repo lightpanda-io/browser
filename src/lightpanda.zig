@@ -329,42 +329,42 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
 const rc_canary: u32 = 0x52434E54;
 const rc_poison: u32 = 0xDEADC0DE;
 
-// Reference counting helper
-pub fn RC(comptime T: type) type {
-    return struct {
-        _refs: std.atomic.Value(T) = .init(0),
-        _canary: u32 = rc_canary,
+// Reference counting helper. The count is a u32: a u8 silently wrapped at 256
+// concurrent refs (e.g. hundreds of live iterators on one URLSearchParams),
+// causing a premature deinit and a poisoned "release overflow" crash.
+pub const RC = struct {
+    _refs: std.atomic.Value(u32) = .init(0),
+    _canary: u32 = rc_canary,
 
-        pub fn init(refs: T) @This() {
-            return .{ ._refs = .init(refs) };
-        }
+    pub fn init(refs: u32) RC {
+        return .{ ._refs = .init(refs) };
+    }
 
-        pub fn acquire(self: *@This()) void {
-            _ = self._refs.fetchAdd(1, .monotonic);
-        }
+    pub fn acquire(self: *RC) void {
+        _ = self._refs.fetchAdd(1, .monotonic);
+    }
 
-        pub fn release(self: *@This(), value: anytype, page: *Page) void {
-            const prev = self._refs.fetchSub(1, .acq_rel);
-            assert(prev > 0, "release overflow", .{
-                .type = @typeName(@TypeOf(value)),
-                .canary = self._canary, // rc_canary=live/accounting, rc_poison=double-release, else=reuse
-                .refs = prev,
-                .ptr = @intFromPtr(value),
-            });
-            if (prev == 1) {
-                // Mark dead before deinit frees this memory, so a stale
-                // weak-callback re-fire reads rc_poison instead of a
-                // misleadingly-intact canary.
-                self._canary = rc_poison;
-                value.deinit(page);
-            }
+    pub fn release(self: *RC, value: anytype, page: *Page) void {
+        const prev = self._refs.fetchSub(1, .acq_rel);
+        assert(prev > 0, "release overflow", .{
+            .type = @typeName(@TypeOf(value)),
+            .canary = self._canary, // rc_canary=live/accounting, rc_poison=double-release, else=reuse
+            .refs = prev,
+            .ptr = @intFromPtr(value),
+        });
+        if (prev == 1) {
+            // Mark dead before deinit frees this memory, so a stale
+            // weak-callback re-fire reads rc_poison instead of a
+            // misleadingly-intact canary.
+            self._canary = rc_poison;
+            value.deinit(page);
         }
+    }
 
-        pub fn format(self: @This(), writer: *std.Io.Writer) !void {
-            return writer.print("{d}", .{self._refs.load(.monotonic)});
-        }
-    };
-}
+    pub fn format(self: RC, writer: *std.Io.Writer) !void {
+        return writer.print("{d}", .{self._refs.load(.monotonic)});
+    }
+};
 
 const testing = @import("testing.zig");
 test "writeJsonEnvelope: null frame" {

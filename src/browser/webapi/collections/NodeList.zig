@@ -39,7 +39,7 @@ _data: union(enum) {
     radio_node_list: *RadioNodeList,
     name: NodeLive(.name),
 },
-_rc: lp.RC(u32) = .{},
+_rc: lp.RC = .{},
 
 pub fn deinit(self: *NodeList, page: *Page) void {
     switch (self._data) {
