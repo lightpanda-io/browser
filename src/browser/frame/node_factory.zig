@@ -905,6 +905,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     asUint("mask") => return createSvgElementT(frame, Element.Svg.Mask, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("rect") => return createSvgElementT(frame, Geometry.Rect, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("stop") => return createSvgElementT(frame, Element.Svg.Stop, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("text") => return createSvgElementT(frame, Graphics.TextContent.TextPositioning.Text, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("line") => return createSvgElementT(frame, Geometry.Line, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("path") => return createSvgElementT(frame, Geometry.Path, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("view") => return createSvgElementT(frame, Element.Svg.View, name, attribute_iterator, .{ ._proto = undefined }),
@@ -913,6 +914,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                 5 => switch (@as(u40, @bitCast(name[0..5].*))) {
                     asUint("image") => return createSvgElementT(frame, Graphics.Image, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("title") => return createSvgElementT(frame, Element.Svg.Title, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("tspan") => return createSvgElementT(frame, Graphics.TextContent.TextPositioning.TSpan, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(name[0..6].*))) {
@@ -932,6 +934,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     asUint("clipPath") => return createSvgElementT(frame, Element.Svg.ClipPath, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("metadata") => return createSvgElementT(frame, Element.Svg.Metadata, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("polyline") => return createSvgElementT(frame, Geometry.Polyline, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("textPath") => return createSvgElementT(frame, Graphics.TextContent.TextPath, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 13 => if (std.mem.eql(u8, name, "foreignObject")) {

@@ -65,6 +65,8 @@ pub const Kind = enum {
     pattern_y,
     pattern_width,
     pattern_height,
+    text_length,
+    text_path_start_offset,
 
     fn attributeName(self: Kind) lp.String {
         return switch (self) {
@@ -88,6 +90,8 @@ pub const Kind = enum {
             .marker_ref_y => comptime .wrap("refY"),
             .marker_width => comptime .wrap("markerWidth"),
             .marker_height => comptime .wrap("markerHeight"),
+            .text_length => comptime .wrap("textLength"),
+            .text_path_start_offset => comptime .wrap("startOffset"),
         };
     }
 
@@ -109,6 +113,7 @@ pub const Kind = enum {
             .mask_width,
             .pattern_x,
             .pattern_width,
+            .text_length,
             => .horizontal,
             .y,
             .height,
@@ -127,7 +132,7 @@ pub const Kind = enum {
             .pattern_y,
             .pattern_height,
             => .vertical,
-            .r, .radial_gradient_r, .radial_gradient_fr => .unspecified,
+            .r, .radial_gradient_r, .radial_gradient_fr, .text_path_start_offset => .unspecified,
         };
     }
 

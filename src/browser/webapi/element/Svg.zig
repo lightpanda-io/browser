@@ -81,6 +81,13 @@ pub fn getTag(self: *const Svg) Element.Tag {
             // No dedicated Element.Tag values; tag-name matching falls back
             // to _tag_name, like it does for generic SVG elements.
             .a, .use, .image, .defs, .symbol, .switch_element, .foreign_object => .unknown,
+            .text_content => |content| switch (content._type) {
+                .positioning => |positioning| switch (positioning._type) {
+                    .text => .text,
+                    .tspan => .unknown,
+                },
+                .text_path => .unknown,
+            },
             .geometry => |geo| switch (geo._type) {
                 .rect => .rect,
                 .circle => .circle,
