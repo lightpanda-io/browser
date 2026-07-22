@@ -339,9 +339,9 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     // so that we can cleanup on Page teardown if v8 doesn't finalize.
                     errdefer _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
                     finalizer.acquire_ref(finalizer_ptr_id);
-                    finalizer_gop.value_ptr.* = try self.createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
+                    finalizer_gop.value_ptr.* = createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
                 }
-                const fc = finalizer_gop.value_ptr.*;
+                const fc = finalizer_gop.value_ptr;
                 const browser = session.browser;
                 const identity_finalizer = try browser.fc_identity_pool.create();
                 identity_finalizer.* = .{
@@ -1316,7 +1316,7 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                     }
 
                     const finalizer_ptr_id = identity_finalizer.finalizer_ptr_id;
-                    const fc = page.finalizer_callbacks.get(finalizer_ptr_id) orelse return;
+                    const fc = page.finalizer_callbacks.getPtr(finalizer_ptr_id) orelse return;
 
                     {
                         // Unlink this identity from the FC's intrusive list
@@ -1346,7 +1346,6 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                         // Remove from map before releaseRef to prevent address reuse issues.
                         _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
                         FT.releaseRef(@ptrFromInt(finalizer_ptr_id), page);
-                        page.releaseArena(fc.arena);
                     }
                 }
 
@@ -1601,8 +1600,6 @@ pub fn debugContextId(self: *const Local) i32 {
 }
 
 fn createFinalizerCallback(
-    self: *const Local,
-
     // Key in identity map
     // The most specific value (KeyboardEvent, not Event)
     resolved_ptr_id: usize,
@@ -1611,21 +1608,12 @@ fn createFinalizerCallback(
     // What actually gets acquired / released / deinit
     finalizer_ptr_id: usize,
     release_ref: *const fn (ptr_id: usize, page: *Page) void,
-) !*FinalizerCallback {
-    const page = self.ctx.page;
-
-    const arena = try page.getArena(.tiny, "FinalizerCallback");
-    errdefer page.releaseArena(arena);
-
-    const fc = try arena.create(FinalizerCallback);
-    fc.* = .{
-        .page = page,
-        .arena = arena,
+) FinalizerCallback {
+    return .{
         .release_ref = release_ref,
         .resolved_ptr_id = resolved_ptr_id,
         .finalizer_ptr_id = finalizer_ptr_id,
     };
-    return fc;
 }
 
 // Encapsulates a Local and a HandleScope. When we're going from V8->Zig
