@@ -183,7 +183,14 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     const x509_store = blk: {
         if (config.tlsVerifyHost()) {
-            break :blk try createX509Store(allocator, config);
+            break :blk try prepareX509Store(allocator, config);
+        }
+        // Verification is off, so the store is never consulted — but still
+        // take ownership of a user-supplied one so the flags compose and
+        // nothing leaks.
+        if (config.customCertStore()) |store| {
+            log.warn(.app, "custom CA ignored", .{ .arg = "--ca-cert, --ca-path", .reason = "TLS verification disabled" });
+            break :blk store;
         }
         break :blk crypto.X509_STORE_new() orelse {
             return error.FailedToCreateX509Store;
@@ -730,64 +737,38 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     return conn;
 }
 
-const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{FailedToCreateX509Store};
-
 /// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
 /// Allocations made through passed `allocator` are freed before this function returns.
-pub fn createX509Store(allocator: Allocator, config: *const Config) CreateX509StoreError!*crypto.X509_STORE {
+pub fn prepareX509Store(allocator: Allocator, config: *const Config) !*crypto.X509_STORE {
+    // A user-supplied store replaces system trust entirely.
+    if (config.customCertStore()) |store| {
+        return store;
+    }
+    return storeFromSystemCA(allocator);
+}
+
+/// Creates an X509_STORE from system root CA.
+fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
-    // Hashed directories register a lazy lookup: their certs are read on
-    // demand during verification and never appear in the store's object
-    // stack, so they must be tracked separately from `getCertCount`.
-    var loaded_hashed_dir = false;
-    // Report back if no certificates loaded.
+
+    var count: usize = 0;
     defer {
-        if (!loaded_hashed_dir and crypto.getCertCount(store) == 0) {
+        if (count == 0) {
             log.warn(.app, "No certificates loaded", .{});
         }
     }
 
-    load_custom_ca: switch (config.mode) {
-        // Load custom CA if provided.
-        inline .serve, .fetch, .mcp, .agent => |opts| {
-            const directories = opts.ca_path.items;
-            const files = opts.ca_cert.items;
-            // Don't try loading custom CA.
-            const no_custom_ca = directories.len == 0 and files.len == 0;
-            if (no_custom_ca) {
-                break :load_custom_ca;
-            }
-
-            for (directories) |ca_path| {
-                if (crypto.X509_STORE_load_locations(store, null, ca_path) == 1) {
-                    loaded_hashed_dir = true;
-                } else {
-                    log.warn(.app, "Invalid CA path", .{ .ca_path = ca_path });
-                }
-            }
-
-            for (files) |ca_cert| {
-                if (crypto.X509_STORE_load_locations(store, ca_cert, null) != 1) {
-                    log.warn(.app, "Invalid CA cert", .{ .ca_cert = ca_cert });
-                }
-            }
-        },
-        .help => unreachable,
-        .version => {}, // Don't load custom CA for version command.
-    }
-
     switch (comptime builtin.os.tag) {
         .linux, .openbsd, .netbsd, .freebsd => blk: {
-            // Iterate over known directories.
-            inline for ([_][:0]const u8{
+            // Iterate over known directories; this may or may not succeed.
+            const cwd = std.fs.cwd();
+            inline for ([_][]const u8{
                 "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
                 "/etc/pki/tls/certs", // Fedora/RHEL
-            }) |dir| {
-                if (loadHashedDirectory(store, dir)) {
-                    loaded_hashed_dir = true;
-                    break :blk;
-                }
+            }) |dir_path| {
+                count += try loadFromDirectory(allocator, store, cwd, dir_path);
+                if (count > 0) break :blk;
             }
 
             // Iterate over known files.
@@ -800,7 +781,8 @@ pub fn createX509Store(allocator: Allocator, config: *const Config) CreateX509St
                 "/etc/ssl/cert.pem", // Alpine, *BSD
             }) |file| {
                 if (crypto.X509_STORE_load_locations(store, file, null) == 1) {
-                    break :blk;
+                    count += 1;
+                    if (count > 0) break :blk;
                 }
             }
         },
@@ -826,6 +808,7 @@ pub fn createX509Store(allocator: Allocator, config: *const Config) CreateX509St
                 if (result != 1) {
                     log.warn(.app, "Failed to add X509 cert to store", .{});
                 }
+                count += 1;
             }
         },
     }
@@ -833,9 +816,27 @@ pub fn createX509Store(allocator: Allocator, config: *const Config) CreateX509St
     return store;
 }
 
-fn loadHashedDirectory(store: *crypto.X509_STORE, dir: [:0]const u8) bool {
-    if (Config.isHashedDirectory(dir)) {
-        return crypto.X509_STORE_load_locations(store, null, dir.ptr) == 1;
+/// Loads certificates from given `path`; returning how many CA loaded.
+fn loadFromDirectory(
+    allocator: Allocator,
+    store: *crypto.X509_STORE,
+    cwd: std.fs.Dir,
+    dir_path: []const u8,
+) Allocator.Error!usize {
+    var count: usize = 0;
+    var dir = cwd.openDir(dir_path, .{ .iterate = true }) catch return count;
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (it.next() catch return count) |entry| {
+        if (entry.kind != .file and entry.kind != .sym_link) continue;
+
+        const path = try std.fs.path.joinZ(allocator, &.{ dir_path, entry.name });
+        defer allocator.free(path);
+
+        if (crypto.X509_STORE_load_locations(store, path, null) == 1) {
+            count += 1;
+        }
     }
-    return false;
+    return count;
 }
