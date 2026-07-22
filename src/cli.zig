@@ -498,7 +498,7 @@ pub fn Builder(comptime commands: anytype) type {
                 return *const fn (Allocator, *std.process.Args.Iterator, *std.ArrayList(T)) anyerror!void;
             }
 
-            return *const fn (Allocator, *std.process.ArgIterator, *T) anyerror!void;
+            return *const fn (Allocator, *std.process.Args.Iterator, *T) anyerror!void;
         }
 
         /// Turns a snake_case string to kebab-case in comptime.

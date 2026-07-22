@@ -762,7 +762,7 @@ fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
     switch (comptime builtin.os.tag) {
         .linux, .openbsd, .netbsd, .freebsd => blk: {
             // Iterate over known directories; this may or may not succeed.
-            const cwd = std.fs.cwd();
+            const cwd = std.Io.Dir.cwd();
             inline for ([_][]const u8{
                 "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
                 "/etc/pki/tls/certs", // Fedora/RHEL
@@ -820,15 +820,15 @@ fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
 fn loadFromDirectory(
     allocator: Allocator,
     store: *crypto.X509_STORE,
-    cwd: std.fs.Dir,
+    cwd: std.Io.Dir,
     dir_path: []const u8,
 ) Allocator.Error!usize {
     var count: usize = 0;
-    var dir = cwd.openDir(dir_path, .{ .iterate = true }) catch return count;
-    defer dir.close();
+    var dir = cwd.openDir(lp.io, dir_path, .{ .iterate = true }) catch return count;
+    defer dir.close(lp.io);
 
     var it = dir.iterate();
-    while (it.next() catch return count) |entry| {
+    while (it.next(lp.io) catch return count) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
 
         const path = try std.fs.path.joinZ(allocator, &.{ dir_path, entry.name });

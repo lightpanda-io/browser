@@ -74,7 +74,7 @@ fn logFilterScopesValidator(allocator: Allocator, args: *std.process.Args.Iterat
     }
 }
 
-fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator, target: *?log.Level) !void {
+fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?log.Level) !void {
     const str = args.next() orelse return error.MissingArgument;
     if (std.mem.eql(u8, str, "error")) {
         target.* = .err;
@@ -116,7 +116,7 @@ const Cert = struct {
 
 fn caCertValidator(
     _: Allocator,
-    args: *std.process.ArgIterator,
+    args: *std.process.Args.Iterator,
     cert: *Cert,
 ) !void {
     const file_name = args.next() orelse return error.MissingArgument;
@@ -132,16 +132,16 @@ fn caCertValidator(
 
 fn caPathValidator(
     allocator: Allocator,
-    args: *std.process.ArgIterator,
+    args: *std.process.Args.Iterator,
     cert: *Cert,
 ) !void {
     const dir_path = args.next() orelse return error.MissingArgument;
 
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
+    var dir = std.Io.Dir.cwd().openDir(lp.io, dir_path, .{ .iterate = true }) catch {
         log.fatal(.app, "Invalid CA path", .{ .arg = "--ca-path", .value = dir_path });
         return error.InvalidArgument;
     };
-    defer dir.close();
+    defer dir.close(lp.io);
 
     const store = try cert.getOrCreate();
     errdefer cert.deinit();
@@ -152,7 +152,7 @@ fn caPathValidator(
     // what was actually loaded.
     const count_before = cert.count;
     var it = dir.iterate();
-    while (it.next() catch {
+    while (it.next(lp.io) catch {
         log.fatal(.app, "Invalid CA path", .{ .arg = "--ca-path", .value = dir_path });
         return error.InvalidArgument;
     }) |entry| {
@@ -231,7 +231,7 @@ const CommonOptions = .{
     },
 };
 
-fn dumpValidator(_: Allocator, args: *std.process.ArgIterator, target: *?DumpFormat) !void {
+fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?DumpFormat) !void {
     // Peek next argument.
     var peek_args = args.*;
     if (peek_args.next()) |next_arg| {
@@ -273,13 +273,13 @@ pub const AgentVerbosity = enum {
     }
 };
 
-fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator, target: *?[:0]const u8) !void {
+fn waitScriptFileValidator(allocator: Allocator, args: *std.process.Args.Iterator, target: *?[:0]const u8) !void {
     const path = args.next() orelse {
         log.fatal(.app, "missing argument value", .{ .arg = "--wait-script-file" });
         return error.InvalidArgument;
     };
 
-    target.* = std.fs.cwd().readFileAllocOptions(allocator, path, 1024 * 1024, null, .of(u8), 0) catch |err| {
+    target.* = std.Io.Dir.cwd().readFileAllocOptions(lp.io, path, allocator, .limited(1024 * 1024), .of(u8), 0) catch |err| {
         log.fatal(.app, "failed to read file", .{ .arg = "--wait-script-file", .path = path, .err = err });
         return error.InvalidArgument;
     };
