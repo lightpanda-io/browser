@@ -132,6 +132,13 @@ fn configureSocket(socket: posix.socket_t) !void {
         log.warn(.app, "TCP_KEEPCNT", .{ .err = err });
         return err;
     };
+
+    if (builtin.os.tag == .linux) {
+        posix.setsockopt(socket, posix.IPPROTO.TCP, std.os.linux.TCP.USER_TIMEOUT, &std.mem.toBytes(Config.CDP_TCP_USER_TIMEOUT_MS)) catch |err| {
+            log.warn(.app, "TCP_USER_TIMEOUT", .{ .err = err });
+            return err;
+        };
+    }
 }
 
 fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
