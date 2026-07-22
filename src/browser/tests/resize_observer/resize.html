@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id="anchor">anchor</div>
+
+<script id="style_change_delivers" type=module>
+  // Changing an element's size delivers a fresh notification.
+  const state = await testing.async();
+  const t = document.createElement('div');
+  t.style.width = '100px';
+  t.style.height = '50px';
+  document.body.appendChild(t);
+
+  let step = 0;
+  const observer = new ResizeObserver((entries) => {
+    step += 1;
+    if (step === 1) {
+      testing.expectEqual(100, entries[0].contentRect.width);
+      t.style.width = '25px';
+    } else if (step === 2) {
+      testing.expectEqual(25, entries[0].contentRect.width);
+      observer.disconnect();
+      state.resolve();
+    }
+  });
+  observer.observe(t);
+
+  await state.done(() => {
+    testing.expectEqual(2, step);
+  });
+</script>
+
+<script id="disconnect_from_dom" type=module>
+  // Removing the target from the DOM collapses its size to 0 and notifies.
+  const state = await testing.async();
+  const t = document.createElement('div');
+  t.style.width = '80px';
+  document.body.appendChild(t);
+
+  const widths = [];
+  const observer = new ResizeObserver((entries) => {
+    widths.push(entries[0].contentRect.width);
+    if (widths.length === 1) {
+      t.remove();
+    } else if (widths.length === 2) {
+      observer.disconnect();
+      state.resolve();
+    }
+  });
+  observer.observe(t);
+
+  await state.done(() => {
+    testing.expectEqual(80, widths[0]);
+    testing.expectEqual(0, widths[1]);
+  });
+</script>
