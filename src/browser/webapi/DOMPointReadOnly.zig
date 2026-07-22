@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
 const DOMPoint = @import("DOMPoint.zig");
 const Matrix = @import("DOMMatrixReadOnly.zig");
@@ -38,6 +39,15 @@ _x: f64,
 _y: f64,
 _z: f64,
 _w: f64,
+_attachment: ?Attachment = null,
+
+pub const Coordinate = enum { x, y, z, w };
+
+pub const Attachment = struct {
+    owner: *anyopaque,
+    read_only: bool,
+    mutate: *const fn (*anyopaque, *DOMPointReadOnly, Coordinate, f64, *Frame) anyerror!void,
+};
 
 pub const Type = union(enum) {
     generic,
@@ -130,6 +140,41 @@ pub fn getZ(self: *const DOMPointReadOnly) f64 {
 }
 pub fn getW(self: *const DOMPointReadOnly) f64 {
     return self._w;
+}
+
+pub fn setCoordinate(self: *DOMPointReadOnly, coordinate: Coordinate, value: f64, frame: *Frame) !void {
+    if (self._attachment) |attachment| {
+        if (attachment.read_only) return error.NoModificationAllowed;
+        return attachment.mutate(attachment.owner, self, coordinate, value, frame);
+    }
+    self.setCoordinateRaw(coordinate, value);
+}
+
+pub fn setCoordinateRaw(self: *DOMPointReadOnly, coordinate: Coordinate, value: f64) void {
+    switch (coordinate) {
+        .x => self._x = value,
+        .y => self._y = value,
+        .z => self._z = value,
+        .w => self._w = value,
+    }
+}
+
+pub fn attach(self: *DOMPointReadOnly, attachment: Attachment) void {
+    self._attachment = attachment;
+}
+
+pub fn detach(self: *DOMPointReadOnly, owner: *anyopaque) void {
+    const attachment = self._attachment orelse return;
+    if (attachment.owner == owner) self._attachment = null;
+}
+
+pub fn isAttached(self: *const DOMPointReadOnly) bool {
+    return self._attachment != null;
+}
+
+pub fn isAttachedTo(self: *const DOMPointReadOnly, owner: *anyopaque) bool {
+    const attachment = self._attachment orelse return false;
+    return attachment.owner == owner;
 }
 
 pub fn toJSON(self: *const DOMPointReadOnly) struct {
