@@ -49,6 +49,7 @@ pub const ContentTypeEnum = enum {
     application_json,
     unknown,
     other,
+    other_xml,
 };
 
 pub const ContentType = union(ContentTypeEnum) {
@@ -68,6 +69,7 @@ pub const ContentType = union(ContentTypeEnum) {
     // A valid but unrecognized type/subtype. Keeping it would require some
     // memory management of the input. Nothing needs it right now, so why bother.
     other: void,
+    other_xml: void, // i.e. application/xml or */*+xml
 };
 
 pub fn contentTypeString(mime: *const Mime) []const u8 {
@@ -346,6 +348,13 @@ pub fn isHTML(self: *const Mime) bool {
     return self.content_type == .text_html;
 }
 
+pub fn isXML(self: *const Mime) bool {
+    return switch (self.content_type) {
+        .text_xml, .other_xml => true,
+        else => false,
+    };
+}
+
 pub fn isText(mime: *const Mime) bool {
     return switch (mime.content_type) {
         .text_xml, .text_html, .text_javascript, .text_plain, .text_css, .text_markdown => true,
@@ -378,9 +387,11 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
         @"image/webp",
 
         @"application/json",
+        @"application/xml",
     }, type_name)) |known_type| {
         const ct: ContentType = switch (known_type) {
             .@"text/xml" => .{ .text_xml = {} },
+            .@"application/xml" => .{ .other_xml = {} },
             .@"text/html" => .{ .text_html = {} },
             .@"text/javascript", .@"application/javascript", .@"application/x-javascript" => .{ .text_javascript = {} },
             .@"text/plain" => .{ .text_plain = {} },
@@ -406,6 +417,10 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
     }
     if (sub_type.len == 0 or validType(sub_type) == false) {
         return error.Invalid;
+    }
+
+    if (std.mem.endsWith(u8, type_name, "+xml")) {
+        return .{ .{ .other_xml = {} }, attribute_start };
     }
 
     return .{ .{ .other = {} }, attribute_start };
@@ -895,6 +910,28 @@ test "Mime: isHTML" {
     try assert(false, "text/htm"); // htm not html
     try assert(false, "text/plain");
     try assert(false, "over/9000");
+}
+
+test "Mime: isXML" {
+    defer testing.reset();
+
+    const assert = struct {
+        fn assert(expected: bool, input: []const u8) !void {
+            const mutable_input = try testing.arena_allocator.dupe(u8, input);
+            var mime = try Mime.parse(mutable_input);
+            try testing.expectEqual(expected, mime.isXML());
+        }
+    }.assert;
+    try assert(true, "text/xml");
+    try assert(true, "TEXT/XML; charset=utf-8");
+    try assert(true, "application/xml");
+    try assert(true, "image/svg+xml");
+    try assert(true, "application/xhtml+xml");
+    try assert(true, "application/rss+xml;charset=utf-8");
+    try assert(false, "text/html");
+    try assert(false, "application/json");
+    try assert(false, "application/xmlfoo");
+    try assert(false, "text/xm");
 }
 
 test "Mime: sniff" {
