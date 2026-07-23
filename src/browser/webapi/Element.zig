@@ -484,7 +484,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     var fragment: ?*Node = null;
     if (html.len > 0) {
         const frag = (try Node.DocumentFragment.init(frame)).asNode();
-        try frame.parseHtmlAsChildren(frag, html);
+        try Frame.parse.htmlAsChildren(frame, frag, html);
         fragment = frag;
     }
 

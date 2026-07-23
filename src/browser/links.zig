@@ -94,7 +94,7 @@ fn testLinks(html: []const u8) ![]Link {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try frame.parseHtmlAsChildren(div.asNode(), html);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
     return collectLinks(frame.call_arena, div.asNode(), frame);
 }
