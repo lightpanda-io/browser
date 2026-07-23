@@ -75,7 +75,7 @@ pub const Migrations = struct {
             }
             try conn.exec(
                 "insert into migrations (id, applied_at) values ($1, $2)",
-                .{ @as(i64, @intCast(i + 1)), std.Io.Clock.now(.boot, lp.io).toSeconds() },
+                .{ @as(i64, @intCast(i + 1)), std.Io.Clock.now(.real, lp.io).toSeconds() },
             );
         }
 
