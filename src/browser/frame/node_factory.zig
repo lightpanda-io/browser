@@ -890,37 +890,37 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
             // SVG tag names are case-sensitive; no lowering before matching.
             switch (name.len) {
                 1 => switch (name[0]) {
-                    'g' => return createSvgGraphicsElementT(frame, Graphics.G, name, attribute_iterator),
-                    'a' => return createSvgGraphicsElementT(frame, Graphics.A, name, attribute_iterator),
+                    'g' => return createSvgElementT(frame, Graphics.G, name, attribute_iterator, .{ ._proto = undefined }),
+                    'a' => return createSvgElementT(frame, Graphics.A, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 3 => switch (@as(u24, @bitCast(name[0..3].*))) {
-                    asUint("svg") => return createSvgGraphicsElementT(frame, Graphics.Svg, name, attribute_iterator),
-                    asUint("use") => return createSvgGraphicsElementT(frame, Graphics.Use, name, attribute_iterator),
+                    asUint("svg") => return createSvgElementT(frame, Graphics.Svg, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("use") => return createSvgElementT(frame, Graphics.Use, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 4 => switch (@as(u32, @bitCast(name[0..4].*))) {
-                    asUint("defs") => return createSvgGraphicsElementT(frame, Graphics.Defs, name, attribute_iterator),
-                    asUint("rect") => return createSvgGeometryElementT(frame, Geometry.Rect, name, attribute_iterator),
-                    asUint("line") => return createSvgGeometryElementT(frame, Geometry.Line, name, attribute_iterator),
-                    asUint("path") => return createSvgGeometryElementT(frame, Geometry.Path, name, attribute_iterator),
+                    asUint("defs") => return createSvgElementT(frame, Graphics.Defs, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("rect") => return createSvgElementT(frame, Geometry.Rect, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("line") => return createSvgElementT(frame, Geometry.Line, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("path") => return createSvgElementT(frame, Geometry.Path, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 5 => switch (@as(u40, @bitCast(name[0..5].*))) {
-                    asUint("image") => return createSvgGraphicsElementT(frame, Graphics.Image, name, attribute_iterator),
+                    asUint("image") => return createSvgElementT(frame, Graphics.Image, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(name[0..6].*))) {
-                    asUint("circle") => return createSvgGeometryElementT(frame, Geometry.Circle, name, attribute_iterator),
+                    asUint("circle") => return createSvgElementT(frame, Geometry.Circle, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 7 => switch (@as(u56, @bitCast(name[0..7].*))) {
-                    asUint("ellipse") => return createSvgGeometryElementT(frame, Geometry.Ellipse, name, attribute_iterator),
-                    asUint("polygon") => return createSvgGeometryElementT(frame, Geometry.Polygon, name, attribute_iterator),
+                    asUint("ellipse") => return createSvgElementT(frame, Geometry.Ellipse, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("polygon") => return createSvgElementT(frame, Geometry.Polygon, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 8 => switch (@as(u64, @bitCast(name[0..8].*))) {
-                    asUint("polyline") => return createSvgGeometryElementT(frame, Geometry.Polyline, name, attribute_iterator),
+                    asUint("polyline") => return createSvgElementT(frame, Geometry.Polyline, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 else => {},
@@ -967,16 +967,6 @@ fn createHtmlMediaElementT(frame: *Frame, comptime E: type, namespace: Element.N
 
 fn createSvgElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype, svg_element: E) !*Node {
     const svg_element_ptr = try frame._factory.svgElement(tag_name, svg_element);
-    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
-}
-
-fn createSvgGraphicsElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype) !*Node {
-    const svg_element_ptr = try frame._factory.svgGraphicsElement(tag_name, E{ ._proto = undefined });
-    return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
-}
-
-fn createSvgGeometryElementT(frame: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype) !*Node {
-    const svg_element_ptr = try frame._factory.svgGeometryElement(tag_name, E{ ._proto = undefined });
     return initSvgElement(frame, svg_element_ptr.asElement(), attribute_iterator);
 }
 

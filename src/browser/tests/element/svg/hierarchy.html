@@ -48,8 +48,10 @@
   testing.expectEqual(true, root instanceof SVGGraphicsElement);
   testing.expectEqual(true, root instanceof SVGElement);
   testing.expectEqual(true, root instanceof Element);
+  testing.expectEqual(true, root instanceof Node);
   testing.expectEqual(false, root instanceof SVGGeometryElement);
   testing.expectEqual('svg', root.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', root.namespaceURI);
 
   const rect = $('#rect1');
   testing.expectEqual(true, rect instanceof SVGRectElement);
@@ -75,8 +77,10 @@
   // Elements without a dedicated type stay generic, but are still SVGElement.
   const filter = $('#filter1');
   testing.expectEqual(true, filter instanceof SVGElement);
+  testing.expectEqual(true, filter instanceof Element);
   testing.expectEqual(false, filter instanceof SVGGraphicsElement);
   testing.expectEqual('filter', filter.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', filter.namespaceURI);
 }
 </script>
 
@@ -85,13 +89,20 @@
   const NS = 'http://www.w3.org/2000/svg';
   const rect = document.createElementNS(NS, 'rect');
   testing.expectEqual(true, rect instanceof SVGRectElement);
+  testing.expectEqual(true, rect instanceof SVGGeometryElement);
+  testing.expectEqual(true, rect instanceof SVGGraphicsElement);
+  testing.expectEqual(true, rect instanceof SVGElement);
+  testing.expectEqual(true, rect instanceof Element);
   testing.expectEqual('rect', rect.tagName);
+  testing.expectEqual(NS, rect.namespaceURI);
 
   // SVG tag names are case-sensitive: 'RECT' isn't a rect element.
   const notRect = document.createElementNS(NS, 'RECT');
   testing.expectEqual(false, notRect instanceof SVGRectElement);
   testing.expectEqual(true, notRect instanceof SVGElement);
+  testing.expectEqual(true, notRect instanceof Element);
   testing.expectEqual('RECT', notRect.tagName);
+  testing.expectEqual(NS, notRect.namespaceURI);
 
   const svg = document.createElementNS(NS, 'svg');
   testing.expectEqual(true, svg instanceof SVGSVGElement);
