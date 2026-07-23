@@ -1,0 +1,1 @@
+fetch("/echo_method");

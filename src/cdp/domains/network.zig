@@ -312,6 +312,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
         .requestId = &id.toRequestId(msg.transfer),
+        .timestamp = timestamp(.monotonic),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -327,7 +328,16 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     const transfer = msg.transfer;
     const req = &transfer.req;
     const frame_id = req.frame_id;
-    const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
+    // Worker requests use their WorkerGlobalScope id rather than a document
+    // frame id. They still belong to this page session and must be visible to
+    // Network clients; otherwise responseReceived/loadingFinished are emitted
+    // without the corresponding requestWillBeSent event and CDP clients drop
+    // the whole request. A worker has no document URL, so use its request URL
+    // when the id does not resolve to a document frame.
+    const document_url = if (bc.session.findFrameByFrameId(frame_id)) |frame|
+        frame.url
+    else
+        req.url;
 
     // Modify request with extra CDP headers. Use set (replace by name) so a
     // caller-supplied header overrides a built-in default of the same name
@@ -342,7 +352,7 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
         .type = req.resource_type.string(),
-        .documentURL = frame.url,
+        .documentURL = document_url,
         .request = RequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
@@ -365,6 +375,8 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
         .frameId = &id.toFrameId(req.frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
+        .timestamp = timestamp(.monotonic),
+        .type = req.resource_type.string(),
         .response = ResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
@@ -376,6 +388,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     const session_id = bc.session_id orelse return;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
+        .timestamp = timestamp(.monotonic),
         .encodedDataLength = msg.content_length,
     }, .{ .session_id = session_id });
 }
@@ -428,6 +441,16 @@ pub const RequestWriter = struct {
         {
             try jws.objectField("hasPostData");
             try jws.write(request.body != null);
+        }
+
+        {
+            try jws.objectField("initialPriority");
+            try jws.write("High");
+        }
+
+        {
+            try jws.objectField("referrerPolicy");
+            try jws.write("strict-origin-when-cross-origin");
         }
 
         {
@@ -500,6 +523,17 @@ const ResponseWriter = struct {
         }
 
         {
+            try jws.objectField("connectionReused");
+            try jws.write(false);
+            try jws.objectField("connectionId");
+            try jws.write(0);
+            try jws.objectField("encodedDataLength");
+            try jws.write(transfer._cdp_content_length);
+            try jws.objectField("securityState");
+            try jws.write("unknown");
+        }
+
+        {
             try jws.objectField("timing");
             try jws.write(.{
                 // TODO: fix
@@ -516,6 +550,12 @@ const ResponseWriter = struct {
                 .sendStart = -1,
                 .sslEnd = -1,
                 .sslStart = -1,
+                .workerStart = -1,
+                .workerReady = -1,
+                .workerFetchStart = -1,
+                .workerRespondWithSettled = -1,
+                .pushStart = -1,
+                .pushEnd = -1,
             });
         }
 
@@ -980,4 +1020,58 @@ test "cdp.Network: configured CDP ignores setCacheDisabled" {
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
     try testing.expect(client.cache == &cache);
+}
+
+test "cdp.Network: worker requests emit network events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp = ctx.cdp();
+    _ = try cdp.createBrowserContext();
+    var bc = &cdp.browser_context.?;
+    bc.id = "BID-NW";
+    bc.session_id = "SID-NW";
+    bc.target_id = "TID-NW-0000000".*;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const fixture_root = "http://127.0.0.1:9582/src/browser/tests/cdp/";
+    const worker_url = fixture_root ++ "worker_network.js";
+    const api_url = "http://127.0.0.1:9582/echo_method";
+    const page = try bc.session.createPage();
+    try page.navigate(fixture_root ++ "worker_network.html", .{});
+    try testing.waitForPage(bc);
+
+    try ctx.expectSentEvent("Network.requestWillBeSent", .{
+        .documentURL = worker_url,
+        .type = "Script",
+        .request = .{
+            .url = worker_url,
+            .initialPriority = "High",
+            .referrerPolicy = "strict-origin-when-cross-origin",
+        },
+    }, .{ .session_id = "SID-NW" });
+    try ctx.expectSentEvent("Network.responseReceived", .{
+        .type = "Script",
+        .response = .{
+            .url = worker_url,
+            .connectionReused = false,
+            .connectionId = 0,
+            .securityState = "unknown",
+            .timing = .{
+                .workerStart = -1,
+                .workerReady = -1,
+                .workerFetchStart = -1,
+                .workerRespondWithSettled = -1,
+                .pushStart = -1,
+                .pushEnd = -1,
+            },
+        },
+    }, .{ .session_id = "SID-NW" });
+    try ctx.expectSentEvent("Network.requestWillBeSent", .{
+        .documentURL = api_url,
+        .type = "Fetch",
+        .request = .{ .url = api_url },
+    }, .{ .session_id = "SID-NW" });
 }
