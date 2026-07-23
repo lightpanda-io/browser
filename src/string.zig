@@ -412,6 +412,16 @@ pub fn truncateUtf8(bytes: []const u8, max_bytes: usize) []const u8 {
     return bytes[0..i];
 }
 
+/// Returns `bytes` unchanged when under `max_bytes`; a truncated-and-marked
+/// copy in `allocator` otherwise (the bare prefix on OOM — never an error).
+pub fn capBytes(allocator: std.mem.Allocator, bytes: []const u8, max_bytes: usize) []const u8 {
+    if (bytes.len <= max_bytes) return bytes;
+    const prefix = truncateUtf8(bytes, max_bytes);
+    var suffix_buf: [64]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{bytes.len}) catch return prefix;
+    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
+}
+
 // Discriminatory type that signals the bridge to use arena instead of call_arena
 // Use this for strings that need to persist beyond the current call
 // The caller can unwrap and store just the underlying .str field
@@ -456,6 +466,21 @@ test "truncateUtf8" {
     // Invalid leader byte counts as one byte so the loop terminates.
     try testing.expectEqual("\xFF", truncateUtf8("\xFFx", 1));
     try testing.expectEqual("\xFFx", truncateUtf8("\xFFx", 2));
+}
+
+test "capBytes: passes through when under cap" {
+    const out = capBytes(testing.allocator, "short", 16);
+    try testing.expectEqual("short", out);
+}
+
+test "capBytes: appends a marker, keeps valid UTF-8" {
+    const ta = testing.allocator;
+    // 3-byte codepoint '한' (0xED 0x95 0x9C) straddling the cap.
+    const out = capBytes(ta, "aaaaaaa한bbb", 8);
+    defer ta.free(out);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(out));
+    try std.testing.expect(std.mem.startsWith(u8, out, "aaaaaaa"));
+    try std.testing.expect(std.mem.indexOf(u8, out, "truncated, original 13 bytes") != null);
 }
 
 test "String" {

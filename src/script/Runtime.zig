@@ -42,12 +42,17 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// clear the live spinner so script output starts on a clean line instead
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
-/// When set, every console line writes here — stderr-bound methods included.
-console_sink: ?*std.Io.Writer = null,
+/// When set, receives each `console.*` line — stderr-bound methods included —
+/// instead of the process stdout/stderr write, for embedders (MCP) whose
+/// stdout is a protocol stream. The observer still fires first.
+console_sink: ?ConsoleSink = null,
 /// In-flight async `goto`s; emptied before each `runSource` returns.
 pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
 run_timer: std.Io.Timestamp,
+/// Per-run tally of extract field emptiness. call_arena-backed, so it is
+/// re-zeroed alongside the arena reset at the top of `runSource`.
+extract_stats: std.ArrayList(ExtractStat) = .empty,
 
 /// The runtime installs exactly the recorded browser tools as script
 /// primitives — the same set the recorder writes — so every recorded call
@@ -81,7 +86,7 @@ const PendingGoto = struct {
     }
 };
 
-const ConsoleMethod = enum {
+pub const ConsoleMethod = enum {
     debug,
     @"error",
     info,
@@ -104,6 +109,11 @@ const ConsoleData = struct {
 pub const ConsoleObserver = struct {
     context: *anyopaque,
     notify: *const fn (context: *anyopaque) void,
+};
+
+pub const ConsoleSink = struct {
+    context: *anyopaque,
+    write: *const fn (context: *anyopaque, method: ConsoleMethod, line: []const u8) void,
 };
 
 pub const InitError = error{
@@ -264,11 +274,81 @@ fn setObjectProperty(
     if (!out.has_value or !out.value) return error.RuntimeInitFailed;
 }
 
-/// Run script source in the agent context. Returns null on success; on a JS
-/// compile/runtime exception returns a formatted error allocated in this
-/// runtime's call arena and valid until deinit or the next run.
-pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
+/// The value a script ran to completion with.
+pub const Completion = struct {
+    /// Display form of the returned value: objects and arrays as JSON.
+    text: []const u8,
+    /// True when the value carries no data — null, "", or an array/object all
+    /// of whose members are empty.
+    empty: bool,
+};
+
+/// One top-level field of a parsed extract result: an object yields an entry
+/// per key, an array (a `__root` schema) the single null field. Slices
+/// reference the parsed value.
+pub const ExtractField = struct {
+    field: ?[]const u8,
+    empty: bool,
+};
+
+pub fn classifyExtractFields(arena: std.mem.Allocator, result: std.json.Value) error{OutOfMemory}![]const ExtractField {
+    switch (result) {
+        .array => {
+            const out = try arena.alloc(ExtractField, 1);
+            out[0] = .{ .field = null, .empty = jsonIsEmpty(result) };
+            return out;
+        },
+        .object => |obj| {
+            const out = try arena.alloc(ExtractField, obj.count());
+            var it = obj.iterator();
+            var i: usize = 0;
+            while (it.next()) |entry| : (i += 1) {
+                out[i] = .{
+                    .field = entry.key_ptr.*,
+                    .empty = jsonIsEmpty(entry.value_ptr.*),
+                };
+            }
+            return out;
+        },
+        else => return &.{},
+    }
+}
+
+pub fn fieldEql(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a) |x| return b != null and std.mem.eql(u8, x, b.?);
+    return b == null;
+}
+
+/// One extract schema's top-level result field, tallied across the run.
+pub const ExtractStat = struct {
+    /// Schema JSON as the script wrote it (array schemas are shown without the
+    /// internal `__root` wrapper).
+    schema: []const u8,
+    /// Top-level field of the result; null when the schema itself is a list.
+    field: ?[]const u8,
+    calls: u32,
+    empty: u32,
+};
+
+/// A script run's outcome. `err` is a formatted JS compile/runtime exception.
+/// All slices are allocated in this runtime's call arena and valid until
+/// deinit or the next run.
+pub const RunResult = union(enum) {
+    ok: Ok,
+    err: []const u8,
+};
+
+pub const Ok = struct {
+    /// The value the script returned; null when it returned `undefined`.
+    completion: ?Completion,
+    /// Per-(schema, field) extract tallies for the run.
+    extract_stats: []const ExtractStat,
+};
+
+/// Run script source in the agent context.
+pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!RunResult {
     _ = self.call_arena.reset(.retain_capacity);
+    self.extract_stats = .empty;
     self.run_timer = .now(lp.io, .boot);
 
     var hs: lp.js.HandleScope = undefined;
@@ -276,7 +356,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     defer hs.deinit();
 
     const context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.context, self.env.isolate.handle) orelse
-        return try self.dupeError("agent script context is not available"));
+        return .{ .err = try self.dupeError("agent script context is not available") });
     v8.v8__Context__Enter(context);
     defer v8.v8__Context__Exit(context);
 
@@ -291,7 +371,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     // trailing expression no longer auto-prints — `await` and a script
     // completion value are mutually exclusive in JS.)
     const wrapped = std.fmt.allocPrint(self.call_arena.allocator(), "(async () => {{\n{s}\n}})()", .{source}) catch
-        return try self.dupeError("out of memory");
+        return .{ .err = try self.dupeError("out of memory") };
     const script_source = self.env.isolate.initStringHandle(wrapped);
 
     var origin: v8.ScriptOrigin = undefined;
@@ -306,27 +386,33 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
         &compiler_source,
         v8.kNoCompileOptions,
         v8.kNoCacheNoReason,
-    ) orelse return try self.formatCaught(context, &try_catch, "compile failed");
+    ) orelse return .{ .err = try self.formatCaught(context, &try_catch, "compile failed") };
 
-    const completion = v8.v8__Script__Run(script, context) orelse
-        return try self.formatCaught(context, &try_catch, "script failed");
+    const completion_promise = v8.v8__Script__Run(script, context) orelse
+        return .{ .err = try self.formatCaught(context, &try_catch, "script failed") };
 
     // `goto` only *starts* a navigation, so the root Promise is usually still
     // pending; drive the in-flight ones to completion.
-    const root: *const v8.Promise = @ptrCast(completion);
+    const root: *const v8.Promise = @ptrCast(completion_promise);
     self.driveAsync(context, &try_catch, root);
     if (v8.v8__TryCatch__HasCaught(&try_catch)) {
-        return try self.formatCaught(context, &try_catch, "script failed");
+        return .{ .err = try self.formatCaught(context, &try_catch, "script failed") };
     }
 
     // A still-pending root means the script awaited something we can't settle
     // (no async navigation is in flight) — stay silent.
     const state = promiseState(root);
-    if (state != v8.kFulfilled and state != v8.kRejected) return null;
-    const completion_value = v8.v8__Promise__Result(root) orelse return null;
-    if (state == v8.kRejected) return try self.formatRejection(context, completion_value);
-    self.printCompletion(context, completion_value);
-    return null;
+    if (state != v8.kFulfilled and state != v8.kRejected) return self.runOk(null);
+    const completion_value = v8.v8__Promise__Result(root) orelse return self.runOk(null);
+    if (state == v8.kRejected) return .{ .err = try self.formatRejection(context, completion_value) };
+    return self.runOk(try self.completion(context, completion_value));
+}
+
+fn runOk(self: *Runtime, completion_value: ?Completion) RunResult {
+    return .{ .ok = .{
+        .completion = completion_value,
+        .extract_stats = self.extract_stats.items,
+    } };
 }
 
 /// `v8__Promise__State` returns the `c_uint` `PromiseState`, but the `k*`
@@ -355,15 +441,55 @@ fn errorMessage(self: *Runtime, context: *const v8.Context, reason: *const v8.Va
 }
 
 /// Echo a script's output — the value it `return`s from the async wrapper, so a
-/// script ending in `return page.extract(...)` prints without `console.log`.
-/// `undefined` — no `return`, or a bare trailing expression — stays silent.
-fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) void {
-    if (v8.v8__Value__IsUndefined(value)) return;
+/// script ending in `return page.extract(...)` prints without `console.log` —
+/// and hand it back to the caller. `undefined` — no `return`, or a bare
+/// trailing expression — stays silent and yields null, as does a value whose
+/// display form can't be computed.
+fn completion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) error{OutOfMemory}!?Completion {
+    if (v8.v8__Value__IsUndefined(value)) return null;
 
-    var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
-    defer arena_state.deinit();
-    const text = self.displayString(arena_state.allocator(), context, value) catch return;
+    const arena = self.call_arena.allocator();
+    const text = self.displayString(arena, context, value) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.JsException => return null,
+    };
     self.writeConsoleLine(.log, text);
+    return .{ .text = text, .empty = self.isEmptyValue(value, text) };
+}
+
+/// Whether a completion value carries no data. `text` is the value's display
+/// form: JSON for objects and arrays (a fallback coercion — function, circular
+/// reference — won't parse and counts as data), plain coercion otherwise.
+fn isEmptyValue(self: *Runtime, value: *const v8.Value, text: []const u8) bool {
+    if (v8.v8__Value__IsNull(value)) return true;
+    if (v8.v8__Value__IsObject(value)) {
+        // Scratch arena: the parse tree is as large as the extract output and
+        // must not sit in the call arena until the next run.
+        var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
+        defer arena_state.deinit();
+        const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena_state.allocator(), text, .{}) catch return false;
+        return jsonIsEmpty(parsed);
+    }
+    return text.len == 0;
+}
+
+/// Null, "", and arrays/objects all of whose members are empty carry no data;
+/// numbers and booleans always do (0 and false are answers).
+pub fn jsonIsEmpty(value: std.json.Value) bool {
+    switch (value) {
+        .null => return true,
+        .string => |s| return s.len == 0,
+        .array => |a| {
+            for (a.items) |item| if (!jsonIsEmpty(item)) return false;
+            return true;
+        },
+        .object => |o| {
+            var it = o.iterator();
+            while (it.next()) |entry| if (!jsonIsEmpty(entry.value_ptr.*)) return false;
+            return true;
+        },
+        else => return false,
+    }
 }
 
 /// Unwrap a callback's info handle and its `External` payload (the `*T` passed
@@ -465,15 +591,54 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     switch (result) {
         .ok => |text| switch (tool) {
             .extract => {
-                const normalized = self.normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
+                const normalized = normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
                     error.OutOfMemory => return self.throwError("out of memory"),
                 };
-                self.setReturnJson(context, info, normalized);
+                // Recording happens after `callTool` returns, so a re-entrant
+                // extract (via a `toJSON` during argument marshalling) tallies
+                // inner-then-outer; the map is append-only. Failed extracts
+                // threw above and are intentionally not counted.
+                if (normalized.parsed) |parsed| {
+                    self.recordExtractStats(arena, args, parsed) catch
+                        return self.throwError("out of memory");
+                }
+                self.setReturnJson(context, info, normalized.text);
             },
             else => self.setReturnString(info, text),
         },
         .fail => |message| self.throwError(message),
     }
+}
+
+/// Tally each top-level field of an extract result; callers judge what the
+/// tallies mean.
+fn recordExtractStats(self: *Runtime, arena: std.mem.Allocator, args: ?std.json.Value, result: std.json.Value) error{OutOfMemory}!void {
+    const raw_schema = switch ((args orelse return).object.get("schema") orelse return) {
+        .string => |s| s,
+        else => return,
+    };
+    const schema = stripExtractSchemaRoot(raw_schema);
+    for (try classifyExtractFields(arena, result)) |fc| {
+        try self.bumpExtractStat(schema, fc.field, fc.empty);
+    }
+}
+
+fn bumpExtractStat(self: *Runtime, schema: []const u8, field: ?[]const u8, is_empty: bool) error{OutOfMemory}!void {
+    for (self.extract_stats.items) |*stat| {
+        if (!std.mem.eql(u8, stat.schema, schema)) continue;
+        if (!fieldEql(stat.field, field)) continue;
+        stat.calls += 1;
+        if (is_empty) stat.empty += 1;
+        return;
+    }
+    // `schema`/`field` live in invoke's per-call arena; the stat outlives it.
+    const arena = self.call_arena.allocator();
+    try self.extract_stats.append(arena, .{
+        .schema = try arena.dupe(u8, schema),
+        .field = if (field) |f| try arena.dupe(u8, f) else null,
+        .calls = 1,
+        .empty = @intFromBool(is_empty),
+    });
 }
 
 /// Start the receiver Page's navigation and return a *pending* Promise of the
@@ -687,10 +852,7 @@ fn invokeConsole(self: *Runtime, method: ConsoleMethod, info: *const v8.Function
 
 fn writeConsoleLine(self: *Runtime, method: ConsoleMethod, line: []const u8) void {
     if (self.console_observer) |obs| obs.notify(obs.context);
-    if (self.console_sink) |sink| {
-        sink.print("{s}\n", .{line}) catch {};
-        return;
-    }
+    if (self.console_sink) |sink| return sink.write(sink.context, method, line);
     var buf: [4096]u8 = undefined;
     const file = if (method.writesStderr()) std.Io.File.stderr() else std.Io.File.stdout();
     var writer = file.writerStreaming(lp.io, &buf);
@@ -817,10 +979,24 @@ fn extractSchemaString(arena: std.mem.Allocator, value: std.json.Value) error{Ou
     };
 }
 
+/// Key under which `normalizeExtractSchemaString` nests an array schema so the
+/// walker always receives an object; wrap, unwrap, and display-strip must agree.
+const extract_root_key = "__root";
+
 fn normalizeExtractSchemaString(arena: std.mem.Allocator, schema: []const u8) error{OutOfMemory}![]const u8 {
     const trimmed = std.mem.trim(u8, schema, &std.ascii.whitespace);
     if (trimmed.len == 0 or trimmed[0] != '[') return schema;
-    return try std.fmt.allocPrint(arena, "{{\"__root\":{s}}}", .{schema});
+    return try std.fmt.allocPrint(arena, "{{\"" ++ extract_root_key ++ "\":{s}}}", .{schema});
+}
+
+/// Inverse of the wrapping above, for showing an array schema the way the
+/// script wrote it.
+fn stripExtractSchemaRoot(schema: []const u8) []const u8 {
+    const prefix = "{\"" ++ extract_root_key ++ "\":";
+    if (std.mem.startsWith(u8, schema, prefix) and std.mem.endsWith(u8, schema, "}")) {
+        return schema[prefix.len .. schema.len - 1];
+    }
+    return schema;
 }
 
 fn argJson(
@@ -854,19 +1030,27 @@ fn objectWith(arena: std.mem.Allocator, key: []const u8, value: std.json.Value) 
 
 /// Unwraps only the `__root` sentinel that `normalizeExtractSchemaString` injects
 /// for array schemas; a real single-field object schema keeps its shape.
-fn normalizeExtractReturnJson(_: *Runtime, arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}![]const u8 {
-    if (value.len == 0) return value;
+/// `parsed` is the post-unwrap value, null when the raw text is empty or not
+/// JSON — the stats hook classifies it without a second parse.
+fn normalizeExtractReturnJson(arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}!struct {
+    text: []const u8,
+    parsed: ?std.json.Value,
+} {
+    if (value.len == 0) return .{ .text = value, .parsed = null };
 
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, value, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return value,
+        else => return .{ .text = value, .parsed = null },
     };
-    if (parsed != .object or parsed.object.count() != 1) return value;
-
-    var it = parsed.object.iterator();
-    const entry = it.next() orelse return value;
-    if (!std.mem.eql(u8, entry.key_ptr.*, "__root")) return value;
-    return try std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{});
+    if (parsed == .object and parsed.object.count() == 1) {
+        var it = parsed.object.iterator();
+        const entry = it.next().?;
+        if (std.mem.eql(u8, entry.key_ptr.*, extract_root_key)) return .{
+            .text = try std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{}),
+            .parsed = entry.value_ptr.*,
+        };
+    }
+    return .{ .text = value, .parsed = parsed };
 }
 
 fn setReturnString(self: *Runtime, info: *const v8.FunctionCallbackInfo, value: []const u8) void {
@@ -985,10 +1169,18 @@ fn dupeError(self: *Runtime, message: []const u8) RunError![]const u8 {
 const testing = @import("../testing.zig");
 
 fn runTestScript(runtime: *Runtime, source: []const u8) !void {
-    if (try runtime.runSource(source, "agent-runtime-test.js")) |message| {
-        std.debug.print("agent script failed:\n{s}\n", .{message});
-        return error.AgentScriptFailed;
+    switch (try runtime.runSource(source, "agent-runtime-test.js")) {
+        .ok => {},
+        .err => |message| {
+            std.debug.print("agent script failed:\n{s}\n", .{message});
+            return error.AgentScriptFailed;
+        },
     }
+}
+
+fn appendConsoleLine(context: *anyopaque, _: ConsoleMethod, line: []const u8) void {
+    const aw: *std.Io.Writer.Allocating = @ptrCast(@alignCast(context));
+    aw.writer.print("{s}\n", .{line}) catch {};
 }
 
 fn terminateRuntimeSoon(runtime: *Runtime) void {
@@ -1027,7 +1219,7 @@ test "agent script runtime: Page must be called with new" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    const message = (try runtime.runSource("Page();", "agent-runtime-page-no-new.js")).?;
+    const message = (try runtime.runSource("Page();", "agent-runtime-page-no-new.js")).err;
     try testing.expect(std.mem.indexOf(u8, message, "must be called with new") != null);
 }
 
@@ -1043,7 +1235,7 @@ test "agent script runtime: a method on an un-navigated page errors" {
     const message = (try runtime.runSource(
         \\const page = new Page();
         \\page.extract({ btn: "#btn" });
-    , "agent-runtime-not-navigated.js")).?;
+    , "agent-runtime-not-navigated.js")).err;
     try testing.expect(std.mem.indexOf(u8, message, "not navigated") != null);
 }
 
@@ -1064,7 +1256,7 @@ test "agent script runtime: page.close stales the handle" {
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\page.close();
         \\page.extract({ btn: "#btn" });
-    , "agent-runtime-close.js")).?;
+    , "agent-runtime-close.js")).err;
     try testing.expect(std.mem.indexOf(u8, message, "closed") != null);
 }
 
@@ -1337,7 +1529,7 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
 
     var sink: std.Io.Writer.Allocating = .init(testing.allocator);
     defer sink.deinit();
-    runtime.console_sink = &sink.writer;
+    runtime.console_sink = .{ .context = @ptrCast(&sink), .write = appendConsoleLine };
 
     try runTestScript(runtime,
         \\const page = new Page();
@@ -1367,8 +1559,8 @@ test "agent script runtime: terminate interrupts local JavaScript" {
     defer runtime.cancelTerminate();
     defer thread.join();
 
-    const message = try runtime.runSource("while (true) {}", "agent-runtime-terminate-test.js");
-    try testing.expect(message != null);
+    const result = try runtime.runSource("while (true) {}", "agent-runtime-terminate-test.js");
+    try testing.expect(result == .err);
 }
 
 test "agent script runtime: agent variables persist and page globals are isolated" {
@@ -1427,7 +1619,7 @@ test "agent script runtime: console is available in agent context" {
 
     var sink: std.Io.Writer.Allocating = .init(testing.allocator);
     defer sink.deinit();
-    runtime.console_sink = &sink.writer;
+    runtime.console_sink = .{ .context = @ptrCast(&sink), .write = appendConsoleLine };
 
     try runTestScript(runtime,
         \\if (typeof console !== "object") throw new Error("missing console");
@@ -1435,6 +1627,36 @@ test "agent script runtime: console is available in agent context" {
         \\console.log("agent console ready");
     );
     try testing.expectString("agent console ready\n", sink.written());
+}
+
+test "agent script runtime: console sink captures lines instead of the process streams" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const Capture = struct {
+        buf: [256]u8 = undefined,
+        len: usize = 0,
+
+        fn write(context: *anyopaque, method: ConsoleMethod, line: []const u8) void {
+            const capture: *@This() = @ptrCast(@alignCast(context));
+            const out = std.fmt.bufPrint(capture.buf[capture.len..], "{s}:{s}\n", .{ @tagName(method), line }) catch return;
+            capture.len += out.len;
+        }
+    };
+    var capture: Capture = .{};
+    runtime.console_sink = .{ .context = @ptrCast(&capture), .write = Capture.write };
+
+    try runTestScript(runtime,
+        \\console.log("hello", 42);
+        \\console.warn("careful");
+    );
+
+    try testing.expectString("log:hello 42\nwarn:careful\n", capture.buf[0..capture.len]);
 }
 
 test "agent script runtime: tool errors throw and stop execution" {
@@ -1453,7 +1675,7 @@ test "agent script runtime: tool errors throw and stop execution" {
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\page.click({ selector: "#does-not-exist" });
         \\globalThis.marker = "after";
-    , "agent-runtime-failure.js")).?;
+    , "agent-runtime-failure.js")).err;
 
     try testing.expect(std.mem.indexOf(u8, message, "click") != null or
         std.mem.indexOf(u8, message, "NodeNotFound") != null or
@@ -1508,7 +1730,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
     {
         const message = (try runtime.runSource(
             \\await new Page().goto("http://localhost:9582/src/browser/tests/mcp_actions.html", { url: "http://other" });
-        , "agent-runtime-conflict.js")).?;
+        , "agent-runtime-conflict.js")).err;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
 
@@ -1518,7 +1740,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
             \\const page = new Page();
             \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
             \\page.click("#btn", "#extra");
-        , "agent-runtime-arity.js")).?;
+        , "agent-runtime-arity.js")).err;
         try testing.expect(std.mem.indexOf(u8, message, "invalid arguments") != null);
     }
 }
@@ -1534,7 +1756,7 @@ test "agent script runtime: top-level await runs in an async wrapper" {
 
     var sink: std.Io.Writer.Allocating = .init(testing.allocator);
     defer sink.deinit();
-    runtime.console_sink = &sink.writer;
+    runtime.console_sink = .{ .context = @ptrCast(&sink), .write = appendConsoleLine };
 
     // `await` on a non-goto promise resolves without touching the browser, and
     // a top-level `return` surfaces as the (otherwise un-echoed) result.
@@ -1544,4 +1766,87 @@ test "agent script runtime: top-level await runs in an async wrapper" {
         \\return x + 2;
     );
     try testing.expectString("42\n", sink.written());
+}
+
+test "agent script runtime: completion value emptiness" {
+    defer testing.reset();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const cases = [_]struct { source: []const u8, empty: bool }{
+        // The shapes a stale extract selector produces: an empty list, or rows
+        // whose every field missed.
+        .{ .source = "return [];", .empty = true },
+        .{ .source = "return {};", .empty = true },
+        .{ .source = "return null;", .empty = true },
+        .{ .source = "return { stories: [] };", .empty = true },
+        .{ .source = "return [{ id: null, title: \"\" }];", .empty = true },
+        .{ .source = "return [{ id: null, title: \"HN\" }];", .empty = false },
+        .{ .source = "return \"text\";", .empty = false },
+        .{ .source = "return 0;", .empty = false },
+        .{ .source = "return false;", .empty = false },
+    };
+    for (cases) |case| {
+        const result = try runtime.runSource(case.source, "agent-runtime-emptiness.js");
+        try testing.expectEqual(case.empty, result.ok.completion.?.empty);
+    }
+
+    // No `return` — nothing to classify, nothing to heal.
+    const silent = try runtime.runSource("const x = 1;", "agent-runtime-emptiness.js");
+    try testing.expectEqual(null, silent.ok.completion);
+}
+
+test "agent script runtime: extract stats tally list-field emptiness" {
+    defer testing.reset();
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    const result = try runtime.runSource(
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\page.extract({ items: [".no-such"] });
+        \\page.extract({ items: [".no-such"] });
+        \\page.extract({ btn: "#btn", buttons: ["button"] });
+        \\page.extract([".no-such-root"]);
+        \\const other = new Page();
+        \\await other.goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
+        \\page.extract({ sel: ["#sel0"] });
+        \\other.extract({ sel: ["#sel0"] });
+    , "agent-runtime-extract-stats.js");
+
+    const stats = result.ok.extract_stats;
+    try testing.expectEqual(5, stats.len);
+
+    try testing.expectString("items", stats[0].field.?);
+    try testing.expectEqual(2, stats[0].calls);
+    try testing.expectEqual(2, stats[0].empty);
+
+    try testing.expectString("btn", stats[1].field.?);
+    try testing.expectEqual(1, stats[1].calls);
+    try testing.expectEqual(0, stats[1].empty);
+
+    try testing.expectString("buttons", stats[2].field.?);
+    try testing.expectEqual(1, stats[2].calls);
+    try testing.expectEqual(0, stats[2].empty);
+
+    try testing.expectEqual(null, stats[3].field);
+    try testing.expectString("[\".no-such-root\"]", stats[3].schema);
+    try testing.expectEqual(1, stats[3].calls);
+    try testing.expectEqual(1, stats[3].empty);
+
+    try testing.expectString("sel", stats[4].field.?);
+    try testing.expectEqual(2, stats[4].calls);
+    try testing.expectEqual(1, stats[4].empty);
+
+    const rerun = try runtime.runSource("return 1;", "agent-runtime-extract-stats.js");
+    try testing.expectEqual(0, rerun.ok.extract_stats.len);
 }

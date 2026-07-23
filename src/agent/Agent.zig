@@ -29,6 +29,8 @@ const Command = lp.Command;
 const Schema = lp.Schema;
 const Recorder = lp.Recorder;
 const ScriptRuntime = lp.Runtime;
+const Baseline = lp.Baseline;
+
 const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
@@ -152,6 +154,7 @@ session: *lp.Session,
 node_registry: CDPNode.Registry,
 terminal: Terminal,
 save_buffer: Recorder,
+baseline: Baseline,
 save_path: ?[]u8,
 script_runtime_mutex: std.Io.Mutex = .init,
 active_script_runtime: ?*ScriptRuntime = null,
@@ -160,6 +163,7 @@ model: []u8,
 /// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
 effort: Config.Effort,
 script_file: ?[]const u8,
+heal: bool,
 one_shot_task: ?[]const u8,
 one_shot_save: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
@@ -225,6 +229,20 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
             return error.InvalidFilename;
         }
     }
+    if (opts.heal) {
+        if (opts.script_file == null) {
+            log.fatal(.app, "conflicting flags", .{
+                .hint = "--heal repairs a failing script run; pass a script positional",
+            });
+            return error.ConflictingFlags;
+        }
+        if (opts.no_llm) {
+            log.fatal(.app, "conflicting flags", .{
+                .hint = "--heal needs an LLM to repair the script; drop --no-llm",
+            });
+            return error.ConflictingFlags;
+        }
+    }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
     }
@@ -234,10 +252,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const is_one_shot = opts.task != null;
     const will_repl = !is_one_shot and opts.script_file == null;
+    // One-shot --task and --heal both need a model before any interaction.
+    const needs_llm_upfront = is_one_shot or opts.heal;
 
     // Load remembered selection up front so a saved null provider can flip the
     // REPL into basic mode before resolution. Pure script runs need nothing.
-    const remembered: ?settings.Remembered = if (will_repl or is_one_shot) settings.loadRemembered(allocator) else null;
+    const remembered: ?settings.Remembered = if (will_repl or needs_llm_upfront) settings.loadRemembered(allocator) else null;
     defer if (remembered) |r| std.zon.parse.free(allocator, r);
 
     // A remembered null provider means the user disabled the LLM via
@@ -250,7 +270,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // null provider. Without it the REPL accepts natural language, so an absent
     // API key would only surface at the first non-slash-command line — too late.
     // Pure JavaScript script runs stay allowed: no REPL, no LLM.
-    const requires_llm = is_one_shot or (will_repl and !opts.no_llm and !remembered_no_llm);
+    const requires_llm = needs_llm_upfront or (will_repl and !opts.no_llm and !remembered_no_llm);
 
     // Skip resolve when no client is wanted — else resolveCredentials prints
     // "No API key detected" for a run that does not need one.
@@ -331,12 +351,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .node_registry = .init(allocator),
         .terminal = .init(allocator, history_paths, verbosity, will_repl),
         .save_buffer = .init(allocator),
+        .baseline = .init(allocator),
         .save_path = null,
         .conversation = .init(allocator, opts.system_prompt orelse default_system_prompt),
         .model = model,
         .effort = effort,
         .stream_enabled = stream_enabled,
         .script_file = opts.script_file,
+        .heal = opts.heal,
         .one_shot_task = opts.task,
         .one_shot_save = opts.save,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
@@ -353,7 +375,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.startSession();
 
-    self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, lp.io, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ() }) else null;
+    self.ai_client = if (llm) |l| try zenai.provider.Client.init(lp.io, allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
@@ -374,6 +396,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 pub fn deinit(self: *Agent) void {
     self.terminal.uninstallLogSink();
     self.save_buffer.deinit();
+    self.baseline.deinit();
     if (self.save_path) |p| self.allocator.free(p);
     self.terminal.deinit();
     self.conversation.deinit();
@@ -401,6 +424,8 @@ fn startSession(self: *Agent) !void {
     self.session = try self.browser.newSession(self.notification);
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
     try self.session.enableConsoleCapture();
+    // Node IDs are session-scoped; drop them with the session they point into.
+    self.node_registry.reset();
 }
 
 // Compile-time constant; projected once per process to avoid rebuilding per call.
@@ -472,8 +497,14 @@ fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
 /// The side effects of `drainCancellation` without surfacing the error, for
 /// void callers (e.g. `/save` synthesis) that just need to clean up.
 fn resetAfterCancel(self: *Agent, baseline: usize) void {
-    self.endStreamedText();
+    self.clearCancelState();
     self.conversation.rollback(baseline);
+}
+
+/// Cancel cleanup that touches no conversation state, for turns whose message
+/// cleanup is owned elsewhere (meta-turns roll back via their own defer).
+fn clearCancelState(self: *Agent) void {
+    self.endStreamedText();
     self.browser.env.cancelTerminate();
     self.cancel_requested.store(false, .release);
     self.http_interrupt.reset();
@@ -539,6 +570,7 @@ pub fn run(self: *Agent) bool {
         return ok;
     }
     if (self.script_file) |path| {
+        if (self.heal) return self.runScriptWithHeal(path);
         return self.runScript(path);
     }
     self.runRepl();
@@ -787,6 +819,7 @@ fn handleUsage(self: *Agent) void {
 fn clearConversation(self: *Agent) void {
     self.conversation.rollback(0);
     self.save_buffer.reset();
+    self.baseline.reset();
     if (self.save_path) |p| self.allocator.free(p);
     self.save_path = null;
     self.total_usage = .{};
@@ -817,7 +850,54 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
         self.terminal.printError("usage: /load <path>", .{});
         return;
     }
-    _ = self.runScript(path);
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    while (true) {
+        // Nothing from a prior retry is read again.
+        _ = arena.reset(.retain_capacity);
+        const finding: ScriptError = switch (self.runAndJudge(arena.allocator(), path)) {
+            .fatal, .clean => return,
+            .broken => |f| f,
+        };
+        if (self.ai_client == null) return;
+        switch (promptHeal(path, finding.kind)) {
+            .no => return,
+            .retry => {},
+            .heal => {
+                _ = self.healLoop(arena.allocator(), path, finding);
+                return;
+            },
+        }
+    }
+}
+
+const HealChoice = enum { heal, retry, no };
+
+/// Defaults to no: healing spends tokens and its validation step resets the
+/// browser session. Retry is the antidote to a transient failure (a flaky
+/// page load) that would otherwise send a correct script to the model.
+fn promptHeal(path: []const u8, kind: ScriptError.Kind) HealChoice {
+    const symptom = switch (kind) {
+        .threw => "failed",
+        .empty => "ran but returned no data",
+        .dry_extracts => "ran but some extracts came back empty",
+    };
+    var header_buf: [256]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, "{s} {s}. Heal it with the model?", .{ path, symptom }) catch
+        "Script failed. Heal it with the model?";
+    const labels: []const [:0]const u8 = &.{
+        "heal — diagnose and fix, then validate in a fresh session (drops page/cookies like /reset)",
+        "retry — run the script again, in case the failure was transient (no tokens)",
+        "no — leave the script and session as they are",
+    };
+    // Blank line so the question doesn't run into the script's output dump.
+    std.debug.print("\n", .{});
+    const idx = picker.promptNumberedChoice(header, labels, 2) catch return .no;
+    return switch (idx) {
+        0 => .heal,
+        1 => .retry,
+        else => .no,
+    };
 }
 
 const api_keys_hint = settings.api_keys_hint;
@@ -968,7 +1048,7 @@ fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
 /// `owned_key` transfers ownership of an allocated `credentials.key` (Vertex
 /// gcloud token) on success; on error the caller still owns it.
 fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8) !void {
-    const new_client = try zenai.provider.Client.init(self.allocator, lp.io, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ() });
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ() });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
@@ -1060,7 +1140,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         null;
     defer if (new_save_path) |p| self.allocator.free(p);
 
-    save.writeContentFile(path, self.save_buffer.bytes(), mode) catch |err| {
+    save.writeContentFile(path, self.appendSessionBaseline(arena, self.save_buffer.bytes()), mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1072,6 +1152,14 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     const saved_lines = self.save_buffer.lines;
     self.save_buffer.reset();
     self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, self.save_path.? });
+}
+
+/// `script` with the session's extract baseline as its trailing comment (stale
+/// baseline lines stripped); the script itself on any failure — the baseline
+/// is telemetry, never worth failing a save over.
+fn appendSessionBaseline(self: *Agent, arena: std.mem.Allocator, script: []const u8) []const u8 {
+    const line = self.baseline.serialize(arena) catch return script;
+    return Baseline.withBaseline(arena, script, line) catch script;
 }
 
 fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
@@ -1101,15 +1189,81 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
     return modes[idx];
 }
 
-fn failSave(self: *Agent, reason: []const u8) void {
-    self.terminal.printError("save failed: {s}", .{reason});
+fn failSynthesis(self: *Agent, label: []const u8, reason: []const u8) ?[]const u8 {
+    self.terminal.printError("{s} failed: {s}", .{ label, reason });
+    return null;
 }
 
-/// Roll the in-flight save turn back out of the conversation, then report the
-/// failure — so a doomed `/save` synthesis never leaks its messages into history.
-fn abortSave(self: *Agent, baseline: usize, reason: []const u8) void {
-    self.conversation.rollback(baseline);
-    self.failSave(reason);
+/// One out-of-conversation LLM turn — the transport shared by `/save`/heal
+/// synthesis and the replay verdict: swap `system` in for this turn, send
+/// `user_msg`, and return the response text duped into `arena`. The turn is
+/// always rolled back out of history; null (with a `label`-tagged report) on
+/// error, no text, or cancellation.
+fn metaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: []const u8, user_msg: []const u8, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
+    self.conversation.ensureSystemPrompt() catch return self.failSynthesis(label, "out of memory");
+
+    // Regular turns keep the driver prompt. (`messages[0]` is the system
+    // message — rollback and prune never touch it.)
+    const plain_system = self.conversation.messages.items[0].content;
+    self.conversation.messages.items[0].content = system;
+    defer self.conversation.messages.items[0].content = plain_system;
+
+    const baseline = self.conversation.messages.items.len;
+    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSynthesis(label, "out of memory");
+    defer self.conversation.rollback(baseline);
+
+    return self.sendMetaTurn(arena, label, &self.conversation.messages, self.conversation.arena.allocator(), max_tokens, effort);
+}
+
+/// `metaTurn` minus the conversation: the turn sends `system` + `user_msg`
+/// alone, for judgments that must come from the message itself (the replay
+/// verdict) — session history would only add tokens and sway the verdict.
+fn soloTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: []const u8, user_msg: []const u8, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
+    var messages: std.ArrayList(zenai.provider.Message) = .empty;
+    messages.append(arena, .{ .role = .system, .content = system }) catch return self.failSynthesis(label, "out of memory");
+    messages.append(arena, .{ .role = .user, .content = user_msg }) catch return self.failSynthesis(label, "out of memory");
+    return self.sendMetaTurn(arena, label, &messages, arena, max_tokens, effort);
+}
+
+fn sendMetaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, messages: *std.ArrayList(zenai.provider.Message), message_arena: std.mem.Allocator, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
+    const provider_client = self.ai_client.?;
+    self.http_interrupt.reset();
+    self.terminal.spinner.start();
+    var result = provider_client.runTools(
+        self.model,
+        messages,
+        self.allocator,
+        message_arena,
+        .{ .context = @ptrCast(self), .callFn = handleToolCall },
+        .{
+            .tools = &.{},
+            .max_turns = 1,
+            .max_tokens = max_tokens,
+            .tool_choice = .none,
+            .effort = effort,
+            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+        },
+    ) catch |err| {
+        self.terminal.spinner.cancel();
+        if (self.cancel_requested.load(.acquire)) {
+            self.clearCancelState();
+            return null;
+        }
+        log.err(.app, "AI meta-turn error", .{ .label = label, .err = err });
+        return self.failSynthesis(label, @errorName(err));
+    };
+    self.terminal.spinner.stop();
+    defer result.deinit();
+    self.total_usage.add(result.usage);
+    if (result.cancelled) {
+        self.clearCancelState();
+        return null;
+    }
+
+    // `result.text` lives in `message_arena`, which the caller may roll back
+    // on return; the dupe happens before that.
+    const raw = result.text orelse return self.failSynthesis(label, "the model returned no text");
+    return arena.dupe(u8, raw) catch self.failSynthesis(label, "out of memory");
 }
 
 /// Save synthesis warrants more reasoning than a normal turn. `.none` stays off
@@ -1156,8 +1310,6 @@ fn saveOneShot(self: *Agent) void {
 /// LLM synthesis + write for an already-resolved destination. Shared by the
 /// interactive `/save` and one-shot `--save`.
 fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mode: save.Mode, prompt: ?[]const u8) void {
-    const provider_client = self.ai_client.?;
-
     // Only update feeds the saved script back to the model; append stays
     // blind — the script is synthesized from this session alone and written
     // after the existing content.
@@ -1169,67 +1321,10 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     else
         null;
 
-    self.conversation.ensureSystemPrompt() catch return self.failSave("out of memory");
+    const script = self.synthesizeScriptText(arena, "save", path, previous_script, prompt) orelse return;
 
-    // Swap the dedicated save_system_prompt in as the system prompt for this one turn;
-    // regular turns keep the driver prompt. (`messages[0]` is the system
-    // message — rollback and prune never touch it.)
-    const plain_system = self.conversation.messages.items[0].content;
-    self.conversation.messages.items[0].content = savePrompt(previous_script != null);
-    defer self.conversation.messages.items[0].content = plain_system;
-
-    const ma = self.conversation.arena.allocator();
-    const baseline = self.conversation.messages.items.len;
-
-    const user_msg = self.buildSaveSynthesisMessage(ma, path, previous_script, prompt) catch return self.failSave("out of memory");
-    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
-
-    self.http_interrupt.reset();
-    self.terminal.spinner.start();
-    var result = provider_client.runTools(
-        self.model,
-        &self.conversation.messages,
-        self.allocator,
-        ma,
-        .{ .context = @ptrCast(self), .callFn = handleToolCall },
-        .{
-            .tools = &.{},
-            .max_turns = 1,
-            .max_tokens = 8192,
-            .tool_choice = .none,
-            .effort = bumpedEffort(self.effort),
-            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
-        },
-    ) catch |err| {
-        self.terminal.spinner.cancel();
-        if (self.cancel_requested.load(.acquire)) {
-            self.resetAfterCancel(baseline);
-            return;
-        }
-        log.err(.app, "AI save synthesis error", .{ .err = err });
-        return self.abortSave(baseline, @errorName(err));
-    };
-    self.terminal.spinner.stop();
-    defer result.deinit();
-    self.total_usage.add(result.usage);
-
-    if (result.cancelled) {
-        self.resetAfterCancel(baseline);
-        return;
-    }
-
-    const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
-
-    // `result.text` lives in the conversation arena, freed by the rollback
-    // below; copy into the command arena first (scrubbing may return its input
-    // as-is).
-    const owned = arena.dupe(u8, save.stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
-    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
-
-    // The save turn is a meta-action; keep it out of the ongoing conversation.
-    self.conversation.rollback(baseline);
-
-    save.writeContentFile(path, script, mode) catch |err| {
+    const content = self.appendSessionBaseline(arena, script);
+    save.writeContentFile(path, content, mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1237,6 +1332,20 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     self.rememberSavePath(path);
     self.save_buffer.reset();
     self.terminal.printInfo("Saved synthesized script to {s}", .{path});
+}
+
+/// The synthesis turn shared by `/save` and `--heal`: hand the model the
+/// conversation, the deterministic record of what ran, and the previous script
+/// when revising, then return the scrubbed script text (arena-owned). Reports
+/// the failure under `label` and returns null on any error or cancellation;
+/// the synthesis turn never stays in history.
+fn synthesizeScriptText(self: *Agent, arena: std.mem.Allocator, label: []const u8, path: []const u8, previous_script: ?[]const u8, prompt: ?[]const u8) ?[]const u8 {
+    const user_msg = self.buildSaveSynthesisMessage(self.conversation.arena.allocator(), path, previous_script, prompt) catch
+        return self.failSynthesis(label, "out of memory");
+    const system = savePrompt(previous_script != null);
+    const raw = self.metaTurn(arena, label, system, user_msg, 8192, bumpedEffort(self.effort)) orelse return null;
+    return browser_tools.reverseSubstituteEnvVars(arena, save.stripCodeFence(raw)) catch
+        return self.failSynthesis(label, "out of memory");
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
@@ -1390,7 +1499,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .tool_call => |t| t,
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
-    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| .{
+    return self.callTool(arena, tc.name(), tc.args) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1398,6 +1507,17 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         },
         .is_error = true,
     };
+}
+
+/// `browser_tools.call` plus the session-baseline note owed on a successful
+/// extract, shared by both dispatch paths. The note runs on the uncapped
+/// result — a truncated one parses as malformed and records nothing.
+fn callTool(self: *Agent, arena: std.mem.Allocator, tool_name: []const u8, args: ?std.json.Value) browser_tools.ToolError!browser_tools.ToolResult {
+    const result = try browser_tools.call(arena, self.session, &self.node_registry, tool_name, args);
+    if (!result.is_error and std.mem.eql(u8, tool_name, @tagName(BrowserTool.extract))) {
+        self.baseline.noteExtractResult(result.text) catch {};
+    }
+    return result;
 }
 
 /// Data output (/extract, /evaluate, /markdown, /tree, …) → plain stdout on
@@ -1441,18 +1561,55 @@ const ScriptOutput = struct {
     }
 };
 
+const RunFacts = lp.heal.RunFacts;
+const ScriptError = lp.heal.ScriptError;
+
+/// `fatal` covers setup failures (unreadable file, runtime init, OOM) that a
+/// retry can't help.
+const ScriptRunOutcome = union(enum) {
+    ok: RunFacts,
+    fatal,
+    script_error: ScriptError,
+};
+
 fn runScript(self: *Agent, path: []const u8) bool {
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    return switch (self.runScriptOutcome(arena.allocator(), path)) {
+        .ok => true,
+        .fatal, .script_error => false,
+    };
+}
+
+/// Terminal `fatal`/`clean` states, or the `broken` finding to heal — the model
+/// gets to judge a clean-but-suspicious run. Shared by the `/load` heal offer
+/// and one-shot `--heal`.
+const RunJudgement = union(enum) {
+    fatal,
+    clean,
+    broken: ScriptError,
+};
+
+fn runAndJudge(self: *Agent, arena: std.mem.Allocator, path: []const u8) RunJudgement {
+    return switch (self.runScriptOutcome(arena, path)) {
+        .fatal => .fatal,
+        .ok => |facts| if (self.judgedFinding(arena, path, facts)) |finding| .{ .broken = finding } else .clean,
+        .script_error => |script_error| .{ .broken = script_error },
+    };
+}
+
+fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ScriptRunOutcome {
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
 
     const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, script_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
         self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
-        return false;
+        return .fatal;
     };
 
     const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch |err| {
         self.terminal.printError("Failed to initialize script runtime: {s}", .{@errorName(err)});
-        return false;
+        return .fatal;
     };
     defer runtime.deinit();
     self.script_runtime_mutex.lockUncancelable(lp.io);
@@ -1473,18 +1630,242 @@ fn runScript(self: *Agent, path: []const u8) bool {
     const result = runtime.runSource(content, path);
     self.terminal.endTool();
 
-    if (result catch |err| {
+    const run_result = result catch |err| {
         self.terminal.printError("Script failed: {s}", .{@errorName(err)});
-        return false;
-    }) |message| {
-        self.terminal.printError("{s}", .{message});
-        return false;
+        return .fatal;
+    };
+    if (run_result == .err) {
+        self.terminal.printError("{s}", .{run_result.err});
+        // A Ctrl-C termination is not a script defect — never heal it.
+        if (self.cancel_requested.load(.acquire)) return .fatal;
+    } else {
+        // A script that printed nothing leaves no trace, so freeze the spinner
+        // into a green bullet (like /goto); one that printed already showed its
+        // result.
+        if (!output.emitted) self.terminal.printScriptDone("script", path);
+    }
+    // `content` dies with script_arena; the outcome's source must outlive it.
+    const source = arena.dupe(u8, content) catch return .fatal;
+    return switch (lp.heal.classifyRun(arena, run_result, source) catch return .fatal) {
+        .facts => |facts| .{ .ok = facts },
+        .script_error => |script_error| .{ .script_error = script_error },
+    };
+}
+
+/// One-shot `--heal` run; counterpart of the REPL's `/load` heal offer.
+fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+
+    // A re-run is free; a verdict turn and healing are not. The first pass
+    // gates on the local suspicion check alone — one retry filters a transient
+    // failure (a flaky page load), and the model judges the re-run's facts,
+    // the ones healing would act on.
+    switch (self.runScriptOutcome(arena.allocator(), path)) {
+        .fatal => return false,
+        .ok => |facts| if (lp.heal.suspicionOf(arena.allocator(), facts) == null) return true,
+        .script_error => {},
+    }
+    self.terminal.printInfo("Script run failed or looks broken; retrying once before healing.", .{});
+    const finding: ScriptError = switch (self.runAndJudge(arena.allocator(), path)) {
+        .fatal => return false,
+        .clean => return true,
+        .broken => |f| f,
+    };
+    // Healing spends tokens; report the cost the way --task does.
+    defer self.printUsageSummary();
+    return self.healLoop(arena.allocator(), path, finding);
+}
+
+const max_heal_attempts = 2;
+
+/// Only a revision that passed validation in a fresh session replaces `path`;
+/// the original survives a failed heal.
+fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: ScriptError) bool {
+    var source = first.source;
+    var error_detail = first.detail;
+
+    const tmp_path = std.fmt.allocPrint(arena, "{s}.heal.js", .{path}) catch return self.healOom();
+
+    // Every exit leaves no stray revision behind; a failed rename is the one
+    // deliberate keep (its error message points at tmp_path).
+    var keep_revision = false;
+    defer if (!keep_revision) self.removeTempScript(tmp_path);
+
+    // The recorder and baseline are /save's stream: heal must neither
+    // synthesize from the REPL's prior recordings nor leak its diagnose
+    // actions into a later /save.
+    var prior: Recorder = .init(self.allocator);
+    var prior_baseline: Baseline = .init(self.allocator);
+    std.mem.swap(Recorder, &self.save_buffer, &prior);
+    std.mem.swap(Baseline, &self.baseline, &prior_baseline);
+    defer {
+        std.mem.swap(Recorder, &self.save_buffer, &prior);
+        std.mem.swap(Baseline, &self.baseline, &prior_baseline);
+        prior.deinit();
+        prior_baseline.deinit();
     }
 
-    // A script that printed nothing leaves no trace, so freeze the spinner into
-    // a green bullet (like /goto); one that printed already showed its result.
-    if (!output.emitted) self.terminal.printScriptDone("script", path);
-    return true;
+    var attempt: usize = 1;
+    while (attempt <= max_heal_attempts) : (attempt += 1) {
+        self.terminal.printInfo("Healing {s} (attempt {d}/{d})", .{ path, attempt, max_heal_attempts });
+
+        const diagnose = lp.heal.buildDiagnoseMessage(arena, path, source, error_detail) catch return self.healOom();
+        if (!self.runTurn(.{ .prompt = diagnose, .capture_for_save = true, .label = "Heal" })) return false;
+
+        const revised = self.synthesizeScriptText(arena, "heal", path, source, lp.heal.heal_revision_prompt) orelse return false;
+
+        save.writeContentFile(tmp_path, revised, .replace) catch |err| {
+            self.terminal.printError("heal failed: could not write {s}: {s}", .{ tmp_path, @errorName(err) });
+            return false;
+        };
+
+        // Validate in a fresh session so failure-state cookies and pages can't
+        // mask a still-broken script.
+        self.startSession() catch |err| {
+            self.terminal.printError("heal failed: could not start a fresh session: {s}", .{@errorName(err)});
+            return false;
+        };
+
+        switch (self.runScriptOutcome(arena, tmp_path)) {
+            .ok => |facts| {
+                if (lp.heal.cureFailure(arena, first, facts) catch return self.healOom()) |failure| {
+                    self.terminal.printWarning("{s}", .{failure});
+                    source = revised;
+                    error_detail = failure;
+                } else {
+                    // Refresh the baseline from the validation run — synthesis
+                    // may have copied the stale one from the broken script.
+                    // Best-effort: the validated revision is already on disk.
+                    if (lp.heal.refreshedBaselineScript(arena, revised, facts.extract_stats)) |updated| {
+                        save.writeContentFile(tmp_path, updated, .replace) catch {};
+                    }
+                    keep_revision = true;
+                    const cwd = std.Io.Dir.cwd();
+                    cwd.rename(tmp_path, cwd, path, lp.io) catch |err| {
+                        self.terminal.printError("healed script validated but replacing {s} failed: {s} (revision left at {s})", .{ path, @errorName(err), tmp_path });
+                        return false;
+                    };
+                    self.terminal.printInfo("Healed {s}: the revised script validated in a fresh session.", .{path});
+                    return true;
+                }
+            },
+            .fatal => return false,
+            .script_error => |script_error| {
+                source = revised;
+                error_detail = script_error.detail;
+            },
+        }
+    }
+    self.terminal.printError("heal gave up after {d} attempts; {s} is unchanged", .{ max_heal_attempts, path });
+    return false;
+}
+
+fn healOom(self: *Agent) bool {
+    self.terminal.printError("heal failed: out of memory", .{});
+    return false;
+}
+
+const verdict_system_prompt =
+    \\You judge replays of saved browser-automation scripts. Given the script
+    \\and facts about a run that completed without errors, decide whether the
+    \\empty output means the script is broken (stale selectors after a site
+    \\change) or legitimate (the page genuinely has no such data right now).
+    \\A `
+++ std.mem.trimEnd(u8, Baseline.marker, " ") ++
+    \\` comment, when present, records how often each output
+    \\field carried data when the script was saved — weigh it as evidence.
+    \\Respond with your verdict on its own final line:
+    \\
+++ verdict_marker ++
+    \\ {"broken": true|false, "fields": ["<field>", ...], "reason": "<one sentence>"}
+    \\`fields` names the output fields you judge broken; use "" for the whole
+    \\return value.
+;
+
+const verdict_marker = "VERDICT:";
+
+const Verdict = struct {
+    broken: bool,
+    /// Output fields the model judged broken; null = the whole return value.
+    fields: []const ?[]const u8,
+    reason: []const u8,
+};
+
+/// One tool-free LLM turn deciding whether suspicious facts are breakage.
+/// Null on transport/parse failure or cancellation — the caller falls back to
+/// surfacing the facts instead of guessing.
+fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, suspicion: ScriptError) ?Verdict {
+    const user_msg = std.fmt.allocPrint(arena,
+        \\Replay of {s} completed without errors, but {s}
+        \\
+        \\The script (its comments and structure carry the intent):
+        \\```js
+        \\{s}
+        \\```
+    , .{ path, suspicion.detail, suspicion.source }) catch return null;
+    const raw = self.soloTurn(arena, "verdict", verdict_system_prompt, user_msg, 1024, self.effort) orelse return null;
+    return parseVerdict(arena, raw);
+}
+
+fn parseVerdict(arena: std.mem.Allocator, raw: []const u8) ?Verdict {
+    const at = std.mem.lastIndexOf(u8, raw, verdict_marker) orelse return null;
+    const rest = raw[at + verdict_marker.len ..];
+    const start = std.mem.indexOfScalar(u8, rest, '{') orelse return null;
+    const end = std.mem.lastIndexOfScalar(u8, rest, '}') orelse return null;
+    if (end < start) return null;
+    const Wire = struct { broken: bool, fields: []const []const u8 = &.{}, reason: []const u8 = "" };
+    const wire = std.json.parseFromSliceLeaky(Wire, arena, rest[start .. end + 1], .{ .ignore_unknown_fields = true }) catch return null;
+    const fields = arena.alloc(?[]const u8, wire.fields.len) catch return null;
+    for (wire.fields, fields) |f, *out| out.* = if (f.len == 0) null else f;
+    return .{ .broken = wire.broken, .fields = fields, .reason = wire.reason };
+}
+
+/// The finding to heal, per the model's verdict on suspicious facts; null when
+/// the run is fine (no suspicion, no model, or a not-broken verdict). A failed
+/// verdict call falls back to the raw facts — the heal prompt, defaulting to
+/// no, becomes the judgment of last resort.
+fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts: RunFacts) ?ScriptError {
+    const suspicion = lp.heal.suspicionOf(arena, facts) orelse return null;
+    if (self.ai_client == null) return null;
+    if (self.judgeSuspicion(arena, path, suspicion)) |verdict| {
+        if (!verdict.broken) {
+            self.terminal.printInfo("Output has empty fields, but the model judged the run consistent: {s}", .{verdict.reason});
+            return null;
+        }
+        return .{
+            .kind = suspicion.kind,
+            .detail = std.fmt.allocPrint(arena, "{s}\nVerdict: {s}", .{ suspicion.detail, verdict.reason }) catch return null,
+            .source = suspicion.source,
+            .dry_fields = confirmedDryFields(arena, verdict.fields, suspicion.dry_fields) catch return null,
+        };
+    }
+    return suspicion;
+}
+
+/// Verdict field names minus any that weren't actually dry — a hallucinated
+/// name never matches an extract stat, so the cure check could never clear it.
+/// Falls back to every dry field when none match.
+fn confirmedDryFields(arena: std.mem.Allocator, judged: []const ?[]const u8, actual: []const ?[]const u8) error{OutOfMemory}![]const ?[]const u8 {
+    if (judged.len == 0) return actual;
+    var kept: std.ArrayList(?[]const u8) = .empty;
+    for (judged) |f| {
+        for (actual) |a| {
+            if (ScriptRuntime.fieldEql(f, a)) {
+                try kept.append(arena, f);
+                break;
+            }
+        }
+    }
+    return if (kept.items.len == 0) actual else kept.items;
+}
+
+fn removeTempScript(self: *Agent, tmp_path: []const u8) void {
+    std.Io.Dir.cwd().deleteFile(lp.io, tmp_path) catch |err| switch (err) {
+        // Covers exits before the first write.
+        error.FileNotFound => {},
+        else => self.terminal.printWarning("could not remove temp script {s}: {s}", .{ tmp_path, @errorName(err) }),
+    };
 }
 
 /// Mirror a user-typed slash command into `self.conversation.messages` as if the
@@ -1512,9 +1893,9 @@ fn recordSlashToolCall(
         .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
     };
 
-    // capToolOutput returns its input unchanged under the cap; dupe so content
+    // capBytes returns its input unchanged under the cap; dupe so content
     // doesn't alias the caller's per-iteration arena.
-    const capped = capToolOutput(ma, result.text);
+    const capped = string.capBytes(ma, result.text, tool_output_max_bytes);
     const content = if (capped.ptr == result.text.ptr) try ma.dupe(u8, capped) else capped;
 
     const tool_results = try ma.alloc(zenai.provider.ToolResult, 1);
@@ -1790,14 +2171,6 @@ fn buildUserMessageParts(
 // the next request body) without bound.
 const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
-fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
-    if (output.len <= tool_output_max_bytes) return output;
-    const prefix = string.truncateUtf8(output, tool_output_max_bytes);
-    var suffix_buf: [64]u8 = undefined;
-    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
-    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
-}
-
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     // Close any assistant text streamed this turn before the tool spinner shows.
@@ -1814,8 +2187,8 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
-        .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error }
+    const outcome: zenai.provider.Client.ToolHandler.Result = if (self.callTool(allocator, tool_name, arguments)) |result|
+        .{ .content = string.capBytes(allocator, result.text, tool_output_max_bytes), .is_error = result.is_error }
     else |err|
         .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
 
@@ -1917,7 +2290,50 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
 test {
     _ = save;
     _ = settings;
+    _ = Baseline;
     _ = picker;
+}
+
+test "confirmedDryFields drops hallucinated names, keeps the narrowing" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const actual: []const ?[]const u8 = &.{ @as(?[]const u8, "comments"), @as(?[]const u8, "score"), null };
+
+    const narrowed = try confirmedDryFields(aa, &.{@as(?[]const u8, "comments")}, actual);
+    try std.testing.expectEqual(1, narrowed.len);
+    try std.testing.expectEqualStrings("comments", narrowed[0].?);
+
+    const mixed = try confirmedDryFields(aa, &.{ @as(?[]const u8, "nonexistent"), @as(?[]const u8, "score") }, actual);
+    try std.testing.expectEqual(1, mixed.len);
+    try std.testing.expectEqualStrings("score", mixed[0].?);
+
+    // All hallucinated → the full dry set, not an empty one.
+    const fallback = try confirmedDryFields(aa, &.{@as(?[]const u8, "bogus")}, actual);
+    try std.testing.expectEqual(3, fallback.len);
+
+    try std.testing.expectEqual(actual.ptr, (try confirmedDryFields(aa, &.{}, actual)).ptr);
+}
+
+test "parseVerdict: anchored to the marker, tolerant of prose around it" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const v = parseVerdict(aa, "The {comments} baseline says data was always present.\nVERDICT: {\"broken\": true, \"fields\": [\"comments\", \"\"], \"reason\": \"selector drift\"}").?;
+    try std.testing.expect(v.broken);
+    try std.testing.expectEqual(2, v.fields.len);
+    try std.testing.expectEqualStrings("comments", v.fields[0].?);
+    try std.testing.expectEqual(null, v.fields[1]);
+    try std.testing.expectEqualStrings("selector drift", v.reason);
+
+    const fenced = parseVerdict(aa, "As instructed, VERDICT: first.\nVERDICT:\n```json\n{\"broken\": false}\n```").?;
+    try std.testing.expect(!fenced.broken);
+
+    try std.testing.expectEqual(null, parseVerdict(aa, "{\"broken\": true, \"fields\": []}"));
+    try std.testing.expectEqual(null, parseVerdict(aa, "VERDICT: no json here"));
+    try std.testing.expectEqual(null, parseVerdict(aa, "VERDICT: {\"fields\": []}"));
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {
@@ -1928,33 +2344,4 @@ test "savePrompt: save instructions followed by the rendered script skill" {
     const revision = savePrompt(true);
     try std.testing.expect(std.mem.indexOf(u8, revision, save_revision_note) != null);
     try std.testing.expect(std.mem.endsWith(u8, revision, lp.skill.text()));
-}
-
-test "capToolOutput: passes through when under cap" {
-    const ta = std.testing.allocator;
-    const out = capToolOutput(ta, "short");
-    try std.testing.expectEqualStrings("short", out);
-}
-
-// Boundary correctness lives in string.zig's `truncateUtf8` tests; here we only
-// assert the agent-specific policy: an over-cap body keeps valid UTF-8 and gains
-// the truncation marker.
-test "capToolOutput: appends a marker when truncating" {
-    const ta = std.testing.allocator;
-
-    // 3-byte Hangul codepoint (U+D55C '한' = 0xED 0x95 0x9C) straddling the cap.
-    const cap = tool_output_max_bytes;
-    const buf = try ta.alloc(u8, cap + 8);
-    defer ta.free(buf);
-    @memset(buf[0 .. cap - 1], 'a');
-    buf[cap - 1] = 0xED;
-    buf[cap + 0] = 0x95;
-    buf[cap + 1] = 0x9C;
-    @memset(buf[cap + 2 ..], 'b');
-
-    const out = capToolOutput(ta, buf);
-    defer if (out.ptr != buf.ptr) ta.free(out);
-
-    try std.testing.expect(std.unicode.utf8ValidateSlice(out));
-    try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
 }
