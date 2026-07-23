@@ -22,9 +22,9 @@ const lp = @import("lightpanda");
 const Cache = @import("Cache.zig");
 
 const log = lp.log;
-const CacheRequest = Cache.CacheRequest;
+const CacheGetRequest = Cache.CacheGetRequest;
 const RenewResponse = Cache.RenewResponse;
-const CachedMetadata = Cache.CachedMetadata;
+const CachePutRequest = Cache.CachePutRequest;
 const CacheGetResult = Cache.CacheGetResult;
 const CachedResponse = Cache.CachedResponse;
 const CacheControl = Cache.CacheControl;
@@ -44,7 +44,7 @@ pool: Pool,
 
 const cache_migrations: []const Migration = &.{
     .{ .sql =
-    \\ create table metadata (
+    \\ create table cache (
     \\      url               text not null primary key,
     \\      status            integer not null,
     \\      stored_at         integer not null,
@@ -52,14 +52,8 @@ const cache_migrations: []const Migration = &.{
     \\      max_age           integer not null,
     \\      must_revalidate   integer not null,
     \\      etag              text,
-    \\      last_modified     text
-    \\ ) strict
-    },
-    .{ .sql =
-    \\ create table body (
-    \\      url               text not null primary key,
-    \\      data              blob not null,
-    \\      foreign key (url) references metadata(url) on delete cascade
+    \\      last_modified     text,
+    \\      body              blob not null
     \\ ) strict
     },
     .{ .sql =
@@ -68,7 +62,7 @@ const cache_migrations: []const Migration = &.{
     \\      name              text not null,
     \\      value             blob not null,
     \\      vary              integer not null,
-    \\      foreign key (url) references metadata(url) on delete cascade
+    \\      foreign key (url) references cache(url) on delete cascade
     \\ ) strict
     },
     .{ .sql = "create index header_url on header(url)" },
@@ -123,7 +117,7 @@ pub fn deinit(self: *SqliteCache) void {
     self.pool.deinit(self.allocator);
 }
 
-pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !CacheGetResult {
+pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
@@ -132,8 +126,8 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !Cac
 
     var entry = try conn.row(
         \\ select status, stored_at, age_at_store,
-        \\     max_age, must_revalidate, etag, last_modified
-        \\ from metadata where url = $1
+        \\     max_age, must_revalidate, etag, last_modified, body
+        \\ from cache where url = $1
     , .{req.url}) orelse {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
         return .miss;
@@ -147,6 +141,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !Cac
     const must_revalidate = entry.get(bool, 4);
     const raw_etag = entry.get(?[]const u8, 5);
     const raw_last_modified = entry.get(?[]const u8, 6);
+    const raw_body = entry.get(Blob, 7);
 
     const expired = must_revalidate or blk: {
         const age = (req.timestamp - stored_at) + age_at_store;
@@ -161,37 +156,29 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !Cac
         return .stale;
     }
 
-    var vary_headers: std.ArrayList(Http.Header) = .empty;
-    {
-        var vary_rows = try conn.rows(
-            "select name, value from header where url = $1 and vary = true",
-            .{req.url},
-        );
-        defer vary_rows.deinit();
+    var vary_rows = try conn.rows(
+        "select name, value from header where url = $1 and vary = true",
+        .{req.url},
+    );
+    defer vary_rows.deinit();
 
-        while (try vary_rows.next()) |row| {
-            const name = row.get([]const u8, 0);
-            const value = row.get(Blob, 1).data;
+    while (try vary_rows.next()) |row| {
+        const name = row.get([]const u8, 0);
+        const value = row.get(Blob, 1).data;
 
-            const incoming = for (req.request_headers) |rh| {
-                if (std.ascii.eqlIgnoreCase(rh.name, name)) break rh.value;
-            } else "";
+        const incoming = for (req.request_headers) |rh| {
+            if (std.ascii.eqlIgnoreCase(rh.name, name)) break rh.value;
+        } else "";
 
-            if (!std.ascii.eqlIgnoreCase(value, incoming)) {
-                log.debug(.cache, "miss", .{
-                    .url = req.url,
-                    .reason = "vary mismatch",
-                    .header = name,
-                    .expected = value,
-                    .got = incoming,
-                });
-                return .miss;
-            }
-
-            try vary_headers.append(arena, .{
-                .name = try arena.dupe(u8, name),
-                .value = try arena.dupe(u8, value),
+        if (!std.ascii.eqlIgnoreCase(value, incoming)) {
+            log.debug(.cache, "miss", .{
+                .url = req.url,
+                .reason = "vary mismatch",
+                .header = name,
+                .expected = value,
+                .got = incoming,
             });
+            return .miss;
         }
     }
 
@@ -211,94 +198,72 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !Cac
         try headers.append(arena, .{ .name = name, .value = value });
     }
 
-    const metadata = CachedMetadata{
-        .url = try arena.dupeZ(u8, req.url),
-        .content_type = content_type,
+    log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
+
+    const resp: CachedResponse = .{
         .status = status,
-        .stored_at = stored_at,
-        .age_at_store = @intCast(age_at_store),
-        .cache_control = .{
-            .max_age = max_age,
-            .must_revalidate = must_revalidate,
-        },
+        .content_type = content_type,
         .headers = headers.items,
-        .vary_headers = vary_headers.items,
         .etag = if (raw_etag) |v| try arena.dupe(u8, v) else null,
         .last_modified = if (raw_last_modified) |v| try arena.dupe(u8, v) else null,
+        .data = .{ .buffer = try arena.dupe(u8, raw_body.data) },
     };
-
-    var body_entry = try conn.row(
-        "select data from body where url = $1",
-        .{req.url},
-    ) orelse {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing body" });
-        return .stale;
-    };
-    defer body_entry.deinit();
-    const body = try arena.dupe(u8, body_entry.get(Blob, 0).data);
-
-    log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
-    const resp: CachedResponse = .{ .metadata = metadata, .data = .{ .buffer = body } };
     return if (expired) .{ .revalidate = resp } else .{ .hit = resp };
 }
 
-pub fn put(self: *SqliteCache, meta: CachedMetadata, body: []const u8) !void {
+pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
     try conn.begin(.immediate);
     defer conn.rollback() catch {};
 
-    try conn.exec("delete from metadata where url = $1", .{meta.url});
+    try conn.exec("delete from cache where url = $1", .{req.url});
 
     try conn.exec(
-        \\ insert into metadata
-        \\     (url, status, stored_at, age_at_store, max_age, must_revalidate, etag, last_modified)
-        \\ values ($1, $2, $3, $4, $5, $6, $7, $8)
+        \\ insert into cache
+        \\     (url, status, stored_at, age_at_store, max_age, must_revalidate, etag, last_modified, body)
+        \\ values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     , .{
-        meta.url,
-        @as(i64, @intCast(meta.status)),
-        meta.stored_at,
-        @as(i64, @intCast(meta.age_at_store)),
-        @as(i64, @intCast(meta.cache_control.max_age)),
-        meta.cache_control.must_revalidate,
-        meta.etag,
-        meta.last_modified,
+        req.url,
+        @as(i64, @intCast(req.status)),
+        req.stored_at,
+        @as(i64, @intCast(req.age_at_store)),
+        @as(i64, @intCast(req.cache_control.max_age)),
+        req.cache_control.must_revalidate,
+        req.etag,
+        req.last_modified,
+        Blob{ .data = body },
     });
 
-    try conn.exec(
-        "insert into body (url, data) values ($1, $2)",
-        .{ meta.url, Blob{ .data = body } },
-    );
-
     var lower_name: [256]u8 = undefined;
-    for (meta.headers) |h| {
+    for (req.headers) |h| {
         if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, false)",
-            .{ meta.url, name, Blob{ .data = h.value } },
+            .{ req.url, name, Blob{ .data = h.value } },
         );
     }
-    for (meta.vary_headers) |h| {
+    for (req.vary_headers) |h| {
         if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
         const name = std.ascii.lowerString(lower_name[0..h.name.len], h.name);
         try conn.exec(
             "insert into header (url, name, value, vary) values ($1, $2, $3, true)",
-            .{ meta.url, name, Blob{ .data = h.value } },
+            .{ req.url, name, Blob{ .data = h.value } },
         );
     }
 
     try conn.commit();
 
-    log.debug(.cache, "put", .{ .url = meta.url, .body_len = body.len });
+    log.debug(.cache, "put", .{ .url = req.url, .body_len = body.len });
 }
 
 pub fn clear(self: *SqliteCache) !void {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    try conn.exec("delete from metadata", .{});
+    try conn.exec("delete from cache", .{});
     log.debug(.cache, "clear", .{});
 }
 
@@ -309,7 +274,7 @@ pub fn evict(self: *SqliteCache, url: []const u8) void {
     };
     defer self.pool.release(conn);
 
-    conn.exec("delete from metadata where url = $1", .{url}) catch |err| {
+    conn.exec("delete from cache where url = $1", .{url}) catch |err| {
         log.err(.cache, "delete from cache", .{ .url = url, .err = err });
         return;
     };
@@ -342,7 +307,7 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
     }
 
     try conn.exec(
-        \\ update metadata
+        \\ update cache
         \\ set stored_at = $1,
         \\     age_at_store = $2,
         \\     max_age = coalesce($3, max_age),
@@ -412,7 +377,7 @@ test "SqliteCache: basic put and get" {
     defer arena.deinit();
 
     const now = std.Io.Clock.now(.boot, lp.io).toSeconds();
-    const meta = CachedMetadata{
+    const meta = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
         .status = 200,
@@ -436,8 +401,8 @@ test "SqliteCache: basic put and get" {
 
     try testing.expect(result == .hit);
     try testing.expectEqualStrings("hello world", result.hit.data.buffer);
-    try testing.expectEqual(@as(u16, 200), result.hit.metadata.status);
-    try testing.expectEqualStrings("text/html", result.hit.metadata.content_type);
+    try testing.expectEqual(@as(u16, 200), result.hit.status);
+    try testing.expectEqualStrings("text/html", result.hit.content_type);
 }
 
 test "SqliteCache: get expiration" {
@@ -450,7 +415,7 @@ test "SqliteCache: get expiration" {
     const now = 5000;
     const max_age = 1000;
 
-    const meta = CachedMetadata{
+    const meta = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
         .status = 200,
@@ -497,7 +462,7 @@ test "SqliteCache: get expiration (without validators)" {
     const now = 5000;
     const max_age = 1000;
 
-    const meta = CachedMetadata{
+    const meta = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
         .status = 200,
@@ -540,7 +505,7 @@ test "SqliteCache: put override" {
     defer arena.deinit();
 
     {
-        const meta = CachedMetadata{
+        const meta = CachePutRequest{
             .url = "https://example.com",
             .content_type = "text/html",
             .status = 200,
@@ -565,7 +530,7 @@ test "SqliteCache: put override" {
     }
 
     {
-        const meta = CachedMetadata{
+        const meta = CachePutRequest{
             .url = "https://example.com",
             .content_type = "text/html",
             .status = 200,
@@ -598,7 +563,7 @@ test "SqliteCache: vary hit and miss" {
     defer arena.deinit();
 
     const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
-    const meta = CachedMetadata{
+    const meta = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
         .status = 200,
@@ -644,7 +609,7 @@ test "SqliteCache: vary multiple headers" {
     defer arena.deinit();
 
     const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
-    const meta = CachedMetadata{
+    const meta = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
         .status = 200,
@@ -757,7 +722,7 @@ test "SqliteCache: put after clear works" {
     defer arena.deinit();
 
     const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
-    const meta = CachedMetadata{
+    const meta = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
         .status = 200,
@@ -801,7 +766,7 @@ test "SqliteCache: evict removes entry" {
     defer arena.deinit();
 
     const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
-    const meta = CachedMetadata{
+    const meta = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
         .status = 200,

@@ -944,13 +944,13 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         .revalidate => |cached| {
             log.debug(.cache, "revalidate cache entry", .{
                 .url = req.url,
-                .etag = cached.metadata.etag,
-                .last_modified = cached.metadata.last_modified,
+                .etag = cached.etag,
+                .last_modified = cached.last_modified,
             });
-            if (cached.metadata.etag) |etag| {
+            if (cached.etag) |etag| {
                 try req.headers.add(try std.fmt.allocPrintSentinel(arena, "If-None-Match: {s}", .{etag}, 0));
             }
-            if (cached.metadata.last_modified) |lm| {
+            if (cached.last_modified) |lm| {
                 try req.headers.add(try std.fmt.allocPrintSentinel(arena, "If-Modified-Since: {s}", .{lm}, 0));
             }
             transfer._cache_intent = .{ .revalidate = cached };
@@ -1024,7 +1024,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     const headers = transfer.res.headers;
 
     const vary = findHeader(headers, "vary");
-    const maybe_cm = Cache.tryCache(
+    const maybe_req = Cache.tryCache(
         arena,
         std.Io.Clock.now(.real, lp.io).toSeconds(),
         transfer._cache_key,
@@ -1041,7 +1041,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
         log.warn(.http, "cache eligibility", .{ .err = err });
         return;
     };
-    var metadata = maybe_cm orelse return;
+    var req = maybe_req orelse return;
 
     var vary_headers: std.ArrayList(http.Header) = .empty;
     if (vary) |vary_str| {
@@ -1061,13 +1061,13 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
         }
     }
 
-    metadata.headers = headers;
-    metadata.vary_headers = vary_headers.items;
+    req.headers = headers;
+    req.vary_headers = vary_headers.items;
 
     if (comptime IS_DEBUG) {
-        log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .metadata = metadata });
+        log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .put = req });
     }
-    cache.put(metadata, transfer.res.buffer.items) catch |err| {
+    cache.put(req, transfer.res.buffer.items) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
     };
 }
@@ -2366,8 +2366,8 @@ pub const Transfer = struct {
             .buffer => |b| b,
         };
 
-        self.setResponseHead(cached.metadata.status, cached.metadata.content_type);
-        self.res.headers = cached.metadata.headers;
+        self.setResponseHead(cached.status, cached.content_type);
+        self.res.headers = cached.headers;
         self._from_cache = true;
         self._cdp_content_length = body.len;
         try self.bufferEvents(body);
