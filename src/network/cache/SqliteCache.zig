@@ -51,6 +51,7 @@ const cache_migrations: []const Migration = &.{
     \\      age_at_store      integer not null,
     \\      max_age           integer not null,
     \\      must_revalidate   integer not null,
+    \\      content_type      text not null,
     \\      etag              text,
     \\      last_modified     text,
     \\      body              blob not null
@@ -140,7 +141,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !
 
     var entry = try conn.row(
         \\ select status, stored_at, age_at_store,
-        \\     max_age, must_revalidate, etag, last_modified, body
+        \\     max_age, must_revalidate, content_type, etag, last_modified, body
         \\ from cache where url = $1
     , .{req.url}) orelse {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
@@ -153,9 +154,10 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !
     const age_at_store = entry.get(i64, 2);
     const max_age: u64 = @intCast(entry.get(i64, 3));
     const must_revalidate = entry.get(bool, 4);
-    const raw_etag = entry.get(?[]const u8, 5);
-    const raw_last_modified = entry.get(?[]const u8, 6);
-    const raw_body = entry.get(Blob, 7);
+    const raw_content_type = entry.get([]const u8, 5);
+    const raw_etag = entry.get(?[]const u8, 6);
+    const raw_last_modified = entry.get(?[]const u8, 7);
+    const raw_body = entry.get(Blob, 8);
 
     const expired = must_revalidate or blk: {
         const age = (req.timestamp - stored_at) + age_at_store;
@@ -203,12 +205,10 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !
     defer header_rows.deinit();
 
     var headers: std.ArrayList(Http.Header) = .empty;
-    var content_type: []const u8 = "application/octet-stream";
 
     while (try header_rows.next()) |row| {
         const name = try arena.dupe(u8, row.get([]const u8, 0));
         const value = try arena.dupe(u8, row.get(Blob, 1).data);
-        if (std.ascii.eqlIgnoreCase(name, "content-type")) content_type = value;
         try headers.append(arena, .{ .name = name, .value = value });
     }
 
@@ -216,7 +216,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !
 
     const resp: CachedResponse = .{
         .status = status,
-        .content_type = content_type,
+        .content_type = try arena.dupe(u8, raw_content_type),
         .headers = headers.items,
         .etag = if (raw_etag) |v| try arena.dupe(u8, v) else null,
         .last_modified = if (raw_last_modified) |v| try arena.dupe(u8, v) else null,
@@ -236,8 +236,9 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
 
     try conn.exec(
         \\ insert into cache
-        \\     (url, status, stored_at, age_at_store, max_age, must_revalidate, etag, last_modified, body)
-        \\ values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        \\     (url, status, stored_at, age_at_store, max_age, must_revalidate,
+        \\     content_type, etag, last_modified, body)
+        \\ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     , .{
         req.url,
         @as(i64, @intCast(req.status)),
@@ -245,6 +246,7 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
         @as(i64, @intCast(req.age_at_store)),
         @as(i64, @intCast(req.cache_control.max_age)),
         req.cache_control.must_revalidate,
+        req.content_type,
         req.etag,
         req.last_modified,
         Blob{ .data = body },
@@ -304,6 +306,7 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
     defer conn.rollback() catch {};
 
     var age_at_store: u64 = 0;
+    var content_type: ?[]const u8 = null;
     var etag: ?[]const u8 = null;
     var last_modified: ?[]const u8 = null;
     var cache_control: ?CacheControl = null;
@@ -317,6 +320,8 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
             etag = h.value;
         } else if (std.ascii.eqlIgnoreCase(h.name, "Last-Modified")) {
             last_modified = h.value;
+        } else if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
+            content_type = h.value;
         }
     }
 
@@ -326,14 +331,16 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
         \\     age_at_store = $2,
         \\     max_age = coalesce($3, max_age),
         \\     must_revalidate = coalesce($4, must_revalidate),
-        \\     etag = coalesce($5, etag),
-        \\     last_modified = coalesce($6, last_modified)
-        \\ where url = $7
+        \\     content_type = coalesce($5, content_type),
+        \\     etag = coalesce($6, etag),
+        \\     last_modified = coalesce($7, last_modified)
+        \\ where url = $8
     , .{
         req.timestamp,
         age_at_store,
         if (cache_control) |cc| cc.max_age else null,
         if (cache_control) |cc| cc.must_revalidate else null,
+        content_type,
         etag,
         last_modified,
         req.url,
