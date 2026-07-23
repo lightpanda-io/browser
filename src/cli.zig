@@ -48,7 +48,10 @@ const log = lp.log;
 ///   - `options: tuple` — tuple of option descriptors (see below). Use `.{}`
 ///     for none.
 ///   - `shared_options: tuple` (optional) — extra options merged into this
-///     command. Useful for common flags shared across commands.
+///     command. Useful for common flags shared across commands. An option
+///     that appears in both with the same field name and type is collapsed
+///     into one field (the command's own option wins); reusing a name with
+///     a different type is a compile error.
 ///   - `positional: struct` (optional) — a positional argument with `.name`
 ///     and `.type` that may appear anywhere in argv. By default it holds a
 ///     single value: `.type` must be an optional pointer-to-u8 slice (e.g.
@@ -61,7 +64,12 @@ const log = lp.log;
 ///
 ///   - `name: []const u8` — snake_case field name. Both `--snake_case` and
 ///     `--kebab-case` are accepted on the command line.
+///   - `field_name: []const u8` (optional) — name of the struct field the
+///     value is written to, when it should differ from the flag name.
 ///   - `type` — the Zig type of the parsed value (see supported types below).
+///     When the stored representation differs from the CLI-facing one, use
+///     `.{ .cli = T, .memory = T }`; a `validator` must then produce the
+///     memory type.
 ///   - `default` (optional) — compile-time default when the flag is absent.
 ///     Rules vary by type; see the defaults section below.
 ///   - `multiple: bool` (optional) — when `true`, the field becomes a
@@ -92,15 +100,20 @@ const log = lp.log;
 /// ## Validators
 ///
 /// A `validator` is a custom parse function that takes over argument
-/// consumption for an option. Its signature depends on whether `multiple`
+/// consumption for an option. It receives a pointer to the generated struct
+/// field and writes through it; the pointee depends on whether `multiple`
 /// is set:
 ///
-///   - Single: `fn (Allocator, *ArgIterator) !T` — returns the parsed value.
+///   - Single: `fn (Allocator, *ArgIterator, *T) !void` — writes the parsed
+///     value through the field pointer.
 ///   - Multiple: `fn (Allocator, *ArgIterator, *std.ArrayList(T)) !void` —
 ///     appends directly into the list.
 ///
 /// When a validator is present, the built-in type switch is skipped entirely.
 /// The validator owns advancing the iterator and is free to peek ahead.
+/// Because the validator sees the field itself, a repeated flag can
+/// accumulate state in place (e.g. add each certificate to a store the
+/// field points at) instead of collecting values in a list.
 ///
 /// ## Variants
 ///
@@ -196,7 +209,22 @@ pub fn Builder(comptime commands: anytype) type {
                 // Whether option has a default value.
                 const has_default = @hasField(@TypeOf(option), "default");
 
-                const T = if (is_multiple) std.ArrayList(option.type) else option.type;
+                const Type = blk: {
+                    if (@typeInfo(@TypeOf(option.type)) == .@"struct") {
+                        break :blk option.type.memory;
+                    }
+                    break :blk option.type;
+                };
+
+                const T = if (is_multiple) std.ArrayList(Type) else Type;
+
+                // Prefer `option.field_name` if memory representation will differ.
+                const name = blk: {
+                    if (@hasField(@TypeOf(option), "field_name")) {
+                        break :blk option.field_name;
+                    }
+                    break :blk option.name;
+                };
 
                 const default = blk: {
                     if (is_multiple) {
@@ -208,7 +236,7 @@ pub fn Builder(comptime commands: anytype) type {
                         break :blk @as(*const anyopaque, @ptrCast(&@as(T, .empty)));
                     }
 
-                    switch (@typeInfo(option.type)) {
+                    switch (@typeInfo(Type)) {
                         .optional => |optional| {
                             if (optional.child == bool) {
                                 @compileError("?bool is not supported, prefer enum");
@@ -228,7 +256,7 @@ pub fn Builder(comptime commands: anytype) type {
                         },
                         inline else => {
                             if (!has_default) {
-                                @compileError("option `" ++ option.name ++ "` is not optional type and has no default value");
+                                @compileError("option `" ++ name ++ "` is not optional type and has no default value");
                             }
                             break :blk @as(*const anyopaque, @ptrCast(&@as(T, option.default)));
                         },
@@ -236,7 +264,7 @@ pub fn Builder(comptime commands: anytype) type {
                 };
 
                 fields[j] = .{
-                    .name = option.name,
+                    .name = name,
                     .type = T,
                     .default_value_ptr = default,
                     .is_comptime = false,
@@ -245,6 +273,34 @@ pub fn Builder(comptime commands: anytype) type {
             }
 
             return fields;
+        }
+
+        /// Drops duplicate fields, keeping the first occurrence. Only an exact
+        /// duplicate (same name and type) is deduplicated; a name that
+        /// reappears with a different type is a conflict.
+        fn dedupeStructFields(comptime fields: []const std.builtin.Type.StructField) []const std.builtin.Type.StructField {
+            // The pairwise name comparisons blow the default 1000-branch quota.
+            @setEvalBranchQuota(1000 + fields.len * fields.len * 100);
+
+            var out: [fields.len]std.builtin.Type.StructField = undefined;
+            var len: usize = 0;
+
+            outer: for (fields) |field| {
+                for (out[0..len]) |existing| {
+                    if (!std.mem.eql(u8, existing.name, field.name)) continue;
+
+                    if (existing.type != field.type) {
+                        @compileError("field `" ++ field.name ++ "` is duplicated with a different type");
+                    }
+                    continue :outer;
+                }
+
+                out[len] = field;
+                len += 1;
+            }
+
+            const frozen = out;
+            return frozen[0..len];
         }
 
         /// Union type for provided commands.
@@ -258,7 +314,7 @@ pub fn Builder(comptime commands: anytype) type {
                 const Command = @TypeOf(command);
                 const options = command.options;
 
-                const fields = optionsToStructFields(options) ++
+                const all_fields = optionsToStructFields(options) ++
                     (if (@hasField(Command, "shared_options"))
                         optionsToStructFields(command.shared_options)
                     else
@@ -268,7 +324,7 @@ pub fn Builder(comptime commands: anytype) type {
                     else
                         .{});
 
-                const T = StructFromFields(&fields);
+                const T = StructFromFields(dedupeStructFields(&all_fields));
 
                 union_fields[i] = .{ .name = command.name, .type = T, .alignment = @alignOf(T) };
             }
@@ -435,7 +491,7 @@ pub fn Builder(comptime commands: anytype) type {
                 return *const fn (Allocator, *std.process.Args.Iterator, *std.ArrayList(T)) anyerror!void;
             }
 
-            return *const fn (Allocator, *std.process.Args.Iterator) anyerror!T;
+            return *const fn (Allocator, *std.process.Args.Iterator, *T) anyerror!void;
         }
 
         /// Turns a snake_case string to kebab-case in comptime.
@@ -456,7 +512,9 @@ pub fn Builder(comptime commands: anytype) type {
             /// ```zig
             /// Option{
             ///     .name = "option_name",
-            ///     .type = T,
+            ///     // If provided, names the struct field written to instead of `name`.
+            ///     .field_name = "struct_field_name",
+            ///     .type = T, // or .{ .cli = T, .memory = T }
             ///     .multiple = ?bool,
             ///     .validator = ?ValidatorFn(T, is_multiple),
             /// };
@@ -469,23 +527,19 @@ pub fn Builder(comptime commands: anytype) type {
             const is_multiple = @hasField(OptionType, "multiple") and option.multiple;
             const has_validator = @hasField(OptionType, "validator");
 
-            // Prefer validator for parsing if provided.
+            // Prefer validator for parsing if provided. The validator writes
+            // through the field pointer (the list itself for multiples).
             if (has_validator) {
-                const validator = option.validator;
-                if (is_multiple) {
-                    // Pass the list.
-                    try @call(.auto, validator, .{ allocator, args, target });
-                } else {
-                    // Receive the value from return.
-                    const v = try @call(.auto, validator, .{ allocator, args });
-                    target.* = v;
-                }
-
-                return;
+                return @call(.auto, option.validator, .{ allocator, args, target });
             }
 
-            // Extract type info.
-            const T = option.type;
+            // Extract type info. We need the type that's used in the CLI.
+            const T = blk: {
+                if (@typeInfo(@TypeOf(option.type)) == .@"struct") {
+                    break :blk option.type.cli;
+                }
+                break :blk option.type;
+            };
             const option_info = blk: {
                 const info = @typeInfo(T);
                 // If wrapped in optional, prefer the child type.
@@ -639,15 +693,23 @@ pub fn Builder(comptime commands: anytype) type {
             };
             iter_args: while (args.next()) |option_name| {
                 inline for (options) |option| {
+                    const name = option.name;
+                    const field_name = blk: {
+                        if (@hasField(@TypeOf(option), "field_name")) {
+                            break :blk option.field_name;
+                        }
+                        break :blk option.name;
+                    };
+
                     // We allow both `--my-option` and `--my_option` variants;
                     // assuming given `option` struct prefer snake_case for `name`.
                     // Match an option.
                     const matches_short = comptime @hasField(@TypeOf(option), "short");
-                    if (std.mem.eql(u8, option_name, "--" ++ option.name) or
-                        std.mem.eql(u8, option_name, "--" ++ comptime toKebabCase(option.name)) or
+                    if (std.mem.eql(u8, option_name, "--" ++ name) or
+                        std.mem.eql(u8, option_name, "--" ++ comptime toKebabCase(name)) or
                         (matches_short and std.mem.eql(u8, option_name, "-" ++ [_]u8{option.short})))
                     {
-                        try parseValue(allocator, args, &@field(c, option.name), option);
+                        try parseValue(allocator, args, &@field(c, field_name), option);
                         continue :iter_args;
                     }
 
@@ -672,7 +734,7 @@ pub fn Builder(comptime commands: anytype) type {
                                     break :blk .{ .name = variant.name, .type = option.type, .multiple = is_multiple };
                                 };
 
-                                try parseValue(allocator, args, &@field(c, option.name), opts);
+                                try parseValue(allocator, args, &@field(c, field_name), opts);
                                 continue :iter_args;
                             }
                         }

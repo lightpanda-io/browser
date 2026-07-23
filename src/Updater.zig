@@ -38,7 +38,7 @@ config: *const Config,
 pub fn init(allocator: Allocator, config: *const Config) !Updater {
     Network.globalInit(allocator);
     errdefer Network.globalDeinit();
-    const x509_store = try Network.createX509Store(allocator);
+    const x509_store = try Network.prepareX509Store(allocator, config);
 
     return .{
         .x509_store = x509_store,

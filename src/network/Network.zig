@@ -183,7 +183,14 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     const x509_store = blk: {
         if (config.tlsVerifyHost()) {
-            break :blk try createX509Store(allocator);
+            break :blk try prepareX509Store(allocator, config);
+        }
+        // Verification is off, so the store is never consulted — but still
+        // take ownership of a user-supplied one so the flags compose and
+        // nothing leaks.
+        if (config.customCertStore()) |store| {
+            log.warn(.app, "custom CA ignored", .{ .arg = "--ca-cert, --ca-path", .reason = "TLS verification disabled" });
+            break :blk store;
         }
         break :blk crypto.X509_STORE_new() orelse {
             return error.FailedToCreateX509Store;
@@ -730,24 +737,38 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     return conn;
 }
 
-const CreateX509StoreError = std.crypto.Certificate.Bundle.RescanError || error{FailedToCreateX509Store};
-
 /// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
 /// Allocations made through passed `allocator` are freed before this function returns.
-pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_STORE {
+pub fn prepareX509Store(allocator: Allocator, config: *const Config) !*crypto.X509_STORE {
+    // A user-supplied store replaces system trust entirely.
+    if (config.customCertStore()) |store| {
+        return store;
+    }
+    return storeFromSystemCA(allocator);
+}
+
+/// Creates an X509_STORE from system root CA.
+fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
     const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
     errdefer crypto.X509_STORE_free(store);
 
+    var count: usize = 0;
+    defer {
+        if (count == 0) {
+            log.warn(.app, "No certificates loaded", .{});
+        }
+    }
+
     switch (comptime builtin.os.tag) {
         .linux, .openbsd, .netbsd, .freebsd => blk: {
-            // Iterate over known directories.
-            inline for ([_][:0]const u8{
+            // Iterate over known directories; this may or may not succeed.
+            const cwd = std.Io.Dir.cwd();
+            inline for ([_][]const u8{
                 "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
                 "/etc/pki/tls/certs", // Fedora/RHEL
-            }) |dir| {
-                if (loadHashedDirectory(store, dir)) {
-                    break :blk;
-                }
+            }) |dir_path| {
+                count += try loadFromDirectory(allocator, store, cwd, dir_path);
+                if (count > 0) break :blk;
             }
 
             // Iterate over known files.
@@ -760,11 +781,10 @@ pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_S
                 "/etc/ssl/cert.pem", // Alpine, *BSD
             }) |file| {
                 if (crypto.X509_STORE_load_locations(store, file, null) == 1) {
+                    count += 1;
                     break :blk;
                 }
             }
-
-            log.warn(.app, "No system certificates", .{});
         },
         else => {
             // Prefer stdlib's cert scanner.
@@ -773,10 +793,6 @@ pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_S
             defer bundle.deinit(allocator);
 
             const bytes = bundle.bytes.items;
-            if (bytes.len == 0) {
-                log.warn(.app, "No system certificates", .{});
-                return store;
-            }
             var it = bundle.map.valueIterator();
             while (it.next()) |index| {
                 // d2i_X509 reads the cert's own DER length header to find its end and
@@ -792,6 +808,7 @@ pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_S
                 if (result != 1) {
                     log.warn(.app, "Failed to add X509 cert to store", .{});
                 }
+                count += 1;
             }
         },
     }
@@ -799,19 +816,27 @@ pub fn createX509Store(allocator: Allocator) CreateX509StoreError!*crypto.X509_S
     return store;
 }
 
-fn loadHashedDirectory(store: *crypto.X509_STORE, dir: [:0]const u8) bool {
-    var handle = std.Io.Dir.openDirAbsolute(lp.io, dir, .{ .iterate = true }) catch return false;
-    defer handle.close(lp.io);
+/// Loads certificates from given `path`; returning how many CA loaded.
+fn loadFromDirectory(
+    allocator: Allocator,
+    store: *crypto.X509_STORE,
+    cwd: std.Io.Dir,
+    dir_path: []const u8,
+) Allocator.Error!usize {
+    var count: usize = 0;
+    var dir = cwd.openDir(lp.io, dir_path, .{ .iterate = true }) catch return count;
+    defer dir.close(lp.io);
 
-    var hashed = false;
-    var it = handle.iterate();
-    while (it.next(lp.io) catch return false) |entry| {
-        if (std.mem.endsWith(u8, entry.name, ".0")) {
-            hashed = true;
-            break;
+    var it = dir.iterate();
+    while (it.next(lp.io) catch return count) |entry| {
+        if (entry.kind != .file and entry.kind != .sym_link) continue;
+
+        const path = try std.fs.path.joinZ(allocator, &.{ dir_path, entry.name });
+        defer allocator.free(path);
+
+        if (crypto.X509_STORE_load_locations(store, path, null) == 1) {
+            count += 1;
         }
     }
-    if (!hashed) return false;
-
-    return crypto.X509_STORE_load_locations(store, null, dir.ptr) == 1;
+    return count;
 }
