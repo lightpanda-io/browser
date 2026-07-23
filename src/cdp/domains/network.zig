@@ -981,3 +981,35 @@ test "cdp.Network: configured CDP ignores setCacheDisabled" {
     try ctx.expectSentResult(null, .{ .id = 2 });
     try testing.expect(client.cache == &cache);
 }
+
+test "cdp.Network: repeated enable does not duplicate captured response bodies" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp = ctx.cdp();
+    _ = try cdp.createBrowserContext();
+    var bc = &cdp.browser_context.?;
+    bc.id = "BID-NE";
+    bc.session_id = "SID-NE";
+    bc.target_id = "TID-NE-0000000".*;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.processMessage(.{ .id = 2, .method = "Network.enable" });
+
+    const fixture_root = "http://127.0.0.1:9582/src/browser/tests/cdp/";
+    const page = try bc.session.createPage();
+    try page.navigate(fixture_root ++ "dom1.html", .{});
+    try testing.waitForPage(bc);
+
+    const expected = @embedFile("../../browser/tests/cdp/dom1.html");
+    var matches: usize = 0;
+    var responses = bc.captured_responses.valueIterator();
+    while (responses.next()) |response| {
+        if (std.mem.indexOf(u8, response.data.items, "<p>1</p>") == null) {
+            continue;
+        }
+        matches += 1;
+        try std.testing.expectEqualStrings(expected, response.data.items);
+    }
+    try testing.expectEqual(1, matches);
+}

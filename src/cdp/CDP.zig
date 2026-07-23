@@ -573,6 +573,10 @@ pub const BrowserContext = struct {
     // Browser.setDownloadBehavior calls don't add duplicate listeners.
     download_events_registered: bool = false,
 
+    // True once we've registered for the network notifications, so repeated
+    // Network.enable calls don't add duplicate listeners.
+    network_events_registered: bool = false,
+
     // Extra headers to add to all requests.
     extra_headers: std.ArrayList([*c]const u8) = .empty,
 
@@ -808,12 +812,16 @@ pub const BrowserContext = struct {
     }
 
     pub fn networkEnable(self: *BrowserContext) !void {
+        if (self.network_events_registered) return;
+        errdefer self.networkDisable();
+
         try self.notification.register(.http_request_fail, self, onHttpRequestFail);
         try self.notification.register(.http_request_start, self, onHttpRequestStart);
         try self.notification.register(.http_request_done, self, onHttpRequestDone);
         try self.notification.register(.http_response_data, self, onHttpResponseData);
         try self.notification.register(.http_response_header_done, self, onHttpResponseHeadersDone);
         try self.notification.register(.http_request_served_from_cache, self, onHttpRequestServedFromCache);
+        self.network_events_registered = true;
     }
 
     pub fn networkDisable(self: *BrowserContext) void {
@@ -823,6 +831,7 @@ pub const BrowserContext = struct {
         self.notification.unregister(.http_response_data, self);
         self.notification.unregister(.http_response_header_done, self);
         self.notification.unregister(.http_request_served_from_cache, self);
+        self.network_events_registered = false;
     }
 
     pub fn fetchEnable(self: *BrowserContext, authRequests: bool) !void {
