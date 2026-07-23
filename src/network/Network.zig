@@ -782,7 +782,7 @@ fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
             }) |file| {
                 if (crypto.X509_STORE_load_locations(store, file, null) == 1) {
                     count += 1;
-                    if (count > 0) break :blk;
+                    break :blk;
                 }
             }
         },
