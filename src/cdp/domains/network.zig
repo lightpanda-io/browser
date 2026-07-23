@@ -28,6 +28,7 @@ const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
 
+const HttpClient = @import("../../network/HttpClient.zig");
 const Cache = @import("../../network/cache/Cache.zig");
 const Headers = @import("../../network/HttpClient.zig").Headers;
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
@@ -42,6 +43,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         enable,
         disable,
         setCacheDisabled,
+        setBlockedURLs,
         setExtraHTTPHeaders,
         setUserAgentOverride,
         deleteCookies,
@@ -59,6 +61,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
         .setCacheDisabled => return setCacheDisabled(cmd),
+        .setBlockedURLs => return setBlockedURLs(cmd),
         .setUserAgentOverride => return @import("emulation.zig").setUserAgentOverride(cmd),
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
         .deleteCookies => return deleteCookies(cmd),
@@ -95,6 +98,16 @@ fn setCacheDisabled(cmd: *CDP.Command) !void {
     if (!bc.cdp.disable_set_cache_disabled) {
         client.disableCache(params.cacheDisabled);
     }
+    return cmd.sendResult(null, .{});
+}
+
+fn setBlockedURLs(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        urlPatterns: []const HttpClient.BlockPattern,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    try bc.cdp.browser.http_client.setBlockedUrlPatterns(params.urlPatterns);
     return cmd.sendResult(null, .{});
 }
 
@@ -316,6 +329,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
         .type = "Ping",
         .errorText = msg.err,
         .canceled = false,
+        .blockedReason = msg.blocked_reason,
     }, .{ .session_id = session_id });
 }
 
@@ -980,4 +994,90 @@ test "cdp.Network: configured CDP ignores setCacheDisabled" {
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
     try testing.expect(client.cache == &cache);
+}
+
+test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
+    const filter: testing.LogFilter = .init(&.{.http});
+    defer filter.deinit();
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{
+        .id = "BID-BLOCK",
+        .session_id = "SID-BLOCK",
+    });
+    const page = try bc.session.createPage();
+    const client = &bc.cdp.browser.http_client;
+    defer client.setBlockedUrls(&.{}) catch unreachable;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.enable",
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.setBlockedURLs",
+        .params = .{ .urlPatterns = &[_]HttpClient.BlockPattern{
+            .{ .urlPattern = "*://blocked.test/*", .block = true },
+        } },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const ErrorContext = struct {
+        err: ?anyerror = null,
+
+        fn callback(raw: *anyopaque, err: anyerror) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.err = err;
+        }
+    };
+    var error_context: ErrorContext = .{};
+
+    try client.request(.{
+        .frame_id = page.frame_id,
+        .loader_id = 1,
+        .method = .GET,
+        .url = "https://blocked.test/script.js",
+        .cookie_jar = null,
+        .cookie_origin = "https://blocked.test/",
+        .resource_type = .script,
+        .notification = bc.session.notification,
+        .ctx = &error_context,
+        .error_callback = ErrorContext.callback,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, null);
+
+    try ctx.expectSentEvent("Network.loadingFailed", .{
+        .errorText = error.UrlBlocked,
+        .blockedReason = "inspector",
+    }, .{ .session_id = "SID-BLOCK" });
+    try testing.expectEqual(error.UrlBlocked, error_context.err.?);
+
+    try client.setBlockedUrls(&.{"*redirect-target*"});
+    error_context.err = null;
+
+    var redirect_request_id: [14]u8 = undefined;
+    _ = std.fmt.bufPrint(&redirect_request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+
+    try client.request(.{
+        .frame_id = page.frame_id,
+        .loader_id = 1,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/redirect-no-fragment",
+        .cookie_jar = null,
+        .cookie_origin = "http://127.0.0.1:9582/",
+        .resource_type = .script,
+        .notification = bc.session.notification,
+        .ctx = &error_context,
+        .error_callback = ErrorContext.callback,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, null);
+
+    try ctx.expectSentEvent("Network.loadingFailed", .{
+        .requestId = &redirect_request_id,
+        .errorText = error.UrlBlocked,
+        .blockedReason = "inspector",
+    }, .{ .session_id = "SID-BLOCK" });
+    try testing.expectEqual(error.UrlBlocked, error_context.err.?);
 }

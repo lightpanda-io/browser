@@ -35,6 +35,8 @@ const http = @import("http.zig");
 const Network = @import("Network.zig");
 const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
+const UrlBlocklist = @import("UrlBlocklist.zig");
+pub const BlockPattern = UrlBlocklist.Pattern;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -186,12 +188,28 @@ serve_mode: bool,
 obey_robots: bool,
 
 robots: RobotsGate,
+url_blocklist: ?UrlBlocklist,
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
     errdefer handles.deinit();
 
     const http_proxy = network.config.httpProxy();
+
+    var url_blocklist: ?UrlBlocklist = null;
+    if (network.config.blockedUrlPatterns()) |initial_patterns| {
+        var patterns: std.ArrayList([]const u8) = .empty;
+        defer patterns.deinit(allocator);
+
+        var it = initial_patterns;
+        while (it.next()) |pattern| {
+            if (pattern.len > 0) try patterns.append(allocator, pattern);
+        }
+        if (patterns.items.len > 0) {
+            url_blocklist = try UrlBlocklist.init(allocator, patterns.items);
+        }
+    }
+    errdefer if (url_blocklist) |*blocklist| blocklist.deinit();
 
     self.* = Client{
         .handles = handles,
@@ -209,6 +227,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
         .robots = .{ .allocator = allocator, .network = network },
+        .url_blocklist = url_blocklist,
         .arena_pool = &network.app.arena_pool,
     };
 }
@@ -237,6 +256,7 @@ pub fn deinit(self: *Client) void {
         self.allocator.free(owned);
     }
 
+    self.clearUrlBlocklist();
     self.robots.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
@@ -332,6 +352,42 @@ pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
         self.http_proxy = owned;
     }
     self.use_proxy = self.http_proxy != null;
+}
+
+/// Replace the current URL blocklist. The caller retains ownership of
+/// `patterns`; compiled copies remain valid after the CDP command arena is
+/// released.
+pub fn setBlockedUrls(self: *Client, patterns: []const []const u8) !void {
+    const replacement: ?UrlBlocklist = if (patterns.len == 0)
+        null
+    else
+        try UrlBlocklist.init(self.allocator, patterns);
+
+    self.clearUrlBlocklist();
+    self.url_blocklist = replacement;
+}
+
+pub fn setBlockedUrlPatterns(self: *Client, patterns: []const BlockPattern) !void {
+    const replacement: ?UrlBlocklist = if (patterns.len == 0)
+        null
+    else
+        try UrlBlocklist.initPatterns(self.allocator, patterns);
+
+    self.clearUrlBlocklist();
+    self.url_blocklist = replacement;
+}
+
+fn clearUrlBlocklist(self: *Client) void {
+    if (self.url_blocklist) |*blocklist| {
+        blocklist.deinit();
+        self.url_blocklist = null;
+    }
+}
+
+fn isUrlBlocked(self: *const Client, url: []const u8, internal: bool) bool {
+    if (internal) return false;
+    const blocklist = self.url_blocklist orelse return false;
+    return blocklist.isBlocked(url);
 }
 
 pub fn newHeaders(self: *const Client) !http.Headers {
@@ -808,6 +864,10 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             continue :sw SubmitFrom.after_intercept;
         },
         .after_intercept => {
+            if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
+                log.warn(.http, "blocked url", .{ .url = transfer.req.url });
+                return transfer.failAsync(error.UrlBlocked);
+            }
             if (try self.cacheLookup(transfer)) {
                 // response came from the cache, we're done
                 return;
@@ -1395,6 +1455,15 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
                     try transfer.handleRedirect(location.value);
+
+                    if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
+                        log.warn(.http, "blocked url", .{ .url = transfer.req.url });
+                        self.removeConn(msg.conn);
+                        transfer._conn = null;
+                        transfer.failAsync(error.UrlBlocked);
+                        return true;
+                    }
+
                     if (!transfer.req.internal) lp.metrics.http_redirects.incr();
 
                     const conn = transfer._conn.?;
@@ -2190,6 +2259,7 @@ pub const Transfer = struct {
             self.req.notification.dispatch(.http_request_fail, &.{
                 .transfer = self,
                 .err = err,
+                .blocked_reason = if (err == error.UrlBlocked) .inspector else null,
             });
         }
 
@@ -3135,6 +3205,41 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.serve_mode = false;
     client.obey_robots = false;
     client.robots = .{ .allocator = testing.allocator, .network = undefined };
+    client.url_blocklist = null;
+}
+
+test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    defer client.clearUrlBlocklist();
+
+    var first = [_]u8{ '*', 'f', 'i', 'r', 's', 't', '*' };
+    try client.setBlockedUrls(&.{&first});
+    @memset(&first, 'x');
+
+    try testing.expect(client.url_blocklist.?.isBlocked("https://example.test/first.js"));
+    try client.setBlockedUrls(&.{"*second*"});
+    try testing.expect(!client.url_blocklist.?.isBlocked("https://example.test/first.js"));
+    try testing.expect(client.url_blocklist.?.isBlocked("https://example.test/second.js"));
+
+    try client.setBlockedUrls(&.{});
+    try testing.expectEqual(null, client.url_blocklist);
+}
+
+test "HttpClient: URL blocking exempts internal transfers" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    defer client.clearUrlBlocklist();
+
+    try client.setBlockedUrls(&.{"*example.test*"});
+    try testing.expect(client.isUrlBlocked("https://example.test/script.js", false));
+    try testing.expect(!client.isUrlBlocked("https://example.test/robots.txt", true));
 }
 
 test "HttpClient: fulfillIntercepted survives a done_callback that tears down the owner" {
