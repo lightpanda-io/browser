@@ -75,60 +75,6 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     }
 }
 
-const CDPFrame = struct {
-    id: []const u8,
-    parentId: ?[]const u8 = null,
-    loaderId: []const u8,
-    url: []const u8,
-    domainAndRegistry: []const u8 = "",
-    securityOrigin: []const u8,
-    mimeType: []const u8 = "text/html",
-    adFrameStatus: struct {
-        adFrameType: []const u8 = "none",
-    } = .{},
-    secureContextType: []const u8,
-    crossOriginIsolatedContextType: []const u8 = "NotIsolated",
-    gatedAPIFeatures: [][]const u8 = &[0][]const u8{},
-};
-
-const CDPFrameTree = struct {
-    frame: CDPFrame,
-    childFrames: ?[]CDPFrameTree = null,
-};
-
-fn serializeFrame(arena: Allocator, bc: *const CDP.BrowserContext, frame: *const Frame) !CDPFrame {
-    const frame_id = id.toFrameId(frame._frame_id);
-    const loader_id = id.toLoaderId(frame._loader_id);
-    const parent_id = if (frame.parent) |parent| blk: {
-        const value = id.toFrameId(parent._frame_id);
-        break :blk try arena.dupe(u8, &value);
-    } else null;
-
-    return .{
-        .id = try arena.dupe(u8, &frame_id),
-        .parentId = parent_id,
-        .loaderId = try arena.dupe(u8, &loader_id),
-        .url = frame.url,
-        .securityOrigin = frame.origin orelse bc.security_origin,
-        .secureContextType = bc.secure_context_type,
-    };
-}
-
-fn serializeFrameTree(arena: Allocator, bc: *const CDP.BrowserContext, frame: *const Frame) !CDPFrameTree {
-    const child_frames = frame.child_frames.items;
-    const children = if (child_frames.len == 0) null else try arena.alloc(CDPFrameTree, child_frames.len);
-    if (children) |items| {
-        for (child_frames, items) |child, *serialized| {
-            serialized.* = try serializeFrameTree(arena, bc, child);
-        }
-    }
-
-    return .{
-        .frame = try serializeFrame(arena, bc, frame),
-        .childFrames = children,
-    };
-}
-
 fn getFrameTree(cmd: *CDP.Command) !void {
     // Stagehand parses the response and error if we don't return a
     // correct one for this call when browser context or target id are missing.
@@ -144,11 +90,13 @@ fn getFrameTree(cmd: *CDP.Command) !void {
         },
     };
     const bc = cmd.browser_context orelse return cmd.sendResult(startup, .{});
-    _ = bc.target_id orelse return cmd.sendResult(startup, .{});
+    if (bc.target_id == null) {
+        return cmd.sendResult(startup, .{});
+    }
     const frame = bc.mainFrame() orelse return cmd.sendResult(startup, .{});
 
     return cmd.sendResult(.{
-        .frameTree = try serializeFrameTree(cmd.arena, bc, frame),
+        .frameTree = FrameTreeWriter{ .bc = bc, .frame = frame },
     }, .{});
 }
 
@@ -713,7 +661,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
-        .frame = try serializeFrame(arena, bc, frame),
+        .frame = FrameWriter{ .bc = bc, .frame = frame },
     }, .{ .session_id = session_id });
 
     {
@@ -909,6 +857,85 @@ pub fn javascriptDialogOpening(bc: anytype, event: *const Notification.Javascrip
         .defaultPrompt = "",
     }, .{ .session_id = session_id });
 }
+
+const FrameWriter = struct {
+    frame: *const Frame,
+    bc: *const CDP.BrowserContext,
+
+    pub fn jsonStringify(self: *const FrameWriter, w: anytype) error{WriteFailed}!void {
+        try w.beginObject();
+        try write(self.bc, self.frame, w);
+        try w.endObject();
+    }
+
+    fn write(bc: *const CDP.BrowserContext, frame: *const Frame, w: anytype) error{WriteFailed}!void {
+        try w.objectField("id");
+        try w.write(&id.toFrameId(frame._frame_id));
+
+        if (frame.parent) |parent| {
+            try w.objectField("parentId");
+            try w.write(&id.toFrameId(parent._frame_id));
+        }
+
+        try w.objectField("loaderId");
+        try w.write(&id.toLoaderId(frame._loader_id));
+
+        try w.objectField("url");
+        try w.write(frame.url);
+
+        try w.objectField("domainAndRegistry");
+        try w.write("");
+
+        try w.objectField("securityOrigin");
+        try w.write(frame.origin orelse bc.security_origin);
+
+        try w.objectField("mimeType");
+        try w.write("text/html");
+
+        try w.objectField("adFrameStatus");
+        try w.write(.{ .adFrameType = "none" });
+
+        try w.objectField("secureContextType");
+        try w.write(bc.secure_context_type);
+
+        try w.objectField("crossOriginIsolatedContextType");
+        try w.write("NotIsolated");
+
+        try w.objectField("gatedAPIFeatures");
+        try w.beginArray();
+        try w.endArray();
+    }
+};
+
+const FrameTreeWriter = struct {
+    bc: *const CDP.BrowserContext,
+    frame: *const Frame,
+
+    pub fn jsonStringify(self: *const FrameTreeWriter, w: anytype) error{WriteFailed}!void {
+        try write(self.bc, self.frame, w);
+    }
+
+    fn write(bc: *const CDP.BrowserContext, frame: *const Frame, w: anytype) error{WriteFailed}!void {
+        try w.beginObject();
+
+        try w.objectField("frame");
+        try w.beginObject();
+        try FrameWriter.write(bc, frame, w);
+        try w.endObject();
+
+        const child_frames = frame.child_frames.items;
+        if (child_frames.len > 0) {
+            try w.objectField("childFrames");
+            try w.beginArray();
+            for (child_frames) |child| {
+                try write(bc, child, w);
+            }
+            try w.endArray();
+        }
+
+        try w.endObject();
+    }
+};
 
 const LifecycleEvent = struct {
     frameId: []const u8,
