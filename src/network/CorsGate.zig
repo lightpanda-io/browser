@@ -74,6 +74,10 @@ fn isSafelistedContentType(ct: []const u8) bool {
 pub fn needsPreflight(transfer: *Transfer) bool {
     const req = &transfer.req;
 
+    for (req.authored_headers) |name| {
+        if (!isSafelistedHeader(name)) return true;
+    }
+
     var content_type: ?[]const u8 = null;
     var it = req.headers.iterator();
     while (it.next()) |hdr| {
@@ -81,8 +85,6 @@ pub fn needsPreflight(transfer: *Transfer) bool {
             content_type = hdr.value;
             continue;
         }
-
-        if (!isSafelistedHeader(hdr.name)) return true;
     }
 
     switch (req.method) {
@@ -152,7 +154,7 @@ fn fetchThenResume(self: *CorsGate, arena: Allocator, key: []const u8, transfer:
                 .req_credentials = .omit,
             };
 
-            log.debug(.browser, "sending cors preflight", .{ .url = transfer.req.url });
+            log.debug(.cors, "sending cors preflight", .{ .url = transfer.req.url });
 
             var headers = try client.newHeaders();
             errdefer headers.deinit();
@@ -184,10 +186,9 @@ fn fetchThenResume(self: *CorsGate, arena: Allocator, key: []const u8, transfer:
 
 fn requestedHeaderNames(arena: Allocator, transfer: *Transfer) ![]const []const u8 {
     var names: std.ArrayList([]const u8) = .empty;
-    var it = transfer.req.headers.iterator();
-    while (it.next()) |hdr| {
-        if (isSafelistedHeader(hdr.name)) continue;
-        try names.append(arena, try arena.dupe(u8, hdr.name));
+    for (transfer.req.authored_headers) |name| {
+        if (isSafelistedHeader(name)) continue;
+        try names.append(arena, try arena.dupe(u8, name));
     }
     return names.items;
 }
@@ -203,12 +204,11 @@ fn preflightHeaders(arena: Allocator, headers: *http.Headers, transfer: *Transfe
     // Non-safelisted request headers must be listed too, comma-separated,
     // per the Fetch spec's preflight algorithm.
     var names: std.ArrayList(u8) = .empty;
-    var it = transfer.req.headers.iterator();
     var first = true;
-    while (it.next()) |hdr| {
-        if (isSafelistedHeader(hdr.name)) continue;
+    for (transfer.req.authored_headers) |name| {
+        if (isSafelistedHeader(name)) continue;
         if (!first) try names.appendSlice(arena, ", ");
-        try names.appendSlice(arena, hdr.name);
+        try names.appendSlice(arena, name);
         first = false;
     }
 
@@ -346,7 +346,7 @@ const CorsContext = struct {
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
         const self: *CorsContext = @ptrCast(@alignCast(transfer.req.ctx));
         if (transfer.res.header) |hdr| {
-            log.debug(.browser, "cors preflight status", .{ .status = hdr.status, .key = self.key });
+            log.debug(.cors, "cors preflight status", .{ .status = hdr.status, .key = self.key });
             self.status = hdr.status;
         }
 
@@ -358,7 +358,7 @@ const CorsContext = struct {
         const self: *CorsContext = @ptrCast(@alignCast(ctx_ptr));
 
         const entry = self.entry orelse {
-            log.warn(.http, "cors preflight rejected", .{ .key = self.key, .status = self.status });
+            log.warn(.cors, "cors preflight rejected", .{ .key = self.key, .status = self.status });
             self.resolve(false);
             return;
         };
@@ -367,20 +367,20 @@ const CorsContext = struct {
             entry.satisfies(self.req_origin, self.req_method, self.req_headers, self.req_credentials);
 
         if (!allowed) {
-            log.warn(.http, "cors preflight rejected", .{ .key = self.key, .status = self.status });
+            log.warn(.cors, "cors preflight rejected", .{ .key = self.key, .status = self.status });
         }
         self.resolve(allowed);
     }
 
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *CorsContext = @ptrCast(@alignCast(ctx_ptr));
-        log.warn(.http, "cors preflight failed", .{ .err = err, .key = self.key });
+        log.warn(.cors, "cors preflight failed", .{ .err = err, .key = self.key });
         self.resolve(false);
     }
 
     fn shutdownCallback(ctx_ptr: *anyopaque) void {
         const self: *CorsContext = @ptrCast(@alignCast(ctx_ptr));
-        log.debug(.http, "cors preflight shutdown", .{});
+        log.debug(.cors, "cors preflight shutdown", .{});
         const gate = self.gate;
         const pool = self.arena_pool;
         const arena = self.arena;
@@ -405,7 +405,7 @@ fn flushPending(self: *CorsGate, key: []const u8, allowed: bool) void {
         transfer.unpark();
 
         if (!allowed) {
-            log.warn(.http, "blocked by cors preflight", .{ .url = transfer.req.url });
+            log.warn(.cors, "blocked by cors preflight", .{ .url = transfer.req.url });
             transfer.failAsync(error.CorsBlocked);
             continue;
         }

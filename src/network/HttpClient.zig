@@ -573,6 +573,12 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             owned.credentials = try arena.dupeZ(u8, c);
         }
 
+        var owned_authored: std.ArrayList([]const u8) = try .initCapacity(arena, req.authored_headers.len);
+        for (req.authored_headers) |name| {
+            owned_authored.appendAssumeCapacity(try arena.dupe(u8, name));
+        }
+        owned.authored_headers = owned_authored.items;
+
         // The body can be larger, so callers can signal, via the
         // `body_outlives_request` flag that they guarantee that the body
         // will outlive the transfer (and thus doesn't need to be duped)
@@ -1669,6 +1675,7 @@ pub const Request = struct {
     // Empty by default; the client fills in its baseline headers (user
     // agent, sec-ch-ua, accept-language) when none are supplied.
     headers: http.Headers = .{ .headers = null },
+    authored_headers: []const []const u8 = &.{},
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
     cookie_origin: [:0]const u8,
@@ -3246,7 +3253,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.cache = null;
     client.serve_mode = false;
     client.obey_robots = false;
-    client.robots = .{ .allocator = testing.allocator, .network = undefined, .single_flight = .{ .allocator = testing.allocator }};
+    client.robots = .{ .allocator = testing.allocator, .network = undefined, .single_flight = .{ .allocator = testing.allocator } };
     client.url_blocklist = null;
 }
 
