@@ -99,13 +99,17 @@ pub fn hasReadyTasks(self: *Scheduler) bool {
     return queueHasReadyTask(&self.low_priority, now) or queueHasReadyTask(&self.high_priority, now);
 }
 
-pub fn msToNextHigh(self: *Scheduler) ?u64 {
-    const task = self.high_priority.peek() orelse return null;
+pub fn msToNext(self: *Scheduler) ?u64 {
+    var next: ?u64 = null;
     const now = milliTimestamp(.monotonic);
-    if (task.run_at <= now) {
-        return 0;
+    for ([_]*Queue{ &self.high_priority, &self.low_priority }) |queue| {
+        const task = queue.peek() orelse continue;
+        const ms = if (task.run_at <= now) 0 else task.run_at - now;
+        if (next == null or ms < next.?) {
+            next = ms;
+        }
     }
-    return @intCast(task.run_at - now);
+    return next;
 }
 
 fn runQueue(self: *Scheduler, queue: *Queue) !void {

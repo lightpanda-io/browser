@@ -75,21 +75,6 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     }
 }
 
-const CDPFrame = struct {
-    id: []const u8,
-    loaderId: []const u8,
-    url: []const u8,
-    domainAndRegistry: []const u8 = "",
-    securityOrigin: []const u8,
-    mimeType: []const u8 = "text/html",
-    adFrameStatus: struct {
-        adFrameType: []const u8 = "none",
-    } = .{},
-    secureContextType: []const u8,
-    crossOriginIsolatedContextType: []const u8 = "NotIsolated",
-    gatedAPIFeatures: [][]const u8 = &[0][]const u8{},
-};
-
 fn getFrameTree(cmd: *CDP.Command) !void {
     // Stagehand parses the response and error if we don't return a
     // correct one for this call when browser context or target id are missing.
@@ -105,18 +90,13 @@ fn getFrameTree(cmd: *CDP.Command) !void {
         },
     };
     const bc = cmd.browser_context orelse return cmd.sendResult(startup, .{});
-    const target_id = bc.target_id orelse return cmd.sendResult(startup, .{});
+    if (bc.target_id == null) {
+        return cmd.sendResult(startup, .{});
+    }
+    const frame = bc.mainFrame() orelse return cmd.sendResult(startup, .{});
 
     return cmd.sendResult(.{
-        .frameTree = .{
-            .frame = CDPFrame{
-                .id = &target_id,
-                .securityOrigin = bc.security_origin,
-                .loaderId = "LID-0000000001",
-                .url = bc.getURL() orelse "about:blank",
-                .secureContextType = bc.secure_context_type,
-            },
-        },
+        .frameTree = FrameTreeWriter{ .bc = bc, .frame = frame },
     }, .{});
 }
 
@@ -455,12 +435,14 @@ pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNa
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    // is_pending_root means this navigation is in flight against a pending
-    // Page while the OLD page is still alive and addressable. Don't blow
-    // away the node_registry — the OLD page's nodes are still referenced
-    // by client-held objectIds. The reset moves to frameRemove (commit).
+    // Child-frame navigations must not invalidate node IDs owned by other
+    // frames. A pending root keeps its old page addressable until frameRemove;
+    // other root navigations can clear the registry immediately.
     if (!event.is_pending_root) {
-        bc.reset();
+        const root_frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+        if (event.frame_id == root_frame._frame_id) {
+            bc.reset();
+        }
     }
 
     const frame_id = &id.toFrameId(event.frame_id);
@@ -679,13 +661,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
-        .frame = CDPFrame{
-            .id = frame_id,
-            .url = event.url,
-            .loaderId = loader_id,
-            .securityOrigin = bc.security_origin,
-            .secureContextType = bc.secure_context_type,
-        },
+        .frame = FrameWriter{ .bc = bc, .frame = frame },
     }, .{ .session_id = session_id });
 
     {
@@ -882,6 +858,85 @@ pub fn javascriptDialogOpening(bc: anytype, event: *const Notification.Javascrip
     }, .{ .session_id = session_id });
 }
 
+const FrameWriter = struct {
+    frame: *const Frame,
+    bc: *const CDP.BrowserContext,
+
+    pub fn jsonStringify(self: *const FrameWriter, w: anytype) error{WriteFailed}!void {
+        try w.beginObject();
+        try write(self.bc, self.frame, w);
+        try w.endObject();
+    }
+
+    fn write(bc: *const CDP.BrowserContext, frame: *const Frame, w: anytype) error{WriteFailed}!void {
+        try w.objectField("id");
+        try w.write(&id.toFrameId(frame._frame_id));
+
+        if (frame.parent) |parent| {
+            try w.objectField("parentId");
+            try w.write(&id.toFrameId(parent._frame_id));
+        }
+
+        try w.objectField("loaderId");
+        try w.write(&id.toLoaderId(frame._loader_id));
+
+        try w.objectField("url");
+        try w.write(frame.url);
+
+        try w.objectField("domainAndRegistry");
+        try w.write("");
+
+        try w.objectField("securityOrigin");
+        try w.write(frame.origin orelse bc.security_origin);
+
+        try w.objectField("mimeType");
+        try w.write("text/html");
+
+        try w.objectField("adFrameStatus");
+        try w.write(.{ .adFrameType = "none" });
+
+        try w.objectField("secureContextType");
+        try w.write(bc.secure_context_type);
+
+        try w.objectField("crossOriginIsolatedContextType");
+        try w.write("NotIsolated");
+
+        try w.objectField("gatedAPIFeatures");
+        try w.beginArray();
+        try w.endArray();
+    }
+};
+
+const FrameTreeWriter = struct {
+    bc: *const CDP.BrowserContext,
+    frame: *const Frame,
+
+    pub fn jsonStringify(self: *const FrameTreeWriter, w: anytype) error{WriteFailed}!void {
+        try write(self.bc, self.frame, w);
+    }
+
+    fn write(bc: *const CDP.BrowserContext, frame: *const Frame, w: anytype) error{WriteFailed}!void {
+        try w.beginObject();
+
+        try w.objectField("frame");
+        try w.beginObject();
+        try FrameWriter.write(bc, frame, w);
+        try w.endObject();
+
+        const child_frames = frame.child_frames.items;
+        if (child_frames.len > 0) {
+            try w.objectField("childFrames");
+            try w.beginArray();
+            for (child_frames) |child| {
+                try write(bc, child, w);
+            }
+            try w.endArray();
+        }
+
+        try w.endObject();
+    }
+};
+
 const LifecycleEvent = struct {
     frameId: []const u8,
     loaderId: ?[]const u8,
@@ -1025,16 +1080,18 @@ test "cdp.frame: getFrameTree" {
     }
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
     {
         try ctx.processMessage(.{ .id = 11, .method = "Page.getFrameTree" });
         try ctx.expectSentResult(.{
             .frameTree = .{
                 .frame = .{
-                    .id = "FID-000000000X",
+                    .id = &root_id,
                     .loaderId = "LID-0000000001",
                     .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
                     .domainAndRegistry = "",
-                    .securityOrigin = bc.security_origin,
+                    .securityOrigin = root.origin orelse bc.security_origin,
                     .mimeType = "text/html",
                     .adFrameStatus = .{
                         .adFrameType = "none",
@@ -1053,11 +1110,11 @@ test "cdp.frame: getFrameTree" {
         try ctx.expectSentResult(.{
             .frameTree = .{
                 .frame = .{
-                    .id = "FID-000000000X",
+                    .id = &root_id,
                     .loaderId = "LID-0000000001",
                     .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
                     .domainAndRegistry = "",
-                    .securityOrigin = bc.security_origin,
+                    .securityOrigin = root.origin orelse bc.security_origin,
                     .mimeType = "text/html",
                     .adFrameStatus = .{
                         .adFrameType = "none",
@@ -1069,6 +1126,44 @@ test "cdp.frame: getFrameTree" {
             },
         }, .{ .id = 12 });
     }
+}
+
+test "cdp.frame: child frame metadata" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FRAME", .url = "cdp/empty_iframe.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    try testing.expectEqual(1, root.child_frames.items.len);
+    const child = root.child_frames.items[0];
+
+    const root_id = id.toFrameId(root._frame_id);
+    const child_id = id.toFrameId(child._frame_id);
+    const child_loader_id = id.toLoaderId(child._loader_id);
+
+    try ctx.expectSentEvent("Page.frameNavigated", .{
+        .frame = .{
+            .id = &child_id,
+            .parentId = &root_id,
+            .loaderId = &child_loader_id,
+            .url = "about:blank",
+        },
+    }, .{ .session_id = "SID-X" });
+
+    try ctx.processMessage(.{ .id = 13, .method = "Page.getFrameTree" });
+    try ctx.expectSentResult(.{
+        .frameTree = .{
+            .frame = .{ .id = &root_id },
+            .childFrames = &.{.{
+                .frame = .{
+                    .id = &child_id,
+                    .parentId = &root_id,
+                    .loaderId = &child_loader_id,
+                    .url = "about:blank",
+                },
+            }},
+        },
+    }, .{ .id = 13 });
 }
 
 test "cdp.frame: frameAttached" {
@@ -1088,6 +1183,36 @@ test "cdp.frame: frameAttached" {
         .frameId = "FID-0000000002",
         .parentFrameId = "FID-0000000001",
     }, .{ .session_id = "SID-X" });
+}
+
+test "cdp.frame: child navigation preserves node registry" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "hi.html" });
+    const root_frame = bc.mainFrame().?;
+    const node = try bc.node_registry.register(root_frame.window._document.asNode());
+    const node_id = node.id;
+
+    try frameNavigate(bc, &.{
+        .req_id = 1,
+        .frame_id = root_frame._frame_id + 1,
+        .loader_id = 2,
+        .timestamp = 0,
+        .url = "about:blank",
+        .opts = .{},
+    });
+    try testing.expectEqual(node, bc.node_registry.lookup_by_id.get(node_id).?);
+
+    try frameNavigate(bc, &.{
+        .req_id = 2,
+        .frame_id = root_frame._frame_id,
+        .loader_id = 3,
+        .timestamp = 0,
+        .url = "about:blank",
+        .opts = .{},
+    });
+    try testing.expectEqual(null, bc.node_registry.lookup_by_id.get(node_id));
 }
 
 test "cdp.frame: captureScreenshot" {

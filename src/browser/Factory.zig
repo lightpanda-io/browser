@@ -354,49 +354,44 @@ pub fn htmlMediaElement(self: *Factory, child: anytype) !*@TypeOf(child) {
 }
 
 pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
-    const chain = try PrototypeChain(
-        &.{ EventTarget, Node, Element, Element.Svg, @TypeOf(child) },
-    ).allocate(self._slab.allocator());
+    const types = comptime svgPrototypeTypes(@TypeOf(child));
+    const chain = try PrototypeChain(types).allocate(self._slab.allocator());
 
-    try self.setSvgChainBase(chain, tag_name);
-    chain.setLeaf(4, child);
-    return chain.get(4);
-}
-
-pub fn svgGraphicsElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
-    const chain = try PrototypeChain(
-        &.{ EventTarget, Node, Element, Element.Svg, Element.Svg.Graphics, @TypeOf(child) },
-    ).allocate(self._slab.allocator());
-
-    try self.setSvgChainBase(chain, tag_name);
-    chain.setMiddle(4, Element.Svg.Graphics.Type);
-    chain.setLeaf(5, child);
-    return chain.get(5);
-}
-
-pub fn svgGeometryElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
-    const chain = try PrototypeChain(
-        &.{ EventTarget, Node, Element, Element.Svg, Element.Svg.Graphics, Element.Svg.Graphics.Geometry, @TypeOf(child) },
-    ).allocate(self._slab.allocator());
-
-    try self.setSvgChainBase(chain, tag_name);
-    chain.setMiddle(4, Element.Svg.Graphics.Type);
-    chain.setMiddle(5, Element.Svg.Graphics.Geometry.Type);
-    chain.setLeaf(6, child);
-    return chain.get(6);
-}
-
-fn setSvgChainBase(self: *Factory, chain: anytype, tag_name: []const u8) !void {
     chain.setRoot(EventTarget.Type);
-    chain.setMiddle(1, Node.Type);
-    chain.setMiddle(2, Element.Type);
+    inline for (1..types.len - 1) |i| {
+        const T = types[i];
+        if (T == Element.Svg) {
+            chain.set(i, .{
+                ._proto = chain.get(i - 1),
+                ._tag_name = try String.init(self._arena, tag_name, .{}),
+                ._type = unionInit(Element.Svg.Type, chain.get(i + 1)),
+            });
+        } else {
+            chain.setMiddle(i, T.Type);
+        }
+    }
+    chain.setLeaf(types.len - 1, child);
+    return chain.get(types.len - 1);
+}
 
-    // Manually set Element.Svg with the tag_name
-    chain.set(3, .{
-        ._proto = chain.get(2),
-        ._tag_name = try String.init(self._arena, tag_name, .{}),
-        ._type = unionInit(Element.Svg.Type, chain.get(4)),
-    });
+fn svgPrototypeTypes(comptime Child: type) []const type {
+    comptime {
+        var types: []const type = &[_]type{Child};
+        var T = Child;
+
+        while (T != EventTarget) {
+            if (!@hasField(T, "_proto")) {
+                @compileError(@typeName(T) ++ " does not lead to EventTarget through _proto");
+            }
+            T = reflect.Struct(@FieldType(T, "_proto"));
+            types = &[_]type{T} ++ types;
+        }
+
+        if (types.len < 5 or types[3] != Element.Svg) {
+            @compileError(@typeName(Child) ++ " is not an SVG prototype chain");
+        }
+        return types;
+    }
 }
 
 pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !*@TypeOf(child) {

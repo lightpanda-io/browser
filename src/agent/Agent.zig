@@ -375,7 +375,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.startSession();
 
-    self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, lp.io, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ() }) else null;
+    self.ai_client = if (llm) |l| try zenai.provider.Client.init(lp.io, allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
@@ -1048,7 +1048,7 @@ fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
 /// `owned_key` transfers ownership of an allocated `credentials.key` (Vertex
 /// gcloud token) on success; on error the caller still owns it.
 fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8) !void {
-    const new_client = try zenai.provider.Client.init(self.allocator, lp.io, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ() });
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ() });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.

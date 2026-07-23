@@ -271,7 +271,7 @@ pub fn tick(self: *CDP) !bool {
             // No active page yet (or a teardown is in flight). Fall
             // back to ticking the http client directly so CDP messages
             // still get dispatched.
-            self.browser.http_client.tick(wait_ms) catch |err| switch (err) {
+            _ = self.browser.http_client.tick(wait_ms) catch |err| switch (err) {
                 error.ClientDisconnected => return false,
                 else => {
                     log.err(.app, "http tick", .{ .err = err });

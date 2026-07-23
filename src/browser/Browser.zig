@@ -215,12 +215,12 @@ pub fn waitForBackgroundTasks(self: *Browser) void {
     self.env.waitForBackgroundTasks();
 }
 
-pub fn msToNextMacrotask(self: *Browser) ?u64 {
-    return self.env.msToNextMacrotask();
+pub fn hasMacrotasks(self: *Browser) bool {
+    return self.env.hasMacrotasks();
 }
 
-pub fn msTo(self: *Browser) bool {
-    return self.env.hasBackgroundTasks();
+pub fn msToNextTask(self: *Browser) ?u64 {
+    return self.env.msToNextTask();
 }
 
 pub fn runIdleTasks(self: *const Browser) void {

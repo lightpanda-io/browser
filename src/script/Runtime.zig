@@ -42,9 +42,9 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// clear the live spinner so script output starts on a clean line instead
 /// of colliding with the indicator; the line still goes to stdout/stderr.
 console_observer: ?ConsoleObserver = null,
-/// When set, receives each `console.*` line instead of the process
-/// stdout/stderr write — for embedders (MCP) whose stdout is a protocol
-/// stream. The observer still fires first.
+/// When set, receives each `console.*` line — stderr-bound methods included —
+/// instead of the process stdout/stderr write, for embedders (MCP) whose
+/// stdout is a protocol stream. The observer still fires first.
 console_sink: ?ConsoleSink = null,
 /// In-flight async `goto`s; emptied before each `runSource` returns.
 pending_gotos: std.ArrayList(PendingGoto),
@@ -1178,6 +1178,11 @@ fn runTestScript(runtime: *Runtime, source: []const u8) !void {
     }
 }
 
+fn appendConsoleLine(context: *anyopaque, _: ConsoleMethod, line: []const u8) void {
+    const aw: *std.Io.Writer.Allocating = @ptrCast(@alignCast(context));
+    aw.writer.print("{s}\n", .{line}) catch {};
+}
+
 fn terminateRuntimeSoon(runtime: *Runtime) void {
     lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
     runtime.terminate();
@@ -1522,6 +1527,10 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
+    var sink: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer sink.deinit();
+    runtime.console_sink = .{ .context = @ptrCast(&sink), .write = appendConsoleLine };
+
     try runTestScript(runtime,
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
@@ -1533,6 +1542,7 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
         \\console.log("value", { toString() { probed += 1; return page.evaluate("'ok'"); } }, "tail");
         \\if (probed !== 1) throw new Error("console toString re-entry not exercised");
     );
+    try testing.expectString("value ok tail\n", sink.written());
 }
 
 test "agent script runtime: terminate interrupts local JavaScript" {
@@ -1607,11 +1617,16 @@ test "agent script runtime: console is available in agent context" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
+    var sink: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer sink.deinit();
+    runtime.console_sink = .{ .context = @ptrCast(&sink), .write = appendConsoleLine };
+
     try runTestScript(runtime,
         \\if (typeof console !== "object") throw new Error("missing console");
         \\if (typeof console.log !== "function") throw new Error("missing console.log");
         \\console.log("agent console ready");
     );
+    try testing.expectString("agent console ready\n", sink.written());
 }
 
 test "agent script runtime: console sink captures lines instead of the process streams" {
@@ -1739,6 +1754,10 @@ test "agent script runtime: top-level await runs in an async wrapper" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
+    var sink: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer sink.deinit();
+    runtime.console_sink = .{ .context = @ptrCast(&sink), .write = appendConsoleLine };
+
     // `await` on a non-goto promise resolves without touching the browser, and
     // a top-level `return` surfaces as the (otherwise un-echoed) result.
     try runTestScript(runtime,
@@ -1746,6 +1765,7 @@ test "agent script runtime: top-level await runs in an async wrapper" {
         \\if (x + 2 !== 42) throw new Error("top-level await did not resolve: " + x);
         \\return x + 2;
     );
+    try testing.expectString("42\n", sink.written());
 }
 
 test "agent script runtime: completion value emptiness" {

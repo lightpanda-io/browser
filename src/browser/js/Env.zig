@@ -461,10 +461,19 @@ pub fn runMacrotasks(self: *Env) !void {
     }
 }
 
-pub fn msToNextMacrotask(self: *Env) ?u64 {
+pub fn hasMacrotasks(self: *Env) bool {
+    for (self.contexts.items) |ctx| {
+        if (ctx.scheduler.high_priority.count() > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn msToNextTask(self: *Env) ?u64 {
     var next_task: u64 = std.math.maxInt(u64);
     for (self.contexts.items) |ctx| {
-        const candidate = ctx.scheduler.msToNextHigh() orelse continue;
+        const candidate = ctx.scheduler.msToNext() orelse continue;
         next_task = @min(candidate, next_task);
     }
     return if (next_task == std.math.maxInt(u64)) null else next_task;

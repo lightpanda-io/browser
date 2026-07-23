@@ -30,6 +30,7 @@ const Page = @import("../Page.zig");
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
 const Element = @import("../webapi/Element.zig");
+const ResizeObserver = @import("../webapi/ResizeObserver.zig");
 const MutationObserver = @import("../webapi/MutationObserver.zig");
 const IntersectionObserver = @import("../webapi/IntersectionObserver.zig");
 
@@ -52,6 +53,14 @@ pub const Intersection = struct {
     delivery_scheduled: bool = false,
 };
 
+// ResizeObserver bookkeeping for a frame.
+pub const Resize = struct {
+    // List of active ResizeObservers (i.e. those with >= 1 observation)
+    observers: std.ArrayList(*ResizeObserver) = .empty,
+    delivery_scheduled: bool = false,
+    delivery_depth: u32 = 0,
+};
+
 // Releases the frame's references to its registered observers. Called from
 // Frame.deinit.
 pub fn deinit(frame: *Frame, page: *Page) void {
@@ -63,6 +72,10 @@ pub fn deinit(frame: *Frame, page: *Page) void {
     }
 
     for (frame._intersection.observers.items) |observer| {
+        observer.releaseRef(page);
+    }
+
+    for (frame._resize.observers.items) |observer| {
         observer.releaseRef(page);
     }
 }
@@ -92,6 +105,21 @@ pub fn unregisterIntersectionObserver(frame: *Frame, observer: *IntersectionObse
     }
 }
 
+pub fn registerResizeObserver(frame: *Frame, observer: *ResizeObserver) !void {
+    observer.acquireRef();
+    try frame._resize.observers.append(frame.arena, observer);
+}
+
+pub fn unregisterResizeObserver(frame: *Frame, observer: *ResizeObserver) void {
+    for (frame._resize.observers.items, 0..) |obs, i| {
+        if (obs == observer) {
+            observer.releaseRef(frame._page);
+            _ = frame._resize.observers.swapRemove(i);
+            return;
+        }
+    }
+}
+
 pub fn hasMutationObservers(frame: *const Frame) bool {
     return frame._mutation.observers.first != null;
 }
@@ -116,6 +144,63 @@ pub fn scheduleIntersectionDelivery(frame: *Frame) !void {
     }
     frame._intersection.delivery_scheduled = true;
     try frame.js.queueIntersectionDelivery();
+}
+
+pub fn scheduleIntersectionChecks(frame: *Frame) void {
+    if (frame._intersection.check_scheduled) {
+        return;
+    }
+    frame._intersection.check_scheduled = true;
+    frame.js.queueIntersectionChecks() catch |err| {
+        frame._intersection.check_scheduled = false;
+        log.err(.frame, "frame.scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
+    };
+}
+
+pub fn scheduleResizeDelivery(frame: *Frame) void {
+    if (frame._resize.observers.items.len == 0) {
+        return;
+    }
+    if (frame._resize.delivery_scheduled) {
+        return;
+    }
+    frame._resize.delivery_scheduled = true;
+    frame.js.queueResizeDelivery() catch |err| {
+        frame._resize.delivery_scheduled = false;
+        log.err(.frame, "frame.scheduleResizeDelivery", .{ .err = err, .type = frame._type, .url = frame.url });
+    };
+}
+
+pub fn deliverResizes(frame: *Frame) void {
+    if (!frame._resize.delivery_scheduled) {
+        return;
+    }
+    frame._resize.delivery_scheduled = false;
+
+    // guard against a callback that keeps mutating the layout, and thus causes
+    // an endless stram of deliveries.
+    frame._resize.delivery_depth += 1;
+    defer if (!frame._resize.delivery_scheduled) {
+        frame._resize.delivery_depth = 0;
+    };
+    if (frame._resize.delivery_depth > 50) {
+        log.warn(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
+        frame._resize.delivery_depth = 0;
+        return;
+    }
+
+    // Iterate backwards so an observer disconnecting during its callback is safe.
+    var i = frame._resize.observers.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (i >= frame._resize.observers.items.len) {
+            continue;
+        }
+        const observer = frame._resize.observers.items[i];
+        observer.deliverEntries(frame) catch |err| {
+            log.err(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
+        };
+    }
 }
 
 pub fn performScheduledIntersectionChecks(frame: *Frame) void {
@@ -157,7 +242,7 @@ pub fn deliverMutations(frame: *Frame) void {
         frame._mutation.delivery_depth = 0;
     };
 
-    if (frame._mutation.delivery_depth > 100) {
+    if (frame._mutation.delivery_depth > 50) {
         log.err(.frame, "frame.MutationLimit", .{ .type = frame._type, .url = frame.url });
         frame._mutation.delivery_depth = 0;
         return;
