@@ -624,6 +624,9 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     }
 
     const event = error_event.asEvent();
+    event.acquireRef();
+    defer event.releaseRef(frame._page);
+
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
     // We still dispatch so that addEventListener('error', ...) listeners fire.
