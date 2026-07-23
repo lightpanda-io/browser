@@ -2923,6 +2923,39 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: F
     }
 }
 
+// Build a detached XMLDocument from `xml` (DOMParser.parseFromString and
+// XMLHttpRequest.responseXML). Returns null when the input isn't well-formed
+// XML. The parse borrows the fragment parse-mode so frame-side hooks triggered
+// from `Build.created` / `nodeIsReady` (external stylesheet fetches, script
+// execution, mutation-observer fan-out, default-script injection) treat the
+// parsed nodes as detached and skip side effects on the live document.
+pub fn parseXmlDocument(self: *Frame, xml: []const u8) !?*Document.XMLDocument {
+    const arena = try self.getArena(.medium, "Frame.parseXmlDocument");
+    defer self.releaseArena(arena);
+
+    const previous_parse_mode = self._parse_mode;
+    self._parse_mode = .fragment;
+    defer self._parse_mode = previous_parse_mode;
+
+    const doc = try self._factory.document(Document.XMLDocument{ ._proto = undefined });
+    const doc_node = doc.asNode();
+    var parser = Parser.init(arena, doc_node, self, .{});
+    parser.parseXML(xml);
+
+    if (parser.err != null or doc_node.firstChild() == null) {
+        return null;
+    }
+
+    // If first node is a `ProcessingInstruction` (e.g. the <?xml?>
+    // declaration), skip it.
+    const first_child = doc_node.firstChild().?;
+    if (first_child.getNodeType() == 7) {
+        _ = try doc_node.removeChild(first_child, self);
+    }
+
+    return doc;
+}
+
 // Runs the "ready" work for an inserted node and, when it's an element with
 // children, for its descendants in tree order: appending a subtree
 // containing scripts must execute them all, after the whole insertion.
