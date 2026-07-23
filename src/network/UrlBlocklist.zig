@@ -19,6 +19,12 @@ const UrlBlocklist = @This();
 
 allocator: std.mem.Allocator,
 patterns: []const []const u8,
+blocks: ?[]const bool = null,
+
+pub const Pattern = struct {
+    urlPattern: []const u8,
+    block: bool,
+};
 
 /// Compile and own a set of URL wildcard patterns. Patterns are normalized to
 /// lowercase once so request matching remains allocation-free.
@@ -45,14 +51,28 @@ pub fn init(allocator: std.mem.Allocator, patterns: []const []const u8) !UrlBloc
     };
 }
 
+pub fn initPatterns(allocator: std.mem.Allocator, patterns: []const Pattern) !UrlBlocklist {
+    const urls = try allocator.alloc([]const u8, patterns.len);
+    defer allocator.free(urls);
+    for (patterns, urls) |pattern, *url| url.* = pattern.urlPattern;
+
+    var blocklist = try init(allocator, urls);
+    errdefer blocklist.deinit();
+    const blocks = try allocator.alloc(bool, patterns.len);
+    for (patterns, blocks) |pattern, *block| block.* = pattern.block;
+    blocklist.blocks = blocks;
+    return blocklist;
+}
+
 pub fn deinit(self: *UrlBlocklist) void {
     for (self.patterns) |pattern| self.allocator.free(pattern);
     self.allocator.free(self.patterns);
+    if (self.blocks) |blocks| self.allocator.free(blocks);
 }
 
 pub fn isBlocked(self: *const UrlBlocklist, url: []const u8) bool {
-    for (self.patterns) |pattern| {
-        if (wildcardMatch(pattern, url)) return true;
+    for (self.patterns, 0..) |pattern, index| {
+        if (wildcardMatch(pattern, url)) return if (self.blocks) |blocks| blocks[index] else true;
     }
     return false;
 }
@@ -133,9 +153,9 @@ test "UrlBlocklist: wildcard matching backtracks and handles empty patterns" {
 
 test "UrlBlocklist: owns compiled patterns" {
     var pattern = [_]u8{ '*', 'a', 'd', 's', '*' };
-    var blocklist = try UrlBlocklist.init(std.testing.allocator, &.{&pattern});
+    var blocklist = try UrlBlocklist.initPatterns(std.testing.allocator, &.{ .{ .urlPattern = &pattern, .block = false }, .{ .urlPattern = "*", .block = true } });
     defer blocklist.deinit();
 
     @memset(&pattern, 'x');
-    try std.testing.expect(blocklist.isBlocked("https://example.com/ads/script.js"));
+    try std.testing.expect(!blocklist.isBlocked("https://example.com/ads/script.js"));
 }

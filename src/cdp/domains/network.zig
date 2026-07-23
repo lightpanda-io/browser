@@ -100,11 +100,11 @@ fn setCacheDisabled(cmd: *CDP.Command) !void {
 
 fn setBlockedURLs(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        urls: []const []const u8,
+        urlPatterns: []const HttpClient.BlockPattern,
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.cdp.browser.http_client.setBlockedUrls(params.urls);
+    try bc.cdp.browser.http_client.setBlockedUrlPatterns(params.urlPatterns);
     return cmd.sendResult(null, .{});
 }
 
@@ -984,7 +984,9 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
     try ctx.processMessage(.{
         .id = 2,
         .method = "Network.setBlockedURLs",
-        .params = .{ .urls = &[_][]const u8{"*://blocked.test/*"} },
+        .params = .{ .urlPatterns = &[_]HttpClient.BlockPattern{
+            .{ .urlPattern = "*://blocked.test/*", .block = true },
+        } },
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
