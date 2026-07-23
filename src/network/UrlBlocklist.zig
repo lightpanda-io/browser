@@ -26,22 +26,30 @@ pub const Pattern = struct {
     block: bool,
 };
 
-/// Compile and own a set of URL wildcard patterns. Patterns are normalized to
-/// lowercase once so request matching remains allocation-free.
+/// Compile and own a set of URL wildcard patterns. Empty patterns (e.g. from
+/// trailing or duplicate commas in `--block-urls`) are skipped so every entry
+/// point behaves the same. Patterns are normalized to lowercase once so request
+/// matching remains allocation-free.
 pub fn init(allocator: std.mem.Allocator, patterns: []const []const u8) !UrlBlocklist {
-    const owned = try allocator.alloc([]const u8, patterns.len);
+    var count: usize = 0;
+    for (patterns) |pattern| {
+        if (pattern.len > 0) count += 1;
+    }
+
+    const owned = try allocator.alloc([]const u8, count);
     var initialized: usize = 0;
     errdefer {
         for (owned[0..initialized]) |pattern| allocator.free(pattern);
         allocator.free(owned);
     }
 
-    for (patterns, owned) |pattern, *compiled| {
+    for (patterns) |pattern| {
+        if (pattern.len == 0) continue;
         const normalized = try allocator.alloc(u8, pattern.len);
         for (pattern, normalized) |char, *lower| {
             lower.* = std.ascii.toLower(char);
         }
-        compiled.* = normalized;
+        owned[initialized] = normalized;
         initialized += 1;
     }
 
@@ -52,14 +60,28 @@ pub fn init(allocator: std.mem.Allocator, patterns: []const []const u8) !UrlBloc
 }
 
 pub fn initPatterns(allocator: std.mem.Allocator, patterns: []const Pattern) !UrlBlocklist {
-    const urls = try allocator.alloc([]const u8, patterns.len);
+    var count: usize = 0;
+    for (patterns) |pattern| {
+        if (pattern.urlPattern.len > 0) count += 1;
+    }
+
+    // Pre-filter empty patterns here too so `blocks` stays aligned with the
+    // (also-filtered) patterns compiled by init().
+    const urls = try allocator.alloc([]const u8, count);
     defer allocator.free(urls);
-    for (patterns, urls) |pattern, *url| url.* = pattern.urlPattern;
+    const blocks = try allocator.alloc(bool, count);
+    errdefer allocator.free(blocks);
+    {
+        var i: usize = 0;
+        for (patterns) |pattern| {
+            if (pattern.urlPattern.len == 0) continue;
+            urls[i] = pattern.urlPattern;
+            blocks[i] = pattern.block;
+            i += 1;
+        }
+    }
 
     var blocklist = try init(allocator, urls);
-    errdefer blocklist.deinit();
-    const blocks = try allocator.alloc(bool, patterns.len);
-    for (patterns, blocks) |pattern, *block| block.* = pattern.block;
     blocklist.blocks = blocks;
     return blocklist;
 }
@@ -131,14 +153,16 @@ test "UrlBlocklist: matches full URLs with case-insensitive wildcards" {
     try std.testing.expect(!blocklist.isBlocked("https://example.com/exact/path"));
 }
 
-test "UrlBlocklist: wildcard matching backtracks and handles empty patterns" {
+test "UrlBlocklist: wildcard matching backtracks and skips empty patterns" {
     var blocklist = try UrlBlocklist.init(std.testing.allocator, &.{
         "",
         "**tracker***pixel*",
     });
     defer blocklist.deinit();
 
-    try std.testing.expect(blocklist.isBlocked(""));
+    // The empty pattern is dropped, so it never matches (not even "").
+    try std.testing.expectEqual(1, blocklist.patterns.len);
+    try std.testing.expect(!blocklist.isBlocked(""));
     try std.testing.expect(blocklist.isBlocked("https://tracker.test/a/pixel.gif"));
     try std.testing.expect(!blocklist.isBlocked("https://anything.test/"));
 
@@ -149,6 +173,22 @@ test "UrlBlocklist: wildcard matching backtracks and handles empty patterns" {
     var empty = try UrlBlocklist.init(std.testing.allocator, &.{});
     defer empty.deinit();
     try std.testing.expect(!empty.isBlocked("https://example.com/"));
+}
+
+test "UrlBlocklist: initPatterns skips empty patterns and keeps blocks aligned" {
+    var blocklist = try UrlBlocklist.initPatterns(std.testing.allocator, &.{
+        .{ .urlPattern = "*allow*", .block = false },
+        .{ .urlPattern = "", .block = true },
+        .{ .urlPattern = "*", .block = true },
+    });
+    defer blocklist.deinit();
+
+    try std.testing.expectEqual(2, blocklist.patterns.len);
+    try std.testing.expectEqual(2, blocklist.blocks.?.len);
+    // The exemption (block = false) still wins over the trailing catch-all,
+    // proving the empty pattern was removed without shifting `blocks`.
+    try std.testing.expect(!blocklist.isBlocked("https://example.com/allow/me"));
+    try std.testing.expect(blocklist.isBlocked("https://example.com/other"));
 }
 
 test "UrlBlocklist: owns compiled patterns" {
