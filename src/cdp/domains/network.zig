@@ -312,6 +312,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
         .requestId = &id.toRequestId(msg.transfer),
+        .timestamp = timestamp(.monotonic),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -365,6 +366,8 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
         .frameId = &id.toFrameId(req.frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
+        .timestamp = timestamp(.monotonic),
+        .type = req.resource_type.string(),
         .response = ResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
@@ -376,6 +379,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     const session_id = bc.session_id orelse return;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
+        .timestamp = timestamp(.monotonic),
         .encodedDataLength = msg.content_length,
     }, .{ .session_id = session_id });
 }
@@ -428,6 +432,16 @@ pub const RequestWriter = struct {
         {
             try jws.objectField("hasPostData");
             try jws.write(request.body != null);
+        }
+
+        {
+            try jws.objectField("initialPriority");
+            try jws.write("High");
+        }
+
+        {
+            try jws.objectField("referrerPolicy");
+            try jws.write("strict-origin-when-cross-origin");
         }
 
         {
@@ -500,6 +514,17 @@ const ResponseWriter = struct {
         }
 
         {
+            try jws.objectField("connectionReused");
+            try jws.write(false);
+            try jws.objectField("connectionId");
+            try jws.write(0);
+            try jws.objectField("encodedDataLength");
+            try jws.write(transfer._cdp_content_length);
+            try jws.objectField("securityState");
+            try jws.write("unknown");
+        }
+
+        {
             try jws.objectField("timing");
             try jws.write(.{
                 // TODO: fix
@@ -516,6 +541,12 @@ const ResponseWriter = struct {
                 .sendStart = -1,
                 .sslEnd = -1,
                 .sslStart = -1,
+                .workerStart = -1,
+                .workerReady = -1,
+                .workerFetchStart = -1,
+                .workerRespondWithSettled = -1,
+                .pushStart = -1,
+                .pushEnd = -1,
             });
         }
 
