@@ -366,6 +366,9 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
         return error.CacheEntryNotFound;
     }
 
+    // Clear old non-Vary headers.
+    try conn.exec("delete from header where url = $1 and vary = false", .{req.url});
+
     var lower_name: [256]u8 = undefined;
     for (req.headers) |h| {
         if (h.name.len > lower_name.len) return error.HeaderNameTooLong;
