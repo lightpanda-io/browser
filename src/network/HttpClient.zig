@@ -1455,7 +1455,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
                     try transfer.handleRedirect(location.value);
-                    if (!transfer.req.internal) lp.metrics.http_redirects.incr();
 
                     if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
                         log.warn(.http, "blocked url", .{ .url = transfer.req.url });
@@ -1464,6 +1463,8 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                         transfer.failAsync(error.UrlBlocked);
                         return true;
                     }
+
+                    if (!transfer.req.internal) lp.metrics.http_redirects.incr();
 
                     const conn = transfer._conn.?;
 
