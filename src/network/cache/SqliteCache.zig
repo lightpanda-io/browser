@@ -68,7 +68,21 @@ const cache_migrations: []const Migration = &.{
     .{ .sql = "create index header_url on header(url)" },
 };
 
-pub const SqliteCachePath = union(enum) { path: []const u8, memory };
+pub const SqliteCachePath = union(enum) {
+    path: []const u8,
+    memory,
+
+    pub fn format(
+        self: SqliteCachePath,
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        const name = switch (self) {
+            .memory => "memory",
+            .path => |p| p,
+        };
+        try writer.writeAll(name);
+    }
+};
 
 pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath) !SqliteCache {
     var pool = switch (path) {
