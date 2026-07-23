@@ -55,7 +55,7 @@ pub fn parseFromString(
             defer frame.releaseArena(arena);
 
             // DOMParser builds a detached Document. Borrow the same fragment
-            // parse-mode that `parseHtmlAsChildren` uses so frame-side hooks
+            // parse-mode that `Frame.parse` uses so frame-side hooks
             // triggered from `Build.created` / `nodeIsReady` (external
             // stylesheet fetches, script execution, mutation-observer fan-out,
             // default-script injection) treat the parsed nodes as detached and
@@ -86,9 +86,9 @@ pub fn parseFromString(
             return doc.asDocument();
         },
         else => {
-            const doc = (try frame.parseXmlDocument(html)) orelse blk: {
+            const doc = (try Frame.parse.xmlDocument(frame, html)) orelse blk: {
                 // Return a document with a <parsererror> element per spec.
-                break :blk (try frame.parseXmlDocument("<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>")).?;
+                break :blk (try Frame.parse.xmlDocument(frame, "<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>")).?;
             };
             return doc.asDocument();
         },

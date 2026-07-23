@@ -290,7 +290,7 @@ pub fn insertAdjacentHTML(
 ) !void {
     const DocumentFragment = @import("../DocumentFragment.zig");
     const fragment = (try DocumentFragment.init(frame)).asNode();
-    try frame.parseHtmlAsChildren(fragment, html);
+    try Frame.parse.htmlAsChildren(frame, fragment, html);
 
     const target_node, const prev_node = try self.asNode().findAdjacentNodes(position, .html);
 
