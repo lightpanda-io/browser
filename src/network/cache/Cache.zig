@@ -37,7 +37,7 @@ pub fn deinit(self: *Cache) void {
     };
 }
 
-pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
+pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) !CacheGetResult {
     return switch (self.kind) {
         inline else => |*c| c.get(arena, req),
     };
@@ -232,13 +232,23 @@ pub const CachedData = union(enum) {
     }
 };
 
+pub const CacheGetResult = union(enum) {
+    // Fresh / Usable as is.
+    hit: CachedResponse,
+    /// Stale but has proper revalidators. Caller should make a conditional request and then
+    /// renew or put depending on Response.
+    revalidate: CachedResponse,
+    /// Cache Miss.
+    miss,
+    /// Stale entry with no revalidators. Must call `evict()` and should be treated as a miss.
+    stale,
+};
+
 pub const CachedResponse = struct {
     metadata: CachedMetadata,
     data: CachedData,
-    expired: bool,
 
     pub fn format(self: *const CachedResponse, writer: *std.Io.Writer) !void {
-        try writer.print("expired={}, ", .{self.expired});
         try writer.print("metadata=(", .{});
         try self.metadata.format(writer);
         try writer.print("), data=", .{});

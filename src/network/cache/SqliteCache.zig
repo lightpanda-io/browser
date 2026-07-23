@@ -25,6 +25,7 @@ const log = lp.log;
 const CacheRequest = Cache.CacheRequest;
 const RenewResponse = Cache.RenewResponse;
 const CachedMetadata = Cache.CachedMetadata;
+const CacheGetResult = Cache.CacheGetResult;
 const CachedResponse = Cache.CachedResponse;
 const CacheControl = Cache.CacheControl;
 const parseDeltaSeconds = Cache.parseDeltaSeconds;
@@ -83,7 +84,7 @@ pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath) !SqliteCache {
                 log.err(
                     .cache,
                     "failed to make path",
-                    .{ .kind = "httpCacheSqlitePath", .path = cache_dir, .err = e },
+                    .{ .kind = "SqliteCache", .path = cache_dir, .err = e },
                 );
                 return e;
             };
@@ -122,11 +123,11 @@ pub fn deinit(self: *SqliteCache) void {
     self.pool.deinit(self.allocator);
 }
 
-pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?CachedResponse {
+pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !CacheGetResult {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    try conn.begin(.immediate);
+    try conn.begin(.deferred);
     defer conn.rollback() catch {};
 
     var entry = try conn.row(
@@ -135,7 +136,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         \\ from metadata where url = $1
     , .{req.url}) orelse {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
-        return null;
+        return .miss;
     };
     defer entry.deinit();
 
@@ -157,9 +158,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
     // we are going to have to make a network request for this resource.
     if (expired and !has_validators) {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "expired with no validators" });
-        try conn.exec("delete from metadata where url = $1", .{req.url});
-        try conn.commit();
-        return null;
+        return .stale;
     }
 
     var vary_headers: std.ArrayList(Http.Header) = .empty;
@@ -186,7 +185,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
                     .expected = value,
                     .got = incoming,
                 });
-                return null;
+                return .miss;
             }
 
             try vary_headers.append(arena, .{
@@ -232,20 +231,15 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheRequest) !?Ca
         "select data from body where url = $1",
         .{req.url},
     ) orelse {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing body " });
-        return null;
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing body" });
+        return .stale;
     };
     defer body_entry.deinit();
     const body = try arena.dupe(u8, body_entry.get(Blob, 0).data);
 
     log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
-    try conn.commit();
-
-    return .{
-        .metadata = metadata,
-        .data = .{ .buffer = body },
-        .expired = expired,
-    };
+    const resp: CachedResponse = .{ .metadata = metadata, .data = .{ .buffer = body } };
+    return if (expired) .{ .revalidate = resp } else .{ .hit = resp };
 }
 
 pub fn put(self: *SqliteCache, meta: CachedMetadata, body: []const u8) !void {
@@ -330,14 +324,6 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
     try conn.begin(.immediate);
     defer conn.rollback() catch {};
 
-    const exists = try conn.row("select 1 from metadata where url = $1", .{req.url});
-    if (exists) |*row| {
-        row.deinit();
-    } else {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
-        return error.CacheEntryNotFound;
-    }
-
     var age_at_store: u64 = 0;
     var etag: ?[]const u8 = null;
     var last_modified: ?[]const u8 = null;
@@ -373,6 +359,12 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
         last_modified,
         req.url,
     });
+
+    const affected = conn.changes();
+    if (affected == 0) {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
+        return error.CacheEntryNotFound;
+    }
 
     var lower_name: [256]u8 = undefined;
     for (req.headers) |h| {
@@ -416,7 +408,7 @@ test "SqliteCache: basic put and get" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Timestamp.now(testing.io, .boot).toMilliseconds();
+    const now = std.Io.Clock.now(.boot, lp.io).toSeconds();
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -437,12 +429,12 @@ test "SqliteCache: basic put and get" {
             .timestamp = now,
             .request_headers = &.{},
         },
-    ) orelse return error.CacheMiss;
+    );
 
-    try testing.expectEqualStrings("hello world", result.data.buffer);
-    try testing.expectEqual(@as(u16, 200), result.metadata.status);
-    try testing.expectEqual(false, result.expired);
-    try testing.expectEqualStrings("text/html", result.metadata.content_type);
+    try testing.expect(result == .hit);
+    try testing.expectEqualStrings("hello world", result.hit.data.buffer);
+    try testing.expectEqual(@as(u16, 200), result.hit.metadata.status);
+    try testing.expectEqualStrings("text/html", result.hit.metadata.content_type);
 }
 
 test "SqliteCache: get expiration" {
@@ -477,10 +469,9 @@ test "SqliteCache: get expiration" {
             .timestamp = now + 50,
             .request_headers = &.{},
         },
-    ) orelse return error.CacheMiss;
-    try testing.expectEqual(false, fresh.expired);
+    );
+    try testing.expect(fresh == .hit);
 
-    // age = 200 + 900 = 1100 >= 1000: stale
     const stale = try cache.get(
         arena.allocator(),
         .{
@@ -488,8 +479,9 @@ test "SqliteCache: get expiration" {
             .timestamp = now + 200,
             .request_headers = &.{},
         },
-    ) orelse return error.CacheMiss;
-    try testing.expectEqual(true, stale.expired);
+    );
+    try testing.expect(stale == .revalidate);
+    try testing.expectEqualStrings("hello world", stale.revalidate.data.buffer);
 }
 
 test "SqliteCache: get expiration (without validators)" {
@@ -523,10 +515,9 @@ test "SqliteCache: get expiration (without validators)" {
             .timestamp = now + 50,
             .request_headers = &.{},
         },
-    ) orelse return error.CacheMiss;
-    try testing.expectEqual(false, fresh.expired);
+    );
+    try testing.expect(fresh == .hit);
 
-    // age = 200 + 900 = 1100 >= 1000: stale
     const stale = try cache.get(
         arena.allocator(),
         .{
@@ -535,7 +526,7 @@ test "SqliteCache: get expiration (without validators)" {
             .request_headers = &.{},
         },
     );
-    try testing.expectEqual(null, stale);
+    try testing.expect(stale == .stale);
 }
 
 test "SqliteCache: put override" {
@@ -565,8 +556,9 @@ test "SqliteCache: put override" {
                 .timestamp = 5000,
                 .request_headers = &.{},
             },
-        ) orelse return error.CacheMiss;
-        try testing.expectEqualStrings("hello world", result.data.buffer);
+        );
+        try testing.expect(result == .hit);
+        try testing.expectEqualStrings("hello world", result.hit.data.buffer);
     }
 
     {
@@ -589,8 +581,9 @@ test "SqliteCache: put override" {
                 .timestamp = 10000,
                 .request_headers = &.{},
             },
-        ) orelse return error.CacheMiss;
-        try testing.expectEqualStrings("goodbye world", result.data.buffer);
+        );
+        try testing.expect(result == .hit);
+        try testing.expectEqualStrings("goodbye world", result.hit.data.buffer);
     }
 }
 
@@ -601,7 +594,7 @@ test "SqliteCache: vary hit and miss" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Timestamp.now(testing.io, .boot).toMilliseconds();
+    const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -621,20 +614,23 @@ test "SqliteCache: vary hit and miss" {
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
-    }) orelse return error.CacheMiss;
-    try testing.expectEqualStrings("hello world", hit.data.buffer);
+    });
+    try testing.expect(hit == .hit);
+    try testing.expectEqualStrings("hello world", hit.hit.data.buffer);
 
-    try testing.expectEqual(null, try cache.get(arena.allocator(), .{
+    const mismatch = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "br" }},
-    }));
+    });
+    try testing.expect(mismatch == .miss);
 
-    try testing.expectEqual(null, try cache.get(arena.allocator(), .{
+    const missing_header = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{},
-    }));
+    });
+    try testing.expect(missing_header == .miss);
 }
 
 test "SqliteCache: vary multiple headers" {
@@ -644,7 +640,7 @@ test "SqliteCache: vary multiple headers" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Timestamp.now(testing.io, .boot).toMilliseconds();
+    const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -668,17 +664,19 @@ test "SqliteCache: vary multiple headers" {
             .{ .name = "Accept-Encoding", .value = "gzip" },
             .{ .name = "Accept-Language", .value = "en" },
         },
-    }) orelse return error.CacheMiss;
-    try testing.expectEqualStrings("hello world", hit.data.buffer);
+    });
+    try testing.expect(hit == .hit);
+    try testing.expectEqualStrings("hello world", hit.hit.data.buffer);
 
-    try testing.expectEqual(null, try cache.get(arena.allocator(), .{
+    const mismatch = try cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
             .{ .name = "Accept-Encoding", .value = "gzip" },
             .{ .name = "Accept-Language", .value = "fr" },
         },
-    }));
+    });
+    try testing.expect(mismatch == .miss);
 }
 
 test "SqliteCache: clear removes all entries" {
@@ -688,7 +686,7 @@ test "SqliteCache: clear removes all entries" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Timestamp.now(testing.io, .boot).toMilliseconds();
+    const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
     try cache.put(.{
         .url = "https://example.com/a",
         .content_type = "text/html",
@@ -711,41 +709,41 @@ test "SqliteCache: clear removes all entries" {
         .vary_headers = &.{},
     }, "body b");
 
-    try testing.expect(null != try cache.get(
+    try testing.expect((try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com/a",
             .timestamp = now,
             .request_headers = &.{},
         },
-    ));
-    try testing.expect(null != try cache.get(
+    )) == .hit);
+    try testing.expect((try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com/b",
             .timestamp = now,
             .request_headers = &.{},
         },
-    ));
+    )) == .hit);
 
     try cache.clear();
 
-    try testing.expectEqual(null, try cache.get(
+    try testing.expect((try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com/a",
             .timestamp = now,
             .request_headers = &.{},
         },
-    ));
-    try testing.expectEqual(null, try cache.get(
+    )) == .miss);
+    try testing.expect((try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com/b",
             .timestamp = now,
             .request_headers = &.{},
         },
-    ));
+    )) == .miss);
 }
 
 test "SqliteCache: put after clear works" {
@@ -755,7 +753,7 @@ test "SqliteCache: put after clear works" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Timestamp.now(testing.io, .boot).toMilliseconds();
+    const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -770,14 +768,14 @@ test "SqliteCache: put after clear works" {
     try cache.put(meta, "before clear");
     try cache.clear();
 
-    try testing.expectEqual(null, try cache.get(
+    try testing.expect((try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
             .timestamp = now,
             .request_headers = &.{},
         },
-    ));
+    )) == .miss);
 
     try cache.put(meta, "after clear");
     const result = try cache.get(
@@ -787,8 +785,9 @@ test "SqliteCache: put after clear works" {
             .timestamp = now,
             .request_headers = &.{},
         },
-    ) orelse return error.CacheMiss;
-    try testing.expectEqualStrings("after clear", result.data.buffer);
+    );
+    try testing.expect(result == .hit);
+    try testing.expectEqualStrings("after clear", result.hit.data.buffer);
 }
 
 test "SqliteCache: evict removes entry" {
@@ -798,7 +797,7 @@ test "SqliteCache: evict removes entry" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Timestamp.now(testing.io, .boot).toMilliseconds();
+    const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -812,21 +811,22 @@ test "SqliteCache: evict removes entry" {
 
     try cache.put(meta, "hello world");
 
-    _ = try cache.get(
+    const before = try cache.get(
         arena.allocator(),
         .{ .url = "https://example.com", .timestamp = now, .request_headers = &.{} },
-    ) orelse return error.CacheMiss;
+    );
+    try testing.expect(before == .hit);
 
     cache.evict("https://example.com");
 
-    try testing.expectEqual(null, try cache.get(
+    try testing.expect((try cache.get(
         arena.allocator(),
         .{
             .url = "https://example.com",
             .timestamp = now,
             .request_headers = &.{},
         },
-    ));
+    )) == .miss);
 }
 
 test "SqliteCache: renew refreshes expiry" {
@@ -862,10 +862,9 @@ test "SqliteCache: renew refreshes expiry" {
             .timestamp = now + 1200,
             .request_headers = &.{},
         },
-    ) orelse return error.CacheMiss;
-    try testing.expectEqual(false, fresh.expired);
+    );
+    try testing.expect(fresh == .hit);
 
-    // Expires at now+500+1000 = now+1500
     const stale = try cache.get(
         arena.allocator(),
         .{
@@ -873,8 +872,8 @@ test "SqliteCache: renew refreshes expiry" {
             .timestamp = now + 1500,
             .request_headers = &.{},
         },
-    ) orelse return error.CacheMiss;
-    try testing.expectEqual(true, stale.expired);
+    );
+    try testing.expect(stale == .revalidate);
 }
 
 test "SqliteCache: renew preserves body" {
@@ -884,7 +883,7 @@ test "SqliteCache: renew preserves body" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Timestamp.now(testing.io, .boot).toMilliseconds();
+    const now = std.Io.Clock.now(.boot, testing.io).toSeconds();
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -908,6 +907,7 @@ test "SqliteCache: renew preserves body" {
             .timestamp = now + 100,
             .request_headers = &.{},
         },
-    ) orelse return error.CacheMiss;
-    try testing.expectEqualStrings("original body", result.data.buffer);
+    );
+    try testing.expect(result == .hit);
+    try testing.expectEqualStrings("original body", result.hit.data.buffer);
 }
