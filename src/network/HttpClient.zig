@@ -573,11 +573,13 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             owned.credentials = try arena.dupeZ(u8, c);
         }
 
-        var owned_authored: std.ArrayList([]const u8) = try .initCapacity(arena, req.authored_headers.len);
-        for (req.authored_headers) |name| {
-            owned_authored.appendAssumeCapacity(try arena.dupe(u8, name));
+        if (req.authored_headers.len > 0) {
+            const dupe_names = try arena.alloc([]const u8, req.authored_headers.len);
+            for (req.authored_headers, 0..) |name, i| {
+                dupe_names[i] = try arena.dupe(u8, name);
+            }
+            owned.authored_headers = dupe_names;
         }
-        owned.authored_headers = owned_authored.items;
 
         // The body can be larger, so callers can signal, via the
         // `body_outlives_request` flag that they guarantee that the body

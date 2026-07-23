@@ -250,10 +250,27 @@ pub const CorsEntry = struct {
         var iter = transfer.responseHeaderIterator();
         while (iter.next()) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
-                entry.origin = if (std.mem.eql(u8, hdr.value, "*"))
-                    .wildcard
-                else
-                    .{ .value = try arena.dupe(u8, hdr.value) };
+                var origin_value: ?[]const u8 = null;
+                var conflicting = false;
+                var it = std.mem.splitScalar(u8, hdr.value, ',');
+                while (it.next()) |raw| {
+                    const tok = std.mem.trim(u8, raw, &std.ascii.whitespace);
+                    if (tok.len == 0) continue;
+                    if (origin_value) |existing| {
+                        if (!std.mem.eql(u8, existing, tok)) conflicting = true;
+                    } else {
+                        origin_value = tok;
+                    }
+                }
+
+                if (conflicting) {
+                    entry.origin = null;
+                } else if (origin_value) |v| {
+                    entry.origin = if (std.mem.eql(u8, v, "*"))
+                        .wildcard
+                    else
+                        .{ .value = try arena.dupe(u8, v) };
+                }
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials")) {
                 if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, hdr.value, &std.ascii.whitespace), "true")) {
                     entry.credentials = .include;
@@ -368,8 +385,35 @@ const CorsContext = struct {
             entry.satisfies(self.req_origin, self.req_method, self.req_headers, self.req_credentials);
 
         if (!allowed) {
-            log.warn(.cors, "cors preflight rejected", .{ .key = self.key, .status = self.status });
+            const req_headers_str = std.mem.join(self.arena, ", ", self.req_headers) catch "(oom)";
+            const allow_headers_str = std.mem.join(self.arena, ", ", entry.headers) catch "(oom)";
+            const allow_methods_str = blk: {
+                var buf: std.ArrayList(u8) = .empty;
+                for (entry.methods, 0..) |m, i| {
+                    if (i != 0) buf.appendSlice(self.arena, ", ") catch break :blk "(oom)";
+                    buf.appendSlice(self.arena, @tagName(m)) catch break :blk "(oom)";
+                }
+                break :blk buf.items;
+            };
+
+            log.warn(.cors, "cors preflight rejected", .{
+                .key = self.key,
+                .status = self.status,
+                .req_origin = self.req_origin,
+                .req_method = @tagName(self.req_method),
+                .req_headers = req_headers_str,
+                .req_credentials = @tagName(self.req_credentials),
+                .allow_origin = if (entry.origin) |o| switch (o) {
+                    .wildcard => "*",
+                    .value => |v| v,
+                } else "(missing)",
+                .allow_credentials = @tagName(entry.credentials),
+                .allow_methods = allow_methods_str,
+                .allow_headers = allow_headers_str,
+            });
         }
+
+        log.debug(.cors, "cors preflight allowed", .{ .key = self.key, .status = self.status });
         self.resolve(allowed);
     }
 
