@@ -306,12 +306,14 @@
     \\          resolution.
     \\          Defaults to false.
     \\  --ca-cert <PATH>
-    \\          Load TLS root certificates from a PEM file, in addition to the
-    \\          system trust store. Can be passed multiple times.
+    \\          Load TLS root certificates from a PEM file. Can be passed
+    \\          multiple times. When any --ca-cert or --ca-path is given, the
+    \\          system trust store is replaced by these certificates.
     \\  --ca-path <PATH>
-    \\          Load TLS root certificates from a directory of hashed certificates,
-    \\          as prepared by c_rehash / openssl rehash. Can be passed multiple
-    \\          times.
+    \\          Load TLS root certificates from every file in a directory. Unlike
+    \\          openssl, the directory does not need to be c_rehash'ed. Can be
+    \\          passed multiple times. When any --ca-cert or --ca-path is given,
+    \\          the system trust store is replaced by these certificates.
     \\  --cookie <PATH>
     \\          Path to a JSON file to load cookies from (read-only).
     \\          Defaults to no cookie loading.
