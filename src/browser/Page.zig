@@ -86,7 +86,7 @@ identity: js.Identity = .{},
 // Zig instance ptr. The backing FinalizerCallback.Identity structs come from
 // Browser.fc_identity_pool so they outlive the Page (and the Session) for v8
 // weak-callback safety.
-finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *js.FinalizerCallback) = .empty,
+finalizer_callbacks: std.AutoHashMapUnmanaged(usize, js.FinalizerCallback) = .empty,
 
 // Persisted v8 handles owned by this Page. Handles that outlive the Page are
 // reset on teardown; handles that can be released early are dropped
@@ -205,7 +205,7 @@ pub fn deinit(self: *Page) void {
     {
         var it = self.finalizer_callbacks.valueIterator();
         while (it.next()) |fc| {
-            fc.*.deinit(self);
+            fc.deinit(self);
         }
         self.finalizer_callbacks = .empty;
     }

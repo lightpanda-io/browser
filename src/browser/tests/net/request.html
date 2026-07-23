@@ -268,3 +268,9 @@
   }
   testing.expectError('TypeError', () => new Request('https://example.com', { priority: 'bogus' }));
 </script>
+
+<script id=many_live_requests>
+  const requests = Array.from({ length: 1024 }, (_, i) => new Request(`https://example.com/${i}`));
+  testing.expectEqual(1024, requests.length);
+  testing.expectEqual('https://example.com/1023', requests[1023].url);
+</script>
