@@ -75,7 +75,7 @@ pub const Migrations = struct {
             }
             try conn.exec(
                 "insert into migrations (id, applied_at) values ($1, $2)",
-                .{ @as(i64, @intCast(i + 1)), std.Io.Timestamp.now(lp.io, .boot).toMilliseconds() },
+                .{ @as(i64, @intCast(i + 1)), std.Io.Clock.now(.boot, lp.io).toSeconds() },
             );
         }
 
@@ -175,6 +175,10 @@ pub const Conn = struct {
             .immediate => try self.exec("begin immediate", .{}),
             .exclusive => try self.exec("begin exclusive", .{}),
         }
+    }
+
+    pub fn changes(self: Conn) i64 {
+        return @intCast(c.sqlite3_changes(self.conn));
     }
 
     pub fn commit(self: Conn) !void {

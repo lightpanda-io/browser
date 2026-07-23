@@ -905,36 +905,48 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         out.* = .{ .name = hdr.name, .value = hdr.value };
     }
 
-    const cached = try cache.get(arena.allocator(), .{
+    const cache_result = try cache.get(arena.allocator(), .{
         .url = req.url,
         .timestamp = lp.datetime.timestamp(.real),
         .request_headers = req_headers,
-    }) orelse {
-        lp.metrics.http_cache.incr(.miss);
-        transfer._cache_intent = .store;
-        return false;
+    }) catch |e| blk: {
+        log.err(.cache, "failed to get", .{ .url = req.url, .err = e });
+        break :blk .miss;
     };
 
-    if (cached.expired == false) {
-        lp.metrics.http_cache.incr(.hit);
-        try transfer.bufferCached(cached);
-        return true;
+    switch (cache_result) {
+        .hit => |cached| {
+            lp.metrics.http_cache.incr(.hit);
+            try transfer.bufferCached(cached);
+            return true;
+        },
+        .revalidate => |cached| {
+            log.debug(.cache, "revalidate cache entry", .{
+                .url = req.url,
+                .etag = cached.metadata.etag,
+                .last_modified = cached.metadata.last_modified,
+            });
+            if (cached.metadata.etag) |etag| {
+                try transfer.addHeader("If-None-Match", etag, .{});
+            }
+            if (cached.metadata.last_modified) |lm| {
+                try transfer.addHeader("If-Modified-Since", lm, .{});
+            }
+            transfer._cache_intent = .{ .revalidate = cached };
+            return false;
+        },
+        .miss => {
+            lp.metrics.http_cache.incr(.miss);
+            transfer._cache_intent = .store;
+            return false;
+        },
+        .stale => {
+            lp.metrics.http_cache.incr(.miss);
+            cache.evict(req.url);
+            transfer._cache_intent = .store;
+            return false;
+        },
     }
-
-    // expired but with validators
-    log.debug(.cache, "revalidate with etag", .{
-        .url = req.url,
-        .etag = cached.metadata.etag,
-        .last_modified = cached.metadata.last_modified,
-    });
-    if (cached.metadata.etag) |etag| {
-        try transfer.addHeader("If-None-Match", etag, .{});
-    }
-    if (cached.metadata.last_modified) |lm| {
-        try transfer.addHeader("If-Modified-Since", lm, .{});
-    }
-    transfer._cache_intent = .{ .revalidate = cached };
-    return false;
 }
 
 // 304 on a revalidation: renew the stored entry from the fresh headers and
