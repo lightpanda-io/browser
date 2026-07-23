@@ -36,6 +36,7 @@ const Network = @import("Network.zig");
 const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
+pub const BlockPattern = UrlBlocklist.Pattern;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -361,6 +362,16 @@ pub fn setBlockedUrls(self: *Client, patterns: []const []const u8) !void {
         null
     else
         try UrlBlocklist.init(self.allocator, patterns);
+
+    self.clearUrlBlocklist();
+    self.url_blocklist = replacement;
+}
+
+pub fn setBlockedUrlPatterns(self: *Client, patterns: []const BlockPattern) !void {
+    const replacement: ?UrlBlocklist = if (patterns.len == 0)
+        null
+    else
+        try UrlBlocklist.initPatterns(self.allocator, patterns);
 
     self.clearUrlBlocklist();
     self.url_blocklist = replacement;
