@@ -73,6 +73,9 @@ fn isSafelistedContentType(ct: []const u8) bool {
 
 pub fn needsPreflight(transfer: *Transfer) bool {
     const req = &transfer.req;
+    if (req.internal) return false;
+    if (req.resource_type == .document) return false;
+    if (URL.isSameOrigin(req.url, req.cookie_origin)) return false;
 
     for (req.authored_headers) |name| {
         if (!isSafelistedHeader(name)) return true;
@@ -111,8 +114,6 @@ pub fn remove(self: *CorsGate, transfer: *Transfer) void {
 }
 
 pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
-    if (transfer.req.resource_type == .document) return .allowed;
-    if (URL.isSameOrigin(transfer.req.url, transfer.req.cookie_origin)) return .allowed;
     if (!needsPreflight(transfer)) return .allowed;
 
     const client = transfer.client;
