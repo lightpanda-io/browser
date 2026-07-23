@@ -104,6 +104,10 @@ fn keyFor(arena: Allocator, transfer: *Transfer) ![]const u8 {
     );
 }
 
+pub fn remove(self: *CorsGate, transfer: *Transfer) void {
+    self.single_flight.remove(transfer);
+}
+
 pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     if (transfer.req.resource_type == .document) return .allowed;
     if (URL.isSameOrigin(transfer.req.url, transfer.req.cookie_origin)) return .allowed;

@@ -2138,10 +2138,14 @@ pub const Transfer = struct {
             self._dispatch_queued = false;
         }
 
-        // And for the robots gate: RobotsGate.pending holds a raw *Transfer
-        // while we're parked.
-        if (self.state == .parked and self.state.parked == .robots) {
-            self.client.robots.remove(self);
+        // And for the robots/cors gates: their single_flight.pending holds a raw
+        // *Transfer while we're parked.
+        if (self.state == .parked) {
+            switch (self.state.parked) {
+                .robots => self.client.robots.remove(self),
+                .cors => self.client.cors.remove(self),
+                .intercept_request, .intercept_auth => {},
+            }
         }
 
         // A pending revalidation entry owns cache resources (possibly an
