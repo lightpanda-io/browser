@@ -79,6 +79,9 @@ pub fn parseFromString(
             // Parse HTML into the document
             var parser = Parser.init(arena, doc.asNode(), frame, .{});
             parser.parse(normalized);
+            if (parser.terminated) {
+                return error.ExecutionTerminated;
+            }
 
             if (parser.err) |pe| {
                 return pe.err;
@@ -96,6 +99,9 @@ pub fn parseFromString(
             const doc_node = doc.asNode();
             var parser = Parser.init(arena, doc_node, frame, .{});
             parser.parseXML(html);
+            if (parser.terminated) {
+                return error.ExecutionTerminated;
+            }
 
             if (parser.err != null or doc_node.firstChild() == null) {
                 // Return a document with a <parsererror> element per spec.

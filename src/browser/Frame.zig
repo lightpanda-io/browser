@@ -2910,6 +2910,9 @@ fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: F
 
     var parser = Parser.init(self.call_arena, node, self, .{ .allow_declarative_shadow = opts.allow_declarative_shadow });
     parser.parseFragment(html);
+    if (parser.terminated) {
+        return error.ExecutionTerminated;
+    }
 
     // html5ever wraps fragment output in an <html> element; unwrap so its
     // children land directly on `node`. See https://github.com/servo/html5ever/issues/583.
