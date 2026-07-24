@@ -3404,6 +3404,31 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const method = Element.Html.Form.normalizeMethod(method_attr, "get");
     const is_post = std.mem.eql(u8, method, "post");
 
+    // Per the HTML form-submission algorithm, the dialog method closes the
+    // form's nearest ancestor dialog with the submitter's value and performs no
+    // navigation. Falling through here would submit the form as a GET, which
+    // both reloads the page and leaves the dialog open forever.
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm
+    if (std.mem.eql(u8, method, "dialog")) {
+        var ancestor: ?*Element = form_element;
+        while (ancestor) |el| : (ancestor = el.parentElement()) {
+            const dialog = el.is(Element.Html.Dialog) orelse continue;
+            // A submit button always has a value (empty when the attribute is
+            // absent); with no submitter at all the dialog's existing
+            // returnValue is left untouched.
+            const result: ?[]const u8 = if (submit_button) |s|
+                s.getAttributeSafe(comptime .wrap("value")) orelse ""
+            else
+                null;
+            try dialog.close(result, self);
+            break;
+        }
+        // Nothing is navigated, so the arena reserved for the request body goes
+        // unused — the errdefer above only covers the error path.
+        self._session.releaseArena(arena);
+        return;
+    }
+
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
         if (form_element.getAttributeSafe(.wrap("accept-charset"))) |ac| {
