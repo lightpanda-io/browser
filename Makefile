@@ -38,11 +38,18 @@ endif
 # Building V8 from source takes 10+ minutes. `make download-v8` fetches the
 # matching prebuilt archive from the zig-v8-fork releases instead. The versions
 # are read from the install action so they can't drift from CI.
+#
+# The cache path is keyed on ZIG_V8_TAG as well as the archive name: a
+# zig-v8-fork release keeps the same asset filename across tags (the name
+# encodes only the V8 version), so a tag bump that leaves V8_VERSION alone
+# still ships different bytes. Keying the cache on the filename alone made
+# download-v8's `test -f` guard skip that refresh and leave a stale archive
+# in place, which then fails at link time on undefined v8__* symbols.
 V8_ACTION := .github/actions/install/action.yml
 V8_VERSION := $(shell awk -F\' '/^  v8:/{f=1} f&&/default:/{print $$2; exit}' $(V8_ACTION))
 ZIG_V8_TAG := $(shell awk -F\' '/^  zig-v8:/{f=1} f&&/default:/{print $$2; exit}' $(V8_ACTION))
 V8_ARCHIVE := libc_v8_$(V8_VERSION)_$(OS)_$(ARCH).a
-V8_CACHE   := .lp-cache/prebuilt-v8/$(V8_ARCHIVE)
+V8_CACHE   := .lp-cache/prebuilt-v8/$(ZIG_V8_TAG)/$(V8_ARCHIVE)
 
 # If the prebuilt archive is in place and the caller hasn't set ZIGFLAGS, point
 # the build at it rather than building V8 from source.
