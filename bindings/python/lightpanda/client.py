@@ -29,6 +29,19 @@ _SPAWN_ATTEMPTS = 3
 _READY_TIMEOUT = 15.0
 
 
+def _die_with_parent():
+    """Linux: ask the kernel to SIGTERM the sidecar when the parent dies,
+    so a SIGKILLed interpreter can't leak a browser process."""
+    try:
+        import ctypes
+        import signal as _signal
+
+        PR_SET_PDEATHSIG = 1
+        ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, _signal.SIGTERM)
+    except Exception:
+        pass
+
+
 def find_binary(explicit: str | os.PathLike | None = None) -> Path:
     """Locate the lightpanda binary: explicit arg, $LIGHTPANDA_BIN, the
     bundled package copy, then PATH."""
@@ -91,6 +104,7 @@ class Client:
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
                 env=child_env,
+                preexec_fn=_die_with_parent if sys.platform == "linux" else None,
             )
             try:
                 self._wait_ready(proc, port)

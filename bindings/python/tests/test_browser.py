@@ -1,3 +1,10 @@
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
 import pytest
 
 from lightpanda import ToolError, run_script
@@ -62,6 +69,40 @@ def test_extra_args_passthrough(binary, fixture_url, tmp_path):
             page.goto(url=f"{fixture_url}/index.html")
             assert "Hello" in page.markdown()
     assert cache_dir.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PDEATHSIG is Linux-only")
+def test_sidecar_dies_with_killed_parent(binary, tmp_path):
+    child_src = tmp_path / "spawn_and_hang.py"
+    child_src.write_text(
+        "import os, sys, time\n"
+        "from lightpanda import Browser\n"
+        "b = Browser(binary=sys.argv[1])\n"
+        "print(b._client._proc.pid, flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).parent.parent))
+    child = subprocess.Popen(
+        [sys.executable, str(child_src), binary],
+        stdout=subprocess.PIPE, text=True, env=env,
+    )
+    sidecar_pid = int(child.stdout.readline())
+    assert _alive(sidecar_pid)
+
+    os.kill(child.pid, signal.SIGKILL)
+    child.wait()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and _alive(sidecar_pid):
+        time.sleep(0.1)
+    assert not _alive(sidecar_pid), "sidecar survived its parent's SIGKILL"
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
 
 
 def test_run_script(binary, fixture_url, tmp_path):
