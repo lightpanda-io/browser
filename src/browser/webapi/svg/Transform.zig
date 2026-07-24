@@ -60,7 +60,7 @@ pub const State = struct {
 pub const Attachment = struct {
     owner: *anyopaque,
     read_only: bool,
-    mutate: *const fn (*anyopaque, *Transform, State, *Frame) anyerror!void,
+    mutate: *const fn (*anyopaque, *Transform, State) anyerror!void,
 };
 
 // The transform owns the matrix arena even when no JS wrapper currently
@@ -133,38 +133,38 @@ pub fn getAngle(self: *const Transform) f64 {
     return self._angle;
 }
 
-pub fn setMatrix(self: *Transform, init: ?DOMMatrix2DInit, frame: *Frame) !void {
+pub fn setMatrix(self: *Transform, init: ?DOMMatrix2DInit) !void {
     const parsed = try fixup2D(init orelse .{});
-    try self.applyState(.{ .typ = 1, .angle = 0, .cx = 0, .cy = 0, .matrix = parsed.m, .is_2d = true }, frame);
+    try self.applyState(.{ .typ = 1, .angle = 0, .cx = 0, .cy = 0, .matrix = parsed.m, .is_2d = true });
 }
 
-pub fn setTranslate(self: *Transform, tx: f64, ty: f64, frame: *Frame) !void {
+pub fn setTranslate(self: *Transform, tx: f64, ty: f64) !void {
     try ensureFinite(&.{ tx, ty });
-    try self.applyState(.{ .typ = 2, .angle = 0, .cx = 0, .cy = 0, .matrix = RO.translationMatrix(tx, ty, 0), .is_2d = true }, frame);
+    try self.applyState(.{ .typ = 2, .angle = 0, .cx = 0, .cy = 0, .matrix = RO.translationMatrix(tx, ty, 0), .is_2d = true });
 }
 
-pub fn setScale(self: *Transform, sx: f64, sy: f64, frame: *Frame) !void {
+pub fn setScale(self: *Transform, sx: f64, sy: f64) !void {
     try ensureFinite(&.{ sx, sy });
-    try self.applyState(.{ .typ = 3, .angle = 0, .cx = 0, .cy = 0, .matrix = RO.scaleMatrix(sx, sy, 1), .is_2d = true }, frame);
+    try self.applyState(.{ .typ = 3, .angle = 0, .cx = 0, .cy = 0, .matrix = RO.scaleMatrix(sx, sy, 1), .is_2d = true });
 }
 
-pub fn setRotate(self: *Transform, angle: f64, cx: f64, cy: f64, frame: *Frame) !void {
+pub fn setRotate(self: *Transform, angle: f64, cx: f64, cy: f64) !void {
     try ensureFinite(&.{ angle, cx, cy });
     const radians = angle * std.math.pi / 180.0;
     var matrix = RO.translationMatrix(cx, cy, 0);
     matrix = RO.multiplyMatrix(matrix, RO.rotateZMatrix(radians));
     matrix = RO.multiplyMatrix(matrix, RO.translationMatrix(-cx, -cy, 0));
-    try self.applyState(.{ .typ = 4, .angle = angle, .cx = cx, .cy = cy, .matrix = matrix, .is_2d = true }, frame);
+    try self.applyState(.{ .typ = 4, .angle = angle, .cx = cx, .cy = cy, .matrix = matrix, .is_2d = true });
 }
 
-pub fn setSkewX(self: *Transform, angle: f64, frame: *Frame) !void {
+pub fn setSkewX(self: *Transform, angle: f64) !void {
     try ensureFinite(&.{angle});
-    try self.applyState(.{ .typ = 5, .angle = angle, .cx = 0, .cy = 0, .matrix = RO.skewMatrix(angle * std.math.pi / 180.0, 0), .is_2d = true }, frame);
+    try self.applyState(.{ .typ = 5, .angle = angle, .cx = 0, .cy = 0, .matrix = RO.skewMatrix(angle * std.math.pi / 180.0, 0), .is_2d = true });
 }
 
-pub fn setSkewY(self: *Transform, angle: f64, frame: *Frame) !void {
+pub fn setSkewY(self: *Transform, angle: f64) !void {
     try ensureFinite(&.{angle});
-    try self.applyState(.{ .typ = 6, .angle = angle, .cx = 0, .cy = 0, .matrix = RO.skewMatrix(0, angle * std.math.pi / 180.0), .is_2d = true }, frame);
+    try self.applyState(.{ .typ = 6, .angle = angle, .cx = 0, .cy = 0, .matrix = RO.skewMatrix(0, angle * std.math.pi / 180.0), .is_2d = true });
 }
 
 pub fn getState(self: *const Transform) State {
@@ -187,11 +187,11 @@ pub fn applyStateRaw(self: *Transform, state: State) void {
     self._matrix._proto._is_2d = state.is_2d;
 }
 
-fn applyState(self: *Transform, state: State, frame: *Frame) !void {
+fn applyState(self: *Transform, state: State) !void {
     try ensureFinite(&state.matrix);
     if (self._attachment) |attachment| {
         if (attachment.read_only) return error.NoModificationAllowed;
-        return attachment.mutate(attachment.owner, self, state, frame);
+        return attachment.mutate(attachment.owner, self, state);
     }
     self.applyStateRaw(state);
 }

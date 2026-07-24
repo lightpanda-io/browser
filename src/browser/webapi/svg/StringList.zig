@@ -19,15 +19,51 @@ pub const Delimiter = enum { whitespace, comma };
 _element: *Element,
 _attribute_name: lp.String,
 _delimiter: Delimiter,
+_synced: bool = false,
+_snapshot: std.ArrayList(u8) = .empty,
 _items: std.ArrayList([]const u8) = .empty,
-_snapshot: ?[]const u8 = null,
 
-pub fn create(element: *Element, attribute_name: lp.String, delimiter: Delimiter, frame: *Frame) !*StringList {
-    return frame._factory.create(StringList{
-        ._element = element,
-        ._attribute_name = attribute_name,
-        ._delimiter = delimiter,
-    });
+pub const Kind = enum {
+    required_extensions,
+    system_language,
+
+    fn attributeName(self: Kind) lp.String {
+        return switch (self) {
+            .required_extensions => .wrap("requiredExtensions"),
+            .system_language => .wrap("systemLanguage"),
+        };
+    }
+
+    fn delimiter(self: Kind) Delimiter {
+        return switch (self) {
+            .required_extensions => .whitespace,
+            .system_language => .comma,
+        };
+    }
+};
+
+pub const Key = struct {
+    element: *Element,
+    kind: Kind,
+};
+
+pub const Lookup = std.AutoHashMapUnmanaged(Key, *StringList);
+
+pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*StringList {
+    const key: Key = .{
+        .element = element,
+        .kind = kind,
+    };
+    const gop = try frame._svg_string_lists.getOrPut(frame.arena, key);
+    if (!gop.found_existing) {
+        errdefer _ = frame._svg_string_lists.remove(key);
+        gop.value_ptr.* = try frame._factory.create(StringList{
+            ._element = element,
+            ._attribute_name = kind.attributeName(),
+            ._delimiter = kind.delimiter(),
+        });
+    }
+    return gop.value_ptr.*;
 }
 
 pub fn getLength(self: *StringList, frame: *Frame) !u32 {
@@ -103,18 +139,8 @@ fn validateItem(self: *const StringList, item: []const u8) !void {
 
 fn sync(self: *StringList, frame: *Frame) !void {
     const raw = self._element.getAttributeSafe(self._attribute_name) orelse "";
-    if (self._snapshot) |snapshot| if (std.mem.eql(u8, snapshot, raw)) return;
-
-    const snapshot = try frame.arena.dupe(u8, raw);
-    var parsed = parse(snapshot, self._delimiter, frame.local_arena) catch |err| switch (err) {
-        error.SyntaxError => std.ArrayList([]const u8).empty,
-        else => return err,
-    };
-    try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
-    self._items.clearRetainingCapacity();
-    for (parsed.items) |item| self._items.appendAssumeCapacity(item);
-    parsed.clearRetainingCapacity();
-    self._snapshot = snapshot;
+    if (self._synced and std.mem.eql(u8, self._snapshot.items, raw)) return;
+    try self.rebuild(raw, frame);
 }
 
 fn commit(self: *StringList, items: []const []const u8, frame: *Frame) !void {
@@ -127,14 +153,22 @@ fn commit(self: *StringList, items: []const []const u8, frame: *Frame) !void {
     }
 
     const serialized_bytes = serialized.written();
-    const snapshot = try frame.arena.dupe(u8, serialized_bytes);
-    var parsed = try parse(snapshot, self._delimiter, frame.local_arena);
-    try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
     try self._element.setAttributeSafe(self._attribute_name, .wrap(serialized_bytes), frame);
+    try self.rebuild(serialized_bytes, frame);
+}
+
+// `raw` must not alias `_snapshot`; `_items` are slices into `_snapshot`.
+fn rebuild(self: *StringList, raw: []const u8, frame: *Frame) !void {
+    self._synced = false;
+    self._snapshot.clearRetainingCapacity();
+    try self._snapshot.appendSlice(frame.arena, raw);
+    const parsed = parse(self._snapshot.items, self._delimiter, frame.local_arena) catch |err| switch (err) {
+        error.SyntaxError => std.ArrayList([]const u8).empty,
+        else => return err,
+    };
     self._items.clearRetainingCapacity();
-    for (parsed.items) |item| self._items.appendAssumeCapacity(item);
-    parsed.clearRetainingCapacity();
-    self._snapshot = snapshot;
+    try self._items.appendSlice(frame.arena, parsed.items);
+    self._synced = true;
 }
 
 fn parse(raw: []const u8, delimiter: Delimiter, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {

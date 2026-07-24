@@ -35,9 +35,6 @@ pub const Geometry = @import("Geometry.zig");
 const Graphics = @This();
 _proto: *SvgElement,
 _type: Type,
-_transform: ?*AnimatedTransformList = null,
-_required_extensions: ?*StringList = null,
-_system_language: ?*StringList = null,
 
 pub const Type = union(enum) {
     svg: *Svg,
@@ -85,32 +82,13 @@ pub const JsApi = struct {
 };
 
 pub fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
-    if (self._transform == null) {
-        self._transform = try AnimatedTransformList.create(self.asElement(), frame);
-    }
-    return self._transform.?;
+    return AnimatedTransformList.getOrCreate(self.asElement(), frame);
 }
 
 pub fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {
-    if (self._required_extensions == null) {
-        self._required_extensions = try StringList.create(
-            self.asElement(),
-            .wrap("requiredExtensions"),
-            .whitespace,
-            frame,
-        );
-    }
-    return self._required_extensions.?;
+    return StringList.getOrCreate(self.asElement(), .required_extensions, frame);
 }
 
 pub fn getSystemLanguage(self: *Graphics, frame: *Frame) !*StringList {
-    if (self._system_language == null) {
-        self._system_language = try StringList.create(
-            self.asElement(),
-            .wrap("systemLanguage"),
-            .comma,
-            frame,
-        );
-    }
-    return self._system_language.?;
+    return StringList.getOrCreate(self.asElement(), .system_language, frame);
 }
