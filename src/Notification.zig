@@ -397,7 +397,7 @@ pub fn register(self: *Notification, comptime event: EventType, receiver: anytyp
     if (gop.found_existing) {
         for (gop.value_ptr.items) |existing| {
             if (existing.event == event) {
-                lp.assert(@as(*const anyopaque, @ptrCast(func)) == existing.func, "different notification callbacks per receiver", .{.event = event});
+                lp.assert(@as(*const anyopaque, @ptrCast(func)) == existing.func, "different notification callbacks per receiver", .{ .event = event });
                 return;
             }
         }
