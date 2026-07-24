@@ -392,8 +392,20 @@ pub fn deinit(self: *Notification) void {
 }
 
 pub fn register(self: *Notification, comptime event: EventType, receiver: anytype, func: EventFunc(event)) !void {
-    var list = &@field(self.event_listeners, @tagName(event));
+    const allocator = self.allocator;
+    const gop = try self.listeners.getOrPut(allocator, @intFromPtr(receiver));
+    if (gop.found_existing) {
+        for (gop.value_ptr.items) |existing| {
+            if (existing.event == event) {
+                lp.assert(@as(*const anyopaque, @ptrCast(func)) == existing.func, "different notification callbacks per receiver", .{.event = event});
+                return;
+            }
+        }
+    } else {
+        gop.value_ptr.* = .empty;
+    }
 
+    var list = &@field(self.event_listeners, @tagName(event));
     var listener = try self.mem_pool.create();
     errdefer self.mem_pool.destroy(listener);
 
@@ -405,12 +417,6 @@ pub fn register(self: *Notification, comptime event: EventType, receiver: anytyp
         .func = @ptrCast(func),
         .struct_name = @typeName(@typeInfo(@TypeOf(receiver)).pointer.child),
     };
-
-    const allocator = self.allocator;
-    const gop = try self.listeners.getOrPut(allocator, @intFromPtr(receiver));
-    if (gop.found_existing == false) {
-        gop.value_ptr.* = .empty;
-    }
     try gop.value_ptr.append(allocator, listener);
 
     // we don't add this until we've successfully added the entry to
