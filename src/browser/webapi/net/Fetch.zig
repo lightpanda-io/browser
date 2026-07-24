@@ -94,7 +94,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
 
         try authored.ensureUnusedCapacity(exec.call_arena, h._list._entries.items.len);
         for (h._list._entries.items) |entry| {
-            authored.appendAssumeCapacity(entry.name.str());
+            authored.appendAssumeCapacity(try exec.call_arena.dupe(u8, entry.name.str()));
         }
     }
     try exec.headersForRequest(&headers);
