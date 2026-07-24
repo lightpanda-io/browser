@@ -34,6 +34,15 @@ pub const Kind = enum {
     y,
     width,
     height,
+    cx,
+    cy,
+    r,
+    rx,
+    ry,
+    x1,
+    y1,
+    x2,
+    y2,
 
     fn attributeName(self: Kind) lp.String {
         return switch (self) {
@@ -41,13 +50,23 @@ pub const Kind = enum {
             .y => comptime .wrap("y"),
             .width => comptime .wrap("width"),
             .height => comptime .wrap("height"),
+            .cx => comptime .wrap("cx"),
+            .cy => comptime .wrap("cy"),
+            .r => comptime .wrap("r"),
+            .rx => comptime .wrap("rx"),
+            .ry => comptime .wrap("ry"),
+            .x1 => comptime .wrap("x1"),
+            .y1 => comptime .wrap("y1"),
+            .x2 => comptime .wrap("x2"),
+            .y2 => comptime .wrap("y2"),
         };
     }
 
     fn direction(self: Kind) Length.Direction {
         return switch (self) {
-            .x, .width => .horizontal,
-            .y, .height => .vertical,
+            .x, .width, .cx, .rx, .x1, .x2 => .horizontal,
+            .y, .height, .cy, .ry, .y1, .y2 => .vertical,
+            .r => .unspecified,
         };
     }
 };

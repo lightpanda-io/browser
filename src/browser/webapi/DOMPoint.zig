@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
+const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
 const RO = @import("DOMPointReadOnly.zig");
 
@@ -77,17 +78,17 @@ pub fn getW(self: *const DOMPoint) f64 {
     return self._proto._w;
 }
 
-pub fn setX(self: *DOMPoint, v: f64) void {
-    self._proto._x = v;
+pub fn setX(self: *DOMPoint, v: f64, frame: *Frame) !void {
+    try self._proto.setCoordinate(.x, v, frame);
 }
-pub fn setY(self: *DOMPoint, v: f64) void {
-    self._proto._y = v;
+pub fn setY(self: *DOMPoint, v: f64, frame: *Frame) !void {
+    try self._proto.setCoordinate(.y, v, frame);
 }
-pub fn setZ(self: *DOMPoint, v: f64) void {
-    self._proto._z = v;
+pub fn setZ(self: *DOMPoint, v: f64, frame: *Frame) !void {
+    try self._proto.setCoordinate(.z, v, frame);
 }
-pub fn setW(self: *DOMPoint, v: f64) void {
-    self._proto._w = v;
+pub fn setW(self: *DOMPoint, v: f64, frame: *Frame) !void {
+    try self._proto.setCoordinate(.w, v, frame);
 }
 
 pub const JsApi = struct {
