@@ -67,8 +67,10 @@ class Client:
         env: dict[str, str] | None = None,
         timeout: float = 300.0,
         verbose: bool = False,
+        args: tuple[str, ...] | list[str] = (),
     ):
         self._binary = find_binary(binary)
+        self._extra_args = list(args)
         self._timeout = timeout
         self._lock = threading.Lock()
         self._id = 0
@@ -84,7 +86,7 @@ class Client:
         for _ in range(_SPAWN_ATTEMPTS):
             port = _free_port()
             proc = subprocess.Popen(
-                [str(self._binary), "mcp", "--port", str(port)],
+                [str(self._binary), "mcp", "--port", str(port), *self._extra_args],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,

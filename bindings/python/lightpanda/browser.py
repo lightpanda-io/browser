@@ -150,8 +150,11 @@ class Browser:
         env: dict[str, str] | None = None,
         timeout: float = 300.0,
         verbose: bool = False,
+        args: tuple[str, ...] | list[str] = (),
     ):
-        self._client = Client(binary=binary, env=env, timeout=timeout, verbose=verbose)
+        """``args`` are extra CLI flags for the spawned browser process
+        (e.g. ``["--http-cache-dir", path]`` or cookie flags)."""
+        self._client = Client(binary=binary, env=env, timeout=timeout, verbose=verbose, args=args)
         self._seq = 0
         listed = self._client.request("tools/list")
         self._tools = {

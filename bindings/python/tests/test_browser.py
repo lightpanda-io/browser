@@ -53,6 +53,17 @@ def test_unknown_tool_raises(browser):
             page.call("teleport", where="moon")
 
 
+def test_extra_args_passthrough(binary, fixture_url, tmp_path):
+    from lightpanda import Browser
+
+    cache_dir = tmp_path / "cache"
+    with Browser(binary=binary, args=["--http-cache-dir", str(cache_dir)]) as b:
+        with b.new_session() as page:
+            page.goto(url=f"{fixture_url}/index.html")
+            assert "Hello" in page.markdown()
+    assert cache_dir.exists()
+
+
 def test_run_script(binary, fixture_url, tmp_path):
     script = tmp_path / "visit.js"
     script.write_text('const page = new Page();\nawait page.goto("$LP_TEST_URL");\n')
