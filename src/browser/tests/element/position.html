@@ -24,12 +24,186 @@
 {
   const test1 = $('#test1');
 
-  // In dummy layout, scroll dimensions equal client dimensions (no overflow)
+  // Both scroll dimensions are approximated from the content, so neither falls
+  // below the element's own box but either may exceed it.
+  testing.expectTrue(test1.scrollWidth >= test1.clientWidth);
+  testing.expectTrue(test1.scrollHeight >= test1.clientHeight);
+
+  // test1 holds only a text node, and text is not measured on either axis, so
+  // both still match the element's own box.
   testing.expectEqual(test1.clientWidth, test1.scrollWidth);
   testing.expectEqual(test1.clientHeight, test1.scrollHeight);
 }
 </script>
 
+<script id="scrollWidthFromContent">
+{
+  // An empty element has no content to overflow its box.
+  const empty = document.createElement('div');
+  document.body.appendChild(empty);
+  testing.expectEqual(empty.clientWidth, empty.scrollWidth);
+
+  // Each added child strictly increases scrollWidth, and enough of them push
+  // it past the element's own box.
+  const box = document.createElement('div');
+  document.body.appendChild(box);
+  box.appendChild(document.createElement('span'));
+  const oneChild = box.scrollWidth;
+  testing.expectTrue(oneChild >= box.clientWidth);
+
+  box.appendChild(document.createElement('span'));
+  testing.expectTrue(box.scrollWidth > oneChild);
+  testing.expectTrue(box.scrollWidth > box.clientWidth);
+
+  // Text contributes nothing, however long. Estimating a run from its length
+  // would need a per-character advance that tracks font-size, and would report
+  // overflow for practically every element containing text.
+  const short = document.createElement('div');
+  const long = document.createElement('div');
+  short.textContent = 'ab';
+  long.textContent = 'abcdefghijklmnop';
+  document.body.appendChild(short);
+  document.body.appendChild(long);
+  testing.expectEqual(short.clientWidth, short.scrollWidth);
+  testing.expectEqual(long.clientWidth, long.scrollWidth);
+  testing.expectEqual(short.scrollWidth, long.scrollWidth);
+
+  // Comments are not rendered, so they contribute nothing.
+  const commented = document.createElement('div');
+  commented.innerHTML = '<!-- a very long comment that renders as nothing -->';
+  document.body.appendChild(commented);
+  testing.expectEqual(commented.clientWidth, commented.scrollWidth);
+
+  // A display:none child takes up no space.
+  const withHidden = document.createElement('div');
+  const hiddenChild = document.createElement('span');
+  hiddenChild.style.display = 'none';
+  withHidden.appendChild(hiddenChild);
+  document.body.appendChild(withHidden);
+  testing.expectEqual(withHidden.clientWidth, withHidden.scrollWidth);
+
+  // A hidden element reports 0, matching clientWidth/offsetWidth.
+  const hidden = document.createElement('div');
+  hidden.style.display = 'none';
+  hidden.appendChild(document.createElement('span'));
+  document.body.appendChild(hidden);
+  testing.expectEqual(0, hidden.scrollWidth);
+
+  // The root containers keep their synthetic size rather than summing
+  // children, so horizontal page-overflow checks stay stable.
+  testing.expectEqual(document.body.clientWidth, document.body.scrollWidth);
+  testing.expectEqual(
+    document.documentElement.clientWidth,
+    document.documentElement.scrollWidth,
+  );
+}
+</script>
+
+<script id="scrollWidthMarqueeLoop">
+{
+  // Regression: the infinite-marquee idiom duplicates content until it is
+  // twice the width of its container. scrollWidth has to respond to the
+  // insertion or the loop never terminates.
+  const track = document.createElement('div');
+  const lane = document.createElement('div');
+  lane.innerHTML = '<span>item</span>';
+  track.appendChild(lane);
+  document.body.appendChild(track);
+
+  // Doubling the markup doubles the measured content width.
+  const before = lane.scrollWidth;
+  lane.innerHTML += lane.innerHTML;
+  testing.expectEqual(before * 2, lane.scrollWidth);
+
+  let guard = 0;
+  while (lane.scrollWidth < track.offsetWidth * 2 && guard < 50) {
+    lane.innerHTML += lane.innerHTML;
+    guard++;
+  }
+  testing.expectTrue(guard < 50);
+}
+</script>
+
+<script id="scrollHeightFromContent">
+{
+  // An empty element has no content to overflow its box.
+  const empty = document.createElement('div');
+  document.body.appendChild(empty);
+  testing.expectEqual(empty.clientHeight, empty.scrollHeight);
+
+  // Children stack, so each one strictly increases scrollHeight.
+  const box = document.createElement('div');
+  document.body.appendChild(box);
+  box.appendChild(document.createElement('div'));
+  const oneChild = box.scrollHeight;
+  testing.expectTrue(oneChild >= box.clientHeight);
+
+  box.appendChild(document.createElement('div'));
+  testing.expectTrue(box.scrollHeight > oneChild);
+  testing.expectTrue(box.scrollHeight > box.clientHeight);
+
+  // Text contributes no height, as it contributes no width: a text child's
+  // line box is what the element's own size already stands in for.
+  const short = document.createElement('div');
+  const long = document.createElement('div');
+  short.textContent = 'ab';
+  long.textContent = 'abcdefghijklmnop';
+  document.body.appendChild(short);
+  document.body.appendChild(long);
+  testing.expectEqual(short.clientHeight, short.scrollHeight);
+  testing.expectEqual(long.clientHeight, long.scrollHeight);
+  testing.expectEqual(short.scrollHeight, long.scrollHeight);
+
+  // A display:none child takes up no space.
+  const withHidden = document.createElement('div');
+  const hiddenChild = document.createElement('div');
+  hiddenChild.style.display = 'none';
+  withHidden.appendChild(hiddenChild);
+  document.body.appendChild(withHidden);
+  testing.expectEqual(withHidden.clientHeight, withHidden.scrollHeight);
+
+  // A hidden element reports 0, matching clientHeight/offsetHeight.
+  const hidden = document.createElement('div');
+  hidden.style.display = 'none';
+  hidden.appendChild(document.createElement('div'));
+  document.body.appendChild(hidden);
+  testing.expectEqual(0, hidden.scrollHeight);
+
+  // The root containers keep their synthetic size rather than summing
+  // children. This is what keeps infinite-scroll triggers reading
+  // `scrollTop + clientHeight >= scrollHeight` on body/documentElement
+  // behaving as they do today.
+  testing.expectEqual(document.body.clientHeight, document.body.scrollHeight);
+  testing.expectEqual(
+    document.documentElement.clientHeight,
+    document.documentElement.scrollHeight,
+  );
+}
+</script>
+
+<script id="scrollHeightMarqueeLoop">
+{
+  // The vertical counterpart of scrollWidthMarqueeLoop: a ticker that grows
+  // its lane until it is twice the height of its container.
+  const track = document.createElement('div');
+  const lane = document.createElement('div');
+  lane.innerHTML = '<div>item</div>';
+  track.appendChild(lane);
+  document.body.appendChild(track);
+
+  // Doubling the markup doubles the measured content height.
+  const before = lane.scrollHeight;
+  lane.innerHTML += lane.innerHTML;
+  testing.expectEqual(before * 2, lane.scrollHeight);
+
+  let guard = 0;
+  while (lane.scrollHeight < track.offsetHeight * 2 && guard < 50) {
+    lane.innerHTML += lane.innerHTML;
+    guard++;
+  }
+  testing.expectTrue(guard < 50);
+}
+</script>
 <script id="scrollPosition">
 {
   const test1 = $('#test1');
