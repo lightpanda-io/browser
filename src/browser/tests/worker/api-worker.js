@@ -59,6 +59,11 @@
     const loc_pathname = loc.pathname;
     const loc_to_string = String(loc);
 
+    // DOMPoint mutation (setters must not require a Frame in a worker)
+    const point = new DOMPoint(1, 2);
+    point.x = 5;
+    point.w = 0.5;
+
     postMessage({
       ok: true,
       results: {
@@ -90,6 +95,8 @@
         loc_protocol,
         loc_pathname,
         loc_to_string,
+        point_x: point.x,
+        point_w: point.w,
       },
     });
   } catch (e) {

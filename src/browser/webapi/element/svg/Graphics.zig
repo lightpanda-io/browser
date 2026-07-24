@@ -17,9 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const SvgElement = @import("../Svg.zig");
+const AnimatedTransformList = @import("../../svg/AnimatedTransformList.zig");
+const StringList = @import("../../svg/StringList.zig");
 
 pub const Svg = @import("Svg.zig");
 pub const G = @import("G.zig");
@@ -72,4 +75,20 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const transform = bridge.accessor(Graphics.getTransform, null, .{});
+    pub const requiredExtensions = bridge.accessor(Graphics.getRequiredExtensions, null, .{});
+    pub const systemLanguage = bridge.accessor(Graphics.getSystemLanguage, null, .{});
 };
+
+pub fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
+    return AnimatedTransformList.getOrCreate(self.asElement(), frame);
+}
+
+pub fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {
+    return StringList.getOrCreate(self.asElement(), .required_extensions, frame);
+}
+
+pub fn getSystemLanguage(self: *Graphics, frame: *Frame) !*StringList {
+    return StringList.getOrCreate(self.asElement(), .system_language, frame);
+}

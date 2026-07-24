@@ -247,6 +247,10 @@
       testing.expectEqual(r.loc_href, r.loc_to_string);
       testing.expectEqual('http:', r.loc_protocol);
       testing.expectTrue(r.loc_pathname.endsWith('api-worker.js'));
+
+      // DOMPoint
+      testing.expectEqual(5, r.point_x);
+      testing.expectEqual(0.5, r.point_w);
     });
   }
 </script>

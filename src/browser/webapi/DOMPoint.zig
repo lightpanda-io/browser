@@ -77,17 +77,17 @@ pub fn getW(self: *const DOMPoint) f64 {
     return self._proto._w;
 }
 
-pub fn setX(self: *DOMPoint, v: f64) void {
-    self._proto._x = v;
+pub fn setX(self: *DOMPoint, v: f64) !void {
+    try self._proto.setCoordinate(.x, v);
 }
-pub fn setY(self: *DOMPoint, v: f64) void {
-    self._proto._y = v;
+pub fn setY(self: *DOMPoint, v: f64) !void {
+    try self._proto.setCoordinate(.y, v);
 }
-pub fn setZ(self: *DOMPoint, v: f64) void {
-    self._proto._z = v;
+pub fn setZ(self: *DOMPoint, v: f64) !void {
+    try self._proto.setCoordinate(.z, v);
 }
-pub fn setW(self: *DOMPoint, v: f64) void {
-    self._proto._w = v;
+pub fn setW(self: *DOMPoint, v: f64) !void {
+    try self._proto.setCoordinate(.w, v);
 }
 
 pub const JsApi = struct {
