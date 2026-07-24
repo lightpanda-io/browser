@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
 const DOMPoint = @import("DOMPoint.zig");
 const Matrix = @import("DOMMatrixReadOnly.zig");
@@ -46,7 +45,7 @@ pub const Coordinate = enum { x, y, z, w };
 pub const Attachment = struct {
     owner: *anyopaque,
     read_only: bool,
-    mutate: *const fn (*anyopaque, *DOMPointReadOnly, Coordinate, f64, *Frame) anyerror!void,
+    mutate: *const fn (*anyopaque, *DOMPointReadOnly, Coordinate, f64) anyerror!void,
 };
 
 pub const Type = union(enum) {
@@ -142,10 +141,10 @@ pub fn getW(self: *const DOMPointReadOnly) f64 {
     return self._w;
 }
 
-pub fn setCoordinate(self: *DOMPointReadOnly, coordinate: Coordinate, value: f64, frame: *Frame) !void {
+pub fn setCoordinate(self: *DOMPointReadOnly, coordinate: Coordinate, value: f64) !void {
     if (self._attachment) |attachment| {
         if (attachment.read_only) return error.NoModificationAllowed;
-        return attachment.mutate(attachment.owner, self, coordinate, value, frame);
+        return attachment.mutate(attachment.owner, self, coordinate, value);
     }
     self.setCoordinateRaw(coordinate, value);
 }

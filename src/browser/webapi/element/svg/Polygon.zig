@@ -27,8 +27,6 @@ const PointList = @import("../../svg/PointList.zig");
 
 const Polygon = @This();
 _proto: *Geometry,
-_points: ?*PointList = null,
-_animated_points: ?*PointList = null,
 
 pub fn asElement(self: *Polygon) *Element {
     return self._proto.asElement();
@@ -51,15 +49,9 @@ pub const JsApi = struct {
 };
 
 pub fn getPoints(self: *Polygon, frame: *Frame) !*PointList {
-    if (self._points == null) {
-        self._points = try PointList.create(self.asElement(), false, frame);
-    }
-    return self._points.?;
+    return PointList.getOrCreate(self.asElement(), .base, frame);
 }
 
 pub fn getAnimatedPoints(self: *Polygon, frame: *Frame) !*PointList {
-    if (self._animated_points == null) {
-        self._animated_points = try PointList.create(self.asElement(), true, frame);
-    }
-    return self._animated_points.?;
+    return PointList.getOrCreate(self.asElement(), .animated, frame);
 }
