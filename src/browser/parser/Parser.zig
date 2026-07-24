@@ -28,6 +28,7 @@ const CData = @import("../webapi/CData.zig");
 pub const AttributeIterator = h5e.AttributeIterator;
 
 const Allocator = std.mem.Allocator;
+const TERMINATE_CHECK_INTERVAL = 1024;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const ParsedNode = struct {
@@ -75,6 +76,9 @@ buf: std.ArrayList(u8),
 // True for document navigation, document.write, and setHTMLUnsafe; false for
 // innerHTML and DOMParser (per spec). Set from Options at init.
 allow_declarative_shadow: bool = false,
+
+terminated: bool = false,
+appends_until_terminate_check: u16 = TERMINATE_CHECK_INTERVAL,
 
 pub const Options = struct {
     allow_declarative_shadow: bool = false,
@@ -428,6 +432,9 @@ fn parseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
 
 fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.terminated) {
+        return;
+    }
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._popCallback(getNode(node_ref)) catch |err| {
@@ -535,6 +542,9 @@ fn _createProcessingInstruction(self: *Parser, target: []const u8, data: []const
 
 fn appendDoctypeToDocument(ctx: *anyopaque, name: h5e.StringSlice, public_id: h5e.StringSlice, system_id: h5e.StringSlice) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.terminated) {
+        return;
+    }
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendDoctypeToDocument(name.slice(), public_id.slice(), system_id.slice()) catch |err| {
@@ -559,6 +569,9 @@ fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const 
 
 fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.terminated) {
+        return;
+    }
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._addAttrsIfMissingCallback(getNode(target_ref), attributes) catch |err| {
@@ -607,6 +620,7 @@ fn _getTemplateContentsCallback(self: *Parser, node: *Node) !*anyopaque {
 // fall back to inserting the template as a normal light-DOM element.
 fn attachDeclarativeShadowCallback(ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8 {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.terminated) return 0;
     return self._attachDeclarativeShadowCallback(getNode(host_ref), getNode(template_ref), mode_is_open != 0) catch |err| {
         self.err = .{ .err = err, .source = .attach_declarative_shadow };
         return 0;
@@ -643,6 +657,10 @@ fn getDataCallback(ctx: *anyopaque) callconv(.c) *anyopaque {
 
 fn appendCallback(ctx: *anyopaque, parent_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.pollTerminate()) {
+        return;
+    }
+
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendCallback(getNode(parent_ref), node_or_text) catch |err| {
@@ -677,6 +695,9 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
 
 fn removeFromParentCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.terminated) {
+        return;
+    }
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._removeFromParentCallback(getNode(target_ref)) catch |err| {
@@ -695,6 +716,9 @@ fn _removeFromParentCallback(self: *Parser, node: *Node) !void {
 
 fn reparentChildrenCallback(ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.terminated) {
+        return;
+    }
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._reparentChildrenCallback(getNode(node_ref), getNode(new_parent_ref)) catch |err| {
@@ -711,6 +735,10 @@ fn _reparentChildrenCallback(self: *Parser, node: *Node, new_parent: *Node) !voi
 
 fn appendBeforeSiblingCallback(ctx: *anyopaque, sibling_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.pollTerminate()) {
+        return;
+    }
+
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendBeforeSiblingCallback(getNode(sibling_ref), node_or_text) catch |err| {
@@ -741,6 +769,10 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e
 
 fn appendBasedOnParentNodeCallback(ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    if (self.pollTerminate()) {
+        return;
+    }
+
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendBasedOnParentNodeCallback(getNode(element_ref), getNode(prev_element_ref), node_or_text) catch |err| {
@@ -771,4 +803,24 @@ fn asUint(comptime string: anytype) std.meta.Int(
     }
 
     return @bitCast(@as(*const [byteLength]u8, string).*);
+}
+
+// v8's terminate isn't pre-emptive. A parse of unbounded input
+// (this.innerHTML += this.innerHTML) has to poll the terminate flag itself.
+// We'll poll this (atomic) variable every TERMINATE_CHECK_INTERVAL append.
+fn pollTerminate(self: *Parser) bool {
+    if (self.terminated) {
+        return true;
+    }
+
+    const next_check = self.appends_until_terminate_check - 1;
+    if (next_check > 0) {
+        self.appends_until_terminate_check = next_check;
+        return false;
+    }
+    self.appends_until_terminate_check = TERMINATE_CHECK_INTERVAL;
+
+    const terminated = self.frame.js.env.terminatePending();
+    self.terminated = terminated;
+    return terminated;
 }
