@@ -1287,6 +1287,9 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
 // (allow/allowAndName) and the response carries Content-Disposition: attachment.
 // See issue #2701.
 fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
+    const uuidv4 = @import("../id.zig").uuidv4;
+    const latin1ToUtf8 = @import("../string.zig").latin1ToUtf8;
+
     const session = self._session;
     switch (session.download_behavior) {
         .allow, .allow_and_name => {},
@@ -1314,11 +1317,16 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     // `guid` is the CDP "Global Unique Identifier" that ties the
     // downloadWillBegin / downloadProgress events to one download.
     var guid_buf: [36]u8 = undefined;
-    @import("../id.zig").uuidv4(&guid_buf);
+    uuidv4(&guid_buf);
     const guid = try self.arena.dupe(u8, &guid_buf);
 
+    // Content-Disposition filenames can be in a legacy encoding (e.g.
+    // Shift_JIS) but must yield valid UTF-8
     const suggested = dispositionFilename(disposition) orelse (try urlBasename(self.arena, self.url)) orelse guid;
-    const suggested_filename = try self.arena.dupe(u8, suggested);
+    const suggested_filename = if (std.unicode.utf8ValidateSlice(suggested))
+        try self.arena.dupe(u8, suggested)
+    else
+        try latin1ToUtf8(self.arena, suggested);
 
     // allowAndName stores the file under its guid; allow uses the suggested name.
     const on_disk_name = switch (session.download_behavior) {
