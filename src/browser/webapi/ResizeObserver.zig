@@ -52,6 +52,7 @@ _observations: std.ArrayList(Observation) = .empty,
 
 const Observation = struct {
     target: *Element,
+    connected: bool = false,
     last_width: f64 = 0,
     last_height: f64 = 0,
 };
@@ -123,18 +124,50 @@ pub fn disconnect(self: *ResizeObserver, frame: *Frame) void {
     Frame.observers.unregisterResizeObserver(frame, self);
 }
 
+// True if any observed element's connectedness changed since the last
+// delivery. Runs on every DOM change (via Frame.observers), so it must stay
+// pointer walks only — no style lookups.
+pub fn connectivityChanged(self: *const ResizeObserver) bool {
+    for (self._observations.items) |obs| {
+        if (obs.target.asNode().isConnected() != obs.connected) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// True if any observed element is `ancestor` or one of its descendants. Walks
+// the same parentElement chain StyleManager.isHidden resolves visibility
+// through.
+pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element) bool {
+    for (self._observations.items) |obs| {
+        var current: ?*Element = obs.target;
+        while (current) |el| : (current = el.parentElement()) {
+            if (el == ancestor) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Gather the observations whose size changed since the last delivery and, if
 // any, invoke the callback.
 pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
     var entries: std.ArrayList(*ResizeObserverEntry) = .empty;
+    // Observed elements share ancestors, so one cache serves the whole pass.
+    var visibility_cache: Element.VisibilityCache = .empty;
     for (self._observations.items) |*obs| {
         const target = obs.target;
+        const connected = target.asNode().isConnected();
+        obs.connected = connected;
 
         const width, const height = blk: {
-            if (obs.target.asNode().isConnected() == false) {
+            if (!connected or !target.checkVisibilityCached(&visibility_cache, frame)) {
                 break :blk .{ 0, 0 };
             }
-            break :blk .{ target.getClientWidth(frame), target.getClientHeight(frame) };
+            const dims = target.getElementDimensions(frame);
+            break :blk .{ dims.width, dims.height };
         };
 
         if (width == obs.last_width and height == obs.last_height) {

@@ -1956,7 +1956,7 @@ pub fn domChanged(self: *Frame) void {
     // A DOM change is our "rendering opportunity": re-evaluate the layout
     // observers. Both are no-ops unless something they track actually changed.
     observers.scheduleIntersectionChecks(self);
-    observers.scheduleResizeDelivery(self);
+    observers.scheduleResizeChecks(self);
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
