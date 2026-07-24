@@ -931,22 +931,27 @@ fn printPaged(allocator: Allocator, text: []const u8) void {
     var environ_map = lp.environMap(allocator) catch return printPlain(text);
     defer environ_map.deinit();
 
-    var child = std.process.spawn(lp.io, .{
+    // lp.io cannot spawn children: failing allocator, empty environ (no PATH).
+    var pager_threaded: std.Io.Threaded = .init(allocator, .{ .environ = lp.environ() });
+    defer pager_threaded.deinit();
+    const pager_io = pager_threaded.io();
+
+    var child = std.process.spawn(pager_io, .{
         .argv = argv,
         .environ_map = &environ_map,
         .stdin = .pipe,
     }) catch return printPlain(text);
 
     if (child.stdin) |stdin| {
-        var writer = stdin.writerStreaming(lp.io, &.{});
+        var writer = stdin.writerStreaming(pager_io, &.{});
         // A write error here is the pager exiting early (user quit, or the
         // command failed) — wait() below decides which.
         writer.interface.writeAll(text) catch {};
-        stdin.close(lp.io);
+        stdin.close(pager_io);
         child.stdin = null;
     }
 
-    const term_result = child.wait(lp.io) catch return printPlain(text);
+    const term_result = child.wait(pager_io) catch return printPlain(text);
     const clean_exit = term_result == .exited and term_result.exited == 0;
     // Quitting the pager early is still exit 0; a non-zero exit means the
     // pager failed (e.g. $PAGER not found) and the help was never shown.

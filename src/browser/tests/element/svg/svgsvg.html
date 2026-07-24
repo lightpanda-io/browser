@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script src="../../testing.js"></script>
 
-<svg id=first>
+<svg id=first x="10" y="20px" width="25%" height="2.54cm" preserveAspectRatio="xMinYMax slice">
   <g>
     <rect id=inner-rect></rect>
     <svg id=nested>
@@ -24,6 +24,163 @@
   testing.expectEqual(null, $('#second').getElementById('inner-rect'));
   testing.expectEqual(null, first.getElementById(''));
   testing.expectEqual(null, first.getElementById('missing'));
+}
+</script>
+
+<script id=scalarFactories>
+{
+  const svg = $('#first');
+
+  const length = svg.createSVGLength();
+  testing.expectEqual(true, length instanceof SVGLength);
+  testing.expectEqual(false, length === svg.createSVGLength());
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_NUMBER, length.unitType);
+  testing.expectEqual(0, length.value);
+  testing.expectEqual('0', length.valueAsString);
+
+  length.valueAsString = '2.54cm';
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_CM, length.unitType);
+  testing.expectEqual(2.54, length.valueInSpecifiedUnits);
+  testing.expectEqual(96, Math.round(length.value));
+  testing.expectEqual('2.54cm', length.valueAsString);
+
+  // `value` is an absolute user-unit setter and resets the unit to NUMBER.
+  length.value = 12;
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_NUMBER, length.unitType);
+  testing.expectEqual('12', length.valueAsString);
+  length.newValueSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_PX, 4.5);
+  testing.expectEqual('4.5px', length.valueAsString);
+  testing.expectError('NotSupportedError', () => length.newValueSpecifiedUnits(0, 1));
+  testing.expectError('TypeError', () => { length.value = Infinity; });
+  testing.expectError('SyntaxError', () => { length.valueAsString = 'calc(1px + 2%)'; });
+  testing.expectError('SyntaxError', () => { length.valueAsString = 'NaN'; });
+
+  const angle = svg.createSVGAngle();
+  testing.expectEqual(true, angle instanceof SVGAngle);
+  testing.expectEqual(false, angle === svg.createSVGAngle());
+  testing.expectEqual(SVGAngle.SVG_ANGLETYPE_UNSPECIFIED, angle.unitType);
+  angle.valueAsString = '3.141592653589793rad';
+  testing.expectEqual(SVGAngle.SVG_ANGLETYPE_RAD, angle.unitType);
+  testing.expectEqual(180, Math.round(angle.value));
+  angle.convertToSpecifiedUnits(SVGAngle.SVG_ANGLETYPE_DEG);
+  testing.expectEqual(180, Math.round(angle.valueInSpecifiedUnits));
+  testing.expectEqual('180deg', angle.valueAsString);
+  angle.value = 45;
+  testing.expectEqual(SVGAngle.SVG_ANGLETYPE_UNSPECIFIED, angle.unitType);
+  testing.expectEqual('45', angle.valueAsString);
+  testing.expectError('NotSupportedError', () => angle.convertToSpecifiedUnits(0));
+  testing.expectError('TypeError', () => { angle.value = NaN; });
+
+  const transform = svg.createSVGTransform();
+  testing.expectEqual(true, transform instanceof SVGTransform);
+  testing.expectEqual(false, transform === svg.createSVGTransform());
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, transform.type);
+  testing.expectEqual(true, transform.matrix === transform.matrix);
+  testing.expectEqual(1, transform.matrix.a);
+  transform.setTranslate(3, 4);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_TRANSLATE, transform.type);
+  testing.expectEqual(3, transform.matrix.e);
+  testing.expectEqual(4, transform.matrix.f);
+
+  const source = svg.createSVGMatrix();
+  source.e = 8;
+  const copied = svg.createSVGTransformFromMatrix(source);
+  testing.expectEqual(8, copied.matrix.e);
+  source.e = 9;
+  testing.expectEqual(8, copied.matrix.e);
+  copied.setRotate(90, 10, 20);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_ROTATE, copied.type);
+  testing.expectEqual(90, copied.angle);
+  testing.expectEqual(30, Math.round(copied.matrix.e));
+  testing.expectEqual(10, Math.round(copied.matrix.f));
+  testing.expectError('TypeError', () => copied.setScale(Infinity, 1));
+
+  const matrix3d = new DOMMatrix();
+  matrix3d.m13 = 7;
+  const copied2d = svg.createSVGTransformFromMatrix(matrix3d);
+  testing.expectEqual(true, copied2d.matrix.is2D);
+  testing.expectEqual(0, copied2d.matrix.m13);
+}
+</script>
+
+<script id=liveScalarProperties>
+{
+  const svg = $('#first');
+
+  testing.expectEqual(true, svg.x instanceof SVGAnimatedLength);
+  testing.expectEqual(true, svg.x === svg.x);
+  testing.expectEqual(true, svg.x.baseVal === svg.x.baseVal);
+  testing.expectEqual(true, svg.x.animVal === svg.x.animVal);
+  testing.expectEqual(false, svg.x.baseVal === svg.x.animVal);
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_NUMBER, svg.x.baseVal.unitType);
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_PX, svg.y.baseVal.unitType);
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_PERCENTAGE, svg.width.baseVal.unitType);
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_CM, svg.height.baseVal.unitType);
+  testing.expectEqual(96, Math.round(svg.height.baseVal.value));
+
+  const nested = $('#nested');
+  nested.setAttribute('width', '50%');
+  testing.expectEqual(
+    Math.round(svg.width.baseVal.value / 2),
+    Math.round(nested.width.baseVal.value),
+  );
+  nested.setAttribute('style', 'font-size: 20px');
+  nested.setAttribute('x', '2em');
+  testing.expectEqual(40, nested.x.baseVal.value);
+  nested.setAttribute('font-size', '30px');
+  testing.expectEqual(40, nested.x.baseVal.value);
+  nested.style.fontSize = '';
+  testing.expectEqual(60, nested.x.baseVal.value);
+
+  const deep = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  deep.setAttribute('width', '50%');
+  let deepest = deep;
+  for (let i = 0; i < 40; i++) {
+    const child = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    child.setAttribute('width', '50%');
+    child.setAttribute('font-size', '1em');
+    deepest.appendChild(child);
+    deepest = child;
+  }
+  deepest.setAttribute('x', '1em');
+  document.body.appendChild(deep);
+  testing.expectEqual(true, Number.isFinite(deepest.width.baseVal.value));
+  testing.expectEqual(16, deepest.x.baseVal.value);
+  deep.remove();
+
+  svg.setAttribute('x', '12px');
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_PX, svg.x.baseVal.unitType);
+  testing.expectEqual(12, svg.x.baseVal.value);
+  testing.expectEqual(12, svg.x.animVal.value);
+  svg.x.baseVal.valueInSpecifiedUnits = 4.5;
+  testing.expectEqual('4.5px', svg.getAttribute('x'));
+  svg.x.baseVal.value = 7;
+  testing.expectEqual('7', svg.getAttribute('x'));
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_NUMBER, svg.x.animVal.unitType);
+  testing.expectError('NoModificationAllowedError', () => { svg.x.animVal.value = 3; });
+  testing.expectError('NoModificationAllowedError', () => { svg.x.animVal.valueAsString = '3px'; });
+
+  const aspect = svg.preserveAspectRatio;
+  testing.expectEqual(true, aspect instanceof SVGAnimatedPreserveAspectRatio);
+  testing.expectEqual(true, aspect === svg.preserveAspectRatio);
+  testing.expectEqual(true, aspect.baseVal === aspect.baseVal);
+  testing.expectEqual(true, aspect.animVal === aspect.animVal);
+  testing.expectEqual(false, aspect.baseVal === aspect.animVal);
+  testing.expectEqual(SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMINYMAX, aspect.baseVal.align);
+  testing.expectEqual(SVGPreserveAspectRatio.SVG_MEETORSLICE_SLICE, aspect.baseVal.meetOrSlice);
+
+  aspect.baseVal.align = SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMID;
+  testing.expectEqual('xMidYMid slice', svg.getAttribute('preserveAspectRatio'));
+  svg.setAttribute('preserveAspectRatio', 'none meet');
+  testing.expectEqual(SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_NONE, aspect.baseVal.align);
+  testing.expectEqual(SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_NONE, aspect.animVal.align);
+  testing.expectError('TypeError', () => { aspect.baseVal.align = 0; });
+  testing.expectError('NoModificationAllowedError', () => { aspect.animVal.meetOrSlice = 2; });
+
+  const empty = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  testing.expectEqual(SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMID, empty.preserveAspectRatio.baseVal.align);
+  testing.expectEqual(SVGPreserveAspectRatio.SVG_MEETORSLICE_MEET, empty.preserveAspectRatio.baseVal.meetOrSlice);
+  testing.expectEqual(null, empty.getAttribute('preserveAspectRatio'));
 }
 </script>
 

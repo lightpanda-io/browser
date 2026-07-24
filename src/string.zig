@@ -17,7 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const M = @This();
 
@@ -412,6 +414,40 @@ pub fn truncateUtf8(bytes: []const u8, max_bytes: usize) []const u8 {
     return bytes[0..i];
 }
 
+/// Reinterprets `bytes` as Latin-1 (each byte one codepoint) and encodes it
+/// as UTF-8. For bytes that aren't valid UTF-8 but must become a valid UTF-8
+/// string (JSON, filenames).
+pub fn latin1ToUtf8(allocator: Allocator, bytes: []const u8) ![]u8 {
+    var extra: usize = 0;
+    for (bytes) |b| {
+        if (b >= 0x80) {
+            extra += 1;
+        }
+    }
+    if (comptime IS_DEBUG) {
+        // The way this is currently used:
+        // 1 - the caller always wants the value duped,
+        // 2 - the caller only got here because utf8ValidateSlice failed.
+        // If both of those ever change, maybe it's worth reconsidering whether
+        // this API unconditionally dupes.
+        std.debug.assert(extra != 0);
+    }
+
+    const out = try allocator.alloc(u8, bytes.len + extra);
+    var i: usize = 0;
+    for (bytes) |b| {
+        if (b < 0x80) {
+            out[i] = b;
+            i += 1;
+        } else {
+            out[i] = 0xC0 | (b >> 6);
+            out[i + 1] = 0x80 | (b & 0x3F);
+            i += 2;
+        }
+    }
+    return out;
+}
+
 // Discriminatory type that signals the bridge to use arena instead of call_arena
 // Use this for strings that need to persist beyond the current call
 // The caller can unwrap and store just the underlying .str field
@@ -456,6 +492,20 @@ test "truncateUtf8" {
     // Invalid leader byte counts as one byte so the loop terminates.
     try testing.expectEqual("\xFF", truncateUtf8("\xFFx", 1));
     try testing.expectEqual("\xFFx", truncateUtf8("\xFFx", 2));
+}
+
+test "latin1ToUtf8" {
+    const cases = [_]struct { in: []const u8, out: []const u8 }{
+        .{ .in = "caf\xE9.txt", .out = "café.txt" },
+        .{ .in = "report\xFF.csv", .out = "report\xC3\xBF.csv" },
+        .{ .in = "\x82\xd3\x82\xe9.xlsx", .out = "\xC2\x82\xC3\x93\xC2\x82\xC3\xA9.xlsx" },
+    };
+    for (cases) |case| {
+        const out = try latin1ToUtf8(testing.allocator, case.in);
+        defer testing.allocator.free(out);
+        try testing.expectEqual(case.out, out);
+        try testing.expectEqual(true, std.unicode.utf8ValidateSlice(out));
+    }
 }
 
 test "String" {

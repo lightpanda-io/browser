@@ -13,7 +13,7 @@ inputs:
   zig-v8:
     description: 'zig-v8 release tag the prebuilt lib came from'
     required: false
-    default: 'v0.5.1'
+    default: 'v0.5.2'
 
 runs:
   using: "composite"

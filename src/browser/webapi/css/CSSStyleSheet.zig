@@ -224,3 +224,7 @@ test "WebApi: CSSStyleSheet" {
 test "WebApi: layer @-rule cascade" {
     try testing.htmlRunner("css/layer_at_rule_cascade.html", .{});
 }
+
+test "WebApi: layer order cascade" {
+    try testing.htmlRunner("css/layer_order_cascade.html", .{});
+}
