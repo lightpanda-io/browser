@@ -17,9 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Geometry = @import("Geometry.zig");
+const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 
 const Rect = @This();
 _proto: *Geometry,
@@ -39,4 +41,30 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const x = bridge.accessor(Rect.getX, null, .{});
+    pub const y = bridge.accessor(Rect.getY, null, .{});
+    pub const width = bridge.accessor(Rect.getWidth, null, .{});
+    pub const height = bridge.accessor(Rect.getHeight, null, .{});
+    pub const rx = bridge.accessor(Rect.getRx, null, .{});
+    pub const ry = bridge.accessor(Rect.getRy, null, .{});
 };
+
+pub fn getX(self: *Rect, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .x, frame);
+}
+pub fn getY(self: *Rect, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .y, frame);
+}
+pub fn getWidth(self: *Rect, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .width, frame);
+}
+pub fn getHeight(self: *Rect, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .height, frame);
+}
+pub fn getRx(self: *Rect, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .rx, frame);
+}
+pub fn getRy(self: *Rect, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .ry, frame);
+}

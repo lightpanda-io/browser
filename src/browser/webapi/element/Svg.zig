@@ -27,6 +27,16 @@ const Element = @import("../Element.zig");
 const AnimatedString = @import("../svg/AnimatedString.zig");
 pub const Generic = @import("svg/Generic.zig");
 pub const Graphics = @import("svg/Graphics.zig");
+pub const View = @import("svg/View.zig");
+pub const Title = @import("svg/Title.zig");
+pub const Desc = @import("svg/Desc.zig");
+pub const Metadata = @import("svg/Metadata.zig");
+pub const GradientElement = @import("svg/GradientElement.zig");
+pub const ClipPath = @import("svg/ClipPath.zig");
+pub const Marker = @import("svg/Marker.zig");
+pub const Mask = @import("svg/Mask.zig");
+pub const Pattern = @import("svg/Pattern.zig");
+pub const Stop = @import("svg/Stop.zig");
 
 const String = lp.String;
 
@@ -37,23 +47,29 @@ _tag_name: String, // Svg elements are case-preserving
 
 pub const Type = union(enum) {
     graphics: *Graphics,
+    view: *View,
+    title: *Title,
+    desc: *Desc,
+    metadata: *Metadata,
+    gradient: *GradientElement,
+    clip_path: *ClipPath,
+    marker: *Marker,
+    mask: *Mask,
+    pattern: *Pattern,
+    stop: *Stop,
     generic: *Generic,
 };
 
 pub fn is(self: *Svg, comptime T: type) ?*T {
-    switch (self._type) {
-        .graphics => |g| {
-            if (T == Graphics) {
-                return g;
+    inline for (@typeInfo(Type).@"union".fields) |field| {
+        if (@field(Type, field.name) == self._type) {
+            if (field.type == *T) {
+                return @field(self._type, field.name);
             }
-            return g.is(T);
-        },
-        .generic => |g| {
-            if (T == Generic) {
-                return g;
-            }
-        },
+        }
     }
+    if (self._type == .graphics) return self._type.graphics.is(T);
+    if (self._type == .gradient) return self._type.gradient.is(T);
     return null;
 }
 
@@ -64,7 +80,14 @@ pub fn getTag(self: *const Svg) Element.Tag {
             .g => .g,
             // No dedicated Element.Tag values; tag-name matching falls back
             // to _tag_name, like it does for generic SVG elements.
-            .a, .use, .image, .defs => .unknown,
+            .a, .use, .image, .defs, .symbol, .switch_element, .foreign_object => .unknown,
+            .text_content => |content| switch (content._type) {
+                .positioning => |positioning| switch (positioning._type) {
+                    .text => .text,
+                    .tspan => .unknown,
+                },
+                .text_path => .unknown,
+            },
             .geometry => |geo| switch (geo._type) {
                 .rect => .rect,
                 .circle => .circle,
@@ -76,6 +99,8 @@ pub fn getTag(self: *const Svg) Element.Tag {
             },
         },
         .generic => |g| g._tag,
+        .title => .title,
+        .view, .desc, .metadata, .gradient, .clip_path, .marker, .mask, .pattern, .stop => .unknown,
     };
 }
 

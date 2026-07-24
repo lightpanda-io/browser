@@ -312,176 +312,272 @@ pub fn invertMatrix(m: [16]f64) ?[16]f64 {
     return out;
 }
 
+pub const TransformSyntax = enum { css, svg };
+
+pub const TransformKind = enum {
+    matrix,
+    matrix3d,
+    translate,
+    translate_x,
+    translate_y,
+    translate_z,
+    translate_3d,
+    scale,
+    scale_x,
+    scale_y,
+    scale_z,
+    scale_3d,
+    rotate,
+    rotate_x,
+    rotate_y,
+    rotate_z,
+    rotate_3d,
+    skew,
+    skew_x,
+    skew_y,
+    perspective,
+};
+
+pub const ParsedTransform = struct {
+    kind: TransformKind,
+    matrix: [16]f64,
+    values: [16]f64,
+    count: usize,
+    is_2d: bool,
+};
+
+pub const TransformFunction = struct {
+    name: []const u8,
+    arguments: []const u8,
+};
+
+pub const TransformFunctionIterator = struct {
+    input: []const u8,
+    index: usize = 0,
+    allow_comma: bool = false,
+
+    pub fn next(self: *TransformFunctionIterator) !?TransformFunction {
+        while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) self.index += 1;
+        if (self.index == self.input.len) return null;
+        if (self.input[self.index] == ',') return error.SyntaxError;
+
+        const name_start = self.index;
+        while (self.index < self.input.len and
+            (std.ascii.isAlphabetic(self.input[self.index]) or std.ascii.isDigit(self.input[self.index])))
+        {
+            self.index += 1;
+        }
+        if (self.index == name_start or self.index >= self.input.len or self.input[self.index] != '(') {
+            return error.SyntaxError;
+        }
+        const name = self.input[name_start..self.index];
+        self.index += 1;
+
+        const arguments_start = self.index;
+        while (self.index < self.input.len and self.input[self.index] != ')') {
+            if (self.input[self.index] == '(') return error.SyntaxError;
+            self.index += 1;
+        }
+        if (self.index == self.input.len) return error.SyntaxError;
+        const arguments = self.input[arguments_start..self.index];
+        self.index += 1;
+
+        var had_whitespace = false;
+        while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) {
+            had_whitespace = true;
+            self.index += 1;
+        }
+        if (self.index < self.input.len and self.input[self.index] == ',') {
+            if (!self.allow_comma) return error.SyntaxError;
+            self.index += 1;
+            while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) self.index += 1;
+            if (self.index == self.input.len) return error.SyntaxError;
+        } else if (self.index < self.input.len and !had_whitespace) {
+            return error.SyntaxError;
+        }
+        return .{ .name = name, .arguments = arguments };
+    }
+};
+
 // Parses a CSS <transform-list> (e.g. "matrix(1,0,0,1,10,20) scale(2)") and
 // accumulates it into `m`. "none"/empty leave the matrix as identity.
 pub fn parseTransformList(input: []const u8, m: *[16]f64, is_2d: *bool) !void {
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
-    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "none")) {
-        return;
-    }
+    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "none")) return;
 
-    var i: usize = 0;
-    while (i < trimmed.len) {
-        // skip whitespace and separating commas
-        while (i < trimmed.len and (std.ascii.isWhitespace(trimmed[i]) or trimmed[i] == ',')) : (i += 1) {}
-        if (i >= trimmed.len) {
-            break;
-        }
-
-        const name_start = i;
-        while (i < trimmed.len and trimmed[i] != '(') : (i += 1) {}
-        if (i >= trimmed.len) {
-            return error.SyntaxError;
-        }
-        const name = std.mem.trim(u8, trimmed[name_start..i], " \t\r\n");
-
-        i += 1; // consume '('
-        const args_start = i;
-        while (i < trimmed.len and trimmed[i] != ')') : (i += 1) {}
-        if (i >= trimmed.len) {
-            return error.SyntaxError;
-        }
-        const args = trimmed[args_start..i];
-        i += 1; // consume ')'
-
-        const func = try parseFunction(name, args, is_2d);
-        m.* = multiplyMatrix(m.*, func);
+    var iterator = TransformFunctionIterator{ .input = trimmed };
+    while (try iterator.next()) |function| {
+        const parsed = try parseTransformFunction(function, .css);
+        m.* = multiplyMatrix(m.*, parsed.matrix);
+        if (!parsed.is_2d) is_2d.* = false;
     }
 }
 
-fn parseFunction(name: []const u8, args: []const u8, is_2d: *bool) ![16]f64 {
-    var nums: [16]f64 = undefined;
+pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSyntax) !ParsedTransform {
+    var values: [16]f64 = undefined;
     var units: [16]ParsedValue.Unit = undefined;
-    var count: usize = 0;
-
-    var it = std.mem.splitScalar(u8, args, ',');
-    while (it.next()) |raw| {
-        const tok = std.mem.trim(u8, raw, " \t\r\n");
-        if (tok.len == 0) {
-            continue;
-        }
-        if (count >= 16) {
-            return error.SyntaxError;
-        }
-        const parsed = try ParsedValue.parse(tok);
-        nums[count] = parsed.value;
-        units[count] = parsed.unit;
-        count += 1;
-    }
-
+    const count = try parseArguments(function.arguments, &values, &units);
+    const name = function.name;
     const Eql = std.mem.eql;
+
     if (Eql(u8, name, "matrix")) {
-        if (count != 6) {
-            return error.SyntaxError;
-        }
-        return .{
-            nums[0], nums[1], 0, 0,
-            nums[2], nums[3], 0, 0,
-            0,       0,       1, 0,
-            nums[4], nums[5], 0, 1,
-        };
+        try requireCount(count, 6, 6);
+        try requireUnitless(units[0..count]);
+        return makeParsedTransform(.matrix, .{
+            values[0], values[1], 0, 0,
+            values[2], values[3], 0, 0,
+            0,         0,         1, 0,
+            values[4], values[5], 0, 1,
+        }, values, count, true);
     }
 
     if (Eql(u8, name, "matrix3d")) {
-        if (count != 16) {
-            return error.SyntaxError;
-        }
-        is_2d.* = false;
-        return nums;
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 16, 16);
+        try requireUnitless(units[0..count]);
+        return makeParsedTransform(.matrix3d, values, values, count, false);
     }
 
     if (Eql(u8, name, "translate")) {
-        const tx = nums[0];
-        const ty = if (count > 1) nums[1] else 0;
-        return translationMatrix(tx, ty, 0);
+        try requireCount(count, 1, 2);
+        if (syntax == .svg) try requireUnitless(units[0..count]);
+        const ty = if (count == 2) values[1] else 0;
+        return makeParsedTransform(.translate, translationMatrix(values[0], ty, 0), values, count, true);
     }
-
     if (Eql(u8, name, "translateX")) {
-        return translationMatrix(nums[0], 0, 0);
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 1);
+        return makeParsedTransform(.translate_x, translationMatrix(values[0], 0, 0), values, count, true);
     }
-
     if (Eql(u8, name, "translateY")) {
-        return translationMatrix(0, nums[0], 0);
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 1);
+        return makeParsedTransform(.translate_y, translationMatrix(0, values[0], 0), values, count, true);
     }
-
     if (Eql(u8, name, "translateZ")) {
-        is_2d.* = false;
-        return translationMatrix(0, 0, nums[0]);
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 1);
+        return makeParsedTransform(.translate_z, translationMatrix(0, 0, values[0]), values, count, false);
     }
-
     if (Eql(u8, name, "translate3d")) {
-        is_2d.* = false;
-        return translationMatrix(nums[0], nums[1], nums[2]);
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 3, 3);
+        return makeParsedTransform(.translate_3d, translationMatrix(values[0], values[1], values[2]), values, count, false);
     }
 
     if (Eql(u8, name, "scale")) {
-        const sx = nums[0];
-        const sy = if (count > 1) nums[1] else sx;
-        return scaleMatrix(sx, sy, 1);
+        try requireCount(count, 1, 2);
+        try requireUnitless(units[0..count]);
+        const sy = if (count == 2) values[1] else values[0];
+        return makeParsedTransform(.scale, scaleMatrix(values[0], sy, 1), values, count, true);
     }
-
     if (Eql(u8, name, "scaleX")) {
-        return scaleMatrix(nums[0], 1, 1);
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 1);
+        try requireUnitless(units[0..count]);
+        return makeParsedTransform(.scale_x, scaleMatrix(values[0], 1, 1), values, count, true);
     }
-
     if (Eql(u8, name, "scaleY")) {
-        return scaleMatrix(1, nums[0], 1);
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 1);
+        try requireUnitless(units[0..count]);
+        return makeParsedTransform(.scale_y, scaleMatrix(1, values[0], 1), values, count, true);
     }
-
     if (Eql(u8, name, "scaleZ")) {
-        is_2d.* = false;
-        return scaleMatrix(1, 1, nums[0]);
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 1);
+        try requireUnitless(units[0..count]);
+        return makeParsedTransform(.scale_z, scaleMatrix(1, 1, values[0]), values, count, false);
     }
-
     if (Eql(u8, name, "scale3d")) {
-        is_2d.* = false;
-        return scaleMatrix(nums[0], nums[1], nums[2]);
-    }
-    if (Eql(u8, name, "rotate") or Eql(u8, name, "rotateZ")) {
-        if (Eql(u8, name, "rotateZ")) is_2d.* = false;
-        return rotateZMatrix(toRadians(nums[0], units[0]));
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 3, 3);
+        try requireUnitless(units[0..count]);
+        return makeParsedTransform(.scale_3d, scaleMatrix(values[0], values[1], values[2]), values, count, false);
     }
 
-    if (Eql(u8, name, "rotateX")) {
-        is_2d.* = false;
-        return rotateXMatrix(toRadians(nums[0], units[0]));
-    }
-
-    if (Eql(u8, name, "rotateY")) {
-        is_2d.* = false;
-        return rotateYMatrix(toRadians(nums[0], units[0]));
-    }
-
-    if (Eql(u8, name, "rotate3d")) {
-        is_2d.* = false;
-        if (count != 4) {
-            return error.SyntaxError;
+    if (Eql(u8, name, "rotate")) {
+        try requireCount(count, 1, if (syntax == .svg) 3 else 1);
+        if (count != 1 and count != 3) return error.SyntaxError;
+        try requireAngle(units[0]);
+        if (syntax == .svg and units[0] != .none) return error.SyntaxError;
+        if (count == 3) try requireUnitless(units[1..3]);
+        var matrix = rotateZMatrix(toRadians(values[0], units[0]));
+        if (count == 3) {
+            matrix = multiplyMatrix(translationMatrix(values[1], values[2], 0), matrix);
+            matrix = multiplyMatrix(matrix, translationMatrix(-values[1], -values[2], 0));
         }
-        return axisAngleMatrix(nums[0], nums[1], nums[2], toRadians(nums[3], units[3]));
+        return makeParsedTransform(.rotate, matrix, values, count, true);
+    }
+    if (Eql(u8, name, "rotateX") or Eql(u8, name, "rotateY") or Eql(u8, name, "rotateZ")) {
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 1);
+        try requireAngle(units[0]);
+        if (Eql(u8, name, "rotateX")) return makeParsedTransform(.rotate_x, rotateXMatrix(toRadians(values[0], units[0])), values, count, false);
+        if (Eql(u8, name, "rotateY")) return makeParsedTransform(.rotate_y, rotateYMatrix(toRadians(values[0], units[0])), values, count, false);
+        return makeParsedTransform(.rotate_z, rotateZMatrix(toRadians(values[0], units[0])), values, count, false);
+    }
+    if (Eql(u8, name, "rotate3d")) {
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 4, 4);
+        try requireUnitless(units[0..3]);
+        try requireAngle(units[3]);
+        return makeParsedTransform(.rotate_3d, axisAngleMatrix(values[0], values[1], values[2], toRadians(values[3], units[3])), values, count, false);
     }
 
     if (Eql(u8, name, "skew")) {
-        const ax = toRadians(nums[0], units[0]);
-        const ay = if (count > 1) toRadians(nums[1], units[1]) else 0;
-        return skewMatrix(ax, ay);
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 2);
+        try requireAngle(units[0]);
+        if (count == 2) try requireAngle(units[1]);
+        const ay = if (count == 2) toRadians(values[1], units[1]) else 0;
+        return makeParsedTransform(.skew, skewMatrix(toRadians(values[0], units[0]), ay), values, count, true);
     }
-
-    if (Eql(u8, name, "skewX")) {
-        return skewMatrix(toRadians(nums[0], units[0]), 0);
-    }
-
-    if (Eql(u8, name, "skewY")) {
-        return skewMatrix(0, toRadians(nums[0], units[0]));
+    if (Eql(u8, name, "skewX") or Eql(u8, name, "skewY")) {
+        try requireCount(count, 1, 1);
+        try requireAngle(units[0]);
+        if (syntax == .svg and units[0] != .none) return error.SyntaxError;
+        if (Eql(u8, name, "skewX")) return makeParsedTransform(.skew_x, skewMatrix(toRadians(values[0], units[0]), 0), values, count, true);
+        return makeParsedTransform(.skew_y, skewMatrix(0, toRadians(values[0], units[0])), values, count, true);
     }
 
     if (Eql(u8, name, "perspective")) {
-        is_2d.* = false;
-        var out = identity();
-        if (nums[0] != 0) out[11] = -1.0 / nums[0];
-        return out;
+        if (syntax == .svg) return error.SyntaxError;
+        try requireCount(count, 1, 1);
+        var matrix = identity();
+        if (values[0] != 0) matrix[11] = -1.0 / values[0];
+        return makeParsedTransform(.perspective, matrix, values, count, false);
     }
 
     return error.SyntaxError;
+}
+
+fn makeParsedTransform(kind: TransformKind, matrix: [16]f64, values: [16]f64, count: usize, is_2d: bool) ParsedTransform {
+    return .{ .kind = kind, .matrix = matrix, .values = values, .count = count, .is_2d = is_2d };
+}
+
+fn requireCount(count: usize, minimum: usize, maximum: usize) !void {
+    if (count < minimum or count > maximum) return error.SyntaxError;
+}
+
+fn requireUnitless(units: []const ParsedValue.Unit) !void {
+    for (units) |unit| if (unit != .none) return error.SyntaxError;
+}
+
+fn requireAngle(unit: ParsedValue.Unit) !void {
+    if (unit == .other) return error.SyntaxError;
+}
+
+fn parseArguments(arguments: []const u8, values: *[16]f64, units: *[16]ParsedValue.Unit) !usize {
+    var scanner = ArgumentScanner{ .input = arguments };
+    var count: usize = 0;
+    while (try scanner.next()) |value| {
+        if (count == values.len) return error.SyntaxError;
+        values[count] = value.value;
+        units[count] = value.unit;
+        count += 1;
+    }
+    return count;
 }
 
 pub fn toRadians(value: f64, unit: ParsedValue.Unit) f64 {
@@ -491,6 +587,7 @@ pub fn toRadians(value: f64, unit: ParsedValue.Unit) f64 {
         .turn => value * std.math.tau,
         // bare numbers in rotate()/skew() are interpreted as degrees
         .deg, .none => value * std.math.pi / 180.0,
+        .other => value,
     };
 }
 
@@ -725,43 +822,75 @@ const ParsedValue = struct {
         rad,
         grad,
         turn,
+        other,
     };
+};
 
-    // Parses a single CSS dimension token: a number with an optional unit suffix.
-    // Length units are ignored (we don't resolve layout), so the numeric part is
-    // taken verbatim; angle units are recorded so they can be normalised.
-    fn parse(tok: []const u8) !ParsedValue {
-        var end: usize = 0;
-        while (end < tok.len) : (end += 1) {
-            const c = tok[end];
-            if ((c >= '0' and c <= '9') or c == '.' or c == '+' or c == '-' or c == 'e' or c == 'E') {
-                // 'e'/'E' is ambiguous with exponents; only treat as exponent when
-                // followed by a digit/sign.
-                if ((c == 'e' or c == 'E') and end > 0) {
-                    if (end + 1 >= tok.len) break;
-                    const nx = tok[end + 1];
-                    if (!((nx >= '0' and nx <= '9') or nx == '+' or nx == '-')) break;
-                }
-                continue;
-            }
-            break;
+const ArgumentScanner = struct {
+    input: []const u8,
+    index: usize = 0,
+    first: bool = true,
+
+    fn next(self: *ArgumentScanner) !?ParsedValue {
+        var had_whitespace = false;
+        while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) {
+            had_whitespace = true;
+            self.index += 1;
         }
-        if (end == 0) {
+
+        if (!self.first and self.index < self.input.len and self.input[self.index] == ',') {
+            self.index += 1;
+            while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) self.index += 1;
+            if (self.index == self.input.len) return error.SyntaxError;
+        } else if (!self.first and self.index < self.input.len and !had_whitespace and
+            self.input[self.index] != '+' and self.input[self.index] != '-')
+        {
             return error.SyntaxError;
         }
-        const value = try std.fmt.parseFloat(f64, tok[0..end]);
-        const suffix = tok[end..];
 
-        var unit: Unit = .none;
-        if (std.ascii.eqlIgnoreCase(suffix, "deg")) {
-            unit = .deg;
-        } else if (std.ascii.eqlIgnoreCase(suffix, "rad")) {
-            unit = .rad;
-        } else if (std.ascii.eqlIgnoreCase(suffix, "grad")) {
-            unit = .grad;
-        } else if (std.ascii.eqlIgnoreCase(suffix, "turn")) {
-            unit = .turn;
+        if (self.index == self.input.len) return null;
+        const start = self.index;
+        if (self.input[self.index] == '+' or self.input[self.index] == '-') self.index += 1;
+
+        var digits: usize = 0;
+        while (self.index < self.input.len and std.ascii.isDigit(self.input[self.index])) : (self.index += 1) digits += 1;
+        if (self.index < self.input.len and self.input[self.index] == '.') {
+            self.index += 1;
+            while (self.index < self.input.len and std.ascii.isDigit(self.input[self.index])) : (self.index += 1) digits += 1;
         }
+        if (digits == 0) return error.SyntaxError;
+
+        if (self.index < self.input.len and (self.input[self.index] == 'e' or self.input[self.index] == 'E')) {
+            self.index += 1;
+            if (self.index < self.input.len and (self.input[self.index] == '+' or self.input[self.index] == '-')) self.index += 1;
+            const exponent_start = self.index;
+            while (self.index < self.input.len and std.ascii.isDigit(self.input[self.index])) self.index += 1;
+            if (self.index == exponent_start) return error.SyntaxError;
+        }
+
+        const number_end = self.index;
+        while (self.index < self.input.len and
+            (std.ascii.isAlphabetic(self.input[self.index]) or self.input[self.index] == '%'))
+        {
+            self.index += 1;
+        }
+        const suffix = self.input[number_end..self.index];
+        const unit: ParsedValue.Unit = if (suffix.len == 0)
+            .none
+        else if (std.ascii.eqlIgnoreCase(suffix, "deg"))
+            .deg
+        else if (std.ascii.eqlIgnoreCase(suffix, "rad"))
+            .rad
+        else if (std.ascii.eqlIgnoreCase(suffix, "grad"))
+            .grad
+        else if (std.ascii.eqlIgnoreCase(suffix, "turn"))
+            .turn
+        else
+            .other;
+
+        const value = std.fmt.parseFloat(f64, self.input[start..number_end]) catch return error.SyntaxError;
+        if (!std.math.isFinite(value)) return error.SyntaxError;
+        self.first = false;
         return .{ .value = value, .unit = unit };
     }
 };

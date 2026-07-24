@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg>
+  <text id=text font-size="20">Hello<tspan id=tspan>🌍</tspan></text>
+  <text id=invalidFont font-size="-10">A</text>
+  <path id=guide d="M0 0 L100 0"></path>
+  <text><textPath id=textPath href="#guide" startOffset="25%" method="stretch" spacing="auto">abc</textPath></text>
+</svg>
+
+<script id=textIdentities>
+{
+  const text = $('#text');
+  testing.expectEqual(true, text instanceof SVGTextElement);
+  testing.expectEqual(true, text instanceof SVGTextPositioningElement);
+  testing.expectEqual(true, text instanceof SVGTextContentElement);
+  testing.expectEqual(true, text instanceof SVGGraphicsElement);
+  testing.expectEqual(text, document.querySelector('svg text'));
+  testing.expectEqual(true, $('#tspan') instanceof SVGTSpanElement);
+  testing.expectEqual(true, $('#tspan') instanceof SVGTextPositioningElement);
+  testing.expectEqual(true, $('#textPath') instanceof SVGTextPathElement);
+  testing.expectEqual(true, $('#textPath') instanceof SVGTextContentElement);
+
+  const ns = 'http://www.w3.org/2000/svg';
+  testing.expectEqual(true, document.createElementNS(ns, 'textPath') instanceof SVGTextPathElement);
+  testing.expectEqual(false, document.createElementNS(ns, 'textpath') instanceof SVGTextPathElement);
+}
+</script>
+
+<script id=fallbackMetrics>
+{
+  const text = $('#text');
+  testing.expectEqual(6, text.getNumberOfChars());
+  testing.expectEqual(80, text.getComputedTextLength());
+  testing.expectEqual(60, text.getSubStringLength(0, 5));
+  testing.expectEqual(20, text.getSubStringLength(5, 1));
+  testing.expectEqual(32, text.getSubStringLength(4, 99));
+  testing.expectError('IndexSizeError', () => text.getSubStringLength(6, 1));
+  testing.expectError('IndexSizeError', () => text.getSubStringLength(6, 0));
+  testing.expectEqual(1, $('#tspan').getNumberOfChars());
+  testing.expectEqual(20, $('#tspan').getComputedTextLength());
+  testing.expectEqual(9.6, $('#invalidFont').getComputedTextLength());
+}
+</script>
+
+<script id=textReflection>
+{
+  const text = $('#text');
+  testing.expectEqual(true, text.textLength instanceof SVGAnimatedLength);
+  testing.expectEqual(true, text.textLength === text.textLength);
+  testing.expectEqual(0, text.textLength.baseVal.value);
+  text.textLength.baseVal.value = 100;
+  testing.expectEqual('100', text.getAttribute('textLength'));
+  testing.expectEqual(100, text.textLength.animVal.value);
+  testing.expectEqual(1, text.lengthAdjust.baseVal);
+  testing.expectEqual(true, text.lengthAdjust === text.lengthAdjust);
+  text.lengthAdjust.baseVal = 2;
+  testing.expectEqual('spacingAndGlyphs', text.getAttribute('lengthAdjust'));
+  testing.expectError('InvalidStateError', () => text.getBBox());
+
+  const textPath = $('#textPath');
+  testing.expectEqual('#guide', textPath.href.baseVal);
+  testing.expectEqual(true, textPath.startOffset === textPath.startOffset);
+  testing.expectEqual(true, textPath.method === textPath.method);
+  testing.expectEqual(true, textPath.spacing === textPath.spacing);
+  testing.expectEqual('25%', textPath.startOffset.baseVal.valueAsString);
+  testing.expectEqual(2, textPath.method.baseVal);
+  testing.expectEqual(1, textPath.spacing.baseVal);
+  textPath.spacing.baseVal = 2;
+  testing.expectEqual('exact', textPath.getAttribute('spacing'));
+}
+</script>

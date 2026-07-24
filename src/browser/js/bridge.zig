@@ -812,6 +812,7 @@ fn PrototypeType(comptime T: type) ?type {
 }
 
 fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
+    @setEvalBranchQuota(10_000);
     var index: usize = 0;
     var flat: [countFlattenedTypes(Types)]type = undefined;
     for (Types) |T| {
@@ -829,6 +830,7 @@ fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
 }
 
 fn countFlattenedTypes(comptime Types: []const type) usize {
+    @setEvalBranchQuota(10_000);
     var c: usize = 0;
     for (Types) |T| {
         c += if (@hasDecl(T, "registerTypes")) T.registerTypes().len else 1;
@@ -1061,6 +1063,26 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/svg/Use.zig"),
     @import("../webapi/element/svg/Image.zig"),
     @import("../webapi/element/svg/Defs.zig"),
+    @import("../webapi/element/svg/Symbol.zig"),
+    @import("../webapi/element/svg/Switch.zig"),
+    @import("../webapi/element/svg/ForeignObject.zig"),
+    @import("../webapi/element/svg/TextContent.zig"),
+    @import("../webapi/element/svg/TextPositioning.zig"),
+    @import("../webapi/element/svg/Text.zig"),
+    @import("../webapi/element/svg/TSpan.zig"),
+    @import("../webapi/element/svg/TextPath.zig"),
+    @import("../webapi/element/svg/View.zig"),
+    @import("../webapi/element/svg/Title.zig"),
+    @import("../webapi/element/svg/Desc.zig"),
+    @import("../webapi/element/svg/Metadata.zig"),
+    @import("../webapi/element/svg/GradientElement.zig"),
+    @import("../webapi/element/svg/LinearGradient.zig"),
+    @import("../webapi/element/svg/RadialGradient.zig"),
+    @import("../webapi/element/svg/ClipPath.zig"),
+    @import("../webapi/element/svg/Marker.zig"),
+    @import("../webapi/element/svg/Mask.zig"),
+    @import("../webapi/element/svg/Pattern.zig"),
+    @import("../webapi/element/svg/Stop.zig"),
     @import("../webapi/element/svg/Rect.zig"),
     @import("../webapi/element/svg/Circle.zig"),
     @import("../webapi/element/svg/Ellipse.zig"),
@@ -1074,8 +1096,14 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/svg/Angle.zig"),
     @import("../webapi/svg/Transform.zig"),
     @import("../webapi/svg/AnimatedLength.zig"),
+    @import("../webapi/svg/AnimatedNumber.zig"),
+    @import("../webapi/svg/AnimatedEnumeration.zig"),
     @import("../webapi/svg/PreserveAspectRatio.zig"),
     @import("../webapi/svg/AnimatedPreserveAspectRatio.zig"),
+    @import("../webapi/svg/PointList.zig"),
+    @import("../webapi/svg/TransformList.zig"),
+    @import("../webapi/svg/AnimatedTransformList.zig"),
+    @import("../webapi/svg/StringList.zig"),
     @import("../webapi/encoding/TextDecoder.zig"),
     @import("../webapi/encoding/TextEncoder.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
