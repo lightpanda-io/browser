@@ -158,7 +158,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
 
-    const arena = try arena_pool.acquire(.small, "Session");
+    const arena = try arena_pool.acquireFor(&browser.native_memory, .small, "Session");
     errdefer arena_pool.release(arena);
 
     self.* = .{
@@ -393,7 +393,7 @@ pub fn closeAllPages(self: *Session) void {
 }
 
 pub fn getArena(self: *Session, size_or_bucket: anytype, debug: []const u8) !Allocator {
-    return self.arena_pool.acquire(size_or_bucket, debug);
+    return self.arena_pool.acquireFor(&self.browser.native_memory, size_or_bucket, debug);
 }
 
 pub fn releaseArena(self: *Session, allocator: Allocator) void {

@@ -23,6 +23,7 @@ const CDP = @import("../cdp/CDP.zig");
 const Notification = @import("../Notification.zig");
 
 const js = @import("js/js.zig");
+const NativeMemoryAccount = @import("NativeMemoryAccount.zig");
 const Page = @import("Page.zig");
 const Watchdog = @import("../Watchdog.zig");
 const Session = @import("Session.zig");
@@ -45,6 +46,11 @@ session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: HttpClient,
+
+// Arena backing allocations owned by this browser. Allocation paths update
+// atomics; only flushNativeMemory calls V8 from the isolate thread.
+native_memory: NativeMemoryAccount = .{},
+reported_native_memory: i64 = 0,
 
 // Shared across pages, survives navigation. See Selector.Cache.
 selector_cache: Selector.Cache,
@@ -133,6 +139,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
 
 pub fn deinit(self: *Browser) void {
     self.closeSession();
+    std.debug.assert(self.native_memory.active() == 0);
     // After this returns, the watchdog thread holds no reference to our env
     // or http_client — required before either is torn down.
     self.app.watchdog.unregister(&self.watchdog_entry);
@@ -191,13 +198,21 @@ pub fn closeSession(self: *Browser) void {
         session.deinit();
         self.session = null;
     }
+    self.flushNativeMemory();
+}
+
+pub fn flushNativeMemory(self: *Browser) void {
+    const delta = self.native_memory.takePendingDelta();
+    if (delta != 0) self.reported_native_memory = self.env.isolate.adjustAmountOfExternalAllocatedMemory(delta);
 }
 
 pub fn runMicrotasks(self: *Browser) void {
+    defer self.flushNativeMemory();
     self.env.runMicrotasks();
 }
 
 pub fn runMacrotasks(self: *Browser) !void {
+    defer self.flushNativeMemory();
     const env = &self.env;
 
     try self.env.runMacrotasks();
@@ -223,6 +238,7 @@ pub fn msToNextTask(self: *Browser) ?u64 {
     return self.env.msToNextTask();
 }
 
-pub fn runIdleTasks(self: *const Browser) void {
+pub fn runIdleTasks(self: *Browser) void {
+    defer self.flushNativeMemory();
     self.env.runIdleTasks();
 }

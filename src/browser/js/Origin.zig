@@ -27,7 +27,8 @@
 const std = @import("std");
 const js = @import("js.zig");
 
-const App = @import("../../App.zig");
+const ArenaPool = @import("../../ArenaPool.zig");
+const NativeMemoryAccount = @import("../NativeMemoryAccount.zig");
 
 const v8 = js.v8;
 const Allocator = std.mem.Allocator;
@@ -36,6 +37,7 @@ const Origin = @This();
 
 rc: usize = 1,
 arena: Allocator,
+arena_pool: *ArenaPool,
 
 // The key, e.g. lightpanda.io:443
 key: []const u8,
@@ -44,9 +46,9 @@ key: []const u8,
 // as their security token for V8 to allow cross-context access
 security_token: v8.Global,
 
-pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
-    const arena = try app.arena_pool.acquire(.tiny, "Origin");
-    errdefer app.arena_pool.release(arena);
+pub fn init(arena_pool: *ArenaPool, owner: *NativeMemoryAccount, isolate: js.Isolate, key: []const u8) !*Origin {
+    const arena = try arena_pool.acquireFor(owner, .tiny, "Origin");
+    errdefer arena_pool.release(arena);
 
     var hs: js.HandleScope = undefined;
     hs.init(isolate);
@@ -61,13 +63,14 @@ pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
     self.* = .{
         .rc = 1,
         .arena = arena,
+        .arena_pool = arena_pool,
         .key = owned_key,
         .security_token = token_global,
     };
     return self;
 }
 
-pub fn deinit(self: *Origin, app: *App) void {
+pub fn deinit(self: *Origin) void {
     v8.v8__Global__Reset(&self.security_token);
-    app.arena_pool.release(self.arena);
+    self.arena_pool.release(self.arena);
 }

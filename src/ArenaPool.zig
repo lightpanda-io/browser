@@ -23,6 +23,7 @@ const builtin = @import("builtin");
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+const NativeMemoryAccount = @import("browser/NativeMemoryAccount.zig");
 
 const ArenaPool = @This();
 
@@ -44,7 +45,92 @@ const Entry = struct {
     next: ?*Entry,
     arena: ArenaAllocator,
     bucket: *Bucket,
+    parent_allocator: Allocator,
+    owner: std.atomic.Value(?*NativeMemoryAccount) = .init(null),
+    allocated_bytes: std.atomic.Value(usize) = .init(0),
     debug: if (IS_DEBUG) []const u8 else void = if (IS_DEBUG) "" else {},
+
+    const vtable = Allocator.VTable{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn allocator(self: *Entry) Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn setOwner(self: *Entry, owner: ?*NativeMemoryAccount) void {
+        std.debug.assert(self.owner.load(.acquire) == null);
+        self.owner.store(owner, .release);
+        if (owner) |account| {
+            const bytes = self.allocated_bytes.load(.acquire);
+            account.add(bytes);
+            lp.metrics.browser_native_memory_bytes.incrBy(bytes);
+        }
+    }
+
+    fn clearOwner(self: *Entry) void {
+        const owner = self.owner.swap(null, .acq_rel) orelse return;
+        const bytes = self.allocated_bytes.load(.acquire);
+        owner.remove(bytes);
+        lp.metrics.browser_native_memory_bytes.decrBy(bytes);
+    }
+
+    fn addBytes(self: *Entry, bytes: usize) void {
+        if (bytes == 0) return;
+        _ = self.allocated_bytes.fetchAdd(bytes, .monotonic);
+        if (self.owner.load(.acquire)) |owner| {
+            owner.add(bytes);
+            lp.metrics.browser_native_memory_bytes.incrBy(bytes);
+        }
+    }
+
+    fn removeBytes(self: *Entry, bytes: usize) void {
+        if (bytes == 0) return;
+        const previous = self.allocated_bytes.fetchSub(bytes, .monotonic);
+        std.debug.assert(previous >= bytes);
+        if (self.owner.load(.acquire)) |owner| {
+            owner.remove(bytes);
+            lp.metrics.browser_native_memory_bytes.decrBy(bytes);
+        }
+    }
+
+    fn adjustBytes(self: *Entry, old_len: usize, new_len: usize) void {
+        if (new_len > old_len) {
+            self.addBytes(new_len - old_len);
+        } else {
+            self.removeBytes(old_len - new_len);
+        }
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, return_address: usize) ?[*]u8 {
+        const self: *Entry = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawAlloc(len, alignment, return_address) orelse return null;
+        self.addBytes(len);
+        return result;
+    }
+
+    fn resize(ctx: *anyopaque, old_mem: []u8, alignment: std.mem.Alignment, new_len: usize, return_address: usize) bool {
+        const self: *Entry = @ptrCast(@alignCast(ctx));
+        if (!self.parent_allocator.rawResize(old_mem, alignment, new_len, return_address)) return false;
+        self.adjustBytes(old_mem.len, new_len);
+        return true;
+    }
+
+    fn remap(ctx: *anyopaque, old_mem: []u8, alignment: std.mem.Alignment, new_len: usize, return_address: usize) ?[*]u8 {
+        const self: *Entry = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawRemap(old_mem, alignment, new_len, return_address) orelse return null;
+        self.adjustBytes(old_mem.len, new_len);
+        return result;
+    }
+
+    fn free(ctx: *anyopaque, old_mem: []u8, alignment: std.mem.Alignment, return_address: usize) void {
+        const self: *Entry = @ptrCast(@alignCast(ctx));
+        self.parent_allocator.rawFree(old_mem, alignment, return_address);
+        self.removeBytes(old_mem.len);
+    }
 };
 
 pub const Config = struct {
@@ -111,6 +197,10 @@ pub fn deinit(self: *ArenaPool) void {
 // - Pass a BucketSize (.tiny, .small, .medium, .large) for explicit bucket selection
 // - Pass a usize for automatic bucket selection based on expected size
 pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Allocator {
+    return self.acquireFor(null, size_or_bucket, debug);
+}
+
+pub fn acquireFor(self: *ArenaPool, owner: ?*NativeMemoryAccount, size_or_bucket: anytype, debug: []const u8) !Allocator {
     const bucket_size: BucketSize = blk: {
         const T = @TypeOf(size_or_bucket);
         if (T == BucketSize or T == @TypeOf(.enum_literal)) {
@@ -146,6 +236,7 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Al
             }
             gop.value_ptr.* += 1;
         }
+        entry.setOwner(owner);
         lp.metrics.arena_hit.incr(bucket_size);
         return entry.arena.allocator();
     }
@@ -156,9 +247,12 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Al
     entry.* = .{
         .next = null,
         .bucket = bucket,
+        .parent_allocator = self.allocator,
         .debug = if (IS_DEBUG) debug else {},
-        .arena = ArenaAllocator.init(self.allocator),
+        .arena = undefined,
     };
+    entry.arena = ArenaAllocator.init(entry.allocator());
+    entry.setOwner(owner);
 
     if (IS_DEBUG) {
         const gop = try self._leak_track.getOrPut(self.allocator, debug);
@@ -192,6 +286,7 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
     }
 
     _ = arena.reset(.{ .retain_with_limit = bucket.retain_bytes });
+    entry.clearOwner();
 
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
@@ -380,4 +475,48 @@ test "ArenaPool: size-based acquire" {
     try testing.expectEqual(1, pool.small.free_list_len);
     try testing.expectEqual(1, pool.medium.free_list_len);
     try testing.expectEqual(1, pool.large.free_list_len);
+}
+
+test "ArenaPool: browser account follows retained capacity ownership" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var first: NativeMemoryAccount = .{};
+    var second: NativeMemoryAccount = .{};
+
+    const first_arena = try pool.acquireFor(&first, .tiny, "first");
+    _ = try first_arena.alloc(u8, 256);
+    const retained_bytes = first.active();
+    try testing.expect(retained_bytes > 0);
+    try testing.expectEqual(@as(i64, @intCast(retained_bytes)), first.takePendingDelta());
+
+    pool.release(first_arena);
+    try testing.expectEqual(0, first.active());
+    try testing.expectEqual(-@as(i64, @intCast(retained_bytes)), first.takePendingDelta());
+
+    const second_arena = try pool.acquireFor(&second, .tiny, "second");
+    try testing.expectEqual(retained_bytes, second.active());
+    try testing.expectEqual(@as(i64, @intCast(retained_bytes)), second.takePendingDelta());
+
+    pool.release(second_arena);
+    try testing.expectEqual(0, second.active());
+    try testing.expectEqual(-@as(i64, @intCast(retained_bytes)), second.takePendingDelta());
+}
+
+test "ArenaPool: reset updates the active browser account" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var account: NativeMemoryAccount = .{};
+
+    const arena = try pool.acquireFor(&account, .large, "reset");
+    _ = try arena.alloc(u8, 256 * 1024);
+    try testing.expect(account.active() > 0);
+    _ = account.takePendingDelta();
+
+    pool.reset(arena, 0);
+    try testing.expectEqual(0, account.active());
+    try testing.expect(account.takePendingDelta() < 0);
+
+    pool.release(arena);
+    try testing.expectEqual(0, account.active());
+    try testing.expectEqual(0, account.takePendingDelta());
 }

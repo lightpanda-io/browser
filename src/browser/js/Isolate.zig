@@ -51,6 +51,10 @@ pub fn memoryPressureNotification(self: Isolate, level: MemoryPressureLevel) voi
     v8.v8__Isolate__MemoryPressureNotification(self.handle, @intFromEnum(level));
 }
 
+pub fn adjustAmountOfExternalAllocatedMemory(self: Isolate, delta: i64) i64 {
+    return v8.v8__Isolate__AdjustAmountOfExternalAllocatedMemory(self.handle, delta);
+}
+
 pub fn notifyContextDisposed(self: Isolate) void {
     _ = v8.v8__Isolate__ContextDisposedNotification(self.handle);
 }

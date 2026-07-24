@@ -720,13 +720,13 @@ pub const BrowserContext = struct {
 
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
         const browser = &self.cdp.browser;
-        const arena = try browser.arena_pool.acquire(.small, "IsolatedWorld");
+        const arena = try browser.arena_pool.acquireFor(&browser.native_memory, .small, "IsolatedWorld");
         errdefer browser.arena_pool.release(arena);
 
-        const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
+        const call_arena = try browser.arena_pool.acquireFor(&browser.native_memory, .tiny, "IsolatedWorld.call_arena");
         errdefer browser.arena_pool.release(call_arena);
 
-        const local_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.local_arena");
+        const local_arena = try browser.arena_pool.acquireFor(&browser.native_memory, .tiny, "IsolatedWorld.local_arena");
         errdefer browser.arena_pool.release(local_arena);
 
         const world = try arena.create(IsolatedWorld);
@@ -1408,6 +1408,31 @@ test "cdp: invalid sessionId" {
         try ctx.processMessage(.{ .method = "Hi", .sessionId = "SESS-1" });
         try ctx.expectSentError(-32001, "Unknown sessionId", .{});
     }
+}
+
+test "cdp: browser arena memory is reported to V8" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{});
+    const browser = &ctx.cdp().browser;
+    browser.flushNativeMemory();
+    const native_before = browser.native_memory.active();
+    const reported_before = browser.reported_native_memory;
+
+    {
+        const arena = try browser.arena_pool.acquireFor(&browser.native_memory, .large, "external memory test");
+        defer browser.arena_pool.release(arena);
+        _ = try arena.alloc(u8, 64 * 1024);
+        const native_added = browser.native_memory.active() - native_before;
+        try testing.expect(native_added > 0);
+
+        browser.flushNativeMemory();
+        try testing.expectEqual(reported_before + @as(i64, @intCast(native_added)), browser.reported_native_memory);
+    }
+    browser.flushNativeMemory();
+    try testing.expectEqual(native_before, browser.native_memory.active());
+    try testing.expectEqual(reported_before, browser.reported_native_memory);
 }
 
 test "cdp: STARTUP sessionId" {

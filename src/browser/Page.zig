@@ -146,7 +146,7 @@ pub fn getViewport(self: *const Page) Viewport {
 
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
-    const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");
+    const frame_arena = try session.getArena(.large, "Page.frame_arena");
     errdefer session.arena_pool.release(frame_arena);
 
     self.* = .{
@@ -217,10 +217,9 @@ pub fn deinit(self: *Page) void {
     }
     // Defensive cleanup in case origins leaked.
     {
-        const app = session.browser.app;
         var it = self.origins.valueIterator();
         while (it.next()) |value| {
-            value.*.deinit(app);
+            value.*.deinit();
         }
         self.origins = .empty;
     }
@@ -244,7 +243,7 @@ pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {
         // Origin.init will dupe opaque_origin. It's fine that this doesn't
         // get added to self.origins. In fact, it further isolates it. When the
         // context is freed, it'll call Page.releaseOrigin which will free it.
-        return js.Origin.init(session.browser.app, session.browser.env.isolate, &opaque_origin);
+        return js.Origin.init(session.arena_pool, &session.browser.native_memory, session.browser.env.isolate, &opaque_origin);
     };
 
     const gop = try self.origins.getOrPut(session.arena, key);
@@ -256,7 +255,7 @@ pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {
 
     errdefer _ = self.origins.remove(key);
 
-    const origin = try js.Origin.init(session.browser.app, session.browser.env.isolate, key);
+    const origin = try js.Origin.init(session.arena_pool, &session.browser.native_memory, session.browser.env.isolate, key);
     gop.key_ptr.* = origin.key;
     gop.value_ptr.* = origin;
     return origin;
@@ -295,7 +294,7 @@ pub fn releaseOrigin(self: *Page, origin: *js.Origin) void {
     const rc = origin.rc;
     if (rc == 1) {
         _ = self.origins.remove(origin.key);
-        origin.deinit(self.session.browser.app);
+        origin.deinit();
     } else {
         origin.rc = rc - 1;
     }

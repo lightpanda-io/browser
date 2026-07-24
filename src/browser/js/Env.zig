@@ -254,8 +254,8 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     const T = @TypeOf(global);
     const is_frame = T == *Frame;
 
-    const context_arena = try self.app.arena_pool.acquire(.medium, params.debug_name);
-    errdefer self.app.arena_pool.release(context_arena);
+    const context_arena = try global._session.getArena(.medium, params.debug_name);
+    errdefer global._session.releaseArena(context_arena);
 
     const isolate = self.isolate;
     var hs: js.HandleScope = undefined;
