@@ -1,0 +1,8 @@
+__pycache__/
+*.egg-info/
+build/
+dist/
+docs/
+.venv/
+lightpanda/lightpanda
+lightpanda/lightpanda.exe

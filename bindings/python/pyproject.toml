@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightpanda"
+version = "0.1.0.dev0"
+description = "Lightpanda headless browser: scrape and automate the web from Python"
+readme = "README.md"
+license = { text = "AGPL-3.0-only" }
+requires-python = ">=3.10"
+authors = [{ name = "Lightpanda" }]
+keywords = ["browser", "headless", "scraping", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+
+[project.urls]
+Homepage = "https://lightpanda.io"
+Repository = "https://github.com/lightpanda-io/browser"
+
+[project.scripts]
+lightpanda = "lightpanda.cli:main"
+
+[tool.setuptools]
+packages = ["lightpanda"]
+
+[tool.setuptools.package-data]
+lightpanda = ["lightpanda", "lightpanda.exe", "py.typed"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+docs = ["pdoc"]
