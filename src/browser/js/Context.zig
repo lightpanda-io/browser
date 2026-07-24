@@ -1093,6 +1093,17 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
     }.run);
 }
 
+pub fn queueResizeChecks(self: *Context) !void {
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            switch (ctx.global) {
+                .frame => |frame| Frame.observers.performScheduledResizeChecks(frame),
+                .worker => unreachable,
+            }
+        }
+    }.run);
+}
+
 pub fn queueResizeDelivery(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {

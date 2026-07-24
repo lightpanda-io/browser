@@ -16,10 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Per-frame MutationObserver and IntersectionObserver bookkeeping: registration,
-// the scheduling of the microtask deliveries, and broadcasting DOM mutations to
-// the registered observers. The state lives on the Frame (frame._mutation /
-// frame._intersection); these functions operate on it.
+// Per-frame MutationObserver, IntersectionObserver and ResizeObserver
+// bookkeeping: registration, the scheduling of the microtask deliveries, and
+// broadcasting DOM mutations to the registered observers. The state lives on
+// the Frame (frame._mutation / frame._intersection / frame._resize); these
+// functions operate on it.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -57,6 +58,7 @@ pub const Intersection = struct {
 pub const Resize = struct {
     // List of active ResizeObservers (i.e. those with >= 1 observation)
     observers: std.ArrayList(*ResizeObserver) = .empty,
+    check_scheduled: bool = false,
     delivery_scheduled: bool = false,
     delivery_depth: u32 = 0,
 };
@@ -171,6 +173,81 @@ pub fn scheduleResizeDelivery(frame: *Frame) void {
     };
 }
 
+// Called on every DOM change, a full delivery is too expensive to call here.
+// What we can do is schedule a check.
+pub fn scheduleResizeChecks(frame: *Frame) void {
+    if (frame._resize.observers.items.len == 0) {
+        return;
+    }
+    if (frame._resize.check_scheduled or frame._resize.delivery_scheduled) {
+        // check is already scheduled OR delivery is already scheduled
+        return;
+    }
+    frame._resize.check_scheduled = true;
+    frame.js.queueResizeChecks() catch |err| {
+        frame._resize.check_scheduled = false;
+        log.err(.frame, "frame.scheduleResizeChecks", .{ .err = err, .type = frame._type, .url = frame.url });
+    };
+}
+
+pub fn performScheduledResizeChecks(frame: *Frame) void {
+    if (!frame._resize.check_scheduled) {
+        return;
+    }
+
+    frame._resize.check_scheduled = false;
+    if (frame._resize.delivery_scheduled) {
+        return;
+    }
+
+    // Check if we should schedule a delivery. If you're wondering why we're
+    // scheduling within a schedule, it's because this can be expensive and we
+    // want to coalesce as many of these into a single call as possible.
+    for (frame._resize.observers.items) |observer| {
+        if (observer.connectivityChanged()) {
+            scheduleResizeDelivery(frame);
+            return;
+        }
+    }
+}
+
+// Only these attributes can change an element's size or visibility in our
+// styling model (StyleManager.isHidden + Element.getElementDimensions), and
+// only for the element itself and its descendants — so a delivery is only
+// scheduled when an observed element is in the changed element's subtree.
+fn resizeAttributeChanged(frame: *Frame, element: *Element, name: String) void {
+    if (frame._resize.observers.items.len == 0) {
+        return;
+    }
+    if (frame._resize.delivery_scheduled) {
+        return;
+    }
+
+    // This has proven to be on the hot path
+    switch (name.len) {
+        2 => if (!name.eqlWithSameLen(comptime .wrap("id"))) {
+            return;
+        },
+        4 => if (!name.eqlWithSameLen(comptime .wrap("type")) and !name.eqlWithSameLen(comptime .wrap("open"))) {
+            return;
+        },
+        5 => if (!name.eqlWithSameLen(comptime .wrap("style")) and !name.eqlWithSameLen(comptime .wrap("class")) and !name.eqlWithSameLen(comptime .wrap("width"))) {
+            return;
+        },
+        6 => if (!name.eqlWithSameLen(comptime .wrap("hidden")) and !name.eqlWithSameLen(comptime .wrap("height"))) {
+            return;
+        },
+        else => return,
+    }
+
+    for (frame._resize.observers.items) |observer| {
+        if (observer.observesWithin(element)) {
+            scheduleResizeDelivery(frame);
+            return;
+        }
+    }
+}
+
 pub fn deliverResizes(frame: *Frame) void {
     if (!frame._resize.delivery_scheduled) {
         return;
@@ -183,7 +260,7 @@ pub fn deliverResizes(frame: *Frame) void {
     defer if (!frame._resize.delivery_scheduled) {
         frame._resize.delivery_depth = 0;
     };
-    if (frame._resize.delivery_depth > 50) {
+    if (frame._resize.delivery_depth > 16) {
         log.warn(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
         frame._resize.delivery_depth = 0;
         return;
@@ -242,7 +319,7 @@ pub fn deliverMutations(frame: *Frame) void {
         frame._mutation.delivery_depth = 0;
     };
 
-    if (frame._mutation.delivery_depth > 50) {
+    if (frame._mutation.delivery_depth > 16) {
         log.err(.frame, "frame.MutationLimit", .{ .type = frame._type, .url = frame.url });
         frame._mutation.delivery_depth = 0;
         return;
@@ -292,9 +369,10 @@ pub fn deliverMutations(frame: *Frame) void {
     }
 }
 
-// Broadcast an attribute change to every registered MutationObserver. The
-// caller (Frame.attributeChange / attributeRemove) handles the non-observer
-// side effects (build hooks, custom-element callbacks, slot/popover updates).
+// Broadcast an attribute change to every registered MutationObserver and to
+// the resize bookkeeping. The caller (Frame.attributeChange / attributeRemove)
+// handles the non-observer side effects (build hooks, custom-element
+// callbacks, slot/popover updates).
 pub fn notifyAttributeChange(frame: *Frame, element: *Element, name: String, old_value: ?String) void {
     var it: ?*std.DoublyLinkedList.Node = frame._mutation.observers.first;
     while (it) |node| : (it = node.next) {
@@ -303,6 +381,7 @@ pub fn notifyAttributeChange(frame: *Frame, element: *Element, name: String, old
             log.err(.frame, "attributeChange.notifyObserver", .{ .err = err, .type = frame._type, .url = frame.url });
         };
     }
+    resizeAttributeChanged(frame, element, name);
 }
 
 pub fn notifyCharacterDataChange(frame: *Frame, target: *Node, old_value: String) void {
