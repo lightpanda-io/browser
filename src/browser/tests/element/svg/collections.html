@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=root>
+  <polygon id=polygon points="0,0 10,20"></polygon>
+  <polyline id=polyline points="1 2, 3 4"></polyline>
+  <polyline id=many></polyline>
+  <g id=group transform="translate(10 20) rotate(45 1 2)"
+     requiredExtensions="urn:one urn:two" systemLanguage="en, fr"></g>
+</svg>
+
+<script id=pointLists>
+{
+  const root = $('#root');
+  const polygon = $('#polygon');
+  const points = polygon.points;
+  const animated = polygon.animatedPoints;
+
+  testing.expectEqual(true, points instanceof SVGPointList);
+  testing.expectEqual(true, points === polygon.points);
+  testing.expectEqual(true, animated === polygon.animatedPoints);
+  testing.expectEqual(false, points === animated);
+  testing.expectEqual(2, points.length);
+  testing.expectEqual(2, points.numberOfItems);
+  testing.expectEqual(true, points.getItem(0) === points.getItem(0));
+  testing.expectEqual(10, points.getItem(1).x);
+  testing.expectEqual(20, points.getItem(1).y);
+
+  const oldPoint = points.getItem(0);
+  oldPoint.x = 5;
+  testing.expectEqual('5,0 10,20', polygon.getAttribute('points'));
+  testing.expectEqual(5, animated.getItem(0).x);
+
+  polygon.setAttribute('points', '1 2, 3 4');
+  testing.expectEqual(2, points.length);
+  testing.expectEqual(1, points.getItem(0).x);
+  oldPoint.x = 99;
+  testing.expectEqual('1 2, 3 4', polygon.getAttribute('points'));
+
+  polygon.setAttribute('points', '1,2,3');
+  testing.expectEqual(0, points.length);
+  testing.expectEqual('1,2,3', polygon.getAttribute('points'));
+  polygon.setAttribute('points', '0,0');
+
+  const detached = root.createSVGPoint();
+  detached.x = 7;
+  detached.y = 8;
+  testing.expectEqual(detached, points.appendItem(detached));
+  const copied = points.appendItem(detached);
+  testing.expectEqual(false, copied === detached);
+  testing.expectEqual(3, points.length);
+  detached.x = 9;
+  testing.expectEqual(9, points.getItem(1).x);
+  testing.expectEqual(7, copied.x);
+
+  testing.expectEqual(detached, points.removeItem(1));
+  detached.y = 12;
+  testing.expectEqual(12, detached.y);
+  testing.expectError('IndexSizeError', () => points.getItem(99));
+  testing.expectError('IndexSizeError', () => points.replaceItem(root.createSVGPoint(), 99));
+  testing.expectError('IndexSizeError', () => points.removeItem(99));
+
+  testing.expectError('NoModificationAllowedError', () => animated.clear());
+  testing.expectError('NoModificationAllowedError', () => animated.appendItem(root.createSVGPoint()));
+  testing.expectError('NoModificationAllowedError', () => { animated.getItem(0).x = 4; });
+}
+</script>
+
+<script id=pointListCapacityAndPolyline>
+{
+  const root = $('#root');
+  const list = $('#many').points;
+  for (let i = 0; i < 70; i++) {
+    const point = root.createSVGPoint();
+    point.x = i;
+    point.y = -i;
+    list.appendItem(point);
+  }
+  testing.expectEqual(70, list.numberOfItems);
+  testing.expectEqual(69, list.getItem(69).x);
+  testing.expectEqual(-69, list.getItem(69).y);
+
+  const polyline = $('#polyline');
+  testing.expectEqual(true, polyline.points instanceof SVGPointList);
+  testing.expectEqual(2, polyline.points.length);
+  const initialized = root.createSVGPoint();
+  initialized.x = 4;
+  initialized.y = 5;
+  polyline.points.initialize(initialized);
+  testing.expectEqual('4,5', polyline.getAttribute('points'));
+  polyline.points.clear();
+  testing.expectEqual('', polyline.getAttribute('points'));
+}
+</script>
+
+<script id=transformLists>
+{
+  const root = $('#root');
+  const group = $('#group');
+  const animated = group.transform;
+  const base = animated.baseVal;
+  const anim = animated.animVal;
+
+  testing.expectEqual(true, animated instanceof SVGAnimatedTransformList);
+  testing.expectEqual(true, animated === group.transform);
+  testing.expectEqual(true, base === animated.baseVal);
+  testing.expectEqual(true, anim === animated.animVal);
+  testing.expectEqual(false, base === anim);
+  testing.expectEqual(true, base instanceof SVGTransformList);
+  testing.expectEqual(2, base.numberOfItems);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_TRANSLATE, base.getItem(0).type);
+  testing.expectEqual(10, base.getItem(0).matrix.e);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_ROTATE, base.getItem(1).type);
+  testing.expectEqual(45, base.getItem(1).angle);
+  testing.expectEqual(true, base.getItem(1).matrix === base.getItem(1).matrix);
+
+  const oldTransform = base.getItem(0);
+  oldTransform.setTranslate(3, 4);
+  testing.expectEqual(true, group.getAttribute('transform').startsWith('translate(3 4)'));
+  testing.expectEqual(3, anim.getItem(0).matrix.e);
+
+  group.setAttribute('transform', 'scale(2)');
+  testing.expectEqual(1, base.length);
+  testing.expectEqual(2, base.getItem(0).matrix.a);
+  oldTransform.setTranslate(8, 9);
+  testing.expectEqual('scale(2)', group.getAttribute('transform'));
+
+  const detached = root.createSVGTransform();
+  detached.setSkewX(15);
+  testing.expectEqual(detached, base.appendItem(detached));
+  const copied = base.appendItem(detached);
+  testing.expectEqual(false, copied === detached);
+  testing.expectEqual(3, base.length);
+
+  testing.expectError('IndexSizeError', () => base.getItem(99));
+  testing.expectError('IndexSizeError', () => base.replaceItem(root.createSVGTransform(), 99));
+  testing.expectError('IndexSizeError', () => base.removeItem(99));
+  testing.expectError('NoModificationAllowedError', () => anim.clear());
+  testing.expectError('NoModificationAllowedError', () => anim.appendItem(root.createSVGTransform()));
+  testing.expectError('NoModificationAllowedError', () => anim.getItem(0).setScale(3, 3));
+
+  const consolidated = base.consolidate();
+  testing.expectEqual(true, consolidated instanceof SVGTransform);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, consolidated.type);
+  testing.expectEqual(1, base.length);
+  testing.expectEqual(true, group.getAttribute('transform').startsWith('matrix('));
+}
+</script>
+
+<script id=transformParserRegression>
+{
+  const group = $('#group');
+  group.setAttribute('transform', 'translate()');
+  testing.expectEqual(0, group.transform.baseVal.length);
+  testing.expectEqual('translate()', group.getAttribute('transform'));
+
+  group.setAttribute('transform', 'translate(1 2) scale(3,4) rotate(30 5 6)');
+  testing.expectEqual(3, group.transform.baseVal.length);
+  testing.expectEqual(2, group.transform.baseVal.getItem(0).matrix.f);
+  testing.expectEqual(4, group.transform.baseVal.getItem(1).matrix.d);
+  testing.expectEqual(30, group.transform.baseVal.getItem(2).angle);
+
+  testing.expectError('SyntaxError', () => new DOMMatrix('translate()'));
+  testing.expectError('SyntaxError', () => new DOMMatrix('scale()'));
+  const matrix = new DOMMatrix('translate(3px 4px) scale(2 3)');
+  testing.expectEqual(3, matrix.e);
+  testing.expectEqual(4, matrix.f);
+}
+</script>
+
+<script id=stringLists>
+{
+  const group = $('#group');
+  const required = group.requiredExtensions;
+  const languages = group.systemLanguage;
+
+  testing.expectEqual(true, required instanceof SVGStringList);
+  testing.expectEqual(true, required === group.requiredExtensions);
+  testing.expectEqual(true, languages === group.systemLanguage);
+  testing.expectEqual(2, required.numberOfItems);
+  testing.expectEqual('urn:one', required.getItem(0));
+  testing.expectEqual(2, languages.length);
+  testing.expectEqual('fr', languages.getItem(1));
+
+  required.appendItem('urn:three');
+  testing.expectEqual('urn:one urn:two urn:three', group.getAttribute('requiredExtensions'));
+  testing.expectEqual('urn:two', required.removeItem(1));
+  testing.expectEqual('urn:one urn:three', group.getAttribute('requiredExtensions'));
+  testing.expectError('SyntaxError', () => required.appendItem('two words'));
+  testing.expectError('IndexSizeError', () => required.getItem(99));
+
+  languages.insertItemBefore('de', 1);
+  testing.expectEqual('en, de, fr', group.getAttribute('systemLanguage'));
+  group.setAttribute('systemLanguage', 'ja, ko');
+  testing.expectEqual(2, languages.length);
+  testing.expectEqual('ko', languages.getItem(1));
+  group.setAttribute('systemLanguage', 'en,,fr');
+  testing.expectEqual(0, languages.length);
+  testing.expectEqual('en,,fr', group.getAttribute('systemLanguage'));
+}
+</script>

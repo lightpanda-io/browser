@@ -100,7 +100,7 @@ pub fn createSVGRect(_: *Svg, frame: *Frame) !*DOMRect {
 }
 
 pub fn createSVGNumber(_: *Svg, frame: *Frame) !*SvgNumber {
-    return frame._factory.create(SvgNumber{});
+    return SvgNumber.detached(frame);
 }
 
 pub fn createSVGLength(_: *Svg, frame: *Frame) !*SvgLength {
