@@ -25,6 +25,7 @@ const Frame = @import("../../Frame.zig");
 const Form = @import("../element/html/Form.zig");
 const Element = @import("../Element.zig");
 const File = @import("../File.zig");
+const Blob = @import("../Blob.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
 const log = lp.log;
@@ -165,9 +166,65 @@ pub fn has(self: *const FormData, name: String) bool {
     return false;
 }
 
-pub fn set(self: *FormData, name: String, value: []const u8, exec: *Execution) !void {
+// The value half of the JS-facing append()/set(). `bytes` must stay last:
+// js.Bridge tries the JsApi classes first and maps anything else to a string,
+// so an earlier position would swallow File and Blob arguments.
+pub const EntryValue = union(enum) {
+    file: *File,
+    blob: *Blob,
+    bytes: []const u8,
+};
+
+pub fn jsSet(self: *FormData, name: String, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
     self.deleteByName(name, exec);
-    return self.append(name.str(), value);
+    return self.jsAppend(name.str(), value, filename, exec);
+}
+
+// https://xhr.spec.whatwg.org/#create-an-entry
+pub fn jsAppend(self: *FormData, name: []const u8, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
+    const entry_value: Entry.Value = switch (value) {
+        // A Blob that is not a File becomes a File named "blob", unless a
+        // filename was supplied.
+        .blob => |blob| blk: {
+            if (blob._type == .file and filename == null) {
+                const file = blob._type.file;
+                file.acquireRef();
+                break :blk .{ .file = file };
+            }
+            break :blk .{ .file = try fileFrom(blob, filename orelse "blob", exec.page) };
+        },
+        // A File keeps its bytes; a supplied filename means a new File over
+        // the same bytes rather than a rename of the caller's object.
+        .file => |file| blk: {
+            if (filename) |n| break :blk .{ .file = try fileFrom(file._proto, n, exec.page) };
+            file.acquireRef();
+            break :blk .{ .file = file };
+        },
+        .bytes => |b| .{ .string = try String.init(self._arena, b, .{}) },
+    };
+
+    try self._entries.append(self._arena, .{
+        .name = try String.init(self._arena, name, .{}),
+        .value = entry_value,
+    });
+}
+
+// Mirrors File.init — a Blob and File sharing one reference-counted arena —
+// but over bytes we already hold rather than JS parts. Returned at refcount 1:
+// the entry owns that reference and deleteByName releases it.
+fn fileFrom(source: *Blob, name: []const u8, page: *Page) !*File {
+    const blob = try Blob.initFromBytes(source._slice, source._mime, page);
+    errdefer blob.deinit(page);
+
+    const file = try blob._arena.create(File);
+    file.* = .{
+        ._proto = blob,
+        ._name = try blob._arena.dupe(u8, name),
+        ._last_modified = std.Io.Clock.now(.real, lp.io).toMilliseconds(),
+    };
+    blob._type = .{ .file = file };
+    blob.acquireRef();
+    return file;
 }
 
 pub fn append(self: *FormData, name: []const u8, value: []const u8) !void {
@@ -511,8 +568,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(FormData.init, .{});
     pub const has = bridge.function(FormData.has, .{});
     pub const get = bridge.function(FormData.get, .{});
-    pub const set = bridge.function(FormData.set, .{});
-    pub const append = bridge.function(FormData.append, .{});
+    pub const set = bridge.function(FormData.jsSet, .{});
+    pub const append = bridge.function(FormData.jsAppend, .{});
     pub const getAll = bridge.function(FormData.getAll, .{});
     pub const delete = bridge.function(FormData.delete, .{});
     pub const keys = bridge.function(FormData.keys, .{});
@@ -598,8 +655,6 @@ test "FormData: multipart empty body" {
 
     try testing.expectString("--B--\r\n", buf.written());
 }
-
-const Blob = @import("../Blob.zig");
 
 fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
     const blob = try Blob.initFromBytes(body, mime, page);
