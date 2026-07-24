@@ -24,7 +24,6 @@ const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
 const HTMLDocument = @import("HTMLDocument.zig");
-const XMLDocument = @import("XMLDocument.zig");
 const Document = @import("Document.zig");
 
 const DOMParser = @This();
@@ -50,22 +49,22 @@ pub fn parseFromString(
         @"image/svg+xml",
     }, mime_type) orelse return error.NotSupported;
 
-    const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
-    defer frame.releaseArena(arena);
-
-    // DOMParser builds a detached Document. Borrow the same fragment
-    // parse-mode that `parseHtmlAsChildren` uses so frame-side hooks
-    // triggered from `Build.created` / `nodeIsReady` (external stylesheet
-    // fetches, script execution, mutation-observer fan-out, default-script
-    // injection) treat the parsed nodes as detached and skip
-    // side effects on the live document. The frame's `_parse_mode` is
-    // restored on exit.
-    const previous_parse_mode = frame._parse_mode;
-    frame._parse_mode = .fragment;
-    defer frame._parse_mode = previous_parse_mode;
-
     return switch (target_mime) {
         .@"text/html" => {
+            const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
+            defer frame.releaseArena(arena);
+
+            // DOMParser builds a detached Document. Borrow the same fragment
+            // parse-mode that `Frame.parse` uses so frame-side hooks
+            // triggered from `Build.created` / `nodeIsReady` (external
+            // stylesheet fetches, script execution, mutation-observer fan-out,
+            // default-script injection) treat the parsed nodes as detached and
+            // skip side effects on the live document. The frame's
+            // `_parse_mode` is restored on exit.
+            const previous_parse_mode = frame._parse_mode;
+            frame._parse_mode = .fragment;
+            defer frame._parse_mode = previous_parse_mode;
+
             // Create a new HTMLDocument
             const doc = try frame._factory.document(HTMLDocument{
                 ._proto = undefined,
@@ -87,32 +86,10 @@ pub fn parseFromString(
             return doc.asDocument();
         },
         else => {
-            // Create a new XMLDocument.
-            const doc = try frame._factory.document(XMLDocument{
-                ._proto = undefined,
-            });
-
-            // Parse XML into XMLDocument.
-            const doc_node = doc.asNode();
-            var parser = Parser.init(arena, doc_node, frame, .{});
-            parser.parseXML(html);
-
-            if (parser.err != null or doc_node.firstChild() == null) {
+            const doc = (try Frame.parse.xmlDocument(frame, html)) orelse blk: {
                 // Return a document with a <parsererror> element per spec.
-                const err_doc = try frame._factory.document(XMLDocument{ ._proto = undefined });
-                var err_parser = Parser.init(arena, err_doc.asNode(), frame, .{});
-                err_parser.parseXML("<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>");
-                return err_doc.asDocument();
-            }
-
-            const first_child = doc_node.firstChild().?;
-
-            // If first node is a `ProcessingInstruction`, skip it.
-            if (first_child.getNodeType() == 7) {
-                // We're sure that firstChild exist, this cannot fail.
-                _ = try doc_node.removeChild(first_child, frame);
-            }
-
+                break :blk (try Frame.parse.xmlDocument(frame, "<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>")).?;
+            };
             return doc.asDocument();
         },
     };

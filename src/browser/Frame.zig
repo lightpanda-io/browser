@@ -73,6 +73,7 @@ const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
+pub const parse = @import("frame/parse.zig");
 pub const preload = @import("frame/preload.zig");
 pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
@@ -2864,74 +2865,6 @@ pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, chi
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
         ar.updateForNodeRemoval(parent, child, child_index);
-    }
-}
-
-// TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
-pub fn parseHtmlAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
-    return self.parseHtmlAsChildrenInner(node, html, .{});
-}
-
-// setHTMLUnsafe variant: parse a fragment that may contain declarative shadow node
-pub fn parseHtmlUnsafeAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
-    return self.parseHtmlAsChildrenInner(node, html, .{ .allow_declarative_shadow = true });
-}
-
-// Range.createContextualFragment variant: unlike innerHTML et al., its scripts
-// are run when the fragment is inserted into a document.
-pub fn parseContextualFragment(self: *Frame, node: *Node, html: []const u8) !void {
-    return self.parseHtmlAsChildrenInner(node, html, .{ .scripts_runnable = true });
-}
-
-const FragmentParseOpts = struct {
-    scripts_runnable: bool = false,
-    allow_declarative_shadow: bool = false,
-};
-
-fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: FragmentParseOpts) !void {
-    const previous_parse_mode = self._parse_mode;
-    self._parse_mode = .fragment;
-    defer self._parse_mode = previous_parse_mode;
-
-    // The html5ever wrapper-unwrap below rebinds children without going
-    // through the insertion path, so recompute slot assignments for any
-    // shadow tree this fragment landed in (idempotent; signals only on diff).
-    defer if (self._element_shadow_roots.count() != 0) {
-        const root = node.getRootNode(.{});
-        if (root.is(ShadowRoot) != null) {
-            slotting.assignSlottablesForTree(root, self);
-        }
-        if (node.is(Element)) |el| {
-            if (self._element_shadow_roots.get(el)) |shadow_root| {
-                slotting.assignSlottablesForTree(shadow_root.asNode(), self);
-            }
-        }
-    };
-
-    const previous_scripts_runnable = self._fragment_scripts_runnable;
-    self._fragment_scripts_runnable = opts.scripts_runnable;
-    defer self._fragment_scripts_runnable = previous_scripts_runnable;
-
-    var parser = Parser.init(self.call_arena, node, self, .{ .allow_declarative_shadow = opts.allow_declarative_shadow });
-    parser.parseFragment(html);
-
-    // html5ever wraps fragment output in an <html> element; unwrap so its
-    // children land directly on `node`. See https://github.com/servo/html5ever/issues/583.
-    // Because of custom element callbacks, the structure might not be what
-    // we expect, and nodes might be altogether removed. We deal with this in a
-    // few different places, but always the same way: leave it as-is.
-    const children = node._children orelse return;
-    const first = Node.linkToNode(children.first.?);
-    if (first.is(Element.Html.Html) == null) {
-        return;
-    }
-    node._children = first._children;
-
-    // No mutation records for the unwrapped children either; see the comment
-    // about fragment parses in _insertNodeRelative.
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
-        child._parent = node;
     }
 }
 

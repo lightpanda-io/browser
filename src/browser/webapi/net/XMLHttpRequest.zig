@@ -26,6 +26,7 @@ const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
 const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
 const Event = @import("../Event.zig");
@@ -434,16 +435,18 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
         .document => blk: {
             // responseType=document is only meaningful in a Frame; workers
             // have no DOM. Drastically different impls -> switch on global.
-            //
-            // TODO: per WHATWG XHR "set a document response", the final MIME
-            // type (_override_mime ?? _response_mime) should select an XML
-            // parser when it is an XML MIME type, and the HTML parser
-            // otherwise. We only have an HTML parser today, so the body is
-            // always parsed as HTML regardless of the override.
             switch (exec.js.global) {
                 .frame => |frame| {
+                    const final: Mime = self._override_mime orelse self._response_mime orelse .{ .content_type = .text_xml };
+                    if (final.isXML()) {
+                        const document = (try Frame.parse.xmlDocument(frame, data)) orelse return null;
+                        break :blk .{ .document = document.asDocument() };
+                    }
+                    if (!final.isHTML()) {
+                        return null;
+                    }
                     const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
-                    try frame.parseHtmlAsChildren(document.asNode(), data);
+                    try Frame.parse.htmlAsChildren(frame, document.asNode(), data);
                     break :blk .{ .document = document };
                 },
                 .worker => return error.NotSupportedInWorker,
@@ -478,13 +481,15 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
         return document;
     }
 
-    const final = self._override_mime orelse self._response_mime orelse return null;
-    if (final.content_type != .text_xml) return null;
+    // With responseType "", only an XML final MIME type is parsed (an HTML
+    // one yields null); absent a Content-Type it defaults to text/xml.
+    const final: Mime = self._override_mime orelse self._response_mime orelse .{ .content_type = .text_xml };
+    if (!final.isXML()) return null;
 
     switch (exec.js.global) {
         .frame => |frame| {
-            const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
-            try frame.parseHtmlAsChildren(document.asNode(), self._response_data.items);
+            const xml_document = (try Frame.parse.xmlDocument(frame, self._response_data.items)) orelse return null;
+            const document = xml_document.asDocument();
             self._response_xml = document;
             return document;
         },

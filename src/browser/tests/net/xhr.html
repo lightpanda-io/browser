@@ -372,9 +372,30 @@
 
 <script id=xhr_override_mime_responsexml type=module>
   {
-    // End-to-end: server returns text/html, but overrideMimeType("text/xml")
-    // makes responseXML lazily parse the body as a Document, while
-    // responseText is unaffected (responseType is still the default "").
+    // End-to-end: server returns text/plain, but overrideMimeType("text/xml")
+    // makes responseXML lazily parse the body as XML, while responseText is
+    // unaffected (responseType is still the default "").
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.overrideMimeType('text/xml');
+    req.open('GET', 'http://127.0.0.1:9582/xhr/xml_as_text');
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual(true, req.responseText.startsWith('<?xml'));
+      testing.expectEqual(true, req.responseXML instanceof XMLDocument);
+      testing.expectEqual('catalog', req.responseXML.documentElement.tagName);
+      // Cached across calls.
+      testing.expectEqual(req.responseXML, req.responseXML);
+    });
+  }
+</script>
+
+<script id=xhr_override_mime_malformed_xml type=module>
+  {
+    // The overridden type selects the XML parser; a body that isn't
+    // well-formed XML yields responseXML === null.
     const state = await testing.async();
     const req = new XMLHttpRequest();
     req.overrideMimeType('text/xml');
@@ -382,11 +403,45 @@
     req.onload = () => state.resolve();
     req.send();
     await state.done(() => {
-      testing.expectEqual(200, req.status);
       testing.expectEqual(100, req.responseText.length);
-      testing.expectEqual(true, req.responseXML instanceof Document);
-      // Cached across calls.
-      testing.expectEqual(req.responseXML, req.responseXML);
+      testing.expectEqual(null, req.responseXML);
+    });
+  }
+</script>
+
+<script id=xhr_responsexml_xml_mime type=module>
+  {
+    // An application/xml response parses with the XML parser: XMLDocument,
+    // tag case preserved, self-closing tags don't swallow their siblings.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr/xml');
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      const doc = req.responseXML;
+      testing.expectEqual(true, doc instanceof XMLDocument);
+      testing.expectEqual('catalog', doc.documentElement.tagName);
+      testing.expectEqual(3, doc.documentElement.children.length);
+      testing.expectEqual(2, doc.getElementsByTagName('item').length);
+      testing.expectEqual(1, doc.getElementsByTagName('pubDate').length);
+    });
+  }
+</script>
+
+<script id=xhr_document_xml type=module>
+  {
+    // responseType=document with an XML MIME type also uses the XML parser.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.open('GET', 'http://127.0.0.1:9582/xhr/xml');
+    req.responseType = 'document';
+    req.onload = () => state.resolve();
+    req.send();
+    await state.done(() => {
+      testing.expectEqual(true, req.response instanceof XMLDocument);
+      testing.expectEqual('catalog', req.response.documentElement.tagName);
+      testing.expectEqual(req.response, req.responseXML);
     });
   }
 </script>

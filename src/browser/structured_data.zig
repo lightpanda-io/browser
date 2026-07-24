@@ -494,7 +494,7 @@ fn testStructuredData(html: []const u8) !StructuredData {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try frame.parseHtmlAsChildren(div.asNode(), html);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
     return collectStructuredData(div.asNode(), frame.call_arena, frame);
 }
@@ -714,7 +714,7 @@ test "structured_data: link headers from response" {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try frame.parseHtmlAsChildren(div.asNode(), "<title>Example</title>");
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<title>Example</title>");
 
     const data = try collectStructuredData(div.asNode(), frame.call_arena, frame);
 

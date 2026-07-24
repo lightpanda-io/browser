@@ -1557,9 +1557,9 @@ pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, fr
 
     if (html.len > 0) {
         if (allow_declarative_shadow) {
-            try frame.parseHtmlUnsafeAsChildren(self, html);
+            try Frame.parse.htmlUnsafeAsChildren(frame, self, html);
         } else {
-            try frame.parseHtmlAsChildren(self, html);
+            try Frame.parse.htmlAsChildren(frame, self, html);
         }
     }
 
