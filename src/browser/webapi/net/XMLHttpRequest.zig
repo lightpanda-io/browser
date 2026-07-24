@@ -262,6 +262,13 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     const cookie_support = self._with_credentials or exec.isSameOrigin(self._url);
 
     try self._request_headers.populateHttpHeader(exec.call_arena, &headers);
+
+    const req_headers = self._request_headers._list._entries.items;
+    var authored: std.ArrayList([]const u8) = try .initCapacity(exec.call_arena, req_headers.len);
+    for (req_headers) |entry| {
+        authored.appendAssumeCapacity(try exec.call_arena.dupe(u8, entry.name.str()));
+    }
+
     if (cookie_support) {
         try exec.headersForRequest(&headers);
     }

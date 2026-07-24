@@ -86,9 +86,16 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
 
     const session = exec.session;
     const http_client = &session.browser.http_client;
+
     var headers = try http_client.newHeaders();
+    var authored: std.ArrayList([]const u8) = .empty;
     if (request._headers) |h| {
         try h.populateHttpHeader(exec.call_arena, &headers);
+
+        try authored.ensureUnusedCapacity(exec.call_arena, h._list._entries.items.len);
+        for (h._list._entries.items) |entry| {
+            authored.appendAssumeCapacity(try exec.call_arena.dupe(u8, entry.name.str()));
+        }
     }
     try exec.headersForRequest(&headers);
 
@@ -110,6 +117,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .loader_id = exec.loaderId(),
         .body = request._body,
         .headers = headers,
+        .authored_headers = authored.items,
         .resource_type = .fetch,
         .cookie_jar = cookie_jar,
         .cookie_origin = exec.url.*,

@@ -22,33 +22,29 @@
 // fetch, and resumes (or fails) the parked transfers when it resolves.
 
 const std = @import("std");
-const lp = @import("lightpanda");
-
-const URL = @import("../browser/URL.zig");
-const ArenaPool = @import("../ArenaPool.zig");
-
-const http = @import("http.zig");
-const Robots = @import("Robots.zig");
-const Network = @import("Network.zig");
-const Transfer = @import("HttpClient.zig").Transfer;
-
-const log = lp.log;
 const Allocator = std.mem.Allocator;
+
+const lp = @import("lightpanda");
+const log = lp.log;
+
+const ArenaPool = @import("../ArenaPool.zig");
+const URL = @import("../browser/URL.zig");
+const http = @import("http.zig");
+const Network = @import("Network.zig");
+const Robots = @import("Robots.zig");
+const SingleFlight = @import("SingleFlight.zig");
+const Transfer = @import("HttpClient.zig").Transfer;
 
 const RobotsGate = @This();
 
 network: *Network,
 allocator: Allocator,
-pending: std.StringHashMapUnmanaged(std.ArrayList(*Transfer)) = .empty,
+single_flight: SingleFlight,
 
 pub const Result = enum { allowed, blocked, pending };
 
 pub fn deinit(self: *RobotsGate) void {
-    var it = self.pending.iterator();
-    while (it.next()) |entry| {
-        entry.value_ptr.deinit(self.allocator);
-    }
-    self.pending.deinit(self.allocator);
+    self.single_flight.deinit();
 }
 
 pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
@@ -77,94 +73,80 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
 // stays: the in-flight fetch owns it (the key lives on the fetch's context
 // arena) and still resolves the remaining waiters.
 pub fn remove(self: *RobotsGate, transfer: *Transfer) void {
-    var it = self.pending.valueIterator();
-    while (it.next()) |waiting| {
-        for (waiting.items, 0..) |t, i| {
-            if (t == transfer) {
-                _ = waiting.swapRemove(i);
-                return;
-            }
-        }
-    }
+    self.single_flight.remove(transfer);
 }
 
 fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Transfer) !void {
-    if (self.pending.getPtr(robots_url)) |waiting| {
-        // A fetch for this robots.txt is already in flight, queue behind it.
-        try waiting.append(self.allocator, transfer);
-        transfer.park(.robots);
-        return;
-    }
-
     const client = transfer.client;
-
-    // The context, the response buffer and the pending-map key live on
-    // their own pooled arena, NOT on transfer.arena — any waiter (this one
-    // included) can be aborted while the fetch is still in flight, and the
-    // fetch's callbacks must survive that. The arena is released by
-    // whichever terminal callback fires (done / error / shutdown).
     const arena = try client.arena_pool.acquire(.small, "RobotsGate.RobotsContext");
     errdefer client.arena_pool.release(arena);
 
     const owned_url = try arena.dupeZ(u8, robots_url);
-    const robots_ctx = try arena.create(RobotsContext);
-    robots_ctx.* = .{
-        .gate = self,
-        .buffer = .empty,
-        .arena = arena,
-        .arena_pool = client.arena_pool,
-        .robots_url = owned_url,
-    };
+    const res = try self.single_flight.enter(robots_url, transfer, .robots);
+    switch (res) {
+        .queued => {
+            // joined inflight fetch so release it.
+            client.arena_pool.release(arena);
+            return;
+        },
+        .initial => {
+            errdefer self.single_flight.abort(robots_url);
 
-    var waiting: std.ArrayList(*Transfer) = .empty;
-    try waiting.append(self.allocator, transfer);
-    errdefer waiting.deinit(self.allocator);
+            // The context, the response buffer and the pending-map key live on
+            // their own pooled arena, NOT on transfer.arena — any waiter (this one
+            // included) can be aborted while the fetch is still in flight, and the
+            // fetch's callbacks must survive that. The arena is released by
+            // whichever terminal callback fires (done / error / shutdown).
+            const robots_ctx = try arena.create(RobotsContext);
+            robots_ctx.* = .{
+                .gate = self,
+                .buffer = .empty,
+                .arena = arena,
+                .arena_pool = client.arena_pool,
+                .robots_url = owned_url,
+            };
 
-    try self.pending.putNoClobber(self.allocator, owned_url, waiting);
-    errdefer _ = self.pending.remove(owned_url);
+            log.debug(.browser, "fetching robots.txt", .{ .robots_url = owned_url });
 
-    transfer.park(.robots);
-    errdefer transfer.unpark();
+            // Only the parent's frame/loader ids (CDP correlation) and notification
+            // carry over — no cookies, credentials, headers, or timeout.
+            const fetch_transfer = try client.newRequest(.{
+                .url = owned_url,
+                .method = .GET,
+                .internal = true,
+                .resource_type = .fetch,
+                .frame_id = transfer.req.frame_id,
+                .loader_id = transfer.req.loader_id,
+                .notification = transfer.req.notification,
+                .cookie_jar = null,
+                .cookie_origin = owned_url,
+                .ctx = robots_ctx,
+                .header_callback = RobotsContext.headerCallback,
+                .data_callback = RobotsContext.dataCallback,
+                .done_callback = RobotsContext.doneCallback,
+                .error_callback = RobotsContext.errorCallback,
+                .shutdown_callback = RobotsContext.shutdownCallback,
+            }, null);
 
-    log.debug(.browser, "fetching robots.txt", .{ .robots_url = owned_url });
-
-    // Only the parent's frame/loader ids (CDP correlation) and notification
-    // carry over — no cookies, credentials, headers, or timeout.
-    const fetch_transfer = try client.newRequest(.{
-        .url = owned_url,
-        .method = .GET,
-        .internal = true,
-        .resource_type = .fetch,
-        .frame_id = transfer.req.frame_id,
-        .loader_id = transfer.req.loader_id,
-        .notification = transfer.req.notification,
-        .cookie_jar = null,
-        .cookie_origin = owned_url,
-        .ctx = robots_ctx,
-        .header_callback = RobotsContext.headerCallback,
-        .data_callback = RobotsContext.dataCallback,
-        .done_callback = RobotsContext.doneCallback,
-        .error_callback = RobotsContext.errorCallback,
-        .shutdown_callback = RobotsContext.shutdownCallback,
-    }, null);
-
-    // From here the fetch owns the pending entry and the context arena. If
-    // submit fails it fires error_callback — possibly synchronously, right
-    // here — which resolves the waiters (fail-open, may already have resumed
-    // `transfer`) and releases the arena. So there is nothing to unwind
-    // locally and the errdefers above must not run: swallow the error.
-    fetch_transfer.submit() catch {};
+            // From here the fetch owns the pending entry and the context arena. If
+            // submit fails it fires error_callback — possibly synchronously, right
+            // here — which resolves the waiters (fail-open, may already have resumed
+            // `transfer`) and releases the arena. So there is nothing to unwind
+            // locally and the errdefers above must not run: swallow the error.
+            fetch_transfer.submit() catch {};
+        },
+    }
 }
 
 // The robots.txt fetch resolved: hand every waiter back to the pipeline,
 // each judged against its own path. No store entry (fetch failed, or a 200
 // whose body never got parsed) fails open.
 fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
-    var queued = self.pending.fetchRemove(robots_url) orelse return;
-    defer queued.value.deinit(self.allocator);
+    var queued = self.single_flight.take(robots_url) orelse return;
+    defer queued.deinit(self.allocator);
 
     const robot_entry = self.network.robot_store.get(robots_url);
-    for (queued.value.items) |transfer| {
+    for (queued.items) |transfer| {
         transfer.unpark();
 
         const allowed = if (robot_entry) |entry| switch (entry) {
@@ -193,8 +175,7 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
 // where every waiter is being kill()'d by the same loop; their deinit
 // finds no gate entry left (or unlinks itself first) and no-ops.
 fn flushPendingShutdown(self: *RobotsGate, robots_url: []const u8) void {
-    var pending = self.pending.fetchRemove(robots_url) orelse return;
-    pending.value.deinit(self.allocator);
+    self.single_flight.discard(robots_url);
 }
 
 const RobotsContext = struct {

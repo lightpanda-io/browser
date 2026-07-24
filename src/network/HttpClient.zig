@@ -37,6 +37,7 @@ const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
 pub const BlockPattern = UrlBlocklist.Pattern;
+const CorsGate = @import("CorsGate.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -189,6 +190,7 @@ obey_robots: bool,
 
 robots: RobotsGate,
 url_blocklist: ?UrlBlocklist,
+cors: CorsGate,
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
@@ -226,7 +228,8 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
-        .robots = .{ .allocator = allocator, .network = network },
+        .robots = .{ .allocator = allocator, .network = network, .single_flight = .{ .allocator = allocator } },
+        .cors = .{ .allocator = allocator, .network = network, .single_flight = .{ .allocator = allocator } },
         .url_blocklist = url_blocklist,
         .arena_pool = &network.app.arena_pool,
     };
@@ -258,6 +261,7 @@ pub fn deinit(self: *Client) void {
 
     self.clearUrlBlocklist();
     self.robots.deinit();
+    self.cors.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
     self.inbox.deinit(self.arena_pool);
@@ -431,7 +435,8 @@ pub fn abort(self: *Client) void {
         std.debug.assert(self.ws_dispatch_queue.first == null);
         // - self.robots.pending : each robots fetch's shutdown_callback
         //   drops its entry; parked waiters unlink in their own deinit.
-        std.debug.assert(self.robots.pending.count() == 0);
+        std.debug.assert(self.robots.single_flight.count() == 0);
+        std.debug.assert(self.cors.single_flight.count() == 0);
     }
 }
 
@@ -566,6 +571,14 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         owned.cookie_origin = try arena.dupeZ(u8, req.cookie_origin);
         if (req.credentials) |c| {
             owned.credentials = try arena.dupeZ(u8, c);
+        }
+
+        if (req.authored_headers.len > 0) {
+            const dupe_names = try arena.alloc([]const u8, req.authored_headers.len);
+            for (req.authored_headers, 0..) |name, i| {
+                dupe_names[i] = try arena.dupe(u8, name);
+            }
+            owned.authored_headers = dupe_names;
         }
 
         // The body can be larger, so callers can signal, via the
@@ -840,6 +853,8 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 try wba.signRequest(transfer.arena, &transfer.req.headers, authority);
             }
 
+            try addOriginHeader(transfer);
+
             if (self.serve_mode) {
                 transfer._notify_cdp = true;
                 transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
@@ -872,15 +887,23 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 // response came from the cache, we're done
                 return;
             }
-            if (self.obey_robots and !transfer.req.internal) {
-                switch (try self.robots.check(transfer)) {
-                    .allowed => {
-                        lp.metrics.robots_access.incr(.allow);
-                    },
-                    .blocked => {
-                        lp.metrics.robots_access.incr(.deny);
-                        return transfer.failAsync(error.RobotsBlocked);
-                    },
+            if (!transfer.req.internal) {
+                if (self.obey_robots) {
+                    switch (try self.robots.check(transfer)) {
+                        .allowed => {
+                            lp.metrics.robots_access.incr(.allow);
+                        },
+                        .blocked => {
+                            lp.metrics.robots_access.incr(.deny);
+                            return transfer.failAsync(error.RobotsBlocked);
+                        },
+                        .pending => return,
+                    }
+                }
+
+                switch (try self.cors.check(transfer)) {
+                    .allowed => {},
+                    .blocked => return transfer.failAsync(error.CorsBlocked),
                     .pending => return,
                 }
             }
@@ -888,6 +911,26 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
         },
         .network => try self.processTransfer(transfer),
     }
+}
+
+fn addOriginHeader(transfer: *Transfer) !void {
+    const req = &transfer.req;
+    const is_cross_origin = !URL.isSameOrigin(req.cookie_origin, req.url);
+    const is_unsafe_method = switch (req.method) {
+        .GET, .HEAD => false,
+        else => true,
+    };
+    if (!is_cross_origin and !is_unsafe_method) {
+        return;
+    }
+    const origin = try std.fmt.allocPrintSentinel(transfer.arena, "Origin: {s}", .{req.cookie_origin}, 0);
+    try req.headers.add(origin);
+}
+
+// CorsGate resumption. The robots gate is the last step before the
+// network, so an allowed transfer goes straight there.
+pub fn resumeAfterCors(self: *Client, transfer: *Transfer) !void {
+    return self.pipeline(transfer, .network);
 }
 
 // RobotsGate resumption. The robots gate is the last step before the
@@ -1634,6 +1677,7 @@ pub const Request = struct {
     // Empty by default; the client fills in its baseline headers (user
     // agent, sec-ch-ua, accept-language) when none are supplied.
     headers: http.Headers = .{ .headers = null },
+    authored_headers: []const []const u8 = &.{},
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
     cookie_origin: [:0]const u8,
@@ -1996,6 +2040,9 @@ pub const Transfer = struct {
 
         // RobotsGate holds the transfer pending a robots.txt fetch.
         robots,
+
+        // CorsGate holds the transfer pending a CORS Preflight.
+        cors,
     };
 
     pub const HeaderResult = enum {
@@ -2031,7 +2078,7 @@ pub const Transfer = struct {
             return;
         }
         switch (self.state.parked) {
-            .robots => {},
+            .robots, .cors => {},
             .intercept_request, .intercept_auth => {
                 lp.assert(self.client.intercepted > 0, "Transfer.leaveIntercept", .{ .value = self.client.intercepted });
                 self.client.intercepted -= 1;
@@ -2100,10 +2147,14 @@ pub const Transfer = struct {
             self._dispatch_queued = false;
         }
 
-        // And for the robots gate: RobotsGate.pending holds a raw *Transfer
-        // while we're parked.
-        if (self.state == .parked and self.state.parked == .robots) {
-            self.client.robots.remove(self);
+        // And for the robots/cors gates: their single_flight.pending holds a raw
+        // *Transfer while we're parked.
+        if (self.state == .parked) {
+            switch (self.state.parked) {
+                .robots => self.client.robots.remove(self),
+                .cors => self.client.cors.remove(self),
+                .intercept_request, .intercept_auth => {},
+            }
         }
 
         // A pending revalidation entry owns cache resources (possibly an
@@ -3204,7 +3255,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.cache = null;
     client.serve_mode = false;
     client.obey_robots = false;
-    client.robots = .{ .allocator = testing.allocator, .network = undefined };
+    client.robots = .{ .allocator = testing.allocator, .network = undefined, .single_flight = .{ .allocator = testing.allocator } };
     client.url_blocklist = null;
 }
 
@@ -3336,6 +3387,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
     defer client.transfers.deinit(testing.allocator);
     defer client.robots.deinit();
 
+    const pending = &client.robots.single_flight.pending;
     const robots_url = "http://example.com/robots.txt";
 
     var waiting: std.ArrayList(*Transfer) = .empty;
@@ -3364,18 +3416,18 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
         try waiting.append(testing.allocator, transfer);
         transfer.park(.robots);
     }
-    try client.robots.pending.putNoClobber(testing.allocator, robots_url, waiting);
+    try pending.putNoClobber(testing.allocator, robots_url, waiting);
 
-    const t1 = client.robots.pending.get(robots_url).?.items[0];
-    const t2 = client.robots.pending.get(robots_url).?.items[1];
+    const t1 = pending.get(robots_url).?.items[0];
+    const t2 = pending.get(robots_url).?.items[1];
 
     t1.abort(error.Abort);
-    try testing.expectEqual(1, client.robots.pending.get(robots_url).?.items.len);
-    try testing.expect(client.robots.pending.get(robots_url).?.items[0] == t2);
+    try testing.expectEqual(1, pending.get(robots_url).?.items.len);
+    try testing.expect(pending.get(robots_url).?.items[0] == t2);
     try testing.expectEqual(1, client.transfers.count());
 
     t2.abort(error.Abort);
-    try testing.expectEqual(0, client.robots.pending.get(robots_url).?.items.len);
+    try testing.expectEqual(0, pending.get(robots_url).?.items.len);
     try testing.expectEqual(0, client.transfers.count());
 }
 
