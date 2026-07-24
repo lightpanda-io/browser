@@ -901,17 +901,22 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                 },
                 4 => switch (@as(u32, @bitCast(name[0..4].*))) {
                     asUint("defs") => return createSvgElementT(frame, Graphics.Defs, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("desc") => return createSvgElementT(frame, Element.Svg.Desc, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("rect") => return createSvgElementT(frame, Geometry.Rect, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("line") => return createSvgElementT(frame, Geometry.Line, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("path") => return createSvgElementT(frame, Geometry.Path, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("view") => return createSvgElementT(frame, Element.Svg.View, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 5 => switch (@as(u40, @bitCast(name[0..5].*))) {
                     asUint("image") => return createSvgElementT(frame, Graphics.Image, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("title") => return createSvgElementT(frame, Element.Svg.Title, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(name[0..6].*))) {
                     asUint("circle") => return createSvgElementT(frame, Geometry.Circle, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("switch") => return createSvgElementT(frame, Graphics.Switch, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("symbol") => return createSvgElementT(frame, Graphics.Symbol, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
                 7 => switch (@as(u56, @bitCast(name[0..7].*))) {
@@ -920,8 +925,12 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     else => {},
                 },
                 8 => switch (@as(u64, @bitCast(name[0..8].*))) {
+                    asUint("metadata") => return createSvgElementT(frame, Element.Svg.Metadata, name, attribute_iterator, .{ ._proto = undefined }),
                     asUint("polyline") => return createSvgElementT(frame, Geometry.Polyline, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
+                },
+                13 => if (std.mem.eql(u8, name, "foreignObject")) {
+                    return createSvgElementT(frame, Graphics.ForeignObject, name, attribute_iterator, .{ ._proto = undefined });
                 },
                 else => {},
             }
