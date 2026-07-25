@@ -622,6 +622,19 @@ pub const Connection = struct {
         return @intCast(count);
     }
 
+    // -1 when the transfer used no connection.
+    pub fn getConnId(self: *const Connection) !c_long {
+        var conn_id: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .conn_id, &conn_id);
+        return conn_id;
+    }
+
+    pub fn isConnReused(self: *const Connection) !bool {
+        var opened: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .num_connects, &opened);
+        return opened == 0;
+    }
+
     // Total transfer time (name lookup to completion) in microseconds.
     pub fn getTotalTimeMicros(self: *const Connection) !c_long {
         var micros: c_long = undefined;

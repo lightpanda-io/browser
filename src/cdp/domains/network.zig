@@ -328,6 +328,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
         .requestId = &id.toRequestId(msg.transfer),
+        .timestamp = timestamp(.monotonic),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -343,7 +344,7 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
 
     const transfer = msg.transfer;
     const req = &transfer.req;
-    const frame_id = req.frame_id;
+    const frame_id = req.document_frame_id orelse req.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
     // Modify request with extra CDP headers. Use set (replace by name) so a
@@ -379,9 +380,11 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .frameId = &id.toFrameId(req.frame_id),
+        .frameId = &id.toFrameId(req.document_frame_id orelse req.frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
+        .timestamp = timestamp(.monotonic),
+        .type = req.resource_type.string(),
         .response = ResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
@@ -393,6 +396,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     const session_id = bc.session_id orelse return;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
+        .timestamp = timestamp(.monotonic),
         .encodedDataLength = msg.content_length,
     }, .{ .session_id = session_id });
 }
@@ -445,6 +449,17 @@ pub const RequestWriter = struct {
         {
             try jws.objectField("hasPostData");
             try jws.write(request.body != null);
+        }
+
+        {
+            try jws.objectField("initialPriority");
+            try jws.write(initialPriority(request.resource_type));
+        }
+
+        {
+            // TODO implement proper referrerPolicy
+            try jws.objectField("referrerPolicy");
+            try jws.write("unsafe-url");
         }
 
         {
@@ -517,6 +532,19 @@ const ResponseWriter = struct {
         }
 
         {
+            try jws.objectField("connectionReused");
+            try jws.write(transfer._conn_reused);
+            try jws.objectField("connectionId");
+            try jws.write(transfer._conn_id);
+            // Bytes received so far, which is zero for a streaming response:
+            // its headers are reported before any of the body is read.
+            try jws.objectField("encodedDataLength");
+            try jws.write(transfer._content_length);
+            try jws.objectField("securityState");
+            try jws.write(securityState(transfer.req.url));
+        }
+
+        {
             try jws.objectField("timing");
             try jws.write(.{
                 // TODO: fix
@@ -533,6 +561,14 @@ const ResponseWriter = struct {
                 .sendStart = -1,
                 .sslEnd = -1,
                 .sslStart = -1,
+                // -1 is Chrome's "no service worker"; the push pair is 0 when
+                // nothing was pushed, not -1.
+                .workerStart = -1,
+                .workerReady = -1,
+                .workerFetchStart = -1,
+                .workerRespondWithSettled = -1,
+                .pushStart = 0,
+                .pushEnd = 0,
             });
         }
 
@@ -565,6 +601,23 @@ const ResponseWriter = struct {
         try jws.endObject();
     }
 };
+
+fn initialPriority(resource_type: HttpClient.Request.ResourceType) []const u8 {
+    return switch (resource_type) {
+        .document, .stylesheet => "VeryHigh",
+        .script, .xhr, .fetch, .eventsource => "High",
+    };
+}
+
+fn securityState(url: [:0]const u8) []const u8 {
+    if (URL.isSecure(url)) {
+        return "secure";
+    }
+    if (std.mem.startsWith(u8, url, "http:") or std.mem.startsWith(u8, url, "ws:")) {
+        return "insecure";
+    }
+    return "unknown";
+}
 
 fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedResponseKey {
     const key = std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
@@ -1020,4 +1073,64 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .blockedReason = "inspector",
     }, .{ .session_id = "SID-BLOCK" });
     try testing.expectEqual(error.UrlBlocked, error_context.err.?);
+}
+
+test "cdp.Network: worker requests emit network events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp = ctx.cdp();
+    _ = try cdp.createBrowserContext();
+    var bc = &cdp.browser_context.?;
+    bc.id = "BID-NW";
+    bc.session_id = "SID-NW";
+    bc.target_id = "TID-NW-0000000".*;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const fixture_root = "http://127.0.0.1:9582/src/browser/tests/cdp/";
+    const page_url = fixture_root ++ "worker_network.html";
+    const worker_url = fixture_root ++ "worker_network.js";
+    const api_url = "http://127.0.0.1:9582/echo_method";
+    const page = try bc.session.createPage();
+    try page.navigate(page_url, .{});
+    try testing.waitForPage(bc);
+
+    // Both the worker's script fetch and the fetch the worker itself issues are
+    // attributed to the document that created the worker, not to the worker's
+    // own frame id, which no client can resolve.
+    try ctx.expectSentEvent("Network.requestWillBeSent", .{
+        .documentURL = page_url,
+        .type = "Script",
+        .request = .{
+            .url = worker_url,
+            .initialPriority = "High",
+            .referrerPolicy = "unsafe-url",
+        },
+    }, .{ .session_id = "SID-NW" });
+    try ctx.expectSentEvent("Network.responseReceived", .{
+        .type = "Script",
+        .response = .{
+            .url = worker_url,
+            .securityState = "insecure",
+            // The document was fetched from this origin a moment ago, so the
+            // worker's script comes off the same socket. The id itself is a
+            // process-wide libcurl counter, so it isn't assertable here.
+            .connectionReused = true,
+            .timing = .{
+                .workerStart = -1,
+                .workerReady = -1,
+                .workerFetchStart = -1,
+                .workerRespondWithSettled = -1,
+                .pushStart = 0,
+                .pushEnd = 0,
+            },
+        },
+    }, .{ .session_id = "SID-NW" });
+    try ctx.expectSentEvent("Network.requestWillBeSent", .{
+        .documentURL = page_url,
+        .type = "Fetch",
+        .request = .{ .url = api_url },
+    }, .{ .session_id = "SID-NW" });
 }

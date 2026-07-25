@@ -262,7 +262,9 @@ pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !*HttpClient.Transfer {
-    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+    var r = req;
+    r.document_frame_id = self._frame._frame_id;
+    return self._session.browser.http_client.newRequest(r, &self._http_owner);
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
@@ -399,6 +401,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .url = resolved_url,
         .method = .GET,
         .frame_id = self._frame_id,
+        .document_frame_id = self._frame._frame_id,
         .loader_id = self._loader_id,
         .headers = headers,
         .cookie_jar = &session.cookie_jar,

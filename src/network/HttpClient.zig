@@ -1543,7 +1543,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
     self.cacheStore(transfer);
 
-    transfer._cdp_content_length = transfer.getContentLength() orelse 0;
+    transfer._content_length = transfer.getContentLength() orelse 0;
     try transfer.bufferEvents(transfer.res.buffer.items);
     return true;
 }
@@ -1643,6 +1643,10 @@ pub const Request = struct {
     notification: *Notification,
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
+
+    // The document frame this request belongs to, for CDP attribution.
+    // This will be different than frame_id for Workers.
+    document_frame_id: ?u32 = null,
 
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
@@ -1943,7 +1947,10 @@ pub const Transfer = struct {
     _cache_key: [:0]const u8 = "",
 
     // Content length reported on the CDP loadingFinished event.
-    _cdp_content_length: usize = 0,
+    _content_length: usize = 0,
+
+    _conn_id: i64 = 0,
+    _conn_reused: bool = false,
 
     // Set by the first deinit. A retired transfer is unlinked from
     // everything and sits on client.graveyard
@@ -2374,7 +2381,7 @@ pub const Transfer = struct {
         self.setResponseHead(cached.metadata.status, cached.metadata.content_type);
         self.res.headers = cached.metadata.headers;
         self._from_cache = true;
-        self._cdp_content_length = body.len;
+        self._content_length = body.len;
         try self.bufferEvents(body);
     }
 
@@ -2400,7 +2407,7 @@ pub const Transfer = struct {
 
         self.setResponseHead(status, content_type);
         self.res.headers = owned;
-        self._cdp_content_length = owned_body.len;
+        self._content_length = owned_body.len;
         try self.bufferEvents(owned_body);
     }
 
@@ -2412,6 +2419,13 @@ pub const Transfer = struct {
             // Streaming: already materialized at the first delivered chunk.
             return;
         }
+
+        // libcurl returns -1 if the connection wasn't used. We want to avoid
+        // negative, so -1 -> 0 and everything else += 1;
+        const conn_id = conn.getConnId() catch -1;
+        self._conn_id = if (conn_id < 0) 0 else conn_id + 1;
+        self._conn_reused = conn.isConnReused() catch false;
+
         const arena = self.arena;
 
         if (self.res.header == null) {
@@ -2913,7 +2927,7 @@ pub const Transfer = struct {
                     if (transfer._notify_cdp) {
                         req.notification.dispatch(.http_request_done, &.{
                             .transfer = transfer,
-                            .content_length = transfer._cdp_content_length,
+                            .content_length = transfer._content_length,
                         });
                     }
                     req.done_callback(req.ctx) catch |err| {
@@ -3045,7 +3059,7 @@ const Synthetic = struct {
             h[0] = .{ .name = "content-type", .value = content_type };
             transfer.res.headers = h;
         }
-        transfer._cdp_content_length = body.len;
+        transfer._content_length = body.len;
         try transfer.bufferEvents(body);
     }
 };
