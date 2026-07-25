@@ -48,6 +48,43 @@ pub fn asConstNode(self: *const Select) *const Node {
     return self.asConstElement().asConstNode();
 }
 
+// Walks the select's list of options in tree order: its option children plus
+// the option children of its optgroup children, per HTML
+// §the-select-element. Options nested any deeper are not in the list.
+const OptionIterator = struct {
+    // Cursor over the select's children.
+    _child: ?*Node,
+    // Cursor over the current optgroup's children, while inside one.
+    _in_group: ?*Node = null,
+
+    fn init(select: *const Select) OptionIterator {
+        return .{ ._child = select.asConstNode().firstChild() };
+    }
+
+    fn next(self: *OptionIterator) ?*Option {
+        while (true) {
+            if (self._in_group) |node| {
+                self._in_group = node.nextSibling();
+                if (node.is(Option)) |option| {
+                    return option;
+                }
+                continue;
+            }
+
+            const node = self._child orelse return null;
+            self._child = node.nextSibling();
+
+            if (node.is(Option)) |option| {
+                return option;
+            }
+            const element = node.is(Element) orelse continue;
+            if (element.getTag() == .optgroup) {
+                self._in_group = node.firstChild();
+            }
+        }
+    }
+};
+
 // Resolves the option whose selectedness contributes to the select's value
 // per HTML §form-elements§selectedness-setting-algorithm: an explicitly
 // selected non-disabled option, falling back to the first non-disabled
@@ -56,10 +93,12 @@ pub fn asConstNode(self: *const Select) *const Node {
 // and contributes no entry to a FormData set.
 pub fn effectiveOption(self: *const Select) ?*Option {
     var first_option: ?*Option = null;
-    var maybe_child = self.asConstNode().firstChild();
-    while (maybe_child) |child| : (maybe_child = child.nextSibling()) {
-        const option = child.is(Option) orelse continue;
-        if (option.getDisabled()) continue;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
+        // Element.isDisabled, not Option.getDisabled: an option is also
+        // disabled when its parent is an <optgroup disabled>
+        // (HTML "concept-option-disabled").
+        if (option.asElement().isDisabled()) continue;
         if (option.getSelected()) return option;
         if (first_option == null) first_option = option;
     }
@@ -77,9 +116,8 @@ pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
     // Find option with matching value and select it
     // Note: This updates the current state (_selected), not the default state (attribute)
     // Setting value always deselects all others, even for multiple selects
-    var iter = self.asNode().childrenIterator();
-    while (iter.next()) |child| {
-        const option = child.is(Option) orelse continue;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
         option._selected = std.mem.eql(u8, option.getValue(frame), value);
     }
 }
@@ -87,9 +125,8 @@ pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
 pub fn getSelectedIndex(self: *Select) i32 {
     var index: i32 = 0;
     var has_options = false;
-    var iter = self.asNode().childrenIterator();
-    while (iter.next()) |child| {
-        const option = child.is(Option) orelse continue;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
         has_options = true;
         if (option.getSelected()) {
             return index;
@@ -112,9 +149,8 @@ pub fn setSelectedIndex(self: *Select, index: i32) !void {
     // Note: This updates the current state (_selected), not the default state (attribute)
     const is_multiple = self.getMultiple();
     var current_index: i32 = 0;
-    var iter = self.asNode().childrenIterator();
-    while (iter.next()) |child| {
-        const option = child.is(Option) orelse continue;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
         if (current_index == index) {
             option._selected = true;
         } else if (!is_multiple) {
@@ -200,8 +236,9 @@ pub fn setRequired(self: *Select, required: bool, frame: *Frame) !void {
 }
 
 pub fn getOptions(self: *Select, frame: *Frame) !*collections.HTMLOptionsCollection {
-    // For options, we use the child_tag mode to filter only <option> elements
-    const node_live = collections.NodeLive(.child_tag).init(self.asNode(), .option, frame);
+    // select_options mode is the select's list of options: option children
+    // plus the option children of optgroup children.
+    const node_live = collections.NodeLive(.select_options).init(self.asNode(), {}, frame);
     const html_collection = try node_live.runtimeGenericWrap(frame);
 
     // Create and return HTMLOptionsCollection
@@ -213,11 +250,9 @@ pub fn getOptions(self: *Select, frame: *Frame) !*collections.HTMLOptionsCollect
 
 pub fn getLength(self: *Select) u32 {
     var i: u32 = 0;
-    var it = self.asNode().childrenIterator();
-    while (it.next()) |child| {
-        if (child.is(Option) != null) {
-            i += 1;
-        }
+    var it = OptionIterator.init(self);
+    while (it.next()) |_| {
+        i += 1;
     }
     return i;
 }
@@ -235,13 +270,10 @@ pub fn add(self: *Select, element: *Option, before_: ?AddBeforeOption, frame: *F
         switch (before) {
             .index => |idx| {
                 var i: u32 = 0;
-                var it = self_node.childrenIterator();
-                while (it.next()) |child| {
-                    if (child.is(Option) == null) {
-                        continue;
-                    }
+                var it = OptionIterator.init(self);
+                while (it.next()) |option| {
                     if (i == idx) {
-                        before_node = child;
+                        before_node = option.asNode();
                         break;
                     }
                     i += 1;
@@ -250,7 +282,10 @@ pub fn add(self: *Select, element: *Option, before_: ?AddBeforeOption, frame: *F
             .option => |before_option| before_node = before_option.asNode(),
         }
     }
-    _ = try self_node.insertBefore(element.asElement().asNode(), before_node, frame);
+    // Per HTML §dom-select-add, the insertion parent is `before`'s parent —
+    // which is the optgroup when `before` sits inside one.
+    const parent = if (before_node) |node| node.parentNode() orelse self_node else self_node;
+    _ = try parent.insertBefore(element.asElement().asNode(), before_node, frame);
 }
 
 pub fn getSelectedOptions(self: *Select, frame: *Frame) !collections.NodeLive(.selected_options) {
@@ -387,5 +422,6 @@ const std = @import("std");
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Select" {
     try testing.htmlRunner("element/html/select.html", .{});
+    try testing.htmlRunner("element/html/select-optgroup.html", .{});
     try testing.htmlRunner("element/html/select-validity.html", .{});
 }

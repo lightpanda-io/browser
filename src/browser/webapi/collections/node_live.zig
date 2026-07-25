@@ -40,6 +40,7 @@ const Mode = enum {
     child_elements,
     child_tag,
     cells,
+    select_options,
     selected_options,
     links,
     anchors,
@@ -68,6 +69,7 @@ const Filters = union(Mode) {
     child_elements,
     child_tag: Element.Tag,
     cells,
+    select_options,
     selected_options,
     links,
     anchors,
@@ -100,7 +102,10 @@ pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
         .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form => TreeWalker.FullExcludeSelf,
-        .child_elements, .child_tag, .cells, .selected_options => TreeWalker.Children,
+        .child_elements, .child_tag, .cells => TreeWalker.Children,
+        // A select's options can sit one level down, inside an <optgroup>, so
+        // these two walk the subtree and filter on the parent instead.
+        .select_options, .selected_options => TreeWalker.FullExcludeSelf,
     };
     return struct {
         _tw: TW,
@@ -299,11 +304,23 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     return el.is(Element.Html.TableCell) != null;
                 },
-                .selected_options => {
+                .select_options, .selected_options => {
+                    // The select's list of options is its option children plus
+                    // the option children of its optgroup children — NOT every
+                    // option descendant.
+                    // https://html.spec.whatwg.org/multipage/form-elements.html#the-select-element
                     const el = node.is(Element) orelse return false;
                     const Option = Element.Html.Option;
                     const opt = el.is(Option) orelse return false;
-                    return opt.getSelected();
+
+                    const parent = node.parentNode() orelse return false;
+                    if (parent != self._tw._root) {
+                        const group = parent.is(Element) orelse return false;
+                        if (group.getTag() != .optgroup) return false;
+                        if (parent.parentNode() != self._tw._root) return false;
+                    }
+
+                    return if (comptime mode == .selected_options) opt.getSelected() else true;
                 },
                 .links => {
                     // Links are <a> elements with href attribute (TODO: also <area> when implemented)
@@ -390,6 +407,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .child_elements => HTMLCollection{ ._data = .{ .child_elements = self } },
                 .child_tag => HTMLCollection{ ._data = .{ .child_tag = self } },
                 .cells => HTMLCollection{ ._data = .{ .cells = self } },
+                .select_options => HTMLCollection{ ._data = .{ .select_options = self } },
                 .selected_options => HTMLCollection{ ._data = .{ .selected_options = self } },
                 .links => HTMLCollection{ ._data = .{ .links = self } },
                 .anchors => HTMLCollection{ ._data = .{ .anchors = self } },
