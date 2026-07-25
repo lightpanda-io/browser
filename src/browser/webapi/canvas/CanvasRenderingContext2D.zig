@@ -43,7 +43,7 @@ pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
 }
 
 pub fn getFillStyle(self: *const CanvasRenderingContext2D, exec: *Execution) ![]const u8 {
-    var w = std.Io.Writer.Allocating.init(exec.call_arena);
+    var w = std.Io.Writer.Allocating.init(exec.local_arena);
     try self._fill_style.format(&w.writer);
     return w.written();
 }

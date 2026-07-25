@@ -332,11 +332,11 @@ pub fn setOnUnhandledRejection(self: *WorkerGlobalScope, setter: ?FunctionSetter
 
 const base64 = @import("encoding/base64.zig");
 pub fn btoa(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) ![]const u8 {
-    return base64.encode(exec.call_arena, input);
+    return base64.encode(exec.local_arena, input);
 }
 
 pub fn atob(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) !JS.String.OneByte {
-    const bytes = try base64.decode(exec.call_arena, input);
+    const bytes = try base64.decode(exec.local_arena, input);
     return .{ .bytes = bytes };
 }
 

@@ -53,7 +53,7 @@ pub fn getValue(self: *Option, frame: *Frame) []const u8 {
     }
 
     const node = self.asNode();
-    const text = node.getTextContentAlloc(frame.call_arena) catch return "";
+    const text = node.getTextContentAlloc(frame.local_arena) catch return "";
     return std.mem.trim(u8, text, &std.ascii.whitespace);
 }
 
