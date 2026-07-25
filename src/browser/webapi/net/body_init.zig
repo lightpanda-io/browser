@@ -163,8 +163,8 @@ test "BodyInit: FormData emits multipart with random boundary" {
 
     const fd = try arena.create(FormData);
     fd.* = .{ ._rc = .{}, ._arena = arena, ._entries = .empty };
-    try fd.append("username", "alice");
-    try fd.append("email", "alice@example.com");
+    try fd.appendText("username", "alice");
+    try fd.appendText("email", "alice@example.com");
 
     const r = try (BodyInit{ .form_data = fd }).extract(arena);
 
