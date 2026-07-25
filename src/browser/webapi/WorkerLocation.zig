@@ -54,7 +54,7 @@ pub fn getHash(self: *const WorkerLocation) []const u8 {
 }
 
 pub fn getOrigin(self: *const WorkerLocation, exec: *const js.Execution) ![]const u8 {
-    return (try U.getOrigin(exec.call_arena, self._url)) orelse "null";
+    return (try U.getOrigin(exec.local_arena, self._url)) orelse "null";
 }
 
 pub fn toString(self: *const WorkerLocation) [:0]const u8 {

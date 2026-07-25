@@ -1726,7 +1726,7 @@ pub const JsApi = struct {
 
     pub const innerText = bridge.accessor(_innerText, _setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *HtmlElement, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.getInnerText(&buf.writer, frame);
         return buf.written();
     }

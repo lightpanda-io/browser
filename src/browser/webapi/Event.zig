@@ -437,7 +437,7 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     const visible_path_len = if (path_len > visible_start_index) path_len - visible_start_index else 0;
 
     // Allocate and return the visible path using call_arena (short-lived)
-    const path = try exec.call_arena.alloc(*EventTarget, visible_path_len);
+    const path = try exec.local_arena.alloc(*EventTarget, visible_path_len);
     @memcpy(path, path_buffer[visible_start_index..path_len]);
     return path;
 }

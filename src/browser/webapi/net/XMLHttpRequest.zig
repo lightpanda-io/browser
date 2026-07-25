@@ -354,7 +354,7 @@ pub fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution
         return "";
     }
 
-    var buf = std.Io.Writer.Allocating.init(exec.call_arena);
+    var buf = std.Io.Writer.Allocating.init(exec.local_arena);
     for (self._response_headers.items) |entry| {
         try buf.writer.writeAll(entry);
         try buf.writer.writeAll("\r\n");
