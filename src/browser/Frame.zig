@@ -3382,9 +3382,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     form_data.acquireRef();
     defer form_data.releaseRef(self._page);
 
-    const arena = try self._session.getArena(.medium, "submitForm");
-    errdefer self._session.releaseArena(arena);
-
     // Per HTML spec form-submission algorithm, when the submitter is a submit
     // button, its formaction/formmethod/formenctype attributes override the
     // form's corresponding attributes (matching how formtarget is honored above).
@@ -3402,7 +3399,36 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         break :blk form_element.getAttributeSafe(comptime .wrap("method"));
     };
     const method = Element.Html.Form.normalizeMethod(method_attr, "get");
+
+    // Per the HTML form-submission algorithm, the dialog method closes the
+    // form's nearest ancestor dialog with the submitter's value and performs no
+    // navigation. Falling through here would submit the form as a GET, which
+    // both reloads the page and leaves the dialog open forever.
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm
+    if (std.mem.eql(u8, method, "dialog")) {
+        // A submit button always has a value (empty when unset); with no
+        // submitter at all the dialog's existing returnValue is left untouched.
+        const result: ?[]const u8 = if (submit_button) |s| blk: {
+            if (s.is(Element.Html.Form.Input)) |input| {
+                break :blk input.getValue();
+            }
+            // if not an Input, it has to be a Button (checked above by isSubmitButton)
+            break :blk s.as(Element.Html.Form.Button).getValue();
+        } else null;
+
+        var ancestor: ?*Element = form_element;
+        while (ancestor) |el| : (ancestor = el.parentElement()) {
+            const dialog = el.is(Element.Html.Dialog) orelse continue;
+            try dialog.close(result, self);
+            break;
+        }
+        return;
+    }
+
     const is_post = std.mem.eql(u8, method, "post");
+
+    const arena = try self._session.getArena(.medium, "submitForm");
+    errdefer self._session.releaseArena(arena);
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {

@@ -198,3 +198,99 @@
     testing.expectEqual(0, fired)
   }
 </script>
+
+<script id="dialog_method_closes_with_submitter_value">
+  {
+    document.body.insertAdjacentHTML('beforeend',
+      '<dialog id="d_submit"><form method="dialog">' +
+      '<button type="submit" value="confirm" id="b_submit">ok</button>' +
+      '</form></dialog>')
+
+    const dialog = $('#d_submit')
+    dialog.showModal()
+
+    let fired = 0
+    dialog.addEventListener('close', () => fired++)
+
+    $('#b_submit').click()
+
+    testing.expectEqual(1, fired)
+    testing.expectEqual(false, dialog.open)
+    testing.expectEqual('confirm', dialog.returnValue)
+  }
+</script>
+
+<script id="dialog_method_uses_empty_value_when_submitter_has_none">
+  {
+    document.body.insertAdjacentHTML('beforeend',
+      '<dialog id="d_novalue"><form method="dialog">' +
+      '<button type="submit" id="b_novalue">ok</button>' +
+      '</form></dialog>')
+
+    const dialog = $('#d_novalue')
+    dialog.returnValue = 'preset'
+    dialog.showModal()
+
+    $('#b_novalue').click()
+
+    testing.expectEqual(false, dialog.open)
+    testing.expectEqual('', dialog.returnValue)
+  }
+</script>
+
+<script id="dialog_method_closes_nearest_ancestor_dialog">
+  {
+    document.body.insertAdjacentHTML('beforeend',
+      '<dialog id="d_outer"><dialog id="d_inner"><form method="dialog">' +
+      '<button type="submit" value="inner" id="b_nested">ok</button>' +
+      '</form></dialog></dialog>')
+
+    const outer = $('#d_outer')
+    const inner = $('#d_inner')
+    outer.show()
+    inner.show()
+
+    $('#b_nested').click()
+
+    testing.expectEqual(false, inner.open)
+    testing.expectEqual('inner', inner.returnValue)
+    testing.expectEqual(true, outer.open)
+  }
+</script>
+
+<script id="dialog_method_is_inert_without_ancestor_dialog">
+  {
+    // No ancestor dialog: the submission is dropped. It must not fall through
+    // to a GET submission either, so the form's own submit handler is the only
+    // thing that runs.
+    document.body.insertAdjacentHTML('beforeend',
+      '<form method="dialog" id="f_orphan">' +
+      '<button type="submit" value="x" id="b_orphan">ok</button>' +
+      '</form>')
+
+    let submits = 0
+    $('#f_orphan').addEventListener('submit', () => submits++)
+
+    $('#b_orphan').click()
+    testing.expectEqual(1, submits)
+  }
+</script>
+
+<script id="dialog_method_honors_formmethod_on_submitter">
+  {
+    // formmethod on the submit button overrides the form's method, so a GET
+    // form can still close its dialog.
+    document.body.insertAdjacentHTML('beforeend',
+      '<dialog id="d_formmethod"><form method="get">' +
+      '<button type="submit" formmethod="dialog" value="via-formmethod" id="b_formmethod">ok</button>' +
+      '</form></dialog>')
+
+    const dialog = $('#d_formmethod')
+    dialog.showModal()
+
+    $('#b_formmethod').click()
+
+    testing.expectEqual(false, dialog.open)
+    testing.expectEqual('via-formmethod', dialog.returnValue)
+  }
+</script>
