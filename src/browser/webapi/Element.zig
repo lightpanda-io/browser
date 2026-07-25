@@ -1377,13 +1377,106 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
-    // In our dummy layout engine, content doesn't overflow
-    return self.getClientHeight(frame);
+    var visibility_cache: VisibilityCache = .{};
+    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
+        return 0.0;
+    }
+
+    const height = self.getElementDimensions(frame).height;
+
+    const tag = self.getTag();
+    // As in getScrollWidth: the root containers carry artificial giant
+    // defaults, and page-level overflow checks read them.
+    if (tag == .html or tag == .body) {
+        return height;
+    }
+
+    return @max(height, self.contentHeight(frame, &visibility_cache));
+}
+
+// The height of the direct child elements stacked vertically, the counterpart
+// of contentWidth.
+//
+// Note that the two assume contradictory arrangements — contentWidth lays the
+// children out in a row, this stacks them. That is deliberate. We can't detect
+// the real layout mode (see contentWidth), so each axis independently assumes
+// the arrangement that produces overflow. Together they bound the content
+// extent per axis rather than describing one coherent layout: reporting no
+// overflow when there is some is what wedges measure-then-mutate loops,
+// while the reverse merely over-reports.
+fn contentHeight(self: *Element, frame: *Frame, visibility_cache: *VisibilityCache) f64 {
+    var total: f64 = 0;
+
+    var child = self.asNode().firstChild();
+    while (child) |node| : (child = node.nextSibling()) {
+        if (node.is(Element)) |el| {
+            if (el.checkVisibilityCached(visibility_cache, frame)) {
+                total += el.getElementDimensions(frame).height;
+            }
+        }
+    }
+
+    return total;
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
-    // In our dummy layout engine, content doesn't overflow
-    return self.getClientWidth(frame);
+    var visibility_cache: VisibilityCache = .{};
+    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
+        return 0.0;
+    }
+
+    const width = self.getElementDimensions(frame).width;
+
+    const tag = self.getTag();
+    // The root containers carry artificial giant defaults (1920 and
+    // 100_000_000, see getElementDimensions). Stacking their children on
+    // top would inflate a value sites read to detect page overflow.
+    if (tag == .html or tag == .body) {
+        return width;
+    }
+
+    return @max(width, self.contentWidth(frame, &visibility_cache));
+}
+
+// The width of the direct child elements laid end to end on a single row.
+//
+// The dummy layout engine has no line-breaking, and an element only overflows
+// horizontally when its children don't wrap (white-space:nowrap, a flex row, an
+// inline-block strip), so the single-row assumption covers the case that
+// matters. We can't detect the layout mode to do better: getStyle() sees only
+// the inline `style=` attribute, and the computed cascade resolves stylesheet
+// rules for `display:none` and `visibility` alone.
+//
+// Only direct children are measured, never the whole subtree. This runs on
+// every scrollWidth read, and recursing would make an element's cost O(subtree)
+// rather than O(fan-out).
+//
+// Growing with the child count is the point: JS that appends content until
+// `scrollWidth` passes a threshold (the infinite-marquee idiom) never
+// terminates when the metric ignores what it just inserted.
+//
+// Text children are not measured, matching contentHeight. Estimating a text run
+// from its length would need a per-character advance, which in turn has to track
+// font-size or "shrink the font until it fits" loops stop converging — and it
+// would report overflow for practically every element containing text, since a
+// few words already exceed the default box. Element children are what content
+// grown by script actually consists of.
+fn contentWidth(self: *Element, frame: *Frame, visibility_cache: *VisibilityCache) f64 {
+    var total: f64 = 0;
+
+    // The cache arrives seeded by the caller's own visibility walk, and
+    // siblings share that ancestor chain, so the loop costs one own-element
+    // check per child rather than N ancestor walks.
+    var child = self.asNode().firstChild();
+    while (child) |node| : (child = node.nextSibling()) {
+        if (node.is(Element)) |el| {
+            if (el.checkVisibilityCached(visibility_cache, frame)) {
+                total += el.getElementDimensions(frame).width;
+            }
+        }
+    }
+
+    return total;
 }
 
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
