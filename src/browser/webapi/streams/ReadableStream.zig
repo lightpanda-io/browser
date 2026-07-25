@@ -141,13 +141,32 @@ pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator) ![]cons
         .closed => {},
     }
 
+    const exec = self._execution;
+    if (exec.js.local == null) return error.TypeError;
+
+    var ls: js.Local.Scope = undefined;
+    exec.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls;
+
     var buf = std.Io.Writer.Allocating.init(arena);
     const controller = self._controller;
     while (controller.dequeue()) |chunk| {
-        const bytes = switch (chunk) {
+        const bytes: []const u8 = switch (chunk) {
             .string => |s| s,
             .uint8array => |arr| arr.values,
-            .js_value => return error.TypeError,
+            .js_value => |global| blk: {
+                const value = local.toLocal(global);
+                if (value.isTypedArray() or value.isArrayBufferView() or value.isArrayBuffer()) {
+                    const typed = try local.jsValueToZig([]u8, value);
+                    break :blk try arena.dupe(u8, typed);
+                } else if (value.isString()) |str| {
+                    const slice = try str.toSlice();
+                    break :blk try arena.dupe(u8, slice);
+                } else {
+                    return error.TypeError;
+                }
+            },
         };
         try buf.writer.writeAll(bytes);
     }
