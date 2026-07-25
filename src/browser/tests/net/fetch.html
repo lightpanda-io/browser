@@ -348,6 +348,33 @@
   }
 </script>
 
+<script id=fetch_readablestream_body type=module>
+  {
+    const state = await testing.async();
+    const payload = "name=Streamed&count=9";
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+    });
+
+    const response = await fetch("http://127.0.0.1:9582/xhr/echo_post_body", {
+      method: "POST",
+      body: stream,
+      duplex: "half",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    const text = await response.text();
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(200, response.status);
+      testing.expectEqual(payload, text);
+    });
+  }
+</script>
+
 <script id=fetch_blob_url_in_worker type=module>
   {
     const state = await testing.async();

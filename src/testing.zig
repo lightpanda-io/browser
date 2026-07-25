@@ -970,6 +970,19 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/echo_post_body")) {
+        var body_buf: [4096]u8 = undefined;
+        const body = if (req.head.method.requestHasBody())
+            req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(body_buf.len)) catch ""
+        else
+            "";
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect_to_echo")) {
         // 302 to /echo_method. Used by the Page.reload-after-redirect test to
         // confirm a POST→302→GET chain doesn't replay POST on reload.

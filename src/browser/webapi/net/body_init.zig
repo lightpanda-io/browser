@@ -104,14 +104,12 @@ pub const BodyInit = union(enum) {
                     .content_type = null,
                 };
             },
-            .stream => {
-                // A ReadableStream body cannot be serialized synchronously.
-                // Callers that support streaming bodies (Response) special-case
-                // the `.stream` arm before calling extract; the Request/XHR
-                // paths that reach here have no place to store a stream, so
-                // they send an empty body. Like other non-string sources, a
-                // stream carries no default Content-Type.
-                return .{ .bytes = "", .content_type = null };
+            .stream => |stream| {
+                // Response special-cases `.stream` before extract. Request/XHR
+                // paths buffer a closed stream synchronously; open streams and
+                // async-only bodies reject rather than send Content-Length: 0.
+                const bytes = try stream.collectBodyBytes(arena);
+                return .{ .bytes = bytes, .content_type = null };
             },
         }
     }

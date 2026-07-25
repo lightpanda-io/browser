@@ -131,6 +131,29 @@ pub fn getLocked(self: *const ReadableStream) bool {
     return self._reader != null;
 }
 
+/// Drain a closed stream's internal queue into bytes for outbound HTTP
+/// request bodies. Open, errored, or locked streams, and chunks that cannot
+/// be converted synchronously, return `error.TypeError`.
+pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator) ![]const u8 {
+    if (self.getLocked()) return error.TypeError;
+    switch (self._state) {
+        .errored, .readable => return error.TypeError,
+        .closed => {},
+    }
+
+    var buf = std.Io.Writer.Allocating.init(arena);
+    const controller = self._controller;
+    while (controller.dequeue()) |chunk| {
+        const bytes = switch (chunk) {
+            .string => |s| s,
+            .uint8array => |arr| arr.values,
+            .js_value => return error.TypeError,
+        };
+        try buf.writer.writeAll(bytes);
+    }
+    return buf.written();
+}
+
 pub fn callPullIfNeeded(self: *ReadableStream) !void {
     if (!self.shouldCallPull()) {
         return;
