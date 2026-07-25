@@ -89,6 +89,15 @@
   document.body.appendChild(hidden);
   testing.expectEqual(0, hidden.scrollWidth);
 
+  // A visible width:0 box (an off-screen measurement container) is not
+  // hidden: its content still overflows it.
+  const zeroWidth = document.createElement('div');
+  zeroWidth.style.width = '0';
+  zeroWidth.appendChild(document.createElement('span'));
+  document.body.appendChild(zeroWidth);
+  testing.expectEqual(0, zeroWidth.clientWidth);
+  testing.expectTrue(zeroWidth.scrollWidth > 0);
+
   // The root containers keep their synthetic size rather than summing
   // children, so horizontal page-overflow checks stay stable.
   testing.expectEqual(document.body.clientWidth, document.body.scrollWidth);
@@ -168,6 +177,17 @@
   hidden.appendChild(document.createElement('div'));
   document.body.appendChild(hidden);
   testing.expectEqual(0, hidden.scrollHeight);
+
+  // The collapse/expand idiom: scrollHeight is read while the panel is
+  // collapsed at height:0 to know how far to open it. A zero-height box is
+  // not hidden; its content is still measured.
+  const panel = document.createElement('div');
+  panel.style.height = '0';
+  panel.appendChild(document.createElement('div'));
+  panel.appendChild(document.createElement('div'));
+  document.body.appendChild(panel);
+  testing.expectEqual(0, panel.clientHeight);
+  testing.expectTrue(panel.scrollHeight > 0);
 
   // The root containers keep their synthetic size rather than summing
   // children. This is what keeps infinite-scroll triggers reading
