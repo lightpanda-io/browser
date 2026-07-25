@@ -166,39 +166,34 @@ pub fn has(self: *const FormData, name: String) bool {
     return false;
 }
 
-// The value half of the JS-facing append()/set(). `bytes` must stay last:
-// js.Bridge tries the JsApi classes first and maps anything else to a string,
-// so an earlier position would swallow File and Blob arguments.
 pub const EntryValue = union(enum) {
-    file: *File,
-    blob: *Blob,
-    bytes: []const u8,
+    blob: *Blob, // can be of _type == .file
+    bytes: []const u8, //must be last, everything can coerce to a []const u8
 };
 
-pub fn jsSet(self: *FormData, name: String, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
+pub fn set(self: *FormData, name: String, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
     self.deleteByName(name, exec);
-    return self.jsAppend(name.str(), value, filename, exec);
+    return self.append(name.str(), value, filename, exec);
 }
 
 // https://xhr.spec.whatwg.org/#create-an-entry
-pub fn jsAppend(self: *FormData, name: []const u8, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
+pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
     const entry_value: Entry.Value = switch (value) {
-        // A Blob that is not a File becomes a File named "blob", unless a
-        // filename was supplied.
         .blob => |blob| blk: {
-            if (blob._type == .file and filename == null) {
+            if (filename) |n| {
+                // A supplied filename means a new File over the same bytes rather
+                // than a rename of the caller's object.
+                break :blk .{ .file = try fileFrom(blob, n, exec.page) };
+            }
+
+            if (blob._type == .file) {
                 const file = blob._type.file;
                 file.acquireRef();
                 break :blk .{ .file = file };
             }
-            break :blk .{ .file = try fileFrom(blob, filename orelse "blob", exec.page) };
-        },
-        // A File keeps its bytes; a supplied filename means a new File over
-        // the same bytes rather than a rename of the caller's object.
-        .file => |file| blk: {
-            if (filename) |n| break :blk .{ .file = try fileFrom(file._proto, n, exec.page) };
-            file.acquireRef();
-            break :blk .{ .file = file };
+
+            // A Blob that is not a File becomes a File named "blob".
+            break :blk .{ .file = try fileFrom(blob, "blob", exec.page) };
         },
         .bytes => |b| .{ .string = try String.init(self._arena, b, .{}) },
     };
@@ -227,7 +222,7 @@ fn fileFrom(source: *Blob, name: []const u8, page: *Page) !*File {
     return file;
 }
 
-pub fn append(self: *FormData, name: []const u8, value: []const u8) !void {
+pub fn appendText(self: *FormData, name: []const u8, value: []const u8) !void {
     try self._entries.append(self._arena, .{
         .name = try String.init(self._arena, name, .{}),
         .value = .{ .string = try String.init(self._arena, value, .{}) },
@@ -568,8 +563,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(FormData.init, .{});
     pub const has = bridge.function(FormData.has, .{});
     pub const get = bridge.function(FormData.get, .{});
-    pub const set = bridge.function(FormData.jsSet, .{});
-    pub const append = bridge.function(FormData.jsAppend, .{});
+    pub const set = bridge.function(FormData.set, .{});
+    pub const append = bridge.function(FormData.append, .{});
     pub const getAll = bridge.function(FormData.getAll, .{});
     pub const delete = bridge.function(FormData.delete, .{});
     pub const keys = bridge.function(FormData.keys, .{});
@@ -592,8 +587,8 @@ test "FormData: multipart write" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try fd.append("name", "John");
-    try fd.append("note", "two\r\nlines");
+    try fd.appendText("name", "John");
+    try fd.appendText("note", "two\r\nlines");
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     try fd.write(.{
@@ -621,7 +616,7 @@ test "FormData: multipart escapes name CR/LF/quote" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try fd.append("a\"b\r\nc", "v");
+    try fd.appendText("a\"b\r\nc", "v");
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     try fd.write(.{
@@ -681,7 +676,7 @@ test "FormData: multipart with file" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try fd.append("field", "value");
+    try fd.appendText("field", "value");
     try fd._entries.append(allocator, .{
         .name = try String.init(allocator, "upload", .{}),
         .value = .{ .file = file },
@@ -852,9 +847,9 @@ test "FormData: plaintext write" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try fd.append("name", "John");
-    try fd.append("note", "two\r\nlines");
-    try fd.append("equals", "a=b");
+    try fd.appendText("name", "John");
+    try fd.appendText("note", "two\r\nlines");
+    try fd.appendText("equals", "a=b");
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     try fd.write(.{ .encoding = .plaintext, .allocator = allocator }, &buf.writer);
