@@ -142,12 +142,7 @@ pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator) ![]cons
     }
 
     const exec = self._execution;
-    if (exec.js.local == null) return error.TypeError;
-
-    var ls: js.Local.Scope = undefined;
-    exec.js.localScope(&ls);
-    defer ls.deinit();
-    const local = &ls;
+    const local = exec.js.local orelse return error.TypeError;
 
     var buf = std.Io.Writer.Allocating.init(arena);
     const controller = self._controller;
