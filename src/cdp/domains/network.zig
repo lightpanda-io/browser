@@ -344,17 +344,8 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
 
     const transfer = msg.transfer;
     const req = &transfer.req;
-    const frame_id = req.frame_id;
-    // Worker requests use their WorkerGlobalScope id rather than a document
-    // frame id. They still belong to this page session and must be visible to
-    // Network clients; otherwise responseReceived/loadingFinished are emitted
-    // without the corresponding requestWillBeSent event and CDP clients drop
-    // the whole request. A worker has no document URL, so use its request URL
-    // when the id does not resolve to a document frame.
-    const document_url = if (bc.session.findFrameByFrameId(frame_id)) |frame|
-        frame.url
-    else
-        req.url;
+    const frame_id = req.document_frame_id orelse req.frame_id;
+    const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
     // Modify request with extra CDP headers. Use set (replace by name) so a
     // caller-supplied header overrides a built-in default of the same name
@@ -369,7 +360,7 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
         .type = req.resource_type.string(),
-        .documentURL = document_url,
+        .documentURL = frame.url,
         .request = RequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
@@ -389,7 +380,7 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .frameId = &id.toFrameId(req.frame_id),
+        .frameId = &id.toFrameId(req.document_frame_id orelse req.frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
         .timestamp = timestamp(.monotonic),
@@ -462,12 +453,13 @@ pub const RequestWriter = struct {
 
         {
             try jws.objectField("initialPriority");
-            try jws.write("High");
+            try jws.write(initialPriority(request.resource_type));
         }
 
         {
+            // TODO implement proper referrerPolicy
             try jws.objectField("referrerPolicy");
-            try jws.write("strict-origin-when-cross-origin");
+            try jws.write("unsafe-url");
         }
 
         {
@@ -541,13 +533,15 @@ const ResponseWriter = struct {
 
         {
             try jws.objectField("connectionReused");
-            try jws.write(false);
+            try jws.write(transfer._conn_reused);
             try jws.objectField("connectionId");
-            try jws.write(0);
+            try jws.write(transfer._conn_id);
+            // Bytes received so far, which is zero for a streaming response:
+            // its headers are reported before any of the body is read.
             try jws.objectField("encodedDataLength");
-            try jws.write(transfer._cdp_content_length);
+            try jws.write(transfer._content_length);
             try jws.objectField("securityState");
-            try jws.write("unknown");
+            try jws.write(securityState(transfer.req.url));
         }
 
         {
@@ -567,12 +561,14 @@ const ResponseWriter = struct {
                 .sendStart = -1,
                 .sslEnd = -1,
                 .sslStart = -1,
+                // -1 is Chrome's "no service worker"; the push pair is 0 when
+                // nothing was pushed, not -1.
                 .workerStart = -1,
                 .workerReady = -1,
                 .workerFetchStart = -1,
                 .workerRespondWithSettled = -1,
-                .pushStart = -1,
-                .pushEnd = -1,
+                .pushStart = 0,
+                .pushEnd = 0,
             });
         }
 
@@ -605,6 +601,23 @@ const ResponseWriter = struct {
         try jws.endObject();
     }
 };
+
+fn initialPriority(resource_type: HttpClient.Request.ResourceType) []const u8 {
+    return switch (resource_type) {
+        .document, .stylesheet => "VeryHigh",
+        .script, .xhr, .fetch, .eventsource => "High",
+    };
+}
+
+fn securityState(url: [:0]const u8) []const u8 {
+    if (URL.isSecure(url)) {
+        return "secure";
+    }
+    if (std.mem.startsWith(u8, url, "http:") or std.mem.startsWith(u8, url, "ws:")) {
+        return "insecure";
+    }
+    return "unknown";
+}
 
 fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedResponseKey {
     const key = std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
@@ -1077,40 +1090,46 @@ test "cdp.Network: worker requests emit network events" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 
     const fixture_root = "http://127.0.0.1:9582/src/browser/tests/cdp/";
+    const page_url = fixture_root ++ "worker_network.html";
     const worker_url = fixture_root ++ "worker_network.js";
     const api_url = "http://127.0.0.1:9582/echo_method";
     const page = try bc.session.createPage();
-    try page.navigate(fixture_root ++ "worker_network.html", .{});
+    try page.navigate(page_url, .{});
     try testing.waitForPage(bc);
 
+    // Both the worker's script fetch and the fetch the worker itself issues are
+    // attributed to the document that created the worker, not to the worker's
+    // own frame id, which no client can resolve.
     try ctx.expectSentEvent("Network.requestWillBeSent", .{
-        .documentURL = worker_url,
+        .documentURL = page_url,
         .type = "Script",
         .request = .{
             .url = worker_url,
             .initialPriority = "High",
-            .referrerPolicy = "strict-origin-when-cross-origin",
+            .referrerPolicy = "unsafe-url",
         },
     }, .{ .session_id = "SID-NW" });
     try ctx.expectSentEvent("Network.responseReceived", .{
         .type = "Script",
         .response = .{
             .url = worker_url,
-            .connectionReused = false,
-            .connectionId = 0,
-            .securityState = "unknown",
+            .securityState = "insecure",
+            // The document was fetched from this origin a moment ago, so the
+            // worker's script comes off the same socket. The id itself is a
+            // process-wide libcurl counter, so it isn't assertable here.
+            .connectionReused = true,
             .timing = .{
                 .workerStart = -1,
                 .workerReady = -1,
                 .workerFetchStart = -1,
                 .workerRespondWithSettled = -1,
-                .pushStart = -1,
-                .pushEnd = -1,
+                .pushStart = 0,
+                .pushEnd = 0,
             },
         },
     }, .{ .session_id = "SID-NW" });
     try ctx.expectSentEvent("Network.requestWillBeSent", .{
-        .documentURL = api_url,
+        .documentURL = page_url,
         .type = "Fetch",
         .request = .{ .url = api_url },
     }, .{ .session_id = "SID-NW" });

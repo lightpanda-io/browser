@@ -1024,7 +1024,9 @@ pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
-    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+    var r = req;
+    r.document_frame_id = self._frame_id;
+    return self._session.browser.http_client.newRequest(r, &self._http_owner);
 }
 
 // Synchronously abort every transfer and WebSocket owned by this frame
