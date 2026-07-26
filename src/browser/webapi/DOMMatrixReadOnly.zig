@@ -44,10 +44,22 @@ _arena: Allocator,
 //   out[row] = sum_col _m[col*4 + row] * in[col]
 _m: [16]f64,
 _is_2d: bool,
+_attachment: ?Attachment = null,
 
 pub const Type = union(enum) {
     generic,
     mutable: *DOMMatrix,
+};
+
+pub const State = struct {
+    matrix: [16]f64,
+    is_2d: bool,
+};
+
+pub const Attachment = struct {
+    owner: *anyopaque,
+    read_only: bool,
+    mutate: *const fn (*anyopaque, *DOMMatrixReadOnly, State) anyerror!void,
 };
 
 pub fn init(init_: ?js.Value, exec: *const js.Execution) !*DOMMatrixReadOnly {
@@ -80,6 +92,40 @@ pub fn createBare(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrixReadOnly {
         ._is_2d = is_2d,
     };
     return self;
+}
+
+pub fn getState(self: *const DOMMatrixReadOnly) State {
+    return .{
+        .matrix = self._m,
+        .is_2d = self._is_2d,
+    };
+}
+
+pub fn applyState(self: *DOMMatrixReadOnly, state: State) !void {
+    if (self._attachment) |attachment| {
+        if (attachment.read_only) return error.NoModificationAllowed;
+        return attachment.mutate(attachment.owner, self, state);
+    }
+    self.applyStateRaw(state);
+}
+
+pub fn applyStateRaw(self: *DOMMatrixReadOnly, state: State) void {
+    self._m = state.matrix;
+    self._is_2d = state.is_2d;
+}
+
+pub fn attach(self: *DOMMatrixReadOnly, attachment: Attachment) void {
+    self._attachment = attachment;
+}
+
+pub fn detach(self: *DOMMatrixReadOnly, owner: *anyopaque) void {
+    const attachment = self._attachment orelse return;
+    if (attachment.owner == owner) self._attachment = null;
+}
+
+pub fn isAttachedTo(self: *const DOMMatrixReadOnly, owner: *anyopaque) bool {
+    const attachment = self._attachment orelse return false;
+    return attachment.owner == owner;
 }
 
 pub const DOMMatrixInit = struct {
@@ -432,7 +478,6 @@ pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSynt
     }
 
     if (Eql(u8, name, "matrix3d")) {
-        if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 16, 16);
         try requireUnitless(units[0..count]);
         return makeParsedTransform(.matrix3d, values, values, count, false);

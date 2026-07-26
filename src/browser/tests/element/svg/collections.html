@@ -7,6 +7,8 @@
   <polyline id=many></polyline>
   <g id=group transform="translate(10 20) rotate(45 1 2)"
      requiredExtensions="urn:one urn:two" systemLanguage="en, fr"></g>
+  <g id=matrixGroup transform="translate(1 2)"></g>
+  <g id=replaceGroup transform="scale(1) translate(0 0)"></g>
 </svg>
 
 <script id=pointLists>
@@ -144,6 +146,79 @@
   testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, consolidated.type);
   testing.expectEqual(1, base.length);
   testing.expectEqual(true, group.getAttribute('transform').startsWith('matrix('));
+}
+</script>
+
+<script id=transformMatrixReflection>
+{
+  const root = $('#root');
+  const group = $('#matrixGroup');
+  const base = group.transform.baseVal;
+  const anim = group.transform.animVal;
+  const transform = base.getItem(0);
+  const matrix = transform.matrix;
+
+  testing.expectEqual(true, matrix === transform.matrix);
+  matrix.e = 5;
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, transform.type);
+  testing.expectEqual(0, transform.angle);
+  testing.expectEqual(true, group.getAttribute('transform').startsWith('matrix('));
+  testing.expectEqual(5, anim.getItem(0).matrix.e);
+
+  testing.expectEqual(matrix, matrix.translateSelf(2, 3));
+  testing.expectEqual(7, matrix.e);
+  testing.expectEqual(5, matrix.f);
+  testing.expectEqual(7, anim.getItem(0).matrix.e);
+  testing.expectEqual(5, anim.getItem(0).matrix.f);
+
+  testing.expectEqual(matrix, matrix.setMatrixValue('matrix(1, 0, 0, 1, 9, 10)'));
+  testing.expectEqual(9, matrix.e);
+  testing.expectEqual(10, matrix.f);
+  testing.expectEqual(9, anim.getItem(0).matrix.e);
+  testing.expectEqual(10, anim.getItem(0).matrix.f);
+
+  const animMatrix = anim.getItem(0).matrix;
+  const beforeReadOnlyWrites = group.getAttribute('transform');
+  testing.expectError('NoModificationAllowedError', () => { animMatrix.e = 99; });
+  testing.expectError('NoModificationAllowedError', () => animMatrix.translateSelf(1, 1));
+  testing.expectError('NoModificationAllowedError', () => animMatrix.setMatrixValue('scale(2)'));
+  testing.expectEqual(beforeReadOnlyWrites, group.getAttribute('transform'));
+  testing.expectEqual(9, animMatrix.e);
+
+  group.setAttribute('transform', 'scale(4)');
+  testing.expectEqual(1, base.length);
+  matrix.e = 11;
+  testing.expectEqual('scale(4)', group.getAttribute('transform'));
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, transform.type);
+  testing.expectEqual(11, matrix.e);
+
+  const detached = root.createSVGTransform();
+  const detachedMatrix = detached.matrix;
+  detachedMatrix.e = 13;
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, detached.type);
+  testing.expectEqual(true, detachedMatrix === detached.matrix);
+  detachedMatrix.m13 = 2;
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_UNKNOWN, detached.type);
+  testing.expectEqual(false, detachedMatrix.is2D);
+
+  testing.expectEqual(detached, base.initialize(detached));
+  testing.expectEqual(true, group.getAttribute('transform').startsWith('matrix3d('));
+  testing.expectEqual(2, base.getItem(0).matrix.m13);
+  testing.expectEqual(2, anim.getItem(0).matrix.m13);
+  testing.expectError('NoModificationAllowedError', () => { anim.getItem(0).matrix.m13 = 3; });
+
+  const consolidated = base.consolidate();
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_UNKNOWN, consolidated.type);
+  testing.expectEqual(false, consolidated.matrix.is2D);
+  testing.expectEqual(true, group.getAttribute('transform').startsWith('matrix3d('));
+
+  const replaceGroup = $('#replaceGroup');
+  const replacement = root.createSVGTransform();
+  replacement.setScale(10, 1);
+  testing.expectEqual(replacement, replaceGroup.transform.baseVal.replaceItem(replacement, 0));
+  testing.expectEqual(replacement, replaceGroup.transform.baseVal.getItem(0));
+  testing.expectEqual(10, replacement.matrix.a);
+  testing.expectEqual(true, replaceGroup.getAttribute('transform').startsWith('scale(10 1)'));
 }
 </script>
 

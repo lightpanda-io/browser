@@ -77,19 +77,24 @@ pub fn releaseRef(self: *Transform, page: *Page) void {
 pub fn detached(frame: *Frame) !*Transform {
     const matrix = try DOMMatrix.create(RO.identity(), true, frame._page);
     errdefer matrix._proto.deinit(frame._page);
-    return frame._factory.create(Transform{ ._matrix = matrix });
+    const self = try frame._factory.create(Transform{ ._matrix = matrix });
+    self.attachMatrix(false);
+    return self;
 }
 
 pub fn fromMatrix(init: ?DOMMatrix2DInit, frame: *Frame) !*Transform {
     const parsed = try fixup2D(init orelse .{});
     const matrix = try DOMMatrix.create(parsed.m, true, frame._page);
     errdefer matrix._proto.deinit(frame._page);
-    return frame._factory.create(Transform{ ._matrix = matrix });
+    const self = try frame._factory.create(Transform{ ._matrix = matrix });
+    self.attachMatrix(false);
+    return self;
 }
 
 pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
     const typ: u16 = switch (parsed.kind) {
         .matrix => 1,
+        .matrix3d => 0,
         .translate => 2,
         .scale => 3,
         .rotate => 4,
@@ -99,26 +104,30 @@ pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
     };
     const matrix = try DOMMatrix.create(parsed.matrix, parsed.is_2d, frame._page);
     errdefer matrix._proto.deinit(frame._page);
-    return frame._factory.create(Transform{
+    const self = try frame._factory.create(Transform{
         ._type = typ,
         ._angle = if (typ >= 4) parsed.values[0] else 0,
         ._cx = if (typ == 4 and parsed.count == 3) parsed.values[1] else 0,
         ._cy = if (typ == 4 and parsed.count == 3) parsed.values[2] else 0,
         ._matrix = matrix,
     });
+    self.attachMatrix(false);
+    return self;
 }
 
 pub fn clone(self: *const Transform, frame: *Frame) !*Transform {
     const current = self.getState();
     const matrix = try DOMMatrix.create(current.matrix, current.is_2d, frame._page);
     errdefer matrix._proto.deinit(frame._page);
-    return frame._factory.create(Transform{
+    const cloned = try frame._factory.create(Transform{
         ._type = current.typ,
         ._angle = current.angle,
         ._cx = current.cx,
         ._cy = current.cy,
         ._matrix = matrix,
     });
+    cloned.attachMatrix(false);
+    return cloned;
 }
 
 pub fn getType(self: *const Transform) u16 {
@@ -183,8 +192,10 @@ pub fn applyStateRaw(self: *Transform, state: State) void {
     self._angle = state.angle;
     self._cx = state.cx;
     self._cy = state.cy;
-    self._matrix._proto._m = state.matrix;
-    self._matrix._proto._is_2d = state.is_2d;
+    self._matrix._proto.applyStateRaw(.{
+        .matrix = state.matrix,
+        .is_2d = state.is_2d,
+    });
 }
 
 fn applyState(self: *Transform, state: State) !void {
@@ -198,11 +209,15 @@ fn applyState(self: *Transform, state: State) !void {
 
 pub fn attach(self: *Transform, attachment: Attachment) void {
     self._attachment = attachment;
+    self.attachMatrix(attachment.read_only);
 }
 
 pub fn detach(self: *Transform, owner: *anyopaque) void {
     const attachment = self._attachment orelse return;
-    if (attachment.owner == owner) self._attachment = null;
+    if (attachment.owner == owner) {
+        self._attachment = null;
+        self.attachMatrix(false);
+    }
 }
 
 pub fn isAttached(self: *const Transform) bool {
@@ -216,6 +231,12 @@ pub fn isAttachedTo(self: *const Transform, owner: *anyopaque) bool {
 
 pub fn writeState(state: State, writer: anytype) !void {
     switch (state.typ) {
+        0 => try writer.print("matrix3d({d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d})", .{
+            state.matrix[0],  state.matrix[1],  state.matrix[2],  state.matrix[3],
+            state.matrix[4],  state.matrix[5],  state.matrix[6],  state.matrix[7],
+            state.matrix[8],  state.matrix[9],  state.matrix[10], state.matrix[11],
+            state.matrix[12], state.matrix[13], state.matrix[14], state.matrix[15],
+        }),
         1 => try writer.print("matrix({d} {d} {d} {d} {d} {d})", .{
             state.matrix[0], state.matrix[1], state.matrix[4], state.matrix[5], state.matrix[12], state.matrix[13],
         }),
@@ -229,6 +250,26 @@ pub fn writeState(state: State, writer: anytype) !void {
         6 => try writer.print("skewY({d})", .{state.angle}),
         else => return error.SyntaxError,
     }
+}
+
+fn attachMatrix(self: *Transform, read_only: bool) void {
+    self._matrix._proto.attach(.{
+        .owner = self,
+        .read_only = read_only,
+        .mutate = Transform.mutateMatrix,
+    });
+}
+
+fn mutateMatrix(context: *anyopaque, _: *RO, state: RO.State) anyerror!void {
+    const self: *Transform = @ptrCast(@alignCast(context));
+    try self.applyState(.{
+        .typ = if (state.is_2d) 1 else 0,
+        .angle = 0,
+        .cx = 0,
+        .cy = 0,
+        .matrix = state.matrix,
+        .is_2d = state.is_2d,
+    });
 }
 
 fn fixup2D(init: DOMMatrix2DInit) !RO.Parsed {

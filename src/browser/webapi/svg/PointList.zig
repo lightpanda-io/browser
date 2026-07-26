@@ -72,8 +72,9 @@ pub fn getNumberOfItems(self: *PointList, frame: *Frame) !u32 {
 pub fn clear(self: *PointList, frame: *Frame) !void {
     try self.requireMutable();
     try self.sync(frame);
-    try self.retireAll(frame);
+    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
     try self.setAttribute(&.{}, frame);
+    self.retireAllAssumeCapacity();
 }
 
 pub fn initialize(self: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
@@ -83,9 +84,10 @@ pub fn initialize(self: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
     const prepared = try self.prepareItem(item, frame);
     errdefer prepared._proto.releaseRef(frame._page);
 
-    try self.retireAll(frame);
     try self._items.ensureTotalCapacity(frame.arena, 1);
+    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
     try self.setAttribute(&.{prepared}, frame);
+    self.retireAllAssumeCapacity();
     self._items.appendAssumeCapacity(prepared);
     self.attach(prepared);
     return prepared;
@@ -218,17 +220,20 @@ fn sync(self: *PointList, frame: *Frame) !void {
         return;
     }
 
-    self._synced = false;
     var parsed = parse(raw, frame) catch |err| switch (err) {
         error.SyntaxError => std.ArrayList(*DOMPoint).empty,
         else => return err,
     };
     errdefer for (parsed.items) |point| point._proto.releaseRef(frame._page);
 
-    self._snapshot.clearRetainingCapacity();
-    try self._snapshot.appendSlice(frame.arena, raw);
-    try self.retireAll(frame);
+    try self._snapshot.ensureTotalCapacity(frame.arena, raw.len);
+    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
     try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
+
+    self._synced = false;
+    self._snapshot.clearRetainingCapacity();
+    self._snapshot.appendSliceAssumeCapacity(raw);
+    self.retireAllAssumeCapacity();
     for (parsed.items) |point| {
         self._items.appendAssumeCapacity(point);
         self.attach(point);
@@ -264,9 +269,7 @@ fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*DOMPoint) {
     return parsed;
 }
 
-fn retireAll(self: *PointList, frame: *Frame) !void {
-    self._synced = false;
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
+fn retireAllAssumeCapacity(self: *PointList) void {
     for (self._items.items) |point| {
         point._proto.detach(self);
         self._retired.appendAssumeCapacity(point);
@@ -303,10 +306,11 @@ fn setAttributeWithOverride(
 }
 
 fn commitAttribute(self: *PointList, serialized: []const u8, frame: *Frame) !void {
-    self._synced = false;
+    try self._snapshot.ensureTotalCapacity(frame.arena, serialized.len);
     try self._element.setAttributeSafe(comptime .wrap("points"), .wrap(serialized), frame);
+    self._synced = false;
     self._snapshot.clearRetainingCapacity();
-    try self._snapshot.appendSlice(frame.arena, serialized);
+    self._snapshot.appendSliceAssumeCapacity(serialized);
     self._synced = true;
 }
 
