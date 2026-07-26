@@ -305,19 +305,22 @@ pub fn NodeLive(comptime mode: Mode) type {
                     return el.is(Element.Html.TableCell) != null;
                 },
                 .select_options, .selected_options => {
-                    // The select's list of options is its option children plus
-                    // the option children of its optgroup children — NOT every
-                    // option descendant.
-                    // https://html.spec.whatwg.org/multipage/form-elements.html#the-select-element
-                    const el = node.is(Element) orelse return false;
-                    const Option = Element.Html.Option;
-                    const opt = el.is(Option) orelse return false;
+                    const opt = node.is(Element.Html.Option) orelse return false;
+
+                    // we have an option, but it's only a match IF
+                    // 1 - this is a direct child of the root (i.e. the <select>)
+                    // OR
+                    // 2 - this is a direct child of an <optgroup> which, itself
+                    //     is a direct child of the root (i.e. the <select>)
 
                     const parent = node.parentNode() orelse return false;
-                    if (parent != self._tw._root) {
-                        const group = parent.is(Element) orelse return false;
-                        if (group.getTag() != .optgroup) return false;
-                        if (parent.parentNode() != self._tw._root) return false;
+                    if (parent == self._tw._root) {
+                        // case 1: it _is_ a direct child of the root
+                    } else {
+                        if (parent.is(Element.Html.OptGroup) == null or parent.parentNode() != self._tw._root) {
+                            return false;
+                        }
+                        // the parent is an optgroup and its parent is the root
                     }
 
                     return if (comptime mode == .selected_options) opt.getSelected() else true;

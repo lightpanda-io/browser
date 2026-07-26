@@ -52,36 +52,38 @@ pub fn asConstNode(self: *const Select) *const Node {
 // the option children of its optgroup children, per HTML
 // §the-select-element. Options nested any deeper are not in the list.
 const OptionIterator = struct {
-    // Cursor over the select's children.
-    _child: ?*Node,
-    // Cursor over the current optgroup's children, while inside one.
-    _in_group: ?*Node = null,
+    _node: ?*Node,
+    _in_group: bool = false,
 
     fn init(select: *const Select) OptionIterator {
-        return .{ ._child = select.asConstNode().firstChild() };
+        return .{ ._node = select.asConstNode().firstChild() };
     }
 
     fn next(self: *OptionIterator) ?*Option {
-        while (true) {
-            if (self._in_group) |node| {
-                self._in_group = node.nextSibling();
-                if (node.is(Option)) |option| {
-                    return option;
+        while (self._node) |node| {
+            if (self._in_group == false and node.is(Element.Html.OptGroup) != null) {
+                if (node.firstChild()) |first_child| {
+                    self._in_group = true;
+                    self._node = first_child;
+                    continue;
                 }
-                continue;
             }
 
-            const node = self._child orelse return null;
-            self._child = node.nextSibling();
+            self._node = node.nextSibling() orelse blk: {
+                if (self._in_group == false) {
+                    break :blk null;
+                }
+                // Exhausted the optgroup, resume after it.
+                self._in_group = false;
+                const group = node.parentNode() orelse break :blk null;
+                break :blk group.nextSibling();
+            };
 
             if (node.is(Option)) |option| {
                 return option;
             }
-            const element = node.is(Element) orelse continue;
-            if (element.getTag() == .optgroup) {
-                self._in_group = node.firstChild();
-            }
         }
+        return null;
     }
 };
 
@@ -98,8 +100,12 @@ pub fn effectiveOption(self: *const Select) ?*Option {
         // Element.isDisabled, not Option.getDisabled: an option is also
         // disabled when its parent is an <optgroup disabled>
         // (HTML "concept-option-disabled").
-        if (option.asElement().isDisabled()) continue;
-        if (option.getSelected()) return option;
+        if (option.asElement().isDisabled()) {
+            continue;
+        }
+        if (option.getSelected()) {
+            return option;
+        }
         if (first_option == null) first_option = option;
     }
     return first_option;

@@ -168,3 +168,41 @@
     testing.expectEqual('direct', select.options[0].value)
   }
 </script>
+
+<script id="options_stop_at_one_optgroup">
+  {
+    // The parser never nests optgroups, so build the tree by hand: an optgroup
+    // inside an optgroup is not walked into, its options are out of the list.
+    const select = document.createElement('select')
+    const outer = document.createElement('optgroup')
+    const inner = document.createElement('optgroup')
+
+    const option = (value) => {
+      const o = document.createElement('option')
+      o.value = value
+      return o
+    }
+
+    inner.appendChild(option('buried'))
+    outer.appendChild(option('grouped'))
+    outer.appendChild(inner)
+    outer.appendChild(option('after'))
+    select.appendChild(option('before'))
+    select.appendChild(outer)
+    select.appendChild(option('last'))
+    document.body.appendChild(select)
+
+    testing.expectEqual(4, select.length)
+    testing.expectEqual(4, select.options.length)
+    testing.expectEqual('before', select.options[0].value)
+    testing.expectEqual('grouped', select.options[1].value)
+    testing.expectEqual('after', select.options[2].value)
+    testing.expectEqual('last', select.options[3].value)
+
+    // The iterator resumes after the optgroup, so indexes stay in tree order.
+    select.selectedIndex = 3
+    testing.expectEqual('last', select.value)
+    select.value = 'after'
+    testing.expectEqual(2, select.selectedIndex)
+  }
+</script>
