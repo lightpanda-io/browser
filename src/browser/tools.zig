@@ -22,6 +22,7 @@ const zenai = @import("zenai");
 
 const log = lp.log;
 const tavily = zenai.search.tavily;
+const brave = zenai.search.brave;
 
 const DOMNode = @import("webapi/Node.zig");
 const CDPNode = @import("../cdp/Node.zig");
@@ -335,7 +336,7 @@ pub const Tool = enum {
                 ),
             },
             .search => .{
-                .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
+                .description = "Run a web search and return results as markdown. When BRAVE_API_KEY or TAVILY_API_KEY is set, queries that search API (Brave preferred) and returns a numbered list of {title, url, snippet}. Otherwise (or on API failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
                 .summary = "Web search, results as markdown",
                 .input_schema = minify(
                     \\{
@@ -814,7 +815,7 @@ fn dispatch(
 ) ToolError!ToolResult {
     return switch (tool) {
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
-        .search => .{ .text = try execSearch(arena, session, registry, substituted) },
+        .search => execSearch(arena, session, registry, substituted),
         .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
         .html => .{ .text = try execHtml(arena, session, registry, substituted) },
         .links => .{ .text = try execLinks(arena, session, registry, substituted) },
@@ -946,20 +947,38 @@ pub const SearchParams = struct {
     timeout: ?u32 = null,
 };
 
-fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+/// Search backend for `execSearch`. `.auto` tries Brave then Tavily (each
+/// only when its API key is set), then the DuckDuckGo scrape; an explicit
+/// engine is used alone. Only the agent REPL's `/searchEngine` mutates this.
+pub const SearchEngine = enum { auto, tavily, brave, duckduckgo };
+pub var search_engine: SearchEngine = .auto;
+
+fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(SearchParams, arena, arguments);
     if (args.query.len == 0) return ToolError.InvalidParams;
 
-    // Tavily path: only when TAVILY_API_KEY is set in the process env. On any
-    // failure (network, non-2xx, parse) fall through to the DuckDuckGo scrape
-    // so a single Tavily outage doesn't kill a whole benchmark run.
-    if (std.c.getenv("TAVILY_API_KEY")) |api_key_z| {
-        const api_key = std.mem.span(api_key_z);
-        if (tavilySearch(arena, api_key, args.query)) |markdown_| {
-            return markdown_;
-        } else |err| {
-            log.warn(.browser, "tavily fallback", .{ .err = err });
-        }
+    switch (search_engine) {
+        // Any failure (network, non-2xx, parse) falls through to the next
+        // engine so a single outage doesn't kill a whole benchmark run.
+        .auto => {
+            if (std.c.getenv("BRAVE_API_KEY")) |api_key_z| {
+                if (braveSearch(arena, std.mem.span(api_key_z), args.query)) |markdown_| {
+                    return .{ .text = markdown_ };
+                } else |err| {
+                    log.warn(.browser, "brave fallback", .{ .err = err });
+                }
+            }
+            if (std.c.getenv("TAVILY_API_KEY")) |api_key_z| {
+                if (tavilySearch(arena, std.mem.span(api_key_z), args.query)) |markdown_| {
+                    return .{ .text = markdown_ };
+                } else |err| {
+                    log.warn(.browser, "tavily fallback", .{ .err = err });
+                }
+            }
+        },
+        .tavily => return searchExplicit(arena, "tavily", "TAVILY_API_KEY", tavilySearch, args.query),
+        .brave => return searchExplicit(arena, "brave", "BRAVE_API_KEY", braveSearch, args.query),
+        .duckduckgo => {},
     }
 
     const encoded = lp.URL.percentEncodeSegment(arena, args.query, .component) catch return ToolError.OutOfMemory;
@@ -971,7 +990,28 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
     ) catch return ToolError.OutOfMemory;
     _ = try performGoto(session, registry, ddg_url, args.timeout);
     const ddg_frame = try requireFrame(session);
-    return renderFrameMarkdown(arena, ddg_frame);
+    return .{ .text = try renderFrameMarkdown(arena, ddg_frame) };
+}
+
+/// Search with an explicitly selected engine: a missing key or a failed call
+/// comes back as an error result — no DDG fallback.
+fn searchExplicit(
+    arena: std.mem.Allocator,
+    comptime label: []const u8,
+    comptime env_var: [:0]const u8,
+    searchFn: anytype,
+    query: []const u8,
+) ToolError!ToolResult {
+    const api_key_z = std.c.getenv(env_var) orelse return .{
+        .text = "web search engine is set to " ++ label ++ " but " ++ env_var ++ " is not set in the environment",
+        .is_error = true,
+    };
+    const markdown_ = searchFn(arena, std.mem.span(api_key_z), query) catch |err| {
+        const msg = std.fmt.allocPrint(arena, label ++ " search failed: {s}", .{@errorName(err)}) catch
+            return ToolError.OutOfMemory;
+        return .{ .text = msg, .is_error = true };
+    };
+    return .{ .text = markdown_ };
 }
 
 /// Thin wrapper over `zenai.search.tavily.Client` that handles client
@@ -982,38 +1022,95 @@ fn tavilySearch(
     api_key: []const u8,
     query: []const u8,
 ) ![]const u8 {
-    var client: tavily.Client = .init(arena, lp.io, api_key, .{});
+    var client: tavily.Client = .init(lp.io, arena, api_key, .{});
     defer client.deinit();
 
     var response = client.search(query, .{ .max_results = 10 }) catch |err| {
         if (client.last_error_status) |status| {
             log.warn(.browser, "tavily non-2xx", .{
                 .status = status,
-                .body = client.last_error_body orelse "",
+                .body = client.last_error_body,
             });
         }
         return err;
     };
     defer response.deinit();
 
-    return formatTavilyMarkdown(arena, response.value);
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try formatTavilyMarkdown(&aw.writer, response.value);
+    return aw.written();
 }
 
-fn formatTavilyMarkdown(arena: std.mem.Allocator, resp: tavily.types.SearchResponse) ![]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    const w = &aw.writer;
-    if (resp.answer) |a| {
-        if (a.len > 0) {
-            try w.print("**Answer:** {s}\n\n", .{a});
-        }
+fn formatTavilyMarkdown(w: *std.Io.Writer, resp: tavily.types.SearchResponse) !void {
+    const answer = resp.answer orelse "";
+    if (answer.len == 0 and resp.results.len == 0) {
+        return w.writeAll("No results.");
+    }
+    if (answer.len > 0) {
+        try w.print("**Answer:** {s}\n\n", .{answer});
     }
     for (resp.results, 0..) |r, i| {
-        try w.print("{d}. **{s}** — {s}\n   {s}\n\n", .{ i + 1, r.title, r.url, r.content });
+        try writeResultItem(w, i, r.title, r.url, r.content);
     }
-    if (resp.results.len == 0 and (resp.answer == null or resp.answer.?.len == 0)) {
-        try w.writeAll("No results.");
-    }
+}
+
+/// Thin wrapper over `zenai.search.brave.Client` that handles client
+/// lifetime and renders the structured response as markdown for the agent.
+/// `arena` owns the returned slice. `api_key` is the value of BRAVE_API_KEY.
+fn braveSearch(
+    arena: std.mem.Allocator,
+    api_key: []const u8,
+    query: []const u8,
+) ![]const u8 {
+    var client: brave.Client = .init(lp.io, arena, api_key, .{});
+    defer client.deinit();
+
+    // text_decorations=false: no <strong> markup in model-read snippets.
+    var response = client.search(query, .{ .count = 10, .text_decorations = false }) catch |err| {
+        if (client.last_error_status) |status| {
+            log.warn(.browser, "brave non-2xx", .{
+                .status = status,
+                .body = client.last_error_body,
+            });
+        }
+        return err;
+    };
+    defer response.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try formatBraveMarkdown(&aw.writer, response.value);
     return aw.written();
+}
+
+fn formatBraveMarkdown(w: *std.Io.Writer, resp: brave.types.SearchResponse) !void {
+    const results: []const brave.types.Result = if (resp.web) |web| web.results else &.{};
+    if (results.len == 0) {
+        return w.writeAll("No results.");
+    }
+    for (results, 0..) |r, i| {
+        try writeResultItem(w, i, r.title, r.url, r.description);
+    }
+}
+
+fn writeResultItem(w: *std.Io.Writer, i: usize, title: []const u8, url: []const u8, snippet: []const u8) !void {
+    try w.print("{d}. **", .{i + 1});
+    try writeSingleLine(w, title);
+    try w.print("** — {s}\n   ", .{url});
+    try writeSingleLine(w, snippet);
+    try w.writeAll("\n\n");
+}
+
+/// Newlines in API-provided text would break the numbered-list markdown.
+fn writeSingleLine(w: *std.Io.Writer, text: []const u8) !void {
+    var it = std.mem.tokenizeAny(u8, text, "\r\n");
+    var first = true;
+    while (it.next()) |chunk| {
+        if (!first) {
+            try w.writeByte(' ');
+        }
+        first = false;
+        try w.writeAll(chunk);
+    }
 }
 
 fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]const u8 {
@@ -2220,7 +2317,9 @@ test "formatTavilyMarkdown renders answer and results" {
         },
     };
 
-    const md = try formatTavilyMarkdown(aa, resp);
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatTavilyMarkdown(&aw.writer, resp);
+    const md = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, md, "**Answer:** Paris") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
@@ -2233,9 +2332,64 @@ test "formatTavilyMarkdown handles empty results" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const resp: tavily.types.SearchResponse = .{};
-    const md = try formatTavilyMarkdown(aa, resp);
-    try std.testing.expectEqualStrings("No results.", md);
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatTavilyMarkdown(&aw.writer, .{});
+    try std.testing.expectEqualStrings("No results.", aw.written());
+}
+
+test "formatBraveMarkdown renders web results" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const resp: brave.types.SearchResponse = .{
+        .web = .{
+            .results = &.{
+                .{ .title = "Paris - Wikipedia", .url = "https://en.wikipedia.org/wiki/Paris", .description = "Paris is the capital of France." },
+                .{ .title = "France", .url = "https://example.org/fr", .description = "Country in Western Europe." },
+            },
+        },
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatBraveMarkdown(&aw.writer, resp);
+    const md = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "Paris is the capital of France.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
+}
+
+test "formatBraveMarkdown handles empty results" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var no_web: std.Io.Writer.Allocating = .init(aa);
+    try formatBraveMarkdown(&no_web.writer, .{});
+    try std.testing.expectEqualStrings("No results.", no_web.written());
+
+    var empty_web: std.Io.Writer.Allocating = .init(aa);
+    try formatBraveMarkdown(&empty_web.writer, .{ .web = .{} });
+    try std.testing.expectEqualStrings("No results.", empty_web.written());
+}
+
+test "formatBraveMarkdown flattens newlines in titles and descriptions" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const resp: brave.types.SearchResponse = .{
+        .web = .{
+            .results = &.{
+                .{ .title = "Multi\nline title", .url = "https://example.org", .description = "line one\r\n\r\nline two" },
+            },
+        },
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatBraveMarkdown(&aw.writer, resp);
+    try std.testing.expectEqualStrings("1. **Multi line title** — https://example.org\n   line one line two\n\n", aw.written());
 }
 
 test "isPathSafe: relative paths without traversal are accepted" {
