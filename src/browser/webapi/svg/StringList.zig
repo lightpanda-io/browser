@@ -22,6 +22,8 @@ _delimiter: Delimiter,
 _synced: bool = false,
 _snapshot: std.ArrayList(u8) = .empty,
 _items: std.ArrayList([]const u8) = .empty,
+_scratch_snapshot: std.ArrayList(u8) = .empty,
+_scratch_items: std.ArrayList([]const u8) = .empty,
 
 pub const Kind = enum {
     required_extensions,
@@ -140,7 +142,8 @@ fn validateItem(self: *const StringList, item: []const u8) !void {
 fn sync(self: *StringList, frame: *Frame) !void {
     const raw = self._element.getAttributeSafe(self._attribute_name) orelse "";
     if (self._synced and std.mem.eql(u8, self._snapshot.items, raw)) return;
-    try self.rebuild(raw, frame);
+    try self.prepare(raw, frame);
+    self.publishPrepared();
 }
 
 fn commit(self: *StringList, items: []const []const u8, frame: *Frame) !void {
@@ -153,21 +156,26 @@ fn commit(self: *StringList, items: []const []const u8, frame: *Frame) !void {
     }
 
     const serialized_bytes = serialized.written();
-    try self._element.setAttributeSafe(self._attribute_name, .wrap(serialized_bytes), frame);
-    try self.rebuild(serialized_bytes, frame);
+    try self.prepare(serialized_bytes, frame);
+    try self._element.setAttributeSafe(self._attribute_name, .wrap(self._scratch_snapshot.items), frame);
+    self.publishPrepared();
 }
 
-// `raw` must not alias `_snapshot`; `_items` are slices into `_snapshot`.
-fn rebuild(self: *StringList, raw: []const u8, frame: *Frame) !void {
-    self._synced = false;
-    self._snapshot.clearRetainingCapacity();
-    try self._snapshot.appendSlice(frame.arena, raw);
-    const parsed = parse(self._snapshot.items, self._delimiter, frame.local_arena) catch |err| switch (err) {
+fn prepare(self: *StringList, raw: []const u8, frame: *Frame) !void {
+    self._scratch_snapshot.clearRetainingCapacity();
+    try self._scratch_snapshot.appendSlice(frame.arena, raw);
+    const parsed = parse(self._scratch_snapshot.items, self._delimiter, frame.local_arena) catch |err| switch (err) {
         error.SyntaxError => std.ArrayList([]const u8).empty,
         else => return err,
     };
-    self._items.clearRetainingCapacity();
-    try self._items.appendSlice(frame.arena, parsed.items);
+    self._scratch_items.clearRetainingCapacity();
+    try self._scratch_items.appendSlice(frame.arena, parsed.items);
+}
+
+fn publishPrepared(self: *StringList) void {
+    self._synced = false;
+    std.mem.swap(std.ArrayList(u8), &self._snapshot, &self._scratch_snapshot);
+    std.mem.swap(std.ArrayList([]const u8), &self._items, &self._scratch_items);
     self._synced = true;
 }
 

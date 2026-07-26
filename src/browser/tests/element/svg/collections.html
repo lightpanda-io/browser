@@ -272,5 +272,8 @@
   group.setAttribute('systemLanguage', 'en,,fr');
   testing.expectEqual(0, languages.length);
   testing.expectEqual('en,,fr', group.getAttribute('systemLanguage'));
+  group.setAttribute('systemLanguage', 'it, pt');
+  testing.expectEqual(2, languages.length);
+  testing.expectEqual('pt', languages.getItem(1));
 }
 </script>
