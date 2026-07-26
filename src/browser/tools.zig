@@ -1029,31 +1029,29 @@ fn tavilySearch(
         if (client.last_error_status) |status| {
             log.warn(.browser, "tavily non-2xx", .{
                 .status = status,
-                .body = client.last_error_body orelse "",
+                .body = client.last_error_body,
             });
         }
         return err;
     };
     defer response.deinit();
 
-    return formatTavilyMarkdown(arena, response.value);
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try formatTavilyMarkdown(&aw.writer, response.value);
+    return aw.written();
 }
 
-fn formatTavilyMarkdown(arena: std.mem.Allocator, resp: tavily.types.SearchResponse) ![]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    const w = &aw.writer;
-    if (resp.answer) |a| {
-        if (a.len > 0) {
-            try w.print("**Answer:** {s}\n\n", .{a});
-        }
+fn formatTavilyMarkdown(w: *std.Io.Writer, resp: tavily.types.SearchResponse) !void {
+    const answer = resp.answer orelse "";
+    if (answer.len == 0 and resp.results.len == 0) {
+        return w.writeAll("No results.");
+    }
+    if (answer.len > 0) {
+        try w.print("**Answer:** {s}\n\n", .{answer});
     }
     for (resp.results, 0..) |r, i| {
-        try w.print("{d}. **{s}** — {s}\n   {s}\n\n", .{ i + 1, r.title, r.url, r.content });
+        try writeResultItem(w, i, r.title, r.url, r.content);
     }
-    if (resp.results.len == 0 and (resp.answer == null or resp.answer.?.len == 0)) {
-        try w.writeAll("No results.");
-    }
-    return aw.written();
 }
 
 /// Thin wrapper over `zenai.search.brave.Client` that handles client
@@ -1072,27 +1070,47 @@ fn braveSearch(
         if (client.last_error_status) |status| {
             log.warn(.browser, "brave non-2xx", .{
                 .status = status,
-                .body = client.last_error_body orelse "",
+                .body = client.last_error_body,
             });
         }
         return err;
     };
     defer response.deinit();
 
-    return formatBraveMarkdown(arena, response.value);
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try formatBraveMarkdown(&aw.writer, response.value);
+    return aw.written();
 }
 
-fn formatBraveMarkdown(arena: std.mem.Allocator, resp: brave.types.SearchResponse) ![]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    const w = &aw.writer;
+fn formatBraveMarkdown(w: *std.Io.Writer, resp: brave.types.SearchResponse) !void {
     const results: []const brave.types.Result = if (resp.web) |web| web.results else &.{};
-    for (results, 0..) |r, i| {
-        try w.print("{d}. **{s}** — {s}\n   {s}\n\n", .{ i + 1, r.title, r.url, r.description });
-    }
     if (results.len == 0) {
-        try w.writeAll("No results.");
+        return w.writeAll("No results.");
     }
-    return aw.written();
+    for (results, 0..) |r, i| {
+        try writeResultItem(w, i, r.title, r.url, r.description);
+    }
+}
+
+fn writeResultItem(w: *std.Io.Writer, i: usize, title: []const u8, url: []const u8, snippet: []const u8) !void {
+    try w.print("{d}. **", .{i + 1});
+    try writeSingleLine(w, title);
+    try w.print("** — {s}\n   ", .{url});
+    try writeSingleLine(w, snippet);
+    try w.writeAll("\n\n");
+}
+
+/// Newlines in API-provided text would break the numbered-list markdown.
+fn writeSingleLine(w: *std.Io.Writer, text: []const u8) !void {
+    var it = std.mem.tokenizeAny(u8, text, "\r\n");
+    var first = true;
+    while (it.next()) |chunk| {
+        if (!first) {
+            try w.writeByte(' ');
+        }
+        first = false;
+        try w.writeAll(chunk);
+    }
 }
 
 fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]const u8 {
@@ -2299,7 +2317,9 @@ test "formatTavilyMarkdown renders answer and results" {
         },
     };
 
-    const md = try formatTavilyMarkdown(aa, resp);
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatTavilyMarkdown(&aw.writer, resp);
+    const md = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, md, "**Answer:** Paris") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
@@ -2312,9 +2332,9 @@ test "formatTavilyMarkdown handles empty results" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const resp: tavily.types.SearchResponse = .{};
-    const md = try formatTavilyMarkdown(aa, resp);
-    try std.testing.expectEqualStrings("No results.", md);
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatTavilyMarkdown(&aw.writer, .{});
+    try std.testing.expectEqualStrings("No results.", aw.written());
 }
 
 test "formatBraveMarkdown renders web results" {
@@ -2331,7 +2351,9 @@ test "formatBraveMarkdown renders web results" {
         },
     };
 
-    const md = try formatBraveMarkdown(aa, resp);
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatBraveMarkdown(&aw.writer, resp);
+    const md = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "Paris is the capital of France.") != null);
@@ -2343,11 +2365,31 @@ test "formatBraveMarkdown handles empty results" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const md_no_web = try formatBraveMarkdown(aa, .{});
-    try std.testing.expectEqualStrings("No results.", md_no_web);
+    var no_web: std.Io.Writer.Allocating = .init(aa);
+    try formatBraveMarkdown(&no_web.writer, .{});
+    try std.testing.expectEqualStrings("No results.", no_web.written());
 
-    const md_empty_web = try formatBraveMarkdown(aa, .{ .web = .{} });
-    try std.testing.expectEqualStrings("No results.", md_empty_web);
+    var empty_web: std.Io.Writer.Allocating = .init(aa);
+    try formatBraveMarkdown(&empty_web.writer, .{ .web = .{} });
+    try std.testing.expectEqualStrings("No results.", empty_web.written());
+}
+
+test "formatBraveMarkdown flattens newlines in titles and descriptions" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const resp: brave.types.SearchResponse = .{
+        .web = .{
+            .results = &.{
+                .{ .title = "Multi\nline title", .url = "https://example.org", .description = "line one\r\n\r\nline two" },
+            },
+        },
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatBraveMarkdown(&aw.writer, resp);
+    try std.testing.expectEqualStrings("1. **Multi line title** — https://example.org\n   line one line two\n\n", aw.written());
 }
 
 test "isPathSafe: relative paths without traversal are accepted" {
