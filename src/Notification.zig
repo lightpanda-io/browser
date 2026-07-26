@@ -68,7 +68,7 @@ event_listeners: EventListeners,
 listeners: std.AutoHashMapUnmanaged(usize, std.ArrayList(*Listener)),
 
 allocator: Allocator,
-mem_pool: std.heap.memory_pool.ExtraManaged(Listener, .{}),
+mem_pool: std.heap.MemoryPool(Listener),
 
 const EventListeners = struct {
     frame_remove: List = .{},
@@ -371,9 +371,9 @@ pub fn init(allocator: Allocator) !*Notification {
 
     notification.* = .{
         .listeners = .{},
+        .mem_pool = .empty,
         .event_listeners = .{},
         .allocator = allocator,
-        .mem_pool = .init(allocator),
     };
 
     return notification;
@@ -387,7 +387,7 @@ pub fn deinit(self: *Notification) void {
         listener.deinit(allocator);
     }
     self.listeners.deinit(allocator);
-    self.mem_pool.deinit();
+    self.mem_pool.deinit(allocator);
     allocator.destroy(self);
 }
 
@@ -406,7 +406,7 @@ pub fn register(self: *Notification, comptime event: EventType, receiver: anytyp
     }
 
     var list = &@field(self.event_listeners, @tagName(event));
-    var listener = try self.mem_pool.create();
+    var listener = try self.mem_pool.create(self.allocator);
     errdefer self.mem_pool.destroy(listener);
 
     listener.* = .{
