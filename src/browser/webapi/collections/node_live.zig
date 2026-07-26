@@ -40,6 +40,7 @@ const Mode = enum {
     child_elements,
     child_tag,
     cells,
+    select_options,
     selected_options,
     links,
     anchors,
@@ -68,6 +69,7 @@ const Filters = union(Mode) {
     child_elements,
     child_tag: Element.Tag,
     cells,
+    select_options,
     selected_options,
     links,
     anchors,
@@ -100,7 +102,10 @@ pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
         .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form => TreeWalker.FullExcludeSelf,
-        .child_elements, .child_tag, .cells, .selected_options => TreeWalker.Children,
+        .child_elements, .child_tag, .cells => TreeWalker.Children,
+        // A select's options can sit one level down, inside an <optgroup>, so
+        // these two walk the subtree and filter on the parent instead.
+        .select_options, .selected_options => TreeWalker.FullExcludeSelf,
     };
     return struct {
         _tw: TW,
@@ -299,11 +304,26 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     return el.is(Element.Html.TableCell) != null;
                 },
-                .selected_options => {
-                    const el = node.is(Element) orelse return false;
-                    const Option = Element.Html.Option;
-                    const opt = el.is(Option) orelse return false;
-                    return opt.getSelected();
+                .select_options, .selected_options => {
+                    const opt = node.is(Element.Html.Option) orelse return false;
+
+                    // we have an option, but it's only a match IF
+                    // 1 - this is a direct child of the root (i.e. the <select>)
+                    // OR
+                    // 2 - this is a direct child of an <optgroup> which, itself
+                    //     is a direct child of the root (i.e. the <select>)
+
+                    const parent = node.parentNode() orelse return false;
+                    if (parent == self._tw._root) {
+                        // case 1: it _is_ a direct child of the root
+                    } else {
+                        if (parent.is(Element.Html.OptGroup) == null or parent.parentNode() != self._tw._root) {
+                            return false;
+                        }
+                        // the parent is an optgroup and its parent is the root
+                    }
+
+                    return if (comptime mode == .selected_options) opt.getSelected() else true;
                 },
                 .links => {
                     // Links are <a> elements with href attribute (TODO: also <area> when implemented)
@@ -390,6 +410,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .child_elements => HTMLCollection{ ._data = .{ .child_elements = self } },
                 .child_tag => HTMLCollection{ ._data = .{ .child_tag = self } },
                 .cells => HTMLCollection{ ._data = .{ .cells = self } },
+                .select_options => HTMLCollection{ ._data = .{ .select_options = self } },
                 .selected_options => HTMLCollection{ ._data = .{ .selected_options = self } },
                 .links => HTMLCollection{ ._data = .{ .links = self } },
                 .anchors => HTMLCollection{ ._data = .{ .anchors = self } },
