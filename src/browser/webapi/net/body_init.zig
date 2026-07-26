@@ -106,8 +106,9 @@ pub const BodyInit = union(enum) {
             },
             .stream => |stream| {
                 // Response special-cases `.stream` before extract. Request/XHR
-                // paths buffer a closed stream synchronously; open streams and
-                // async-only bodies reject rather than send Content-Length: 0.
+                // paths buffer a closed stream synchronously; a stream that
+                // can't be drained here - still open, or already used as a
+                // body - rejects rather than send Content-Length: 0.
                 const bytes = try stream.collectBodyBytes(arena);
                 return .{ .bytes = bytes, .content_type = null };
             },

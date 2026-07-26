@@ -53,6 +53,7 @@ _pull_fn: ?js.Function.Global = null,
 _pulling: bool = false,
 _pull_again: bool = false,
 _cancel: ?Cancel = null,
+_collected: bool = false,
 
 const UnderlyingSource = struct {
     start: ?js.Function = null,
@@ -132,39 +133,44 @@ pub fn getLocked(self: *const ReadableStream) bool {
 }
 
 /// Drain a closed stream's internal queue into bytes for outbound HTTP
-/// request bodies. Open, errored, or locked streams, and chunks that cannot
-/// be converted synchronously, return `error.TypeError`.
+/// request bodies. A stream that is locked, already used as a body, still
+/// readable, or errored - or that holds a chunk which isn't string or binary
+/// data - is `error.TypeError`. The queue is only consumed once every chunk
+/// has converted, so a rejected body leaves the stream as it was.
 pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator) ![]const u8 {
-    if (self.getLocked()) return error.TypeError;
+    if (self._collected or self.getLocked()) {
+        return error.TypeError;
+    }
     switch (self._state) {
         .errored, .readable => return error.TypeError,
         .closed => {},
     }
 
-    const exec = self._execution;
-    const local = exec.js.local orelse return error.TypeError;
+    const local = self._execution.js.local.?;
 
     var buf = std.Io.Writer.Allocating.init(arena);
-    const controller = self._controller;
-    while (controller.dequeue()) |chunk| {
+    const queue = &self._controller._queue;
+    for (queue.items) |chunk| {
         const bytes: []const u8 = switch (chunk) {
             .string => |s| s,
             .uint8array => |arr| arr.values,
             .js_value => |global| blk: {
                 const value = local.toLocal(global);
-                if (value.isTypedArray() or value.isArrayBufferView() or value.isArrayBuffer()) {
-                    const typed = try local.jsValueToZig([]u8, value);
-                    break :blk try arena.dupe(u8, typed);
-                } else if (value.isString()) |str| {
-                    const slice = try str.toSlice();
-                    break :blk try arena.dupe(u8, slice);
-                } else {
+                // toStringSmart falls back to toString(), which would turn a
+                // stray number or object into "42" / "[object Object]" bytes.
+                if (value.isString() == null and !value.isTypedArray() and
+                    !value.isArrayBufferView() and !value.isArrayBuffer())
+                {
                     return error.TypeError;
                 }
+                break :blk try value.toStringSmart();
             },
         };
         try buf.writer.writeAll(bytes);
     }
+
+    self._collected = true;
+    queue.clearRetainingCapacity();
     return buf.written();
 }
 

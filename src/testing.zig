@@ -970,10 +970,12 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
-    if (std.mem.eql(u8, path, "/xhr/echo_post_body")) {
+    if (std.mem.eql(u8, path, "/echo_body")) {
+        // Echo the request body back verbatim, so tests can assert on the bytes
+        // a request actually sent rather than just on its status.
         var body_buf: [4096]u8 = undefined;
         const body = if (req.head.method.requestHasBody())
-            req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(body_buf.len)) catch ""
+            try req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(body_buf.len))
         else
             "";
         return req.respond(body, .{

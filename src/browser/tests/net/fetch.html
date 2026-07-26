@@ -361,7 +361,7 @@
       },
     });
 
-    const response = await fetch("http://127.0.0.1:9582/xhr/echo_post_body", {
+    const response = await fetch("http://127.0.0.1:9582/echo_body", {
       method: "POST",
       body: stream,
       duplex: "half",
@@ -380,7 +380,7 @@
 <script id=fetch_readablestream_body_reject type=module>
   {
     const state = await testing.async();
-    const url = "http://127.0.0.1:9582/xhr/echo_post_body";
+    const url = "http://127.0.0.1:9582/echo_body";
     const opts = { method: "POST", duplex: "half" };
 
     let openRejected = false;
@@ -407,10 +407,30 @@
       lockedRejected = e instanceof TypeError;
     }
 
+    // A stream is single-use: draining it for one body must not leave it
+    // looking like a valid (empty) body for the next request.
+    const once = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("x"));
+        c.close();
+      },
+    });
+    const first = await fetch(url, { ...opts, body: once });
+    const firstText = await first.text();
+
+    let reuseRejected = false;
+    try {
+      await fetch(url, { ...opts, body: once });
+    } catch (e) {
+      reuseRejected = e instanceof TypeError;
+    }
+
     state.resolve();
     await state.done(() => {
       testing.expectEqual(true, openRejected);
       testing.expectEqual(true, lockedRejected);
+      testing.expectEqual("x", firstText);
+      testing.expectEqual(true, reuseRejected);
     });
   }
 </script>
