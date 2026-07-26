@@ -348,6 +348,93 @@
   }
 </script>
 
+<script id=fetch_readablestream_body type=module>
+  {
+    const state = await testing.async();
+    const payload = "name=Streamed&count=9";
+    const enc = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(enc.encode("name=Streamed&"));
+        controller.enqueue(enc.encode("count=9"));
+        controller.close();
+      },
+    });
+
+    const response = await fetch("http://127.0.0.1:9582/echo_body", {
+      method: "POST",
+      body: stream,
+      duplex: "half",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    const text = await response.text();
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(200, response.status);
+      testing.expectEqual(payload, text);
+    });
+  }
+</script>
+
+<script id=fetch_readablestream_body_reject type=module>
+  {
+    const state = await testing.async();
+    const url = "http://127.0.0.1:9582/echo_body";
+    const opts = { method: "POST", duplex: "half" };
+
+    let openRejected = false;
+    try {
+      const open = new ReadableStream({
+        start(c) { c.enqueue(new TextEncoder().encode("x")); },
+      });
+      await fetch(url, { ...opts, body: open });
+    } catch (e) {
+      openRejected = e instanceof TypeError;
+    }
+
+    let lockedRejected = false;
+    try {
+      const locked = new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode("x"));
+          c.close();
+        },
+      });
+      locked.getReader();
+      await fetch(url, { ...opts, body: locked });
+    } catch (e) {
+      lockedRejected = e instanceof TypeError;
+    }
+
+    // A stream is single-use: draining it for one body must not leave it
+    // looking like a valid (empty) body for the next request.
+    const once = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("x"));
+        c.close();
+      },
+    });
+    const first = await fetch(url, { ...opts, body: once });
+    const firstText = await first.text();
+
+    let reuseRejected = false;
+    try {
+      await fetch(url, { ...opts, body: once });
+    } catch (e) {
+      reuseRejected = e instanceof TypeError;
+    }
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, openRejected);
+      testing.expectEqual(true, lockedRejected);
+      testing.expectEqual("x", firstText);
+      testing.expectEqual(true, reuseRejected);
+    });
+  }
+</script>
+
 <script id=fetch_blob_url_in_worker type=module>
   {
     const state = await testing.async();
