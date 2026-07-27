@@ -56,7 +56,9 @@ pub fn is(self: *Svg, comptime T: type) ?*T {
             }
         }
     }
-    if (self._type == .graphics) return self._type.graphics.is(T);
+    if (self._type == .graphics) {
+        return self._type.graphics.is(T);
+    }
     return null;
 }
 

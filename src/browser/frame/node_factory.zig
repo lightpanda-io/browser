@@ -929,8 +929,9 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     asUint("polyline") => return createSvgElementT(frame, Geometry.Polyline, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
-                13 => if (std.mem.eql(u8, name, "foreignObject")) {
-                    return createSvgElementT(frame, Graphics.ForeignObject, name, attribute_iterator, .{ ._proto = undefined });
+                13 => switch (@as(u104, @bitCast(name[0..13].*))) {
+                    asUint("foreignObject") => return createSvgElementT(frame, Graphics.ForeignObject, name, attribute_iterator, .{ ._proto = undefined }),
+                    else => {},
                 },
                 else => {},
             }

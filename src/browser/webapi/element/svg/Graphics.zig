@@ -132,13 +132,13 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
     });
 
     while (cursors.items.len != 0) {
-        const cursor = &cursors.items[cursors.items.len - 1];
-        const node = cursor.next orelse {
+        const top = cursors.items.len - 1;
+        const node = cursors.items[top].next orelse {
             _ = cursors.pop();
             continue;
         };
-        cursor.next = node.nextSibling();
-        const parent_matrix = cursor.matrix;
+        cursors.items[top].next = node.nextSibling();
+        const parent_matrix = cursors.items[top].matrix;
 
         const element = node.is(Element) orelse continue;
         if (element._namespace != .svg) continue;
