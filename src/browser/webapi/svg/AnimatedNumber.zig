@@ -27,13 +27,23 @@ const AnimatedNumber = @This();
 
 _element: *Element,
 _attr_name: lp.String,
+_allow_percentage: bool,
 
 pub const Kind = enum {
     path_length,
+    offset,
 
     fn attributeName(self: Kind) lp.String {
         return switch (self) {
             .path_length => comptime .wrap("pathLength"),
+            .offset => comptime .wrap("offset"),
+        };
+    }
+
+    fn allowsPercentage(self: Kind) bool {
+        return switch (self) {
+            .path_length => false,
+            .offset => true,
         };
     }
 };
@@ -53,6 +63,7 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedNumbe
         gop.value_ptr.* = try frame._factory.create(AnimatedNumber{
             ._element = element,
             ._attr_name = kind.attributeName(),
+            ._allow_percentage = kind.allowsPercentage(),
         });
     }
     return gop.value_ptr.*;
@@ -77,7 +88,10 @@ pub fn getAnimVal(self: *const AnimatedNumber) f32 {
 fn currentValue(self: *const AnimatedNumber) f32 {
     const raw = self._element.getAttributeSafe(self._attr_name) orelse return 0;
     const trimmed = std.mem.trim(u8, raw, " \t\r\n\x0c");
-    const value = std.fmt.parseFloat(f32, trimmed) catch return 0;
+    const value = if (self._allow_percentage and std.mem.endsWith(u8, trimmed, "%"))
+        (std.fmt.parseFloat(f32, trimmed[0 .. trimmed.len - 1]) catch return 0) / 100
+    else
+        std.fmt.parseFloat(f32, trimmed) catch return 0;
     return if (std.math.isFinite(value)) value else 0;
 }
 

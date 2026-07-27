@@ -204,7 +204,7 @@ fn transformMatrix(element: *Element) PathData.Matrix {
 }
 
 pub fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
-    return AnimatedTransformList.getOrCreate(self.asElement(), frame);
+    return AnimatedTransformList.getOrCreate(self.asElement(), .transform, frame);
 }
 
 pub fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {

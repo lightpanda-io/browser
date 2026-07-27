@@ -32,6 +32,8 @@ _element: ?*Element = null,
 _attr_name: String = .empty,
 _direction: Direction = .unspecified,
 _read_only: bool = false,
+_default_value: f64 = 0,
+_default_unit: Unit = .number,
 
 pub const Direction = enum {
     horizontal,
@@ -39,7 +41,7 @@ pub const Direction = enum {
     unspecified,
 };
 
-const Unit = enum(u16) {
+pub const Unit = enum(u16) {
     unknown = 0,
     number = 1,
     percentage = 2,
@@ -65,6 +67,25 @@ pub fn reflected(element: *Element, attr_name: String, direction: Direction, rea
         ._attr_name = attr_name,
         ._direction = direction,
         ._read_only = read_only,
+    });
+}
+
+pub fn reflectedConfigured(
+    element: *Element,
+    attr_name: String,
+    direction: Direction,
+    default_value: f64,
+    default_unit: Unit,
+    read_only: bool,
+    frame: *Frame,
+) !*Length {
+    return frame._factory.create(Length{
+        ._element = element,
+        ._attr_name = attr_name,
+        ._direction = direction,
+        ._read_only = read_only,
+        ._default_value = default_value,
+        ._default_unit = default_unit,
     });
 }
 
@@ -156,13 +177,13 @@ fn ensureFinite(value: f64) !void {
 fn syncFromAttribute(self: *Length) void {
     const element = self._element orelse return;
     const raw = element.getAttributeSafe(self._attr_name) orelse {
-        self._value = 0;
-        self._unit = .number;
+        self._value = self._default_value;
+        self._unit = self._default_unit;
         return;
     };
     const parsed = parse(raw) catch {
-        self._value = 0;
-        self._unit = .unknown;
+        self._value = self._default_value;
+        self._unit = self._default_unit;
         return;
     };
     self._value = parsed.value;

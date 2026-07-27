@@ -6,6 +6,7 @@
 // (at your option) any later version.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
@@ -18,20 +19,44 @@ const AnimatedTransformList = @This();
 _base_val: *TransformList,
 _anim_val: *TransformList,
 
-pub const Lookup = std.AutoHashMapUnmanaged(*Element, *AnimatedTransformList);
+pub const Kind = enum {
+    transform,
+    gradient_transform,
+    pattern_transform,
 
-pub fn getOrCreate(element: *Element, frame: *Frame) !*AnimatedTransformList {
-    const gop = try frame._svg_animated_transform_lists.getOrPut(frame.arena, element);
+    fn attributeName(self: Kind) lp.String {
+        return switch (self) {
+            .transform => .wrap("transform"),
+            .gradient_transform => .wrap("gradientTransform"),
+            .pattern_transform => .wrap("patternTransform"),
+        };
+    }
+};
+
+pub const Key = struct {
+    element: *Element,
+    kind: Kind,
+};
+
+pub const Lookup = std.AutoHashMapUnmanaged(Key, *AnimatedTransformList);
+
+pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedTransformList {
+    const key: Key = .{ .element = element, .kind = kind };
+    const gop = try frame._svg_animated_transform_lists.getOrPut(frame.arena, key);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_animated_transform_lists.remove(element);
-        gop.value_ptr.* = try create(element, frame);
+        errdefer _ = frame._svg_animated_transform_lists.remove(key);
+        gop.value_ptr.* = try createForAttribute(element, kind.attributeName(), frame);
     }
     return gop.value_ptr.*;
 }
 
 pub fn create(element: *Element, frame: *Frame) !*AnimatedTransformList {
-    const base_val = try TransformList.create(element, false, frame);
-    const anim_val = try TransformList.create(element, true, frame);
+    return createForAttribute(element, comptime .wrap("transform"), frame);
+}
+
+pub fn createForAttribute(element: *Element, attr_name: lp.String, frame: *Frame) !*AnimatedTransformList {
+    const base_val = try TransformList.createForAttribute(element, attr_name, false, frame);
+    const anim_val = try TransformList.createForAttribute(element, attr_name, true, frame);
     return frame._factory.create(AnimatedTransformList{
         ._base_val = base_val,
         ._anim_val = anim_val,

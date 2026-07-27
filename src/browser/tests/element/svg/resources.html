@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=root width="200" height="100">
+  <defs>
+    <linearGradient id=linear x1="10%" gradientUnits="userSpaceOnUse"
+      spreadMethod="reflect" gradientTransform="translate(4 5)" transform="translate(90)" href="#base">
+      <stop id=stop offset="25%"></stop>
+    </linearGradient>
+    <radialGradient id=radial cx="20%" cy="30%"></radialGradient>
+    <clipPath id=clip clipPathUnits="objectBoundingBox" transform="scale(2)"></clipPath>
+    <mask id=mask></mask>
+    <marker id=marker></marker>
+    <pattern id=pattern patternTransform="translate(7 8)" href="#tile"></pattern>
+  </defs>
+</svg>
+
+<script id=resourceIdentities>
+{
+  testing.expectEqual(true, $('#linear') instanceof SVGLinearGradientElement);
+  testing.expectEqual(true, $('#linear') instanceof SVGGradientElement);
+  testing.expectEqual(true, $('#linear') instanceof SVGElement);
+  testing.expectEqual(true, $('#radial') instanceof SVGRadialGradientElement);
+  testing.expectEqual(true, $('#radial') instanceof SVGGradientElement);
+  testing.expectEqual(true, $('#clip') instanceof SVGClipPathElement);
+  testing.expectEqual(true, $('#mask') instanceof SVGMaskElement);
+  testing.expectEqual(true, $('#marker') instanceof SVGMarkerElement);
+  testing.expectEqual(true, $('#pattern') instanceof SVGPatternElement);
+  testing.expectEqual(true, $('#stop') instanceof SVGStopElement);
+
+  // SVG_UNIT_TYPE_* constants live on SVGUnitTypes, not the element interfaces.
+  testing.expectEqual('undefined', typeof SVGClipPathElement.SVG_UNIT_TYPE_USERSPACEONUSE);
+  testing.expectEqual('undefined', typeof SVGMaskElement.SVG_UNIT_TYPE_OBJECTBOUNDINGBOX);
+  testing.expectEqual(2, SVGGradientElement.SVG_SPREADMETHOD_REFLECT);
+  testing.expectEqual(2, SVGMarkerElement.SVG_MARKERUNITS_STROKEWIDTH);
+
+  const ns = 'http://www.w3.org/2000/svg';
+  testing.expectEqual(true, document.createElementNS(ns, 'linearGradient') instanceof SVGLinearGradientElement);
+  testing.expectEqual(false, document.createElementNS(ns, 'lineargradient') instanceof SVGLinearGradientElement);
+  testing.expectEqual(false, document.createElementNS(ns, 'clippath') instanceof SVGClipPathElement);
+}
+</script>
+
+<script id=gradientReflection>
+{
+  const linear = $('#linear');
+  testing.expectEqual(true, linear.gradientUnits instanceof SVGAnimatedEnumeration);
+  testing.expectEqual(true, linear.gradientUnits === linear.gradientUnits);
+  testing.expectEqual(1, linear.gradientUnits.baseVal);
+  testing.expectEqual(1, linear.gradientUnits.animVal);
+  linear.gradientUnits.baseVal = 2;
+  testing.expectEqual('objectBoundingBox', linear.getAttribute('gradientUnits'));
+  testing.expectEqual(2, linear.gradientUnits.animVal);
+  testing.expectError('TypeError', () => { linear.gradientUnits.baseVal = 99; });
+
+  testing.expectEqual(2, linear.spreadMethod.baseVal);
+  // Enumerated values match exactly: whitespace padding makes the value
+  // unrecognized, and both engines then report the initial value.
+  linear.setAttribute('spreadMethod', ' \treflect\n');
+  testing.expectEqual(1, linear.spreadMethod.baseVal);
+  testing.expectEqual('#base', linear.href.baseVal);
+  linear.href.baseVal = '#other';
+  testing.expectEqual('#other', linear.getAttribute('href'));
+
+  testing.expectEqual(1, linear.gradientTransform.baseVal.numberOfItems);
+  testing.expectEqual(4, linear.gradientTransform.baseVal.getItem(0).matrix.e);
+  testing.expectEqual(5, linear.gradientTransform.baseVal.getItem(0).matrix.f);
+  testing.expectEqual(true, linear.gradientTransform === linear.gradientTransform);
+  const gradientMatrix = linear.gradientTransform.baseVal.getItem(0).matrix;
+  gradientMatrix.e = 12;
+  testing.expectEqual(true, linear.getAttribute('gradientTransform').startsWith('matrix('));
+  testing.expectEqual('translate(90)', linear.getAttribute('transform'));
+  testing.expectEqual(12, linear.gradientTransform.animVal.getItem(0).matrix.e);
+  testing.expectError('NoModificationAllowedError', () => {
+    linear.gradientTransform.animVal.getItem(0).matrix.e = 99;
+  });
+
+  testing.expectEqual(2, linear.x1.baseVal.unitType);
+  testing.expectEqual(true, linear.x2 === linear.x2);
+  testing.expectEqual(10, linear.x1.baseVal.valueInSpecifiedUnits);
+  testing.expectEqual('100%', linear.x2.baseVal.valueAsString);
+  linear.x2.baseVal.valueInSpecifiedUnits = 80;
+  testing.expectEqual('80%', linear.getAttribute('x2'));
+  testing.expectEqual(80, linear.x2.animVal.valueInSpecifiedUnits);
+  testing.expectError('NoModificationAllowedError', () => { linear.x2.animVal.value = 1; });
+  linear.setAttribute('x2', 'invalid');
+  testing.expectEqual('100%', linear.x2.baseVal.valueAsString);
+}
+</script>
+
+<script id=radialDefaults>
+{
+  // fx/fy reflect only their own attribute: the rendering-time fallback to
+  // cx/cy is not visible through the DOM, which reports the 50% default.
+  const radial = $('#radial');
+  testing.expectEqual(true, radial.fx === radial.fx);
+  testing.expectEqual('50%', radial.fx.baseVal.valueAsString);
+  testing.expectEqual('50%', radial.fy.baseVal.valueAsString);
+  radial.setAttribute('cx', '40%');
+  testing.expectEqual('50%', radial.fx.baseVal.valueAsString);
+  radial.fx.baseVal.valueAsString = '15%';
+  testing.expectEqual('15%', radial.fx.baseVal.valueAsString);
+  testing.expectEqual('15%', radial.getAttribute('fx'));
+  radial.removeAttribute('fx');
+  testing.expectEqual('50%', radial.fx.baseVal.valueAsString);
+  testing.expectEqual('50%', radial.r.baseVal.valueAsString);
+  testing.expectEqual('0%', radial.fr.baseVal.valueAsString);
+  radial.setAttribute('r', 'invalid');
+  testing.expectEqual('50%', radial.r.baseVal.valueAsString);
+}
+</script>
+
+<script id=resourceDefaultsAndAttributes>
+{
+  const clip = $('#clip');
+  testing.expectEqual(2, clip.clipPathUnits.baseVal);
+  testing.expectEqual(2, clip.transform.baseVal.getItem(0).matrix.a);
+
+  const mask = $('#mask');
+  testing.expectEqual(true, mask.x === mask.x);
+  testing.expectEqual('-10%', mask.x.baseVal.valueAsString);
+  testing.expectEqual('-10%', mask.y.baseVal.valueAsString);
+  testing.expectEqual('120%', mask.width.baseVal.valueAsString);
+  testing.expectEqual('120%', mask.height.baseVal.valueAsString);
+  mask.setAttribute('width', 'invalid');
+  testing.expectEqual('120%', mask.width.baseVal.valueAsString);
+  testing.expectEqual(2, mask.maskUnits.baseVal);
+  testing.expectEqual(1, mask.maskContentUnits.baseVal);
+
+  const marker = $('#marker');
+  testing.expectEqual(true, marker.markerUnits === marker.markerUnits);
+  testing.expectEqual(3, marker.markerWidth.baseVal.value);
+  testing.expectEqual(3, marker.markerHeight.baseVal.value);
+  marker.setAttribute('markerWidth', 'invalid');
+  testing.expectEqual(3, marker.markerWidth.baseVal.value);
+  testing.expectEqual(2, marker.markerUnits.baseVal);
+
+  const pattern = $('#pattern');
+  testing.expectEqual(true, pattern.patternTransform === pattern.patternTransform);
+  testing.expectEqual(2, pattern.patternUnits.baseVal);
+  testing.expectEqual(1, pattern.patternContentUnits.baseVal);
+  testing.expectEqual(7, pattern.patternTransform.baseVal.getItem(0).matrix.e);
+  testing.expectEqual(8, pattern.patternTransform.baseVal.getItem(0).matrix.f);
+  const patternMatrix = pattern.patternTransform.baseVal.getItem(0).matrix;
+  patternMatrix.f = 11;
+  testing.expectEqual(true, pattern.getAttribute('patternTransform').startsWith('matrix('));
+  testing.expectEqual(11, pattern.patternTransform.animVal.getItem(0).matrix.f);
+  testing.expectEqual('#tile', pattern.href.baseVal);
+
+  const stop = $('#stop');
+  testing.expectEqual(true, stop.offset === stop.offset);
+  testing.expectEqual('number', typeof stop.offset.baseVal);
+  testing.expectEqual(0.25, stop.offset.baseVal);
+  stop.offset.baseVal = 0.5;
+  testing.expectEqual('0.5', stop.getAttribute('offset'));
+  testing.expectEqual(0.5, stop.offset.animVal);
+  testing.expectEqual(false, Reflect.set(stop.offset, 'animVal', 1));
+  testing.expectEqual(0.5, stop.offset.animVal);
+  stop.setAttribute('offset', 'invalid');
+  testing.expectEqual(0, stop.offset.baseVal);
+}
+</script>
