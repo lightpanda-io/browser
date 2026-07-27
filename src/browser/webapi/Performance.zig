@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const datetime = @import("../../datetime.zig");
 
 const EventCounts = @import("EventCounts.zig");
 const PerformanceObserver = @import("PerformanceObserver.zig");
@@ -48,7 +47,7 @@ _delivery_scheduled: bool = false,
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
 pub fn highResTimestamp() u64 {
-    const micros = datetime.microTimestamp(.monotonic);
+    const micros = lp.datetime.microTimestamp(.boot);
     // Round to nearest 5 microseconds (like Firefox default)
     const rounded = @divTrunc(micros + 2, 5) * 5;
     return rounded;

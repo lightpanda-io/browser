@@ -23,7 +23,6 @@ const builtin = @import("builtin");
 const Inbox = @import("../Inbox.zig");
 const ArenaPool = @import("../ArenaPool.zig");
 const Notification = @import("../Notification.zig");
-const timestamp = @import("../datetime.zig").timestamp;
 
 const CDP = @import("../cdp/CDP.zig");
 const Watchdog = @import("../Watchdog.zig");
@@ -593,7 +592,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             .client = self,
             .arena = arena,
             .id = self.incrReqId(),
-            .start_time = timestamp(.monotonic),
+            .start_time = lp.datetime.timestamp(.boot),
             // owner is set AFTER we've actually appended to the owner list,
             // so transfer.deinit's `if (self.owner)` branch only fires when
             // we're truly linked. Otherwise we'd try to remove a node from
@@ -928,7 +927,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
 
     const cached = cache.get(arena, .{
         .url = req.url,
-        .timestamp = std.Io.Clock.now(.real, lp.io).toSeconds(),
+        .timestamp = lp.datetime.timestamp(.real),
         .request_headers = req_headers.items,
     }) orelse {
         lp.metrics.http_cache.incr(.miss);
@@ -985,7 +984,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
     cache.renew(transfer.arena, .{
         .url = transfer._cache_key,
-        .timestamp = std.Io.Clock.now(.real, lp.io).toSeconds(),
+        .timestamp = lp.datetime.timestamp(.real),
         .headers = transfer.res.headers,
     }) catch |err| {
         log.warn(.cache, "renew failed", .{ .err = err });
@@ -1023,7 +1022,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     const vary = findHeader(headers, "vary");
     const maybe_cm = Cache.tryCache(
         arena,
-        std.Io.Clock.now(.real, lp.io).toSeconds(),
+        lp.datetime.timestamp(.real),
         transfer._cache_key,
         rh.status,
         rh.contentType(),

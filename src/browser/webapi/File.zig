@@ -54,7 +54,7 @@ pub fn init(
     file.* = .{
         ._proto = blob,
         ._name = try blob._arena.dupe(u8, name),
-        ._last_modified = opts.lastModified orelse std.Io.Clock.now(.real, lp.io).toMilliseconds(),
+        ._last_modified = opts.lastModified orelse @intCast(lp.datetime.milliTimestamp(.real)),
     };
     blob._type = .{ .file = file };
 

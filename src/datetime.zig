@@ -291,7 +291,7 @@ pub const DateTime = struct {
 
     pub fn now() DateTime {
         return .{
-            .micros = @intCast(microTimestamp(.clock)),
+            .micros = @intCast(microTimestamp(.real)),
         };
     }
 
@@ -522,30 +522,16 @@ pub const DateTime = struct {
     }
 };
 
-pub const TimestampMode = enum {
-    clock,
-    monotonic,
-
-    // .boot intends to keep counting across system suspend, matching the
-    // old CLOCK_BOOTTIME / UPTIME_RAW choice.
-    fn ioClock(comptime mode: TimestampMode) std.Io.Clock {
-        return switch (mode) {
-            .clock => .real,
-            .monotonic => .boot,
-        };
-    }
-};
-
-pub fn timestamp(comptime mode: TimestampMode) u64 {
-    return @intCast(mode.ioClock().now(lp.io).toSeconds());
+pub fn timestamp(comptime clock: std.Io.Clock) u64 {
+    return @intCast(clock.now(lp.io).toSeconds());
 }
 
-pub fn milliTimestamp(comptime mode: TimestampMode) u64 {
-    return @intCast(mode.ioClock().now(lp.io).toMilliseconds());
+pub fn milliTimestamp(comptime clock: std.Io.Clock) u64 {
+    return @intCast(clock.now(lp.io).toMilliseconds());
 }
 
-pub fn microTimestamp(comptime mode: TimestampMode) u64 {
-    return @intCast(mode.ioClock().now(lp.io).toMicroseconds());
+pub fn microTimestamp(comptime clock: std.Io.Clock) u64 {
+    return @intCast(clock.now(lp.io).toMicroseconds());
 }
 
 fn writeDate(into: []u8, date: Date) u8 {
@@ -1239,7 +1225,7 @@ test "DateTime: initUTC" {
 
 test "DateTime: now" {
     const dt = DateTime.now();
-    try testing.expectDelta(@as(i64, @intCast(microTimestamp(.clock))), dt.micros, 1000);
+    try testing.expectDelta(@as(i64, @intCast(microTimestamp(.real))), dt.micros, 1000);
 }
 
 test "DateTime: date" {
