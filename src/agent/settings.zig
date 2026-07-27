@@ -50,7 +50,7 @@ pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider,
     const key = zenai.provider.envApiKey(lp.environ(), tag) orelse return null;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = zenai.provider.listChatModelIds(allocator, lp.io, arena.allocator(), tag, key, base_url, lp.environ()) catch return null;
+    const ids = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), tag, key, .{ .base_url = base_url, .environ = lp.environ() }) catch return null;
     if (ids.len == 0) return null;
     return .{ .provider = tag, .key = key };
 }
@@ -198,6 +198,7 @@ pub const Remembered = struct {
     effort: ?Config.Effort = null,
     verbosity: ?Config.AgentVerbosity = null,
     stream: ?bool = null,
+    search_engine: ?lp.tools.SearchEngine = null,
 };
 
 pub fn loadRemembered(allocator: std.mem.Allocator) ?Remembered {
@@ -282,6 +283,13 @@ pub fn resolveStream(remembered: ?Remembered) bool {
     return true;
 }
 
+/// Precedence: remembered `.lp-agent.zon` value > default (auto). No CLI
+/// flag — the REPL `/searchEngine` command sets and persists it.
+pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.SearchEngine {
+    if (remembered) |r| if (r.search_engine) |e| return e;
+    return .auto;
+}
+
 pub const ReconciledModel = union(enum) {
     /// Owned by the allocator passed to reconcileModel.
     use: []u8,
@@ -302,7 +310,7 @@ pub fn reconcileModel(
 ) !ReconciledModel {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids: []const []const u8 = zenai.provider.listChatModelIds(allocator, lp.io, arena.allocator(), llm.provider, llm.key, base_url, lp.environ()) catch &.{};
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), llm.provider, llm.key, .{ .base_url = base_url, .environ = lp.environ() }) catch &.{};
     if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
 
     if (!explicit) {
@@ -350,6 +358,18 @@ test "parseRemembered: stream field round-trips" {
     const remembered = parseRemembered(testing.allocator, ".{ .model = \"m\", .stream = false }").?;
     defer std.zon.parse.free(testing.allocator, remembered);
     try testing.expect(remembered.stream == false);
+}
+
+test "parseRemembered: search_engine field round-trips" {
+    const remembered = parseRemembered(testing.allocator, ".{ .model = \"m\", .search_engine = .brave }").?;
+    defer std.zon.parse.free(testing.allocator, remembered);
+    try testing.expect(remembered.search_engine == .brave);
+}
+
+test "resolveSearchEngine: default auto, remembered wins" {
+    try testing.expect(resolveSearchEngine(null) == .auto);
+    try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = null }) == .auto);
+    try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = .duckduckgo }) == .duckduckgo);
 }
 
 test "resolveStream: default on, remembered wins" {

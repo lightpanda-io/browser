@@ -108,7 +108,7 @@ pub const JsApi = struct {
     pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
 
     fn _getInnerHTML(self: *Template, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self._content.getInnerHTML(&buf.writer, frame);
         return buf.written();
     }
@@ -119,7 +119,7 @@ pub const JsApi = struct {
 
     pub const outerHTML = bridge.accessor(_getOuterHTML, null, .{});
     fn _getOuterHTML(self: *Template, frame: *Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.getOuterHTML(&buf.writer, frame);
         return buf.written();
     }

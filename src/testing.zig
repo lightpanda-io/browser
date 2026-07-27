@@ -637,6 +637,24 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    const xhr_xml_body = "<?xml version=\"1.0\"?><catalog><item id=\"a\"/><item id=\"b\"/><pubDate>2026</pubDate></catalog>";
+
+    if (std.mem.eql(u8, path, "/xhr/xml")) {
+        return req.respond(xhr_xml_body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/xml" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/xml_as_text")) {
+        return req.respond(xhr_xml_body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/json")) {
         return req.respond("{\"over\":\"9000!!!\",\"updated_at\":1765867200000}", .{
             .extra_headers = &.{
@@ -966,6 +984,21 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(html, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/echo_body")) {
+        // Echo the request body back verbatim, so tests can assert on the bytes
+        // a request actually sent rather than just on its status.
+        var body_buf: [4096]u8 = undefined;
+        const body = if (req.head.method.requestHasBody())
+            try req.readerExpectNone(&body_buf).allocRemaining(arena_allocator, .limited(body_buf.len))
+        else
+            "";
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
             },
         });
     }

@@ -179,16 +179,24 @@ pub const String = packed struct {
             return false;
         }
 
-        const len = a.len;
-        if (len < 0 or b.len < 0) {
+        if (a.len < 0 or b.len < 0) {
             return false;
         }
+        return eqlWithSameLen(a, b);
+    }
 
+    // Dangerous. Use this only when you have to (and, obviously, when you know
+    // a.len == b.len)
+    pub fn eqlWithSameLen(a: String, b: String) bool {
+        if (comptime IS_DEBUG) {
+            std.debug.assert(a.len == b.len);
+        }
+
+        const len = a.len;
         if (len <= 12) {
             return a.payload.content == b.payload.content;
         }
 
-        // a.len == b.len at this point
         const al: usize = @intCast(len);
         const bl: usize = @intCast(len);
         const ap: [*]const u8 = @ptrFromInt(a.payload.heap.ptr);

@@ -216,7 +216,7 @@ pub fn setName(self: *Anchor, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getText(self: *Anchor, frame: *Frame) ![:0]const u8 {
-    return self.asNode().getTextContentAlloc(frame.call_arena);
+    return self.asNode().getTextContentAlloc(frame.local_arena);
 }
 
 pub fn setText(self: *Anchor, value: []const u8, frame: *Frame) !void {

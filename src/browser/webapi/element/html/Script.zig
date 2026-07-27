@@ -145,13 +145,13 @@ pub const JsApi = struct {
     pub const supports = bridge.function(Script.supports, .{ .static = true });
     pub const innerText = bridge.accessor(_innerText, Script.setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *Script, frame: *const Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.asNode().getTextContent(&buf.writer);
         return buf.written();
     }
     pub const text = bridge.accessor(_text, Script.setInnerText, .{ .ce_reactions = true });
     fn _text(self: *Script, frame: *const Frame) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         try self.asNode().getChildTextContent(&buf.writer);
         return buf.written();
     }

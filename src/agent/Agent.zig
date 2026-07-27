@@ -296,10 +296,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credentials.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
+    browser_tools.search_engine = settings.resolveSearchEngine(remembered);
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled }) catch {};
+            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search_engine }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -353,7 +354,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.startSession();
 
-    self.ai_client = if (llm) |l| try zenai.provider.Client.init(allocator, lp.io, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ() }) else null;
+    self.ai_client = if (llm) |l| try zenai.provider.Client.init(lp.io, allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
@@ -721,6 +722,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .load => self.handleLoad(rest),
         .model => self.handleModel(arena, rest),
         .provider => self.handleProvider(arena, rest),
+        .searchEngine => self.handleSearchEngine(rest),
     }
     return false;
 }
@@ -758,6 +760,21 @@ fn handleStream(self: *Agent, rest: []const u8) void {
     };
     self.stream_enabled = on;
     self.reportSaved("stream", if (on) "on" else "off");
+}
+
+/// `/searchEngine`: bare prints the current engine; an argument sets and
+/// persists it, warning when the chosen engine's API key is unset.
+fn handleSearchEngine(self: *Agent, rest: []const u8) void {
+    self.setEnumOption("searchEngine", &browser_tools.search_engine, rest);
+    const selected = std.meta.stringToEnum(browser_tools.SearchEngine, rest) orelse return;
+    const env_var: [:0]const u8 = switch (selected) {
+        .tavily => "TAVILY_API_KEY",
+        .brave => "BRAVE_API_KEY",
+        .auto, .duckduckgo => return,
+    };
+    if (std.c.getenv(env_var) == null) {
+        self.terminal.printWarning("{s} is not set; the search tool will fail until you export it", .{env_var});
+    }
 }
 
 /// Print cumulative session token usage, broken down so the cache's effect is
@@ -870,7 +887,7 @@ fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
     }
-    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled })) {
+    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled, .search_engine = browser_tools.search_engine })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
@@ -968,7 +985,7 @@ fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
 /// `owned_key` transfers ownership of an allocated `credentials.key` (Vertex
 /// gcloud token) on success; on error the caller still owns it.
 fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8) !void {
-    const new_client = try zenai.provider.Client.init(self.allocator, lp.io, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ() });
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ() });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
@@ -1360,6 +1377,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
             .provider => self.terminal.printInfo(
                 "/provider [name|null] — change the provider, or 'null' to disable the LLM (persisted, so the next launch starts in basic mode); Tab completes detected providers, bare /provider shows the current one",
                 .{},
+            ),
+            .searchEngine => self.terminal.printInfo(
+                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' tries Brave then Tavily (when their API keys are set) and falls back to the DuckDuckGo scrape; an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                .{ @tagName(browser_tools.search_engine), settings.remembered_path },
             ),
         }
         return;
@@ -1845,7 +1866,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = zenai.provider.listChatModelIds(allocator, lp.io, arena.allocator(), llm.provider, llm.key, opts.base_url, lp.environ()) catch |err| {
+    const ids = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), llm.provider, llm.key, .{ .base_url = opts.base_url, .environ = lp.environ() }) catch |err| {
         if (llm.provider == .vertex and !settings.vertexProjectMode()) {
             std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
         }
@@ -1902,13 +1923,12 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
 
     _ = self.model_completion_arena.reset(.retain_capacity);
     const ids = zenai.provider.listChatModelIds(
-        self.allocator,
         lp.io,
+        self.allocator,
         self.model_completion_arena.allocator(),
         llm.provider,
         llm.key,
-        self.model_base_url,
-        lp.environ(),
+        .{ .base_url = self.model_base_url, .environ = lp.environ() },
     ) catch &.{};
     self.model_completions = .{ .provider = llm.provider, .ids = ids };
     return ids;

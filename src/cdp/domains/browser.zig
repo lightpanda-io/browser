@@ -320,7 +320,6 @@ test "cdp.browser: setDownloadBehavior stores config on the session" {
     try testing.expectEqual(.allow_and_name, bc.session.download_behavior);
     try testing.expectEqualSlices(u8, "/tmp/lp-downloads", bc.session.download_path.?);
     try testing.expect(bc.session.download_events_enabled);
-    try testing.expect(bc.download_events_registered);
 
     // `default` maps to `deny` and tears the registration down again.
     try ctx.processMessage(.{
@@ -331,7 +330,6 @@ test "cdp.browser: setDownloadBehavior stores config on the session" {
     try testing.expectEqual(.deny, bc.session.download_behavior);
     try testing.expect(bc.session.download_path == null);
     try testing.expect(bc.session.download_events_enabled == false);
-    try testing.expect(bc.download_events_registered == false);
 }
 
 test "cdp.browser: setDownloadBehavior is a no-op when no context is loaded" {

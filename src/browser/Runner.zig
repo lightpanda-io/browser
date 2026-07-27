@@ -217,7 +217,9 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         return .{ .ok = 0 };
     }
 
-    if (hasRunnablePage(session)) {
+    const has_runnable_page = hasRunnablePage(session);
+
+    if (has_runnable_page) {
         try browser.runMacrotasks();
     }
 
@@ -295,12 +297,18 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 
     if ((comptime is_cdp) or want_http_tick) {
-        var ms_to_wait = @min(timeout_ms, browser.msToNextTask() orelse 200);
-        if (browser.hasBackgroundTasks()) {
-            // background work will queue more to do soon — don't block long
-            // for a client message; loop back and run macrotasks instead.
-            ms_to_wait = @min(ms_to_wait, 10);
-        }
+        const ms_to_next_task = blk: {
+            if (has_runnable_page == false) {
+                break :blk 200;
+            }
+            if (browser.hasBackgroundTasks()) {
+                // msToNextTask could be less than this, but 10ms drift is ok
+                break :blk 10;
+            }
+            break :blk browser.msToNextTask() orelse 200;
+        };
+        const ms_to_wait = @min(timeout_ms, ms_to_next_task);
+
         const waited = try http_client.tick(@intCast(ms_to_wait));
 
         // If the HttpClient didn't wait/poll then it has nothing to do, and we

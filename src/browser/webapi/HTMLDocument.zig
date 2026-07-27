@@ -71,7 +71,7 @@ pub fn setBody(self: *HTMLDocument, html: []const u8, frame: *Frame) !void {
     // parsing strips any <html>/<body>/<head> wrappers the author included.
     const new_body_node = try Frame.node_factory.createElementNS(frame, .html, "body", null);
     if (html.len > 0) {
-        try frame.parseHtmlAsChildren(new_body_node, html);
+        try Frame.parse.htmlAsChildren(frame, new_body_node, html);
     }
 
     const document_node = document_element.asNode();

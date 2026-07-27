@@ -246,6 +246,8 @@ pub const CurlInfo = enum(c.CURLINFO) {
     response_code = c.CURLINFO_RESPONSE_CODE,
     connect_code = c.CURLINFO_HTTP_CONNECTCODE,
     total_time_t = c.CURLINFO_TOTAL_TIME_T,
+    num_connects = c.CURLINFO_NUM_CONNECTS,
+    conn_id = c.CURLINFO_CONN_ID,
 };
 
 pub const Error = error{
@@ -661,11 +663,14 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
         .response_code,
         .connect_code,
         .redirect_count,
+        .num_connects,
         => blk: {
             const p: *c_long = out;
             break :blk c.curl_easy_getinfo(easy, inf, p);
         },
-        .total_time_t => blk: {
+        .total_time_t,
+        .conn_id,
+        => blk: {
             const p: *c.curl_off_t = out;
             break :blk c.curl_easy_getinfo(easy, inf, p);
         },

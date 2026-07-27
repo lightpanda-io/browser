@@ -104,14 +104,13 @@ pub const BodyInit = union(enum) {
                     .content_type = null,
                 };
             },
-            .stream => {
-                // A ReadableStream body cannot be serialized synchronously.
-                // Callers that support streaming bodies (Response) special-case
-                // the `.stream` arm before calling extract; the Request/XHR
-                // paths that reach here have no place to store a stream, so
-                // they send an empty body. Like other non-string sources, a
-                // stream carries no default Content-Type.
-                return .{ .bytes = "", .content_type = null };
+            .stream => |stream| {
+                // Response special-cases `.stream` before extract. Request/XHR
+                // paths buffer a closed stream synchronously; a stream that
+                // can't be drained here - still open, or already used as a
+                // body - rejects rather than send Content-Length: 0.
+                const bytes = try stream.collectBodyBytes(arena);
+                return .{ .bytes = bytes, .content_type = null };
             },
         }
     }
@@ -163,8 +162,8 @@ test "BodyInit: FormData emits multipart with random boundary" {
 
     const fd = try arena.create(FormData);
     fd.* = .{ ._rc = .{}, ._arena = arena, ._entries = .empty };
-    try fd.append("username", "alice");
-    try fd.append("email", "alice@example.com");
+    try fd.appendText("username", "alice");
+    try fd.appendText("email", "alice@example.com");
 
     const r = try (BodyInit{ .form_data = fd }).extract(arena);
 

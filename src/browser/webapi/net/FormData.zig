@@ -25,6 +25,7 @@ const Frame = @import("../../Frame.zig");
 const Form = @import("../element/html/Form.zig");
 const Element = @import("../Element.zig");
 const File = @import("../File.zig");
+const Blob = @import("../Blob.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
 const log = lp.log;
@@ -165,12 +166,63 @@ pub fn has(self: *const FormData, name: String) bool {
     return false;
 }
 
-pub fn set(self: *FormData, name: String, value: []const u8, exec: *Execution) !void {
+pub const EntryValue = union(enum) {
+    blob: *Blob, // can be of _type == .file
+    bytes: []const u8, //must be last, everything can coerce to a []const u8
+};
+
+pub fn set(self: *FormData, name: String, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
     self.deleteByName(name, exec);
-    return self.append(name.str(), value);
+    return self.append(name.str(), value, filename, exec);
 }
 
-pub fn append(self: *FormData, name: []const u8, value: []const u8) !void {
+// https://xhr.spec.whatwg.org/#create-an-entry
+pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
+    const entry_value: Entry.Value = switch (value) {
+        .blob => |blob| blk: {
+            if (filename) |n| {
+                // A supplied filename means a new File over the same bytes rather
+                // than a rename of the caller's object.
+                break :blk .{ .file = try fileFrom(blob, n, exec.page) };
+            }
+
+            if (blob._type == .file) {
+                const file = blob._type.file;
+                file.acquireRef();
+                break :blk .{ .file = file };
+            }
+
+            // A Blob that is not a File becomes a File named "blob".
+            break :blk .{ .file = try fileFrom(blob, "blob", exec.page) };
+        },
+        .bytes => |b| .{ .string = try String.init(self._arena, b, .{}) },
+    };
+
+    try self._entries.append(self._arena, .{
+        .name = try String.init(self._arena, name, .{}),
+        .value = entry_value,
+    });
+}
+
+// Mirrors File.init — a Blob and File sharing one reference-counted arena —
+// but over bytes we already hold rather than JS parts. Returned at refcount 1:
+// the entry owns that reference and deleteByName releases it.
+fn fileFrom(source: *Blob, name: []const u8, page: *Page) !*File {
+    const blob = try Blob.initFromBytes(source._slice, source._mime, page);
+    errdefer blob.deinit(page);
+
+    const file = try blob._arena.create(File);
+    file.* = .{
+        ._proto = blob,
+        ._name = try blob._arena.dupe(u8, name),
+        ._last_modified = std.Io.Clock.now(.real, lp.io).toMilliseconds(),
+    };
+    blob._type = .{ .file = file };
+    blob.acquireRef();
+    return file;
+}
+
+pub fn appendText(self: *FormData, name: []const u8, value: []const u8) !void {
     try self._entries.append(self._arena, .{
         .name = try String.init(self._arena, name, .{}),
         .value = .{ .string = try String.init(self._arena, value, .{}) },
@@ -535,8 +587,8 @@ test "FormData: multipart write" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try fd.append("name", "John");
-    try fd.append("note", "two\r\nlines");
+    try fd.appendText("name", "John");
+    try fd.appendText("note", "two\r\nlines");
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     try fd.write(.{
@@ -564,7 +616,7 @@ test "FormData: multipart escapes name CR/LF/quote" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try fd.append("a\"b\r\nc", "v");
+    try fd.appendText("a\"b\r\nc", "v");
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     try fd.write(.{
@@ -599,8 +651,6 @@ test "FormData: multipart empty body" {
     try testing.expectString("--B--\r\n", buf.written());
 }
 
-const Blob = @import("../Blob.zig");
-
 fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
     const blob = try Blob.initFromBytes(body, mime, page);
     blob.acquireRef();
@@ -626,7 +676,7 @@ test "FormData: multipart with file" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try fd.append("field", "value");
+    try fd.appendText("field", "value");
     try fd._entries.append(allocator, .{
         .name = try String.init(allocator, "upload", .{}),
         .value = .{ .file = file },
@@ -797,9 +847,9 @@ test "FormData: plaintext write" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try fd.append("name", "John");
-    try fd.append("note", "two\r\nlines");
-    try fd.append("equals", "a=b");
+    try fd.appendText("name", "John");
+    try fd.appendText("note", "two\r\nlines");
+    try fd.appendText("equals", "a=b");
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     try fd.write(.{ .encoding = .plaintext, .allocator = allocator }, &buf.writer);
