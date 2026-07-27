@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta charset=utf-8>
 <script src="../../testing.js"></script>
 
 <svg>
@@ -27,19 +28,34 @@
 }
 </script>
 
+<!-- This block asserts our deterministic fallback metrics; real browsers
+     shape text and produce different numbers, so it is not expected to pass
+     there. The other blocks are browser-comparable. -->
 <script id=fallbackMetrics>
 {
   const text = $('#text');
-  testing.expectEqual(6, text.getNumberOfChars());
+  // Characters are UTF-16 code units, like DOM strings: the emoji counts as
+  // two, and addressing either of its halves measures the full glyph.
+  testing.expectEqual(7, text.getNumberOfChars());
   testing.expectEqual(80, text.getComputedTextLength());
   testing.expectEqual(60, text.getSubStringLength(0, 5));
   testing.expectEqual(20, text.getSubStringLength(5, 1));
+  testing.expectEqual(20, text.getSubStringLength(6, 1));
   testing.expectEqual(32, text.getSubStringLength(4, 99));
-  testing.expectError('IndexSizeError', () => text.getSubStringLength(6, 1));
-  testing.expectError('IndexSizeError', () => text.getSubStringLength(6, 0));
-  testing.expectEqual(1, $('#tspan').getNumberOfChars());
+  testing.expectError('IndexSizeError', () => text.getSubStringLength(7, 1));
+  testing.expectError('IndexSizeError', () => text.getSubStringLength(7, 0));
+  testing.expectEqual(2, $('#tspan').getNumberOfChars());
   testing.expectEqual(20, $('#tspan').getComputedTextLength());
   testing.expectEqual(9.6, $('#invalidFont').getComputedTextLength());
+
+  // Chrome answers an absent textLength with the computed (shaped) text
+  // length; without shaping we default to 0.
+  testing.expectEqual(0, text.textLength.baseVal.value);
+
+  // Browsers return the shaped text box here; our text geometry is
+  // unmeasured, so like the other unresolved elements getBBox answers an
+  // empty box rather than an error.
+  testing.expectEqual(0, text.getBBox().width);
 }
 </script>
 
@@ -48,7 +64,6 @@
   const text = $('#text');
   testing.expectEqual(true, text.textLength instanceof SVGAnimatedLength);
   testing.expectEqual(true, text.textLength === text.textLength);
-  testing.expectEqual(0, text.textLength.baseVal.value);
   text.textLength.baseVal.value = 100;
   testing.expectEqual('100', text.getAttribute('textLength'));
   testing.expectEqual(100, text.textLength.animVal.value);
@@ -56,7 +71,6 @@
   testing.expectEqual(true, text.lengthAdjust === text.lengthAdjust);
   text.lengthAdjust.baseVal = 2;
   testing.expectEqual('spacingAndGlyphs', text.getAttribute('lengthAdjust'));
-  testing.expectError('InvalidStateError', () => text.getBBox());
 
   const textPath = $('#textPath');
   testing.expectEqual('#guide', textPath.href.baseVal);

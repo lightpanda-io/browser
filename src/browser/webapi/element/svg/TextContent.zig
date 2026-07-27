@@ -1,14 +1,32 @@
-// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const text_measure = @import("../../../text_measure.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+
 const AnimatedEnumeration = @import("../../svg/AnimatedEnumeration.zig");
 const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 const Length = @import("../../svg/Length.zig");
+
 const Graphics = @import("Graphics.zig");
 
 pub const TextPositioning = @import("TextPositioning.zig");
@@ -57,7 +75,7 @@ fn getLengthAdjust(self: *TextContent, frame: *Frame) !*AnimatedEnumeration {
 }
 
 pub fn getNumberOfChars(self: *TextContent, frame: *Frame) u32 {
-    return text_measure.countCodepoints(self.text(frame));
+    return text_measure.utf16Length(self.text(frame));
 }
 
 pub fn getComputedTextLength(self: *TextContent, frame: *Frame) f64 {

@@ -1,13 +1,40 @@
-// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
 
 // Deterministic DOM fallback only. This intentionally does not claim to shape
 // scripts, apply kerning, or select fonts; a real shaping backend can replace
 // this module without changing SVGTextContentElement.
-pub fn countCodepoints(text: []const u8) u32 {
-    return @intCast(std.unicode.utf8CountCodepoints(text) catch 0);
+
+// Character counts and indices are UTF-16 code units, to match DOM string
+// semantics: an astral codepoint is two addressable characters in browsers.
+pub fn utf16Length(text: []const u8) u32 {
+    var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    var result: u32 = 0;
+    while (iterator.nextCodepoint()) |codepoint| {
+        result += unitLength(codepoint);
+    }
+    return result;
+}
+
+fn unitLength(codepoint: u21) u32 {
+    return if (codepoint >= 0x10000) 2 else 1;
 }
 
 pub fn width(text: []const u8, font_size: f64) f64 {
@@ -17,21 +44,21 @@ pub fn width(text: []const u8, font_size: f64) f64 {
     return result;
 }
 
-pub fn substringWidth(text: []const u8, offset: u32, count: u32, font_size: f64) !f64 {
-    if (text.len == 0) return error.IndexSizeError;
+pub fn substringWidth(text: []const u8, charnum: u32, nchars: u32, font_size: f64) !f64 {
+    if (charnum >= utf16Length(text)) return error.IndexSizeError;
+    const end = charnum +| nchars;
 
+    // A glyph is measured whenever its unit range intersects the request, so
+    // addressing either half of a surrogate pair yields the full glyph, like
+    // Chrome does.
     var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    var index: u32 = 0;
-    while (index < offset) : (index += 1) {
-        if (iterator.nextCodepoint() == null) return error.IndexSizeError;
-    }
-    if (offset > 0 and iterator.i == text.len) return error.IndexSizeError;
-
+    var unit: u32 = 0;
     var result: f64 = 0;
-    var remaining = count;
-    while (remaining > 0) : (remaining -= 1) {
-        const codepoint = iterator.nextCodepoint() orelse break;
-        result += advance(codepoint, font_size);
+    while (iterator.nextCodepoint()) |codepoint| {
+        const units = unitLength(codepoint);
+        if (unit >= end) break;
+        if (unit + units > charnum) result += advance(codepoint, font_size);
+        unit += units;
     }
     return result;
 }
@@ -70,10 +97,14 @@ fn isWide(codepoint: u21) bool {
         (codepoint >= 0x20000 and codepoint <= 0x3fffd);
 }
 
-test "fallback metrics count codepoints and ignore combining marks" {
-    try std.testing.expectEqual(@as(u32, 3), countCodepoints("Aé界"));
+test "fallback metrics count utf-16 units and ignore combining marks" {
+    try std.testing.expectEqual(@as(u32, 3), utf16Length("Aé界"));
+    try std.testing.expectEqual(@as(u32, 2), utf16Length("🌍"));
     try std.testing.expectApproxEqAbs(@as(f64, 16), width("A\u{0301}界", 10), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f64, 10), try substringWidth("A界", 1, 1, 10), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f64, 10), try substringWidth("🌍", 0, 1, 10), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f64, 10), try substringWidth("🌍", 1, 1, 10), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f64, 0), try substringWidth("A界", 1, 0, 10), 0.0001);
     try std.testing.expectError(error.IndexSizeError, substringWidth("A", 2, 1, 10));
     try std.testing.expectError(error.IndexSizeError, substringWidth("A", 1, 0, 10));
     try std.testing.expectError(error.IndexSizeError, substringWidth("", 0, 0, 10));
