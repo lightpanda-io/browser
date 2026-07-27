@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <!-- Fixture for the Page.js_error_count test: one uncaught top-level
+         exception and one uncaught timer-callback exception. -->
+    <script>throw new Error("boom");</script>
+    <script>setTimeout(() => { throw new Error("boom timer"); }, 1);</script>
+</body>
+</html>

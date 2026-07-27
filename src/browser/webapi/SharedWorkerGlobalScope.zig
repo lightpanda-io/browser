@@ -293,6 +293,7 @@ fn loadInitialScript(self: *SharedWorkerGlobalScope, script: []const u8) !void {
                 return;
             }
 
+            js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?, err);
             log.err(.browser, "shared worker script error", .{ .url = self._url, .caught = caught });
             return;
@@ -302,6 +303,7 @@ fn loadInitialScript(self: *SharedWorkerGlobalScope, script: []const u8) !void {
                 return;
             }
 
+            js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?, err);
             log.err(.browser, "shared worker module error", .{ .url = self._url, .caught = caught });
             return;

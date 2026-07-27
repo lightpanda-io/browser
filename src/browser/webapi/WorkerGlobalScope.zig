@@ -360,6 +360,10 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
         break :blk .{ "rejectionhandled", self._on_rejection_handled };
     };
 
+    if (no_handler) {
+        self._page.recordJsError(error.JsException);
+    }
+
     const target = self.asEventTarget();
     if (self._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
@@ -428,6 +432,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     defer try_catch.deinit();
 
     _ = ls.local.eval(response.body.items, url) catch |err| {
+        self._page.recordJsError(err);
         const caught = try_catch.caughtOrError(arena, err);
         log.err(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
         return;
@@ -437,6 +442,8 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 }
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
+    self._page.recordJsError(error.JsException);
+
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
