@@ -31,7 +31,7 @@ const string = @import("../string.zig");
 const auth = @import("auth/auth.zig");
 const Credentials = zenai.provider.Credentials;
 
-pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Anthropic: a Claude subscription from Claude Code)";
+pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
 
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
@@ -188,24 +188,24 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
 }
 
 /// Swaps a placeholder credential for a live token: a gcloud token for
-/// project-mode Vertex, or an imported subscription session for the Anthropic
-/// bearer placeholder.
+/// project-mode Vertex, or a stored subscription session for the subscription
+/// (empty-key) placeholder.
 fn finishResolved(allocator: std.mem.Allocator, credentials: Credentials, source: @FieldType(ResolvedProvider, "source")) !ResolvedProvider {
     if (credentials.provider == .vertex and vertexProjectMode()) {
         const token = try gcloudAccessToken(allocator);
         return .{ .credentials = .{ .provider = .vertex, .key = token }, .source = source, .key_owned = true };
     }
-    if (credentials.auth == .bearer and credentials.key.len == 0) {
+    if (auth.descriptorFor(credentials.provider) != null and credentials.key.len == 0) {
         if (try subscriptionResolved(allocator, credentials.provider, source)) |resolved| return resolved;
         return error.MissingApiKey;
     }
     return .{ .credentials = credentials, .source = source };
 }
 
-/// Import a subscription and wrap it as a resolved bearer credential. The
+/// Load a stored subscription session and wrap it as a resolved credential. The
 /// returned `session` owns `credentials.key`; the caller must keep it alive as
-/// long as the AI client and free it with `session.deinit`. Null when no
-/// subscription is importable.
+/// long as the AI client and free it with `session.deinit`. Null when the user
+/// hasn't logged in.
 fn subscriptionResolved(allocator: std.mem.Allocator, provider: Config.AiProvider, source: @FieldType(ResolvedProvider, "source")) !?ResolvedProvider {
     const session = (try auth.sessionFor(allocator, provider)) orelse return null;
     // Name the credential in effect — a set-but-ignored API key would otherwise
@@ -216,7 +216,7 @@ fn subscriptionResolved(allocator: std.mem.Allocator, provider: Config.AiProvide
         std.debug.print("{s}: using your {s}.\n", .{ @tagName(provider), session.descriptor.label });
     }
     return .{
-        .credentials = .{ .provider = provider, .key = session.tokens.access_token, .auth = .bearer },
+        .credentials = .{ .provider = provider, .key = session.tokens.access_token },
         .source = source,
         .session = session,
     };
@@ -279,7 +279,7 @@ pub fn availableProviders(buf: []Credentials) []Credentials {
     // live token on selection, mirroring Vertex project mode below.
     for (auth.registry) |desc| {
         if (!auth.subscriptionAvailable(desc.provider)) continue;
-        const placeholder: Credentials = .{ .provider = desc.provider, .key = "", .auth = .bearer };
+        const placeholder: Credentials = .{ .provider = desc.provider, .key = "" };
         if (indexOfProvider(found, desc.provider)) |i| {
             found[i] = placeholder;
         } else if (found.len < buf.len) {
@@ -357,9 +357,9 @@ pub fn reconcileModel(
     base_url: ?[:0]const u8,
     explicit: bool,
 ) !ReconciledModel {
-    // A subscription (bearer) token can't list models; trust the desired model
-    // as-is rather than 401 against `/models`.
-    if (llm.auth == .bearer) return .{ .use = try allocator.dupe(u8, desired) };
+    // A subscription provider can't list models via the provider API; trust the
+    // desired model as-is rather than error against `/models`.
+    if (auth.descriptorFor(llm.provider) != null) return .{ .use = try allocator.dupe(u8, desired) };
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -418,4 +418,11 @@ test "resolveStream: default on, remembered wins" {
     try testing.expect(resolveStream(.{ .model = "m", .stream = null }));
     try testing.expect(resolveStream(.{ .model = "m", .stream = true }));
     try testing.expect(!resolveStream(.{ .model = "m", .stream = false }));
+}
+
+test {
+    // Pull the auth module tests into the suite (a `const` import alone doesn't).
+    _ = @import("auth/auth.zig");
+    _ = @import("auth/codex.zig");
+    _ = @import("auth/models_dev.zig");
 }

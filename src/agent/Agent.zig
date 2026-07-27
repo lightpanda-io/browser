@@ -364,7 +364,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.startSession();
 
-    self.ai_client = if (llm) |l| try zenai.provider.Client.init(lp.io, allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ() }) else null;
+    self.ai_client = if (llm) |l| try zenai.provider.Client.init(lp.io, allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ(), .account_id = if (self.auth_session) |s| s.tokens.account_id else null }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
@@ -936,25 +936,23 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         };
         return;
     }
-    // Subscription takes priority; on no importable credential, fall through to
-    // the API-key path.
-    if (subscription) {
-        if (auth.sessionFor(self.allocator, provider) catch null) |session| {
-            var owned = session;
-            self.setProvider(.{ .provider = provider, .key = owned.tokens.access_token, .auth = .bearer }, null, owned) catch |err| {
-                owned.deinit();
-                self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
-            };
-            return;
-        }
+    // Subscription provider: use the stored session, or run the interactive
+    // login (device-code flow) when there's none yet.
+    if (auth.descriptorFor(provider)) |desc| {
+        var owned = (auth.sessionFor(self.allocator, provider) catch null) orelse
+            (auth.login(self.allocator, desc) catch |err| {
+                self.terminal.printError("{s} login failed: {s}", .{ desc.label, @errorName(err) });
+                return;
+            });
+        self.setProvider(.{ .provider = provider, .key = owned.tokens.access_token }, null, owned) catch |err| {
+            owned.deinit();
+            self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
+        };
+        return;
     }
     const key = zenai.provider.envApiKey(lp.environ(), provider) orelse {
         if (provider == .vertex) {
             self.terminal.printError("vertex needs VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud)", .{});
-            return;
-        }
-        if (subscription) {
-            self.terminal.printError("no API key or subscription for {s}; set {s} or log into Claude Code", .{ @tagName(provider), zenai.provider.envVarName(provider) });
             return;
         }
         self.terminal.printError("no API key for {s}; set {s}", .{ @tagName(provider), zenai.provider.envVarName(provider) });
@@ -1000,7 +998,7 @@ fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
 /// likewise transfers a subscription session that owns `credentials.key`; the
 /// previous session is freed only after the old client is gone.
 fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8, session: ?auth.Session) !void {
-    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ() });
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ(), .account_id = if (session) |s| s.tokens.account_id else null });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
@@ -1018,9 +1016,8 @@ fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8,
     self.model_completions = null;
     self.allocator.free(self.model);
     self.model = new_model;
-    if (credentials.auth == .bearer) {
-        const label = if (auth.descriptorFor(credentials.provider)) |d| d.label else "subscription";
-        self.terminal.printInfo("provider: {s} ({s})", .{ @tagName(credentials.provider), label });
+    if (auth.descriptorFor(credentials.provider)) |d| {
+        self.terminal.printInfo("provider: {s} ({s})", .{ @tagName(credentials.provider), d.label });
     } else {
         self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
     }
@@ -1029,9 +1026,9 @@ fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8,
         self.terminal.printInfo("effort: {s} ({s} default)", .{ @tagName(e), @tagName(credentials.provider) });
     };
     self.reportSaved("model", self.model);
-    // Priming warms the completion cache; skip it for bearer, whose catalog is a
-    // multi-MB models.dev download best deferred to first `/model` use.
-    if (credentials.auth != .bearer) _ = completionModels(self, self.allocator);
+    // Priming warms the completion cache; skip it for a subscription provider,
+    // whose catalog is a multi-MB models.dev download best deferred to first use.
+    if (auth.descriptorFor(credentials.provider) == null) _ = completionModels(self, self.allocator);
 }
 
 /// Keep a subscription (bearer) token current before a model request: when the
@@ -1042,7 +1039,7 @@ fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8,
 fn refreshAuthIfNeeded(self: *Agent) void {
     if (self.auth_session) |*session| {
         const new_token = session.ensureFresh() catch |err| {
-            self.terminal.printError("could not refresh the Claude subscription token: {s}", .{@errorName(err)});
+            self.terminal.printError("could not refresh the subscription token: {s}", .{@errorName(err)});
             return;
         };
         if (new_token) |tok| {
@@ -1907,9 +1904,9 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    // A subscription (bearer) token can't list models via the provider; use the
+    // A subscription provider can't list models via the provider API; use the
     // free models.dev catalog (uncached here — this is a one-shot CLI command).
-    if (llm.auth == .bearer) {
+    if (auth.descriptorFor(llm.provider) != null) {
         const sub_ids = models_dev.modelIds(arena.allocator(), @tagName(llm.provider), null);
         var stdout_sub = std.Io.File.stdout().writerStreaming(lp.io, &.{});
         const ws = &stdout_sub.interface;
@@ -1974,10 +1971,9 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
 
     _ = self.model_completion_arena.reset(.retain_capacity);
     const arena = self.model_completion_arena.allocator();
-    // A subscription (bearer) token can't hit the provider's `/models` endpoint
-    // (it 401s), so list from the free, unauthenticated models.dev catalog
-    // instead — no API key needed.
-    const ids = if (llm.auth == .bearer)
+    // A subscription provider can't hit the provider's `/models` endpoint, so
+    // list from the free, unauthenticated models.dev catalog instead.
+    const ids = if (auth.descriptorFor(llm.provider) != null)
         models_dev.modelIds(arena, @tagName(llm.provider), self.app_dir)
     else
         zenai.provider.listChatModelIds(
