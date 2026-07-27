@@ -118,7 +118,7 @@ pub fn buildPath(self: *Geometry, frame: *Frame) !PathData.Path {
 
 fn value(length: *AnimatedLength, frame: *Frame) ?f64 {
     const base = length.getBaseVal();
-    if (base.getUnitType() == 0) return null;
+    if (!base.hasKnownUnit()) return null;
     const result = base.getValue(frame);
     return if (std.math.isFinite(result)) result else null;
 }

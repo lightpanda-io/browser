@@ -1,10 +1,20 @@
 // Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
@@ -139,33 +149,58 @@ pub const Path = struct {
     }
 
     pub fn appendArc(self: *Path, start: Point, rx: f64, ry: f64, rotation: f64, large: bool, sweep: bool, end: Point, allocator: Allocator) !void {
-        if (self.first_point == null) self.first_point = start;
-        if (pointsEqual(start, end)) return;
-        if (rx == 0 or ry == 0) return self.appendLine(start, end, allocator);
+        if (self.first_point == null) {
+            self.first_point = start;
+        }
+        if (pointsEqual(start, end)) {
+            return;
+        }
+        if (rx == 0 or ry == 0) {
+            return self.appendLine(start, end, allocator);
+        }
+
         const arc = endpointArc(start, rx, ry, rotation, large, sweep, end) orelse
             return self.appendLine(start, end, allocator);
+
         try self.segments.append(allocator, .{ .arc = arc });
     }
 
     pub fn bounds(self: *const Path, matrix: Matrix) Bounds {
         var result: Bounds = .{};
-        for (self.segments.items) |segment| includeSegmentBounds(&result, segment, matrix);
+        for (self.segments.items) |segment| {
+            includeSegmentBounds(&result, segment, matrix);
+        }
         return result;
     }
 
     pub fn totalLength(self: *const Path, allocator: Allocator) !f64 {
+        // One buffer for every segment: growing a fresh list per segment leaves
+        // each intermediate copy behind in the arena.
+        var points: std.ArrayList(Point) = .empty;
+        defer points.deinit(allocator);
+
         var total: f64 = 0;
-        for (self.segments.items) |segment| total += try segmentLength(segment, allocator);
+        for (self.segments.items) |segment| {
+            points.clearRetainingCapacity();
+            try flatten(segment, &points, allocator);
+            for (points.items[0 .. points.items.len - 1], points.items[1..]) |a, b| {
+                total += distance(a, b);
+            }
+        }
         return total;
     }
 
     pub fn pointAtLength(self: *const Path, requested: f64, allocator: Allocator) !Point {
-        if (self.segments.items.len == 0) return self.first_point orelse .{ .x = 0, .y = 0 };
+        if (self.segments.items.len == 0) {
+            return self.first_point orelse .{ .x = 0, .y = 0 };
+        }
+
+        var points: std.ArrayList(Point) = .empty;
+        defer points.deinit(allocator);
 
         var remaining = @max(requested, 0);
         for (self.segments.items, 0..) |segment, segment_index| {
-            var points: std.ArrayList(Point) = .empty;
-            defer points.deinit(allocator);
+            points.clearRetainingCapacity();
             try flatten(segment, &points, allocator);
 
             for (points.items[0 .. points.items.len - 1], points.items[1..]) |a, b| {
@@ -181,7 +216,9 @@ pub const Path = struct {
                 remaining -= length;
             }
 
-            if (segment_index + 1 == self.segments.items.len) return segment.end();
+            if (segment_index + 1 == self.segments.items.len) {
+                return segment.end();
+            }
         }
         unreachable;
     }
@@ -226,7 +263,9 @@ pub fn parse(input: []const u8, allocator: Allocator) !Path {
 
         const cmd = command.?;
         const kind = upper(cmd);
-        if (!saw_moveto and kind != 'M') break;
+        if (!saw_moveto and kind != 'M') {
+            break;
+        }
         const relative = std.ascii.isLower(cmd);
         const allow_first_comma = !command_fresh;
 
@@ -345,31 +384,44 @@ const Parser = struct {
     }
 
     fn skipWhitespace(self: *Parser) void {
-        while (!self.atEnd() and isWhitespace(self.peek())) self.index += 1;
+        while (!self.atEnd() and isWhitespace(self.peek())) {
+            self.index += 1;
+        }
     }
 
     fn separator(self: *Parser, allow_comma: bool) bool {
         self.skipWhitespace();
         if (!self.atEnd() and self.peek() == ',') {
-            if (!allow_comma) return false;
+            if (!allow_comma) {
+                return false;
+            }
             self.index += 1;
             self.skipWhitespace();
-            if (self.atEnd() or self.peek() == ',') return false;
+            if (self.atEnd() or self.peek() == ',') {
+                return false;
+            }
         }
         return true;
     }
 
     fn number(self: *Parser, allow_comma: bool) ?f64 {
-        if (!self.separator(allow_comma)) return null;
+        if (!self.separator(allow_comma)) {
+            return null;
+        }
         const start = self.index;
-        if (self.atEnd()) return null;
+
+        if (self.atEnd()) {
+            return null;
+        }
 
         if (self.peek() == '+' or self.peek() == '-') self.index += 1;
         var digits: usize = 0;
         while (!self.atEnd() and std.ascii.isDigit(self.peek())) : (self.index += 1) digits += 1;
         if (!self.atEnd() and self.peek() == '.') {
             self.index += 1;
-            while (!self.atEnd() and std.ascii.isDigit(self.peek())) : (self.index += 1) digits += 1;
+            while (!self.atEnd() and std.ascii.isDigit(self.peek())) : (self.index += 1) {
+                digits += 1;
+            }
         }
         if (digits == 0) {
             self.index = start;
@@ -448,7 +500,9 @@ fn distance(a: Point, b: Point) f64 {
 fn endpointArc(start: Point, rx_input: f64, ry_input: f64, rotation_degrees: f64, large: bool, sweep: bool, end: Point) ?Arc {
     var rx = @abs(rx_input);
     var ry = @abs(ry_input);
-    if (rx == 0 or ry == 0 or pointsEqual(start, end)) return null;
+    if (rx == 0 or ry == 0 or pointsEqual(start, end)) {
+        return null;
+    }
 
     const rotation = @mod(rotation_degrees, 360.0) * std.math.pi / 180.0;
     const cosine = @cos(rotation);
@@ -469,9 +523,13 @@ fn endpointArc(start: Point, rx_input: f64, ry_input: f64, rotation_degrees: f64
     const ry2 = ry * ry;
     const numerator = @max(0, rx2 * ry2 - rx2 * y_prime * y_prime - ry2 * x_prime * x_prime);
     const denominator = rx2 * y_prime * y_prime + ry2 * x_prime * x_prime;
-    if (denominator == 0) return null;
+    if (denominator == 0) {
+        return null;
+    }
     var coefficient = @sqrt(numerator / denominator);
-    if (large == sweep) coefficient = -coefficient;
+    if (large == sweep) {
+        coefficient = -coefficient;
+    }
 
     const center_prime = Point{
         .x = coefficient * rx * y_prime / ry,
@@ -492,8 +550,12 @@ fn endpointArc(start: Point, rx_input: f64, ry_input: f64, rotation_degrees: f64
     };
     const theta = std.math.atan2(first.y, first.x);
     var delta = std.math.atan2(first.x * second.y - first.y * second.x, first.x * second.x + first.y * second.y);
-    if (sweep and delta < 0) delta += tau;
-    if (!sweep and delta > 0) delta -= tau;
+    if (sweep and delta < 0) {
+        delta += tau;
+    }
+    if (!sweep and delta > 0) {
+        delta -= tau;
+    }
 
     return .{
         .start = start,
@@ -513,23 +575,10 @@ fn includeSegmentBounds(bounds: *Bounds, segment: Segment, matrix: Matrix) void 
 
     switch (segment) {
         .line => {},
-        .quadratic => |quadratic| {
-            includeQuadraticExtremum(bounds, quadratic.start.x, quadratic.control.x, quadratic.end.x, quadratic, matrix);
-            includeQuadraticExtremum(bounds, quadratic.start.y, quadratic.control.y, quadratic.end.y, quadratic, matrix);
-            includeTransformedQuadraticExtrema(bounds, quadratic, matrix);
-        },
+        .quadratic => |quadratic| includeTransformedQuadraticExtrema(bounds, quadratic, matrix),
         .cubic => |cubic| includeTransformedCubicExtrema(bounds, cubic, matrix),
         .arc => |arc| includeArcExtrema(bounds, arc, matrix),
     }
-}
-
-// The direct-axis roots help the identity case and are harmless duplicates for
-// transformed paths. The transformed roots below are authoritative.
-fn includeQuadraticExtremum(bounds: *Bounds, p0: f64, p1: f64, p2: f64, quadratic: Quadratic, matrix: Matrix) void {
-    const denominator = p0 - 2.0 * p1 + p2;
-    if (@abs(denominator) < 1e-14) return;
-    const t = (p0 - p1) / denominator;
-    if (t > 0 and t < 1) bounds.include(matrix.apply(evalQuadratic(quadratic, t)));
 }
 
 fn includeTransformedQuadraticExtrema(bounds: *Bounds, quadratic: Quadratic, matrix: Matrix) void {
@@ -538,9 +587,13 @@ fn includeTransformedQuadraticExtrema(bounds: *Bounds, quadratic: Quadratic, mat
     const p2 = matrix.apply(quadratic.end);
     for ([_][3]f64{ .{ p0.x, p1.x, p2.x }, .{ p0.y, p1.y, p2.y } }) |values| {
         const denominator = values[0] - 2.0 * values[1] + values[2];
-        if (@abs(denominator) < 1e-14) continue;
+        if (@abs(denominator) < 1e-14) {
+            continue;
+        }
         const t = (values[0] - values[1]) / denominator;
-        if (t > 0 and t < 1) bounds.include(matrix.apply(evalQuadratic(quadratic, t)));
+        if (t > 0 and t < 1) {
+            bounds.include(matrix.apply(evalQuadratic(quadratic, t)));
+        }
     }
 }
 
@@ -555,7 +608,9 @@ fn includeTransformedCubicExtrema(bounds: *Bounds, cubic: Cubic, matrix: Matrix)
         const c = values[1] - values[0];
         for (quadraticRoots(a, b, c)) |root| {
             const t = root orelse continue;
-            if (t > 0 and t < 1) bounds.include(matrix.apply(evalCubic(cubic, t)));
+            if (t > 0 and t < 1) {
+                bounds.include(matrix.apply(evalCubic(cubic, t)));
+            }
         }
     }
 }
@@ -576,30 +631,41 @@ fn includeArcExtrema(bounds: *Bounds, arc: Arc, matrix: Matrix) void {
     for (transformed) |coefficients| {
         const candidate = std.math.atan2(coefficients[1], coefficients[0]);
         for ([_]f64{ candidate, candidate + std.math.pi }) |angle| {
-            if (angleInSweep(angle, arc.theta, arc.delta)) bounds.include(matrix.apply(evalArc(arc, angle)));
+            if (angleInSweep(angle, arc.theta, arc.delta)) {
+                bounds.include(matrix.apply(evalArc(arc, angle)));
+            }
         }
     }
 }
 
 fn quadraticRoots(a: f64, b: f64, c: f64) [2]?f64 {
     if (@abs(a) < 1e-14) {
-        if (@abs(b) < 1e-14) return .{ null, null };
+        if (@abs(b) < 1e-14) {
+            return .{ null, null };
+        }
         return .{ -c / b, null };
     }
     const discriminant = b * b - 4.0 * a * c;
-    if (discriminant < 0) return .{ null, null };
+    if (discriminant < 0) {
+        return .{ null, null };
+    }
+
     const root = @sqrt(discriminant);
     return .{ (-b + root) / (2.0 * a), (-b - root) / (2.0 * a) };
 }
 
 fn angleInSweep(angle: f64, start: f64, delta: f64) bool {
-    if (delta >= 0) return positiveAngle(angle - start) <= delta + 1e-12;
+    if (delta >= 0) {
+        return positiveAngle(angle - start) <= delta + 1e-12;
+    }
     return positiveAngle(start - angle) <= -delta + 1e-12;
 }
 
 fn positiveAngle(angle: f64) f64 {
     var result = @mod(angle, tau);
-    if (result < 0) result += tau;
+    if (result < 0) {
+        result += tau;
+    }
     return result;
 }
 
@@ -630,46 +696,63 @@ fn evalArc(arc: Arc, angle: f64) Point {
     };
 }
 
-fn segmentLength(segment: Segment, allocator: Allocator) !f64 {
-    var points: std.ArrayList(Point) = .empty;
-    defer points.deinit(allocator);
-    try flatten(segment, &points, allocator);
-
-    var total: f64 = 0;
-    for (points.items[0 .. points.items.len - 1], points.items[1..]) |a, b| total += distance(a, b);
-    return total;
-}
-
 const flatten_tolerance = 0.001;
+// Above roughly a thousand user units, absolute tolerance costs subdivisions
+// nobody can observe, so it scales with the segment instead.
+const flatten_relative_tolerance = 1e-6;
 const flatten_depth = 18;
 
 fn flatten(segment: Segment, points: *std.ArrayList(Point), allocator: Allocator) !void {
     try points.append(allocator, segment.start());
     switch (segment) {
         .line => |line| try points.append(allocator, line.end),
-        .quadratic => |quadratic| try flattenQuadratic(quadratic, points, allocator, 0),
-        .cubic => |cubic| try flattenCubic(cubic, points, allocator, 0),
-        .arc => |arc| try flattenArc(arc, arc.theta, arc.theta + arc.delta, arc.start, arc.end, points, allocator, 0),
+        .quadratic => |quadratic| {
+            const legs = distance(quadratic.start, quadratic.control) + distance(quadratic.control, quadratic.end);
+            try flattenQuadratic(quadratic, toleranceFor(legs), points, allocator, 0);
+        },
+        .cubic => |cubic| {
+            const legs = distance(cubic.start, cubic.control1) +
+                distance(cubic.control1, cubic.control2) +
+                distance(cubic.control2, cubic.end);
+            try flattenCubic(cubic, toleranceFor(legs), points, allocator, 0);
+        },
+        .arc => |arc| try flattenArc(
+            arc,
+            toleranceFor(@abs(arc.delta) * @max(arc.rx, arc.ry)),
+            arc.theta,
+            arc.theta + arc.delta,
+            arc.start,
+            arc.end,
+            points,
+            allocator,
+            0,
+        ),
     }
 }
 
-fn flattenQuadratic(segment: Quadratic, points: *std.ArrayList(Point), allocator: Allocator, depth: usize) !void {
-    if (depth >= flatten_depth or pointLineDistance(segment.control, segment.start, segment.end) <= flatten_tolerance) {
+fn toleranceFor(size: f64) f64 {
+    return @max(flatten_tolerance, size * flatten_relative_tolerance);
+}
+
+fn flattenQuadratic(segment: Quadratic, tolerance: f64, points: *std.ArrayList(Point), allocator: Allocator, depth: usize) !void {
+    if (depth >= flatten_depth or pointSegmentDistance(segment.control, segment.start, segment.end) <= tolerance) {
         return points.append(allocator, segment.end);
     }
     const a = Point.midpoint(segment.start, segment.control);
     const b = Point.midpoint(segment.control, segment.end);
     const middle = Point.midpoint(a, b);
-    try flattenQuadratic(.{ .start = segment.start, .control = a, .end = middle }, points, allocator, depth + 1);
-    try flattenQuadratic(.{ .start = middle, .control = b, .end = segment.end }, points, allocator, depth + 1);
+    try flattenQuadratic(.{ .start = segment.start, .control = a, .end = middle }, tolerance, points, allocator, depth + 1);
+    try flattenQuadratic(.{ .start = middle, .control = b, .end = segment.end }, tolerance, points, allocator, depth + 1);
 }
 
-fn flattenCubic(segment: Cubic, points: *std.ArrayList(Point), allocator: Allocator, depth: usize) !void {
+fn flattenCubic(segment: Cubic, tolerance: f64, points: *std.ArrayList(Point), allocator: Allocator, depth: usize) !void {
     const flatness = @max(
-        pointLineDistance(segment.control1, segment.start, segment.end),
-        pointLineDistance(segment.control2, segment.start, segment.end),
+        pointSegmentDistance(segment.control1, segment.start, segment.end),
+        pointSegmentDistance(segment.control2, segment.start, segment.end),
     );
-    if (depth >= flatten_depth or flatness <= flatten_tolerance) return points.append(allocator, segment.end);
+    if (depth >= flatten_depth or flatness <= tolerance) {
+        return points.append(allocator, segment.end);
+    }
 
     const a = Point.midpoint(segment.start, segment.control1);
     const b = Point.midpoint(segment.control1, segment.control2);
@@ -677,57 +760,89 @@ fn flattenCubic(segment: Cubic, points: *std.ArrayList(Point), allocator: Alloca
     const d = Point.midpoint(a, b);
     const e = Point.midpoint(b, c);
     const middle = Point.midpoint(d, e);
-    try flattenCubic(.{ .start = segment.start, .control1 = a, .control2 = d, .end = middle }, points, allocator, depth + 1);
-    try flattenCubic(.{ .start = middle, .control1 = e, .control2 = c, .end = segment.end }, points, allocator, depth + 1);
+    try flattenCubic(.{ .start = segment.start, .control1 = a, .control2 = d, .end = middle }, tolerance, points, allocator, depth + 1);
+    try flattenCubic(.{ .start = middle, .control1 = e, .control2 = c, .end = segment.end }, tolerance, points, allocator, depth + 1);
 }
 
-fn flattenArc(arc: Arc, start_angle: f64, end_angle: f64, start: Point, end: Point, points: *std.ArrayList(Point), allocator: Allocator, depth: usize) !void {
+fn flattenArc(arc: Arc, tolerance: f64, start_angle: f64, end_angle: f64, start: Point, end: Point, points: *std.ArrayList(Point), allocator: Allocator, depth: usize) !void {
     const middle_angle = (start_angle + end_angle) / 2.0;
     const middle = evalArc(arc, middle_angle);
-    if (depth >= flatten_depth or pointLineDistance(middle, start, end) <= flatten_tolerance) {
+    if (depth >= flatten_depth or pointSegmentDistance(middle, start, end) <= tolerance) {
         return points.append(allocator, end);
     }
-    try flattenArc(arc, start_angle, middle_angle, start, middle, points, allocator, depth + 1);
-    try flattenArc(arc, middle_angle, end_angle, middle, end, points, allocator, depth + 1);
+    try flattenArc(arc, tolerance, start_angle, middle_angle, start, middle, points, allocator, depth + 1);
+    try flattenArc(arc, tolerance, middle_angle, end_angle, middle, end, points, allocator, depth + 1);
 }
 
-fn pointLineDistance(point: Point, start: Point, end: Point) f64 {
+// Distance to the chord as a segment, not as an infinite line: control points
+// collinear with the chord but past its ends make a curve that overshoots, and
+// the distance to the line would call it flat and measure the chord instead.
+fn pointSegmentDistance(point: Point, start: Point, end: Point) f64 {
     const dx = end.x - start.x;
     const dy = end.y - start.y;
-    const denominator = std.math.hypot(dx, dy);
-    if (denominator == 0) return distance(point, start);
-    return @abs(dy * point.x - dx * point.y + end.x * start.y - end.y * start.x) / denominator;
+    const length_squared = dx * dx + dy * dy;
+    if (length_squared == 0) {
+        return distance(point, start);
+    }
+    const projection = ((point.x - start.x) * dx + (point.y - start.y) * dy) / length_squared;
+    const clamped = std.math.clamp(projection, 0, 1);
+    return distance(point, .{ .x = start.x + clamped * dx, .y = start.y + clamped * dy });
 }
 
+const testing = @import("../../../testing.zig");
+
 test "path parser preserves complete packs before an error" {
-    var path = try parse("M10 10 L20 20 30", std.testing.allocator);
-    defer path.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), path.segments.items.len);
+    var path = try parse("M10 10 L20 20 30", testing.allocator);
+    defer path.deinit(testing.allocator);
+    try testing.expectEqual(1, path.segments.items.len);
     const bounds = path.bounds(.{});
-    try std.testing.expectEqual(@as(f64, 10), bounds.min_x);
-    try std.testing.expectEqual(@as(f64, 20), bounds.max_x);
+    try testing.expectEqual(10, bounds.min_x);
+    try testing.expectEqual(20, bounds.max_x);
 }
 
 test "moveto coordinate pairs become lines and malformed exponents stop" {
-    var path = try parse("M0 0 10 10 20 1e L99 99", std.testing.allocator);
-    defer path.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), path.segments.items.len);
-    try std.testing.expectEqual(Point{ .x = 10, .y = 10 }, path.segments.items[0].end());
+    var path = try parse("M0 0 10 10 20 1e L99 99", testing.allocator);
+    defer path.deinit(testing.allocator);
+    try testing.expectEqual(1, path.segments.items.len);
+    try testing.expectEqual(Point{ .x = 10, .y = 10 }, path.segments.items[0].end());
 }
 
 test "rotated arc bounds use ellipse derivative extrema" {
-    var path = try parse("M0 0 A80 20 45 1 1 100 100", std.testing.allocator);
-    defer path.deinit(std.testing.allocator);
+    var path = try parse("M0 0 A80 20 45 1 1 100 100", testing.allocator);
+    defer path.deinit(testing.allocator);
     const bounds = path.bounds(.{});
-    try std.testing.expect(bounds.min_x < 0);
-    try std.testing.expect(bounds.max_y >= 100);
+    try testing.expectEqual(true, bounds.min_x < 0);
+    try testing.expectEqual(true, bounds.max_y >= 100);
 }
 
 test "length and point lookup share adaptive geometry" {
-    var path = try parse("M0 0 C0 100 100 100 100 0", std.testing.allocator);
-    defer path.deinit(std.testing.allocator);
-    const length = try path.totalLength(std.testing.allocator);
-    const middle = try path.pointAtLength(length / 2.0, std.testing.allocator);
-    try std.testing.expectApproxEqAbs(@as(f64, 50), middle.x, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f64, 75), middle.y, 0.01);
+    var path = try parse("M0 0 C0 100 100 100 100 0", testing.allocator);
+    defer path.deinit(testing.allocator);
+    const length = try path.totalLength(testing.allocator);
+    try testing.expectDelta(200, length, 0.01);
+    const middle = try path.pointAtLength(length / 2.0, testing.allocator);
+    try testing.expectDelta(50, middle.x, 0.01);
+    try testing.expectDelta(75, middle.y, 0.01);
+}
+
+test "curves overshooting a collinear chord are still subdivided" {
+    // Both control points sit on the line through the endpoints, so a
+    // distance-to-chord test would report these as flat and measure the chord.
+    var cubic = try parse("M0 0 C0 -50 0 150 0 100", testing.allocator);
+    defer cubic.deinit(testing.allocator);
+    try testing.expectDelta(132.38, try cubic.totalLength(testing.allocator), 0.01);
+
+    var quadratic = try parse("M0 0 Q0 200 0 100", testing.allocator);
+    defer quadratic.deinit(testing.allocator);
+    try testing.expectDelta(166.67, try quadratic.totalLength(testing.allocator), 0.01);
+}
+
+test "large geometry stays within the subdivision budget" {
+    var path = try parse("M0 0 A1e8 1e8 45 1 1 100 100", testing.allocator);
+    defer path.deinit(testing.allocator);
+
+    var points: std.ArrayList(Point) = .empty;
+    defer points.deinit(testing.allocator);
+    try flatten(path.segments.items[0], &points, testing.allocator);
+    try testing.expectEqual(true, points.items.len < 2048);
 }

@@ -87,18 +87,10 @@ pub const JsApi = struct {
     pub const getBBox = bridge.function(Graphics.getBBox, .{});
 };
 
-const BoundingBoxOptions = struct {
-    fill: bool = true,
-    stroke: bool = false,
-    markers: bool = false,
-    clipped: bool = false,
-};
-
-pub fn getBBox(self: *Graphics, options_: ?BoundingBoxOptions, frame: *Frame) !*DOMRect {
-    const options = options_ orelse BoundingBoxOptions{};
-    if (options.stroke or options.markers or options.clipped) return error.NotSupported;
-    if (!options.fill) return DOMRect.create(.{}, frame._factory);
-
+// SVGBoundingBoxOptions is not modelled: Chrome declares no parameter at all
+// and Firefox's flags degenerate to the fill geometry, so both engines answer
+// every call with the fill box.
+pub fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
     var bounds: PathData.Bounds = .{};
     switch (self._type) {
         .geometry => |geometry| {
@@ -106,10 +98,13 @@ pub fn getBBox(self: *Graphics, options_: ?BoundingBoxOptions, frame: *Frame) !*
             defer path.deinit(frame.local_arena);
             bounds = path.bounds(.{});
         },
-        .g, .a, .svg => try accumulateChildren(self, .{}, &bounds, frame),
-        .defs, .use, .image => return error.InvalidStateError,
+        .g, .a, .svg => try accumulateChildren(self, .{}, &bounds, frame, 0),
+        .defs, .use, .image => {},
     }
-    if (bounds.isEmpty()) return DOMRect.create(.{}, frame._factory);
+    if (bounds.isEmpty()) {
+        return DOMRect.create(.{}, frame._factory);
+    }
+
     return DOMRect.create(.{
         .x = bounds.min_x,
         .y = bounds.min_y,
@@ -118,7 +113,13 @@ pub fn getBBox(self: *Graphics, options_: ?BoundingBoxOptions, frame: *Frame) !*
     }, frame._factory);
 }
 
-fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathData.Bounds, frame: *Frame) !void {
+const MAX_NESTING_DEPTH = 512;
+
+fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathData.Bounds, frame: *Frame, depth: usize) !void {
+    if (depth == MAX_NESTING_DEPTH) {
+        return;
+    }
+
     var child = parent.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         const element = node.is(Element) orelse continue;
@@ -133,9 +134,11 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
                 defer path.deinit(frame.local_arena);
                 bounds.merge(path.bounds(child_matrix));
             },
-            .g, .a => try accumulateChildren(graphics, child_matrix, bounds, frame),
-            .defs => {},
-            .svg, .use, .image => return error.InvalidStateError,
+            .g, .a => try accumulateChildren(graphics, child_matrix, bounds, frame, depth + 1),
+            // <defs> never renders. Nested viewports, <use> and <image> have
+            // geometry we cannot resolve yet, so they contribute nothing rather
+            // than making the whole box unavailable.
+            .defs, .svg, .use, .image => {},
         }
     }
 }
@@ -143,7 +146,9 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
 fn transformMatrix(element: *Element) PathData.Matrix {
     const raw = element.getAttributeSafe(comptime .wrap("transform")) orelse return .{};
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "none")) return .{};
+    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "none")) {
+        return .{};
+    }
 
     var matrix = DOMMatrixReadOnly.identity();
     var iterator = DOMMatrixReadOnly.TransformFunctionIterator{ .input = trimmed, .allow_comma = true };

@@ -17,53 +17,27 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
-const Element = @import("../Element.zig");
 
 const Number = @This();
 _value: f32 = 0,
-_element: ?*Element = null,
-_attr_name: lp.String = .empty,
-_read_only: bool = false,
 
 pub fn detached(frame: *Frame) !*Number {
     return frame._factory.create(Number{});
 }
 
-pub fn reflected(element: *Element, attr_name: lp.String, read_only: bool, frame: *Frame) !*Number {
-    return frame._factory.create(Number{
-        ._element = element,
-        ._attr_name = attr_name,
-        ._read_only = read_only,
-    });
-}
-
-pub fn getValue(self: *Number) f32 {
-    self.syncFromAttribute();
+pub fn getValue(self: *const Number) f32 {
     return self._value;
 }
 
-pub fn setValue(self: *Number, value: f32, frame: *Frame) !void {
-    if (self._read_only) return error.NoModificationAllowed;
-    if (!std.math.isFinite(value)) return error.TypeError;
+pub fn setValue(self: *Number, value: f32) !void {
+    // WebIDL float is restricted, and the bridge does not police that for us.
+    if (!std.math.isFinite(value)) {
+        return error.TypeError;
+    }
     self._value = value;
-    const element = self._element orelse return;
-    const serialized = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try element.setAttributeSafe(self._attr_name, lp.String.wrap(serialized), frame);
-}
-
-fn syncFromAttribute(self: *Number) void {
-    const element = self._element orelse return;
-    const raw = element.getAttributeSafe(self._attr_name) orelse {
-        self._value = 0;
-        return;
-    };
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n\x0c");
-    self._value = std.fmt.parseFloat(f32, trimmed) catch 0;
-    if (!std.math.isFinite(self._value)) self._value = 0;
 }
 
 pub const JsApi = struct {

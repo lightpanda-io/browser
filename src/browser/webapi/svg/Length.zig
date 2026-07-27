@@ -73,6 +73,13 @@ pub fn getUnitType(self: *Length) u16 {
     return @intFromEnum(self._unit);
 }
 
+// An attribute SVG could not parse reports the unknown unit type. Callers that
+// need geometry substitute the property's default instead.
+pub fn hasKnownUnit(self: *Length) bool {
+    self.syncFromAttribute();
+    return self._unit != .unknown;
+}
+
 pub fn getValue(self: *Length, frame: *Frame) f64 {
     self.syncFromAttribute();
     return self._value * self.unitToUserUnits(self._unit, frame);

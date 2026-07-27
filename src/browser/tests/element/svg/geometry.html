@@ -12,6 +12,13 @@
   <path id=arc d="M0 0 A80 20 45 1 1 100 100"></path>
   <path id=partial d="M10 10 L20 20 30"></path>
   <path id=moves d="M0 0 10 10 20 0"></path>
+  <path id=overshoot d="M0 0 C0 -50 0 150 0 100"></path>
+  <g id=unresolved>
+    <rect x="0" y="0" width="10" height="10"></rect>
+    <use href="#circle"></use>
+    <image x="40" y="40" width="10" height="10"></image>
+    <svg x="0" y="0" width="10" height="10"><rect width="5" height="5"></rect></svg>
+  </g>
   <g id=transformed transform="translate(10 20)">
     <rect x="0" y="0" width="10" height="5"></rect>
     <g transform="scale(2)"><circle cx="10" cy="10" r="2"></circle></g>
@@ -66,7 +73,9 @@
   testing.expectEqual(20, box.y);
   testing.expectEqual(35, box.width);
   testing.expectEqual(40, box.height);
-  testing.expectEqual(true, box instanceof DOMRect);
+  // SVG2 and Chrome return a DOMRect. Firefox returns its own legacy SVGRect,
+  // which does not inherit from DOMRect.
+  testing.expectEqual(true, box instanceof (window.SVGRect ?? DOMRect));
 
   box = $('#circle').getBBox();
   testing.expectEqual(40, box.x);
@@ -92,13 +101,20 @@
   testing.expectEqual(17, box.width);
   testing.expectEqual(9, box.height);
 
-  box = $('#circle').getBBox({fill: false});
-  testing.expectEqual(0, box.width);
-  testing.expectError('NotSupportedError', () => $('#circle').getBBox({stroke: true}));
+  // Chrome declares no parameter at all and Firefox's flags degenerate to the
+  // fill geometry, so the options are inert in every engine.
+  testing.expectEqual(20, $('#circle').getBBox({fill: false}).width);
+  testing.expectEqual(20, $('#circle').getBBox({stroke: true}).width);
 
   $('#circle').setAttribute('r', '-2');
   testing.expectEqual(0, $('#circle').getBBox().width);
   $('#circle').setAttribute('r', '10');
+
+  // Nested viewports, <use> and <image> contribute no geometry here, but they
+  // must not make the whole box unavailable.
+  box = $('#unresolved').getBBox();
+  testing.expectEqual(true, box.width >= 10);
+  testing.expectEqual(true, box.height >= 10);
 }
 </script>
 
@@ -126,6 +142,12 @@
   testing.expectEqual(true, box.x < 0);
   testing.expectEqual(true, box.width > 100);
   testing.expectEqual(true, box.height >= 100);
+
+  // Both control points are collinear with the chord, so the curve overshoots
+  // the endpoints along it.
+  box = $('#overshoot').getBBox();
+  testing.expectEqual(0, box.width);
+  testing.expectEqual('-8.1', box.y.toFixed(1));
 }
 </script>
 
@@ -133,7 +155,8 @@
 {
   testing.expectEqual(5, $('#line').getTotalLength());
   let point = $('#line').getPointAtLength(2.5);
-  testing.expectEqual(true, point instanceof DOMPoint);
+  // As with getBBox, Firefox returns its legacy SVGPoint instead of a DOMPoint.
+  testing.expectEqual(true, point instanceof (window.SVGPoint ?? DOMPoint));
   testing.expectEqual(2.5, point.x);
   testing.expectEqual(4, point.y);
   point = $('#line').getPointAtLength(-100);
@@ -150,8 +173,24 @@
   testing.expectEqual(true, Math.abs(point.y - 75) < 0.01);
 
   // pathLength calibrates author distance, not these native geometry methods.
-  cubic.pathLength.baseVal.value = 10;
+  cubic.pathLength.baseVal = 10;
   testing.expectEqual(true, Math.abs(cubic.getTotalLength() - 200) < 0.01);
+}
+</script>
+
+<script id=overshootLengthFirefoxDiverges>
+{
+  // #overshoot's control points are collinear with its chord, so flattening on
+  // their distance to the chord *line* sees a flat curve and measures the 100
+  // unit chord. Firefox does exactly that; Chrome measures the curve, and
+  // 132.38 is the true arc length, so we follow Chrome. Its own bounding box
+  // above is analytic in every engine, which is why only length disagrees.
+  const overshoot = $('#overshoot');
+  testing.expectEqual('132', overshoot.getTotalLength().toFixed(0));
+  // The curve leaves the start heading away from the chord, so four units along
+  // it sits four units below y=0. Firefox reports +4, on the chord.
+  const point = overshoot.getPointAtLength(4);
+  testing.expectEqual('-4.0', point.y.toFixed(1));
 }
 </script>
 
