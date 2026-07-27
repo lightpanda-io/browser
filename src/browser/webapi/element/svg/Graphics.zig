@@ -38,6 +38,7 @@ pub const Defs = @import("Defs.zig");
 pub const Symbol = @import("Symbol.zig");
 pub const Switch = @import("Switch.zig");
 pub const ForeignObject = @import("ForeignObject.zig");
+pub const TextContent = @import("TextContent.zig");
 pub const Geometry = @import("Geometry.zig");
 
 const Graphics = @This();
@@ -54,6 +55,7 @@ pub const Type = union(enum) {
     symbol: *Symbol,
     switch_element: *Switch,
     foreign_object: *ForeignObject,
+    text_content: *TextContent,
     geometry: *Geometry,
 };
 
@@ -67,6 +69,9 @@ pub fn is(self: *Graphics, comptime T: type) ?*T {
     }
     if (self._type == .geometry) {
         return self._type.geometry.is(T);
+    }
+    if (self._type == .text_content) {
+        return self._type.text_content.is(T);
     }
     return null;
 }
@@ -106,7 +111,7 @@ pub fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
         },
         .foreign_object => |foreign_object| bounds = try foreign_object.getBounds(frame),
         .g, .a, .svg => try accumulateChildren(self, .{}, &bounds, frame),
-        .defs, .symbol, .switch_element, .use, .image => {},
+        .defs, .symbol, .switch_element, .use, .image, .text_content => {},
     }
     if (bounds.isEmpty()) {
         return DOMRect.create(.{}, frame._factory);
@@ -173,9 +178,10 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
                 .matrix = child_matrix,
             }),
             // <defs> and <symbol> never render. Nested viewports, <switch>,
-            // <use> and <image> have geometry we cannot resolve yet, so they
-            // contribute nothing rather than making the whole box unavailable.
-            .defs, .symbol, .svg, .switch_element, .use, .image => {},
+            // <use>, <image> and text have geometry we cannot resolve yet, so
+            // they contribute nothing rather than making the whole box
+            // unavailable.
+            .defs, .symbol, .svg, .switch_element, .use, .image, .text_content => {},
         }
     }
 }
