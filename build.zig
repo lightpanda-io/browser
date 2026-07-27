@@ -325,6 +325,13 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     }
 
     mod.linkLibrary(lib);
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = lib.getEmittedIncludeTree().path(b, "sqlite3.h"),
+        .target = mod.resolved_target.?,
+        .optimize = mod.optimize.?,
+    });
+    mod.addImport("sqlite3", translate_c.createModule());
 }
 
 fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
@@ -332,6 +339,15 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
 
     const curl = buildCurl(b, target, mod.optimize.?, is_tsan);
     mod.linkLibrary(curl);
+
+    const dep = b.dependency("curl", .{});
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = dep.path("include/curl/curl.h"),
+        .target = target,
+        .optimize = mod.optimize.?,
+    });
+    translate_c.addIncludePath(dep.path("include"));
+    mod.addImport("curl", translate_c.createModule());
 
     const zlib = buildZlib(b, target, mod.optimize.?, is_tsan);
     curl.root_module.linkLibrary(zlib);
@@ -833,6 +849,13 @@ fn linkIsocline(b: *Build, mod: *Build.Module) void {
     mod.addCSourceFile(.{
         .file = dep.path("src/isocline.c"),
     });
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = dep.path("include/isocline.h"),
+        .target = mod.resolved_target.?,
+        .optimize = mod.optimize.?,
+    });
+    mod.addImport("isocline", translate_c.createModule());
 }
 
 /// Resolves the semantic version of the build.

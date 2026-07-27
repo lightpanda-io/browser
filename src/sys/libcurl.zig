@@ -21,9 +21,7 @@ const builtin = @import("builtin");
 
 const crypto = @import("libcrypto.zig");
 
-const c = @cImport({
-    @cInclude("curl/curl.h");
-});
+const c = @import("curl");
 
 const IS_DEBUG = builtin.mode == .Debug;
 

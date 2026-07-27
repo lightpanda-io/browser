@@ -27,9 +27,7 @@ const browser_tools = lp.tools;
 const Schema = lp.Schema;
 const SlashCommand = @import("SlashCommand.zig");
 const js_highlight = @import("js_highlight.zig");
-const c = @cImport({
-    @cInclude("isocline.h");
-});
+const c = @import("isocline");
 
 const style_slash = "ps-slash";
 const style_string = "ps-string";
