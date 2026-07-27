@@ -20,9 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const string = @import("../../string.zig");
 
-const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
-const Session = @import("../Session.zig");
+const Frame = @import("../Frame.zig");
 
 const js = @import("js.zig");
 const Local = @import("Local.zig");
@@ -676,10 +675,6 @@ fn isPage(comptime T: type) bool {
     return T == *Page or T == *const Page;
 }
 
-fn isSession(comptime T: type) bool {
-    return T == *Session or T == *const Session;
-}
-
 fn isExecution(comptime T: type) bool {
     return T == *js.Execution or T == *const js.Execution;
 }
@@ -990,7 +985,7 @@ pub const Function = struct {
 // Offset is always 0 for constructors.
 //
 // For constructors, setters and methods, we can further increase offset + 1
-// if the first parameter is an instance of Page.
+// if the first parameter is an instance of Page/Frame/Execution.
 //
 // Finally, if the JS function is called with _more_ parameters and
 // the last parameter in Zig is an array, we'll try to slurp the additional
@@ -1006,16 +1001,16 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             return args;
         }
 
-        // If the last parameter is Frame/Page/Session/Execution, set it from
+        // If the last parameter is Frame/Page/Execution, set it from
         // context and exclude it from our params slice, because we don't want
         // to bind it to a JS argument.
         const LastParamType = params[params.len - 1].type.?;
-        if (comptime isFrame(LastParamType) or isPage(LastParamType) or isExecution(LastParamType) or isSession(LastParamType)) {
+        if (comptime isFrame(LastParamType) or isPage(LastParamType) or isExecution(LastParamType)) {
             @field(args, tupleFieldName(params.len - 1 + offset)) = getGlobalArg(LastParamType, local.ctx);
             break :blk params[0 .. params.len - 1];
         }
 
-        // we have neither a Frame/Page/Session/Execution nor a JsObject.
+        // we have neither a Frame/Page/Execution nor a JsObject.
         // All params must be bound to a JavaScript value.
         break :blk params;
     };
@@ -1069,8 +1064,6 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             @compileError("Page must be the last parameter: " ++ @typeName(F));
         } else if (comptime isExecution(param.type.?)) {
             @compileError("Execution must be the last parameter: " ++ @typeName(F));
-        } else if (comptime isSession(param.type.?)) {
-            @compileError("Session must be the last parameter: " ++ @typeName(F));
         } else if (i >= js_parameter_count) {
             if (@typeInfo(param.type.?) != .optional) {
                 return error.InvalidArgument;
