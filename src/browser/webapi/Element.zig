@@ -856,6 +856,10 @@ pub fn removeAttribute(self: *Element, name: String, frame: *Frame) !void {
     return self._attributes.delete(name, self, frame);
 }
 
+pub fn removeAttributeSafe(self: *Element, name: String, frame: *Frame) void {
+    self._attributes.deleteSafe(name, self, frame);
+}
+
 pub fn toggleAttribute(self: *Element, name: String, force: ?bool, frame: *Frame) !bool {
     try Attribute.validateAttributeName(name);
     const has = try self.hasAttribute(name, frame);

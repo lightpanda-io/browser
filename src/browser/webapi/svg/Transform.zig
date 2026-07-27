@@ -48,6 +48,10 @@ _cy: f64 = 0,
 _matrix: *DOMMatrix,
 _attachment: ?Attachment = null,
 
+// Sticky. An animVal item that a later external attribute change detaches from
+// its list must not turn into a writable orphan.
+_read_only: bool = false,
+
 pub const State = struct {
     typ: u16,
     angle: f64,
@@ -59,7 +63,6 @@ pub const State = struct {
 
 pub const Attachment = struct {
     owner: *anyopaque,
-    read_only: bool,
     mutate: *const fn (*anyopaque, *Transform, State) anyerror!void,
 };
 
@@ -78,7 +81,7 @@ pub fn detached(frame: *Frame) !*Transform {
     const matrix = try DOMMatrix.create(RO.identity(), true, frame._page);
     errdefer matrix._proto.deinit(frame._page);
     const self = try frame._factory.create(Transform{ ._matrix = matrix });
-    self.attachMatrix(false);
+    self.attachMatrix();
     return self;
 }
 
@@ -87,14 +90,13 @@ pub fn fromMatrix(init: ?DOMMatrix2DInit, frame: *Frame) !*Transform {
     const matrix = try DOMMatrix.create(parsed.m, true, frame._page);
     errdefer matrix._proto.deinit(frame._page);
     const self = try frame._factory.create(Transform{ ._matrix = matrix });
-    self.attachMatrix(false);
+    self.attachMatrix();
     return self;
 }
 
 pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
     const typ: u16 = switch (parsed.kind) {
         .matrix => 1,
-        .matrix3d => 0,
         .translate => 2,
         .scale => 3,
         .rotate => 4,
@@ -111,7 +113,7 @@ pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
         ._cy = if (typ == 4 and parsed.count == 3) parsed.values[2] else 0,
         ._matrix = matrix,
     });
-    self.attachMatrix(false);
+    self.attachMatrix();
     return self;
 }
 
@@ -126,7 +128,7 @@ pub fn clone(self: *const Transform, frame: *Frame) !*Transform {
         ._cy = current.cy,
         ._matrix = matrix,
     });
-    cloned.attachMatrix(false);
+    cloned.attachMatrix();
     return cloned;
 }
 
@@ -199,25 +201,22 @@ pub fn applyStateRaw(self: *Transform, state: State) void {
 }
 
 fn applyState(self: *Transform, state: State) !void {
+    if (self._read_only) return error.NoModificationAllowed;
     try ensureFinite(&state.matrix);
     if (self._attachment) |attachment| {
-        if (attachment.read_only) return error.NoModificationAllowed;
         return attachment.mutate(attachment.owner, self, state);
     }
     self.applyStateRaw(state);
 }
 
-pub fn attach(self: *Transform, attachment: Attachment) void {
+pub fn attach(self: *Transform, attachment: Attachment, read_only: bool) void {
     self._attachment = attachment;
-    self.attachMatrix(attachment.read_only);
+    if (read_only) self._read_only = true;
 }
 
 pub fn detach(self: *Transform, owner: *anyopaque) void {
     const attachment = self._attachment orelse return;
-    if (attachment.owner == owner) {
-        self._attachment = null;
-        self.attachMatrix(false);
-    }
+    if (attachment.owner == owner) self._attachment = null;
 }
 
 pub fn isAttached(self: *const Transform) bool {
@@ -231,12 +230,6 @@ pub fn isAttachedTo(self: *const Transform, owner: *anyopaque) bool {
 
 pub fn writeState(state: State, writer: anytype) !void {
     switch (state.typ) {
-        0 => try writer.print("matrix3d({d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d})", .{
-            state.matrix[0],  state.matrix[1],  state.matrix[2],  state.matrix[3],
-            state.matrix[4],  state.matrix[5],  state.matrix[6],  state.matrix[7],
-            state.matrix[8],  state.matrix[9],  state.matrix[10], state.matrix[11],
-            state.matrix[12], state.matrix[13], state.matrix[14], state.matrix[15],
-        }),
         1 => try writer.print("matrix({d} {d} {d} {d} {d} {d})", .{
             state.matrix[0], state.matrix[1], state.matrix[4], state.matrix[5], state.matrix[12], state.matrix[13],
         }),
@@ -252,23 +245,31 @@ pub fn writeState(state: State, writer: anytype) !void {
     }
 }
 
-fn attachMatrix(self: *Transform, read_only: bool) void {
+fn attachMatrix(self: *Transform) void {
     self._matrix._proto.attach(.{
         .owner = self,
-        .read_only = read_only,
         .mutate = Transform.mutateMatrix,
     });
 }
 
+// An SVGTransform is a 2D affine transform, and the `transform` attribute has
+// no syntax for anything else, so a write through the live matrix keeps only
+// the six components the transform can represent.
 fn mutateMatrix(context: *anyopaque, _: *RO, state: RO.State) anyerror!void {
     const self: *Transform = @ptrCast(@alignCast(context));
+    const m = state.matrix;
     try self.applyState(.{
-        .typ = if (state.is_2d) 1 else 0,
+        .typ = 1,
         .angle = 0,
         .cx = 0,
         .cy = 0,
-        .matrix = state.matrix,
-        .is_2d = state.is_2d,
+        .matrix = .{
+            m[0],  m[1],  0, 0,
+            m[4],  m[5],  0, 0,
+            0,     0,     1, 0,
+            m[12], m[13], 0, 1,
+        },
+        .is_2d = true,
     });
 }
 

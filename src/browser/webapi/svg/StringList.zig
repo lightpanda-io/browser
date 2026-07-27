@@ -20,10 +20,11 @@ _element: *Element,
 _attribute_name: lp.String,
 _delimiter: Delimiter,
 _synced: bool = false,
+// An absent attribute is an empty list, but an empty attribute is not: a
+// comma-separated value parses "" as a single empty token.
+_present: bool = false,
 _snapshot: std.ArrayList(u8) = .empty,
 _items: std.ArrayList([]const u8) = .empty,
-_scratch_snapshot: std.ArrayList(u8) = .empty,
-_scratch_items: std.ArrayList([]const u8) = .empty,
 
 pub const Kind = enum {
     required_extensions,
@@ -82,9 +83,8 @@ pub fn clear(self: *StringList, frame: *Frame) !void {
 }
 
 pub fn initialize(self: *StringList, item: []const u8, frame: *Frame) ![]const u8 {
-    try self.validateItem(item);
     try self.commit(&.{item}, frame);
-    return self._items.items[0];
+    return item;
 }
 
 pub fn getItem(self: *StringList, index: u32, frame: *Frame) ![]const u8 {
@@ -94,7 +94,6 @@ pub fn getItem(self: *StringList, index: u32, frame: *Frame) ![]const u8 {
 }
 
 pub fn insertItemBefore(self: *StringList, item: []const u8, index: u32, frame: *Frame) ![]const u8 {
-    try self.validateItem(item);
     try self.sync(frame);
     const at = @min(@as(usize, index), self._items.items.len);
     const next = try frame.local_arena.alloc([]const u8, self._items.items.len + 1);
@@ -102,17 +101,16 @@ pub fn insertItemBefore(self: *StringList, item: []const u8, index: u32, frame: 
     next[at] = item;
     @memcpy(next[at + 1 ..], self._items.items[at..]);
     try self.commit(next, frame);
-    return self._items.items[at];
+    return item;
 }
 
 pub fn replaceItem(self: *StringList, item: []const u8, index: u32, frame: *Frame) ![]const u8 {
-    try self.validateItem(item);
     try self.sync(frame);
     if (index >= self._items.items.len) return error.IndexSizeError;
     const next = try frame.local_arena.dupe([]const u8, self._items.items);
     next[index] = item;
     try self.commit(next, frame);
-    return self._items.items[index];
+    return item;
 }
 
 pub fn removeItem(self: *StringList, index: u32, frame: *Frame) ![]const u8 {
@@ -130,75 +128,81 @@ pub fn appendItem(self: *StringList, item: []const u8, frame: *Frame) ![]const u
     return self.insertItemBefore(item, std.math.maxInt(u32), frame);
 }
 
-fn validateItem(self: *const StringList, item: []const u8) !void {
-    if (item.len == 0) return error.SyntaxError;
-    for (item) |byte| {
-        if (std.ascii.isWhitespace(byte) or (self._delimiter == .comma and byte == ',')) {
-            return error.SyntaxError;
-        }
-    }
-}
-
 fn sync(self: *StringList, frame: *Frame) !void {
-    const raw = self._element.getAttributeSafe(self._attribute_name) orelse "";
-    if (self._synced and std.mem.eql(u8, self._snapshot.items, raw)) return;
-    try self.prepare(raw, frame);
-    self.publishPrepared();
+    const raw = self._element.getAttributeSafe(self._attribute_name);
+    if (self._synced and self._present == (raw != null) and
+        std.mem.eql(u8, self._snapshot.items, raw orelse ""))
+    {
+        return;
+    }
+    return self.rebuild(raw, frame);
 }
 
+// The list is authoritative: an item keeps its identity even when it contains
+// the delimiter, so we record where each one landed rather than reparsing our
+// own serialization.
 fn commit(self: *StringList, items: []const []const u8, frame: *Frame) !void {
+    if (items.len == 0) {
+        self._synced = false;
+        self._element.removeAttributeSafe(self._attribute_name, frame);
+        self._present = false;
+        self._snapshot.clearRetainingCapacity();
+        self._items.clearRetainingCapacity();
+        self._synced = true;
+        return;
+    }
+
+    const separator: []const u8 = if (self._delimiter == .comma) "," else " ";
     var serialized: std.Io.Writer.Allocating = .init(frame.local_arena);
     const writer = &serialized.writer;
-    for (items, 0..) |item, i| {
-        try self.validateItem(item);
-        if (i != 0) try writer.writeAll(if (self._delimiter == .comma) ", " else " ");
+    const bounds = try frame.local_arena.alloc([2]usize, items.len);
+    for (items, bounds, 0..) |item, *bound, i| {
+        if (i != 0) try writer.writeAll(separator);
+        const start = serialized.written().len;
         try writer.writeAll(item);
+        bound.* = .{ start, serialized.written().len };
     }
+    const bytes = serialized.written();
 
-    const serialized_bytes = serialized.written();
-    try self.prepare(serialized_bytes, frame);
-    try self._element.setAttributeSafe(self._attribute_name, .wrap(self._scratch_snapshot.items), frame);
-    self.publishPrepared();
-}
-
-fn prepare(self: *StringList, raw: []const u8, frame: *Frame) !void {
-    self._scratch_snapshot.clearRetainingCapacity();
-    try self._scratch_snapshot.appendSlice(frame.arena, raw);
-    const parsed = parse(self._scratch_snapshot.items, self._delimiter, frame.local_arena) catch |err| switch (err) {
-        error.SyntaxError => std.ArrayList([]const u8).empty,
-        else => return err,
-    };
-    self._scratch_items.clearRetainingCapacity();
-    try self._scratch_items.appendSlice(frame.arena, parsed.items);
-}
-
-fn publishPrepared(self: *StringList) void {
     self._synced = false;
-    std.mem.swap(std.ArrayList(u8), &self._snapshot, &self._scratch_snapshot);
-    std.mem.swap(std.ArrayList([]const u8), &self._items, &self._scratch_items);
+    try self._element.setAttributeSafe(self._attribute_name, .wrap(bytes), frame);
+    self._present = true;
+    self._snapshot.clearRetainingCapacity();
+    try self._snapshot.appendSlice(frame.arena, bytes);
+    self._items.clearRetainingCapacity();
+    for (bounds) |bound| {
+        try self._items.append(frame.arena, self._snapshot.items[bound[0]..bound[1]]);
+    }
     self._synced = true;
 }
 
-fn parse(raw: []const u8, delimiter: Delimiter, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
-    var items: std.ArrayList([]const u8) = .empty;
-    switch (delimiter) {
-        .whitespace => {
-            var iterator = std.mem.tokenizeAny(u8, raw, " \t\r\n\x0c");
-            while (iterator.next()) |item| try items.append(allocator, item);
-        },
-        .comma => {
-            if (std.mem.trim(u8, raw, " \t\r\n\x0c").len == 0) return items;
-            var iterator = std.mem.splitScalar(u8, raw, ',');
-            while (iterator.next()) |part| {
-                const item = std.mem.trim(u8, part, " \t\r\n\x0c");
-                if (item.len == 0) return error.SyntaxError;
-                for (item) |byte| if (std.ascii.isWhitespace(byte)) return error.SyntaxError;
-                try items.append(allocator, item);
-            }
-        },
+fn rebuild(self: *StringList, raw: ?[]const u8, frame: *Frame) !void {
+    self._synced = false;
+    self._present = raw != null;
+    self._snapshot.clearRetainingCapacity();
+    self._items.clearRetainingCapacity();
+
+    if (raw) |value| {
+        try self._snapshot.appendSlice(frame.arena, value);
+        switch (self._delimiter) {
+            .whitespace => {
+                var iterator = std.mem.tokenizeAny(u8, self._snapshot.items, WHITESPACE);
+                while (iterator.next()) |item| try self._items.append(frame.arena, item);
+            },
+            // A set of comma-separated tokens: every segment is a token, even
+            // an empty one, and each is trimmed of surrounding whitespace.
+            .comma => {
+                var iterator = std.mem.splitScalar(u8, self._snapshot.items, ',');
+                while (iterator.next()) |part| {
+                    try self._items.append(frame.arena, std.mem.trim(u8, part, WHITESPACE));
+                }
+            },
+        }
     }
-    return items;
+    self._synced = true;
 }
+
+const WHITESPACE = " \t\r\n\x0c";
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(StringList);

@@ -56,9 +56,10 @@ pub const State = struct {
     is_2d: bool,
 };
 
+// The owner decides whether a write is allowed; a matrix that belongs to an
+// animVal SVGTransform is rejected by the transform, not here.
 pub const Attachment = struct {
     owner: *anyopaque,
-    read_only: bool,
     mutate: *const fn (*anyopaque, *DOMMatrixReadOnly, State) anyerror!void,
 };
 
@@ -103,7 +104,6 @@ pub fn getState(self: *const DOMMatrixReadOnly) State {
 
 pub fn applyState(self: *DOMMatrixReadOnly, state: State) !void {
     if (self._attachment) |attachment| {
-        if (attachment.read_only) return error.NoModificationAllowed;
         return attachment.mutate(attachment.owner, self, state);
     }
     self.applyStateRaw(state);
@@ -116,16 +116,6 @@ pub fn applyStateRaw(self: *DOMMatrixReadOnly, state: State) void {
 
 pub fn attach(self: *DOMMatrixReadOnly, attachment: Attachment) void {
     self._attachment = attachment;
-}
-
-pub fn detach(self: *DOMMatrixReadOnly, owner: *anyopaque) void {
-    const attachment = self._attachment orelse return;
-    if (attachment.owner == owner) self._attachment = null;
-}
-
-pub fn isAttachedTo(self: *const DOMMatrixReadOnly, owner: *anyopaque) bool {
-    const attachment = self._attachment orelse return false;
-    return attachment.owner == owner;
 }
 
 pub const DOMMatrixInit = struct {
@@ -462,7 +452,7 @@ pub fn parseTransformList(input: []const u8, m: *[16]f64, is_2d: *bool) !void {
 pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSyntax) !ParsedTransform {
     var values: [16]f64 = undefined;
     var units: [16]ParsedValue.Unit = undefined;
-    const count = try parseArguments(function.arguments, &values, &units);
+    const count = try parseArguments(function.arguments, syntax, &values, &units);
     const name = function.name;
     const Eql = std.mem.eql;
 
@@ -478,6 +468,7 @@ pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSynt
     }
 
     if (Eql(u8, name, "matrix3d")) {
+        if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 16, 16);
         try requireUnitless(units[0..count]);
         return makeParsedTransform(.matrix3d, values, values, count, false);
@@ -613,8 +604,8 @@ fn requireAngle(unit: ParsedValue.Unit) !void {
     if (unit == .other) return error.SyntaxError;
 }
 
-fn parseArguments(arguments: []const u8, values: *[16]f64, units: *[16]ParsedValue.Unit) !usize {
-    var scanner = ArgumentScanner{ .input = arguments };
+fn parseArguments(arguments: []const u8, syntax: TransformSyntax, values: *[16]f64, units: *[16]ParsedValue.Unit) !usize {
+    var scanner = ArgumentScanner{ .input = arguments, .syntax = syntax };
     var count: usize = 0;
     while (try scanner.next()) |value| {
         if (count == values.len) return error.SyntaxError;
@@ -873,6 +864,7 @@ const ParsedValue = struct {
 
 const ArgumentScanner = struct {
     input: []const u8,
+    syntax: TransformSyntax,
     index: usize = 0,
     first: bool = true,
 
@@ -887,10 +879,14 @@ const ArgumentScanner = struct {
             self.index += 1;
             while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) self.index += 1;
             if (self.index == self.input.len) return error.SyntaxError;
-        } else if (!self.first and self.index < self.input.len and !had_whitespace and
-            self.input[self.index] != '+' and self.input[self.index] != '-')
-        {
-            return error.SyntaxError;
+        } else if (!self.first and self.index < self.input.len) {
+            // CSS separates arguments with a comma and nothing else. The SVG
+            // grammar also takes whitespace, or no separator at all when the
+            // next number carries its own sign.
+            if (self.syntax == .css) return error.SyntaxError;
+            if (!had_whitespace and self.input[self.index] != '+' and self.input[self.index] != '-') {
+                return error.SyntaxError;
+            }
         }
 
         if (self.index == self.input.len) return null;

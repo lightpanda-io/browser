@@ -53,9 +53,8 @@ pub fn getNumberOfItems(self: *TransformList, frame: *Frame) !u32 {
 pub fn clear(self: *TransformList, frame: *Frame) !void {
     try self.requireMutable();
     try self.sync(frame);
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
+    try self.retireAll(frame);
     try self.setAttribute(&.{}, frame);
-    self.retireAllAssumeCapacity();
 }
 
 pub fn initialize(self: *TransformList, item: *Transform, frame: *Frame) !*Transform {
@@ -64,10 +63,9 @@ pub fn initialize(self: *TransformList, item: *Transform, frame: *Frame) !*Trans
     const prepared = try self.prepareItem(item, frame);
     errdefer prepared.releaseRef(frame._page);
 
+    try self.retireAll(frame);
     try self._items.ensureTotalCapacity(frame.arena, 1);
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
     try self.setAttribute(&.{prepared}, frame);
-    self.retireAllAssumeCapacity();
     self._items.appendAssumeCapacity(prepared);
     self.attach(prepared);
     return prepared;
@@ -142,36 +140,28 @@ pub fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
     if (self._items.items.len == 0) return null;
 
     var matrix = DOMMatrixReadOnly.identity();
-    var is_2d = true;
-    for (self._items.items) |item| {
-        const state = item.getState();
-        matrix = DOMMatrixReadOnly.multiplyMatrix(matrix, state.matrix);
-        is_2d = is_2d and state.is_2d;
-    }
+    for (self._items.items) |item| matrix = DOMMatrixReadOnly.multiplyMatrix(matrix, item.getState().matrix);
     for (matrix) |value| if (!std.math.isFinite(value)) return error.TypeError;
-    var values: [16]f64 = matrix;
-    if (is_2d) {
-        values[0] = matrix[0];
-        values[1] = matrix[1];
-        values[2] = matrix[4];
-        values[3] = matrix[5];
-        values[4] = matrix[12];
-        values[5] = matrix[13];
-    }
+    var values: [16]f64 = undefined;
+    values[0] = matrix[0];
+    values[1] = matrix[1];
+    values[2] = matrix[4];
+    values[3] = matrix[5];
+    values[4] = matrix[12];
+    values[5] = matrix[13];
     const consolidated = try Transform.fromParsed(.{
-        .kind = if (is_2d) .matrix else .matrix3d,
+        .kind = .matrix,
         .matrix = matrix,
         .values = values,
-        .count = if (is_2d) 6 else 16,
-        .is_2d = is_2d,
+        .count = 6,
+        .is_2d = true,
     }, frame);
     consolidated.acquireRef();
     errdefer consolidated.releaseRef(frame._page);
 
+    try self.retireAll(frame);
     try self._items.ensureTotalCapacity(frame.arena, 1);
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
     try self.setAttribute(&.{consolidated}, frame);
-    self.retireAllAssumeCapacity();
     self._items.appendAssumeCapacity(consolidated);
     self.attach(consolidated);
     return consolidated;
@@ -190,9 +180,8 @@ fn prepareItem(_: *TransformList, item: *Transform, frame: *Frame) !*Transform {
 fn attach(self: *TransformList, transform: *Transform) void {
     transform.attach(.{
         .owner = self,
-        .read_only = self._read_only,
         .mutate = TransformList.mutateTransform,
-    });
+    }, self._read_only);
 }
 
 fn mutateTransform(context: *anyopaque, transform: *Transform, state: Transform.State) anyerror!void {
@@ -216,20 +205,17 @@ fn sync(self: *TransformList, frame: *Frame) !void {
     const raw = self._element.getAttributeSafe(comptime .wrap("transform")) orelse "";
     if (self._synced and std.mem.eql(u8, self._snapshot.items, raw)) return;
 
+    self._synced = false;
     var parsed = parse(raw, frame) catch |err| switch (err) {
         error.SyntaxError => std.ArrayList(*Transform).empty,
         else => return err,
     };
     errdefer for (parsed.items) |transform| transform.releaseRef(frame._page);
 
-    try self._snapshot.ensureTotalCapacity(frame.arena, raw.len);
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
-    try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
-
-    self._synced = false;
     self._snapshot.clearRetainingCapacity();
-    self._snapshot.appendSliceAssumeCapacity(raw);
-    self.retireAllAssumeCapacity();
+    try self._snapshot.appendSlice(frame.arena, raw);
+    try self.retireAll(frame);
+    try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
     for (parsed.items) |transform| {
         self._items.appendAssumeCapacity(transform);
         self.attach(transform);
@@ -267,7 +253,9 @@ fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*Transform) {
     return parsed;
 }
 
-fn retireAllAssumeCapacity(self: *TransformList) void {
+fn retireAll(self: *TransformList, frame: *Frame) !void {
+    self._synced = false;
+    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
     for (self._items.items) |transform| {
         transform.detach(self);
         self._retired.appendAssumeCapacity(transform);
@@ -296,11 +284,10 @@ fn setAttributeWithOverride(self: *TransformList, index: usize, state: Transform
 }
 
 fn commitAttribute(self: *TransformList, serialized: []const u8, frame: *Frame) !void {
-    try self._snapshot.ensureTotalCapacity(frame.arena, serialized.len);
-    try self._element.setAttributeSafe(comptime .wrap("transform"), .wrap(serialized), frame);
     self._synced = false;
+    try self._element.setAttributeSafe(comptime .wrap("transform"), .wrap(serialized), frame);
     self._snapshot.clearRetainingCapacity();
-    self._snapshot.appendSliceAssumeCapacity(serialized);
+    try self._snapshot.appendSlice(frame.arena, serialized);
     self._synced = true;
 }
 

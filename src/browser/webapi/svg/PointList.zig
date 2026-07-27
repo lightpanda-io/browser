@@ -72,9 +72,8 @@ pub fn getNumberOfItems(self: *PointList, frame: *Frame) !u32 {
 pub fn clear(self: *PointList, frame: *Frame) !void {
     try self.requireMutable();
     try self.sync(frame);
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
+    try self.retireAll(frame);
     try self.setAttribute(&.{}, frame);
-    self.retireAllAssumeCapacity();
 }
 
 pub fn initialize(self: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
@@ -84,10 +83,9 @@ pub fn initialize(self: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
     const prepared = try self.prepareItem(item, frame);
     errdefer prepared._proto.releaseRef(frame._page);
 
+    try self.retireAll(frame);
     try self._items.ensureTotalCapacity(frame.arena, 1);
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
     try self.setAttribute(&.{prepared}, frame);
-    self.retireAllAssumeCapacity();
     self._items.appendAssumeCapacity(prepared);
     self.attach(prepared);
     return prepared;
@@ -174,11 +172,11 @@ fn prepareItem(_: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
 }
 
 fn attach(self: *PointList, point: *DOMPoint) void {
+    point._proto.restrict();
     point._proto.attach(.{
         .owner = self,
-        .read_only = self._read_only,
         .mutate = PointList.mutatePoint,
-    });
+    }, self._read_only);
 }
 
 fn mutatePoint(
@@ -220,20 +218,17 @@ fn sync(self: *PointList, frame: *Frame) !void {
         return;
     }
 
+    self._synced = false;
     var parsed = parse(raw, frame) catch |err| switch (err) {
         error.SyntaxError => std.ArrayList(*DOMPoint).empty,
         else => return err,
     };
     errdefer for (parsed.items) |point| point._proto.releaseRef(frame._page);
 
-    try self._snapshot.ensureTotalCapacity(frame.arena, raw.len);
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
-    try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
-
-    self._synced = false;
     self._snapshot.clearRetainingCapacity();
-    self._snapshot.appendSliceAssumeCapacity(raw);
-    self.retireAllAssumeCapacity();
+    try self._snapshot.appendSlice(frame.arena, raw);
+    try self.retireAll(frame);
+    try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
     for (parsed.items) |point| {
         self._items.appendAssumeCapacity(point);
         self.attach(point);
@@ -258,7 +253,9 @@ fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*DOMPoint) {
     errdefer for (parsed.items) |point| point._proto.releaseRef(frame._page);
 
     while (try scanner.next()) |x| {
-        const y = (try scanner.next()) orelse return error.SyntaxError;
+        // A trailing coordinate with no pair truncates the list; only a
+        // malformed number invalidates the whole attribute.
+        const y = (try scanner.next()) orelse break;
         const point = try DOMPoint.create(x, y, 0, 1, frame._page);
         point._proto.acquireRef();
         parsed.append(frame.local_arena, point) catch |err| {
@@ -269,7 +266,9 @@ fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*DOMPoint) {
     return parsed;
 }
 
-fn retireAllAssumeCapacity(self: *PointList) void {
+fn retireAll(self: *PointList, frame: *Frame) !void {
+    self._synced = false;
+    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
     for (self._items.items) |point| {
         point._proto.detach(self);
         self._retired.appendAssumeCapacity(point);
@@ -282,7 +281,7 @@ fn setAttribute(self: *PointList, items: []const *DOMPoint, frame: *Frame) !void
     const writer = &serialized.writer;
     for (items, 0..) |point, i| {
         if (i != 0) try writer.writeByte(' ');
-        try writer.print("{d},{d}", .{ point._proto._x, point._proto._y });
+        try writer.print("{d} {d}", .{ point._proto._x, point._proto._y });
     }
     try self.commitAttribute(serialized.written(), frame);
 }
@@ -300,17 +299,16 @@ fn setAttributeWithOverride(
         if (i != 0) try writer.writeByte(' ');
         const x = if (i == index and coordinate == .x) value else point._proto._x;
         const y = if (i == index and coordinate == .y) value else point._proto._y;
-        try writer.print("{d},{d}", .{ x, y });
+        try writer.print("{d} {d}", .{ x, y });
     }
     try self.commitAttribute(serialized.written(), frame);
 }
 
 fn commitAttribute(self: *PointList, serialized: []const u8, frame: *Frame) !void {
-    try self._snapshot.ensureTotalCapacity(frame.arena, serialized.len);
-    try self._element.setAttributeSafe(comptime .wrap("points"), .wrap(serialized), frame);
     self._synced = false;
+    try self._element.setAttributeSafe(comptime .wrap("points"), .wrap(serialized), frame);
     self._snapshot.clearRetainingCapacity();
-    self._snapshot.appendSliceAssumeCapacity(serialized);
+    try self._snapshot.appendSlice(frame.arena, serialized);
     self._synced = true;
 }
 
@@ -329,7 +327,6 @@ const NumberScanner = struct {
         if (!self.first and self.index < self.input.len and self.input[self.index] == ',') {
             self.index += 1;
             while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) self.index += 1;
-            if (self.index == self.input.len) return error.SyntaxError;
         } else if (!self.first and self.index < self.input.len and !had_whitespace and
             self.input[self.index] != '+' and self.input[self.index] != '-')
         {

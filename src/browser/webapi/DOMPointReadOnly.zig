@@ -40,11 +40,19 @@ _z: f64,
 _w: f64,
 _attachment: ?Attachment = null,
 
+// Sticky. An animVal item that a later external attribute change detaches from
+// its list must not turn into a writable orphan.
+_read_only: bool = false,
+
+// SVGPoint's coordinates are a restricted float: NaN and infinity are a
+// TypeError rather than a stored value. Only points that reach an SVG list are
+// restricted; a plain DOMPoint takes an unrestricted double.
+_restricted: bool = false,
+
 pub const Coordinate = enum { x, y, z, w };
 
 pub const Attachment = struct {
     owner: *anyopaque,
-    read_only: bool,
     mutate: *const fn (*anyopaque, *DOMPointReadOnly, Coordinate, f64) anyerror!void,
 };
 
@@ -142,8 +150,9 @@ pub fn getW(self: *const DOMPointReadOnly) f64 {
 }
 
 pub fn setCoordinate(self: *DOMPointReadOnly, coordinate: Coordinate, value: f64) !void {
+    if (self._read_only) return error.NoModificationAllowed;
+    if (self._restricted and !std.math.isFinite(value)) return error.TypeError;
     if (self._attachment) |attachment| {
-        if (attachment.read_only) return error.NoModificationAllowed;
         return attachment.mutate(attachment.owner, self, coordinate, value);
     }
     self.setCoordinateRaw(coordinate, value);
@@ -158,8 +167,13 @@ pub fn setCoordinateRaw(self: *DOMPointReadOnly, coordinate: Coordinate, value: 
     }
 }
 
-pub fn attach(self: *DOMPointReadOnly, attachment: Attachment) void {
+pub fn restrict(self: *DOMPointReadOnly) void {
+    self._restricted = true;
+}
+
+pub fn attach(self: *DOMPointReadOnly, attachment: Attachment, read_only: bool) void {
     self._attachment = attachment;
+    if (read_only) self._read_only = true;
 }
 
 pub fn detach(self: *DOMPointReadOnly, owner: *anyopaque) void {
