@@ -16,16 +16,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const js = @import("../../js/js.zig");
+const Frame = @import("../../Frame.zig");
 
 const Number = @This();
 _value: f32 = 0,
+
+pub fn detached(frame: *Frame) !*Number {
+    return frame._factory.create(Number{});
+}
 
 pub fn getValue(self: *const Number) f32 {
     return self._value;
 }
 
-pub fn setValue(self: *Number, value: f32) void {
+pub fn setValue(self: *Number, value: f32) !void {
+    // WebIDL float is restricted, and the bridge does not police that for us.
+    if (!std.math.isFinite(value)) {
+        return error.TypeError;
+    }
     self._value = value;
 }
 

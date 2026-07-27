@@ -17,11 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 
 const Geometry = @import("Geometry.zig");
+const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 
 const Ellipse = @This();
 _proto: *Geometry,
@@ -41,4 +43,22 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const cx = bridge.accessor(Ellipse.getCx, null, .{});
+    pub const cy = bridge.accessor(Ellipse.getCy, null, .{});
+    pub const rx = bridge.accessor(Ellipse.getRx, null, .{});
+    pub const ry = bridge.accessor(Ellipse.getRy, null, .{});
 };
+
+pub fn getCx(self: *Ellipse, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .cx, frame);
+}
+pub fn getCy(self: *Ellipse, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .cy, frame);
+}
+pub fn getRx(self: *Ellipse, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .rx, frame);
+}
+pub fn getRy(self: *Ellipse, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .ry, frame);
+}

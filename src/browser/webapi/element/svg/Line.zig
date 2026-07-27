@@ -17,11 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 
 const Geometry = @import("Geometry.zig");
+const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 
 const Line = @This();
 _proto: *Geometry,
@@ -41,4 +43,22 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const x1 = bridge.accessor(Line.getX1, null, .{});
+    pub const y1 = bridge.accessor(Line.getY1, null, .{});
+    pub const x2 = bridge.accessor(Line.getX2, null, .{});
+    pub const y2 = bridge.accessor(Line.getY2, null, .{});
 };
+
+pub fn getX1(self: *Line, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .x1, frame);
+}
+pub fn getY1(self: *Line, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .y1, frame);
+}
+pub fn getX2(self: *Line, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .x2, frame);
+}
+pub fn getY2(self: *Line, frame: *Frame) !*AnimatedLength {
+    return AnimatedLength.getOrCreate(self.asElement(), .y2, frame);
+}
