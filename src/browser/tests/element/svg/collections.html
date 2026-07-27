@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=root>
+  <polygon id=polygon points="0,0 10,20"></polygon>
+  <polyline id=polylineLive points="0,0 10,20"></polyline>
+  <polyline id=polylineExternal points="0,0 10,20"></polyline>
+  <polyline id=polylineInvalid points="0,0 10,20"></polyline>
+  <polyline id=polylineIdentity points="1 2 3 4"></polyline>
+  <polyline id=polylineMutators points="1 2 3 4"></polyline>
+  <polyline id=polylineStale points="1 2 3 4"></polyline>
+  <polyline id=polylineErrors points="1 2 3 4"></polyline>
+  <polygon id=polygonReadOnly points="1 2 3 4"></polygon>
+  <polyline id=many></polyline>
+
+  <g id=group transform="translate(10 20) rotate(45 1 2)"></g>
+  <g id=transformLive transform="translate(10 20) rotate(45 1 2)"></g>
+  <g id=transformExternal transform="translate(10 20)"></g>
+  <g id=transformIdentity transform="translate(1 2)"></g>
+  <g id=transformMutators transform="translate(1 2)"></g>
+  <g id=transformStale transform="translate(10 20)"></g>
+  <g id=transformConsolidate transform="translate(10 20) scale(2)"></g>
+  <g id=transformConsolidateCommit transform="rotate(30 5 6) scale(2 3)"></g>
+  <g id=matrixIs2D transform="translate(1 2)"></g>
+  <g id=matrixStaleMatrix transform="translate(1 2)"></g>
+  <g id=transformReadOnly transform="translate(1 2)"></g>
+  <g id=transformParse transform="translate(1 2) scale(3,4) rotate(30 5 6)"></g>
+  <g id=matrixGroup transform="translate(1 2)"></g>
+  <g id=matrixReadOnly transform="translate(1 2)"></g>
+
+  <g id=strings requiredExtensions="urn:one urn:two" systemLanguage="en, fr"></g>
+  <g id=stringMutators requiredExtensions="urn:one urn:two"></g>
+  <g id=stringReturns requiredExtensions="urn:one urn:two"></g>
+  <g id=stringClear requiredExtensions="urn:one urn:two"></g>
+  <g id=stringLanguages systemLanguage="en, fr"></g>
+  <g id=stringExternal systemLanguage="en, fr"></g>
+  <g id=stringTokens systemLanguage="en, fr"></g>
+  <g id=stringNoValidation requiredExtensions="urn:one"></g>
+</svg>
+
+<!--
+  These fail in Chrome, deliberately. SVG 2 builds the list interfaces over a
+  list of real objects — getItem returns "a reference to that object and not a
+  copy of it" — so two getItem calls hand back the same object. Firefox does
+  this; Chrome creates a fresh tear-off per call and per mutator return, and
+  honours identity only where the IDL says [SameObject] (SVGTransform.matrix,
+  asserted in transformMatrixLive).
+
+  WPT sits this one out: every list test in svg/types/scripted compares .value
+  rather than the objects. We follow the spec and Firefox. Kept in its own
+  script so the rest of the file still runs in Chrome.
+-->
+<script id=pointListIdentity>
+{
+  const root = $('#root');
+  const polygon = $('#polygon');
+  const points = polygon.points;
+
+  testing.expectTrue(points === polygon.points);
+  testing.expectTrue(polygon.animatedPoints === polygon.animatedPoints);
+  testing.expectFalse(points === polygon.animatedPoints);
+  testing.expectTrue(points.getItem(0) === points.getItem(0));
+
+  // "The inserted item is the item itself and not a copy", so every mutator
+  // hands back the object it was given.
+  const list = $('#polylineIdentity').points;
+  const appended = root.createSVGPoint();
+  testing.expectEqual(appended, list.appendItem(appended));
+  const inserted = root.createSVGPoint();
+  testing.expectEqual(inserted, list.insertItemBefore(inserted, 0));
+  const replacement = root.createSVGPoint();
+  testing.expectEqual(replacement, list.replaceItem(replacement, 1));
+  testing.expectEqual(replacement, list.removeItem(1));
+  const initialized = root.createSVGPoint();
+  testing.expectEqual(initialized, list.initialize(initialized));
+}
+</script>
+
+<script id=pointListBasics>
+{
+  const polygon = $('#polygon');
+  const points = polygon.points;
+
+  testing.expectTrue(points instanceof SVGPointList);
+  testing.expectEqual(2, points.length);
+  testing.expectEqual(2, points.numberOfItems);
+  testing.expectEqual(0, points.getItem(0).x);
+  testing.expectEqual(0, points.getItem(0).y);
+  testing.expectEqual(10, points.getItem(1).x);
+  testing.expectEqual(20, points.getItem(1).y);
+}
+</script>
+
+<script id=pointListLive>
+{
+  const polyline = $('#polylineLive');
+  const points = polyline.points;
+
+  points.getItem(0).x = 5;
+  testing.expectEqual('5 0 10 20', polyline.getAttribute('points'));
+  testing.expectEqual(5, polyline.animatedPoints.getItem(0).x);
+
+  points.getItem(1).y = -1;
+  testing.expectEqual('5 0 10 -1', polyline.getAttribute('points'));
+}
+</script>
+
+<script id=pointListExternalMutation>
+{
+  const polyline = $('#polylineExternal');
+  const points = polyline.points;
+
+  polyline.setAttribute('points', '1 2, 3 4');
+  testing.expectEqual(2, points.length);
+  testing.expectEqual(1, points.getItem(0).x);
+  testing.expectEqual(2, points.getItem(0).y);
+  testing.expectEqual(3, points.getItem(1).x);
+  testing.expectEqual('1 2, 3 4', polyline.getAttribute('points'));
+}
+</script>
+
+<script id=pointListInvalidAttribute>
+{
+  const polyline = $('#polylineInvalid');
+  const points = polyline.points;
+
+  // A malformed number invalidates the whole attribute...
+  polyline.setAttribute('points', '0,0 100,0 INVALID');
+  testing.expectEqual(0, points.length);
+  testing.expectEqual('0,0 100,0 INVALID', polyline.getAttribute('points'));
+
+  // ...but a trailing coordinate with no pair only truncates it.
+  polyline.setAttribute('points', '0,0 100,0 20');
+  testing.expectEqual(2, points.length);
+  polyline.setAttribute('points', '0,0 100,0 20,');
+  testing.expectEqual(2, points.length);
+  polyline.setAttribute('points', '1,2,3');
+  testing.expectEqual(1, points.length);
+  testing.expectEqual('1,2,3', polyline.getAttribute('points'));
+}
+</script>
+
+<script id=pointListMutators>
+{
+  const root = $('#root');
+  const polyline = $('#polylineMutators');
+  const points = polyline.points;
+
+  const detached = root.createSVGPoint();
+  detached.x = 7;
+  detached.y = 8;
+  points.appendItem(detached);
+  testing.expectEqual('1 2 3 4 7 8', polyline.getAttribute('points'));
+
+  // Already in a list, so this one gets copied.
+  points.appendItem(detached);
+  testing.expectEqual(4, points.length);
+  detached.x = 9;
+  testing.expectEqual(9, points.getItem(2).x);
+  testing.expectEqual(7, points.getItem(3).x);
+
+  const removed = points.removeItem(2);
+  testing.expectEqual(9, removed.x);
+  testing.expectEqual('1 2 3 4 7 8', polyline.getAttribute('points'));
+
+  const inserted = root.createSVGPoint();
+  inserted.x = 100;
+  inserted.y = 200;
+  points.insertItemBefore(inserted, 0);
+  testing.expectEqual('100 200 1 2 3 4 7 8', polyline.getAttribute('points'));
+
+  const replacement = root.createSVGPoint();
+  replacement.x = 5;
+  replacement.y = 6;
+  points.replaceItem(replacement, 1);
+  testing.expectEqual('100 200 5 6 3 4 7 8', polyline.getAttribute('points'));
+
+  const initialized = root.createSVGPoint();
+  initialized.x = 4;
+  initialized.y = 5;
+  points.initialize(initialized);
+  testing.expectEqual('4 5', polyline.getAttribute('points'));
+
+  points.clear();
+  testing.expectEqual('', polyline.getAttribute('points'));
+}
+</script>
+
+<script id=pointListErrors>
+{
+  const root = $('#root');
+  const points = $('#polylineErrors').points;
+
+  testing.expectError('IndexSizeError', () => points.getItem(99));
+  testing.expectError('IndexSizeError', () => points.replaceItem(root.createSVGPoint(), 99));
+  testing.expectError('IndexSizeError', () => points.removeItem(99));
+}
+</script>
+
+<!-- SVGPoint's coordinates are a restricted float, unlike DOMPoint's. -->
+<script id=pointCoordinatesAreRestricted>
+{
+  const point = $('#root').createSVGPoint();
+  point.x = 100;
+  testing.expectError('TypeError', () => { point.x = NaN; });
+  testing.expectError('TypeError', () => { point.x = Infinity; });
+  testing.expectError('TypeError', () => { point.x = point; });
+  testing.expectEqual(100, point.x);
+
+  point.y = null;
+  testing.expectEqual(0, point.y);
+}
+</script>
+
+<script id=pointListReadOnly>
+{
+  const root = $('#root');
+  const polygon = $('#polygonReadOnly');
+  const animated = polygon.animatedPoints;
+
+  testing.expectError('NoModificationAllowedError', () => animated.clear());
+  testing.expectError('NoModificationAllowedError', () => animated.appendItem(root.createSVGPoint()));
+  testing.expectError('NoModificationAllowedError', () => { animated.getItem(0).x = 4; });
+
+  // Read-only is sticky: an external attribute change drops the item from the
+  // list, but it must not become a writable orphan.
+  const stale = animated.getItem(0);
+  polygon.setAttribute('points', '9 9');
+  testing.expectEqual(1, animated.length);
+  testing.expectError('NoModificationAllowedError', () => { stale.x = 4; });
+}
+</script>
+
+<script id=pointListCapacity>
+{
+  const root = $('#root');
+  const points = $('#many').points;
+  for (let i = 0; i < 70; i++) {
+    const point = root.createSVGPoint();
+    point.x = i;
+    point.y = -i;
+    points.appendItem(point);
+  }
+  testing.expectEqual(70, points.numberOfItems);
+  testing.expectEqual(69, points.getItem(69).x);
+  testing.expectEqual(-69, points.getItem(69).y);
+}
+</script>
+
+<!-- Fails in Chrome, passes in Firefox; see pointListIdentity. -->
+<script id=transformListIdentity>
+{
+  const root = $('#root');
+  const group = $('#group');
+  const animated = group.transform;
+
+  testing.expectTrue(animated === group.transform);
+  testing.expectTrue(animated.baseVal === animated.baseVal);
+  testing.expectTrue(animated.animVal === animated.animVal);
+  testing.expectFalse(animated.baseVal === animated.animVal);
+  testing.expectTrue(animated.baseVal.getItem(1) === animated.baseVal.getItem(1));
+  testing.expectTrue(animated.baseVal.getItem(1).matrix === animated.baseVal.getItem(1).matrix);
+
+  const list = $('#transformIdentity').transform.baseVal;
+  const appended = root.createSVGTransform();
+  testing.expectEqual(appended, list.appendItem(appended));
+  const inserted = root.createSVGTransform();
+  testing.expectEqual(inserted, list.insertItemBefore(inserted, 0));
+  const replacement = root.createSVGTransform();
+  testing.expectEqual(replacement, list.replaceItem(replacement, 1));
+  testing.expectEqual(replacement, list.removeItem(1));
+  const initialized = root.createSVGTransform();
+  testing.expectEqual(initialized, list.initialize(initialized));
+}
+</script>
+
+<script id=transformListBasics>
+{
+  const group = $('#group');
+  const animated = group.transform;
+  const base = animated.baseVal;
+
+  testing.expectTrue(animated instanceof SVGAnimatedTransformList);
+  testing.expectTrue(base instanceof SVGTransformList);
+  testing.expectEqual(2, base.numberOfItems);
+  testing.expectEqual(2, base.length);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_TRANSLATE, base.getItem(0).type);
+  testing.expectEqual(10, base.getItem(0).matrix.e);
+  testing.expectEqual(20, base.getItem(0).matrix.f);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_ROTATE, base.getItem(1).type);
+  testing.expectEqual(45, base.getItem(1).angle);
+}
+</script>
+
+<script id=transformListLive>
+{
+  const group = $('#transformLive');
+  const base = group.transform.baseVal;
+
+  base.getItem(0).setTranslate(3, 4);
+  testing.expectEqual('translate(3 4)', group.getAttribute('transform').slice(0, 14));
+  testing.expectEqual(3, group.transform.animVal.getItem(0).matrix.e);
+
+  base.getItem(1).setSkewX(15);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_SKEWX, base.getItem(1).type);
+  testing.expectEqual('translate(3 4) skewX(15)', group.getAttribute('transform'));
+}
+</script>
+
+<script id=transformListExternalMutation>
+{
+  const group = $('#transformExternal');
+  const base = group.transform.baseVal;
+
+  group.setAttribute('transform', 'scale(2)');
+  testing.expectEqual(1, base.length);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_SCALE, base.getItem(0).type);
+  testing.expectEqual(2, base.getItem(0).matrix.a);
+  testing.expectEqual(2, base.getItem(0).matrix.d);
+}
+</script>
+
+<!--
+  All three engines differ on writing an item that an external attribute change
+  has dropped from its list:
+
+    us       the write lands on the orphan; the list and attribute are untouched
+    Chrome   lands on the orphan, but the list is re-committed anyway, so the
+             attribute comes back reserialized ("scale(2)" -> "scale(2 2)")
+    Firefox  lands on the *list* at that index, because its tear-off proxies
+             slot n rather than the object ("scale(2)" -> "translate(8, 9)")
+
+  SVG 2 reparses the attribute into a fresh set of objects, so the item that was
+  removed is no longer in the list and a write to it should not reach it.
+-->
+<script id=staleItemWrites>
+{
+  const group = $('#transformStale');
+  const base = group.transform.baseVal;
+  const stale = base.getItem(0);
+
+  group.setAttribute('transform', 'scale(2)');
+  testing.expectEqual(1, base.length);
+  stale.setTranslate(8, 9);
+  testing.expectEqual('scale(2)', group.getAttribute('transform'));
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_SCALE, base.getItem(0).type);
+  testing.expectEqual(2, base.getItem(0).matrix.a);
+
+  const polyline = $('#polylineStale');
+  const points = polyline.points;
+  const stalePoint = points.getItem(0);
+  polyline.setAttribute('points', '9 9');
+  testing.expectEqual(1, points.length);
+  stalePoint.x = 5;
+  testing.expectEqual('9 9', polyline.getAttribute('points'));
+  testing.expectEqual(9, points.getItem(0).x);
+
+  // A live matrix orphaned the same way keeps working as a plain matrix.
+  const matrixGroup = $('#matrixStaleMatrix');
+  const matrixBase = matrixGroup.transform.baseVal;
+  const matrix = matrixBase.getItem(0).matrix;
+  matrixGroup.setAttribute('transform', 'scale(4)');
+  testing.expectEqual(1, matrixBase.length);
+  matrix.e = 11;
+  testing.expectEqual(11, matrix.e);
+  testing.expectEqual(0, matrixBase.getItem(0).matrix.e);
+  testing.expectEqual(4, matrixBase.getItem(0).matrix.a);
+}
+</script>
+
+<script id=transformListMutators>
+{
+  const root = $('#root');
+  const group = $('#transformMutators');
+  const base = group.transform.baseVal;
+
+  const scale = root.createSVGTransform();
+  scale.setScale(2, 3);
+  base.appendItem(scale);
+  testing.expectEqual('translate(1 2) scale(2 3)', group.getAttribute('transform'));
+
+  const removed = base.removeItem(0);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_TRANSLATE, removed.type);
+  testing.expectEqual('scale(2 3)', group.getAttribute('transform'));
+
+  const rotate = root.createSVGTransform();
+  rotate.setRotate(30, 5, 6);
+  base.insertItemBefore(rotate, 0);
+  testing.expectEqual('rotate(30 5 6) scale(2 3)', group.getAttribute('transform'));
+
+  const initialized = root.createSVGTransform();
+  initialized.setTranslate(7, 8);
+  base.initialize(initialized);
+  testing.expectEqual('translate(7 8)', group.getAttribute('transform'));
+
+  base.clear();
+  testing.expectEqual('', group.getAttribute('transform'));
+}
+</script>
+
+<script id=transformListConsolidate>
+{
+  const base = $('#transformConsolidate').transform.baseVal;
+
+  testing.expectEqual(2, base.numberOfItems);
+  const consolidated = base.consolidate();
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, consolidated.type);
+  testing.expectEqual(1, base.numberOfItems);
+  testing.expectEqual(2, consolidated.matrix.a);
+  testing.expectEqual(2, consolidated.matrix.d);
+  testing.expectEqual(10, consolidated.matrix.e);
+  testing.expectEqual(20, consolidated.matrix.f);
+}
+</script>
+
+<!--
+  Chrome updates the list but leaves the attribute alone, so after consolidating
+  to a single matrix the attribute still reads "rotate(...)" while the DOM says
+  one SVG_TRANSFORM_MATRIX item. We commit, like every other mutator does: our
+  list is rebuilt from the attribute on the next read, so not committing would
+  undo the consolidate on the very next access.
+-->
+<script id=transformListConsolidateCommits>
+{
+  const group = $('#transformConsolidateCommit');
+  group.transform.baseVal.consolidate();
+  testing.expectEqual('matrix(', group.getAttribute('transform').slice(0, 7));
+  testing.expectEqual(1, group.transform.baseVal.numberOfItems);
+}
+</script>
+
+<script id=transformListReadOnly>
+{
+  const root = $('#root');
+  const group = $('#transformReadOnly');
+  const anim = group.transform.animVal;
+
+  testing.expectError('NoModificationAllowedError', () => anim.clear());
+  testing.expectError('NoModificationAllowedError', () => anim.appendItem(root.createSVGTransform()));
+  testing.expectError('NoModificationAllowedError', () => anim.getItem(0).setTranslate(1, 1));
+
+  // Read-only is sticky, see pointListReadOnly.
+  const stale = anim.getItem(0);
+  group.setAttribute('transform', 'scale(3)');
+  testing.expectEqual(1, anim.length);
+  testing.expectError('NoModificationAllowedError', () => stale.setTranslate(1, 1));
+}
+</script>
+
+<script id=transformMatrixLive>
+{
+  const group = $('#matrixGroup');
+  const base = group.transform.baseVal;
+  const anim = group.transform.animVal;
+  const transform = base.getItem(0);
+  const matrix = transform.matrix;
+
+  testing.expectTrue(matrix === transform.matrix);
+
+  matrix.e = 5;
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, transform.type);
+  testing.expectEqual(0, transform.angle);
+  testing.expectEqual('matrix(1 0 0 1 5 2)', group.getAttribute('transform'));
+  testing.expectEqual(5, anim.getItem(0).matrix.e);
+  testing.expectEqual(1, base.length);
+}
+</script>
+
+<script id=transformMatrixReadOnly>
+{
+  const group = $('#matrixReadOnly');
+  const animMatrix = group.transform.animVal.getItem(0).matrix;
+
+  testing.expectError('NoModificationAllowedError', () => { animMatrix.e = 99; });
+  testing.expectEqual('translate(1 2)', group.getAttribute('transform'));
+  testing.expectEqual(1, animMatrix.e);
+}
+</script>
+
+<!--
+  SVG 2 types SVGTransform.matrix as a DOMMatrix (SVGMatrix is a typedef for it).
+  Chrome still returns the legacy SVGMatrix, which has none of these members, so
+  this block and the next one only run here.
+-->
+<script id=transformMatrixDomMatrixApi>
+{
+  const root = $('#root');
+  const transform = root.createSVGTransform();
+  const matrix = transform.matrix;
+
+  testing.expectEqual(matrix, matrix.translateSelf(2, 3));
+  testing.expectEqual(2, matrix.e);
+  testing.expectEqual(3, matrix.f);
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, transform.type);
+
+  testing.expectEqual(matrix, matrix.setMatrixValue('matrix(1, 0, 0, 1, 9, 10)'));
+  testing.expectEqual(9, matrix.e);
+  testing.expectEqual(10, matrix.f);
+}
+</script>
+
+<script id=transformMatrixIs2D>
+{
+  const root = $('#root');
+  const group = $('#matrixIs2D');
+  const transform = root.createSVGTransform();
+  const matrix = transform.matrix;
+
+  // An SVGTransform is a 2D affine transform and the `transform` attribute has
+  // no syntax for anything else, so the 3D components are dropped.
+  matrix.m13 = 2;
+  testing.expectEqual(SVGTransform.SVG_TRANSFORM_MATRIX, transform.type);
+  testing.expectTrue(matrix.is2D);
+  testing.expectEqual(0, matrix.m13);
+
+  matrix.setMatrixValue('translate3d(1px, 2px, 3px)');
+  testing.expectTrue(matrix.is2D);
+  testing.expectEqual(1, matrix.e);
+  testing.expectEqual(2, matrix.f);
+  testing.expectEqual(0, matrix.m43);
+
+  group.transform.baseVal.initialize(transform);
+  testing.expectEqual('matrix(1 0 0 1 1 2)', group.getAttribute('transform'));
+}
+</script>
+
+<script id=transformParser>
+{
+  const group = $('#transformParse');
+  const base = group.transform.baseVal;
+
+  testing.expectEqual(3, base.length);
+  testing.expectEqual(2, base.getItem(0).matrix.f);
+  testing.expectEqual(4, base.getItem(1).matrix.d);
+  testing.expectEqual(30, base.getItem(2).angle);
+
+  group.setAttribute('transform', 'translate()');
+  testing.expectEqual(0, base.length);
+  testing.expectEqual('translate()', group.getAttribute('transform'));
+
+  // No 3D function is part of the SVG transform grammar.
+  group.setAttribute('transform', 'matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1)');
+  testing.expectEqual(0, base.length);
+}
+</script>
+
+<script id=domMatrixTransformString>
+{
+  testing.expectError('SyntaxError', () => new DOMMatrix('translate()'));
+  testing.expectError('SyntaxError', () => new DOMMatrix('scale()'));
+
+  const matrix = new DOMMatrix('translate(3px, 4px) scale(2, 3)');
+  testing.expectEqual(3, matrix.e);
+  testing.expectEqual(4, matrix.f);
+  testing.expectEqual(2, matrix.a);
+}
+</script>
+
+<!--
+  The SVG grammar's separators are not CSS syntax: a DOMMatrix string wants
+  commas between arguments, even though `transform="translate(3 4)"` does not.
+-->
+<script id=domMatrixRejectsSvgSeparators>
+{
+  testing.expectError('SyntaxError', () => new DOMMatrix('translate(3px 4px) scale(2 3)'));
+  testing.expectError('SyntaxError', () => new DOMMatrix('translate(3 4)'));
+  testing.expectError('SyntaxError', () => new DOMMatrix('matrix(1 0 0 1 5 6)'));
+  testing.expectError('SyntaxError', () => new DOMMatrix('translate(3px-4px)'));
+
+  const matrix = new DOMMatrix('translate(3px, 4px) scale(2, 3)');
+  testing.expectEqual(3, matrix.e);
+  testing.expectEqual(2, matrix.a);
+}
+</script>
+
+<script id=stringListBasics>
+{
+  const group = $('#strings');
+  const required = group.requiredExtensions;
+  const languages = group.systemLanguage;
+
+  testing.expectTrue(required instanceof SVGStringList);
+  testing.expectTrue(required === group.requiredExtensions);
+  testing.expectTrue(languages === group.systemLanguage);
+  testing.expectEqual(2, required.numberOfItems);
+  testing.expectEqual('urn:one', required.getItem(0));
+  testing.expectEqual('urn:two', required.getItem(1));
+  testing.expectEqual(2, languages.length);
+  testing.expectEqual('en', languages.getItem(0));
+  testing.expectEqual('fr', languages.getItem(1));
+  testing.expectError('IndexSizeError', () => required.getItem(99));
+}
+</script>
+
+<script id=stringListMutators>
+{
+  const group = $('#stringMutators');
+  const required = group.requiredExtensions;
+
+  required.appendItem('urn:three');
+  testing.expectEqual('urn:one urn:two urn:three', group.getAttribute('requiredExtensions'));
+  required.removeItem(1);
+  testing.expectEqual('urn:one urn:three', group.getAttribute('requiredExtensions'));
+  required.insertItemBefore('urn:zero', 0);
+  testing.expectEqual('urn:zero urn:one urn:three', group.getAttribute('requiredExtensions'));
+  required.replaceItem('urn:x', 1);
+  testing.expectEqual('urn:zero urn:x urn:three', group.getAttribute('requiredExtensions'));
+  required.initialize('urn:only');
+  testing.expectEqual('urn:only', group.getAttribute('requiredExtensions'));
+
+  required.clear();
+  testing.expectEqual(0, required.length);
+}
+</script>
+
+<!-- Emptying a string list removes the attribute in Chrome but blanks it in
+     Firefox, which blanks it for point and transform lists too. Chrome is the
+     inconsistent one here; we follow it. -->
+<script id=stringListClearRemovesAttribute>
+{
+  const group = $('#stringClear');
+  group.requiredExtensions.clear();
+  testing.expectEqual(null, group.getAttribute('requiredExtensions'));
+}
+</script>
+
+<!-- Firefox returns "" from SVGStringList.removeItem; Chrome and the spec
+     return the removed item. -->
+<script id=stringListMutatorReturns>
+{
+  const required = $('#stringReturns').requiredExtensions;
+
+  testing.expectEqual('urn:three', required.appendItem('urn:three'));
+  testing.expectEqual('urn:two', required.removeItem(1));
+  testing.expectEqual('urn:zero', required.insertItemBefore('urn:zero', 0));
+  testing.expectEqual('urn:x', required.replaceItem('urn:x', 1));
+  testing.expectEqual('urn:only', required.initialize('urn:only'));
+}
+</script>
+
+<script id=stringListDelimiter>
+{
+  const group = $('#stringLanguages');
+  const languages = group.systemLanguage;
+
+  languages.insertItemBefore('de', 1);
+  testing.expectEqual('en,de,fr', group.getAttribute('systemLanguage'));
+}
+</script>
+
+<!--
+  systemLanguage is a set of comma-separated tokens: every segment is a token,
+  including an empty one, and each is trimmed. Mirrors the cases in
+  wpt/svg/struct/systemLanguage-parsing.html, which we can't run yet because
+  <text> is not an SVGGraphicsElement here.
+-->
+<script id=stringListCommaTokens>
+{
+  const group = $('#stringTokens');
+  const languages = group.systemLanguage;
+
+  const parsesAs = (input, expected) => {
+    group.setAttribute('systemLanguage', input);
+    testing.expectEqual(expected.length, languages.length);
+    for (let i = 0; i < expected.length; i++) {
+      testing.expectEqual(expected[i], languages.getItem(i));
+    }
+  };
+
+  parsesAs('en,fr,de', ['en', 'fr', 'de']);
+  parsesAs('en , fr , de', ['en', 'fr', 'de']);
+  parsesAs('  en, fr  ', ['en', 'fr']);
+  parsesAs(' \t\nen, fr\t\n ', ['en', 'fr']);
+  parsesAs('en', ['en']);
+  parsesAs('en-US, zh-Hans', ['en-US', 'zh-Hans']);
+  parsesAs('en,,fr', ['en', '', 'fr']);
+  parsesAs('', ['']);
+  parsesAs(',', ['', '']);
+  parsesAs('not-a-lang, ???', ['not-a-lang', '???']);
+
+  // An absent attribute is an empty list, unlike an empty one.
+  group.removeAttribute('systemLanguage');
+  testing.expectEqual(0, languages.length);
+}
+</script>
+
+<script id=stringListExternalMutation>
+{
+  const group = $('#stringExternal');
+  const languages = group.systemLanguage;
+
+  group.setAttribute('systemLanguage', 'ja, ko');
+  testing.expectEqual(2, languages.length);
+  testing.expectEqual('ko', languages.getItem(1));
+
+  group.setAttribute('systemLanguage', 'it, pt');
+  testing.expectEqual(2, languages.length);
+  testing.expectEqual('pt', languages.getItem(1));
+}
+</script>
+
+<script id=stringListNoValidation>
+{
+  const group = $('#stringNoValidation');
+  const required = group.requiredExtensions;
+
+  // Neither the spec nor Chrome validates the inserted string against the
+  // list's delimiter, and the list stays authoritative over its own
+  // serialization, so this remains one item.
+  required.appendItem('two words');
+  testing.expectEqual('urn:one two words', group.getAttribute('requiredExtensions'));
+  testing.expectEqual(2, required.length);
+  testing.expectEqual('two words', required.getItem(1));
+
+  // Until the attribute is written from the outside, which reparses.
+  group.setAttribute('requiredExtensions', 'urn:one three more words');
+  testing.expectEqual(4, required.length);
+  testing.expectEqual('three', required.getItem(1));
+}
+</script>

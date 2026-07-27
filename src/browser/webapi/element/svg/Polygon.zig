@@ -17,11 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 
 const Geometry = @import("Geometry.zig");
+const PointList = @import("../../svg/PointList.zig");
 
 const Polygon = @This();
 _proto: *Geometry,
@@ -41,4 +43,15 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const points = bridge.accessor(Polygon.getPoints, null, .{});
+    pub const animatedPoints = bridge.accessor(Polygon.getAnimatedPoints, null, .{});
 };
+
+pub fn getPoints(self: *Polygon, frame: *Frame) !*PointList {
+    return PointList.getOrCreate(self.asElement(), .base, frame);
+}
+
+pub fn getAnimatedPoints(self: *Polygon, frame: *Frame) !*PointList {
+    return PointList.getOrCreate(self.asElement(), .animated, frame);
+}

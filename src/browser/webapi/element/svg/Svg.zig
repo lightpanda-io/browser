@@ -82,7 +82,9 @@ pub fn getPreserveAspectRatio(self: *Svg, frame: *Frame) !*AnimatedPreserveAspec
 }
 
 pub fn createSVGPoint(_: *Svg, frame: *Frame) !*DOMPoint {
-    return DOMPoint.create(0, 0, 0, 1, frame._page);
+    const point = try DOMPoint.create(0, 0, 0, 1, frame._page);
+    point._proto.restrict();
+    return point;
 }
 
 pub fn createSVGMatrix(_: *Svg, frame: *Frame) !*DOMMatrix {
