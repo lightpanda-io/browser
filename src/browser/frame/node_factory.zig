@@ -938,13 +938,10 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     asUint("foreignObject") => return createSvgElementT(frame, Graphics.ForeignObject, name, attribute_iterator, .{ ._proto = undefined }),
                     else => {},
                 },
-                14 => {
-                    if (std.mem.eql(u8, name, "linearGradient")) {
-                        return createSvgElementT(frame, Element.Svg.GradientElement.LinearGradient, name, attribute_iterator, .{ ._proto = undefined });
-                    }
-                    if (std.mem.eql(u8, name, "radialGradient")) {
-                        return createSvgElementT(frame, Element.Svg.GradientElement.RadialGradient, name, attribute_iterator, .{ ._proto = undefined });
-                    }
+                14 => switch (@as(u112, @bitCast(name[0..14].*))) {
+                    asUint("linearGradient") => return createSvgElementT(frame, Element.Svg.GradientElement.LinearGradient, name, attribute_iterator, .{ ._proto = undefined }),
+                    asUint("radialGradient") => return createSvgElementT(frame, Element.Svg.GradientElement.RadialGradient, name, attribute_iterator, .{ ._proto = undefined }),
+                    else => {},
                 },
                 else => {},
             }

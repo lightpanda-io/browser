@@ -24,13 +24,12 @@ pub const Kind = enum {
     gradient_transform,
     pattern_transform,
 
-    fn attributeName(self: Kind, frame: *Frame) !lp.String {
-        const name = switch (self) {
-            .transform => "transform",
-            .gradient_transform => "gradientTransform",
-            .pattern_transform => "patternTransform",
+    fn attributeName(self: Kind) lp.String {
+        return switch (self) {
+            .transform => .wrap("transform"),
+            .gradient_transform => .wrap("gradientTransform"),
+            .pattern_transform => .wrap("patternTransform"),
         };
-        return lp.String.init(frame.arena, name, .{ .dupe = false });
     }
 };
 
@@ -46,7 +45,7 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedTrans
     const gop = try frame._svg_animated_transform_lists.getOrPut(frame.arena, key);
     if (!gop.found_existing) {
         errdefer _ = frame._svg_animated_transform_lists.remove(key);
-        gop.value_ptr.* = try createForAttribute(element, try kind.attributeName(frame), frame);
+        gop.value_ptr.* = try createForAttribute(element, kind.attributeName(), frame);
     }
     return gop.value_ptr.*;
 }

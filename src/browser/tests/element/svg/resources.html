@@ -28,6 +28,12 @@
   testing.expectEqual(true, $('#pattern') instanceof SVGPatternElement);
   testing.expectEqual(true, $('#stop') instanceof SVGStopElement);
 
+  // SVG_UNIT_TYPE_* constants live on SVGUnitTypes, not the element interfaces.
+  testing.expectEqual('undefined', typeof SVGClipPathElement.SVG_UNIT_TYPE_USERSPACEONUSE);
+  testing.expectEqual('undefined', typeof SVGMaskElement.SVG_UNIT_TYPE_OBJECTBOUNDINGBOX);
+  testing.expectEqual(2, SVGGradientElement.SVG_SPREADMETHOD_REFLECT);
+  testing.expectEqual(2, SVGMarkerElement.SVG_MARKERUNITS_STROKEWIDTH);
+
   const ns = 'http://www.w3.org/2000/svg';
   testing.expectEqual(true, document.createElementNS(ns, 'linearGradient') instanceof SVGLinearGradientElement);
   testing.expectEqual(false, document.createElementNS(ns, 'lineargradient') instanceof SVGLinearGradientElement);
@@ -48,8 +54,10 @@
   testing.expectError('TypeError', () => { linear.gradientUnits.baseVal = 99; });
 
   testing.expectEqual(2, linear.spreadMethod.baseVal);
+  // Enumerated values match exactly: whitespace padding makes the value
+  // unrecognized, and both engines then report the initial value.
   linear.setAttribute('spreadMethod', ' \treflect\n');
-  testing.expectEqual(2, linear.spreadMethod.baseVal);
+  testing.expectEqual(1, linear.spreadMethod.baseVal);
   testing.expectEqual('#base', linear.href.baseVal);
   linear.href.baseVal = '#other';
   testing.expectEqual('#other', linear.getAttribute('href'));
@@ -80,19 +88,21 @@
 }
 </script>
 
-<script id=radialFallbacks>
+<script id=radialDefaults>
 {
+  // fx/fy reflect only their own attribute: the rendering-time fallback to
+  // cx/cy is not visible through the DOM, which reports the 50% default.
   const radial = $('#radial');
   testing.expectEqual(true, radial.fx === radial.fx);
-  testing.expectEqual('20%', radial.fx.baseVal.valueAsString);
-  testing.expectEqual('30%', radial.fy.baseVal.valueAsString);
+  testing.expectEqual('50%', radial.fx.baseVal.valueAsString);
+  testing.expectEqual('50%', radial.fy.baseVal.valueAsString);
   radial.setAttribute('cx', '40%');
-  testing.expectEqual('40%', radial.fx.baseVal.valueAsString);
+  testing.expectEqual('50%', radial.fx.baseVal.valueAsString);
   radial.fx.baseVal.valueAsString = '15%';
-  radial.setAttribute('cx', '60%');
   testing.expectEqual('15%', radial.fx.baseVal.valueAsString);
+  testing.expectEqual('15%', radial.getAttribute('fx'));
   radial.removeAttribute('fx');
-  testing.expectEqual('60%', radial.fx.baseVal.valueAsString);
+  testing.expectEqual('50%', radial.fx.baseVal.valueAsString);
   testing.expectEqual('50%', radial.r.baseVal.valueAsString);
   testing.expectEqual('0%', radial.fr.baseVal.valueAsString);
   radial.setAttribute('r', 'invalid');

@@ -174,14 +174,6 @@ pub const Kind = enum {
             else => .number,
         };
     }
-
-    fn fallbackAttributeName(self: Kind) ?lp.String {
-        return switch (self) {
-            .radial_gradient_fx => comptime .wrap("cx"),
-            .radial_gradient_fy => comptime .wrap("cy"),
-            else => null,
-        };
-    }
 };
 
 pub const Key = struct {
@@ -205,7 +197,6 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedLengt
             kind.direction(),
             kind.defaultValue(),
             kind.defaultUnit(),
-            kind.fallbackAttributeName(),
             frame,
         );
     }
@@ -227,7 +218,6 @@ pub fn createConfigured(
     direction: Length.Direction,
     default_value: f64,
     default_unit: Length.Unit,
-    fallback_attr_name: ?lp.String,
     frame: *Frame,
 ) !*AnimatedLength {
     const base_val = try Length.reflectedConfigured(
@@ -236,7 +226,6 @@ pub fn createConfigured(
         direction,
         default_value,
         default_unit,
-        fallback_attr_name,
         false,
         frame,
     );
@@ -246,7 +235,6 @@ pub fn createConfigured(
         direction,
         default_value,
         default_unit,
-        fallback_attr_name,
         true,
         frame,
     );

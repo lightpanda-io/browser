@@ -1,5 +1,20 @@
-// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -44,18 +59,17 @@ pub const Kind = enum {
     pattern_units,
     pattern_content_units,
 
-    fn attributeName(self: Kind, frame: *Frame) !lp.String {
-        const name = switch (self) {
-            .clip_path_units => "clipPathUnits",
-            .gradient_units => "gradientUnits",
-            .spread_method => "spreadMethod",
-            .marker_units => "markerUnits",
-            .mask_units => "maskUnits",
-            .mask_content_units => "maskContentUnits",
-            .pattern_units => "patternUnits",
-            .pattern_content_units => "patternContentUnits",
+    fn attributeName(self: Kind) lp.String {
+        return switch (self) {
+            .clip_path_units => .wrap("clipPathUnits"),
+            .gradient_units => .wrap("gradientUnits"),
+            .spread_method => .wrap("spreadMethod"),
+            .marker_units => .wrap("markerUnits"),
+            .mask_units => .wrap("maskUnits"),
+            .mask_content_units => .wrap("maskContentUnits"),
+            .pattern_units => .wrap("patternUnits"),
+            .pattern_content_units => .wrap("patternContentUnits"),
         };
-        return lp.String.init(frame.arena, name, .{ .dupe = false });
     }
 
     fn entries(self: Kind) []const Entry {
@@ -92,7 +106,7 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedEnume
         errdefer _ = frame._svg_animated_enumerations.remove(key);
         gop.value_ptr.* = try create(
             element,
-            try kind.attributeName(frame),
+            kind.attributeName(),
             kind.entries(),
             kind.defaultValue(),
             frame,
@@ -117,18 +131,19 @@ pub fn create(
 }
 
 pub fn getBaseVal(self: *const AnimatedEnumeration) u16 {
+    // Keywords match exactly — Chrome and Firefox reject even whitespace-padded
+    // values, and both answer an unrecognized value with the initial value.
     const raw = self._element.getAttributeSafe(self._attr_name) orelse return self._default_value;
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n\x0c");
     for (self._entries) |entry| {
-        if (std.mem.eql(u8, trimmed, entry.keyword)) return entry.value;
+        if (std.mem.eql(u8, raw, entry.keyword)) return entry.value;
     }
-    return 0;
+    return self._default_value;
 }
 
 pub fn setBaseVal(self: *AnimatedEnumeration, value: u16, frame: *Frame) !void {
     for (self._entries) |entry| {
         if (entry.value == value) {
-            try self._element.setAttributeSafe(self._attr_name, lp.String.wrap(entry.keyword), frame);
+            try self._element.setAttributeSafe(self._attr_name, .wrap(entry.keyword), frame);
             return;
         }
     }

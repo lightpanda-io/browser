@@ -34,7 +34,6 @@ _direction: Direction = .unspecified,
 _read_only: bool = false,
 _default_value: f64 = 0,
 _default_unit: Unit = .number,
-_fallback_attr_name: ?String = null,
 
 pub const Direction = enum {
     horizontal,
@@ -77,11 +76,9 @@ pub fn reflectedConfigured(
     direction: Direction,
     default_value: f64,
     default_unit: Unit,
-    fallback_attr_name: ?String,
     read_only: bool,
     frame: *Frame,
 ) !*Length {
-    try ensureFinite(default_value);
     return frame._factory.create(Length{
         ._element = element,
         ._attr_name = attr_name,
@@ -89,7 +86,6 @@ pub fn reflectedConfigured(
         ._read_only = read_only,
         ._default_value = default_value,
         ._default_unit = default_unit,
-        ._fallback_attr_name = fallback_attr_name,
     });
 }
 
@@ -180,10 +176,7 @@ fn ensureFinite(value: f64) !void {
 
 fn syncFromAttribute(self: *Length) void {
     const element = self._element orelse return;
-    const raw = element.getAttributeSafe(self._attr_name) orelse raw: {
-        if (self._fallback_attr_name) |fallback_attr_name| {
-            if (element.getAttributeSafe(fallback_attr_name)) |fallback| break :raw fallback;
-        }
+    const raw = element.getAttributeSafe(self._attr_name) orelse {
         self._value = self._default_value;
         self._unit = self._default_unit;
         return;
