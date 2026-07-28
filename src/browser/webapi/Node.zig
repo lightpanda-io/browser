@@ -479,7 +479,7 @@ pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
             .text => "#text",
             .cdata_section => "#cdata-section",
             .comment => "#comment",
-            .processing_instruction => |pi| pi._target,
+            .processing_instruction => cd.subtype(CData.ProcessingInstruction)._target,
         },
         .document => "#document",
         .document_type => |dt| dt.getName(),
@@ -1176,7 +1176,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
                 .text => Frame.node_factory.createTextNode(frame, data),
                 .cdata_section => Frame.node_factory.createCDATASection(frame, data),
                 .comment => Frame.node_factory.createComment(frame, data),
-                .processing_instruction => |pi| Frame.node_factory.createProcessingInstruction(frame, pi._target, data),
+                .processing_instruction => Frame.node_factory.createProcessingInstruction(frame, cd.subtype(CData.ProcessingInstruction)._target, data),
             };
         },
         .element => |el| return el.clone(deep, frame),

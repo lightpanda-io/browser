@@ -1259,7 +1259,19 @@ const Resolved = struct {
 };
 pub fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
-    if (!@hasField(T, "_type") or @typeInfo(@TypeOf(value._type)) != .@"union") {
+    if (!@hasField(T, "_type")) {
+        return resolveT(T, value);
+    }
+
+    // A bare-tag _type means the subtypes are chain members, not payloads
+    // (e.g. CData); the type maps the tag to the member's type.
+    if (comptime @typeInfo(@TypeOf(value._type)) == .@"enum" and @hasDecl(T, "Subtype")) {
+        switch (value._type) {
+            inline else => |tag| return resolveValue(value.subtype(T.Subtype(tag))),
+        }
+    }
+
+    if (comptime @typeInfo(@TypeOf(value._type)) != .@"union") {
         return resolveT(T, value);
     }
 
