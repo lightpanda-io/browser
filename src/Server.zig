@@ -40,7 +40,7 @@ active_threads: std.atomic.Value(u32) = .init(0),
 
 cdps: std.ArrayList(*CDP) = .empty,
 cdp_mutex: std.Io.Mutex = .init,
-cdp_pool: std.heap.memory_pool.ExtraManaged(CDP, .{}),
+cdp_pool: std.heap.MemoryPool(CDP),
 
 pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     const self = try app.allocator.create(Server);
@@ -48,11 +48,11 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
 
     self.* = .{
         .app = app,
+        .cdp_pool = .empty,
         .json_version_response = "",
-        .cdp_pool = .init(app.allocator),
         .max_connections = app.config.maxConnections(),
     };
-    errdefer self.cdp_pool.deinit();
+    errdefer self.cdp_pool.deinit(app.allocator);
 
     // Bind first so /json/version can advertise the OS-assigned port (--port 0).
     var bound_address = address;
@@ -87,8 +87,9 @@ pub fn deinit(self: *Server) void {
         lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
     }
 
-    self.cdps.deinit(self.app.allocator);
-    self.cdp_pool.deinit();
+    const allocator = self.app.allocator;
+    self.cdps.deinit(allocator);
+    self.cdp_pool.deinit(allocator);
     self.app.allocator.free(self.json_version_response);
     self.app.allocator.destroy(self);
 }
@@ -177,9 +178,10 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     defer _ = std.c.close(socket);
 
     const cdp = blk: {
+        const allocator = self.app.allocator;
         self.cdp_mutex.lockUncancelable(lp.io);
         defer self.cdp_mutex.unlock(lp.io);
-        break :blk self.cdp_pool.create() catch @panic("OOM");
+        break :blk self.cdp_pool.create(allocator) catch @panic("OOM");
     };
     defer {
         self.cdp_mutex.lockUncancelable(lp.io);

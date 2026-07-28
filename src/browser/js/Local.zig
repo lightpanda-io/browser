@@ -343,7 +343,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 }
                 const fc = finalizer_gop.value_ptr;
                 const browser = session.browser;
-                const identity_finalizer = try browser.fc_identity_pool.create();
+                const identity_finalizer = try browser.fc_identity_pool.create(browser.allocator);
                 identity_finalizer.* = .{
                     .browser = browser,
                     .page = page,

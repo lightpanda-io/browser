@@ -98,10 +98,10 @@ pub const GlobalSlot = struct {
 pub const GlobalTracker = struct {
     allocator: Allocator,
     list: std.ArrayList(*GlobalSlot) = .empty,
-    pool: std.heap.memory_pool.ExtraManaged(GlobalSlot, .{}),
+    pool: std.heap.MemoryPool(GlobalSlot),
 
     pub fn init(allocator: Allocator) GlobalTracker {
-        return .{ .allocator = allocator, .pool = .init(allocator) };
+        return .{ .allocator = allocator, .pool = .empty };
     }
 
     pub fn deinit(self: *GlobalTracker) void {
@@ -109,18 +109,19 @@ pub const GlobalTracker = struct {
             slot.reset();
         }
         self.list.deinit(self.allocator);
-        self.pool.deinit();
+        self.pool.deinit(self.allocator);
     }
 
     pub fn track(self: *GlobalTracker, handle: v8.Global) !*GlobalSlot {
-        const slot = try self.pool.create();
+        const allocator = self.allocator;
+        const slot = try self.pool.create(allocator);
         errdefer self.pool.destroy(slot);
         slot.* = .{
             .handle = handle,
             .tracker = self,
             .gindex = @intCast(self.list.items.len),
         };
-        try self.list.append(self.allocator, slot);
+        try self.list.append(allocator, slot);
         return slot;
     }
 

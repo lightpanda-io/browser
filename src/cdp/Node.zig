@@ -39,18 +39,18 @@ pub const Registry = struct {
     node_id: u32,
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
-    node_pool: std.heap.memory_pool.ExtraManaged(Node, .{}),
+    node_pool: std.heap.MemoryPool(Node),
     lookup_by_id: std.AutoHashMapUnmanaged(Id, *Node),
     lookup_by_node: std.HashMapUnmanaged(*DOMNode, *Node, NodeContext, std.hash_map.default_max_load_percentage),
 
     pub fn init(allocator: Allocator) Registry {
         return .{
             .node_id = 1,
+            .node_pool = .empty,
             .lookup_by_id = .{},
             .lookup_by_node = .{},
             .allocator = allocator,
             .arena = .init(allocator),
-            .node_pool = .init(allocator),
         };
     }
 
@@ -58,7 +58,7 @@ pub const Registry = struct {
         const allocator = self.allocator;
         self.lookup_by_id.deinit(allocator);
         self.lookup_by_node.deinit(allocator);
-        self.node_pool.deinit();
+        self.node_pool.deinit(allocator);
         self.arena.deinit();
     }
 
@@ -66,7 +66,7 @@ pub const Registry = struct {
         self.lookup_by_id.clearRetainingCapacity();
         self.lookup_by_node.clearRetainingCapacity();
         _ = self.arena.reset(.{ .retain_with_limit = 1024 });
-        _ = self.node_pool.reset(.{ .retain_with_limit = 1024 });
+        _ = self.node_pool.reset(self.allocator, .{ .retain_with_limit = 1024 });
     }
 
     /// Evict only the nodes owned by `frame`'s page, leaving sibling pages' node
@@ -99,7 +99,7 @@ pub const Registry = struct {
         // but, just in case, let's try to keep things tidy.
         errdefer _ = self.lookup_by_node.remove(dom_node);
 
-        const node = try self.node_pool.create();
+        const node = try self.node_pool.create(self.allocator);
         errdefer self.node_pool.destroy(node);
 
         const id = self.node_id;
