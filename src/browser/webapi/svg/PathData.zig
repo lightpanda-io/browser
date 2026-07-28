@@ -15,6 +15,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
@@ -138,12 +139,12 @@ pub const Path = struct {
         try self.segments.append(allocator, .{ .line = .{ .start = start, .end = end } });
     }
 
-    pub fn appendQuadratic(self: *Path, segment: Quadratic, allocator: Allocator) !void {
+    fn appendQuadratic(self: *Path, segment: Quadratic, allocator: Allocator) !void {
         if (self.first_point == null) self.first_point = segment.start;
         try self.segments.append(allocator, .{ .quadratic = segment });
     }
 
-    pub fn appendCubic(self: *Path, segment: Cubic, allocator: Allocator) !void {
+    fn appendCubic(self: *Path, segment: Cubic, allocator: Allocator) !void {
         if (self.first_point == null) self.first_point = segment.start;
         try self.segments.append(allocator, .{ .cubic = segment });
     }

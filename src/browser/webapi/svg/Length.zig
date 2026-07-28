@@ -21,11 +21,17 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 
 const String = lp.String;
 const Length = @This();
 
+// A reflected length is created with one ref held by the frame's animated
+// lookup cache, so a JS wrapper being collected can never free it. Only a
+// detached length (own arena, zero initial refs) dies with its last wrapper.
+_rc: lp.RC = .init(1),
+_arena: ?std.mem.Allocator = null,
 _value: f64 = 0,
 _unit: Unit = .number,
 _element: ?*Element = null,
@@ -58,16 +64,23 @@ pub const Unit = enum(u16) {
 const MAX_ANCESTOR_DEPTH = 32;
 
 pub fn detached(frame: *Frame) !*Length {
-    return frame._factory.create(Length{});
+    const arena = try frame._page.getArena(.tiny, "SVGLength");
+    errdefer frame._page.releaseArena(arena);
+    const self = try arena.create(Length);
+    self.* = .{ ._rc = .{}, ._arena = arena };
+    return self;
 }
 
-pub fn reflected(element: *Element, attr_name: String, direction: Direction, read_only: bool, frame: *Frame) !*Length {
-    return frame._factory.create(Length{
-        ._element = element,
-        ._attr_name = attr_name,
-        ._direction = direction,
-        ._read_only = read_only,
-    });
+pub fn deinit(self: *Length, page: *Page) void {
+    page.releaseArena(self._arena.?);
+}
+
+pub fn acquireRef(self: *Length) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *Length, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn reflectedConfigured(

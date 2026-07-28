@@ -39,7 +39,7 @@ pub fn getOrCreate(element: *Element, frame: *Frame) !*AnimatedPreserveAspectRat
     return gop.value_ptr.*;
 }
 
-pub fn create(element: *Element, frame: *Frame) !*AnimatedPreserveAspectRatio {
+fn create(element: *Element, frame: *Frame) !*AnimatedPreserveAspectRatio {
     const base_val = try PreserveAspectRatio.create(element, false, frame);
     const anim_val = try PreserveAspectRatio.create(element, true, frame);
     return frame._factory.create(AnimatedPreserveAspectRatio{

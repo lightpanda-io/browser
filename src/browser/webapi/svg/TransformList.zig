@@ -1,9 +1,20 @@
 // Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -25,10 +36,6 @@ _synced: bool = false,
 _snapshot: std.ArrayList(u8) = .empty,
 _items: std.ArrayList(*Transform) = .empty,
 _retired: std.ArrayList(*Transform) = .empty,
-
-pub fn create(element: *Element, read_only: bool, frame: *Frame) !*TransformList {
-    return createForAttribute(element, comptime .wrap("transform"), read_only, frame);
-}
 
 pub fn createForAttribute(element: *Element, attr_name: lp.String, read_only: bool, frame: *Frame) !*TransformList {
     return frame._factory.create(TransformList{

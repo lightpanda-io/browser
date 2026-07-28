@@ -17,15 +17,36 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Page = @import("../../Page.zig");
 
 const Number = @This();
+
+_rc: lp.RC = .{},
+_arena: std.mem.Allocator,
 _value: f32 = 0,
 
 pub fn detached(frame: *Frame) !*Number {
-    return frame._factory.create(Number{});
+    const arena = try frame._page.getArena(.tiny, "SVGNumber");
+    errdefer frame._page.releaseArena(arena);
+    const self = try arena.create(Number);
+    self.* = .{ ._arena = arena };
+    return self;
+}
+
+pub fn deinit(self: *Number, page: *Page) void {
+    page.releaseArena(self._arena);
+}
+
+pub fn acquireRef(self: *Number) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *Number, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn getValue(self: *const Number) f32 {
