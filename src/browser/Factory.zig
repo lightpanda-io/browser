@@ -189,14 +189,22 @@ fn PrototypeChain(comptime types: []const type) type {
             assert(index < types.len);
 
             const ptr = self.get(index);
-            ptr.* = .{ ._proto = self.get(index - 1), ._type = unionInit(T, self.get(index + 1)) };
+            ptr.* = if (comptime @hasField(types[index], "_proto"))
+                .{ ._proto = undefined, ._type = unionInit(T, self.get(index + 1)) }
+            else
+                .{ ._type = unionInit(T, self.get(index + 1)) };
+            setProto(ptr, self.get(index - 1));
         }
 
         fn setMiddleWithValue(self: *const Self, comptime index: usize, comptime T: type, value: anytype) void {
             assert(index >= 1);
 
             const ptr = self.get(index);
-            ptr.* = .{ ._proto = self.get(index - 1), ._type = unionInit(T, value) };
+            ptr.* = if (comptime @hasField(types[index], "_proto"))
+                .{ ._proto = undefined, ._type = unionInit(T, value) }
+            else
+                .{ ._type = unionInit(T, value) };
+            setProto(ptr, self.get(index - 1));
         }
 
         fn setLeaf(self: *const Self, comptime index: usize, value: anytype) void {
@@ -204,7 +212,7 @@ fn PrototypeChain(comptime types: []const type) type {
 
             const ptr = self.get(index);
             ptr.* = value;
-            ptr._proto = self.get(index - 1);
+            setProto(ptr, self.get(index - 1));
         }
     };
 }
@@ -325,7 +333,7 @@ pub fn cdataNode(self: *Factory, cd: Node.CData, leaf: anytype) !*Node.CData {
 
     const cd_ptr = chain.get(2);
     cd_ptr.* = cd;
-    cd_ptr._proto = chain.get(1);
+    setProto(cd_ptr, chain.get(1));
 
     // only the CDATASection chain has a middle here (its Text)
     inline for (3..types.len - 1) |i| {
@@ -363,11 +371,35 @@ pub fn chainOffsetOf(comptime Leaf: type, comptime T: type) usize {
     }
 }
 
-// Byte delta from T down to its Proto within any chain allocation containing
-// them (the prefix layout is the same for every leaf).
+// Offset from T to its Proto
 pub fn protoOffset(comptime T: type) usize {
     const P = reflect.Proto(T).?;
     return chainOffsetOf(T, T) - chainOffsetOf(T, P);
+}
+
+// Get the Proto of a value.
+pub fn protoOf(value: anytype) *reflect.Proto(reflect.Struct(@TypeOf(value))).? {
+    const T = reflect.Struct(@TypeOf(value));
+    const proto: *reflect.Proto(T).? = @ptrFromInt(@intFromPtr(value) - comptime protoOffset(T));
+    if (comptime IS_DEBUG) {
+        // In debug, we'll assert that our offset and the _proto field agree.
+        std.debug.assert(proto == if (comptime hasStoredProto(T)) value._proto else value._proto_canary);
+    }
+    return proto;
+}
+
+// Assigns a chain member's stored `_proto`
+fn setProto(ptr: anytype, proto: anytype) void {
+    const T = reflect.Struct(@TypeOf(ptr));
+    if (comptime hasStoredProto(T)) {
+        ptr._proto = proto;
+    } else if (comptime IS_DEBUG and @hasField(T, "_proto_canary")) {
+        ptr._proto_canary = proto;
+    }
+}
+
+fn hasStoredProto(comptime T: type) bool {
+    return @hasField(T, "_proto") and @FieldType(T, "_proto") != void;
 }
 
 // Generic contiguous chain from explicit values, for chains whose middles
@@ -399,7 +431,7 @@ pub fn chainedWithAllocator(allocator: Allocator, values: anytype) !*ChainedLeaf
         const ptr = chain.get(i);
         ptr.* = values[i];
         if (i > 0) {
-            ptr._proto = chain.get(i - 1);
+            setProto(ptr, chain.get(i - 1));
         }
     }
     return chain.get(types.len - 1);
@@ -532,7 +564,7 @@ fn destroyChain(
     const new_align = std.mem.Alignment.max(old_align, std.mem.Alignment.of(S));
 
     if (comptime reflect.Proto(S) != null) {
-        self.destroyChain(value._proto, new_size, new_align);
+        self.destroyChain(protoOf(value), new_size, new_align);
     } else {
         // no proto so this is the head of the chain.
         // we use this as the ptr to the start of the chain.

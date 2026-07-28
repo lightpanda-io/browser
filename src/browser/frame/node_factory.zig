@@ -1052,7 +1052,6 @@ pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element 
 
 pub fn createTextNode(frame: *Frame, text: []const u8) !*Node {
     const cd = try frame._factory.cdataNode(.{
-        ._proto = undefined,
         ._type = .text,
         ._data = try frame.dupeSSO(text),
     }, CData.Text{ ._proto = undefined });
@@ -1061,7 +1060,6 @@ pub fn createTextNode(frame: *Frame, text: []const u8) !*Node {
 
 pub fn createComment(frame: *Frame, text: []const u8) !*Node {
     const cd = try frame._factory.cdataNode(.{
-        ._proto = undefined,
         ._type = .comment,
         ._data = try frame.dupeSSO(text),
     }, CData.Comment{ ._proto = undefined });
@@ -1075,7 +1073,6 @@ pub fn createCDATASection(frame: *Frame, data: []const u8) !*Node {
     }
 
     const cd = try frame._factory.cdataNode(.{
-        ._proto = undefined,
         ._type = .cdata_section,
         ._data = try frame.dupeSSO(data),
     }, CData.CDATASection{ ._proto = undefined });
@@ -1097,7 +1094,6 @@ pub fn createProcessingInstruction(frame: *Frame, target: []const u8, data: []co
     const owned_target = try frame.dupeString(target);
 
     const cd = try frame._factory.cdataNode(.{
-        ._proto = undefined,
         ._type = .processing_instruction,
         ._data = try frame.dupeSSO(data),
     }, CData.ProcessingInstruction{

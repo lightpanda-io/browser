@@ -224,7 +224,7 @@ pub fn asNode(self: *HtmlElement) *Node {
 }
 
 pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
-    return self._proto._proto._proto;
+    return self.asNode().asEventTarget();
 }
 
 pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !void {

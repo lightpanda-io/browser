@@ -17,14 +17,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // The prototype ("parent") type of T, as declared by its `pub const Proto`.
-// This decl is the single source of truth for prototype-chain discovery;
-// a `_proto` field, where one exists, is only storage and must agree.
+// This decl is the single source of truth for prototype-chain discovery.
 pub fn Proto(comptime T: type) ?type {
     if (!@hasDecl(T, "Proto")) {
         return null;
     }
-    if (@hasField(T, "_proto") and @FieldType(T, "_proto") != *T.Proto) {
-        @compileError(@typeName(T) ++ ": _proto field and Proto decl disagree");
+
+    if (@hasField(T, "_proto")) {
+        // If the field also has a _proto: *Parent field, it must be the same type
+        const F = @FieldType(T, "_proto");
+        if (F != *T.Proto and F != void) {
+            @compileError(@typeName(T) ++ ": _proto field and Proto decl disagree");
+        }
     }
     return T.Proto;
 }

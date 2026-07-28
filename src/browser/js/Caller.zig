@@ -22,6 +22,7 @@ const string = @import("../../string.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
 
 const js = @import("js.zig");
@@ -555,7 +556,7 @@ fn protoNode(comptime T: type, instance: *T) *@import("../webapi/Node.zig") {
     if (T == @import("../webapi/Node.zig")) {
         return instance;
     }
-    return protoNode(reflect.Proto(T).?, instance._proto);
+    return protoNode(reflect.Proto(T).?, Factory.protoOf(instance));
 }
 
 fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype) void {

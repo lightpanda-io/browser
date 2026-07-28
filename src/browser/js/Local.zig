@@ -1390,13 +1390,12 @@ fn resolveT(comptime T: type, value: *T) Resolved {
     };
 }
 
-// Every wrapped chain must be contiguous — the TaggedOpaque walk upcasts by
-// pointer arithmetic. The stored _proto fields double as the canary.
+// Debug-only check!
+// Walk the full chain at wrap time; protoOf's Debug assert verifies each
+// hop's _proto (or _proto_canary) against the layout arithmetic.
 fn assertChainContiguity(comptime T: type, value: *T) void {
     if (comptime reflect.Proto(T) != null) {
-        const P = comptime reflect.Proto(T).?;
-        std.debug.assert(@intFromPtr(value._proto) == @intFromPtr(value) - comptime Factory.protoOffset(T));
-        assertChainContiguity(P, value._proto);
+        assertChainContiguity(reflect.Proto(T).?, Factory.protoOf(value));
     }
 }
 
@@ -1424,7 +1423,7 @@ fn finalizerPtrGetter(comptime T: type, comptime FT: type) *const fn (*T) *FT {
         const childGetter = comptime finalizerPtrGetter(P, FT);
         return struct {
             fn get(v: *T) *FT {
-                return childGetter(v._proto);
+                return childGetter(Factory.protoOf(v));
             }
         }.get;
     }

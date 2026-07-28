@@ -37,8 +37,11 @@ const CData = @This();
 pub const Proto = Node;
 
 _type: Type,
-_proto: *Node,
 _data: String = .empty,
+// In debug, set so that we can check that we have a proper contiguous block
+// of memory for the entire chain (and thus, simple pointer arithmetics will
+// work to resolve the proto).
+_proto_canary: if (IS_DEBUG) *Node else void = undefined,
 
 // The subtype's struct is not a payload here: it's the member laid out after
 // the CData in the factory chain (see Factory.cdataNode), reachable via
@@ -227,7 +230,7 @@ fn utf16RangeToUtf8(data: []const u8, utf16_start: usize, utf16_end: usize) !str
 }
 
 pub fn asNode(self: *CData) *Node {
-    return self._proto;
+    return Factory.protoOf(self);
 }
 
 pub fn is(self: *CData, comptime T: type) ?*T {
@@ -551,7 +554,6 @@ test "WebApi: CData.render" {
 
         const cdata = CData{
             ._type = .text,
-            ._proto = undefined,
             ._data = .wrap(test_case.value),
         };
 

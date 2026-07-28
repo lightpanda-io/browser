@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const URL = @import("../URL.zig");
+const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
 
 const EventTarget = @import("EventTarget.zig");
@@ -37,6 +38,7 @@ pub const ShadowRoot = @import("ShadowRoot.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Node, *Element.Html.Slot);
 
@@ -45,13 +47,16 @@ const Node = @This();
 pub const Proto = EventTarget;
 
 _type: Type,
-_proto: *EventTarget,
 _parent: ?*Node = null,
 // The first child's `_prev` points at the LAST child (keeping lastChild
 // O(1)); the last child's `_next` is null. A detached node has null links.
 _first_child: ?*Node = null,
 _next: ?*Node = null,
 _prev: ?*Node = null,
+// In debug, set so that we can check that we have a proper contiguous block
+// of memory for the entire chain (and thus, simple pointer arithmetics will
+// work to resolve the proto).
+_proto_canary: if (IS_DEBUG) *EventTarget else void = undefined,
 
 // Lookup for nodes that have a different owner document than frame.document
 pub const OwnerDocumentLookup = std.AutoHashMapUnmanaged(*Node, *Document);
@@ -66,7 +71,7 @@ pub const Type = union(enum) {
 };
 
 pub fn asEventTarget(self: *Node) *EventTarget {
-    return self._proto;
+    return Factory.protoOf(self);
 }
 
 // Returns the node as a more specific type. Will crash if node is not a `T`.
