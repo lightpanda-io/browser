@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
-const milliTimestamp = @import("../../datetime.zig").milliTimestamp;
 
 const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -85,7 +84,7 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
         .sequence = seq,
         .name = opts.name,
         .finalizer = opts.finalizer,
-        .run_at = milliTimestamp(.monotonic) + run_in_ms,
+        .run_at = lp.datetime.milliTimestamp(.boot) + run_in_ms,
     });
 }
 
@@ -95,13 +94,13 @@ pub fn run(self: *Scheduler) !void {
 }
 
 pub fn hasReadyTasks(self: *Scheduler) bool {
-    const now = milliTimestamp(.monotonic);
+    const now = lp.datetime.milliTimestamp(.boot);
     return queueHasReadyTask(&self.low_priority, now) or queueHasReadyTask(&self.high_priority, now);
 }
 
 pub fn msToNext(self: *Scheduler) ?u64 {
     var next: ?u64 = null;
-    const now = milliTimestamp(.monotonic);
+    const now = lp.datetime.milliTimestamp(.boot);
     for ([_]*Queue{ &self.high_priority, &self.low_priority }) |queue| {
         const task = queue.peek() orelse continue;
         const ms = if (task.run_at <= now) 0 else task.run_at - now;
@@ -116,7 +115,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
     if (queue.count() == 0) {
         return;
     }
-    const start = milliTimestamp(.monotonic);
+    const start = lp.datetime.milliTimestamp(.boot);
     var now = start;
 
     while (queue.peek()) |*task_| {
@@ -144,7 +143,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
             try self.low_priority.push(self.allocator, task);
         }
 
-        now = milliTimestamp(.monotonic);
+        now = lp.datetime.milliTimestamp(.boot);
         if (now - start > 500) {
             return;
         }

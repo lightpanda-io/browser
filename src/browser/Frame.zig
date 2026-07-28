@@ -74,9 +74,6 @@ const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRa
 const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 
-const timestamp = @import("../datetime.zig").timestamp;
-const milliTimestamp = @import("../datetime.zig").milliTimestamp;
-
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
 pub const parse = @import("frame/parse.zig");
@@ -731,7 +728,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .frame_id = self._frame_id,
             .loader_id = self._loader_id,
             .url = request_url,
-            .timestamp = timestamp(.monotonic),
+            .timestamp = lp.datetime.timestamp(.boot),
         });
 
         self.recordNavigateTelemetry(false);
@@ -746,7 +743,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
                 .method = opts.method,
             },
             .url = request_url,
-            .timestamp = timestamp(.monotonic),
+            .timestamp = lp.datetime.timestamp(.boot),
         });
 
         if (self.parent == null) {
@@ -829,7 +826,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .req_id = transfer.id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
         .is_pending_root = is_pending_root,
     });
 
@@ -1091,7 +1088,7 @@ pub fn _documentIsLoaded(self: *Frame) !void {
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 }
 
@@ -1201,7 +1198,7 @@ fn _documentIsComplete(self: *Frame) !void {
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 
     if (self._event_manager.hasDirectListeners(window_target, "pageshow", self.window._on_pageshow)) {
@@ -1298,7 +1295,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             .req_id = self._req_id,
             .frame_id = self._frame_id,
             .loader_id = self._loader_id,
-            .timestamp = timestamp(.monotonic),
+            .timestamp = lp.datetime.timestamp(.boot),
         });
     }
 
@@ -1713,7 +1710,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
         self._session.notification.dispatch(.frame_navigate_failed, &.{
             .frame_id = self._frame_id,
             .loader_id = self._loader_id,
-            .timestamp = timestamp(.monotonic),
+            .timestamp = lp.datetime.timestamp(.boot),
             .url = self.url,
             .err = err,
             .opts = self._navigated_options orelse .{},
@@ -1830,7 +1827,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .parent_id = self._frame_id,
         .frame_id = new_frame._frame_id,
         .loader_id = new_frame._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 
     const url = blk: {
@@ -2346,7 +2343,7 @@ pub fn notifyNetworkIdle(self: *Frame) void {
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 }
 
@@ -2356,7 +2353,7 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 }
 
@@ -3062,13 +3059,13 @@ const IdleNotification = union(enum) {
                     // the first time after being un-triggered). Record the time
                     // so that if the condition holds for long enough, we can
                     // send a notification.
-                    self.* = .{ .triggered = milliTimestamp(.monotonic) };
+                    self.* = .{ .triggered = lp.datetime.milliTimestamp(.boot) };
                 },
                 .triggered => |ms| {
                     // The condition was already triggered and was triggered
                     // again. When this condition holds for 500+ms, we'll send
                     // a notification.
-                    if (milliTimestamp(.monotonic) - ms >= 500) {
+                    if (lp.datetime.milliTimestamp(.boot) - ms >= 500) {
                         // This is the only place in this function where we can
                         // return true. The only place where we can tell our caller
                         // "send the notification!".

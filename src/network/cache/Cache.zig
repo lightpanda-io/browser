@@ -129,7 +129,7 @@ pub const CachedMetadata = struct {
     content_type: []const u8,
 
     status: u16,
-    stored_at: i64,
+    stored_at: u64,
     age_at_store: u64,
 
     cache_control: CacheControl,
@@ -164,10 +164,11 @@ pub const CachedMetadata = struct {
         try writer.print("]", .{});
     }
 
-    pub fn isStale(self: CachedMetadata, timestamp: i64) bool {
+    pub fn isStale(self: CachedMetadata, timestamp: u64) bool {
         if (self.cache_control.must_revalidate) return true;
-        const age = (timestamp - self.stored_at) + @as(i64, @intCast(self.age_at_store));
-        return age >= @as(i64, @intCast(self.cache_control.max_age));
+        // saturating: a backwards wall-clock jump leaves the entry fresh
+        const age = (timestamp -| self.stored_at) + self.age_at_store;
+        return age >= self.cache_control.max_age;
     }
 
     pub fn hasValidators(self: CachedMetadata) bool {
@@ -197,13 +198,13 @@ pub const CachedMetadata = struct {
 
 pub const CacheRequest = struct {
     url: []const u8,
-    timestamp: i64,
+    timestamp: u64,
     request_headers: []const Http.Header,
 };
 
 pub const RenewResponse = struct {
     url: []const u8,
-    timestamp: i64,
+    timestamp: u64,
     headers: []const Http.Header,
 };
 
@@ -246,7 +247,7 @@ pub const CachedResponse = struct {
 
 pub fn tryCache(
     arena: std.mem.Allocator,
-    timestamp: i64,
+    timestamp: u64,
     url: [:0]const u8,
     status: u16,
     content_type: ?[]const u8,

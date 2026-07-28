@@ -179,7 +179,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
 
     var normalized_expires: ?f64 = null;
     if (max_age) |ma| {
-        normalized_expires = @floatFromInt(std.Io.Clock.now(.real, lp.io).toSeconds() + ma);
+        normalized_expires = @as(f64, @floatFromInt(lp.datetime.timestamp(.real))) + @as(f64, @floatFromInt(ma));
     } else {
         // max age takes priority over expires
         if (expires) |expires_| {
@@ -484,7 +484,7 @@ pub const Jar = struct {
     pub fn add(
         self: *Jar,
         cookie: Cookie,
-        request_time: i64,
+        request_time: u64,
         /// Checks if addition comes from HTTP request or JS context.
         comptime is_http: bool,
     ) !void {
@@ -557,9 +557,9 @@ pub const Jar = struct {
         });
     }
 
-    pub fn removeExpired(self: *Jar, request_time: ?i64) void {
+    pub fn removeExpired(self: *Jar, request_time: ?u64) void {
         if (self.cookies.items.len == 0) return;
-        const time = request_time orelse std.Io.Clock.now(.real, lp.io).toSeconds();
+        const time = request_time orelse lp.datetime.timestamp(.real);
         var i: usize = self.cookies.items.len;
         while (i > 0) {
             i -= 1;
@@ -572,7 +572,7 @@ pub const Jar = struct {
 
     pub const LookupOpts = struct {
         is_http: bool,
-        request_time: ?i64 = null,
+        request_time: ?u64 = null,
         is_navigation: bool = true,
         prefix: ?[]const u8 = null,
         origin_url: ?[:0]const u8 = null,
@@ -608,7 +608,7 @@ pub const Jar = struct {
             return;
         };
 
-        const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+        const now = lp.datetime.timestamp(.real);
         try self.add(c, now, true);
     }
 
@@ -623,7 +623,7 @@ pub const Jar = struct {
     }
 };
 
-fn isCookieExpired(cookie: *const Cookie, now: i64) bool {
+fn isCookieExpired(cookie: *const Cookie, now: u64) bool {
     const ce = cookie.expires orelse return false;
     return ce <= @as(f64, @floatFromInt(now));
 }
@@ -734,7 +734,7 @@ test "Jar: add" {
         }
     }.expect;
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
 
     var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
@@ -766,7 +766,7 @@ test "Jar: add" {
 }
 
 test "Jar: non-HTTP add must not replace or duplicate an HttpOnly cookie" {
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
 
     var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
@@ -788,7 +788,7 @@ test "Jar: add limit" {
     var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
 
     // add a too big cookie value.
     try testing.expectError(error.CookieSizeExceeded, jar.add(.{
@@ -845,7 +845,7 @@ test "Jar: forRequest" {
         }
     }.expect;
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
 
     var jar = Jar.init(testing.allocator, null);
     defer jar.deinit();
@@ -997,7 +997,7 @@ test "Jar: forRequest SameSite=Strict on cross-site navigation" {
     defer jar.deinit();
 
     const victim_url: [:0]const u8 = "http://victim.example/";
-    try jar.add(try Cookie.parse(testing.allocator, victim_url, "sid=STRICT_COOKIE; Path=/; SameSite=Strict"), std.Io.Clock.now(.real, lp.io).toSeconds(), true);
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "sid=STRICT_COOKIE; Path=/; SameSite=Strict"), lp.datetime.timestamp(.real), true);
 
     // Same-site navigation: cookie included.
     try expectCookies("sid=STRICT_COOKIE", &jar, "http://victim.example/transfer", .{
@@ -1170,13 +1170,15 @@ test "Cookie: parse max-age" {
     try expectAttribute(.{ .expires = null }, null, "b;max-age=13.22");
     try expectAttribute(.{ .expires = null }, null, "b;max-age=13abc");
 
-    try expectAttribute(.{ .expires = std.Io.Clock.now(.real, lp.io).toSeconds() + 13 }, null, "b;max-age=13");
-    try expectAttribute(.{ .expires = std.Io.Clock.now(.real, lp.io).toSeconds() + -22 }, null, "b;max-age=-22");
-    try expectAttribute(.{ .expires = std.Io.Clock.now(.real, lp.io).toSeconds() + 4294967296 }, null, "b;max-age=4294967296");
-    try expectAttribute(.{ .expires = std.Io.Clock.now(.real, lp.io).toSeconds() + -4294967296 }, null, "b;Max-Age= -4294967296");
-    try expectAttribute(.{ .expires = std.Io.Clock.now(.real, lp.io).toSeconds() + 0 }, null, "b; Max-Age=0");
-    try expectAttribute(.{ .expires = std.Io.Clock.now(.real, lp.io).toSeconds() + 500 }, null, "b; Max-Age = 500  ; Max-Age=invalid");
-    try expectAttribute(.{ .expires = std.Io.Clock.now(.real, lp.io).toSeconds() + 1000 }, null, "b;max-age=600;max-age=0;max-age = 1000");
+    // max-age can be negative, so the expected expiry has to be signed
+    const now: i64 = @intCast(lp.datetime.timestamp(.real));
+    try expectAttribute(.{ .expires = now + 13 }, null, "b;max-age=13");
+    try expectAttribute(.{ .expires = now + -22 }, null, "b;max-age=-22");
+    try expectAttribute(.{ .expires = now + 4294967296 }, null, "b;max-age=4294967296");
+    try expectAttribute(.{ .expires = now + -4294967296 }, null, "b;Max-Age= -4294967296");
+    try expectAttribute(.{ .expires = now + 0 }, null, "b; Max-Age=0");
+    try expectAttribute(.{ .expires = now + 500 }, null, "b; Max-Age = 500  ; Max-Age=invalid");
+    try expectAttribute(.{ .expires = now + 1000 }, null, "b;max-age=600;max-age=0;max-age = 1000");
 }
 
 test "Cookie: parse expires" {
@@ -1188,7 +1190,7 @@ test "Cookie: parse expires" {
     try expectAttribute(.{ .expires = 1918798080 }, null, "b;expires=Wed, 21 Oct 2030 07:28:00 GMT");
     try expectAttribute(.{ .expires = 1784275395 }, null, "b;expires=Fri, 17-Jul-2026 08:03:15 GMT");
     // max-age has priority over expires
-    try expectAttribute(.{ .expires = std.Io.Clock.now(.real, lp.io).toSeconds() + 10 }, null, "b;Max-Age=10; expires=Wed, 21 Oct 2030 07:28:00 GMT");
+    try expectAttribute(.{ .expires = lp.datetime.timestamp(.real) + 10 }, null, "b;Max-Age=10; expires=Wed, 21 Oct 2030 07:28:00 GMT");
 }
 
 test "Cookie: parse all" {
@@ -1206,7 +1208,7 @@ test "Cookie: parse all" {
         .http_only = true,
         .secure = true,
         .domain = ".lightpanda.io",
-        .expires = @floatFromInt(std.Io.Clock.now(.real, lp.io).toSeconds() + 30),
+        .expires = @floatFromInt(lp.datetime.timestamp(.real) + 30),
     }, "https://lightpanda.io/cms/users", "user-id=9000; HttpOnly; Max-Age=30; Secure; path=/; Domain=lightpanda.io");
 
     try expectCookie(.{
@@ -1217,7 +1219,7 @@ test "Cookie: parse all" {
         .secure = false,
         .domain = ".localhost",
         .same_site = .lax,
-        .expires = @floatFromInt(std.Io.Clock.now(.real, lp.io).toSeconds() + 7200),
+        .expires = @floatFromInt(lp.datetime.timestamp(.real) + 7200),
     }, "http://localhost:8000/login", "app_session=123; Max-Age=7200; path=/; domain=localhost; httponly; samesite=lax");
 }
 

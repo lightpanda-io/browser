@@ -155,7 +155,7 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
         var buf: [4096]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
         logTo(scope, level, msg, data, &w) catch |log_err| {
-            std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @tagName(scope), @errorName(log_err), msg });
+            std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.real), @tagName(scope), @errorName(log_err), msg });
             return;
         };
         s(w.buffered());
@@ -167,7 +167,7 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
     defer std.debug.unlockStderr();
 
     logTo(scope, level, msg, data, &stderr.file_writer.interface) catch |log_err| {
-        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
+        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.real), @errorName(log_err), @tagName(scope), msg });
     };
 }
 
@@ -223,7 +223,7 @@ fn logLogfmt(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, write
 
 fn logLogFmtPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.Writer) !void {
     try writer.writeAll("$time=");
-    try writer.print("{d}", .{timestamp(.clock)});
+    try writer.print("{d}", .{timestamp(.real)});
 
     try writer.writeAll(" $scope=");
     try writer.writeAll(@tagName(scope));
@@ -494,7 +494,7 @@ pub const LogFormatWriter = struct {
 
 var first_log: std.atomic.Value(u64) = .init(0);
 fn elapsed() struct { time: f64, unit: []const u8 } {
-    const now = timestamp(.monotonic);
+    const now = timestamp(.boot);
 
     var first = first_log.load(.monotonic);
     if (first == 0) {
@@ -509,11 +509,11 @@ fn elapsed() struct { time: f64, unit: []const u8 } {
 }
 
 const datetime = @import("datetime.zig");
-fn timestamp(comptime mode: datetime.TimestampMode) u64 {
+fn timestamp(comptime clock: std.Io.Clock) u64 {
     if (IS_TEST) {
         return 1739795092929;
     }
-    return datetime.milliTimestamp(mode);
+    return datetime.milliTimestamp(clock);
 }
 
 const testing = @import("testing.zig");

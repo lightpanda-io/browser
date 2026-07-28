@@ -28,7 +28,7 @@ const braille = [_][]const u8{ "⡇", "⣆", "⣤", "⣰", "⢸", "⠹", "⠛", 
 const interval_ns: u64 = 100 * std.time.ns_per_ms;
 /// Minimum dwell on a tool label so the user can read it. Slow tools exceed
 /// it naturally; fast ones (getUrl, getCookies) get padded.
-const min_tool_display_ns: u64 = 1500 * std.time.ns_per_ms;
+const min_tool_display_ms: u64 = 1500;
 const clear_eol = ansi.clear_eol;
 
 const max_args_bytes: usize = 256;
@@ -45,8 +45,8 @@ const ToolState = struct {
     name_len: usize = 0,
     args_buf: [max_args_bytes]u8 = undefined,
     args_len: usize = 0,
-    /// Wall-clock at which `setTool` last fired; gates dwell-honoring.
-    set_ns: i128 = 0,
+    /// Time at which `setTool` last fired; gates dwell-honoring.
+    set_ms: u64 = 0,
     /// Worker should flip back to thinking once dwell elapses. A fresh
     /// `setTool` clears it, overriding the dwell with a new label.
     dwell_pending: bool = false,
@@ -76,7 +76,7 @@ frame: u8 = 0,
 paused: bool = false,
 
 tool_calls: u32 = 0,
-turn_started_ns: i128 = 0,
+turn_started_ms: u64 = 0,
 
 thread: ?std.Thread = null,
 should_exit: bool = false,
@@ -112,7 +112,7 @@ pub fn start(self: *Spinner) void {
     self.paused = false;
     self.frame = 0;
     self.tool_calls = 0;
-    self.turn_started_ns = std.Io.Clock.now(.real, lp.io).toNanoseconds();
+    self.turn_started_ms = lp.datetime.milliTimestamp(.boot);
     self.ensureWorkerLocked();
     self.cv.signal(lp.io);
 }
@@ -136,8 +136,8 @@ pub fn stop(self: *Spinner) void {
     self.mu.lockUncancelable(lp.io);
     defer self.mu.unlock(lp.io);
     if (self.state == .idle) return;
-    const elapsed_ns = std.Io.Clock.now(.real, lp.io).toNanoseconds() - self.turn_started_ns;
-    const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, std.time.ns_per_s);
+    const elapsed_ms = lp.datetime.milliTimestamp(.boot) - self.turn_started_ms;
+    const elapsed_s = @as(f64, @floatFromInt(elapsed_ms)) / @as(f64, std.time.ms_per_s);
 
     var buf: [frame_buf_bytes]u8 = undefined;
     const summary = std.fmt.bufPrint(
@@ -192,7 +192,7 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     self.paused = false;
     const manual = self.state == .idle;
     self.tool_calls += 1;
-    var tool: ToolState = .{ .set_ns = std.Io.Clock.now(.real, lp.io).toNanoseconds(), .manual = manual };
+    var tool: ToolState = .{ .set_ms = lp.datetime.milliTimestamp(.boot), .manual = manual };
     const name_prefix = truncateUtf8(name, tool.name_buf.len);
     tool.name_len = name_prefix.len;
     @memcpy(tool.name_buf[0..name_prefix.len], name_prefix);
@@ -213,7 +213,7 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
 }
 
 /// Request a transition back to the cycling "thinking" state. The worker
-/// honors `min_tool_display_ns`: if the current tool label has not been up
+/// honors `min_tool_display_ms`: if the current tool label has not been up
 /// long enough, the flip is deferred until it has.
 pub fn setThinking(self: *Spinner) void {
     if (!self.isEnabled()) return;
@@ -254,10 +254,8 @@ fn workerLoop(self: *Spinner) void {
         switch (self.state) {
             .tool => {
                 if (self.state.tool.dwell_pending) {
-                    // Signed compare: a backward clock jump (NTP slew, suspend/resume)
-                    // can make the delta negative; `@intCast` to u64 would panic.
-                    const delta: i128 = std.Io.Clock.now(.real, lp.io).toNanoseconds() - self.state.tool.set_ns;
-                    if (delta >= @as(i128, min_tool_display_ns)) {
+                    const delta = lp.datetime.milliTimestamp(.boot) - self.state.tool.set_ms;
+                    if (delta >= min_tool_display_ms) {
                         self.state = .thinking;
                     }
                 }

@@ -29,7 +29,6 @@ const CDP = @import("../CDP.zig");
 const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
 const Frame = @import("../../browser/Frame.zig");
-const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
 
 const log = lp.log;
@@ -123,7 +122,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
         const frame_id = &id.toFrameId(frame._frame_id);
         const loader_id = &id.toLoaderId(frame._loader_id);
 
-        const now = timestampF(.monotonic);
+        const now = lp.datetime.timestamp(.boot);
         try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
         try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
 

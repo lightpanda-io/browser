@@ -27,7 +27,6 @@ const Config = @import("../../Config.zig");
 const URL = @import("../../browser/URL.zig");
 const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
-const timestamp = @import("../../datetime.zig").timestamp;
 
 const HttpClient = @import("../../network/HttpClient.zig");
 const Cache = @import("../../network/cache/Cache.zig");
@@ -328,7 +327,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
         .requestId = &id.toRequestId(msg.transfer),
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -365,8 +364,8 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
         .hasUserGesture = false,
-        .timestamp = timestamp(.monotonic),
-        .wallTime = timestamp(.clock),
+        .timestamp = lp.datetime.timestamp(.boot),
+        .wallTime = lp.datetime.timestamp(.real),
     }, .{ .session_id = session_id });
 }
 
@@ -383,7 +382,7 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
         .frameId = &id.toFrameId(req.document_frame_id orelse req.frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
         .type = req.resource_type.string(),
         .response = ResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
@@ -396,7 +395,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     const session_id = bc.session_id orelse return;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
         .encodedDataLength = msg.content_length,
     }, .{ .session_id = session_id });
 }
