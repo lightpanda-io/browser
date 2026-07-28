@@ -28,7 +28,7 @@ const Blob = @import("../Blob.zig");
 const File = @import("../File.zig");
 const Blob = @import("../Blob.zig");
 const KeyValueList = @import("../KeyValueList.zig");
-const simd = @import("../../../simd.zig");
+const header_parser = @import("../../../network/header_parser.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -531,63 +531,64 @@ fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []c
         return error.InvalidFormData;
     }
     // Skip-past boundary.
-    var cursor = bytes[2 + boundary.len ..];
+    const slice = bytes[2 + boundary.len ..];
 
-    const double_dash: u16 = @bitCast([_]u8{ '-', '-' });
-    const crlf: u16 = @bitCast([_]u8{ '\r', '\n' });
+    var cursor = header_parser.Cursor{
+        .idx = slice.ptr,
+        .end = slice.ptr + slice.len,
+        .start = slice.ptr,
+    };
 
     while (true) {
-        if (cursor.len < 2) {
+        if (!cursor.hasLength(2)) {
             return error.InvalidFormData;
         }
-        const prefix: u16 = @bitCast(cursor[0..2].*);
         // Check if we've reached the end.
-        if (prefix == double_dash) {
+        if (cursor.peek2('-', '-')) {
             return;
         }
         // If we haven't reached the end, CRLF is required.
-        if (prefix != crlf) {
+        if (!cursor.peek2('\r', '\n')) {
             return error.InvalidFormData;
         }
         // Consume prefix.
-        cursor = cursor[2..];
+        cursor.advance(2);
 
         // Content-Disposition can appear once a part, and is required.
-        var disposition: ?simd.Disposition = null;
+        var disposition: ?header_parser.Disposition = null;
         // Default Content-Type; can be overwritten while parsing headers.
         var content_type: []const u8 = "text/plain";
         // Reused for parsing headers.
-        var header: simd.HttpHeader = undefined;
+        var header: header_parser.Header = undefined;
 
         // Parse the whole header block; the content starts only after the
         // terminating empty line.
         while (true) {
-            if (cursor.len == 0) {
+            if (cursor.reachedEnd()) {
                 return error.InvalidFormData;
             }
 
             // Check if headers part has finished.
-            switch (cursor[0]) {
+            switch (cursor.char()) {
                 '\n' => {
                     // End of headers.
-                    cursor = cursor[1..];
+                    cursor.advance(1);
                     break;
                 },
                 '\r' => {
-                    // We need a `\n` character too.
-                    if (cursor.len < 2 or cursor[1] != '\n') {
+                    // We need an LF too.
+                    if (!cursor.hasLength(2) or !cursor.peek2('\r', '\n')) {
                         return error.InvalidFormData;
                     }
-
                     // End of headers.
-                    cursor = cursor[2..];
+                    cursor.advance(2);
                     break;
                 },
                 else => {},
             }
 
-            const consumed = try simd.parseHttpHeader(cursor, &header);
-            cursor = cursor[consumed..];
+            // Parse an HTTP header.
+            try header.parse(&cursor);
 
             if (std.ascii.eqlIgnoreCase(header.key, "content-type")) {
                 content_type = header.value;
@@ -596,16 +597,16 @@ fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []c
                     // Content-Disposition found twice, report an error.
                     return error.InvalidFormData;
                 }
-                disposition = try simd.parseDisposition(header.value);
+                disposition = try header_parser.parseDisposition(header.value);
             }
         }
 
         const parsed = disposition orelse return error.InvalidFormData;
         const name = try decodeMultipartName(self._arena, parsed.name orelse return error.InvalidFormData);
 
-        const content_end = indexOfBoundary(cursor, boundary) orelse return error.InvalidFormData;
-        const content = cursor[0..content_end];
-        cursor = cursor[content_end + "\r\n--".len + boundary.len ..];
+        const content_end = indexOfBoundary(cursor.remaining(), boundary) orelse return error.InvalidFormData;
+        const content = cursor.remaining()[0..content_end];
+        cursor.advance(content_end + "\r\n--".len + boundary.len);
 
         // Got a file.
         if (parsed.filename) |filename| {
@@ -616,7 +617,7 @@ fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []c
             file.* = .{
                 ._proto = blob,
                 ._name = try blob._arena.dupe(u8, try decodeMultipartName(self._arena, filename)),
-                ._last_modified = std.time.milliTimestamp(),
+                ._last_modified = std.Io.Clock.now(.real, lp.io).toMilliseconds(),
             };
             blob._type = .{ .file = file };
 

@@ -26,9 +26,12 @@ const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const Blob = @import("../Blob.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
+const FormData = @import("FormData.zig");
 
 const Headers = @import("Headers.zig");
 const body_init = @import("body_init.zig");
+
+const ContentTypeIterator = @import("../../Mime.zig").ContentTypeIterator;
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -456,9 +459,6 @@ pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
     return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
-const FormData = @import("FormData.zig");
-const simd = @import("../../../simd.zig");
-
 pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     if (self.consume(local)) |rejected| return rejected;
@@ -468,8 +468,10 @@ pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
         .stream => return local.rejectPromise(.{ .type_error = "Cannot read FormData from stream body" }),
     };
 
-    const content_type = try self._headers.get("content-type", exec) orelse return error.InvalidFormData;
-    var it = simd.ContentTypeIterator.init(content_type);
+    const content_type = try self._headers.get("content-type", exec) orelse {
+        return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+    };
+    var it = ContentTypeIterator.init(content_type);
     const essence = it.essence;
 
     // [RFC7578]
@@ -477,7 +479,9 @@ pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
     // per the rules set forth in Returning Values from Forms: multipart/form-data.
     if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
         const boundary = it.findBoundary();
-        if (boundary.len == 0) return error.InvalidFormData;
+        if (boundary.len == 0) {
+            return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+        }
 
         const form_data = FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
             error.OutOfMemory => return err,

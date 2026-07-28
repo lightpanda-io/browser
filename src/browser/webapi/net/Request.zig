@@ -26,8 +26,10 @@ const URL = @import("../URL.zig");
 const Page = @import("../../Page.zig");
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
+const ContentTypeIterator = @import("../../Mime.zig").ContentTypeIterator;
 
 const Headers = @import("Headers.zig");
+const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
 const BodyInit = body_init.BodyInit;
 
@@ -298,21 +300,20 @@ pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
     return local.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
 }
 
-const FormData = @import("FormData.zig");
-const simd = @import("../../../simd.zig");
-
 pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     if (self.consume(local)) |rejected| {
         return rejected;
     }
 
-    // Should we consider body is consumed at this point?
-    const body = self._body orelse return error.InvalidFormData;
+    // Per Fetch, a null body acts as an empty byte sequence.
+    const body = self._body orelse "";
 
     const headers = try self.getHeaders(exec);
-    const content_type = try headers.get("content-type", exec) orelse return error.InvalidFormData;
-    var it = simd.ContentTypeIterator.init(content_type);
+    const content_type = try headers.get("content-type", exec) orelse {
+        return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+    };
+    var it = ContentTypeIterator.init(content_type);
     const essence = it.essence;
 
     // [RFC7578]
@@ -320,7 +321,9 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     // per the rules set forth in Returning Values from Forms: multipart/form-data.
     if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
         const boundary = it.findBoundary();
-        if (boundary.len == 0) return error.InvalidFormData;
+        if (boundary.len == 0) {
+            return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+        }
 
         const form_data = FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
             error.OutOfMemory => return err,
