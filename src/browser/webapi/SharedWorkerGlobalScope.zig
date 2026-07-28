@@ -35,6 +35,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const SharedWorkerGlobalScope = @This();
 
+pub const Proto = WorkerGlobalScope;
+
 _proto: *WorkerGlobalScope,
 _arena: Allocator,
 

@@ -23,6 +23,8 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
 const Embed = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Embed) *Element {

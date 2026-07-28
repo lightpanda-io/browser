@@ -27,6 +27,8 @@ const AnimatedNumber = @import("../../svg/AnimatedNumber.zig");
 const Svg = @import("../Svg.zig");
 
 const Stop = @This();
+
+pub const Proto = Svg;
 _proto: *Svg,
 
 pub fn asElement(self: *Stop) *Element {

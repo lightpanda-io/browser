@@ -29,6 +29,8 @@ const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 const Graphics = @import("Graphics.zig");
 
 const ForeignObject = @This();
+
+pub const Proto = Graphics;
 _proto: *Graphics,
 
 pub fn asElement(self: *ForeignObject) *Element {

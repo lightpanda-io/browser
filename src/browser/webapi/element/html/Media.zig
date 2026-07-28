@@ -30,6 +30,8 @@ const MediaError = @import("../../media/MediaError.zig");
 
 const Media = @This();
 
+pub const Proto = HtmlElement;
+
 pub const ReadyState = enum(u16) {
     HAVE_NOTHING = 0,
     HAVE_METADATA = 1,

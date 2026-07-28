@@ -46,6 +46,8 @@ const String = lp.String;
 
 const Element = @This();
 
+pub const Proto = Node;
+
 pub const DatasetLookup = std.AutoHashMapUnmanaged(*Element, *DOMStringMap);
 pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);

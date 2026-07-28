@@ -29,6 +29,8 @@ const AnimatedString = @import("../../svg/AnimatedString.zig");
 const TextContent = @import("TextContent.zig");
 
 const TextPath = @This();
+
+pub const Proto = TextContent;
 _proto: *TextContent,
 
 pub fn asElement(self: *TextPath) *Element {

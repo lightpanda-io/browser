@@ -29,6 +29,8 @@ const Allocator = std.mem.Allocator;
 
 const ErrorEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _message: []const u8 = "",
 _filename: []const u8 = "",

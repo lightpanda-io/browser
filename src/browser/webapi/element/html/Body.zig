@@ -29,6 +29,8 @@ const String = lp.String;
 
 const Body = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Body) *Element {

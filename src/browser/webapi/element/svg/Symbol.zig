@@ -24,6 +24,8 @@ const Element = @import("../../Element.zig");
 const Graphics = @import("Graphics.zig");
 
 const Symbol = @This();
+
+pub const Proto = Graphics;
 _proto: *Graphics,
 
 pub fn asElement(self: *Symbol) *Element {

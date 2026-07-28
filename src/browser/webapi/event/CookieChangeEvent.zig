@@ -32,6 +32,8 @@ const Allocator = std.mem.Allocator;
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieChangeEvent
 const CookieChangeEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _changed: []CookieStore.CookieListItem,
 _deleted: []CookieStore.CookieListItem,

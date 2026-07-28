@@ -103,6 +103,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const HtmlElement = @This();
 
+pub const Proto = Element;
+
 _type: Type,
 _proto: *Element,
 

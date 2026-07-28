@@ -30,6 +30,8 @@ const Allocator = std.mem.Allocator;
 // https://developer.mozilla.org/en-US/docs/Web/API/PageTransitionEvent
 const PageTransitionEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _persisted: bool,
 

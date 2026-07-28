@@ -444,6 +444,8 @@ pub const Entry = struct {
 };
 
 pub const Mark = struct {
+    pub const Proto = Entry;
+
     _proto: *Entry,
     _detail: ?js.Value.Global,
 
@@ -489,6 +491,8 @@ pub const Mark = struct {
 };
 
 pub const Measure = struct {
+    pub const Proto = Entry;
+
     _proto: *Entry,
     _detail: ?js.Value.Global,
 

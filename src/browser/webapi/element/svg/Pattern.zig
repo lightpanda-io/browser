@@ -30,6 +30,8 @@ const AnimatedTransformList = @import("../../svg/AnimatedTransformList.zig");
 const Svg = @import("../Svg.zig");
 
 const Pattern = @This();
+
+pub const Proto = Svg;
 _proto: *Svg,
 
 pub fn asElement(self: *Pattern) *Element {

@@ -25,6 +25,7 @@ const Page = @import("../Page.zig");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
+const reflect = @import("../reflect.zig");
 const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
@@ -1380,12 +1381,7 @@ fn findFinalizerType(comptime T: type) ?type {
     if (@hasDecl(S, "acquireRef")) {
         return S;
     }
-    if (@hasField(S, "_proto")) {
-        const ProtoPtr = std.meta.fieldInfo(S, ._proto).type;
-        const ProtoChild = @typeInfo(ProtoPtr).pointer.child;
-        return findFinalizerType(ProtoChild);
-    }
-    return null;
+    return findFinalizerType(reflect.Proto(S) orelse return null);
 }
 
 // Generate a function that follows the _proto pointer chain to get to the finalizer type
@@ -1398,10 +1394,8 @@ fn finalizerPtrGetter(comptime T: type, comptime FT: type) *const fn (*T) *FT {
             }
         }.get;
     }
-    if (@hasField(S, "_proto")) {
-        const ProtoPtr = std.meta.fieldInfo(S, ._proto).type;
-        const ProtoChild = @typeInfo(ProtoPtr).pointer.child;
-        const childGetter = comptime finalizerPtrGetter(ProtoChild, FT);
+    if (reflect.Proto(S)) |P| {
+        const childGetter = comptime finalizerPtrGetter(P, FT);
         return struct {
             fn get(v: *T) *FT {
                 return childGetter(v._proto);

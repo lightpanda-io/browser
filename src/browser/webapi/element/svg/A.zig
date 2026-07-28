@@ -27,6 +27,8 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 const Graphics = @import("Graphics.zig");
 
 const A = @This();
+
+pub const Proto = Graphics;
 _proto: *Graphics,
 
 pub fn asElement(self: *A) *Element {

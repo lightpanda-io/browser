@@ -57,6 +57,8 @@ const Allocator = std.mem.Allocator;
 
 const WorkerGlobalScope = @This();
 
+pub const Proto = EventTarget;
+
 _type: Type,
 _frame: *Frame,
 _is_module: bool,

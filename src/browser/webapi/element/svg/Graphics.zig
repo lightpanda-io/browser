@@ -42,6 +42,8 @@ pub const TextContent = @import("TextContent.zig");
 pub const Geometry = @import("Geometry.zig");
 
 const Graphics = @This();
+
+pub const Proto = SvgElement;
 _proto: *SvgElement,
 _type: Type,
 

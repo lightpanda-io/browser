@@ -26,6 +26,8 @@ const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 const CloseEvent = @This();
+
+pub const Proto = Event;
 _proto: *Event,
 _code: u16 = 1000,
 _reason: []const u8 = "",

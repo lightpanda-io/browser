@@ -28,6 +28,8 @@ const String = lp.String;
 // https://w3c.github.io/deviceorientation/#deviceorientationevent
 const DeviceOrientationEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _alpha: ?f64 = null,
 _beta: ?f64 = null,

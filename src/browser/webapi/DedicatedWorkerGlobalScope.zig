@@ -37,6 +37,8 @@ const Allocator = std.mem.Allocator;
 
 const DedicatedWorkerGlobalScope = @This();
 
+pub const Proto = WorkerGlobalScope;
+
 _proto: *WorkerGlobalScope,
 _worker: *Worker,
 _closed: bool = false,

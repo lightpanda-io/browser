@@ -32,6 +32,8 @@ const Allocator = std.mem.Allocator;
 /// https://developer.mozilla.org/en-US/docs/Web/API/FormDataEvent
 const FormDataEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _form_data: ?*FormData = null,
 

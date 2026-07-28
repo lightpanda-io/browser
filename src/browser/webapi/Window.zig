@@ -64,6 +64,8 @@ pub fn registerTypes() []const type {
 
 const Window = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _frame: *Frame,
 _document: *Document,

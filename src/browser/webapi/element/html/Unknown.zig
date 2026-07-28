@@ -27,6 +27,8 @@ const HtmlElement = @import("../Html.zig");
 const String = lp.String;
 
 const Unknown = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 _tag_name: String,
 

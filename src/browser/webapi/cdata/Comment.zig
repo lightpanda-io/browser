@@ -23,6 +23,8 @@ const CData = @import("../CData.zig");
 
 const Comment = @This();
 
+pub const Proto = CData;
+
 _proto: *CData,
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Comment {

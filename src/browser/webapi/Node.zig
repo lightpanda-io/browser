@@ -42,6 +42,8 @@ pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Node, *Element.Html.Slo
 
 const Node = @This();
 
+pub const Proto = EventTarget;
+
 _type: Type,
 _proto: *EventTarget,
 _parent: ?*Node = null,

@@ -22,6 +22,8 @@ const RO = @import("DOMPointReadOnly.zig");
 
 const DOMPoint = @This();
 
+pub const Proto = RO;
+
 _proto: *RO,
 
 pub fn init(x_: ?f64, y_: ?f64, z_: ?f64, w_: ?f64, exec: *const js.Execution) !*DOMPoint {

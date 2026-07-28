@@ -30,6 +30,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const HTMLFormControlsCollection = @This();
 
+pub const Proto = HTMLCollection;
+
 _proto: *HTMLCollection,
 
 // The refcount lives on the proto, but anchoring the finalizer here lets

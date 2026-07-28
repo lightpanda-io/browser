@@ -24,6 +24,8 @@ const Execution = js.Execution;
 
 const IDBCursorWithValue = @This();
 
+pub const Proto = IDBCursor;
+
 _proto: *IDBCursor,
 
 pub fn init(cursor: *IDBCursor) !*IDBCursorWithValue {

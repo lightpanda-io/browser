@@ -26,6 +26,8 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
 const Anchor = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Anchor) *Element {

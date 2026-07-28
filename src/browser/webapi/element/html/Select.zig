@@ -30,6 +30,8 @@ pub const Option = @import("Option.zig");
 
 const Select = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 _selected_index_set: bool = false,
 _custom_validity: ?[]const u8 = null,

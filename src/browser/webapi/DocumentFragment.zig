@@ -28,6 +28,8 @@ const Selector = @import("selector/Selector.zig");
 
 const DocumentFragment = @This();
 
+pub const Proto = Node;
+
 _type: Type,
 _proto: *Node,
 

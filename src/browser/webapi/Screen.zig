@@ -29,6 +29,8 @@ pub fn registerTypes() []const type {
 
 const Screen = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _orientation: ?*Orientation = null,
 
@@ -72,6 +74,8 @@ pub const JsApi = struct {
 };
 
 pub const Orientation = struct {
+    pub const Proto = EventTarget;
+
     _proto: *EventTarget,
 
     pub fn init(frame: *Frame) !*Orientation {

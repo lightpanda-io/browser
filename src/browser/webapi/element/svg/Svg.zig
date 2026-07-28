@@ -37,6 +37,8 @@ const AnimatedPreserveAspectRatio = @import("../../svg/AnimatedPreserveAspectRat
 const Graphics = @import("Graphics.zig");
 
 const Svg = @This();
+
+pub const Proto = Graphics;
 _proto: *Graphics,
 
 pub fn asElement(self: *Svg) *Element {

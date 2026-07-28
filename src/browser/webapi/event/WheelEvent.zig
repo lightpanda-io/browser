@@ -28,6 +28,8 @@ const String = lp.String;
 
 const WheelEvent = @This();
 
+pub const Proto = MouseEvent;
+
 _proto: *MouseEvent,
 _delta_x: f64,
 _delta_y: f64,

@@ -28,6 +28,8 @@ const String = lp.String;
 // https://w3c.github.io/deviceorientation/#devicemotionevent
 const DeviceMotionEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _interval: f64 = 0,
 

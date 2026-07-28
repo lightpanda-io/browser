@@ -26,6 +26,8 @@ const Geometry = @import("Geometry.zig");
 const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 
 const Circle = @This();
+
+pub const Proto = Geometry;
 _proto: *Geometry,
 
 pub fn asElement(self: *Circle) *Element {

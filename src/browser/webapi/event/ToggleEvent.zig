@@ -31,6 +31,8 @@ const Allocator = std.mem.Allocator;
 /// https://html.spec.whatwg.org/multipage/popover.html#toggleevent
 const ToggleEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _old_state: []const u8 = "",
 _new_state: []const u8 = "",

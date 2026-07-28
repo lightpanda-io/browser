@@ -32,6 +32,8 @@ const String = lp.String;
 
 const Template = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 _content: *DocumentFragment,
 

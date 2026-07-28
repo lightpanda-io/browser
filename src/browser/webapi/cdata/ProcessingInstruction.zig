@@ -22,6 +22,8 @@ const CData = @import("../CData.zig");
 
 const ProcessingInstruction = @This();
 
+pub const Proto = CData;
+
 _proto: *CData,
 _target: []const u8,
 

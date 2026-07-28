@@ -22,6 +22,8 @@ const EventTarget = @import("EventTarget.zig");
 
 const VisualViewport = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 
 pub fn asEventTarget(self: *VisualViewport) *EventTarget {

@@ -29,6 +29,8 @@ const String = lp.String;
 
 const Audio = @This();
 
+pub const Proto = Media;
+
 _proto: *Media,
 
 pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {

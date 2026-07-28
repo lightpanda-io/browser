@@ -50,6 +50,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Document = @This();
 
+pub const Proto = Node;
+
 _type: Type,
 _proto: *Node,
 _frame: ?*Frame = null,

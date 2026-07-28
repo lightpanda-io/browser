@@ -26,6 +26,8 @@ pub const Data = RO.Data;
 
 const DOMRect = @This();
 
+pub const Proto = RO;
+
 _proto: *RO,
 
 pub fn init(x_: ?f64, y_: ?f64, width_: ?f64, height_: ?f64, exec: *const js.Execution) !*DOMRect {

@@ -29,6 +29,8 @@ const Execution = js.Execution;
 
 const MessagePort = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 
 // The context this port lives in. The two ends of an entangled pair can be in

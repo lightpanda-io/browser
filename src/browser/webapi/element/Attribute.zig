@@ -41,6 +41,8 @@ pub fn registerTypes() []const type {
 
 pub const Attribute = @This();
 
+pub const Proto = Node;
+
 _proto: *Node,
 _name: String,
 _value: String,

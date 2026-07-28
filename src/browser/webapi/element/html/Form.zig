@@ -31,6 +31,8 @@ pub const Select = @import("Select.zig");
 pub const TextArea = @import("TextArea.zig");
 
 const Form = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 // Prevents submission of the form while we're in the process of submitting

@@ -27,6 +27,8 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 const HtmlElement = @import("../Html.zig");
 
 const Link = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 // Cached CSSStyleSheet for an external `rel=stylesheet` once
 // `Frame.loadExternalStylesheet` has registered it. Re-fetches (href

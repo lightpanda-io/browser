@@ -38,6 +38,8 @@ const String = lp.String;
 
 const Input = @This();
 
+pub const Proto = HtmlElement;
+
 pub const Type = enum {
     text,
     password,

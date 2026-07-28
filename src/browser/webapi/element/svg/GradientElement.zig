@@ -32,6 +32,8 @@ pub const LinearGradient = @import("LinearGradient.zig");
 pub const RadialGradient = @import("RadialGradient.zig");
 
 const GradientElement = @This();
+
+pub const Proto = Svg;
 _proto: *Svg,
 _type: Type,
 

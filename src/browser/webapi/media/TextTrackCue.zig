@@ -23,6 +23,8 @@ const EventTarget = @import("../EventTarget.zig");
 
 const TextTrackCue = @This();
 
+pub const Proto = EventTarget;
+
 _type: Type,
 _proto: *EventTarget,
 _id: []const u8 = "",

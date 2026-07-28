@@ -41,6 +41,8 @@ const FunctionSetter = idb.FunctionSetter;
 
 const IDBRequest = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _op: Operation = .none,
 _error: ?anyerror = null,

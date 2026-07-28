@@ -24,6 +24,8 @@ const MediaQuery = @import("../../css/MediaQuery.zig");
 
 const MediaQueryList = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _media: []const u8,
 

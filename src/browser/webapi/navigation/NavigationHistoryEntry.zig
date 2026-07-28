@@ -26,6 +26,8 @@ const js = @import("../../js/js.zig");
 
 const NavigationHistoryEntry = @This();
 
+pub const Proto = EventTarget;
+
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationHistoryEntry
 _proto: *EventTarget,
 _id: []const u8,

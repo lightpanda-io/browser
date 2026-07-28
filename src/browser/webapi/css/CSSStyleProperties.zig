@@ -25,6 +25,8 @@ const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
 
 const CSSStyleProperties = @This();
 
+pub const Proto = CSSStyleDeclaration;
+
 _proto: *CSSStyleDeclaration,
 
 pub fn init(element: ?*Element, is_computed: bool, frame: *Frame) !*CSSStyleProperties {

@@ -25,6 +25,8 @@ const HTMLCollection = @import("HTMLCollection.zig");
 
 const HTMLOptionsCollection = @This();
 
+pub const Proto = HTMLCollection;
+
 _proto: *HTMLCollection,
 _select: *@import("../element/html/Select.zig"),
 

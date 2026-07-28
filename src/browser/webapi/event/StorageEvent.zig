@@ -30,6 +30,8 @@ const Allocator = std.mem.Allocator;
 // https://html.spec.whatwg.org/multipage/webstorage.html#the-storageevent-interface
 const StorageEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _key: ?[]const u8 = null,
 _old_value: ?[]const u8 = null,
