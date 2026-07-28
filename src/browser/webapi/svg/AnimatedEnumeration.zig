@@ -138,7 +138,7 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedEnume
     return gop.value_ptr.*;
 }
 
-pub fn create(
+fn create(
     element: *Element,
     attr_name: lp.String,
     entries: []const Entry,

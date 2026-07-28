@@ -208,16 +208,7 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedLengt
     return gop.value_ptr.*;
 }
 
-pub fn create(element: *Element, attr_name: lp.String, direction: Length.Direction, frame: *Frame) !*AnimatedLength {
-    const base_val = try Length.reflected(element, attr_name, direction, false, frame);
-    const anim_val = try Length.reflected(element, attr_name, direction, true, frame);
-    return frame._factory.create(AnimatedLength{
-        ._base_val = base_val,
-        ._anim_val = anim_val,
-    });
-}
-
-pub fn createConfigured(
+fn createConfigured(
     element: *Element,
     attr_name: lp.String,
     direction: Length.Direction,

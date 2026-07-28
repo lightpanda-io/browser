@@ -21,11 +21,14 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 
 const String = lp.String;
 const Angle = @This();
 
+_rc: lp.RC = .{},
+_arena: std.mem.Allocator,
 _value: f64 = 0,
 _unit: Unit = .unspecified,
 _element: ?*Element = null,
@@ -42,7 +45,23 @@ const Unit = enum(u16) {
 };
 
 pub fn detached(frame: *Frame) !*Angle {
-    return frame._factory.create(Angle{});
+    const arena = try frame._page.getArena(.tiny, "SVGAngle");
+    errdefer frame._page.releaseArena(arena);
+    const self = try arena.create(Angle);
+    self.* = .{ ._arena = arena };
+    return self;
+}
+
+pub fn deinit(self: *Angle, page: *Page) void {
+    page.releaseArena(self._arena);
+}
+
+pub fn acquireRef(self: *Angle) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *Angle, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn getUnitType(self: *Angle) u16 {

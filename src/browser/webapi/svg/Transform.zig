@@ -66,9 +66,10 @@ pub const Attachment = struct {
     mutate: *const fn (*anyopaque, *Transform, State) anyerror!void,
 };
 
-// The transform owns the matrix arena even when no JS wrapper currently
-// references `matrix`. Forwarding the transform's bridge lifetime keeps the
-// stable SameObject pointer valid across garbage collections.
+// The transform lives in the matrix arena and owns it even when no JS wrapper
+// currently references `matrix`. Forwarding the transform's bridge lifetime
+// keeps the stable SameObject pointer valid across garbage collections, and
+// releasing the last ref frees the transform together with its matrix.
 pub fn acquireRef(self: *Transform) void {
     self._matrix._proto.acquireRef();
 }
@@ -80,7 +81,8 @@ pub fn releaseRef(self: *Transform, page: *Page) void {
 pub fn detached(frame: *Frame) !*Transform {
     const matrix = try DOMMatrix.create(RO.identity(), true, frame._page);
     errdefer matrix._proto.deinit(frame._page);
-    const self = try frame._factory.create(Transform{ ._matrix = matrix });
+    const self = try matrix._proto._arena.create(Transform);
+    self.* = .{ ._matrix = matrix };
     self.attachMatrix();
     return self;
 }
@@ -89,7 +91,8 @@ pub fn fromMatrix(init: ?DOMMatrix2DInit, frame: *Frame) !*Transform {
     const parsed = try fixup2D(init orelse .{});
     const matrix = try DOMMatrix.create(parsed.m, true, frame._page);
     errdefer matrix._proto.deinit(frame._page);
-    const self = try frame._factory.create(Transform{ ._matrix = matrix });
+    const self = try matrix._proto._arena.create(Transform);
+    self.* = .{ ._matrix = matrix };
     self.attachMatrix();
     return self;
 }
@@ -106,13 +109,14 @@ pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
     };
     const matrix = try DOMMatrix.create(parsed.matrix, parsed.is_2d, frame._page);
     errdefer matrix._proto.deinit(frame._page);
-    const self = try frame._factory.create(Transform{
+    const self = try matrix._proto._arena.create(Transform);
+    self.* = .{
         ._type = typ,
         ._angle = if (typ >= 4) parsed.values[0] else 0,
         ._cx = if (typ == 4 and parsed.count == 3) parsed.values[1] else 0,
         ._cy = if (typ == 4 and parsed.count == 3) parsed.values[2] else 0,
         ._matrix = matrix,
-    });
+    };
     self.attachMatrix();
     return self;
 }
@@ -121,13 +125,14 @@ pub fn clone(self: *const Transform, frame: *Frame) !*Transform {
     const current = self.getState();
     const matrix = try DOMMatrix.create(current.matrix, current.is_2d, frame._page);
     errdefer matrix._proto.deinit(frame._page);
-    const cloned = try frame._factory.create(Transform{
+    const cloned = try matrix._proto._arena.create(Transform);
+    cloned.* = .{
         ._type = current.typ,
         ._angle = current.angle,
         ._cx = current.cx,
         ._cy = current.cy,
         ._matrix = matrix,
-    });
+    };
     cloned.attachMatrix();
     return cloned;
 }
