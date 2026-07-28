@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -26,7 +25,6 @@ const Event = @import("../Event.zig");
 const UIEvent = @import("UIEvent.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 // https://w3c.github.io/touch-events/#touchevent-interface
 // There is no touch input source: the touch lists are always empty.

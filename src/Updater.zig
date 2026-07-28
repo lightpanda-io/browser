@@ -17,9 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const json = std.json;
-const SemanticVersion = std.SemanticVersion;
-const Allocator = std.mem.Allocator;
 const lp = @import("lightpanda");
 
 const Network = @import("network/Network.zig");
@@ -27,7 +24,8 @@ const http = @import("network/http.zig");
 const libcurl = @import("sys/libcurl.zig");
 const crypto = @import("sys/libcrypto.zig");
 const Config = @import("Config.zig");
-const log = @import("log.zig");
+
+const Allocator = std.mem.Allocator;
 
 /// Sole purpose of this client is to do updates; hence, its very minimal.
 const Updater = @This();

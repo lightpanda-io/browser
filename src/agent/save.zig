@@ -23,7 +23,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const Schema = lp.Schema;
 
 /// How a save treats an existing destination file. `update` is synthesis-only:
 /// the model merges the saved script with the new material and returns the
